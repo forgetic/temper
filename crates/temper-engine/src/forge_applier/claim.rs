@@ -10,9 +10,9 @@
 //! effects such as `-ready +in-progress` and `set_assignee`. This module applies
 //! those source effects idempotently without invoking the PR-creation effect.
 
-use temper_forge::{Forge, UpdateIssue, UpdatePullRequest, UserId};
+use temper_forge::{Forge, ForgeError, UpdateIssue, UpdatePullRequest, UserId};
 use temper_protocol_worker::JobContext;
-use temper_workflow::{Effect, LabelId, RoleId};
+use temper_workflow::{ArtifactKindId, Effect, LabelId, RoleId, ValidatedWorkflow};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
@@ -61,6 +61,70 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         );
         self.apply_source_mutation(job, mutation, "claim source action")
             .await;
+    }
+
+    /// Reverses a source-action claim after a retryable worker failure, but
+    /// only while the source artifact still appears to be in the exact claimed
+    /// state for this action. This makes a claimed issue queue-visible again
+    /// without disturbing an artifact that a peer, human, or later worker has
+    /// already advanced to another state.
+    pub(super) async fn release_source_action_claim_for_retry(&self, job: &InFlightJob) -> bool {
+        if job.artifact.kind != "issue" {
+            return false;
+        }
+
+        let context = match serde_json::from_value::<JobContext>(job.job_payload.clone()) {
+            Ok(context) => context,
+            Err(error) => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    %error,
+                    "forge applier could not parse JobContext for retry claim release"
+                );
+                return false;
+            }
+        };
+        let Some(action) = context.action.as_deref() else {
+            return false;
+        };
+        let Some(transition) = self
+            .workflow
+            .transitions()
+            .iter()
+            .find(|transition| transition.id.as_str() == action)
+        else {
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                role = %job.role,
+                action,
+                "forge applier could not find action transition for retry claim release"
+            );
+            return false;
+        };
+
+        let effects = transition.effects.clone();
+        let include_label_effects = effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CreatePullRequest { .. }));
+        if !include_label_effects {
+            return false;
+        }
+
+        let current_role_user = self.current_role_user(job).await;
+        let mutation = self.retry_release_mutation(job, &effects, current_role_user);
+        if mutation.is_empty() {
+            return false;
+        }
+
+        let artifact_kind = ArtifactKindId::new(context.artifact_kind);
+        self.apply_retry_release_mutation(job, &effects, &artifact_kind, mutation)
+            .await
     }
 
     /// Clears working labels that the source action added now that the worker's
@@ -231,9 +295,99 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             _ => {}
         }
     }
+    async fn apply_retry_release_mutation(
+        &self,
+        job: &InFlightJob,
+        effects: &[Effect],
+        artifact_kind: &ArtifactKindId,
+        mutation: SourceMutation,
+    ) -> bool {
+        for _ in 0..3 {
+            let Some((_, issue)) = self.resolve_issue(job).await else {
+                return false;
+            };
+            if !source_claim_labels_still_current(
+                &issue.labels,
+                effects,
+                artifact_kind,
+                self.workflow.as_ref(),
+            ) {
+                return false;
+            }
+
+            match self
+                .forge
+                .update_issue(
+                    &issue.id,
+                    UpdateIssue {
+                        add_labels: mutation.add_labels.clone(),
+                        remove_labels: mutation.remove_labels.clone(),
+                        add_assignees: mutation.add_assignees.clone(),
+                        remove_assignees: mutation.remove_assignees.clone(),
+                        expected_version: Some(issue.version),
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return true,
+                Err(ForgeError::Conflict(_)) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        repo = %job.repo,
+                        issue = %issue.number,
+                        %error,
+                        "forge applier could not release source claim for retry"
+                    );
+                    return false;
+                }
+            }
+        }
+
+        tracing::warn!(
+            target: "temper_daemon",
+            job_id = %job.job_id,
+            repo = %job.repo,
+            artifact_kind = %job.artifact.kind,
+            artifact_item = %job.artifact.item,
+            "forge applier gave up releasing source claim for retry after conflicts"
+        );
+        false
+    }
+
+    fn retry_release_mutation(
+        &self,
+        job: &InFlightJob,
+        effects: &[Effect],
+        current_role_user: Option<UserId>,
+    ) -> SourceMutation {
+        let mut mutation = SourceMutation::default();
+        for effect in effects {
+            match effect {
+                Effect::AddLabel(label) if self.is_working_label(label) => {
+                    push_unique(&mut mutation.remove_labels, label.as_str().to_string());
+                }
+                Effect::RemoveLabel(label) => {
+                    push_unique(&mut mutation.add_labels, label.as_str().to_string());
+                }
+                Effect::SetAssignee(role) => {
+                    let user = resolve_effect_role_user(role, job, current_role_user.as_ref());
+                    push_unique(&mut mutation.remove_assignees, user);
+                }
+                Effect::RemoveAssignee(role) => {
+                    let user = resolve_effect_role_user(role, job, current_role_user.as_ref());
+                    push_unique(&mut mutation.add_assignees, user);
+                }
+                _ => {}
+            }
+        }
+        mutation
+    }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct SourceMutation {
     add_labels: Vec<String>,
     remove_labels: Vec<String>,
@@ -279,6 +433,61 @@ fn claim_mutation(
         }
     }
     mutation
+}
+
+fn source_claim_labels_still_current(
+    labels: &[String],
+    effects: &[Effect],
+    artifact_kind: &ArtifactKindId,
+    workflow: &ValidatedWorkflow,
+) -> bool {
+    let mut touched_labels = Vec::<String>::new();
+
+    for effect in effects {
+        match effect {
+            Effect::AddLabel(label) => {
+                let label = label.as_str();
+                push_unique(&mut touched_labels, label.to_string());
+                if !labels.iter().any(|existing| existing == label) {
+                    return false;
+                }
+            }
+            Effect::RemoveLabel(label) => {
+                let label = label.as_str();
+                push_unique(&mut touched_labels, label.to_string());
+                if labels.iter().any(|existing| existing == label) {
+                    return false;
+                }
+            }
+            Effect::RemoveLabelIfPresent(label) => {
+                push_unique(&mut touched_labels, label.as_str().to_string());
+            }
+            _ => {}
+        }
+    }
+
+    // If any other workflow state label for this artifact is present, someone
+    // has moved the item beyond the original claim. Do not project it back to
+    // ready over that newer state.
+    for dimension in workflow.state_dimensions() {
+        for state in &dimension.states {
+            let Some(label) = state.label.as_ref() else {
+                continue;
+            };
+            if !state.allows_artifact(artifact_kind) {
+                continue;
+            }
+            let label = label.as_str();
+            if touched_labels.iter().any(|touched| touched == label) {
+                continue;
+            }
+            if labels.iter().any(|existing| existing == label) {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 fn resolve_effect_role_user(

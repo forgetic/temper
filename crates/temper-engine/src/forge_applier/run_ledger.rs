@@ -7,18 +7,20 @@
 //! checkpoint labels remain resumability history, not a model-owned plan or
 //! checklist.
 
-use std::error::Error;
-use std::fmt;
-
 use temper_forge::{Forge, ForgeError, Issue, ItemNumber, PullRequest, RepositoryId, UpdateIssue};
 use temper_protocol_worker::{JobContext, JobProgress};
-use temper_workflow::{METADATA_BEGIN, METADATA_END, find_pull_request_by_correlation};
+use temper_workflow::find_pull_request_by_correlation;
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
 use crate::workflow_meta::implementation_pr_labels;
 
-const LEDGER_END: &str = "<!-- /temper-run-ledger -->";
+mod merge;
+
+use self::merge::{
+    ledger_block_finalized, ledger_marker, ledger_worker_matches, retryable_ledger_block,
+    run_ledger_finalized, run_ledger_span, upsert_run_ledger_block,
+};
 
 /// One implementation PR the source-issue ledger can hand off to.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +91,92 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             include_final_note,
         };
         self.update_issue_run_ledger(job, issue, &update).await;
+    }
+
+    /// Marks an engineer source-issue ledger as retryable after a transient
+    /// worker failure. The existing block is edited in place so checkpoint
+    /// branch and latest-step metadata remain available to the next worker.
+    ///
+    /// Returns `true` only when the ledger belongs to the failing worker and is
+    /// not already finalized to an implementation PR; callers use that as the
+    /// safety gate before releasing source claim labels.
+    pub(super) async fn mark_run_ledger_retryable(
+        &self,
+        job: &InFlightJob,
+        correlation_key: &str,
+        worker_id: &str,
+    ) -> bool {
+        for _ in 0..3 {
+            let Some((_, issue)) = self.resolve_issue(job).await else {
+                return false;
+            };
+            let span = match run_ledger_span(&issue.body, correlation_key) {
+                Ok(Some(span)) => span,
+                Ok(None) => return false,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        repo = %job.repo,
+                        issue = %issue.number,
+                        correlation_key,
+                        %error,
+                        "forge applier could not read run ledger for retry"
+                    );
+                    return false;
+                }
+            };
+            let current = &issue.body[span.0..span.1];
+            if ledger_block_finalized(current) || !ledger_worker_matches(current, worker_id) {
+                return false;
+            }
+            let Some(updated_block) = retryable_ledger_block(current) else {
+                return true;
+            };
+            let desired_body = format!(
+                "{}{}{}",
+                &issue.body[..span.0],
+                updated_block,
+                &issue.body[span.1..]
+            );
+
+            match self
+                .forge
+                .update_issue(
+                    &issue.id,
+                    UpdateIssue {
+                        body: Some(desired_body),
+                        expected_version: Some(issue.version),
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return true,
+                Err(ForgeError::Conflict(_)) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        repo = %job.repo,
+                        issue = %issue.number,
+                        correlation_key,
+                        %error,
+                        "forge applier could not mark run ledger retryable"
+                    );
+                    return false;
+                }
+            }
+        }
+
+        tracing::warn!(
+            target: "temper_daemon",
+            job_id = %job.job_id,
+            repo = %job.repo,
+            correlation_key,
+            "forge applier gave up marking run ledger retryable after conflicts"
+        );
+        false
     }
 
     /// Finalizes the source issue ledger once the implementation PR body is the
@@ -356,7 +444,7 @@ fn common_ledger_lines(job: &InFlightJob, correlation_key: &str, worker_id: &str
 }
 
 fn finish_block(mut lines: Vec<String>) -> String {
-    lines.push(LEDGER_END.to_string());
+    lines.push(merge::LEDGER_END.to_string());
     lines.join("\n")
 }
 
@@ -426,110 +514,3 @@ fn short_sha(sha: &str) -> Option<String> {
     }
     Some(sha.chars().take(12).collect())
 }
-
-fn ledger_marker(correlation_key: &str) -> String {
-    format!(
-        "<!-- temper-run-ledger correlation_key={} -->",
-        one_line_or(correlation_key, "unknown")
-    )
-}
-
-fn run_ledger_finalized(body: &str, correlation_key: &str) -> bool {
-    match run_ledger_span(body, correlation_key) {
-        Ok(Some((start, end))) => ledger_block_finalized(&body[start..end]),
-        Ok(None) | Err(_) => false,
-    }
-}
-
-fn ledger_block_finalized(block: &str) -> bool {
-    block.contains("Current status: continued in ")
-}
-
-fn upsert_run_ledger_block(
-    body: &str,
-    correlation_key: &str,
-    block: &str,
-    skip_if_finalized: bool,
-) -> Result<Option<String>, RunLedgerMergeError> {
-    if let Some((start, end)) = run_ledger_span(body, correlation_key)? {
-        let current = &body[start..end];
-        if skip_if_finalized && ledger_block_finalized(current) {
-            return Ok(None);
-        }
-        if current == block {
-            return Ok(None);
-        }
-        let updated = format!("{}{}{}", &body[..start], block, &body[end..]);
-        return if updated == body {
-            Ok(None)
-        } else {
-            Ok(Some(updated))
-        };
-    }
-
-    insert_run_ledger_block(body, block).map(Some)
-}
-
-fn run_ledger_span(
-    body: &str,
-    correlation_key: &str,
-) -> Result<Option<(usize, usize)>, RunLedgerMergeError> {
-    let marker = ledger_marker(correlation_key);
-    let Some(start) = body.find(&marker) else {
-        return Ok(None);
-    };
-    let after_marker = start + marker.len();
-    let Some(end_relative) = body[after_marker..].find(LEDGER_END) else {
-        return Err(RunLedgerMergeError::UnterminatedLedger);
-    };
-    let end = after_marker + end_relative + LEDGER_END.len();
-    Ok(Some((start, end)))
-}
-
-fn insert_run_ledger_block(body: &str, block: &str) -> Result<String, RunLedgerMergeError> {
-    if let Some(index) = workflow_metadata_start(body)? {
-        let before = body[..index].trim_end();
-        let after = body[index..].trim_start_matches('\n');
-        return if before.is_empty() {
-            Ok(format!("{block}\n\n{after}"))
-        } else {
-            Ok(format!("{before}\n\n{block}\n\n{after}"))
-        };
-    }
-
-    if body.trim().is_empty() {
-        Ok(block.to_string())
-    } else {
-        Ok(format!("{}\n\n{block}", body.trim_end()))
-    }
-}
-
-fn workflow_metadata_start(body: &str) -> Result<Option<usize>, RunLedgerMergeError> {
-    let Some(start) = body.find(METADATA_BEGIN) else {
-        return Ok(None);
-    };
-    let after_begin = start + METADATA_BEGIN.len();
-    if body[after_begin..].find(METADATA_END).is_none() {
-        return Err(RunLedgerMergeError::UnterminatedWorkflowMetadata);
-    }
-    Ok(Some(start))
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum RunLedgerMergeError {
-    UnterminatedLedger,
-    UnterminatedWorkflowMetadata,
-}
-
-impl fmt::Display for RunLedgerMergeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnterminatedLedger => formatter.write_str("run ledger block was not terminated"),
-            Self::UnterminatedWorkflowMetadata => {
-                formatter.write_str("workflow metadata block was not terminated")
-            }
-        }
-    }
-}
-
-impl Error for RunLedgerMergeError {}
