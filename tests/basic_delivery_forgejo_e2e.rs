@@ -28,8 +28,8 @@ mod process;
 use std::time::{Duration, Instant};
 
 use fake_llm::BasicDeliveryFake;
-use process::{RunWorkspaceGuard, create_site_admin, free_port, populate_repo};
-use temper_testing::forgejo_server::{ForgejoRunner, ForgejoServer};
+use process::{RunWorkspaceGuard, free_port, mint_site_admin_token, populate_repo};
+use temper_testing::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
 
 const OWNER: &str = "acme";
 const NAME: &str = "service";
@@ -58,13 +58,20 @@ fn basic_delivery_run_sh_equivalent_converges() {
     assert_canonical_workflow_bytes();
     let started = Instant::now();
 
-    let server = ForgejoServer::start().expect("throwaway Forgejo starts");
+    let cached = start_cached_bare_admin_server(
+        ADMIN_USER,
+        ADMIN_PASSWORD,
+        "basicadmin@example.invalid",
+    )
+    .expect("cached bare-admin Forgejo starts");
+    let server = cached.server;
     let mut runner = ForgejoRunner::register(&server).expect("forgejo-runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
-    let admin_token = create_site_admin(&server);
+    let admin_token = mint_site_admin_token(&server);
     eprintln!(
-        "basic_delivery_forgejo_e2e: Forgejo up at {} runner={} startup={:?}",
+        "basic_delivery_forgejo_e2e: Forgejo up at {} cache_hit={} runner={} startup={:?}",
         server.base_url(),
+        cached.cache_hit,
         runner.is_running(),
         started.elapsed()
     );
