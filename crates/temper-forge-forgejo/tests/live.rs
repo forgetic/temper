@@ -26,6 +26,7 @@ const ADMIN_USER: &str = "liveadmin";
 const ADMIN_PASSWORD: &str = "L1ve-Smoke-Admin!";
 const ADMIN_EMAIL: &str = "liveadmin@example.invalid";
 const REPO: &str = "forgejo-live-smoke";
+const CI_WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 
 const CI_WORKFLOW: &str = r#"name: ci
 on: [push]
@@ -109,9 +110,11 @@ fn live_smoke_suite_against_throwaway_forgejo() {
 async fn boot_world() -> LiveWorld {
     let state = ForgejoState::new(json!({
         "kind": "forgejo-backend-live-smoke",
-        "version": 1,
+        "version": 2,
         "admin": ADMIN_USER,
         "repo": REPO,
+        "ci_workflow_path": CI_WORKFLOW_PATH,
+        "ci_workflow": CI_WORKFLOW,
     }))
     .expect("live smoke state serializes");
     let cached = skein::runtime::spawn_blocking(move || {
@@ -122,6 +125,8 @@ async fn boot_world() -> LiveWorld {
             // runtime, perform the provisioning calls, tear it down.
             temper_engine_io::block_on(async move {
                 create_initialized_repo(&base, &admin_token).await;
+                enable_repo_actions(&base, &admin_token).await;
+                put_workflow_file(&base, &admin_token).await;
                 Ok::<LiveMetadata, String>(LiveMetadata { admin_token })
             })
         })
@@ -134,9 +139,6 @@ async fn boot_world() -> LiveWorld {
 
     let mut runner = ForgejoRunner::register(&server).expect("forgejo-runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
-
-    enable_repo_actions(&base, &admin_token).await;
-    put_workflow_file(&base, &admin_token).await;
 
     let repo_path = RepositoryPath::new(ADMIN_USER, REPO);
     let forge = ForgejoForge::new(
@@ -237,7 +239,7 @@ async fn put_workflow_file(base: &str, token: &str) -> String {
     let content = base64::engine::general_purpose::STANDARD.encode(CI_WORKFLOW);
     let response = api_json(
         "POST",
-        format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/.forgejo/workflows/ci.yml"),
+        format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/{CI_WORKFLOW_PATH}"),
         token,
         &json!({
             "content": content,
