@@ -13,8 +13,10 @@ use super::{DAEMON_POLL_CADENCE_SECS, ENGINEER};
 
 /// Narrow mechanical backstop cadence. Forgejo 7.0.x does not emit
 /// Actions-completion webhooks through repository hooks, so mechanical landing
-/// keeps a short poll for CI status transitions only (legacy `CI_STATUS_POLL`).
-const DAEMON_MECHANICAL_CADENCE_SECS: u64 = 2;
+/// keeps a short test-only poll for CI status transitions only (legacy
+/// `CI_STATUS_POLL`). The convergence assertions poll every second, so matching
+/// that cadence avoids adding a second of avoidable e2e latency.
+const DAEMON_MECHANICAL_CADENCE_SECS: u64 = 1;
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) const WEBHOOK_SECRET: &str = "daemon-e2e-webhook-secret";

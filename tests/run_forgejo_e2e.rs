@@ -44,6 +44,11 @@ const ENGINEER: &str = "engineer";
 const REPO_NAME: &str = "temper-run-e2e";
 const DEFAULT_CONVERGENCE_SECS: u64 = 300;
 
+/// Test-only mechanical cadence for `temper run` convergence. The assertions
+/// re-check Forgejo every second, so keeping the mechanical backstop at the same
+/// cadence avoids waiting on a slower two-second tick after CI state changes.
+const RUN_MECHANICAL_CADENCE_SECS: u64 = 1;
+
 /// Convergence budget, overridable via `TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS`
 /// (the same knob the daemon e2e honors). CI sets it explicitly; the default
 /// also keeps a full five-minute window for local `--ignored` runs because the
@@ -302,7 +307,7 @@ fn spawn_temper_run(
          roles = [\"{ENGINEER}\"]\n\
          workflow = \"{workflow}\"\n\
          poll_cadence_secs = 2\n\
-         mechanical_cadence_secs = 2\n\
+         mechanical_cadence_secs = {mechanical_cadence}\n\
          daemon_id = \"temper-run-e2e\"\n\
          [worker]\n\
          worker_id = \"temper-run-e2e-worker\"\n\
@@ -318,6 +323,7 @@ fn spawn_temper_run(
         name = provisioned.name,
         workflow = workflow_file.display(),
         workspace_root = workspace.join("run/agent-workspaces").display(),
+        mechanical_cadence = RUN_MECHANICAL_CADENCE_SECS,
         fake_llm_url = fake_llm_url,
     );
     std::fs::write(&config_path, config).expect("write run config");
