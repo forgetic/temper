@@ -139,7 +139,7 @@ fn workflow_metadata_start(body: &str) -> Result<Option<usize>, RunLedgerMergeEr
         return Ok(None);
     };
     let after_begin = start + METADATA_BEGIN.len();
-    if body[after_begin..].find(METADATA_END).is_none() {
+    if !body[after_begin..].contains(METADATA_END) {
         return Err(RunLedgerMergeError::UnterminatedWorkflowMetadata);
     }
     Ok(Some(start))

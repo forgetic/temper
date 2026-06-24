@@ -514,4 +514,3 @@ fn short_sha(sha: &str) -> Option<String> {
     }
     Some(sha.chars().take(12).collect())
 }
-
