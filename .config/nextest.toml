@@ -1,0 +1,9 @@
+# Keep the root Forgejo e2e tests out of nextest's general worker pool.
+# They still take the filesystem lock in tests/support/e2e_lock.rs so plain
+# `cargo test -- --ignored` and other non-nextest runners remain serialized.
+[test-groups]
+root-forgejo-e2e = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
+test-group = 'root-forgejo-e2e'
