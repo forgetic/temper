@@ -1,18 +1,33 @@
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
 
-use jig_core::{Reply, RequestView, Script, StopReason, Turn};
+use jig_core::{
+    PhaseSpec, Reply, ReplySpec, RequestView, Script, ScriptFile, StopSpec, TurnSpec, fixtures_root,
+};
 use jig_server::FakeLlm;
+use serde_json::Value;
 
-pub(super) const ARCHITECT_BODY: &str = "## Code spec\n\nImplement: Service banner should identify the environment\n\n### Requirements\n\n- Add or update `service/src/banner.py` with a `service_banner(environment=None, greeting=None)` helper.\n- Include the active environment in the returned banner.\n- Default `environment` from `SERVICE_ENVIRONMENT`, falling back to `development`.\n- Default `greeting` from `SERVICE_BANNER_GREETING`, falling back to `Hello`.\n";
+const BASIC_DELIVERY_FIXTURE: &str = "basic-delivery.json";
+const ARCHITECT_PHASE: &str = "architect-triage";
+const ENGINEER_PHASE: &str = "engineer-implementation";
+const ARCHITECT_ROLE_PROMPT: &str = "ROLE: architect";
+const ENGINEER_ROLE_PROMPT: &str = "ROLE: engineer";
 
-pub(super) const ENGINEER_SUMMARY: &str =
-    "Updated service/src/banner.py with an environment-aware service_banner helper.";
+struct FixtureExpectations {
+    architect_body: String,
+    engineer_summary: String,
+}
 
-const ENGINEER_FILE: &str = "\"\"\"Service banner helpers.\"\"\"\n\nfrom __future__ import annotations\n\nimport os\n\n\ndef service_banner(environment=None, greeting=None):\n    \"\"\"Return a greeting that identifies the active service environment.\"\"\"\n    active_environment = (\n        environment\n        if environment is not None\n        else os.getenv(\"SERVICE_ENVIRONMENT\", \"development\")\n    )\n    active_greeting = (\n        greeting\n        if greeting is not None\n        else os.getenv(\"SERVICE_BANNER_GREETING\", \"Hello\")\n    )\n    return f\"{active_greeting} from the {active_environment} environment\"\n\n\n__all__ = [\"service_banner\"]\n";
+pub(super) fn architect_body() -> &'static str {
+    fixture_expectations().architect_body.as_str()
+}
 
-/// Jig-compatible fake LLM mirroring `jig/fixtures/basic-delivery.json`.
+pub(super) fn engineer_summary() -> &'static str {
+    fixture_expectations().engineer_summary.as_str()
+}
+
+/// Jig-compatible fake LLM backed by jig's canonical `basic-delivery.json`.
 pub(super) struct BasicDeliveryFake {
     fake: FakeLlm,
     architect_requests: Arc<AtomicUsize>,
@@ -21,20 +36,31 @@ pub(super) struct BasicDeliveryFake {
 
 impl BasicDeliveryFake {
     pub(super) fn start() -> Self {
+        let path = basic_delivery_fixture_path();
+        let script_file = load_script_file(&path);
+        let _expectations = expect_fixture_expectations(&script_file, &path);
+
         let architect_requests = Arc::new(AtomicUsize::new(0));
         let engineer_requests = Arc::new(AtomicUsize::new(0));
         let architect_seen = Arc::clone(&architect_requests);
         let engineer_seen = Arc::clone(&engineer_requests);
+        let script = script_file.into_script();
         let fake = FakeLlm::start(Script::rule(move |view| {
-            if messages_contain(view, "ROLE: architect") {
+            let is_architect = messages_contain(view, ARCHITECT_ROLE_PROMPT);
+            let is_engineer = messages_contain(view, ENGINEER_ROLE_PROMPT);
+            if is_architect {
                 architect_seen.fetch_add(1, Ordering::SeqCst);
-                return architect_reply(view);
             }
-            if messages_contain(view, "ROLE: engineer") {
+            if is_engineer {
                 engineer_seen.fetch_add(1, Ordering::SeqCst);
-                return engineer_reply(view);
             }
-            Reply::text("unexpected basic-delivery fake-LLM request")
+            if is_architect || is_engineer {
+                script.next_reply(view)
+            } else {
+                Reply::text(format!(
+                    "unexpected basic-delivery fake-LLM request; canonical fixture is {BASIC_DELIVERY_FIXTURE}"
+                ))
+            }
         }))
         .expect("start basic-delivery fake LLM");
         Self {
@@ -84,54 +110,203 @@ impl BasicDeliveryFake {
     }
 }
 
-fn architect_reply(view: &RequestView) -> Reply {
-    if view.prior_tool_results == 0 {
-        std::thread::sleep(Duration::from_millis(1_000));
-        Reply {
-            turns: vec![Turn::ToolCall {
-                id: "call_architect_inspect".to_string(),
-                name: "bash".to_string(),
-                args: serde_json::json!({
-                    "command": "printf 'jig-basic-delivery-inspection\\n'; if [ -d service ]; then find service -maxdepth 2 -type f -print | sort; else printf 'service/ not present\\n'; fi"
-                }),
-            }],
-            usage: Default::default(),
-            stop: StopReason::ToolCalls,
-        }
-    } else {
-        Reply::text(
-            serde_json::json!({
-                "verdict": "ready_code",
-                "body": ARCHITECT_BODY,
-            })
-            .to_string(),
+fn fixture_expectations() -> &'static FixtureExpectations {
+    static EXPECTATIONS: OnceLock<FixtureExpectations> = OnceLock::new();
+    EXPECTATIONS.get_or_init(|| {
+        let path = basic_delivery_fixture_path();
+        let script_file = load_script_file(&path);
+        expect_fixture_expectations(&script_file, &path)
+    })
+}
+
+fn basic_delivery_fixture_path() -> PathBuf {
+    fixtures_root().join(BASIC_DELIVERY_FIXTURE)
+}
+
+fn load_script_file(path: &Path) -> ScriptFile {
+    ScriptFile::load(path).unwrap_or_else(|error| {
+        panic!(
+            "load canonical jig basic-delivery fixture {}: {error}",
+            path.display()
         )
+    })
+}
+
+fn expect_fixture_expectations(script_file: &ScriptFile, path: &Path) -> FixtureExpectations {
+    expectations_from_script_file(script_file).unwrap_or_else(|error| {
+        panic!(
+            "canonical jig fixture {} no longer matches the basic_delivery_forgejo_e2e contract: {error}",
+            path.display()
+        )
+    })
+}
+
+fn expectations_from_script_file(script_file: &ScriptFile) -> Result<FixtureExpectations, String> {
+    let phases = match script_file {
+        ScriptFile::Phases(phases) => phases.as_slice(),
+        other => {
+            return Err(format!(
+                "expected a phase script with `{ARCHITECT_PHASE}` and `{ENGINEER_PHASE}` phases, got {other:?}"
+            ));
+        }
+    };
+
+    let architect_phase = phase_by_name(phases, ARCHITECT_PHASE)?;
+    require_role_matcher(architect_phase, ARCHITECT_ROLE_PROMPT)?;
+    require_two_step_phase(architect_phase)?;
+    require_tool_call_reply(reply_at(architect_phase, 0)?, ARCHITECT_PHASE, "bash")?;
+    let architect_result =
+        workspace_result(reply_text(reply_at(architect_phase, 1)?)?, ARCHITECT_PHASE)?;
+    require_string_field(&architect_result, "verdict", ARCHITECT_PHASE).and_then(|verdict| {
+        if verdict == "ready_code" {
+            Ok(())
+        } else {
+            Err(format!(
+                "`{ARCHITECT_PHASE}` result verdict {verdict:?} is not `ready_code`"
+            ))
+        }
+    })?;
+    let architect_body = require_string_field(&architect_result, "body", ARCHITECT_PHASE)?;
+
+    let engineer_phase = phase_by_name(phases, ENGINEER_PHASE)?;
+    require_role_matcher(engineer_phase, ENGINEER_ROLE_PROMPT)?;
+    require_two_step_phase(engineer_phase)?;
+    require_tool_call_reply(reply_at(engineer_phase, 0)?, ENGINEER_PHASE, "write")?;
+    let engineer_result =
+        workspace_result(reply_text(reply_at(engineer_phase, 1)?)?, ENGINEER_PHASE)?;
+    if engineer_result.get("verdict").is_some() {
+        return Err(format!(
+            "`{ENGINEER_PHASE}` result must be a success-path WorkspaceResult without a verdict"
+        ));
+    }
+    let engineer_summary = require_string_field(&engineer_result, "summary", ENGINEER_PHASE)?;
+
+    Ok(FixtureExpectations {
+        architect_body,
+        engineer_summary,
+    })
+}
+
+fn phase_by_name<'a>(phases: &'a [PhaseSpec], name: &str) -> Result<&'a PhaseSpec, String> {
+    phases
+        .iter()
+        .find(|phase| phase.name == name)
+        .ok_or_else(|| format!("missing `{name}` phase in canonical fixture"))
+}
+
+fn require_role_matcher(phase: &PhaseSpec, role_prompt: &str) -> Result<(), String> {
+    let expected = vec![role_prompt.to_string()];
+    if phase.when.messages_contain == expected
+        && phase.when.any_message_contains.is_empty()
+        && phase.when.last_message_contains.is_empty()
+        && phase.when.prior_tool_results.is_none()
+        && phase.when.model.is_none()
+        && phase.when.dialect.is_none()
+        && !phase.when.ignore_case
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{}` phase must be selected only by messages_contain={expected:?}, got {:?}",
+            phase.name, phase.when
+        ))
     }
 }
 
-fn engineer_reply(view: &RequestView) -> Reply {
-    if view.prior_tool_results == 0 {
-        std::thread::sleep(Duration::from_millis(2_000));
-        Reply {
-            turns: vec![Turn::ToolCall {
-                id: "call_engineer_write_banner".to_string(),
-                name: "write".to_string(),
-                args: serde_json::json!({
-                    "path": "service/src/banner.py",
-                    "content": ENGINEER_FILE,
-                }),
-            }],
-            usage: Default::default(),
-            stop: StopReason::ToolCalls,
-        }
+fn require_two_step_phase(phase: &PhaseSpec) -> Result<(), String> {
+    if phase.sequence.len() == 2 {
+        Ok(())
     } else {
-        Reply::text(
-            serde_json::json!({
-                "summary": ENGINEER_SUMMARY,
-            })
-            .to_string(),
-        )
+        Err(format!(
+            "`{}` phase must serve exactly two replies (tool call, then WorkspaceResult), got {}",
+            phase.name,
+            phase.sequence.len()
+        ))
     }
+}
+
+fn reply_at(phase: &PhaseSpec, index: usize) -> Result<&ReplySpec, String> {
+    phase.sequence.get(index).ok_or_else(|| {
+        format!(
+            "`{}` phase is missing reply at sequence index {index}",
+            phase.name
+        )
+    })
+}
+
+fn require_tool_call_reply(
+    reply: &ReplySpec,
+    phase: &str,
+    expected_tool: &str,
+) -> Result<(), String> {
+    let ReplySpec::Full { turns, stop, .. } = reply else {
+        return Err(format!(
+            "`{phase}` first reply must use the full form for a tool-call stop, got {reply:?}"
+        ));
+    };
+    if *stop != StopSpec::ToolCalls {
+        return Err(format!(
+            "`{phase}` first reply must stop with tool_calls, got {stop:?}"
+        ));
+    }
+    let [TurnSpec::ToolCall(tool)] = turns.as_slice() else {
+        return Err(format!(
+            "`{phase}` first reply must contain exactly one tool call, got {turns:?}"
+        ));
+    };
+    if tool.name == expected_tool {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{phase}` first reply must call tool {expected_tool:?}, got {:?}",
+            tool.name
+        ))
+    }
+}
+
+fn reply_text(reply: &ReplySpec) -> Result<&str, String> {
+    match reply {
+        ReplySpec::Text { text } => Ok(text.as_str()),
+        ReplySpec::Full { turns, stop, .. } => {
+            if *stop != StopSpec::Stop {
+                return Err(format!(
+                    "WorkspaceResult reply must stop normally, got {stop:?}"
+                ));
+            }
+            match turns.as_slice() {
+                [TurnSpec::Text(text)] => Ok(text.as_str()),
+                _ => Err(format!(
+                    "WorkspaceResult reply must contain exactly one text turn, got {turns:?}"
+                )),
+            }
+        }
+    }
+}
+
+fn workspace_result(text: &str, phase: &str) -> Result<Value, String> {
+    let trimmed = text.trim();
+    if trimmed != text {
+        return Err(format!(
+            "`{phase}` WorkspaceResult must be a single JSON object without surrounding prose or whitespace"
+        ));
+    }
+    let value: Value = serde_json::from_str(trimmed)
+        .map_err(|error| format!("`{phase}` WorkspaceResult does not parse as JSON: {error}"))?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(format!(
+            "`{phase}` WorkspaceResult must be a JSON object, got {value}"
+        ))
+    }
+}
+
+fn require_string_field(value: &Value, field: &str, phase: &str) -> Result<String, String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("`{phase}` WorkspaceResult is missing string field `{field}`"))
 }
 
 fn messages_contain(view: &RequestView, needle: &str) -> bool {
@@ -141,9 +316,9 @@ fn messages_contain(view: &RequestView, needle: &str) -> bool {
 }
 
 fn role_hint(view: &RequestView) -> &'static str {
-    if messages_contain(view, "ROLE: architect") {
+    if messages_contain(view, ARCHITECT_ROLE_PROMPT) {
         "architect"
-    } else if messages_contain(view, "ROLE: engineer") {
+    } else if messages_contain(view, ENGINEER_ROLE_PROMPT) {
         "engineer"
     } else {
         "unknown"
@@ -160,4 +335,24 @@ fn snippet(text: &str, max: usize) -> String {
         out.push(if ch == '\n' { ' ' } else { ch });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_fixture_matches_basic_delivery_e2e_contract() {
+        let path = basic_delivery_fixture_path();
+        let script_file = load_script_file(&path);
+        let expectations = expect_fixture_expectations(&script_file, &path);
+        assert!(
+            !expectations.architect_body.trim().is_empty(),
+            "architect body must be derived from the canonical jig fixture"
+        );
+        assert!(
+            !expectations.engineer_summary.trim().is_empty(),
+            "engineer summary must be derived from the canonical jig fixture"
+        );
+    }
 }
