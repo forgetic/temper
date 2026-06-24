@@ -3,9 +3,9 @@
 use crate::support::*;
 
 #[test]
-fn transient_failure_drops_job_for_rescan() {
+fn transient_failure_applies_retry_bookkeeping_then_rescans() {
     temper_engine_io::block_on_with(move |_cx, handle| async move {
-        let (daemon, url, mut rx) = spawn_recording(&handle).await;
+        let (daemon, url, mut rx) = spawn_recording_with_apply_grace(&handle, Duration::ZERO).await;
         let client = temper_engine_io::http::JsonClient::new();
         assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
@@ -26,8 +26,17 @@ fn transient_failure_drops_job_for_rescan() {
             &first_job_id,
         );
 
-        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
-        assert!(rx.try_recv().is_none());
+        let (retry_job, retry_result) = rx
+            .recv()
+            .await
+            .expect("applier records transient retry bookkeeping");
+        assert_eq!(retry_job.job_id, first_job_id);
+        assert_eq!(retry_result.job_id, transient.job_id);
+        assert_eq!(retry_result.status, ResultStatus::Failure);
+        assert_eq!(
+            retry_result.failure.as_ref().map(|failure| failure.class),
+            Some(FailureClass::Transient)
+        );
 
         enqueue_standard_job(&daemon, &first_job_id).await;
         let retry_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);

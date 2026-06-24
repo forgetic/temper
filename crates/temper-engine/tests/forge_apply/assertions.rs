@@ -43,6 +43,27 @@ pub(crate) async fn wait_for_issue_count(
     }
 }
 
+pub(crate) async fn wait_for_issue_state(
+    cx: &temper_engine_io::Cx,
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    done: impl Fn(&str, &[String]) -> bool,
+) -> (String, Vec<String>) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let (body, labels) = issue_body_and_labels(forge, repo, number).await;
+        if done(&body, &labels) {
+            return (body, labels);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for issue state, saw labels {labels:?} body {body:?}"
+        );
+        temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
+    }
+}
+
 pub(crate) async fn assert_issue_count_stays(
     cx: &temper_engine_io::Cx,
     forge: &MemoryForge,

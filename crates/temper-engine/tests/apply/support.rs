@@ -120,12 +120,9 @@ pub(crate) async fn spawn_recording_with_apply_grace(
     temper_engine_io::CqReceiver<(InFlightJob, JobResult)>,
 ) {
     let (tx, rx) = temper_engine_io::channel();
-    let (daemon, url) = spawn_with_applier_and_apply_grace(
-        handle,
-        Arc::new(RecordingApplier { tx }),
-        apply_grace,
-    )
-    .await;
+    let (daemon, url) =
+        spawn_with_applier_and_apply_grace(handle, Arc::new(RecordingApplier { tx }), apply_grace)
+            .await;
     (daemon, url, rx)
 }
 
