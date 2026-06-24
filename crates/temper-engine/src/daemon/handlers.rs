@@ -151,9 +151,15 @@ impl DaemonMachine {
                     self.applying.insert(job.job_id.clone());
                     requests.push(DaemonRequest::RunApply { job, result });
                 }
-                // Let the next webhook wake or poll-backstop tick re-feed this
-                // through the guarded scan path instead of hot re-enqueuing.
-                ResultDisposition::DropForRescan => {}
+                // Apply retry bookkeeping (for example, releasing a claimed
+                // source issue back to its ready queue) before the next webhook
+                // wake or poll-backstop tick re-feeds the work through the
+                // guarded scan path. The result is still logged as `rescan`: it
+                // is not a terminal workflow outcome.
+                ResultDisposition::DropForRescan => {
+                    self.applying.insert(job.job_id.clone());
+                    requests.push(DaemonRequest::RunApply { job, result });
+                }
                 ResultDisposition::Drop => {}
             }
         }
