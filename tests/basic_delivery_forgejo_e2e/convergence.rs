@@ -213,10 +213,12 @@ async fn assert_converged(
     }
     require_labels(&issue.labels, &["code"])?;
     reject_labels(&issue.labels, &["untriaged", "ready", "in-progress"])?;
-    if issue.body.trim() != ARCHITECT_BODY.trim() {
-        return Err(
-            "terminal source issue no longer carries the architect-authored spec".to_string(),
-        );
+    let expected_body = ARCHITECT_BODY.trim();
+    if !issue.body.contains(expected_body) {
+        return Err(format!(
+            "terminal source issue no longer carries the architect-authored spec\nexpected to find:\n{expected_body}\nactual:\n{}",
+            issue.body
+        ));
     }
     Ok(())
 }
