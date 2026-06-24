@@ -14,9 +14,9 @@ test-threads = 4
 fail-fast = false
 
 [[profile.default.overrides]]
-filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
+filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
 test-group = 'root-forgejo-e2e'
 
 [[profile.e2e.overrides]]
-filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
+filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
 test-group = 'root-forgejo-e2e'
