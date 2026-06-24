@@ -86,7 +86,7 @@ impl BasicDeliveryFake {
 
 fn architect_reply(view: &RequestView) -> Reply {
     if view.prior_tool_results == 0 {
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(1_000));
         Reply {
             turns: vec![Turn::ToolCall {
                 id: "call_architect_inspect".to_string(),
@@ -111,7 +111,7 @@ fn architect_reply(view: &RequestView) -> Reply {
 
 fn engineer_reply(view: &RequestView) -> Reply {
     if view.prior_tool_results == 0 {
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(2_000));
         Reply {
             turns: vec![Turn::ToolCall {
                 id: "call_engineer_write_banner".to_string(),
