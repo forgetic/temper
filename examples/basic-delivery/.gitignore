@@ -1,6 +1,5 @@
 # Runtime artifacts the fixed launcher creates. The tracked scaffold is config/,
-# observability.md, run.sh, README.md, and secrets/.gitignore (to keep any old
-# local secrets ignored).
+# observability.md, run.sh, and README.md.
 /run/
 /logs/
 *.pid
