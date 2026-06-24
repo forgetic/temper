@@ -18,8 +18,8 @@ temper-agent-io = { path = "../temper-agent-io" }
 [dev-dependencies]
 temper-agent-io = { path = "../temper-agent-io" }
 temper-agent = { path = "../temper-agent" }
-jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
-jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
+jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "b836fdea4d26895c70e3a2586200a8e2bdc43eb0" }
+jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "b836fdea4d26895c70e3a2586200a8e2bdc43eb0" }
 
 [lints]
 workspace = true
