@@ -4,6 +4,19 @@
 [test-groups]
 root-forgejo-e2e = { max-threads = 1 }
 
+# Calibrated profile for the ignored Forgejo/e2e suite. The default nextest
+# scheduler can start too many Forgejo servers, runners, daemons, and lock
+# waiters on shared developer/CI hosts. Four threads leaves one root scenario
+# room to make progress while still running the smaller Forgejo smoke tests in
+# parallel; three threads was measured to starve on lock waiters.
+[profile.e2e]
+test-threads = 4
+fail-fast = false
+
 [[profile.default.overrides]]
+filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
+test-group = 'root-forgejo-e2e'
+
+[[profile.e2e.overrides]]
 filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
 test-group = 'root-forgejo-e2e'
