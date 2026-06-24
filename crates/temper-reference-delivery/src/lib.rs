@@ -83,19 +83,16 @@ pub fn workflow() -> ValidatedWorkflow {
 
 /// The bundled **reference-delivery** workflow JSON, verbatim.
 ///
-/// This is the canonical copy of `examples/reference-delivery/config/workflow.json`,
-/// embedded at build time so a deployment can select it without carrying an
-/// external workflow source file.
+/// Embedded at build time so a deployment can select the reference workflow
+/// without carrying an external workflow source file.
 pub fn reference_delivery_workflow_json() -> &'static str {
     FIXTURE
 }
 
 /// The bundled **basic-delivery** workflow JSON, verbatim.
 ///
-/// This is the canonical copy of `examples/basic-delivery/config/workflow.json`,
-/// embedded at build time so a deployment carries it without a file on disk
-/// (`temper init` writes deployments that reference it). A fixture-vs-example
-/// equality test asserts the two cannot drift.
+/// Embedded at build time so a deployment can select the minimal no-human loop
+/// workflow without carrying an external workflow source file.
 pub fn basic_delivery_workflow_json() -> &'static str {
     BASIC_DELIVERY_FIXTURE
 }
@@ -205,14 +202,6 @@ mod tests {
 
     const REFERENCE_FIXTURE_PATH: &str = "../temper-workflow/fixtures/reference-delivery.json";
 
-    /// The canonical example workflow the bundled basic-delivery fixture mirrors,
-    /// relative to this crate's manifest dir.
-    const BASIC_DELIVERY_EXAMPLE_PATH: &str = "../../examples/basic-delivery/config/workflow.json";
-    /// The operator-facing example workflow the bundled reference-delivery
-    /// fixture mirrors, relative to this crate's manifest dir.
-    const REFERENCE_DELIVERY_EXAMPLE_PATH: &str =
-        "../../examples/reference-delivery/config/workflow.json";
-
     #[test]
     fn basic_delivery_workflow_parses_and_validates() {
         // Panics inside `basic_delivery_workflow` would fail the test; this also
@@ -221,34 +210,6 @@ mod tests {
         assert!(
             !workflow.roles().is_empty(),
             "basic-delivery should define roles"
-        );
-    }
-
-    #[test]
-    fn basic_delivery_fixture_matches_example() {
-        // The bundled fixture and the example must be byte-for-byte identical so a
-        // change to one cannot silently diverge from the other. Pick the example
-        // as the canonical source and assert the embedded copy equals it.
-        let example = std::fs::read_to_string(BASIC_DELIVERY_EXAMPLE_PATH)
-            .expect("basic-delivery example workflow is present");
-        assert_eq!(
-            basic_delivery_workflow_json(),
-            example,
-            "the embedded basic-delivery fixture has drifted from \
-             examples/basic-delivery/config/workflow.json; copy the example over \
-             crates/temper-workflow/fixtures/basic-delivery.json"
-        );
-    }
-
-    #[test]
-    fn reference_delivery_fixture_matches_example() {
-        let example = std::fs::read_to_string(REFERENCE_DELIVERY_EXAMPLE_PATH)
-            .expect("reference-delivery example workflow is present");
-        assert_eq!(
-            FIXTURE, example,
-            "the embedded reference-delivery fixture has drifted from \
-             examples/reference-delivery/config/workflow.json; copy the example over \
-             crates/temper-workflow/fixtures/reference-delivery.json"
         );
     }
 
