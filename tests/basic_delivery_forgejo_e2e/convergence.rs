@@ -1,0 +1,369 @@
+use std::time::{Duration, Instant};
+
+use temper_forge::{
+    CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, IssueState, ItemNumber,
+    PullRequest, PullRequestQuery, PullRequestState, RepositoryId, RepositoryPath, UserId,
+};
+use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_workflow::{CiStatus, parse_metadata_block};
+
+use super::fake_llm::{ARCHITECT_BODY, ENGINEER_SUMMARY};
+use super::process::ChildGuard;
+use super::{ADMIN_USER, ENGINEER, INTAKE_BODY, INTAKE_TITLE, NAME, OWNER, block_on};
+
+const ASSERT_POLL: Duration = Duration::from_secs(1);
+
+pub(super) fn admin_forge(base_url: &str, admin_token: &str) -> ForgejoForge {
+    ForgejoForge::new(
+        ForgejoConfig::new(base_url, admin_token)
+            .with_default_repo(OWNER, NAME)
+            .with_web_ui_credentials(ENGINEER, temper_forge::config::FORGEJO_ROLE_PASSWORD),
+    )
+}
+
+pub(super) async fn repository(forge: &ForgejoForge) -> Result<RepositoryId, String> {
+    forge
+        .get_repository_by_path(&RepositoryPath::new(OWNER, NAME))
+        .await
+        .map_err(|error| format!("repository lookup failed: {error}"))?
+        .map(|repo| repo.id)
+        .ok_or_else(|| format!("repository {OWNER}/{NAME} not found"))
+}
+
+pub(super) async fn seed_intake(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+) -> Result<ItemNumber, String> {
+    let issue = forge
+        .create_issue(
+            repository,
+            CreateIssue {
+                title: INTAKE_TITLE.to_string(),
+                body: INTAKE_BODY.to_string(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .map_err(|error| format!("create intake issue failed: {error}"))?;
+    Ok(issue.number)
+}
+
+pub(super) fn drive_full_basic_delivery(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+    standalone: &mut ChildGuard,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+
+    poll_until(deadline, standalone, || {
+        block_on(assert_issue_has_label(forge, repository, issue, "untriaged"))
+    })?;
+    poll_until(deadline, standalone, || {
+        block_on(assert_issue_triaged_ready(forge, repository, issue))
+    })?;
+    poll_until(deadline, standalone, || {
+        block_on(assert_pr_open_with_landing(forge, repository, issue))
+    })?;
+    poll_until(deadline, standalone, || {
+        block_on(assert_converged(forge, repository, issue))
+    })
+}
+
+async fn assert_issue_has_label(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+    label: &str,
+) -> Result<(), String> {
+    let issue = forge
+        .get_issue_by_number(repository, issue)
+        .await
+        .map_err(|error| format!("issue lookup failed: {error}"))?
+        .ok_or("source issue disappeared")?;
+    if issue.labels.iter().any(|have| have == label) {
+        Ok(())
+    } else {
+        Err(format!(
+            "issue #{} has not been mechanically marked `{label}` yet (labels {:?})",
+            issue.number, issue.labels
+        ))
+    }
+}
+
+async fn assert_issue_triaged_ready(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+) -> Result<(), String> {
+    let issue = forge
+        .get_issue_by_number(repository, issue)
+        .await
+        .map_err(|error| format!("issue lookup failed: {error}"))?
+        .ok_or("source issue disappeared")?;
+    require_labels(&issue.labels, &["code", "ready"])?;
+    reject_labels(&issue.labels, &["untriaged", "in-progress"])?;
+    if issue.body.trim() != ARCHITECT_BODY.trim() {
+        return Err(format!(
+            "architect-authored body not applied yet\nexpected:\n{ARCHITECT_BODY}\nactual:\n{}",
+            issue.body
+        ));
+    }
+    if !issue
+        .assignees
+        .iter()
+        .any(|assignee| assignee == &UserId::new("architect"))
+    {
+        return Err(format!(
+            "triaged issue is not assigned to architect yet (assignees {:?})",
+            issue.assignees
+        ));
+    }
+    Ok(())
+}
+
+async fn assert_pr_open_with_landing(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+) -> Result<(), String> {
+    let pr = implementation_pr(forge, repository, issue).await?;
+    verify_engineer_pr(&pr, issue)?;
+    if pr.state != PullRequestState::Open {
+        return Err(format!(
+            "implementation PR #{} is not in the open landing state (state {:?})",
+            pr.number, pr.state
+        ));
+    }
+    require_labels(&pr.labels, &["implementation", "landing"])?;
+    if !pr.body.contains(ENGINEER_SUMMARY) {
+        return Err(format!(
+            "implementation PR body does not contain engineer summary {:?}:\n{}",
+            ENGINEER_SUMMARY, pr.body
+        ));
+    }
+    Ok(())
+}
+
+async fn assert_converged(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+) -> Result<(), String> {
+    let pr = implementation_pr(forge, repository, issue).await?;
+    verify_engineer_pr(&pr, issue)?;
+    if pr.state != PullRequestState::Merged {
+        return Err(format!(
+            "implementation PR #{} is not merged yet (state {:?})",
+            pr.number, pr.state
+        ));
+    }
+    let merge = pr.merge.as_ref().ok_or("merged PR has no merge record")?;
+    if merge.merged_by == UserId::new(ENGINEER) {
+        return Err("PR was merged by the engineer, not mechanical automation".to_string());
+    }
+    let expected_automation = [UserId::new(ADMIN_USER), UserId::new(temper_provision::BOT_USER)];
+    if !expected_automation.iter().any(|user| user == &merge.merged_by) {
+        return Err(format!(
+            "PR was merged by {:?}, expected an automation identity ({:?})",
+            merge.merged_by, expected_automation
+        ));
+    }
+    require_labels(&pr.labels, &["implementation"])?;
+    reject_labels(&pr.labels, &["landing"])?;
+
+    let jobs = completed_ci_jobs(forge, repository, &pr).await?;
+    if jobs.is_empty() {
+        return Err(format!("no completed CI jobs for PR #{}", pr.number));
+    }
+    if jobs.last().and_then(|job| job.conclusion) != Some(CiJobConclusion::Success) {
+        return Err(format!(
+            "latest CI verdict for PR #{} is not success: {:?}",
+            pr.number,
+            jobs.last()
+        ));
+    }
+    if !CiStatus::from_jobs(&jobs).is_passed() {
+        return Err("latest CI aggregate is not passing".to_string());
+    }
+
+    let issue = forge
+        .get_issue_by_number(repository, issue)
+        .await
+        .map_err(|error| format!("source issue lookup failed: {error}"))?
+        .ok_or("source issue disappeared")?;
+    if issue.state != IssueState::Closed {
+        return Err(format!(
+            "source issue #{} not closed after merge (state {:?}, labels {:?})",
+            issue.number, issue.state, issue.labels
+        ));
+    }
+    require_labels(&issue.labels, &["code"])?;
+    reject_labels(&issue.labels, &["untriaged", "ready", "in-progress"])?;
+    if issue.body.trim() != ARCHITECT_BODY.trim() {
+        return Err("terminal source issue no longer carries the architect-authored spec".to_string());
+    }
+    Ok(())
+}
+
+async fn implementation_pr(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+) -> Result<PullRequest, String> {
+    let pull_requests: Vec<PullRequest> = forge
+        .list_pull_requests(repository, PullRequestQuery::default())
+        .await
+        .map_err(|error| format!("list_pull_requests failed: {error}"))?
+        .into_iter()
+        .filter(|pr| pr.labels.iter().any(|label| label == "implementation"))
+        .collect();
+    if pull_requests.len() != 1 {
+        return Err(format!(
+            "expected exactly one implementation PR, found {}",
+            pull_requests.len()
+        ));
+    }
+    let pr = pull_requests.into_iter().next().expect("one PR");
+    verify_metadata(&pr, issue)?;
+    Ok(pr)
+}
+
+fn verify_engineer_pr(pr: &PullRequest, issue: ItemNumber) -> Result<(), String> {
+    verify_metadata(pr, issue)?;
+    if pr.author_id != UserId::new(ENGINEER) {
+        return Err(format!(
+            "implementation PR #{} authored by {:?}, not engineer {:?}",
+            pr.number, pr.author_id, ENGINEER
+        ));
+    }
+    Ok(())
+}
+
+fn verify_metadata(pr: &PullRequest, issue: ItemNumber) -> Result<(), String> {
+    let metadata = parse_metadata_block(&pr.body)
+        .map_err(|error| format!("implementation PR metadata is malformed: {error}"))?
+        .ok_or("implementation PR is missing workflow metadata")?;
+    let expected_key = format!("pr-for-code-{issue}");
+    if metadata.correlation_key.as_deref() != Some(expected_key.as_str()) {
+        return Err(format!(
+            "implementation PR correlation key {:?} != {expected_key:?}",
+            metadata.correlation_key
+        ));
+    }
+    if !metadata
+        .parents
+        .iter()
+        .any(|parent| parent.is_same_repo() && parent.number == issue)
+    {
+        return Err(format!(
+            "implementation PR parents {:?} do not include issue #{issue}",
+            metadata.parents
+        ));
+    }
+    Ok(())
+}
+
+async fn completed_ci_jobs(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    pr: &PullRequest,
+) -> Result<Vec<CiJob>, String> {
+    let mut jobs = forge
+        .list_ci_jobs(
+            repository,
+            CiJobQuery {
+                pull_request_id: Some(pr.id.clone()),
+                status: Some(CiJobStatus::Completed),
+                ..CiJobQuery::default()
+            },
+        )
+        .await
+        .map_err(|error| format!("list_ci_jobs failed: {error}"))?;
+    jobs.sort_by(|left, right| left.created_at.cmp(&right.created_at).then(left.id.cmp(&right.id)));
+    Ok(jobs)
+}
+
+pub(super) fn ci_diagnostics(forge: &ForgejoForge, repository: &RepositoryId) -> String {
+    block_on(async {
+        let mut out = String::new();
+        match forge
+            .list_pull_requests(repository, PullRequestQuery::default())
+            .await
+        {
+            Ok(prs) => {
+                for pr in &prs {
+                    out.push_str(&format!(
+                        "PR #{} head={} labels={:?} state={:?} merge={:?}\n",
+                        pr.number, pr.source.branch, pr.labels, pr.state, pr.merge
+                    ));
+                    match forge
+                        .list_ci_jobs(
+                            repository,
+                            CiJobQuery {
+                                pull_request_id: Some(pr.id.clone()),
+                                ..CiJobQuery::default()
+                            },
+                        )
+                        .await
+                    {
+                        Ok(jobs) => {
+                            for job in jobs {
+                                out.push_str(&format!(
+                                    "  job {} status={:?} conclusion={:?} created={}\n",
+                                    job.name, job.status, job.conclusion, job.created_at
+                                ));
+                            }
+                        }
+                        Err(error) => out.push_str(&format!("  list_ci_jobs error: {error}\n")),
+                    }
+                }
+            }
+            Err(error) => out.push_str(&format!("list_pull_requests error: {error}\n")),
+        }
+        out
+    })
+}
+
+fn require_labels(labels: &[String], required: &[&str]) -> Result<(), String> {
+    for required in required {
+        if !labels.iter().any(|label| label == required) {
+            return Err(format!("missing label `{required}` from {labels:?}"));
+        }
+    }
+    Ok(())
+}
+
+fn reject_labels(labels: &[String], rejected: &[&str]) -> Result<(), String> {
+    for rejected in rejected {
+        if labels.iter().any(|label| label == rejected) {
+            return Err(format!("unexpected label `{rejected}` in {labels:?}"));
+        }
+    }
+    Ok(())
+}
+
+fn poll_until<T>(
+    deadline: Instant,
+    standalone: &mut ChildGuard,
+    mut assert: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    loop {
+        if let Some(status) = standalone.try_wait() {
+            return Err(format!(
+                "{} exited early with {status:?}",
+                standalone.label
+            ));
+        }
+        match assert() {
+            Ok(value) => return Ok(value),
+            Err(error) if Instant::now() < deadline => {
+                std::thread::sleep(ASSERT_POLL);
+                let _ = error;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
