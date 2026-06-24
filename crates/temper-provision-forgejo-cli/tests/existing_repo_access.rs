@@ -24,8 +24,8 @@ use serde_json::Value;
 use temper_provision_forgejo_cli::provision::{
     AccessScope, BOT_USER, ProvisionOptions, provision_and_seed, provision_world,
 };
-use temper_testing::forgejo_server::{ForgejoServer, ForgejoState};
 use temper_testing::forgejo_server::provision::bootstrap_admin;
+use temper_testing::forgejo_server::{ForgejoServer, ForgejoState};
 use temper_testing::{runner_config, workflow};
 
 const OWNER: &str = "ai";
@@ -99,14 +99,7 @@ fn initialize_existing_repo_state(server: &ForgejoServer) -> Result<String, Stri
     temper_engine_io::block_on(async move {
         let client = http();
         create_org(&client, &base, &admin_for_repo, OWNER).await;
-        create_repo_with_sentinel(
-            &client,
-            &base,
-            &admin_for_repo,
-            OWNER,
-            EXISTING_REPO_NAME,
-        )
-        .await;
+        create_repo_with_sentinel(&client, &base, &admin_for_repo, OWNER, EXISTING_REPO_NAME).await;
     });
     Ok(admin_token)
 }
@@ -348,15 +341,14 @@ async fn has_actions(
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
-        let (server, admin) = start_server_with_admin().await;
+        let (server, admin) = start_existing_repo_state().await;
         let base = server.base_url().to_string();
-        let name = "smith";
+        let name = EXISTING_REPO_NAME;
         let client = http();
 
-        // A real, content-bearing repo on a shared org (the `ai` org also hosts
-        // `temper`), with the project's own CI already committed.
-        create_org(&client, &base, &admin, OWNER).await;
-        create_repo_with_sentinel(&client, &base, &admin, OWNER, name).await;
+        // The cached state contains a real, content-bearing repo on a shared
+        // org (the `ai` org also hosts `temper`), with the project's own CI
+        // already committed.
         let commits_before = commit_count(&client, &base, &admin, OWNER, name).await;
 
         let config = runner_config();
@@ -448,12 +440,10 @@ fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn existing_repo_errors_when_repo_absent() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
-        let (server, admin) = start_server_with_admin().await;
+        let (server, admin) = start_missing_repo_state().await;
         let base = server.base_url().to_string();
-        let client = http();
 
-        // The org exists, but the named repo does not.
-        create_org(&client, &base, &admin, OWNER).await;
+        // The cached state contains the org, but the named repo does not.
 
         let config = runner_config();
         let workflow = workflow();
@@ -489,13 +479,10 @@ fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         // Exercises the full `provision_and_seed` path with `--existing-repo` and a
         // webhook, mirroring the intended Smith caller (`--seed-intake no`).
-        let (server, admin) = start_server_with_admin().await;
+        let (server, admin) = start_existing_repo_state().await;
         let base = server.base_url().to_string();
-        let name = "smith-webhook";
+        let name = EXISTING_REPO_NAME;
         let client = http();
-
-        create_org(&client, &base, &admin, OWNER).await;
-        create_repo_with_sentinel(&client, &base, &admin, OWNER, name).await;
 
         // A webhook secret file on disk.
         let dir = std::env::temp_dir().join(format!("temper-issue70-{}", std::process::id()));
