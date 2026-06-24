@@ -8,7 +8,7 @@
 //! cargo test -p temper-provision-forgejo-cli --test existing_repo_access -- --ignored
 //! ```
 //!
-//! Each test boots a throwaway [`ForgejoServer`], bootstraps an admin token, and
+//! Each test boots a throwaway [`ForgejoServer`] from a small cached state, then
 //! drives the demo operator [`provision_world`] (not the testing-crate copy) so
 //! the `--existing-repo` and `--access repo-collaborator` paths are exercised
 //! end to end against a real Forgejo:
@@ -24,24 +24,91 @@ use serde_json::Value;
 use temper_provision_forgejo_cli::provision::{
     AccessScope, BOT_USER, ProvisionOptions, provision_and_seed, provision_world,
 };
-use temper_testing::forgejo_server::ForgejoServer;
+use temper_testing::forgejo_server::{ForgejoServer, ForgejoState};
 use temper_testing::forgejo_server::provision::bootstrap_admin;
 use temper_testing::{runner_config, workflow};
 
 const OWNER: &str = "ai";
+const EXISTING_REPO_NAME: &str = "smith";
 const SENTINEL_PATH: &str = ".forgejo/workflows/ci.yml";
 const SENTINEL_BODY: &str = "name: project-owned-ci\non: [push]\njobs:\n  noop:\n    runs-on: host\n    steps:\n      - run: echo project owns its CI\n";
 
-/// Boots a throwaway server on a blocking thread (its readiness poll uses a
-/// blocking client that must not be dropped on the reactor) and returns it with
-/// a freshly bootstrapped admin token.
-async fn start_server_with_admin() -> (ForgejoServer, String) {
+/// Restores a throwaway server from the cached state containing the admin user
+/// and shared org but no repository.
+async fn start_missing_repo_state() -> (ForgejoServer, String) {
     skein::runtime::spawn_blocking(|| {
-        let server = ForgejoServer::start().expect("forgejo server boots");
-        let admin_token = bootstrap_admin(&server).expect("admin bootstrap mints a token");
-        (server, admin_token)
+        let state = ForgejoState::new(missing_repo_state_description())
+            .expect("missing-repo state description serializes");
+        let cached = ForgejoServer::start_with_state(&state, initialize_missing_repo_state)
+            .expect("cached missing-repo Forgejo state starts");
+        (cached.server, cached.metadata)
     })
     .await
+}
+
+/// Restores a throwaway server from the cached state containing the admin user,
+/// shared org, and a content-bearing repository with the project-owned CI file.
+async fn start_existing_repo_state() -> (ForgejoServer, String) {
+    skein::runtime::spawn_blocking(|| {
+        let state = ForgejoState::new(existing_repo_state_description())
+            .expect("existing-repo state description serializes");
+        let cached = ForgejoServer::start_with_state(&state, initialize_existing_repo_state)
+            .expect("cached existing-repo Forgejo state starts");
+        (cached.server, cached.metadata)
+    })
+    .await
+}
+
+fn missing_repo_state_description() -> serde_json::Value {
+    serde_json::json!({
+        "kind": "temper-existing-repo-access-missing-repo",
+        "version": 1,
+        "owner": OWNER,
+        "bootstrap": "temper_testing::forgejo_server::provision::bootstrap_admin",
+    })
+}
+
+fn existing_repo_state_description() -> serde_json::Value {
+    serde_json::json!({
+        "kind": "temper-existing-repo-access-existing-repo",
+        "version": 1,
+        "owner": OWNER,
+        "repository": EXISTING_REPO_NAME,
+        "default_branch": "main",
+        "sentinel_path": SENTINEL_PATH,
+        "sentinel_body": SENTINEL_BODY,
+        "bootstrap": "temper_testing::forgejo_server::provision::bootstrap_admin",
+    })
+}
+
+fn initialize_missing_repo_state(server: &ForgejoServer) -> Result<String, String> {
+    let admin_token = bootstrap_admin(server).map_err(|err| err.to_string())?;
+    let base = server.base_url().to_string();
+    let admin_for_org = admin_token.clone();
+    temper_engine_io::block_on(async move {
+        let client = http();
+        create_org(&client, &base, &admin_for_org, OWNER).await;
+    });
+    Ok(admin_token)
+}
+
+fn initialize_existing_repo_state(server: &ForgejoServer) -> Result<String, String> {
+    let admin_token = bootstrap_admin(server).map_err(|err| err.to_string())?;
+    let base = server.base_url().to_string();
+    let admin_for_repo = admin_token.clone();
+    temper_engine_io::block_on(async move {
+        let client = http();
+        create_org(&client, &base, &admin_for_repo, OWNER).await;
+        create_repo_with_sentinel(
+            &client,
+            &base,
+            &admin_for_repo,
+            OWNER,
+            EXISTING_REPO_NAME,
+        )
+        .await;
+    });
+    Ok(admin_token)
 }
 
 fn http() -> temper_engine_io::http::JsonClient {
