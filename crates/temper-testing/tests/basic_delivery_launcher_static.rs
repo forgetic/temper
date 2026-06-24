@@ -8,7 +8,11 @@ use std::collections::BTreeSet;
 use temper_workflow::{IntakeAuthor, RawWorkflowSpec, RoleId, ValidatedWorkflow};
 
 fn role_ids(workflow: &ValidatedWorkflow) -> BTreeSet<&str> {
-    workflow.roles().iter().map(|role| role.id.as_str()).collect()
+    workflow
+        .roles()
+        .iter()
+        .map(|role| role.id.as_str())
+        .collect()
 }
 
 fn queue_served_roles(workflow: &ValidatedWorkflow) -> BTreeSet<&str> {
@@ -42,10 +46,9 @@ fn bundled_basic_delivery_fixture_is_the_minimal_agent_shape() {
 
 #[test]
 fn bundled_basic_delivery_json_parses_to_the_public_workflow() {
-    let spec: RawWorkflowSpec = serde_json::from_str(
-        temper_reference_delivery::basic_delivery_workflow_json(),
-    )
-    .expect("bundled basic-delivery JSON parses");
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
+            .expect("bundled basic-delivery JSON parses");
     let parsed = spec
         .validate()
         .expect("bundled basic-delivery JSON validates");
