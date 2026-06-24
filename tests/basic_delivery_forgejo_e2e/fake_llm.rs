@@ -3,8 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use jig_core::{
-    PhaseSpec, Reply, ReplySpec, RequestView, Script, ScriptFile, StopSpec, TurnSpec,
-    fixtures_root,
+    PhaseSpec, Reply, ReplySpec, RequestView, Script, ScriptFile, StopSpec, TurnSpec, fixtures_root,
 };
 use jig_server::FakeLlm;
 use serde_json::Value;
@@ -155,12 +154,9 @@ fn expectations_from_script_file(script_file: &ScriptFile) -> Result<FixtureExpe
     let architect_phase = phase_by_name(phases, ARCHITECT_PHASE)?;
     require_role_matcher(architect_phase, ARCHITECT_ROLE_PROMPT)?;
     require_two_step_phase(architect_phase)?;
-    require_tool_call_reply(
-        reply_at(architect_phase, 0)?,
-        ARCHITECT_PHASE,
-        "bash",
-    )?;
-    let architect_result = workspace_result(reply_text(reply_at(architect_phase, 1)?)?, ARCHITECT_PHASE)?;
+    require_tool_call_reply(reply_at(architect_phase, 0)?, ARCHITECT_PHASE, "bash")?;
+    let architect_result =
+        workspace_result(reply_text(reply_at(architect_phase, 1)?)?, ARCHITECT_PHASE)?;
     require_string_field(&architect_result, "verdict", ARCHITECT_PHASE).and_then(|verdict| {
         if verdict == "ready_code" {
             Ok(())
@@ -176,7 +172,8 @@ fn expectations_from_script_file(script_file: &ScriptFile) -> Result<FixtureExpe
     require_role_matcher(engineer_phase, ENGINEER_ROLE_PROMPT)?;
     require_two_step_phase(engineer_phase)?;
     require_tool_call_reply(reply_at(engineer_phase, 0)?, ENGINEER_PHASE, "write")?;
-    let engineer_result = workspace_result(reply_text(reply_at(engineer_phase, 1)?)?, ENGINEER_PHASE)?;
+    let engineer_result =
+        workspace_result(reply_text(reply_at(engineer_phase, 1)?)?, ENGINEER_PHASE)?;
     if engineer_result.get("verdict").is_some() {
         return Err(format!(
             "`{ENGINEER_PHASE}` result must be a success-path WorkspaceResult without a verdict"
@@ -199,12 +196,19 @@ fn phase_by_name<'a>(phases: &'a [PhaseSpec], name: &str) -> Result<&'a PhaseSpe
 
 fn require_role_matcher(phase: &PhaseSpec, role_prompt: &str) -> Result<(), String> {
     let expected = vec![role_prompt.to_string()];
-    if phase.when.messages_contain == expected {
+    if phase.when.messages_contain == expected
+        && phase.when.any_message_contains.is_empty()
+        && phase.when.last_message_contains.is_empty()
+        && phase.when.prior_tool_results.is_none()
+        && phase.when.model.is_none()
+        && phase.when.dialect.is_none()
+        && !phase.when.ignore_case
+    {
         Ok(())
     } else {
         Err(format!(
-            "`{}` phase must be selected by messages_contain={expected:?}, got {:?}",
-            phase.name, phase.when.messages_contain
+            "`{}` phase must be selected only by messages_contain={expected:?}, got {:?}",
+            phase.name, phase.when
         ))
     }
 }
@@ -230,7 +234,11 @@ fn reply_at(phase: &PhaseSpec, index: usize) -> Result<&ReplySpec, String> {
     })
 }
 
-fn require_tool_call_reply(reply: &ReplySpec, phase: &str, expected_tool: &str) -> Result<(), String> {
+fn require_tool_call_reply(
+    reply: &ReplySpec,
+    phase: &str,
+    expected_tool: &str,
+) -> Result<(), String> {
     let ReplySpec::Full { turns, stop, .. } = reply else {
         return Err(format!(
             "`{phase}` first reply must use the full form for a tool-call stop, got {reply:?}"

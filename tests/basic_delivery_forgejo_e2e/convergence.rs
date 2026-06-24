@@ -7,7 +7,7 @@ use temper_forge::{
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_workflow::{CiStatus, parse_metadata_block};
 
-use super::fake_llm::{ARCHITECT_BODY, ENGINEER_SUMMARY};
+use super::fake_llm::{architect_body, engineer_summary};
 use super::process::ChildGuard;
 use super::{ADMIN_USER, ENGINEER, INTAKE_BODY, INTAKE_TITLE, NAME, OWNER, block_on};
 
@@ -110,9 +110,10 @@ async fn assert_issue_triaged_ready(
         .ok_or("source issue disappeared")?;
     require_labels(&issue.labels, &["code", "ready"])?;
     reject_labels(&issue.labels, &["untriaged", "in-progress"])?;
-    if issue.body.trim() != ARCHITECT_BODY.trim() {
+    let expected_body = architect_body();
+    if issue.body.trim() != expected_body.trim() {
         return Err(format!(
-            "architect-authored body not applied yet\nexpected:\n{ARCHITECT_BODY}\nactual:\n{}",
+            "architect-authored body not applied yet\nexpected:\n{expected_body}\nactual:\n{}",
             issue.body
         ));
     }
@@ -143,10 +144,11 @@ async fn assert_pr_open_with_landing(
         ));
     }
     require_labels(&pr.labels, &["implementation", "landing"])?;
-    if !pr.body.contains(ENGINEER_SUMMARY) {
+    let expected_summary = engineer_summary();
+    if !pr.body.contains(expected_summary) {
         return Err(format!(
             "implementation PR body does not contain engineer summary {:?}:\n{}",
-            ENGINEER_SUMMARY, pr.body
+            expected_summary, pr.body
         ));
     }
     Ok(())
@@ -213,7 +215,7 @@ async fn assert_converged(
     }
     require_labels(&issue.labels, &["code"])?;
     reject_labels(&issue.labels, &["untriaged", "ready", "in-progress"])?;
-    let expected_body = ARCHITECT_BODY.trim();
+    let expected_body = architect_body().trim();
     if !issue.body.contains(expected_body) {
         return Err(format!(
             "terminal source issue no longer carries the architect-authored spec\nexpected to find:\n{expected_body}\nactual:\n{}",
