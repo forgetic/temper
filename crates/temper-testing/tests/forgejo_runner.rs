@@ -8,12 +8,14 @@
 //! cargo test -p temper-testing --test forgejo_runner -- --ignored
 //! ```
 //!
-//! It boots a [`ForgejoServer`] + [`ForgejoRunner`] (host mode, no containers),
-//! provisions a minimal repo whose `.forgejo/workflows/ci.yml` deliberately
-//! **fails** (`run: exit 1`), then polls the head commit's status API until the
-//! real runner reports `state: "failure"`. That a real verdict appears confirms
-//! the runner picked up and executed the job on this host. (Reading CI via the
-//! web-UI live-view JSON is Phase 3b; commit status is the cheap confirmation.)
+//! It boots a cached [`ForgejoServer`] state that already has a minimal repo with
+//! Actions enabled and a queued `.forgejo/workflows/ci.yml` run that deliberately
+//! **fails** (`run: exit 1`). The test then registers a fresh host-mode
+//! [`ForgejoRunner`] (never cached), and polls the head commit's status API until
+//! the real runner reports `state: "failure"`. That a real verdict appears
+//! confirms the runner picked up and executed the queued job on this host.
+//! (Reading CI via the web-UI live-view JSON is Phase 3b; commit status is the
+//! cheap confirmation.)
 //!
 //! Provisioning here is raw HTTP via an admin token created with the server CLI;
 //! full role/identity provisioning is Phase 2.
@@ -26,6 +28,7 @@ const ADMIN_USER: &str = "temperadmin";
 const ADMIN_PASSWORD: &str = "Sup3rSecret-Phase1b!";
 const ADMIN_EMAIL: &str = "temperadmin@example.invalid";
 const REPO: &str = "ci-smoke";
+const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 
 /// A failing host-mode workflow: `runs-on: host` so the `host:host` runner
 /// claims it, and `exit 1` so the verdict is unambiguously a failure.
@@ -40,6 +43,7 @@ jobs:\n\
 #[derive(serde::Deserialize, serde::Serialize)]
 struct RunnerSmokeMetadata {
     admin_token: String,
+    head_sha: String,
 }
 
 #[test]
@@ -47,9 +51,12 @@ struct RunnerSmokeMetadata {
 fn runner_runs_failing_job_and_reports_failure() {
     let state = ForgejoState::new(json!({
         "kind": "runner-smoke",
-        "version": 1,
+        "version": 2,
         "admin": ADMIN_USER,
         "repo": REPO,
+        "workflow_path": WORKFLOW_PATH,
+        "workflow_sha256": sha256_hex(FAILING_WORKFLOW.as_bytes()),
+        "actions_setup": "cached-with-queued-run",
     }))
     .expect("runner smoke state serializes");
     let cached = ForgejoServer::start_with_state(&state, |server| {
@@ -57,26 +64,39 @@ fn runner_runs_failing_job_and_reports_failure() {
         let token = create_admin_token(server);
         let client = temper_engine_io::http::BlockingJsonClient::new();
         create_repo(&client, &base, &token);
-        Ok::<RunnerSmokeMetadata, String>(RunnerSmokeMetadata { admin_token: token })
+        enable_repo_actions(&client, &base, &token);
+        let head_sha = put_workflow_file(&client, &base, &token);
+        Ok::<RunnerSmokeMetadata, String>(RunnerSmokeMetadata {
+            admin_token: token,
+            head_sha,
+        })
     })
     .expect("forgejo runner smoke state starts");
     let server = cached.server;
     let token = cached.metadata.admin_token;
+    let head_sha = cached.metadata.head_sha;
     let base = server.base_url().to_string();
     let client = temper_engine_io::http::BlockingJsonClient::new();
 
-    // Register the host-mode runner *before* pushing the workflow so it is ready
-    // to claim the job the moment Actions sees it.
+    // The cached state must contain setup work only: an initialized repo,
+    // Actions enabled, and a queued run. It must not already contain the runner's
+    // terminal verdict, or this test would only validate cache restoration.
+    let before_runner = commit_state(&client, &base, &token, &head_sha)
+        .unwrap_or_else(|| "(unreadable)".to_string());
+    assert!(
+        !matches!(before_runner.as_str(), "success" | "failure" | "error"),
+        "expected cached workflow to be queued/pending before runner registration, \
+         observed terminal commit state {before_runner:?}"
+    );
+
+    // Register the host-mode runner only after restoring the cached tree. Runner
+    // registration and the runner daemon are live process/runtime identity and
+    // are intentionally never cached.
     let mut runner = ForgejoRunner::register(&server).expect("runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
 
-    // The cached state already has the admin and initialized repo. Commit the
-    // failing workflow into this per-test copy and enable Actions.
-    let head_sha = put_workflow_file(&client, &base, &token);
-    enable_repo_actions(&client, &base, &token);
-
-    // Wait (generously) for the runner to pick up and fail the job, observed via
-    // the head commit's status.
+    // Wait (generously) for the runner to pick up the queued job and fail it,
+    // observed via the head commit's status.
     let state = wait_for_commit_state(&client, &base, &token, &head_sha);
     assert_eq!(
         state,
@@ -161,7 +181,7 @@ fn put_workflow_file(
     let content = base64::engine::general_purpose::STANDARD.encode(FAILING_WORKFLOW);
     let (status, body) = client.send_expect_json(
         "POST",
-        format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/.forgejo/workflows/ci.yml"),
+        format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/{WORKFLOW_PATH}"),
         Some(token),
         Some(&json!({
             "content": content,
@@ -200,6 +220,18 @@ fn enable_repo_actions(
 
 /// Polls the commit-status API until a terminal state appears or a generous
 /// deadline passes. Returns the observed `state` (e.g. `failure`, `success`).
+fn commit_state(
+    client: &temper_engine_io::http::BlockingJsonClient,
+    base: &str,
+    token: &str,
+    sha: &str,
+) -> Option<String> {
+    let url = format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/commits/{sha}/status");
+    let resp = client.send("GET", url, Some(token), None).ok()?;
+    let body = serde_json::from_slice::<Value>(&resp.body).ok()?;
+    Some(body["state"].as_str().unwrap_or("").to_string())
+}
+
 fn wait_for_commit_state(
     client: &temper_engine_io::http::BlockingJsonClient,
     base: &str,
@@ -208,13 +240,9 @@ fn wait_for_commit_state(
 ) -> String {
     // A real host CI job takes seconds; allow plenty of slack for cold start.
     let deadline = Instant::now() + Duration::from_secs(120);
-    let url = format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/commits/{sha}/status");
     let mut last = String::from("(none)");
     loop {
-        if let Ok(resp) = client.send("GET", url.as_str(), Some(token), None)
-            && let Ok(body) = serde_json::from_slice::<Value>(&resp.body)
-        {
-            let state = body["state"].as_str().unwrap_or("").to_string();
+        if let Some(state) = commit_state(client, base, token, sha) {
             last = state.clone();
             // `pending`/`running`/empty mean "not done yet"; keep polling.
             if matches!(state.as_str(), "success" | "failure" | "error") {
@@ -224,6 +252,18 @@ fn wait_for_commit_state(
         if Instant::now() >= deadline {
             return format!("timeout (last state: {last})");
         }
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(Duration::from_secs(1));
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
