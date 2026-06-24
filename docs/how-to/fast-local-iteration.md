@@ -28,6 +28,17 @@ cargo dev-test-build
 Use it before the full suite when you want `cargo dev-test-full` to start with
 fresh test artifacts already compiled.
 
+For the calibrated ignored Forgejo/e2e suite, use the dedicated nextest profile:
+
+```sh
+cargo dev-test-e2e
+```
+
+This expands to `cargo nextest run --workspace --run-ignored only -P e2e`
+with the usual non-interactive output flags. The `e2e` profile caps nextest at
+4 test threads so the fixture does not over-schedule Forgejo servers, runners,
+daemons, and root-e2e lock waiters on shared developer/CI hosts.
+
 For the full self-contained local suite:
 
 ```sh

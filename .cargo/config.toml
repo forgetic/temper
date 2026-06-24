@@ -23,6 +23,7 @@ dev-fmt = "fmt --all"
 dev-clippy = "clippy --workspace --all-targets"
 dev-test-build = "test --workspace --all-targets --no-run"
 dev-test-quick = "nextest run --workspace --color never --show-progress none --status-level leak"
+dev-test-e2e = "nextest run --workspace --color never --show-progress none --status-level leak --run-ignored only -P e2e"
 dev-test-full = "nextest run --workspace --color never --show-progress none --status-level leak --no-fail-fast --run-ignored all"
 dev-doc = "doc --workspace --no-deps"
 
