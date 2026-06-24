@@ -59,7 +59,12 @@ pub(super) fn drive_full_basic_delivery(
     let deadline = Instant::now() + timeout;
 
     poll_until(deadline, standalone, || {
-        block_on(assert_issue_has_label(forge, repository, issue, "untriaged"))
+        block_on(assert_issue_has_label(
+            forge,
+            repository,
+            issue,
+            "untriaged",
+        ))
     })?;
     poll_until(deadline, standalone, || {
         block_on(assert_issue_triaged_ready(forge, repository, issue))
@@ -164,8 +169,14 @@ async fn assert_converged(
     if merge.merged_by == UserId::new(ENGINEER) {
         return Err("PR was merged by the engineer, not mechanical automation".to_string());
     }
-    let expected_automation = [UserId::new(ADMIN_USER), UserId::new(temper_provision::BOT_USER)];
-    if !expected_automation.iter().any(|user| user == &merge.merged_by) {
+    let expected_automation = [
+        UserId::new(ADMIN_USER),
+        UserId::new(temper_provision::BOT_USER),
+    ];
+    if !expected_automation
+        .iter()
+        .any(|user| user == &merge.merged_by)
+    {
         return Err(format!(
             "PR was merged by {:?}, expected an automation identity ({:?})",
             merge.merged_by, expected_automation
@@ -203,7 +214,9 @@ async fn assert_converged(
     require_labels(&issue.labels, &["code"])?;
     reject_labels(&issue.labels, &["untriaged", "ready", "in-progress"])?;
     if issue.body.trim() != ARCHITECT_BODY.trim() {
-        return Err("terminal source issue no longer carries the architect-authored spec".to_string());
+        return Err(
+            "terminal source issue no longer carries the architect-authored spec".to_string(),
+        );
     }
     Ok(())
 }
@@ -282,7 +295,11 @@ async fn completed_ci_jobs(
         )
         .await
         .map_err(|error| format!("list_ci_jobs failed: {error}"))?;
-    jobs.sort_by(|left, right| left.created_at.cmp(&right.created_at).then(left.id.cmp(&right.id)));
+    jobs.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.id.cmp(&right.id))
+    });
     Ok(jobs)
 }
 
@@ -352,10 +369,7 @@ fn poll_until<T>(
 ) -> Result<T, String> {
     loop {
         if let Some(status) = standalone.try_wait() {
-            return Err(format!(
-                "{} exited early with {status:?}",
-                standalone.label
-            ));
+            return Err(format!("{} exited early with {status:?}", standalone.label));
         }
         match assert() {
             Ok(value) => return Ok(value),

@@ -99,10 +99,13 @@ fn architect_reply(view: &RequestView) -> Reply {
             stop: StopReason::ToolCalls,
         }
     } else {
-        Reply::text(serde_json::json!({
-            "verdict": "ready_code",
-            "body": ARCHITECT_BODY,
-        }).to_string())
+        Reply::text(
+            serde_json::json!({
+                "verdict": "ready_code",
+                "body": ARCHITECT_BODY,
+            })
+            .to_string(),
+        )
     }
 }
 
@@ -122,9 +125,12 @@ fn engineer_reply(view: &RequestView) -> Reply {
             stop: StopReason::ToolCalls,
         }
     } else {
-        Reply::text(serde_json::json!({
-            "summary": ENGINEER_SUMMARY,
-        }).to_string())
+        Reply::text(
+            serde_json::json!({
+                "summary": ENGINEER_SUMMARY,
+            })
+            .to_string(),
+        )
     }
 }
 

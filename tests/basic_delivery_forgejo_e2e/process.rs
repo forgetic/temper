@@ -142,7 +142,12 @@ pub(super) fn populate_repo(base_url: &str, admin_token: &str, workspace: &Path,
 
     if run_git_maybe(&checkout, &["init", "-b", "main"], log, "git init -b main").is_err() {
         run_git(&checkout, &["init"], log, "git init");
-        run_git(&checkout, &["checkout", "-B", "main"], log, "git checkout -B main");
+        run_git(
+            &checkout,
+            &["checkout", "-B", "main"],
+            log,
+            "git checkout -B main",
+        );
     }
     run_git(
         &checkout,
@@ -158,7 +163,12 @@ pub(super) fn populate_repo(base_url: &str, admin_token: &str, workspace: &Path,
     );
     run_git(
         &checkout,
-        &["remote", "add", "origin", &format!("{base_url}/{OWNER}/{NAME}.git")],
+        &[
+            "remote",
+            "add",
+            "origin",
+            &format!("{base_url}/{OWNER}/{NAME}.git"),
+        ],
         log,
         "git remote add origin",
     );
@@ -175,7 +185,12 @@ pub(super) fn populate_repo(base_url: &str, admin_token: &str, workspace: &Path,
     )
     .expect("README writes");
 
-    run_git(&checkout, &["add", "README.md", ".forgejo/workflows/ci.yml"], log, "git add");
+    run_git(
+        &checkout,
+        &["add", "README.md", ".forgejo/workflows/ci.yml"],
+        log,
+        "git add",
+    );
     run_git(
         &checkout,
         &[
@@ -225,8 +240,13 @@ pub(super) fn spawn_temper_standalone(bundle_dir: &Path, log: &Path) -> ChildGua
 }
 
 pub(super) fn wait_for_standalone(child: &mut ChildGuard) {
-    for needle in ["webhook listener up", "worker:  capacity:", "ready -- watching"] {
-        wait_for_log_line(&child.log, needle, child);
+    for needle in [
+        "webhook listener up",
+        "worker:  capacity:",
+        "ready -- watching",
+    ] {
+        let log = child.log.clone();
+        wait_for_log_line(&log, needle, child);
     }
 }
 
@@ -266,7 +286,11 @@ impl ChildGuard {
     }
 
     pub(super) fn log_tail(&self) -> String {
-        format!("(full log: {})\n{}", self.log.display(), read_tail(&self.log, 160))
+        format!(
+            "(full log: {})\n{}",
+            self.log.display(),
+            read_tail(&self.log, 160)
+        )
     }
 }
 
@@ -289,12 +313,19 @@ pub(super) fn read_tail(path: &Path, lines: usize) -> String {
 
 fn run_git(checkout: &Path, args: &[&str], log: &Path, label: &str) {
     run_git_maybe(checkout, args, log, label).unwrap_or_else(|status| {
-        panic!("{label} failed with {status}\n--- git log ---\n{}", read_tail(log, 120))
+        panic!(
+            "{label} failed with {status}\n--- git log ---\n{}",
+            read_tail(log, 120)
+        )
     });
 }
 
 fn run_git_maybe(checkout: &Path, args: &[&str], log: &Path, label: &str) -> Result<(), String> {
-    run_logged(Command::new("git").arg("-C").arg(checkout).args(args), log, label)
+    run_logged(
+        Command::new("git").arg("-C").arg(checkout).args(args),
+        log,
+        label,
+    )
 }
 
 fn run_git_with_token(checkout: &Path, token: &str, args: &[&str], log: &Path, label: &str) {
@@ -309,7 +340,10 @@ fn run_git_with_token(checkout: &Path, token: &str, args: &[&str], log: &Path, l
         label,
     )
     .unwrap_or_else(|status| {
-        panic!("{label} failed with {status}\n--- git log ---\n{}", read_tail(log, 120))
+        panic!(
+            "{label} failed with {status}\n--- git log ---\n{}",
+            read_tail(log, 120)
+        )
     });
 }
 

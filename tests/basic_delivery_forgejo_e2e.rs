@@ -31,21 +31,21 @@ use fake_llm::BasicDeliveryFake;
 use process::{RunWorkspaceGuard, create_site_admin, free_port, populate_repo};
 use temper_testing::forgejo_server::{ForgejoRunner, ForgejoServer};
 
-pub(super) const OWNER: &str = "acme";
-pub(super) const NAME: &str = "service";
-pub(super) const ENGINEER: &str = "engineer";
+const OWNER: &str = "acme";
+const NAME: &str = "service";
+const ENGINEER: &str = "engineer";
 
-pub(super) const ADMIN_USER: &str = "basicadmin";
-pub(super) const ADMIN_PASSWORD: &str = "Basic-Delivery-Admin-1!";
-pub(super) const INIT_PROVIDER_KEY: &str = "basic-delivery-jig-dummy-key";
+const ADMIN_USER: &str = "basicadmin";
+const ADMIN_PASSWORD: &str = "Basic-Delivery-Admin-1!";
+const INIT_PROVIDER_KEY: &str = "basic-delivery-jig-dummy-key";
 
-pub(super) const INTAKE_TITLE: &str = "Service banner should identify the environment";
-pub(super) const INTAKE_BODY: &str =
-    include_str!("../examples/basic-delivery/config/intake-issue.md");
-pub(super) const EXAMPLE_CI: &str = include_str!("../examples/basic-delivery/config/ci.yml");
+const INTAKE_TITLE: &str = "Service banner should identify the environment";
+const INTAKE_BODY: &str = include_str!("../examples/basic-delivery/config/intake-issue.md");
+const EXAMPLE_CI: &str = include_str!("../examples/basic-delivery/config/ci.yml");
 
 const EXAMPLE_WORKFLOW: &str = include_str!("../examples/basic-delivery/config/workflow.json");
-const FIXTURE_WORKFLOW: &str = include_str!("../crates/temper-workflow/fixtures/basic-delivery.json");
+const FIXTURE_WORKFLOW: &str =
+    include_str!("../crates/temper-workflow/fixtures/basic-delivery.json");
 
 const DAEMON_POLL_CADENCE_SECS: u64 = 600;
 const MECHANICAL_CADENCE_SECS: u64 = 1;
@@ -97,7 +97,12 @@ fn basic_delivery_run_sh_equivalent_converges() {
     );
 
     let populate_log = workspace.0.join("logs/repo-populate.log");
-    populate_repo(server.base_url(), &admin_token, workspace.0.path(), &populate_log);
+    populate_repo(
+        server.base_url(),
+        &admin_token,
+        workspace.0.path(),
+        &populate_log,
+    );
 
     let run_log = workspace.0.join("logs/standalone.log");
     let mut standalone = process::spawn_temper_standalone(&bundle_dir, &run_log);
@@ -105,7 +110,8 @@ fn basic_delivery_run_sh_equivalent_converges() {
 
     let forge = convergence::admin_forge(server.base_url(), &admin_token);
     let repository = block_on(convergence::repository(&forge)).expect("repository resolves");
-    let issue = block_on(convergence::seed_intake(&forge, &repository)).expect("intake issue seeds");
+    let issue =
+        block_on(convergence::seed_intake(&forge, &repository)).expect("intake issue seeds");
     eprintln!("basic_delivery_forgejo_e2e: seeded intake issue #{issue}");
 
     let timeout = convergence_timeout();
