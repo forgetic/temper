@@ -91,6 +91,92 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         self.update_issue_run_ledger(job, issue, &update).await;
     }
 
+    /// Marks an engineer source-issue ledger as retryable after a transient
+    /// worker failure. The existing block is edited in place so checkpoint
+    /// branch and latest-step metadata remain available to the next worker.
+    ///
+    /// Returns `true` only when the ledger belongs to the failing worker and is
+    /// not already finalized to an implementation PR; callers use that as the
+    /// safety gate before releasing source claim labels.
+    pub(super) async fn mark_run_ledger_retryable(
+        &self,
+        job: &InFlightJob,
+        correlation_key: &str,
+        worker_id: &str,
+    ) -> bool {
+        for _ in 0..3 {
+            let Some((_, issue)) = self.resolve_issue(job).await else {
+                return false;
+            };
+            let span = match run_ledger_span(&issue.body, correlation_key) {
+                Ok(Some(span)) => span,
+                Ok(None) => return false,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        repo = %job.repo,
+                        issue = %issue.number,
+                        correlation_key,
+                        %error,
+                        "forge applier could not read run ledger for retry"
+                    );
+                    return false;
+                }
+            };
+            let current = &issue.body[span.0..span.1];
+            if ledger_block_finalized(current) || !ledger_worker_matches(current, worker_id) {
+                return false;
+            }
+            let Some(updated_block) = retryable_ledger_block(current) else {
+                return true;
+            };
+            let desired_body = format!(
+                "{}{}{}",
+                &issue.body[..span.0],
+                updated_block,
+                &issue.body[span.1..]
+            );
+
+            match self
+                .forge
+                .update_issue(
+                    &issue.id,
+                    UpdateIssue {
+                        body: Some(desired_body),
+                        expected_version: Some(issue.version),
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return true,
+                Err(ForgeError::Conflict(_)) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        repo = %job.repo,
+                        issue = %issue.number,
+                        correlation_key,
+                        %error,
+                        "forge applier could not mark run ledger retryable"
+                    );
+                    return false;
+                }
+            }
+        }
+
+        tracing::warn!(
+            target: "temper_daemon",
+            job_id = %job.job_id,
+            repo = %job.repo,
+            correlation_key,
+            "forge applier gave up marking run ledger retryable after conflicts"
+        );
+        false
+    }
+
     /// Finalizes the source issue ledger once the implementation PR body is the
     /// canonical handoff.
     pub(super) async fn finalize_run_ledger(
@@ -443,6 +529,50 @@ fn run_ledger_finalized(body: &str, correlation_key: &str) -> bool {
 
 fn ledger_block_finalized(block: &str) -> bool {
     block.contains("Current status: continued in ")
+}
+
+fn ledger_worker_matches(block: &str, worker_id: &str) -> bool {
+    let expected = format!("- Worker: `{}`", one_line_or(worker_id, "unknown"));
+    block.lines().any(|line| line.trim() == expected)
+}
+
+fn retryable_ledger_block(block: &str) -> Option<String> {
+    const RETRY_STATUS: &str = "- Current status: queued for retry";
+    const RETRY_NOTE: &str = "- Retry: released back to the ready queue after a transient failure; checkpointed branch metadata is preserved.";
+
+    let mut lines = block.lines().map(str::to_string).collect::<Vec<_>>();
+    let mut changed = false;
+
+    let status_index = match lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("- Current status:"))
+    {
+        Some(index) => index,
+        None => lines
+            .iter()
+            .position(|line| line.trim() == LEDGER_END)
+            .unwrap_or(lines.len()),
+    };
+
+    if lines
+        .get(status_index)
+        .is_some_and(|line| line.trim_start().starts_with("- Current status:"))
+    {
+        if lines[status_index] != RETRY_STATUS {
+            lines[status_index] = RETRY_STATUS.to_string();
+            changed = true;
+        }
+    } else {
+        lines.insert(status_index, RETRY_STATUS.to_string());
+        changed = true;
+    }
+
+    if !lines.iter().any(|line| line == RETRY_NOTE) {
+        lines.insert(status_index + 1, RETRY_NOTE.to_string());
+        changed = true;
+    }
+
+    if changed { Some(lines.join("\n")) } else { None }
 }
 
 fn upsert_run_ledger_block(

@@ -111,6 +111,24 @@ pub(crate) async fn spawn_recording(
     (daemon, url, rx)
 }
 
+pub(crate) async fn spawn_recording_with_apply_grace(
+    handle: &skein::runtime::RuntimeHandle,
+    apply_grace: Duration,
+) -> (
+    temper_engine::Daemon,
+    String,
+    temper_engine_io::CqReceiver<(InFlightJob, JobResult)>,
+) {
+    let (tx, rx) = temper_engine_io::channel();
+    let (daemon, url) = spawn_with_applier_and_apply_grace(
+        handle,
+        Arc::new(RecordingApplier { tx }),
+        apply_grace,
+    )
+    .await;
+    (daemon, url, rx)
+}
+
 pub(crate) fn register(worker_id: &str) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Register(Register {
         protocol_version: WORKER_PROTOCOL_VERSION,
