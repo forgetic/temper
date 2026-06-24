@@ -1,273 +1,74 @@
-//! Static (source-level) assertions for the `examples/basic-delivery` launcher.
+//! Crate-owned basic-delivery fixture contract tests.
 //!
-//! These tests pin the launcher to the long-term local-dev UX: jig-backed fake
-//! LLM, canonical global `--config` / `--secrets`, explicit repo population,
-//! and `temper serve standalone` before the seed-last intake issue is filed.
+//! These intentionally exercise the bundled workflow fixture and runner config
+//! APIs rather than operator-facing launchers. Editing demo scripts should not
+//! affect the default Rust test suite.
 
-use std::{fs, path::PathBuf};
+use std::collections::BTreeSet;
+use temper_workflow::{IntakeAuthor, RawWorkflowSpec, RoleId, ValidatedWorkflow};
 
-fn example_path(relative: &str) -> PathBuf {
-    workspace_root()
-        .join("examples/basic-delivery")
-        .join(relative)
+fn role_ids(workflow: &ValidatedWorkflow) -> BTreeSet<&str> {
+    workflow.roles().iter().map(|role| role.id.as_str()).collect()
 }
 
-fn workspace_root() -> PathBuf {
-    let mut candidates = Vec::new();
-    if let Ok(path) = std::env::current_dir() {
-        candidates.push(path);
-    }
-    if let Some(value) = std::env::var_os("CARGO_MANIFEST_DIR")
-        && !value.is_empty()
-    {
-        candidates.push(PathBuf::from(value));
-    }
-    candidates
-        .into_iter()
-        .find_map(|start| {
-            start
-                .ancestors()
-                .find(|dir| {
-                    dir.join("Cargo.toml").is_file() && dir.join("examples/basic-delivery").is_dir()
-                })
-                .map(PathBuf::from)
-        })
-        .expect("workspace root resolves")
-}
-
-fn read_example(relative: &str) -> String {
-    fs::read_to_string(example_path(relative)).expect("example file is readable")
-}
-
-fn section<'a>(script: &'a str, marker: &str) -> &'a str {
-    script
-        .split(marker)
-        .nth(1)
-        .unwrap_or_else(|| panic!("{marker} section exists"))
-}
-
-fn assert_order(haystack: &str, earlier: &str, later: &str) {
-    let earlier_index = haystack
-        .find(earlier)
-        .unwrap_or_else(|| panic!("{earlier:?} exists"));
-    let later_index = haystack
-        .find(later)
-        .unwrap_or_else(|| panic!("{later:?} exists"));
-    assert!(
-        earlier_index < later_index,
-        "expected {earlier:?} before {later:?}"
-    );
+fn queue_served_roles(workflow: &ValidatedWorkflow) -> BTreeSet<&str> {
+    workflow
+        .roles()
+        .iter()
+        .filter(|role| !role.queues.is_empty())
+        .map(|role| role.id.as_str())
+        .collect()
 }
 
 #[test]
-fn launcher_uses_init_not_legacy_provisioner() {
-    let script = read_example("run.sh");
+fn bundled_basic_delivery_fixture_is_the_minimal_agent_shape() {
+    let workflow = temper_testing::basic_delivery_workflow();
 
-    assert!(
-        !script.contains("provision-forgejo"),
-        "happy-path launcher must not call the legacy provisioner"
-    );
-    assert!(!script.contains("TEMPER_RUN_AUTH"));
-    assert!(!script.contains("temper run"));
-
-    let init = section(&script, "run_temper_init() {");
-    assert!(init.contains("TEMPER_INIT_ADMIN_PASSWORD=\"$ADMIN_PASSWORD\""));
-    assert!(init.contains("TEMPER_INIT_PROVIDER_KEY=\"$INIT_PROVIDER_KEY\""));
-    assert!(init.contains("\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" \\\n                init --non-interactive --force --apply --yes"));
-    assert!(init.contains("--forge \"$BASE_URL\""));
-    assert!(init.contains("--repo \"$REPO\""));
-    assert!(init.contains("--bind \"$DAEMON_BIND\""));
-    assert!(init.contains("--admin-user \"$ADMIN_USER\""));
-    assert!(init.contains("--provider deepseek"));
-    assert!(init.contains("--provider-url \"$JIG_PROVIDER_URL\""));
-    assert!(
-        init.contains("\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\"")
-    );
-    assert!(init.contains("initialized_by=temper_init_apply"));
-    assert!(
-        init.contains("temper init --apply wrote config/credentials and registered $WEBHOOK_URL")
-    );
-}
-
-#[test]
-fn launcher_has_no_operator_config_knob_file() {
-    let script = read_example("run.sh");
-
-    assert!(
-        !example_path("config/temper.env").exists(),
-        "basic-delivery should no longer carry a knob matrix"
-    );
-    assert!(!script.contains("CONFIG_KNOBS"));
-    assert!(!script.contains("load_config"));
-    assert!(!script.contains("config/temper.env"));
-    assert!(!script.contains("${BASE_URL:-"));
-    assert!(!script.contains("${DAEMON_BIND:-"));
-    assert!(!script.contains("${JIG_REPO:-"));
-}
-
-#[test]
-fn launcher_starts_jig_fixture_and_wires_provider_url() {
-    let script = read_example("run.sh");
-
-    assert!(script.contains("JIG_REPO=\"$HOME/src/rust/jig\""));
-    assert!(script.contains("JIG_FIXTURE_PATH=\"$JIG_REPO/fixtures/basic-delivery.json\""));
-    assert!(script.contains("INIT_PROVIDER_KEY=basic-delivery-jig-dummy-key"));
-
-    let boot_jig = section(&script, "boot_jig() {");
-    assert!(boot_jig.contains("\"$JIG_BIN\" \"$JIG_FIXTURE_PATH\""));
-    assert!(boot_jig.contains("JIG_URL=$(sed -n"));
-    assert!(boot_jig.contains("JIG_PROVIDER_URL=$JIG_URL"));
-    assert!(boot_jig.contains("do not add /v1"));
-
-    let cmd_start = section(&script, "cmd_start() {");
-    assert_order(cmd_start, "boot_jig", "run_temper_init");
-}
-
-#[test]
-fn launcher_uses_init_emitted_artifacts_for_serve_standalone() {
-    let script = read_example("run.sh");
-
-    assert!(script.contains("CONFIG_FILE=\"$RUN_DIR/config.toml\""));
-    assert!(script.contains("CREDENTIALS_FILE=\"$RUN_DIR/credentials.toml\""));
-    assert!(script.contains("INIT_WORKFLOW_PATH=\"$RUN_DIR/workflow.json\""));
-    assert!(script.contains("WEBHOOK_SECRET_FILE=\"$RUN_DIR/webhook-secret\""));
-
-    let init = section(&script, "run_temper_init() {");
-    assert!(init.contains("temper init did not write $CONFIG_FILE"));
-    assert!(init.contains("temper init did not write $CREDENTIALS_FILE"));
-    assert!(init.contains("temper init did not write $INIT_WORKFLOW_PATH"));
-    assert!(init.contains("temper init did not write $WEBHOOK_SECRET_FILE"));
-
-    let boot_run = section(&script, "boot_run() {");
-    assert!(boot_run.contains(
-        "\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" serve standalone"
-    ));
-    assert!(boot_run.contains("webhook listener up"));
-    assert!(boot_run.contains("worker:  capacity:"));
-    assert!(boot_run.contains("ready -- watching"));
-    assert!(!boot_run.contains("daemon --config"));
-}
-
-#[test]
-fn launcher_populates_repo_before_serve() {
-    let script = read_example("run.sh");
-    let ci = read_example("config/ci.yml");
-
-    let populate = section(&script, "populate_repo() {");
-    assert!(
-        populate.contains("cp \"$CONFIG_DIR/ci.yml\" \"$_checkout/.forgejo/workflows/ci.yml\"")
-    );
-    assert!(populate.contains("cat >\"$_checkout/README.md\""));
-    assert!(populate.contains("git -C \"$_checkout\" commit"));
-    assert!(populate.contains("git -C \"$_checkout\" push"));
-    assert!(populate.contains("files=README.md,.forgejo/workflows/ci.yml"));
-    assert!(ci.contains("run.sh commits this file explicitly"));
-
-    let cmd_start = section(&script, "cmd_start() {");
-    assert_order(
-        cmd_start,
-        "\n    run_temper_init\n",
-        "\n    populate_repo\n",
-    );
-    assert_order(cmd_start, "\n    populate_repo\n", "\n    boot_run\n");
-}
-
-#[test]
-fn launcher_files_intake_after_serve_readiness() {
-    let script = read_example("run.sh");
-    let workflow = read_example("config/workflow.json");
-
-    assert!(workflow.contains("\"intake_author\": { \"kind\": \"site_admin\" }"));
-
-    let seed_intake = section(&script, "seed_intake() {");
-    assert!(seed_intake.contains("TEMPER_FORGEJO_ADMIN_TOKEN=\"$ADMIN_TOKEN\""));
-    assert!(seed_intake.contains("/api/v1/repos/{owner}/{repo}/issues"));
-    assert!(seed_intake.contains("\"title\": os.environ[\"TEMPER_INTAKE_TITLE\"]"));
-    assert!(seed_intake.contains("\"body\": body"));
-    assert!(seed_intake.contains("method=\"POST\""));
-    assert!(seed_intake.contains("intake_issue_number=%s intake_issue_url=%s"));
-    assert!(!seed_intake.contains("--seed-only"));
-    assert!(!seed_intake.contains("--intake-title"));
-
-    let boot_run = section(&script, "boot_run() {");
-    assert_order(boot_run, "webhook listener up", "ready -- watching");
-
-    let cmd_start = section(&script, "cmd_start() {");
-    assert_order(cmd_start, "boot_run", "seed_intake");
-}
-
-#[test]
-fn launcher_compatibility_checks_do_not_assume_help_flag_order() {
-    let script = read_example("run.sh");
-
-    assert!(script.contains("*--non-interactive*)"));
-    assert!(script.contains("*--apply*)"));
-    assert!(script.contains("*--yes*)"));
-    assert!(script.contains("*--provider-url*)"));
-    assert!(script.contains("temper help lacks global --config"));
-    assert!(script.contains("temper help lacks global --secrets"));
-    assert!(script.contains("documents non-canonical --config"));
-    assert!(script.contains("documents non-canonical --secrets"));
-    assert!(
-        !script.contains("*--non-interactive*--provider-url*"),
-        "the init help check must not depend on clap's flag display order"
-    );
-    assert!(
-        !script.contains("*--config*--secrets*"),
-        "the serve help check must not depend on clap's flag display order"
-    );
-}
-
-#[test]
-fn launcher_defaults_basic_forgejo_to_distinct_ports() {
-    let script = read_example("run.sh");
-
-    // Distinct from reference-delivery (4200 / 38200) so both demos coexist.
-    assert!(script.contains("BASE_URL=http://127.0.0.1:4100"));
-    assert!(script.contains("DAEMON_BIND=127.0.0.1:38100"));
-    assert!(script.contains("WEBHOOK_URL=http://$DAEMON_BIND/forgejo/webhook"));
-}
-
-#[test]
-fn launcher_uses_non_reserved_setup_admin_handle() {
-    let script = read_example("run.sh");
-
-    // Forgejo reserves the literal username `admin`; the throwaway setup admin
-    // uses a valid non-reserved handle.
-    assert!(script.contains("ADMIN_USER=basicadmin"));
-    assert!(!script.contains("ADMIN_USER=admin\n"));
-}
-
-#[test]
-fn validator_covers_webhook_and_ci_fallback() {
-    let script = read_example("run.sh");
-
-    assert!(script.contains("CI_FALLBACK_MISSING_CREDENTIALS="));
-    assert!(script.contains("validate_absent \"$_run_log\" \"$CI_FALLBACK_MISSING_CREDENTIALS\""));
-    assert!(script.contains("no web-UI credentials configured for the CI read fallback"));
-
-    // Webhooks are the wake path: the validator inspects the unified run log for
-    // standalone readiness, accepted deliveries, wake scans, and worker lifecycle.
-    assert!(script.contains("ready -- watching"));
-    assert!(script.contains("webhook listener up"));
-    assert!(script.contains("worker:  capacity:"));
-    assert!(script.contains("webhook wake scan"));
-    assert!(script.contains("worker: assigned job_id="));
-}
-
-#[test]
-fn config_workflow_matches_canonical_fixture_byte_for_byte() {
-    // config/workflow.json must stay identical to the canonical fixture the
-    // temper-workflow tests validate, so the example and the fixture-shape tests
-    // never describe two different workflows. run.sh uses the workflow.json that
-    // `temper init` emits at runtime; this checked-in copy remains the operator
-    // reference for that embedded basic-delivery shape.
-    let example = read_example("config/workflow.json");
-    const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/basic-delivery.json");
+    assert_eq!(workflow.name(), "basic-delivery");
     assert_eq!(
-        example, FIXTURE,
-        "examples/basic-delivery/config/workflow.json must match \
-         crates/temper-workflow/fixtures/basic-delivery.json byte-for-byte; \
-         copy the fixture over the example config when the fixture changes"
+        role_ids(&workflow),
+        BTreeSet::from(["architect", "engineer", "mechanical"])
     );
+    assert_eq!(
+        queue_served_roles(&workflow),
+        BTreeSet::from(["architect", "engineer"]),
+        "mechanical is an automation authority, not a role worker"
+    );
+    assert!(matches!(
+        workflow.intake_author(),
+        Some(IntakeAuthor::SiteAdmin)
+    ));
+}
+
+#[test]
+fn bundled_basic_delivery_json_parses_to_the_public_workflow() {
+    let spec: RawWorkflowSpec = serde_json::from_str(
+        temper_reference_delivery::basic_delivery_workflow_json(),
+    )
+    .expect("bundled basic-delivery JSON parses");
+    let parsed = spec
+        .validate()
+        .expect("bundled basic-delivery JSON validates");
+
+    assert_eq!(parsed, temper_testing::basic_delivery_workflow());
+}
+
+#[test]
+fn basic_delivery_runner_binds_only_queue_subscribing_roles() {
+    let config = temper_testing::basic_delivery_runner_config();
+    let bound_roles: BTreeSet<_> = config
+        .role_bindings
+        .iter()
+        .map(|binding| binding.role.as_str())
+        .collect();
+
+    assert_eq!(bound_roles, BTreeSet::from(["architect", "engineer"]));
+    for role in ["architect", "engineer"] {
+        let binding = config
+            .role_binding(&RoleId::new(role))
+            .expect("queue-subscribing role is bound");
+        assert_eq!(binding.user.id.as_str(), role);
+        assert_eq!(binding.user.handle, role);
+    }
+    assert!(config.role_binding(&RoleId::new("mechanical")).is_none());
 }
