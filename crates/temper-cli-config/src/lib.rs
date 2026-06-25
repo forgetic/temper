@@ -40,8 +40,8 @@ pub struct ConfigInputs<'a> {
     pub options: LoadOptions,
     /// Global output format parsed before `config`.
     pub format: OutputFormat,
-    /// The injected environment snapshot (used only for `$HOME` / `$XDG_*`
-    /// path expansion; no environment variable selects the config files).
+    /// The injected environment snapshot (used for path expansion and for
+    /// systemd `CREDENTIALS_DIRECTORY` credentials discovery).
     pub env: &'a EnvMap,
     /// The injected base directories (HOME / XDG_*) for default-location discovery.
     pub paths: &'a PathResolver,
@@ -63,9 +63,11 @@ pub struct CheckInputs<'a> {
 
 /// Loads + resolves a deployment for `validate` / `show`, honoring the same
 /// hermeticity rule the daemon uses: an explicit `--config` / `--secrets`
-/// suppresses default `~/.config/temper` discovery. An explicit config root may
-/// load its sibling `credentials.toml`, but the operator's global credentials
-/// never ambiently layer in behind an explicit deployment.
+/// suppresses default `~/.config/temper` discovery. `CREDENTIALS_DIRECTORY` from
+/// the injected env may still supply credentials when `--secrets` is absent;
+/// otherwise an explicit config root may load its sibling `credentials.toml`,
+/// but the operator's global credentials never ambiently layer in behind an
+/// explicit deployment.
 fn load_for(
     options: &LoadOptions,
     env: &EnvMap,

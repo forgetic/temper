@@ -2,11 +2,15 @@
 
 //! Default on-disk locations for the config and credentials files.
 //!
-//! Resolution order for each: an explicit path (the `--config` / `--secrets`
-//! flag) wins; then
-//! `<config-dir>/temper/{config,credentials}.toml`, where the config dir is
-//! `$XDG_CONFIG_HOME` or `~/.config`. No environment variable overrides these
-//! file locations.
+//! Config resolution order: an explicit `--config` path wins, then
+//! `<config-dir>/temper/config.toml`, where the config dir is `$XDG_CONFIG_HOME`
+//! or `~/.config`.
+//!
+//! Credentials resolution order: an explicit `--secrets` path wins; then
+//! systemd's `CREDENTIALS_DIRECTORY` contributes
+//! `<CREDENTIALS_DIRECTORY>/credentials.toml`; then local-bundle pairing may use
+//! an explicit config root's sibling `credentials.toml`; then the normal
+//! `<config-dir>/temper/credentials.toml` default is used.
 //!
 //! Explicit file flags also accept a directory: `--config <dir>` resolves to
 //! `<dir>/config.toml`, and `--secrets <dir>` resolves to
@@ -27,6 +31,7 @@ use crate::inputs::PathResolver;
 
 pub(crate) const CONFIG_FILE_NAME: &str = "config.toml";
 pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.toml";
+pub(crate) const CREDENTIALS_DIRECTORY_ENV: &str = "CREDENTIALS_DIRECTORY";
 
 /// A resolved explicit `--config` source.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -69,34 +74,36 @@ pub fn config_path(
 }
 
 /// Resolves the credentials-file path: explicit override (the `--secrets` flag),
-/// else `<config-dir>/credentials.toml`.
+/// else systemd's `CREDENTIALS_DIRECTORY`, else `<config-dir>/credentials.toml`.
 ///
 /// An explicit directory resolves to `<dir>/credentials.toml`; an explicit file
-/// path resolves to that exact file.
-///
-/// As with [`config_path`], `env` is threaded only to keep the injected-environment
-/// seam; no environment variable overrides the credentials-file location.
+/// path resolves to that exact file. `CREDENTIALS_DIRECTORY`, when set and
+/// non-blank in the injected environment, resolves to
+/// `<CREDENTIALS_DIRECTORY>/credentials.toml`.
 pub fn credentials_path(
     explicit: Option<PathBuf>,
     paths: &PathResolver,
-    _env: &dyn EnvLookup,
+    env: &dyn EnvLookup,
 ) -> Option<PathBuf> {
     explicit
         .map(explicit_credentials_path)
+        .or_else(|| credentials_directory_path(env))
         .or_else(|| config_dir(paths).map(|dir| dir.join(CREDENTIALS_FILE_NAME)))
 }
 
 /// Resolves credentials using local-bundle pairing: an explicit credentials /
-/// secrets path wins; otherwise an explicit config root contributes its sibling
+/// secrets path wins; otherwise systemd's `CREDENTIALS_DIRECTORY` contributes
+/// `credentials.toml`; otherwise an explicit config root contributes its sibling
 /// `credentials.toml`; otherwise the default config directory is used.
 pub fn paired_credentials_path(
     explicit_credentials: Option<PathBuf>,
     explicit_config: Option<PathBuf>,
     paths: &PathResolver,
-    _env: &dyn EnvLookup,
+    env: &dyn EnvLookup,
 ) -> Option<PathBuf> {
     explicit_credentials
         .map(explicit_credentials_path)
+        .or_else(|| credentials_directory_path(env))
         .or_else(|| {
             explicit_config
                 .map(explicit_config_location)
@@ -126,6 +133,12 @@ pub(crate) fn explicit_credentials_path(path: PathBuf) -> PathBuf {
     } else {
         path
     }
+}
+
+pub(crate) fn credentials_directory_path(env: &dyn EnvLookup) -> Option<PathBuf> {
+    env.non_empty(CREDENTIALS_DIRECTORY_ENV)
+        .map(PathBuf::from)
+        .map(|dir| dir.join(CREDENTIALS_FILE_NAME))
 }
 
 fn is_directory_source(path: &Path) -> bool {
@@ -169,7 +182,7 @@ pub fn default_workspace_root(paths: &PathResolver) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NoEnv;
+    use crate::{EnvMap, NoEnv};
 
     fn scratch(tag: &str) -> PathBuf {
         let pid = std::process::id();
@@ -235,6 +248,47 @@ mod tests {
         std::fs::write(&file, "schema_version = 1\n").expect("write file");
 
         assert_eq!(explicit_credentials_path(file.clone()), file);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn credentials_directory_resolves_to_credentials_toml_before_default() {
+        let credentials_dir = scratch("systemd-credentials");
+        let xdg = scratch("systemd-credentials-xdg");
+        let mut env = EnvMap::new();
+        env.insert(
+            CREDENTIALS_DIRECTORY_ENV,
+            credentials_dir.to_string_lossy().into_owned(),
+        );
+        let paths = PathResolver {
+            xdg_config_home: Some(xdg.clone()),
+            ..PathResolver::default()
+        };
+
+        assert_eq!(
+            credentials_path(None, &paths, &env),
+            Some(credentials_dir.join(CREDENTIALS_FILE_NAME))
+        );
+        let _ = std::fs::remove_dir_all(credentials_dir);
+        let _ = std::fs::remove_dir_all(xdg);
+    }
+
+    #[test]
+    fn paired_credentials_uses_credentials_directory_before_sibling() {
+        let dir = scratch("paired-systemd");
+        let config_file = dir.join("deploy.toml");
+        let credentials_dir = dir.join("systemd-creds");
+        std::fs::create_dir_all(&credentials_dir).expect("create credentials dir");
+        let mut env = EnvMap::new();
+        env.insert(
+            CREDENTIALS_DIRECTORY_ENV,
+            credentials_dir.to_string_lossy().into_owned(),
+        );
+
+        assert_eq!(
+            paired_credentials_path(None, Some(config_file), &PathResolver::default(), &env),
+            Some(credentials_dir.join(CREDENTIALS_FILE_NAME))
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

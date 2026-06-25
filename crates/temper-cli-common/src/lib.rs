@@ -198,13 +198,13 @@ pub struct FileTargets {
 }
 
 /// Resolves both file targets from [`LoadOptions`], failing when a default path
-/// cannot be determined (no `--config`/`--secrets`, no env override, no
-/// `HOME`/`XDG_CONFIG_HOME`).
+/// cannot be determined (no `--config`/`--secrets`, no `HOME`/`XDG_CONFIG_HOME`).
 ///
-/// This is the single place a CLI turns "where should I read/write?" into
-/// concrete paths, honoring the same `--config` / `--secrets` / default
-/// precedence the loader uses. The environment is injected (the snapshot
-/// `src/bin` took): this helper never reads `std::env`.
+/// This is the single place a CLI turns "where should I write?" into concrete
+/// paths. It intentionally ignores `CREDENTIALS_DIRECTORY` unless `--secrets` is
+/// explicit: systemd credential directories are input secret sources, not output
+/// targets for `temper init` or `temper config init`. The environment is
+/// injected (the snapshot `src/bin` took): this helper never reads `std::env`.
 pub fn resolve_targets(
     options: &LoadOptions,
     env: &dyn EnvLookup,
@@ -218,7 +218,7 @@ pub fn resolve_targets(
         options.credentials.clone(),
         options.config.clone(),
         paths,
-        env,
+        &temper_config::NoEnv,
     )
     .ok_or_else(|| {
         "cannot determine a default credentials path (no HOME); pass --secrets".to_string()
@@ -310,6 +310,33 @@ mod tests {
 
         assert_eq!(targets.config, bundle.join("config.toml"));
         assert_eq!(targets.credentials, bundle.join("credentials.toml"));
+    }
+
+    #[test]
+    fn resolve_targets_ignores_credentials_directory_for_write_targets() {
+        let home = temp_dir().join(format!(
+            "temper-cli-common-systemd-write-{}",
+            std::process::id()
+        ));
+        let credentials_dir = home.join("systemd-creds");
+        let mut env = temper_config::EnvMap::new();
+        env.insert(
+            "CREDENTIALS_DIRECTORY",
+            credentials_dir.to_string_lossy().into_owned(),
+        );
+        let paths = PathResolver {
+            home: Some(home.clone()),
+            ..PathResolver::default()
+        };
+
+        let targets = resolve_targets(&LoadOptions::default(), &env, &paths)
+            .expect("HOME supplies default write targets");
+
+        assert_eq!(targets.config, home.join(".config/temper/config.toml"));
+        assert_eq!(
+            targets.credentials,
+            home.join(".config/temper/credentials.toml")
+        );
     }
 
     #[test]

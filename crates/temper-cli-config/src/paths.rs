@@ -297,6 +297,81 @@ mod tests {
     }
 
     #[test]
+    fn report_keeps_explicit_secrets_before_credentials_directory() {
+        let dir = scratch("explicit-secrets-systemd");
+        let home = dir.join("home");
+        let explicit_dir = dir.join("explicit-secrets");
+        let credentials_dir = dir.join("systemd-creds");
+        std::fs::create_dir_all(&explicit_dir).expect("create explicit credentials dir");
+        std::fs::create_dir_all(&credentials_dir).expect("create systemd credentials dir");
+        let mut env = env_with_home(&home);
+        env.insert(
+            "CREDENTIALS_DIRECTORY",
+            credentials_dir.to_string_lossy().into_owned(),
+        );
+        let base_paths = PathResolver::from_env(&env);
+
+        let report = PathReport::resolve(
+            &LoadOptions {
+                config: None,
+                credentials: Some(explicit_dir.clone()),
+            },
+            &env,
+            &base_paths,
+        )
+        .expect("report resolves");
+
+        assert_eq!(
+            report.credentials_source.as_deref(),
+            Some(explicit_dir.join("credentials.toml").as_path())
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn json_reports_credentials_directory_source() {
+        let dir = scratch("systemd-json");
+        let home = dir.join("home");
+        let credentials_dir = dir.join("systemd-creds");
+        std::fs::create_dir_all(&credentials_dir).expect("create credentials dir");
+        let default_root = home.join(".config").join("temper");
+        std::fs::create_dir_all(&default_root).expect("create default root");
+        std::fs::write(
+            default_root.join("credentials.toml"),
+            "schema_version = 1\n",
+        )
+        .expect("write default credentials");
+        let mut env = env_with_home(&home);
+        env.insert(
+            "CREDENTIALS_DIRECTORY",
+            credentials_dir.to_string_lossy().into_owned(),
+        );
+        let base_paths = PathResolver::from_env(&env);
+
+        let report = PathReport::resolve(&LoadOptions::default(), &env, &base_paths)
+            .expect("report resolves");
+        let credentials_path = credentials_dir.join("credentials.toml");
+        assert_eq!(
+            report.credentials_source.as_deref(),
+            Some(credentials_path.as_path())
+        );
+        assert!(
+            report
+                .render_human()
+                .contains(credentials_path.display().to_string().as_str()),
+            "human output should show the systemd-derived credentials source"
+        );
+
+        let rendered = report.render_json().expect("json renders");
+        let value: Value = serde_json::from_str(&rendered).expect("valid json");
+        assert_eq!(
+            value["credentials_source"],
+            Value::String(credentials_path.display().to_string())
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn json_uses_required_snake_case_keys_and_null_for_unavailable_paths() {
         let env = EnvMap::new();
         let report = PathReport::resolve(&LoadOptions::default(), &env, &PathResolver::default())
