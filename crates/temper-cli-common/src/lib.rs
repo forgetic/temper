@@ -32,6 +32,32 @@ pub use temper_config::{
     CommonArgs, EX_USAGE, EnvLookup, EnvMap, LoadOptions, PathResolver, parse_common_args,
 };
 
+/// Output formats accepted by the unified `temper --format <human|json>` global
+/// option.
+///
+/// Subcommands opt in to honoring this value incrementally. Until then, the
+/// dispatcher still parses and validates the option in the leading global
+/// position so each subcommand does not grow its own incompatible parser.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum OutputFormat {
+    /// Human-readable terminal output.
+    #[default]
+    Human,
+    /// Machine-readable JSON output.
+    Json,
+}
+
+impl OutputFormat {
+    /// Parses the public `--format` values.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "human" => Some(Self::Human),
+            "json" => Some(Self::Json),
+            _ => None,
+        }
+    }
+}
+
 /// The environment snapshot every CLI subcommand is dispatched with.
 ///
 /// Built once at the binary boundary by `boot()` in `src/bin/temper.rs`
