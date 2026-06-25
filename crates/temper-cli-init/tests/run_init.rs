@@ -205,11 +205,11 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     let credentials_path = dir.path().join("credentials.toml");
     let workspace_path = dir.path().join("workspaces");
 
-    // `--forge` skips the first prompt and `--bind` skips the webhook prompt,
-    // so this starts at workflow and then moves to admin credentials.
+    // `--forge` skips the first prompt, `--bind` skips the webhook prompt, and
+    // `--admin-user` skips the admin-user prompt, so this starts at workflow and
+    // then moves directly to the secret prompts.
     let mut prompter = ScriptedPrompter::new([
         "".to_string(),                     // Q2 workflow (default basic-delivery)
-        "root".to_string(),                 // Q4 admin user
         "admin-pass".to_string(),           // Q4 admin password (secret)
         "sk-deepseek-override".to_string(), // Q5 DeepSeek API key (secret)
     ]);
@@ -228,6 +228,7 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
                 owner: "widgets".to_string(),
                 name: "service".to_string(),
             }),
+            admin_user: Some("flag-admin".to_string()),
             provider: Some("deepseek".to_string()),
             bind: Some("127.0.0.1:38100".to_string()),
             ..Default::default()
@@ -247,6 +248,7 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     assert!(config.contains("widgets/service"), "{config}");
     assert!(!config.contains("acme/service"), "{config}");
     assert!(config.contains("provider = \"deepseek\""), "{config}");
+    assert!(config.contains("admin = \"flag-admin\""), "{config}");
     assert!(config.contains("bind = \"127.0.0.1:38100\""), "{config}");
     let workspace_text = workspace_path.display().to_string();
     assert!(
@@ -267,10 +269,12 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     assert_eq!(seen.base_url, "http://forge.local:3000");
     assert_eq!(seen.owner, "widgets");
     assert_eq!(seen.name, "service");
+    assert_eq!(seen.admin_user, "flag-admin");
+    assert_eq!(seen.admin_password, "admin-pass");
     assert_eq!(seen.webhook_url, "http://127.0.0.1:38100/forgejo/webhook");
     assert!(
         prompter.answers.is_empty(),
-        "forge and webhook prompts should be skipped"
+        "forge, webhook, and admin-user prompts should be skipped"
     );
 }
 
@@ -572,9 +576,9 @@ fn non_interactive_missing_admin_user_errors() {
 }
 
 #[test]
-fn non_interactive_flag_off_ignores_env_overrides() {
-    // When --non-interactive is NOT set, env-based overrides in InitOverrides
-    // are ignored and the interactive flow fires prompts as usual.
+fn non_interactive_flag_off_ignores_secret_env_overrides() {
+    // When --non-interactive is NOT set, secret env-based overrides in
+    // InitOverrides are ignored and the interactive flow fires prompts as usual.
     let dir = tempfile::tempdir().expect("tempdir");
 
     // Scripted answers are the source of truth (env overrides ignored).
@@ -596,9 +600,8 @@ fn non_interactive_flag_off_ignores_env_overrides() {
         apply: true,
         yes: true,
         overrides: InitOverrides {
-            // These would be populated from env in main(), but should be
-            // ignored since non_interactive is false.
-            admin_user: Some("env-user".to_string()),
+            // These are populated from env in main(), but should be ignored
+            // since non_interactive is false.
             admin_password: Some("env-pw".to_string()),
             provider_key: Some("env-key".to_string()),
             ..Default::default()

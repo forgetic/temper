@@ -64,7 +64,8 @@ impl RepoSelection {
     }
 }
 
-/// Non-interactive values supplied by local-dev `temper init` flags.
+/// Values supplied by local-dev `temper init` flags and non-interactive secret
+/// environment variables.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct InitOverrides {
     /// Forgejo base URL supplied by `--forge`, skipping the forge prompt.
@@ -78,7 +79,7 @@ pub struct InitOverrides {
     pub workflow: Option<String>,
     /// Provider supplied by `--provider` (only `deepseek` is accepted today).
     pub provider: Option<String>,
-    /// Forgejo admin username supplied by `--admin-user` (only non-interactive).
+    /// Forgejo admin username supplied by `--admin-user`, skipping the admin prompt.
     pub admin_user: Option<String>,
     /// Forgejo admin password from `TEMPER_INIT_ADMIN_PASSWORD` (only non-interactive).
     pub admin_password: Option<String>,
