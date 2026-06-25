@@ -281,8 +281,9 @@ impl Finding {
 }
 
 /// Audits a [`Resolved`] for the common requirements, returning findings for
-/// `temper config validate` to print. Errors are blocking; notes are advisory
-/// (e.g. a service that simply will not be used in this deployment).
+/// `temper check` / `temper config validate` to print. Errors are blocking for
+/// the compatibility validation path; notes are advisory (e.g. a service that
+/// simply will not be used in this deployment).
 pub fn lint(resolved: &Resolved) -> Vec<Finding> {
     let mut findings = Vec::new();
 

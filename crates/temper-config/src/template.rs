@@ -4,8 +4,8 @@
 //!
 //! These are heavily commented, ready-to-edit TOML files at the current
 //! [`SCHEMA_VERSION`](crate::SCHEMA_VERSION). Both are parseable as-is (every
-//! example value is a placeholder), so `temper config validate` reports the
-//! still-needed values rather than a parse error.
+//! example value is a placeholder), so `temper check` reports the still-needed
+//! values rather than a parse error.
 
 /// A commented starter **config** file.
 pub fn config_template() -> String {
