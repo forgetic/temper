@@ -351,11 +351,7 @@ fn parse_serve_component_args(
     }
 }
 
-fn reject_extra_serve_arg(
-    component: &str,
-    arg: &str,
-    extra: Option<String>,
-) -> Result<(), String> {
+fn reject_extra_serve_arg(component: &str, arg: &str, extra: Option<String>) -> Result<(), String> {
     if let Some(extra) = extra {
         Err(format!(
             "unexpected argument `{extra}` after `{arg}` for `temper serve {component}`"
