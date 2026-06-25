@@ -198,8 +198,8 @@ pub struct FileTargets {
 }
 
 /// Resolves both file targets from [`LoadOptions`], failing when a default path
-/// cannot be determined (no `--config`/`--secrets`, no env override, no
-/// `HOME`/`XDG_CONFIG_HOME`).
+/// cannot be determined (no `--config`/`--secrets`, no `CREDENTIALS_DIRECTORY`,
+/// no `HOME`/`XDG_CONFIG_HOME`).
 ///
 /// This is the single place a CLI turns "where should I read/write?" into
 /// concrete paths, honoring the same `--config` / `--secrets` / default
@@ -221,7 +221,8 @@ pub fn resolve_targets(
         env,
     )
     .ok_or_else(|| {
-        "cannot determine a default credentials path (no HOME); pass --secrets".to_string()
+        "cannot determine a default credentials path (no HOME or CREDENTIALS_DIRECTORY); pass --secrets"
+            .to_string()
     })?;
     Ok(FileTargets {
         config,

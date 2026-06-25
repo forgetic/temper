@@ -7,9 +7,9 @@
 //! - the **config** file ([`Config`]) — non-secret deployment settings;
 //! - the **credentials** file ([`Credentials`]) — secrets.
 //!
-//! [`load`] reads both (honoring `--config` / `--secrets` overrides and default
-//! `~/.config/temper` locations — no environment variable selects the files),
-//! validates each file's `schema_version`, then
+//! [`load`] reads both (honoring `--config` / `--secrets` overrides, systemd's
+//! `CREDENTIALS_DIRECTORY` for credentials, and default `~/.config/temper`
+//! locations), validates each file's `schema_version`, then
 //! [`resolve`](resolve::resolve)s everything — file, environment, and built-in
 //! defaults — into a [`Resolved`] the binary's adapters turn into runtime types.
 //!
@@ -70,9 +70,10 @@ pub use schema::{
 };
 pub use template::{config_template, credentials_template};
 
-/// Where to find the two files. `None` fields fall back to the default
-/// `~/.config/temper` locations (no environment variable selects the files),
-/// except that an explicit config root pairs with a sibling credentials file.
+/// Where to find the two files. `None` config falls back to the default
+/// `~/.config/temper` location. `None` credentials first checks the injected
+/// `CREDENTIALS_DIRECTORY`, then falls back to an explicit config root's sibling
+/// or the default `~/.config/temper` location.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct LoadOptions {
     /// Explicit `--config` path.
@@ -198,10 +199,12 @@ pub const EX_USAGE: u8 = 64;
 /// its service, snapshotting its env, and naming its runner.
 ///
 /// Hermeticity: an explicit `--config` / `--secrets` suppresses default
-/// `~/.config/temper` discovery (an empty [`PathResolver`] is used). An explicit
-/// config root may load sibling `credentials.toml`, but the operator's global
-/// credentials never ambiently layer in behind an explicit deployment — matching
-/// the unified `temper daemon` path.
+/// `~/.config/temper` discovery (an empty [`PathResolver`] is used).
+/// `CREDENTIALS_DIRECTORY` from the injected env may still supply the credentials
+/// file when `--secrets` is absent; otherwise an explicit config root may load
+/// sibling `credentials.toml`, but the operator's global credentials never
+/// ambiently layer in behind an explicit deployment — matching the unified
+/// `temper daemon` path.
 pub fn service_main(
     name: &str,
     usage: &str,

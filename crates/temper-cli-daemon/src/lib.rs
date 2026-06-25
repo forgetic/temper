@@ -21,10 +21,12 @@
 //! the `--service`, and the injected env snapshot + base directories the
 //! composition root captured. It loads via
 //! [`temper_config::load_explicit`]; when an explicit `--config` *or* secret path
-//! is given, default-location discovery is suppressed. An explicit config root
-//! may load its sibling `credentials.toml`, but the operator's global
-//! `~/.config/temper/credentials.toml` can never ambiently layer in behind an
-//! explicit deployment. That layering was the original incident this fixes.
+//! is given, default-location discovery is suppressed. `CREDENTIALS_DIRECTORY`
+//! from the injected env may still supply credentials when `--secrets` is absent;
+//! otherwise an explicit config root may load its sibling `credentials.toml`, but
+//! the operator's global `~/.config/temper/credentials.toml` can never ambiently
+//! layer in behind an explicit deployment. That layering was the original
+//! incident this fixes.
 
 mod provider;
 mod standalone;
@@ -128,8 +130,8 @@ pub struct DaemonInputs<'a> {
     pub credentials: Option<PathBuf>,
     /// Which single service to run, or `None` for the all-in-one standalone.
     pub service: Option<Service>,
-    /// The injected environment snapshot (used only for `$HOME` / `$XDG_*`
-    /// path expansion; no environment variable selects the config files).
+    /// The injected environment snapshot (used for path expansion and for
+    /// systemd `CREDENTIALS_DIRECTORY` credentials discovery).
     pub env: &'a dyn EnvLookup,
     /// The injected base directories (HOME / XDG_*) for default-location discovery.
     pub paths: &'a PathResolver,
@@ -308,9 +310,10 @@ fn parse_daemon_args(args: Vec<String>) -> Result<ParsedDaemonArgs, String> {
 /// Loads the deployment from [`DaemonInputs`] and runs the selected service.
 ///
 /// Hermeticity: an explicit `--config` / `--secrets` suppresses default
-/// `~/.config/temper` discovery (see [`load_for`]). An explicit config root may
-/// load its sibling `credentials.toml`, but the global credentials file never
-/// credentials file never layers in behind an explicit deployment.
+/// `~/.config/temper` discovery (see [`load_for`]). `CREDENTIALS_DIRECTORY` from
+/// the injected env may still supply credentials when `--secrets` is absent;
+/// otherwise an explicit config root may load sibling `credentials.toml`, but the
+/// global credentials file never layers in behind an explicit deployment.
 pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
     let (resolved, loaded_paths) = load_for(&inputs).map_err(DaemonError::Load)?;
     let result = match inputs.service {
@@ -327,9 +330,10 @@ pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
 ///
 /// When an explicit `--config` *or* secret path is given, default-location
 /// discovery is suppressed by handing the loader an *empty* [`PathResolver`]:
-/// only explicit paths plus explicit-config sibling credentials can load. With
-/// no explicit path at all, the captured `paths` are used so a plain
-/// `temper daemon` still finds `~/.config/temper`.
+/// only explicit paths, `CREDENTIALS_DIRECTORY` from the injected env, plus
+/// explicit-config sibling credentials can load. With no explicit path at all,
+/// the captured `paths` are used so a plain `temper daemon` still finds
+/// `~/.config/temper`.
 fn load_for(inputs: &DaemonInputs) -> Result<(Resolved, LoadedPaths), ConfigError> {
     let explicit = inputs.config.is_some() || inputs.credentials.is_some();
     let empty = PathResolver::default();

@@ -40,7 +40,8 @@ pub struct ApplyOptions {
     pub existing_repo: bool,
     /// Skip the confirmation before forge-side mutations.
     pub yes: bool,
-    /// Environment snapshot used only for path expansion during resolution.
+    /// Environment snapshot used for path expansion and for systemd
+    /// `CREDENTIALS_DIRECTORY` credentials discovery.
     pub env: EnvMap,
     /// Base directories used to resolve default config locations.
     pub paths: PathResolver,
