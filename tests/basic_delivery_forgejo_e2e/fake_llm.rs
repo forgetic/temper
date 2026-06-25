@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use jig_core::{
-    PhaseSpec, Reply, ReplySpec, RequestView, Script, ScriptFile, StopSpec, TurnSpec, fixtures_root,
+    ActionSpec, PhaseSpec, Reply, ReplySpec, RequestView, Script, ScriptFile, StopSpec, TurnSpec,
+    fixtures_root,
 };
 use jig_server::FakeLlm;
 use serde_json::Value;
@@ -226,12 +227,19 @@ fn require_two_step_phase(phase: &PhaseSpec) -> Result<(), String> {
 }
 
 fn reply_at(phase: &PhaseSpec, index: usize) -> Result<&ReplySpec, String> {
-    phase.sequence.get(index).ok_or_else(|| {
+    let action = phase.sequence.get(index).ok_or_else(|| {
         format!(
             "`{}` phase is missing reply at sequence index {index}",
             phase.name
         )
-    })
+    })?;
+    match action {
+        ActionSpec::Reply(reply) => Ok(reply),
+        ActionSpec::Action(_) => Err(format!(
+            "`{}` phase sequence index {index} must be a reply, got {action:?}",
+            phase.name
+        )),
+    }
 }
 
 fn require_tool_call_reply(

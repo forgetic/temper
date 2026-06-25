@@ -35,6 +35,27 @@ struct CapturedValidator {
     version: Version,
 }
 
+/// Builds a stable process-local validator from content fields when Forgejo does
+/// not send an ETag. Length-prefixing keeps adjacent fields unambiguous while
+/// avoiding timestamp granularity collisions within one second.
+pub(crate) fn content_validator(kind: &str, fields: &[(&str, String)]) -> String {
+    let mut out = String::new();
+    push_part(&mut out, "kind", kind);
+    for (name, value) in fields {
+        push_part(&mut out, name, value);
+    }
+    out
+}
+
+fn push_part(out: &mut String, name: &str, value: &str) {
+    out.push('|');
+    out.push_str(name);
+    out.push(':');
+    out.push_str(&value.len().to_string());
+    out.push(':');
+    out.push_str(value);
+}
+
 impl VersionCache {
     /// Records the current `validator` for `key` and returns its stable version.
     ///
