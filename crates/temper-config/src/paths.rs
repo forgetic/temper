@@ -8,7 +8,8 @@
 //!
 //! Credentials resolution order: an explicit `--secrets` path wins; then
 //! systemd's `CREDENTIALS_DIRECTORY` contributes
-//! `<CREDENTIALS_DIRECTORY>/credentials.toml`; then the normal
+//! `<CREDENTIALS_DIRECTORY>/credentials.toml`; then local-bundle pairing may use
+//! an explicit config root's sibling `credentials.toml`; then the normal
 //! `<config-dir>/temper/credentials.toml` default is used.
 //!
 //! Explicit file flags also accept a directory: `--config <dir>` resolves to

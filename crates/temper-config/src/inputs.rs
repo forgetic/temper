@@ -201,9 +201,9 @@ fn load_optional<T: Default>(
     kind: FileKind,
     parse: impl Fn(&str, &Path, FileKind) -> Result<T, ConfigError>,
 ) -> Result<(T, Option<PathBuf>), ConfigError> {
-    // An explicit override is *required*: a missing file is an error. A
-    // default-location or explicit-config sibling file is *optional*: absent
-    // means built-in defaults.
+    // An explicit override (or env-selected credential file) is *required*: a
+    // missing file is an error. A default-location or explicit-config sibling
+    // file is *optional*: absent means built-in defaults.
     let Some(LocatedFile { path, required }) = source else {
         return Ok((T::default(), None));
     };

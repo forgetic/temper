@@ -92,11 +92,13 @@ pub struct LoadedPaths {
 
 /// Loads + resolves with an explicit environment source (testable seam).
 ///
-/// Default-location discovery follows the **injected** `env`: the
+/// Default config-location discovery follows the **injected** `env`: the
 /// [`PathResolver`] is built from it via [`PathResolver::from_env`], so a caller
 /// whose `env` snapshot sets `HOME` / `XDG_CONFIG_HOME` still discovers
 /// `~/.config/temper/{config,credentials}.toml`, exactly as before paths/env
-/// were made injectable. An `env` that sets none of those discovers nothing.
+/// were made injectable. Credentials also honor `CREDENTIALS_DIRECTORY` from the
+/// injected `env`, before sibling/default credentials. An `env` that sets none
+/// of those discovers nothing.
 ///
 /// For *strict* explicit-paths-only loads (the hermeticity contract) call
 /// [`load_explicit`] with an empty [`PathResolver`] directly.

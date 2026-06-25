@@ -398,7 +398,8 @@ pub fn default_config_path() -> Option<PathBuf> {
     crate::paths::config_path(None, &paths, &crate::SystemEnv)
 }
 
-/// The default credentials-file path (`<config-dir>/credentials.toml`).
+/// The default credentials-file path (`CREDENTIALS_DIRECTORY/credentials.toml`
+/// when set in the process environment, otherwise `<config-dir>/credentials.toml`).
 ///
 /// Binary-only shim; see [`default_config_path`].
 #[doc(hidden)]

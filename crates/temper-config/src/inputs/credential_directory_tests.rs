@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
+use crate::ExposeSecret;
 use crate::env::{EnvMap, NoEnv};
 use crate::inputs::{LoadInputs, PathResolver, load_explicit};
 use crate::paths::{CREDENTIALS_DIRECTORY_ENV, CREDENTIALS_FILE_NAME};
-use crate::ExposeSecret;
 
 fn temp_dir(tag: &str) -> PathBuf {
     let pid = std::process::id();
@@ -13,9 +13,8 @@ fn temp_dir(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!(
-        "temper-config-credentials-dir-{tag}-{pid}-{nonce}"
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("temper-config-credentials-dir-{tag}-{pid}-{nonce}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }
@@ -73,7 +72,10 @@ fn credentials_directory_credentials_load_when_no_explicit_secrets() {
     let (resolved, loaded) = load_explicit(&inputs).expect("systemd credentials load");
 
     assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
-    assert_eq!(loaded.credentials.as_deref(), Some(credentials_path.as_path()));
+    assert_eq!(
+        loaded.credentials.as_deref(),
+        Some(credentials_path.as_path())
+    );
     assert_eq!(
         resolved
             .forge
