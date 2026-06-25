@@ -50,8 +50,8 @@ pub struct ConfigInputs {
     pub repos: Vec<String>,
     /// `[engine] roles` to drive.
     pub roles: Vec<String>,
-    /// `[engine] workflow` — path to a workflow JSON, or `None` for the bundled
-    /// default.
+    /// `[engine] workflow` — path to a workflow JSON/YAML document, or `None`
+    /// for the bundled default.
     pub workflow_path: Option<String>,
     /// `[engine] bind` — full `host:port` listen address.
     pub webhook_addr: Option<String>,

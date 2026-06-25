@@ -16,13 +16,21 @@ pub(super) fn assert_local_artifacts(
     bind_port: u16,
     workspace_root: &Path,
 ) {
-    let workflow = std::fs::read_to_string(workflow_path).expect("workflow.json written");
-    assert_eq!(
-        workflow,
-        temper_reference_delivery::basic_delivery_workflow_json(),
-        "workflow.json must be the embedded basic-delivery bytes verbatim"
-    );
+    let workflow = std::fs::read_to_string(workflow_path).expect("workflow.yaml written");
+    let generated_spec = temper_reference_delivery::parse_workflow_spec(workflow_path, &workflow)
+        .expect("workflow.yaml parses as YAML");
+    let generated = generated_spec
+        .validate()
+        .expect("workflow.yaml validates");
     let validated = temper_reference_delivery::basic_delivery_workflow();
+    assert_eq!(
+        generated, validated,
+        "workflow.yaml must represent the embedded basic-delivery workflow"
+    );
+    assert!(
+        !workflow.trim_start().starts_with('{'),
+        "workflow.yaml must contain YAML, not JSON bytes: {workflow}"
+    );
 
     assert_mode_600(webhook_secret_path);
     let secret = std::fs::read_to_string(webhook_secret_path).expect("webhook-secret written");

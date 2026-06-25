@@ -74,7 +74,7 @@ pub struct InitOverrides {
     pub bind: Option<String>,
     /// Managed repository supplied by `--repo`.
     pub repo: Option<RepoSelection>,
-    /// Workflow supplied by `--workflow`: a builtin name or a JSON file path.
+    /// Workflow supplied by `--workflow`: a builtin name or a JSON/YAML file path.
     pub workflow: Option<String>,
     /// Provider supplied by `--provider` (only `deepseek` is accepted today).
     pub provider: Option<String>,
