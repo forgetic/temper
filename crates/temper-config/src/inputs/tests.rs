@@ -400,6 +400,189 @@ fn from_env_with_empty_env_discovers_nothing() {
 }
 
 #[test]
+fn explicit_config_directory_resolves_relative_paths_under_bundle_root() {
+    let dir = temp_dir("relative-bundle-paths");
+    let bundle = dir.join("bundle");
+    std::fs::create_dir_all(&bundle).expect("create bundle dir");
+    std::fs::write(
+        bundle.join("config.toml"),
+        "schema_version = 1\n\
+         [engine]\n\
+         workflow = \"flows/workflow.json\"\n\
+         webhook_secret_file = \"secrets/webhook-secret\"\n\
+         [worker]\n\
+         workspace = \"workspace\"\n\
+         [agent]\n\
+         config_dir = \"agent-config\"\n",
+    )
+    .expect("write config");
+
+    let inputs = LoadInputs {
+        explicit_config: Some(bundle.clone()),
+        explicit_credentials: None,
+        env: &NoEnv,
+        paths: &PathResolver::default(),
+    };
+    let (resolved, loaded) = load_explicit(&inputs).expect("bundle load succeeds");
+
+    assert_eq!(loaded.config.as_deref(), Some(bundle.join("config.toml").as_path()));
+    assert_eq!(
+        resolved.engine.workflow_file.as_deref(),
+        Some(bundle.join("flows/workflow.json").as_path())
+    );
+    assert_eq!(
+        resolved.engine.webhook_secret_file.as_deref(),
+        Some(bundle.join("secrets/webhook-secret").as_path())
+    );
+    assert_eq!(resolved.worker.workspace_root, bundle.join("workspace"));
+    assert_eq!(
+        resolved.agent.config_dir.as_deref(),
+        Some(bundle.join("agent-config").as_path())
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_config_file_resolves_relative_paths_under_file_parent() {
+    let dir = temp_dir("relative-file-paths");
+    let profile_dir = dir.join("profiles");
+    std::fs::create_dir_all(&profile_dir).expect("create profile dir");
+    let config_path = profile_dir.join("local.toml");
+    std::fs::write(
+        &config_path,
+        "schema_version = 1\n\
+         [engine]\n\
+         workflow = \"flows/workflow.json\"\n\
+         webhook_secret_file = \"secrets/webhook-secret\"\n\
+         [worker]\n\
+         workspace = \"workspace\"\n\
+         [agent]\n\
+         config_dir = \"agent-config\"\n",
+    )
+    .expect("write config");
+
+    let inputs = LoadInputs {
+        explicit_config: Some(config_path.clone()),
+        explicit_credentials: None,
+        env: &NoEnv,
+        paths: &PathResolver::default(),
+    };
+    let (resolved, loaded) = load_explicit(&inputs).expect("explicit file load succeeds");
+
+    assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
+    assert_eq!(
+        resolved.engine.workflow_file.as_deref(),
+        Some(profile_dir.join("flows/workflow.json").as_path())
+    );
+    assert_eq!(
+        resolved.engine.webhook_secret_file.as_deref(),
+        Some(profile_dir.join("secrets/webhook-secret").as_path())
+    );
+    assert_eq!(resolved.worker.workspace_root, profile_dir.join("workspace"));
+    assert_eq!(
+        resolved.agent.config_dir.as_deref(),
+        Some(profile_dir.join("agent-config").as_path())
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn default_config_resolves_relative_paths_under_default_config_root() {
+    let xdg = temp_dir("relative-default-xdg");
+    let config_root = xdg.join("temper");
+    std::fs::create_dir_all(&config_root).expect("create default config root");
+    let config_path = config_root.join("config.toml");
+    std::fs::write(
+        &config_path,
+        "schema_version = 1\n\
+         [engine]\n\
+         workflow = \"flows/workflow.json\"\n\
+         webhook_secret_file = \"secrets/webhook-secret\"\n\
+         [worker]\n\
+         workspace = \"workspace\"\n\
+         [agent]\n\
+         config_dir = \"agent-config\"\n",
+    )
+    .expect("write config");
+
+    let paths = PathResolver {
+        xdg_config_home: Some(xdg.clone()),
+        ..PathResolver::default()
+    };
+    let inputs = LoadInputs {
+        explicit_config: None,
+        explicit_credentials: None,
+        env: &NoEnv,
+        paths: &paths,
+    };
+    let (resolved, loaded) = load_explicit(&inputs).expect("default config load succeeds");
+
+    assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
+    assert_eq!(
+        resolved.engine.workflow_file.as_deref(),
+        Some(config_root.join("flows/workflow.json").as_path())
+    );
+    assert_eq!(
+        resolved.engine.webhook_secret_file.as_deref(),
+        Some(config_root.join("secrets/webhook-secret").as_path())
+    );
+    assert_eq!(resolved.worker.workspace_root, config_root.join("workspace"));
+    assert_eq!(
+        resolved.agent.config_dir.as_deref(),
+        Some(config_root.join("agent-config").as_path())
+    );
+    let _ = std::fs::remove_dir_all(&xdg);
+}
+
+#[test]
+fn config_relative_resolution_preserves_absolute_and_tilde_paths() {
+    let dir = temp_dir("absolute-tilde-paths");
+    let bundle = dir.join("bundle");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&bundle).expect("create bundle dir");
+    let absolute_workflow = dir.join("elsewhere").join("workflow.json");
+    let absolute_workspace = dir.join("elsewhere").join("workspace");
+    std::fs::write(
+        bundle.join("config.toml"),
+        format!(
+            "schema_version = 1\n\
+             [engine]\n\
+             workflow = \"{}\"\n\
+             webhook_secret_file = \"~/.temper/webhook-secret\"\n\
+             [worker]\n\
+             workspace = \"{}\"\n\
+             [agent]\n\
+             config_dir = \"~\"\n",
+            absolute_workflow.display(),
+            absolute_workspace.display(),
+        ),
+    )
+    .expect("write config");
+
+    let mut env = EnvMap::new();
+    env.insert("HOME", home.to_string_lossy().into_owned());
+    let inputs = LoadInputs {
+        explicit_config: Some(bundle.clone()),
+        explicit_credentials: None,
+        env: &env,
+        paths: &PathResolver::default(),
+    };
+    let (resolved, _loaded) = load_explicit(&inputs).expect("bundle load succeeds");
+
+    assert_eq!(
+        resolved.engine.workflow_file.as_deref(),
+        Some(absolute_workflow.as_path())
+    );
+    assert_eq!(
+        resolved.engine.webhook_secret_file.as_deref(),
+        Some(home.join(".temper/webhook-secret").as_path())
+    );
+    assert_eq!(resolved.worker.workspace_root, absolute_workspace);
+    assert_eq!(resolved.agent.config_dir.as_deref(), Some(home.as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn missing_explicit_file_is_an_error() {
     // An explicit `--config` path is *required*: a missing file errors (it is not
     // silently treated as absent like a default-location file).

@@ -8,7 +8,8 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 use temper_cli_common::{EnvMap, LoadOptions, OutputFormat, PathResolver};
 use temper_config::{
-    Config, ConfigError, Credentials, config_path, paired_credentials_path, resolve, state_dir,
+    Config, ConfigError, Credentials, ResolveOptions, config_path, paired_credentials_path,
+    resolve_with_options, state_dir,
 };
 
 /// Runs `temper config paths`.
@@ -57,9 +58,16 @@ impl PathReport {
         );
         let config_root = config_file.as_deref().and_then(parent_dir);
         let config = load_config_if_present(config_file.as_deref())?;
-        let resolved = resolve(&config, &Credentials::default(), env).map_err(|error| {
-            format!("resolving path-related settings from the config file: {error}")
-        })?;
+        let resolve_options = config_file
+            .as_deref()
+            .filter(|path| path.exists())
+            .and_then(parent_dir)
+            .map(ResolveOptions::from_config_base_dir)
+            .unwrap_or_default();
+        let resolved = resolve_with_options(&config, &Credentials::default(), env, &resolve_options)
+            .map_err(|error| {
+                format!("resolving path-related settings from the config file: {error}")
+            })?;
 
         Ok(Self {
             config_root,
@@ -211,6 +219,43 @@ mod tests {
         );
         assert_eq!(report.workspace_dir, workspace);
         assert_eq!(report.workflow_file.as_deref(), Some(workflow.as_path()));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn report_resolves_relative_runtime_paths_against_loaded_config_root() {
+        let dir = scratch("explicit-bundle-relative-runtime");
+        let bundle = dir.join("bundle");
+        std::fs::create_dir_all(&bundle).expect("create bundle");
+        std::fs::write(
+            bundle.join("config.toml"),
+            "schema_version = 1\n\
+             [engine]\n\
+             workflow = \"flows/workflow.json\"\n\
+             [worker]\n\
+             workspace = \"workspace\"\n",
+        )
+        .expect("write config");
+
+        let home = dir.join("home");
+        let env = env_with_home(&home);
+        let base_paths = PathResolver::from_env(&env);
+        let report = PathReport::resolve(
+            &LoadOptions {
+                config: Some(bundle.clone()),
+                credentials: None,
+            },
+            &env,
+            &base_paths,
+        )
+        .expect("report resolves");
+
+        assert_eq!(report.workspace_dir, bundle.join("workspace"));
+        assert_eq!(
+            report.workflow_file.as_deref(),
+            Some(bundle.join("flows/workflow.json").as_path())
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }

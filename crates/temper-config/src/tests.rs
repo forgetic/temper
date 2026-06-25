@@ -511,6 +511,40 @@ workspace = "~/.local/state/temper/workspace"
 }
 
 #[test]
+fn direct_resolve_keeps_relative_paths_relative_without_config_context() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+workflow = "flows/workflow.json"
+webhook_secret_file = "secrets/webhook-secret"
+[worker]
+workspace = "workspace"
+[agent]
+config_dir = "agent-config"
+"#,
+    );
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+
+    assert_eq!(
+        resolved.engine.workflow_file.as_deref(),
+        Some(std::path::Path::new("flows/workflow.json"))
+    );
+    assert_eq!(
+        resolved.engine.webhook_secret_file.as_deref(),
+        Some(std::path::Path::new("secrets/webhook-secret"))
+    );
+    assert_eq!(
+        resolved.worker.workspace_root,
+        std::path::Path::new("workspace")
+    );
+    assert_eq!(
+        resolved.agent.config_dir.as_deref(),
+        Some(std::path::Path::new("agent-config"))
+    );
+}
+
+#[test]
 fn redacts_secrets_in_debug() {
     let config = parse_config(FULL_CONFIG);
     let credentials = parse_credentials(FULL_CREDENTIALS);
