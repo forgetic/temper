@@ -49,8 +49,8 @@ pub struct InitArtifacts {
 /// Builds (pure, no I/O) every artifact `temper init` will write: the config
 /// document, the workflow YAML, and a freshly generated webhook secret.
 ///
-/// `roles` come from the embedded basic-delivery workflow's queue-subscribing
-/// roles. The repo/provider come from defaults or local-dev flag overrides.
+/// `roles` come from the selected workflow's queue-subscribing roles. The
+/// repo/provider come from defaults or local-dev flag overrides.
 pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArtifacts, InitError> {
     let targets: FileTargets =
         resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
@@ -253,10 +253,9 @@ struct WorkflowArtifact {
 
 fn workflow_artifact(selection: &str) -> Result<WorkflowArtifact, InitError> {
     match selection {
-        WORKFLOW_BASIC_DELIVERY => builtin_workflow_artifact(
-            WORKFLOW_BASIC_DELIVERY,
-            basic_delivery_workflow_json(),
-        ),
+        WORKFLOW_BASIC_DELIVERY => {
+            builtin_workflow_artifact(WORKFLOW_BASIC_DELIVERY, basic_delivery_workflow_json())
+        }
         WORKFLOW_REFERENCE_DELIVERY => builtin_workflow_artifact(
             WORKFLOW_REFERENCE_DELIVERY,
             reference_delivery_workflow_json(),

@@ -69,8 +69,8 @@ fn basic_delivery_spec() -> RawWorkflowSpec {
 fn assert_workflow_yaml_matches(path: &Path, expected_spec: &RawWorkflowSpec) {
     let workflow = std::fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("workflow.yaml written at {}: {error}", path.display()));
-    let generated_spec: RawWorkflowSpec = serde_yaml::from_str(&workflow)
-        .expect("generated workflow artifact should be valid YAML");
+    let generated_spec: RawWorkflowSpec =
+        serde_yaml::from_str(&workflow).expect("generated workflow artifact should be valid YAML");
     assert_eq!(&generated_spec, expected_spec);
     generated_spec
         .validate()
@@ -334,7 +334,8 @@ fn run_init_accepts_custom_json_workflow_and_writes_yaml_artifact() {
     let credentials_path = dir.path().join("credentials.toml");
     let source_workflow_path = dir.path().join("custom-workflow.json");
     let source_spec = basic_delivery_spec();
-    let source_json = serde_json::to_string_pretty(&source_spec).expect("workflow serializes as JSON");
+    let source_json =
+        serde_json::to_string_pretty(&source_spec).expect("workflow serializes as JSON");
     std::fs::write(&source_workflow_path, source_json).expect("custom JSON workflow written");
 
     let mut prompter = ScriptedPrompter::new(Vec::<String>::new());

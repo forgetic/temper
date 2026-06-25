@@ -19,9 +19,7 @@ pub(super) fn assert_local_artifacts(
     let workflow = std::fs::read_to_string(workflow_path).expect("workflow.yaml written");
     let generated_spec = temper_reference_delivery::parse_workflow_spec(workflow_path, &workflow)
         .expect("workflow.yaml parses as YAML");
-    let generated = generated_spec
-        .validate()
-        .expect("workflow.yaml validates");
+    let generated = generated_spec.validate().expect("workflow.yaml validates");
     let validated = temper_reference_delivery::basic_delivery_workflow();
     assert_eq!(
         generated, validated,
