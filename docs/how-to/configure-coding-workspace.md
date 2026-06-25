@@ -74,7 +74,8 @@ repos = ["acme/widgets"]
 roles = ["architect", "engineer", "code-reviewer"]
 
 [worker]
-# Top-level directory under which per-job checkouts are prepared.
+# Top-level directory under which per-job checkouts are prepared. Each job is
+# isolated below this root as <role>/<safe-coordination-key>/<repo-dir>.
 # Default: $XDG_STATE_HOME/temper/workspace (~/.local/state/temper/workspace).
 # workspace = "~/.local/state/temper/workspace"
 # Explicit owner/name:role capabilities this worker serves.
@@ -117,13 +118,14 @@ The credential becomes the single `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON` env
 the child reads. (For the full flag inventory and defaults, see
 [`docs/reference/environment-variables.md`](../reference/environment-variables.md).)
 
-The agent runs **in the prepared checkout** (its `--workspace`, also its cwd). It
-receives the assigned job, work item, user guidance, action, allowed verdicts,
-and branch/base/correlation data as fields of the `WorkspaceContext` JSON the
-worker writes to the `--context` file. The agent does **not** receive Forge
-mutation tools; it completes the assigned action and reports a branch/diff, a
-declared verdict with authored content, or a structured failure for the worker to
-return to Temper.
+The agent runs **in the prepared coordination-scoped workspace root** (its
+`--workspace`, also its cwd), with each manifest repo checked out below that root
+using its `dir`. It receives the assigned job, work item, user guidance, action,
+allowed verdicts, and branch/base/correlation data as fields of the
+`WorkspaceContext` JSON the worker writes to the `--context` file. The agent does
+**not** receive Forge mutation tools; it completes the assigned action and
+reports a branch/diff, a declared verdict with authored content, or a structured
+failure for the worker to return to Temper.
 
 ### Assigned-action checkout capability
 

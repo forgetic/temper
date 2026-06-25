@@ -116,21 +116,25 @@ On success the daemon opens one PR per `RepoOutcome`. Every PR in the set:
 
 ### E. Workspace assembly (worker)
 
-The worker checks out each manifest repo into `<root>/<dir>`: writable repos
-onto their work branch (fetch-or-fresh, as today), read-only repos at their
-pinned base ref. It then runs **one** agent turn with the working directory set
-to the **workspace root** — not a single repo — so the agent can read and build
-all repos together. On completion, for each *writable* repo it detects a diff or
-commits-ahead-of-base, commits, pushes the work branch, and records a
-`RepoOutcome`. Read-only repos are never committed or pushed.
+The worker derives a job workspace root as
+`<worker-workspace>/<role>/<safe-coordination-key>`, where the safe component is
+based on `WorkspaceManifest.coordination_key` and encoded so it is a single path
+segment. It checks out each manifest repo beneath that root as `<root>/<dir>`:
+writable repos onto their work branch (fetch-or-fresh, as today), read-only repos
+at their pinned base ref. It then runs **one** agent turn with the working
+directory set to the **job workspace root** — not a single repo — so the agent
+can read and build all repos together. On completion, for each *writable* repo it
+detects a diff or commits-ahead-of-base, commits, pushes the work branch, and
+records a `RepoOutcome`. Read-only repos are never committed or pushed.
 
 ### F. The worker↔agent protocol
 
-`WorkspaceContext` carries the workspace root and the repo list (each with its
-`dir` and `access`) instead of a single `repository`. The agent edits across
-dirs and returns one `WorkspaceResult` (verdict/summary/body) for the whole
-turn. Per-repo diffs are **discovered by the worker**, not declared by the
-agent — the agent never has to enumerate which repos it touched.
+`WorkspaceContext` carries the repo list (each with its `dir` and `access`),
+and the agent process receives the coordination-scoped workspace root as its
+`--workspace`/cwd. The agent edits across dirs and returns one `WorkspaceResult`
+(verdict/summary/body) for the whole turn. Per-repo diffs are **discovered by the
+worker**, not declared by the agent — the agent never has to enumerate which
+repos it touched.
 
 ## Consequences
 

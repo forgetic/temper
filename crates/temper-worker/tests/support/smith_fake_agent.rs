@@ -4,10 +4,11 @@
 //! Behavior is driven by the worker's spawn flags + a few test env vars:
 //! - reads the [`WorkspaceContext`] from the `--context` flag (the new agent
 //!   contract — the worker passes paths as flags, not env);
-//! - runs in `--workspace` (the prepared checkout), defaulting to cwd;
+//! - runs in `--workspace` (the prepared scoped workspace root), defaulting to
+//!   cwd;
 //! - for a writable role: writes `$SMITH_FAKE_AGENT_FILE` (default `GREETING.md`)
-//!   with `$SMITH_FAKE_AGENT_CONTENT` into the workspace, so the worker has a
-//!   diff to commit/push;
+//!   with `$SMITH_FAKE_AGENT_CONTENT` into writable repo dirs, so the worker has
+//!   a diff to commit/push;
 //! - emits two step-progress lines on stdout (a `Started` and a `Done` marker),
 //!   both stamped with the context's `correlation_key`;
 //! - writes a [`WorkspaceResult`] to the `--result` path. If
@@ -46,8 +47,8 @@ fn main() {
     let verdict = std::env::var("SMITH_FAKE_AGENT_VERDICT").ok();
 
     // Writable head path: leave a product diff in each writable repo's sibling
-    // dir for the worker to commit/push (the cwd is the workspace root; ADR
-    // 0023). A single-repo job has exactly one writable repo.
+    // dir for the worker to commit/push (the cwd is the scoped workspace root;
+    // ADR 0023). A single-repo job has exactly one writable repo.
     if verdict.is_none() {
         let file = std::env::var("SMITH_FAKE_AGENT_FILE").unwrap_or_else(|_| "GREETING.md".into());
         let content = std::env::var("SMITH_FAKE_AGENT_CONTENT")

@@ -7,11 +7,11 @@ use super::{Workspace, WorkspaceError};
 impl Workspace {
     /// Persists this workspace's git author identity and push credential into the
     /// repo's **local** `.git/config`, so a spawned agent (which holds no token)
-    /// can `git commit`/`git push` against the prepared checkout. The push token
+    /// can `git commit`/`git push` against the prepared repo checkout. The push token
     /// goes into `http.extraheader`; it lives only in the worker-owned checkout's
     /// config, never on the agent's argv or env.
     ///
-    /// Idempotent: re-running overwrites the same keys. Called after the checkout
+    /// Idempotent: re-running overwrites the same keys. Called after the repo checkout
     /// is prepared and before the agent is spawned.
     pub async fn configure_local_identity(&self) -> Result<(), WorkspaceError> {
         for (key, value) in [

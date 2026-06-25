@@ -43,7 +43,7 @@ fn read_only_job_with_diff_still_returns_verdict_without_push() {
         assert_eq!(summary.as_deref(), Some("did triage"));
         assert!(children.is_empty());
         assert_no_origin_branch(&fixture, "agent/triage-with-diff-7");
-        assert_workspace_clean(&fixture, "architect");
+        assert_workspace_clean(&fixture, "architect", "triage-with-diff-7");
     });
 }
 

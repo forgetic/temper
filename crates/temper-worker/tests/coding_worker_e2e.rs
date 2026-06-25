@@ -155,6 +155,17 @@ fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo() {
 
     assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
 
+    // The sibling repos live under the role + coordination-key scope, not under
+    // the role root. This preserves ADR 0023 sibling layout while isolating
+    // distinct jobs for the same role/repo.
+    let scoped_root = fixture
+        .workspace_root
+        .join("engineer")
+        .join("coord-for-code-7");
+    assert!(scoped_root.join("service").join(".git").exists());
+    assert!(scoped_root.join("lib").join(".git").exists());
+    assert!(!fixture.workspace_root.join("engineer").join("service").exists());
+
     // Two writable repos that each produced a diff → one outcome per repo.
     let mut reported: Vec<String> = result
         .repos
