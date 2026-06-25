@@ -5,13 +5,17 @@
 //! - `validate` — load the config + credentials, resolve them, and report any
 //!   problems (and advisory notes) without starting anything.
 //! - `show` — print the effective resolved deployment, with secrets redacted.
+//! - `paths` — print the config, secret, state, workspace, and workflow paths
+//!   Temper will use.
 //! - `init` — write starter `config.toml` + `credentials.toml` templates.
 //!
 //! This crate owns only argv parsing, terminal output, and exit codes; the
 //! config schema, resolution, and writing all live in [`temper_config`], and the
 //! shared file-writing/exit-code helpers in [`temper_cli_common`].
 
-use std::path::{Path, PathBuf};
+mod paths;
+
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_cli_common::{
@@ -20,8 +24,7 @@ use temper_cli_common::{
 };
 use temper_config::{
     ConfigError, Finding, LoadInputs, LoadedPaths, ProviderCredential, Resolved, WebUiCreds,
-    config_path, config_template, credentials_template, lint, load_explicit,
-    paired_credentials_path, state_dir,
+    config_template, credentials_template, lint, load_explicit,
 };
 
 /// Everything `temper config` needs, with no ambient environment access.
@@ -85,6 +88,7 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
     let ConfigInputs {
         args,
         options,
+        format,
         env,
         paths,
     } = inputs;
@@ -99,6 +103,7 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
         }
         "validate" => run("temper config", validate(rest, &options, env, paths)),
         "show" => run("temper config", show(rest, &options, env, paths)),
+        "paths" => run("temper config", paths::command(rest, &options, format, env, paths)),
         "init" => run("temper config", init(rest, &options, env, paths)),
         other => {
             eprintln!("temper config: unknown command `{other}`\n\n{USAGE}");
