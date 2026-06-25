@@ -38,14 +38,14 @@ enum WorkflowFileFormat {
 
 impl WorkflowFileFormat {
     fn for_path(path: &Path) -> Self {
-        match path.extension().and_then(|extension| extension.to_str()) {
-            Some(extension)
-                if extension.eq_ignore_ascii_case("yaml")
-                    || extension.eq_ignore_ascii_case("yml") =>
-            {
-                WorkflowFileFormat::Yaml
-            }
-            _ => WorkflowFileFormat::Json,
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default();
+        if extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml") {
+            WorkflowFileFormat::Yaml
+        } else {
+            WorkflowFileFormat::Json
         }
     }
 
