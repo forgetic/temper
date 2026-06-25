@@ -28,10 +28,10 @@ mod e2e_lock;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use jig_core::{Reply, Script, StopReason, Turn};
+use jig_core::{HttpError, Reply, Script, ScriptAction, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_forge::{ItemNumber, PullRequest, PullRequestQuery, UserId};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
@@ -169,6 +169,142 @@ fn temper_run_opens_pr_from_checkpointed_product_diff_via_fake_llm() {
     let _ = run.child.kill();
 }
 
+#[test]
+#[ignore = "boots a real Forgejo fixture + fake LLM provider failures and spawns `temper run`; run with --ignored"]
+fn llm_server_error_requeues_claimed_issue() {
+    let _e2e_lock = e2e_lock::acquire();
+    let started = Instant::now();
+
+    // --- World: provisioned Forgejo (org, engineer identity, labels, repo) ---
+    let cached = start_cached_provisioned_repositories(&[REPO_NAME.to_string()])
+        .expect("forgejo provisioned world starts");
+    let server = cached.server;
+    let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
+    assert!(runner.is_running(), "runner daemon exited immediately");
+    let provisioned = cached
+        .state
+        .provisioned(REPO_NAME)
+        .unwrap_or_else(|| panic!("provisioned world has no repo named {REPO_NAME}"));
+    let engineer = provisioned
+        .role(&temper_workflow::RoleId::new(ENGINEER))
+        .expect("engineer identity is provisioned")
+        .clone();
+
+    // --- Fake LLM: keep returning provider-shaped 5xx server_error responses
+    //     until the test has observed the daemon's retry bookkeeping. Once
+    //     released, the next model attempt follows the normal write/checkpoint/
+    //     final-summary flow. ---
+    let allow_success = Arc::new(AtomicBool::new(false));
+    let provider_errors = Arc::new(AtomicUsize::new(0));
+    let observed_continuation = Arc::new(AtomicUsize::new(0));
+    let fake = server_error_then_engineer_fake(
+        Arc::clone(&allow_success),
+        Arc::clone(&provider_errors),
+        Arc::clone(&observed_continuation),
+    );
+
+    let workspace = RunWorkspaceGuard::new("temper-run-server-error-e2e");
+    let workflow_file = workspace.0.write_file("run/workflow.json", RUN_WORKFLOW);
+    let run_log = workspace.0.join("run/temper-run-server-error.log");
+
+    // --- Spawn one `temper run` (daemon + worker + agent in one process) ---
+    let mut run = spawn_temper_run(
+        &server,
+        &provisioned,
+        &engineer,
+        &workflow_file,
+        workspace.0.path(),
+        &fake.base_url(),
+        &run_log,
+    );
+
+    // Seed one raw intake issue. The mechanical backstop will make it code+ready;
+    // the first engineer run then emits `started` progress before the fake LLM
+    // returns provider HTTP 500/server_error through Jig.
+    let issue = block_on(temper_testing::forgejo_server::seed_intake_issue(
+        server.base_url(),
+        &provisioned.admin_token,
+        &provisioned.owner,
+        &provisioned.name,
+    ))
+    .expect("seed intake issue");
+    eprintln!("run_forgejo_e2e seeded server-error issue #{issue}");
+
+    let forge = admin_forge(&server, &provisioned);
+    let timeout = convergence_timeout();
+    let retry_body = wait_for_retry_release(
+        &forge,
+        &provisioned,
+        issue,
+        &engineer,
+        &mut run,
+        Arc::clone(&provider_errors),
+        timeout,
+    );
+    assert!(retry_body.contains("Current status: queued for retry"));
+    assert!(retry_body.contains("Retry: released back to the ready queue"));
+
+    // Allow the next attempt (or an already-started attempt's next internal
+    // provider retry) to complete successfully. It must reuse the same
+    // correlation key and converge to exactly one implementation PR.
+    allow_success.store(true, Ordering::SeqCst);
+
+    let deadline = Instant::now() + timeout;
+    let result = loop {
+        if let Some(status) = run.child.try_wait().expect("run try_wait") {
+            panic!(
+                "`temper run` exited early with {status:?}\n--- temper run log ---\n{}",
+                run.log_tail()
+            );
+        }
+        match block_on(find_final_engineer_pr(
+            &forge,
+            &provisioned,
+            issue,
+            &engineer,
+        )) {
+            Ok(pr) => break pr,
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            Err(error) => panic!(
+                "`temper run` did not finalize the engineer PR after provider retry within {timeout:?}: {error}\n--- temper run log ---\n{}",
+                run.log_tail()
+            ),
+        }
+    };
+
+    block_on(assert_recovered_issue_final_state(
+        &forge,
+        &provisioned,
+        issue,
+        result.number,
+        &engineer,
+    ));
+    assert!(
+        provider_errors.load(Ordering::SeqCst) >= 1,
+        "fake LLM never injected a provider HTTP server_error"
+    );
+    assert!(
+        fake.requests()
+            .iter()
+            .any(|request| request.path == "/chat/completions"),
+        "fake LLM did not record an OpenAI-compatible chat completion request"
+    );
+    assert!(
+        observed_continuation.load(Ordering::SeqCst) >= 1,
+        "fake LLM never saw the successful tool-result continuation"
+    );
+    eprintln!(
+        "run_forgejo_e2e recovered from provider server_error: PR #{} in {:?}",
+        result.number,
+        started.elapsed()
+    );
+
+    // Graceful-ish shutdown: SIGTERM the run process; the guard hard-kills on drop.
+    let _ = run.child.kill();
+}
+
 /// The fake engineer agent writes the product file, checkpoints the completed
 /// milestone, and returns summary-only success JSON.
 fn engineer_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
@@ -206,6 +342,59 @@ fn engineer_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
                 Reply::text(r#"{"summary":"Created DELIVERY.md via checkpoint-only flow."}"#)
             }
         }
+    }))
+    .expect("start fake LLM")
+}
+
+/// Provider-failure regression fake: return a Codex/OpenAI-style HTTP 500
+/// `server_error` until the test has observed daemon-side retry release, then
+/// run the same successful write/checkpoint/final flow as [`engineer_fake`].
+fn server_error_then_engineer_fake(
+    allow_success: Arc<AtomicBool>,
+    provider_errors: Arc<AtomicUsize>,
+    observed_continuation: Arc<AtomicUsize>,
+) -> FakeLlm {
+    let product_path = format!("{REPO_NAME}/DELIVERY.md");
+    let success_turn = Arc::new(AtomicUsize::new(0));
+    FakeLlm::start(Script::action_rule(move |_view| {
+        if !allow_success.load(Ordering::SeqCst) {
+            provider_errors.fetch_add(1, Ordering::SeqCst);
+            return ScriptAction::HttpError(HttpError::provider(
+                500,
+                "server_error",
+                "temporary upstream failure from Jig",
+            ));
+        }
+
+        let turn = success_turn.fetch_add(1, Ordering::SeqCst);
+        let reply = match turn {
+            0 => Reply {
+                turns: vec![Turn::ToolCall {
+                    id: "call_write_after_retry".to_string(),
+                    name: "write".to_string(),
+                    args: serde_json::json!({
+                        "path": product_path.clone(),
+                        "content": "delivered after provider retry\n"
+                    }),
+                }],
+                usage: Default::default(),
+                stop: StopReason::ToolCalls,
+            },
+            1 => Reply {
+                turns: vec![Turn::ToolCall {
+                    id: "call_checkpoint_after_retry".to_string(),
+                    name: "checkpoint".to_string(),
+                    args: serde_json::json!({ "label": "Create delivery file after retry" }),
+                }],
+                usage: Default::default(),
+                stop: StopReason::ToolCalls,
+            },
+            _ => {
+                observed_continuation.fetch_add(1, Ordering::SeqCst);
+                Reply::text(r#"{"summary":"Created DELIVERY.md via checkpoint-only flow."}"#)
+            }
+        };
+        ScriptAction::Reply(reply)
     }))
     .expect("start fake LLM")
 }
