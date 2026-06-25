@@ -3,8 +3,8 @@
 //! The unified `temper` command line — a thin dispatcher.
 //!
 //! [`run`] dispatches `argv[1]` to the headline subcommands — `init`, `apply`,
-//! `config`, `serve`, `daemon`, `agent` — and to the hidden operator/responder
-//! tools. Each
+//! `config`, `serve`, `daemon` — plus the internal agent entry point and the
+//! hidden operator/responder tools. Each
 //! subcommand lives in its own crate (`temper-cli-init`, `temper-cli-config`,
 //! `temper-cli-daemon`, `temper-agent-session`); this crate owns only the
 //! dispatch table and the operator/responder wrappers, so the heavy
@@ -44,7 +44,6 @@ Commands:
   serve   Run a long-lived Temper process (standalone supported)
   config  Guided or programmatic configuration
   daemon  Run a full standalone daemon or one of its components (engine, worker)
-  agent   Run an agent session (usually invoked by the daemon)
 
 Options:
   -c, --config <DIR|FILE>  Path to configuration file or bundle directory
@@ -188,15 +187,37 @@ pub fn dispatch(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::process::ExitCode;
 
-    use super::{USAGE, parse_top_level_args};
+    use temper_cli_common::{EnvMap, PathResolver};
+    use temper_config::LoadOptions;
+
+    use super::{USAGE, dispatch, parse_top_level_args};
 
     #[test]
-    fn top_level_usage_lists_serve_command() {
-        assert!(USAGE.contains("apply"));
-        assert!(USAGE.contains("serve"));
+    fn top_level_usage_lists_headline_commands_but_hides_internal_agent() {
+        assert!(USAGE.contains("\n  apply "));
+        assert!(USAGE.contains("\n  serve "));
         assert!(USAGE.contains("standalone supported"));
         assert!(USAGE.contains("--secrets"));
+        assert!(!USAGE.contains("\n  agent "), "{USAGE}");
+    }
+
+    #[test]
+    fn internal_agent_help_remains_dispatchable() {
+        let env = EnvMap::new();
+        let paths = PathResolver::default();
+
+        assert_eq!(
+            dispatch(
+                "agent",
+                vec!["--help".to_string()],
+                &env,
+                &paths,
+                LoadOptions::default()
+            ),
+            ExitCode::SUCCESS
+        );
     }
 
     #[test]

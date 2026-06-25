@@ -75,3 +75,20 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::process::ExitCode;
+
+    #[test]
+    fn help_exits_successfully_without_agent_run_inputs() {
+        assert_eq!(
+            crate::main(vec!["--help".to_string()].into_iter()),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            crate::main(vec!["-h".to_string()].into_iter()),
+            ExitCode::SUCCESS
+        );
+    }
+}

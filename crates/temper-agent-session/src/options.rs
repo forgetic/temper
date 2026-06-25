@@ -58,7 +58,7 @@ pub(crate) struct Options {
 }
 
 impl Options {
-    pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+    pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Option<Self>, String> {
         let mut provider = AuthChoice::ChatGptOAuth;
         let mut model = None;
         let mut investigate_model = None;
@@ -107,7 +107,7 @@ impl Options {
                     checkpoint_interval =
                         Some(parse_duration(&value(&mut iter, "--checkpoint-interval")?)?)
                 }
-                "--help" | "-h" => return Err(USAGE.to_string()),
+                "--help" | "-h" => return Ok(None),
                 other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
             }
         }
@@ -115,7 +115,7 @@ impl Options {
         let context = context.ok_or_else(|| format!("missing required --context\n{USAGE}"))?;
         let result = result.ok_or_else(|| format!("missing required --result\n{USAGE}"))?;
 
-        Ok(Self {
+        Ok(Some(Self {
             provider,
             model,
             investigate_model,
@@ -128,11 +128,11 @@ impl Options {
             subagents,
             deadline_unix_seconds,
             checkpoint_interval,
-        })
+        }))
     }
 }
 
-const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
+pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
 [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] \
 [--deadline-unix-seconds <N>] [--checkpoint-interval <DURATION>] [--capture-dir <DIR>]\n  \
@@ -191,7 +191,22 @@ mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Result<Options, String> {
+        match parse_raw(args)? {
+            Some(options) => Ok(options),
+            None => Err("unexpected help request".to_string()),
+        }
+    }
+
+    fn parse_raw(args: &[&str]) -> Result<Option<Options>, String> {
         Options::parse(args.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn help_short_circuits_required_run_inputs() {
+        assert!(parse_raw(&["--help"]).expect("help parses").is_none());
+        assert!(parse_raw(&["-h"]).expect("help parses").is_none());
+        assert!(USAGE.contains("temper agent --context <FILE> --result <FILE>"));
+        assert!(USAGE.contains("TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON"));
     }
 
     #[test]
