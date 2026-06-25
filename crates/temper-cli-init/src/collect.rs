@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn admin_user_override_skips_admin_prompt_and_is_validated() {
+    fn admin_user_override_skips_admin_prompt_and_consumes_one_fewer_answer() {
         let mut p = ScriptedPrompter::new([
             "http://localhost:3000".to_string(), // forge URL
             "".to_string(),                      // workflow (default)
@@ -386,12 +386,12 @@ mod tests {
         let err = collect_answers(&mut p, &overrides, false)
             .expect_err("empty --admin-user should fail interactively");
 
-        assert!(matches!(err, InitError::Unsupported(_)), "{err}");
+        assert!(matches!(&err, InitError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("admin user is required"), "{err}");
         assert!(
-            err.to_string().contains("admin user is required"),
-            "{err}"
+            p.answers.is_empty(),
+            "empty admin override should not prompt"
         );
-        assert!(p.answers.is_empty(), "empty admin override should not prompt");
     }
 
     #[test]

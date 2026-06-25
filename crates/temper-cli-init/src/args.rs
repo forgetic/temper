@@ -326,6 +326,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_accepts_admin_user_without_non_interactive() {
+        let parsed = parse(vec!["--admin-user".to_string(), "myuser".to_string()]).expect("parse");
+        assert!(!parsed.non_interactive);
+        assert_eq!(parsed.overrides.admin_user.as_deref(), Some("myuser"));
+    }
+
+    #[test]
     fn parse_accepts_non_interactive_and_admin_user() {
         let parsed = parse(vec![
             "--non-interactive".to_string(),
