@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "The `temper config` subcommand: validate / show / init-template. Thin argv + terminal-I/O over temper-config; carries no engine/worker/agent deps."
 
 [dependencies]
+serde_json = { workspace = true }
 temper-cli-common = { path = "../temper-cli-common" }
 temper-config = { path = "../temper-config" }
 

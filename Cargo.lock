@@ -1566,6 +1566,7 @@ dependencies = [
 name = "temper-cli-config"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "temper-cli-common",
  "temper-config",
 ]

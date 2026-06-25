@@ -5,17 +5,21 @@
 //! - `validate` — load the config + credentials, resolve them, and report any
 //!   problems (and advisory notes) without starting anything.
 //! - `show` — print the effective resolved deployment, with secrets redacted.
+//! - `paths` — print the config, secret, state, workspace, and workflow paths
+//!   Temper will use.
 //! - `init` — write starter `config.toml` + `credentials.toml` templates.
 //!
 //! This crate owns only argv parsing, terminal output, and exit codes; the
 //! config schema, resolution, and writing all live in [`temper_config`], and the
 //! shared file-writing/exit-code helpers in [`temper_cli_common`].
 
+mod paths;
+
 use std::process::ExitCode;
 
 use temper_cli_common::{
-    EX_USAGE, EnvMap, LoadOptions, PathResolver, WriteOutcome, resolve_targets, restrict_600, run,
-    write_new_file,
+    EX_USAGE, EnvMap, LoadOptions, OutputFormat, PathResolver, WriteOutcome, resolve_targets,
+    restrict_600, run, write_new_file,
 };
 use temper_config::{
     ConfigError, Finding, LoadInputs, LoadedPaths, ProviderCredential, Resolved, WebUiCreds,
@@ -31,6 +35,8 @@ pub struct ConfigInputs<'a> {
     pub args: Vec<String>,
     /// Global file-location options parsed before `config`.
     pub options: LoadOptions,
+    /// Global output format parsed before `config`.
+    pub format: OutputFormat,
     /// The injected environment snapshot (used only for `$HOME` / `$XDG_*`
     /// path expansion; no environment variable selects the config files).
     pub env: &'a EnvMap,
@@ -67,16 +73,21 @@ Usage: temper [GLOBAL OPTIONS] config <COMMAND> [OPTIONS]
 Commands:
   validate  Load and validate the config + credentials, reporting any problems
   show      Print the effective resolved configuration (secrets redacted)
+  paths     Print resolved config, secret, state, workspace, and workflow paths
   init      Write starter config.toml + credentials.toml templates
 
 Options:
   --force     (init) overwrite existing files
-  -h, --help  Print help";
+  -h, --help  Print help
+
+Global options:
+  --format <human|json>  (paths) output format; accepted before `config` only";
 
 pub fn main(inputs: ConfigInputs) -> ExitCode {
     let ConfigInputs {
         args,
         options,
+        format,
         env,
         paths,
     } = inputs;
@@ -91,6 +102,10 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
         }
         "validate" => run("temper config", validate(rest, &options, env, paths)),
         "show" => run("temper config", show(rest, &options, env, paths)),
+        "paths" => run(
+            "temper config",
+            paths::command(rest, &options, format, env, paths),
+        ),
         "init" => run("temper config", init(rest, &options, env, paths)),
         other => {
             eprintln!("temper config: unknown command `{other}`\n\n{USAGE}");

@@ -17,7 +17,8 @@ mod responders;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use temper_config::{EX_USAGE, LoadOptions};
+use temper_cli_common::{GlobalOptions, OutputFormat};
+use temper_config::EX_USAGE;
 
 // Re-exported so `src/bin/*` and tests construct the CLI's injected environment
 // snapshot with `temper_cli::CliEnv`.
@@ -46,9 +47,10 @@ Commands:
   daemon  Run a full standalone daemon or one of its components (engine, worker)
 
 Options:
-  -c, --config <DIR|FILE>  Path to configuration file or bundle directory
-      --secrets <DIR|FILE>  Explicit secret source directory or credentials.toml
-  -h, --help              Print help
+  -c, --config <DIR|FILE>      Path to configuration file or bundle directory
+      --secrets <DIR|FILE>     Explicit secret source directory or credentials.toml
+      --format <human|json>    Output format for commands that support it
+  -h, --help                  Print help
   -V, --version           Print version
 
 Run `temper <command> --help` for subcommand usage.";
@@ -92,22 +94,28 @@ pub fn run(cli: CliEnv) -> ExitCode {
 struct ParsedTopLevelArgs {
     command: Option<String>,
     rest: Vec<String>,
-    globals: LoadOptions,
+    globals: GlobalOptions,
 }
 
-/// Parses leading global file-location flags before the subcommand. The
-/// long-term UX accepts these options only in this leading position, for example
-/// `temper --config … --secrets … serve standalone`.
+/// Parses leading global options before the subcommand. The long-term UX
+/// accepts these options only in this leading position, for example
+/// `temper --config … --secrets … --format json serve standalone`.
 fn parse_top_level_args(args: Vec<String>) -> Result<ParsedTopLevelArgs, String> {
     let mut iter = args.into_iter();
-    let mut globals = LoadOptions::default();
+    let mut globals = GlobalOptions::default();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "-c" | "--config" => {
-                globals.config = Some(PathBuf::from(next_global_value(&mut iter, &arg)?));
+                globals.load.config = Some(PathBuf::from(next_global_value(&mut iter, &arg)?));
             }
             "--secrets" => {
-                globals.credentials = Some(PathBuf::from(next_global_value(&mut iter, &arg)?));
+                globals.load.credentials = Some(PathBuf::from(next_global_value(&mut iter, &arg)?));
+            }
+            "--format" => {
+                let value = next_global_value(&mut iter, &arg)?;
+                globals.format = OutputFormat::parse(&value).ok_or_else(|| {
+                    format!("invalid --format `{value}` (expected `human` or `json`)")
+                })?;
             }
             _ => {
                 return Ok(ParsedTopLevelArgs {
@@ -141,19 +149,20 @@ pub fn dispatch(
     args: Vec<String>,
     env: &temper_cli_common::EnvMap,
     paths: &temper_cli_common::PathResolver,
-    globals: LoadOptions,
+    globals: GlobalOptions,
 ) -> ExitCode {
     match command {
-        "init" => temper_cli_init::main_with_options(args, env, paths, globals),
-        "apply" => temper_cli_init::apply_main_with_options(args, env, paths, globals),
-        "serve" => temper_cli_daemon::serve_main_with_options(args, env, paths, globals),
+        "init" => temper_cli_init::main_with_options(args, env, paths, globals.load),
+        "apply" => temper_cli_init::apply_main_with_options(args, env, paths, globals.load),
+        "serve" => temper_cli_daemon::serve_main_with_options(args, env, paths, globals.load),
         "config" => temper_cli_config::main(temper_cli_config::ConfigInputs {
             args,
-            options: globals,
+            options: globals.load,
+            format: globals.format,
             env,
             paths,
         }),
-        "daemon" => temper_cli_daemon::main_with_options(args, env, paths, globals),
+        "daemon" => temper_cli_daemon::main_with_options(args, env, paths, globals.load),
         // The agent is its own process entry point and reads the worker-injected
         // env through its sanctioned `entry` module (issue #201); it needs no
         // snapshot from here.
@@ -189,8 +198,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::ExitCode;
 
-    use temper_cli_common::{EnvMap, PathResolver};
-    use temper_config::LoadOptions;
+    use temper_cli_common::{EnvMap, GlobalOptions, OutputFormat, PathResolver};
 
     use super::{USAGE, dispatch, parse_top_level_args};
 
@@ -214,7 +222,7 @@ mod tests {
                 vec!["--help".to_string()],
                 &env,
                 &paths,
-                LoadOptions::default()
+                GlobalOptions::default()
             ),
             ExitCode::SUCCESS
         );
@@ -235,13 +243,14 @@ mod tests {
         assert_eq!(parsed.command.as_deref(), Some("serve"));
         assert_eq!(parsed.rest, vec!["standalone".to_string()]);
         assert_eq!(
-            parsed.globals.config,
+            parsed.globals.load.config,
             Some(PathBuf::from("deploy/config.toml"))
         );
         assert_eq!(
-            parsed.globals.credentials,
+            parsed.globals.load.credentials,
             Some(PathBuf::from("deploy/credentials.toml"))
         );
+        assert_eq!(parsed.globals.format, OutputFormat::Human);
     }
 
     #[test]
@@ -256,8 +265,8 @@ mod tests {
 
         assert_eq!(parsed.command.as_deref(), Some("init"));
         assert_eq!(parsed.rest, vec!["--yes".to_string()]);
-        assert_eq!(parsed.globals.config, Some(PathBuf::from("deploy")));
-        assert_eq!(parsed.globals.credentials, None);
+        assert_eq!(parsed.globals.load.config, Some(PathBuf::from("deploy")));
+        assert_eq!(parsed.globals.load.credentials, None);
     }
 
     #[test]
@@ -279,7 +288,61 @@ mod tests {
                 "deploy/config.toml".to_string(),
             ]
         );
-        assert_eq!(parsed.globals.config, None);
-        assert_eq!(parsed.globals.credentials, None);
+        assert_eq!(parsed.globals.load.config, None);
+        assert_eq!(parsed.globals.load.credentials, None);
+        assert_eq!(parsed.globals.format, OutputFormat::Human);
+    }
+
+    #[test]
+    fn leading_format_is_a_global_option() {
+        let parsed = parse_top_level_args(vec![
+            "--format".to_string(),
+            "json".to_string(),
+            "config".to_string(),
+            "paths".to_string(),
+        ])
+        .expect("global args parse");
+
+        assert_eq!(parsed.command.as_deref(), Some("config"));
+        assert_eq!(parsed.rest, vec!["paths".to_string()]);
+        assert_eq!(parsed.globals.load.config, None);
+        assert_eq!(parsed.globals.load.credentials, None);
+        assert_eq!(parsed.globals.format, OutputFormat::Json);
+    }
+
+    #[test]
+    fn invalid_global_format_errors() {
+        let err = parse_top_level_args(vec![
+            "--format".to_string(),
+            "yaml".to_string(),
+            "config".to_string(),
+        ])
+        .expect_err("invalid format errors");
+
+        assert!(err.contains("invalid --format"), "{err}");
+        assert!(err.contains("human"), "{err}");
+        assert!(err.contains("json"), "{err}");
+    }
+
+    #[test]
+    fn format_after_command_is_not_a_global_option() {
+        let parsed = parse_top_level_args(vec![
+            "config".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "paths".to_string(),
+        ])
+        .expect("top-level parse succeeds");
+
+        assert_eq!(parsed.command.as_deref(), Some("config"));
+        assert_eq!(
+            parsed.rest,
+            vec![
+                "--format".to_string(),
+                "json".to_string(),
+                "paths".to_string(),
+            ]
+        );
+        assert_eq!(parsed.globals.format, OutputFormat::Human);
     }
 }
