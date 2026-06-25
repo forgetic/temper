@@ -46,6 +46,20 @@ pub struct ConfigInputs<'a> {
     pub paths: &'a PathResolver,
 }
 
+/// Everything top-level `temper check` needs, with no ambient environment access.
+pub struct CheckInputs<'a> {
+    /// The program arguments after `check`.
+    pub args: Vec<String>,
+    /// Global file-location options parsed before `check`.
+    pub options: LoadOptions,
+    /// Global output format parsed before `check`.
+    pub format: OutputFormat,
+    /// The injected environment snapshot.
+    pub env: &'a EnvMap,
+    /// The injected base directories (HOME / XDG_*) for default-location discovery.
+    pub paths: &'a PathResolver,
+}
+
 /// Loads + resolves a deployment for `validate` / `show`, honoring the same
 /// hermeticity rule the daemon uses: an explicit `--config` / `--secrets`
 /// suppresses default `~/.config/temper` discovery. An explicit config root may
@@ -73,7 +87,7 @@ Guided or programmatic configuration.
 Usage: temper [GLOBAL OPTIONS] config <COMMAND> [OPTIONS]
 
 Commands:
-  validate  Load and validate the config + credentials, reporting any problems
+  validate  Compatibility path for `temper check` (load and validate offline)
   show      Print the effective resolved configuration (secrets redacted)
   paths     Print resolved config, secret, state, workspace, and workflow paths
   schema    Print the canonical JSON Schema for config.toml
@@ -83,8 +97,23 @@ Options:
   --force     (init) overwrite existing files
   -h, --help  Print help
 
+Prefer `temper check` for validation; `temper config validate` remains for compatibility.
+
 Global options:
-  --format <human|json>  (paths) output format; schema always emits JSON; accepted before `config` only";
+  --format <human|json>  `temper check` and `config paths` output format; schema always emits JSON; accepted before the command only";
+
+pub const CHECK_USAGE: &str = "\
+Validate the resolved Temper config and credentials offline.
+
+Usage: temper [GLOBAL OPTIONS] check [OPTIONS]
+
+Options:
+  -h, --help  Print help
+
+Global options:
+  -c, --config <DIR|FILE>   Path to configuration file or bundle directory
+      --secrets <DIR|FILE>  Explicit secret source directory or credentials.toml
+      --format <human|json> Output format (default: human)";
 
 pub fn main(inputs: ConfigInputs) -> ExitCode {
     let ConfigInputs {

@@ -3,8 +3,8 @@
 //! The unified `temper` command line — a thin dispatcher.
 //!
 //! [`run`] dispatches `argv[1]` to the headline subcommands — `init`, `apply`,
-//! `config`, `serve`, `daemon` — plus the internal agent entry point and the
-//! hidden operator/responder tools. Each
+//! `check`, `config`, `serve`, `daemon` — plus the internal agent entry point
+//! and the hidden operator/responder tools. Each
 //! subcommand lives in its own crate (`temper-cli-init`, `temper-cli-config`,
 //! `temper-cli-daemon`, `temper-agent-session`); this crate owns only the
 //! dispatch table and the operator/responder wrappers, so the heavy
@@ -42,6 +42,7 @@ Usage: temper [OPTIONS] [COMMAND]
 Commands:
   init    Interactively configure a deployment bundle
   apply   Provision a deployment bundle on the forge
+  check   Validate the resolved config and credentials offline
   serve   Run a long-lived Temper process (standalone supported)
   config  Guided or programmatic configuration
   daemon  Run a full standalone daemon or one of its components (engine, worker)
@@ -155,6 +156,13 @@ pub fn dispatch(
         "init" => temper_cli_init::main_with_options(args, env, paths, globals.load),
         "apply" => temper_cli_init::apply_main_with_options(args, env, paths, globals.load),
         "serve" => temper_cli_daemon::serve_main_with_options(args, env, paths, globals.load),
+        "check" => temper_cli_config::check(temper_cli_config::CheckInputs {
+            args,
+            options: globals.load,
+            format: globals.format,
+            env,
+            paths,
+        }),
         "config" => temper_cli_config::main(temper_cli_config::ConfigInputs {
             args,
             options: globals.load,
@@ -205,6 +213,7 @@ mod tests {
     #[test]
     fn top_level_usage_lists_headline_commands_but_hides_internal_agent() {
         assert!(USAGE.contains("\n  apply "));
+        assert!(USAGE.contains("\n  check "));
         assert!(USAGE.contains("\n  serve "));
         assert!(USAGE.contains("standalone supported"));
         assert!(USAGE.contains("--secrets"));
