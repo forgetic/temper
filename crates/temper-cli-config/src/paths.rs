@@ -84,7 +84,10 @@ impl PathReport {
             display_optional(self.credentials_source.as_deref(), "(unavailable)"),
             display_optional(self.state_dir.as_deref(), "(unavailable)"),
             self.workspace_dir.display(),
-            display_optional(self.workflow_file.as_deref(), "(bundled reference-delivery)"),
+            display_optional(
+                self.workflow_file.as_deref(),
+                "(bundled reference-delivery)"
+            ),
         )
     }
 
@@ -240,7 +243,10 @@ mod tests {
             Some(bundle.join("credentials.toml").as_path())
         );
         assert_eq!(report.workflow_file, None);
-        assert_eq!(report.workspace_dir, home.join(".local/state/temper/workspace"));
+        assert_eq!(
+            report.workspace_dir,
+            home.join(".local/state/temper/workspace")
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }

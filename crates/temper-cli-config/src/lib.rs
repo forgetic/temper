@@ -15,7 +15,6 @@
 
 mod paths;
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_cli_common::{
@@ -103,7 +102,10 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
         }
         "validate" => run("temper config", validate(rest, &options, env, paths)),
         "show" => run("temper config", show(rest, &options, env, paths)),
-        "paths" => run("temper config", paths::command(rest, &options, format, env, paths)),
+        "paths" => run(
+            "temper config",
+            paths::command(rest, &options, format, env, paths),
+        ),
         "init" => run("temper config", init(rest, &options, env, paths)),
         other => {
             eprintln!("temper config: unknown command `{other}`\n\n{USAGE}");
