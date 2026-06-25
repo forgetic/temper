@@ -16,60 +16,50 @@ if ! expr "$justification_loc" : '[0-9][0-9]*$' >/dev/null; then
     exit 2
 fi
 
-path_list_contains() {
-    list_file="$1"
-    needle="$2"
+tmp_allowed="$(mktemp)"
+tmp_justified="$(mktemp)"
+tmp_missing_justification="$(mktemp)"
+tmp_violations="$(mktemp)"
+trap 'rm -f "$tmp_allowed" "$tmp_justified" "$tmp_missing_justification" "$tmp_violations"' EXIT
 
-    if [ ! -f "$list_file" ]; then
-        return 1
-    fi
+if [ -f "$hard_allowlist" ]; then
+    sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$hard_allowlist" >"$tmp_allowed"
+else
+    : >"$tmp_allowed"
+fi
 
-    awk -v needle="$needle" '
-        {
-            sub(/[[:space:]]*#.*$/, "")
-            sub(/^[[:space:]]+/, "")
-            sub(/[[:space:]]+$/, "")
-            if ($0 == needle) {
-                found = 1
-            }
-        }
-        END { exit found ? 0 : 1 }
-    ' "$list_file"
-}
+if [ -f "$justifications" ]; then
+    sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$justifications" >"$tmp_justified"
+else
+    : >"$tmp_justified"
+fi
 
-violations=""
-missing_justification=""
-paths="$(git ls-files --cached --others --exclude-standard '*.rs' | sort -u)"
-
+git ls-files --cached --others --exclude-standard '*.rs' | sort -u |
 while IFS= read -r path; do
-    if [ -z "$path" ] || [ ! -f "$path" ]; then
+    if [ ! -f "$path" ]; then
         continue
     fi
 
     loc="$(awk 'NF { count++ } END { print count + 0 }' "$path")"
-    if [ "$loc" -gt "$hard_max_loc" ] && ! path_list_contains "$hard_allowlist" "$path"; then
-        violations="${violations}${loc} ${path}
-"
+    if [ "$loc" -gt "$hard_max_loc" ] && ! grep -Fxq "$path" "$tmp_allowed"; then
+        printf '%s %s\n' "$loc" "$path"
     fi
-    if [ "$loc" -gt "$justification_loc" ] && ! path_list_contains "$justifications" "$path"; then
-        missing_justification="${missing_justification}${loc} ${path}
-"
+    if [ "$loc" -gt "$justification_loc" ] && ! grep -Fxq "$path" "$tmp_justified"; then
+        printf '%s %s\n' "$loc" "$path" >>"$tmp_missing_justification"
     fi
-done <<EOF
-$paths
-EOF
+done >"$tmp_violations"
 
-if [ -n "$violations" ]; then
+if [ -s "$tmp_violations" ]; then
     echo "Rust files over ${hard_max_loc} nonblank LOC:" >&2
-    printf '%s' "$violations" | sort -nr >&2
+    sort -nr "$tmp_violations" >&2
     echo >&2
     echo "Split the file or add an explicit hard-rule exception to $hard_allowlist." >&2
     exit 1
 fi
 
-if [ -n "$missing_justification" ]; then
+if [ -s "$tmp_missing_justification" ]; then
     echo "Rust files over ${justification_loc} nonblank LOC without justification:" >&2
-    printf '%s' "$missing_justification" | sort -nr >&2
+    sort -nr "$tmp_missing_justification" >&2
     echo >&2
     echo "Split the file or add a short justification near its path in $justifications." >&2
     exit 1
