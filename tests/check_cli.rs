@@ -15,6 +15,35 @@ fn temper(args: &[&str], env_root: &Path) -> Output {
         .expect("run temper")
 }
 
+fn write_valid_bundle(root: &Path) -> std::path::PathBuf {
+    let bundle = root.join("bundle");
+    std::fs::create_dir_all(&bundle).expect("create bundle");
+    std::fs::write(
+        bundle.join("config.toml"),
+        "schema_version = 1\n\
+         [forge]\n\
+         url = \"http://localhost:3000\"\n\
+         admin = \"engineer\"\n\
+         ci_user = \"engineer\"\n\
+         [engine]\n\
+         repos = [\"ai/temper\"]\n\
+         roles = [\"engineer\"]\n",
+    )
+    .expect("write config");
+    std::fs::write(
+        bundle.join("credentials.toml"),
+        "schema_version = 1\n\
+         [forge.users.engineer]\n\
+         token = \"forge-token\"\n\
+         password = \"forge-password\"\n\
+         [agent.providers.anthropic]\n\
+         type = \"api-key\"\n\
+         key = \"provider-key\"\n",
+    )
+    .expect("write credentials");
+    bundle
+}
+
 #[test]
 fn top_level_help_lists_check_and_hides_internal_agent() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -40,15 +69,13 @@ fn check_help_exits_successfully() {
 }
 
 #[test]
-fn check_succeeds_without_config_files() {
+fn check_fails_without_config_files_but_prints_report() {
     let dir = tempfile::tempdir().expect("tempdir");
     let output = temper(&["check"], dir.path());
 
     assert!(
-        output.status.success(),
-        "status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "missing config should report blocking validation findings"
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(
@@ -68,10 +95,8 @@ fn check_json_reports_status_findings_and_loaded_paths() {
     let output = temper(&["--format", "json", "check"], dir.path());
 
     assert!(
-        output.status.success(),
-        "status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "JSON status=error should also return a non-zero process status"
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     let value: Value = serde_json::from_str(&stdout).expect("valid JSON");
@@ -93,6 +118,41 @@ fn check_json_reports_status_findings_and_loaded_paths() {
     );
     assert!(
         findings.iter().any(|finding| finding["severity"] == "note"),
+        "{value}"
+    );
+}
+
+#[test]
+fn check_json_succeeds_for_valid_explicit_bundle() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = write_valid_bundle(dir.path());
+    let bundle_arg = bundle.to_string_lossy();
+    let output = temper(
+        &["--config", &bundle_arg, "--format", "json", "check"],
+        dir.path(),
+    );
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let value: Value = serde_json::from_str(&stdout).expect("valid JSON");
+
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["result"], "ok");
+    assert_eq!(
+        value["paths"]["config"],
+        bundle.join("config.toml").display().to_string()
+    );
+    assert_eq!(
+        value["paths"]["credentials"],
+        bundle.join("credentials.toml").display().to_string()
+    );
+    assert!(
+        value["findings"].as_array().is_some_and(Vec::is_empty),
         "{value}"
     );
 }

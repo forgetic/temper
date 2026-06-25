@@ -172,12 +172,9 @@ pub fn check(inputs: CheckInputs) -> ExitCode {
                     }
                 }
             }
-            if report.load_failed {
+            if report.load_failed || has_error_findings(&report.findings) {
                 ExitCode::FAILURE
             } else {
-                // `temper check` is the non-strict top-level scaffold: lint
-                // findings are reported in-band, while the process exits
-                // successfully as long as the offline load + resolve path ran.
                 ExitCode::SUCCESS
             }
         }
