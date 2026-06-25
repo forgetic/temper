@@ -57,7 +57,7 @@ pub use paths::{
     config_dir, config_path, credentials_path, default_workspace_root, paired_credentials_path,
     state_dir,
 };
-pub use resolve::{env_role_key, resolve};
+pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
     AgentSettings, Capability, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
     ProviderCredential, ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds,
