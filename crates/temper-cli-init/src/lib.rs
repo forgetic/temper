@@ -80,7 +80,7 @@ Options:
   --provider-url  <URL>         Base URL override for the provider
   --non-interactive             Run without prompts; all required values must
                                 be supplied via flags or environment variables
-  --admin-user   <VALUE>        Forgejo admin username (only non-interactive)
+  --admin-user   <VALUE>        Forgejo admin username; skips the admin prompt
   -h, --help                    Print help
 
 Environment variables (only honoured with --non-interactive):
@@ -105,7 +105,7 @@ pub struct InitOptions {
     pub yes: bool,
     /// The topology selected by `--topology` (standalone only today).
     pub topology: InitTopology,
-    /// Non-interactive answers selected by local-dev flags.
+    /// Init answers selected by local-dev flags.
     pub overrides: InitOverrides,
     /// Run without prompts; all required values must be supplied via flags or
     /// environment variables.
@@ -353,6 +353,12 @@ mod tests {
         assert!(USAGE.contains("Per-job worker workspace root"), "{USAGE}");
         assert!(USAGE.contains("--apply"), "{USAGE}");
         assert!(USAGE.contains("--yes"), "{USAGE}");
+        assert!(USAGE.contains("--admin-user"), "{USAGE}");
+        assert!(USAGE.contains("skips the admin prompt"), "{USAGE}");
+        assert!(
+            !USAGE.contains("admin username (only non-interactive)"),
+            "{USAGE}"
+        );
         assert!(!USAGE.contains("  --config"), "{USAGE}");
         assert!(!USAGE.contains("  --secrets"), "{USAGE}");
     }

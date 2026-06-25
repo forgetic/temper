@@ -75,9 +75,10 @@ impl Answers {
     }
 }
 
-/// Asks the operator the five questions + two secret prompts, validating the
-/// forge URL and rejecting hosted GitHub (unsupported today). `--forge` skips
-/// only the forge URL prompt; the rest of the provisioning flow stays intact.
+/// Asks the operator for any missing non-secret answers plus two secret prompts,
+/// validating the forge URL and rejecting hosted GitHub (unsupported today).
+/// Prompt-overriding flags such as `--forge` and `--admin-user` skip only their
+/// matching prompt; the rest of the provisioning flow stays intact.
 ///
 /// When `non_interactive` is true, prompts are skipped entirely and all values
 /// are taken from the overrides (or errors when required values are missing).
@@ -113,8 +114,12 @@ pub fn collect_answers(
         None => p.ask("Daemon webhook address", Some(DEFAULT_WEBHOOK_ADDR))?,
     };
 
-    // Q4 — Forge admin user + password.
-    let admin_user = p.ask("Forge admin user", None)?;
+    // Q4 — Forge admin user + password. `--admin-user` skips only the username
+    // prompt; the password remains a secret prompt in interactive mode.
+    let admin_user = match &overrides.admin_user {
+        Some(value) => value.clone(),
+        None => p.ask("Forge admin user", None)?,
+    };
     if admin_user.is_empty() {
         return Err(InitError::Unsupported(
             "forge admin user is required".to_string(),
@@ -346,6 +351,50 @@ mod tests {
     }
 
     #[test]
+    fn admin_user_override_skips_admin_prompt_and_consumes_one_fewer_answer() {
+        let mut p = ScriptedPrompter::new([
+            "http://localhost:3000".to_string(), // forge URL
+            "".to_string(),                      // workflow (default)
+            "".to_string(),                      // webhook (default)
+            "admin-pw".to_string(),              // admin password (secret)
+            "sk-deepseek".to_string(),           // provider key (secret)
+        ]);
+        let overrides = InitOverrides {
+            admin_user: Some("flag-admin".to_string()),
+            ..Default::default()
+        };
+
+        let a = collect_answers(&mut p, &overrides, false).expect("collect");
+
+        assert_eq!(a.admin_user, "flag-admin");
+        assert_eq!(a.admin_password, "admin-pw");
+        assert_eq!(a.provider_key, "sk-deepseek");
+        assert!(p.answers.is_empty(), "admin-user prompt should be skipped");
+    }
+
+    #[test]
+    fn empty_admin_user_override_errors_in_interactive_mode() {
+        let mut p = ScriptedPrompter::new(Vec::<String>::new());
+        let overrides = InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            workflow: Some(WORKFLOW_BASIC_DELIVERY.to_string()),
+            bind: Some(DEFAULT_WEBHOOK_ADDR.to_string()),
+            admin_user: Some(String::new()),
+            ..Default::default()
+        };
+
+        let err = collect_answers(&mut p, &overrides, false)
+            .expect_err("empty --admin-user should fail interactively");
+
+        assert!(matches!(&err, InitError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("admin user is required"), "{err}");
+        assert!(
+            p.answers.is_empty(),
+            "empty admin override should not prompt"
+        );
+    }
+
+    #[test]
     fn non_interactive_bind_overrides_default_webhook_addr() {
         let mut p = ScriptedPrompter::new(Vec::<String>::new());
         let overrides = InitOverrides {
@@ -361,6 +410,9 @@ mod tests {
 
         assert_eq!(a.webhook_addr, "127.0.0.1:38100");
         assert_eq!(a.webhook_url(), "http://127.0.0.1:38100/forgejo/webhook");
+        assert_eq!(a.admin_user, "root");
+        assert_eq!(a.admin_password, "admin-pw");
+        assert_eq!(a.provider_key, "sk-deepseek");
         assert!(p.answers.is_empty(), "non-interactive should not prompt");
     }
 

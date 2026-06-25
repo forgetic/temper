@@ -64,7 +64,8 @@ impl RepoSelection {
     }
 }
 
-/// Non-interactive values supplied by local-dev `temper init` flags.
+/// Values supplied by local-dev `temper init` flags and non-interactive secret
+/// environment variables.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct InitOverrides {
     /// Forgejo base URL supplied by `--forge`, skipping the forge prompt.
@@ -78,7 +79,7 @@ pub struct InitOverrides {
     pub workflow: Option<String>,
     /// Provider supplied by `--provider` (only `deepseek` is accepted today).
     pub provider: Option<String>,
-    /// Forgejo admin username supplied by `--admin-user` (only non-interactive).
+    /// Forgejo admin username supplied by `--admin-user`, skipping the admin prompt.
     pub admin_user: Option<String>,
     /// Forgejo admin password from `TEMPER_INIT_ADMIN_PASSWORD` (only non-interactive).
     pub admin_password: Option<String>,
@@ -322,6 +323,13 @@ mod tests {
         let err = parse(vec!["--repo".to_string(), "service".to_string()])
             .expect_err("repo requires owner/name");
         assert!(err.contains("owner/name"), "{err}");
+    }
+
+    #[test]
+    fn parse_accepts_admin_user_without_non_interactive() {
+        let parsed = parse(vec!["--admin-user".to_string(), "myuser".to_string()]).expect("parse");
+        assert!(!parsed.non_interactive);
+        assert_eq!(parsed.overrides.admin_user.as_deref(), Some("myuser"));
     }
 
     #[test]
