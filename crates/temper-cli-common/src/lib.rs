@@ -58,6 +58,19 @@ impl OutputFormat {
     }
 }
 
+/// Global options parsed by the unified `temper` dispatcher before the
+/// subcommand name.
+///
+/// Existing subcommands receive only [`load`](Self::load) and ignore
+/// [`format`](Self::format) unless they explicitly opt in.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct GlobalOptions {
+    /// Global config/credential file-location options.
+    pub load: LoadOptions,
+    /// Requested output format for subcommands that support structured output.
+    pub format: OutputFormat,
+}
+
 /// The environment snapshot every CLI subcommand is dispatched with.
 ///
 /// Built once at the binary boundary by `boot()` in `src/bin/temper.rs`
