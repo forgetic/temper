@@ -425,7 +425,10 @@ fn explicit_config_directory_resolves_relative_paths_under_bundle_root() {
     };
     let (resolved, loaded) = load_explicit(&inputs).expect("bundle load succeeds");
 
-    assert_eq!(loaded.config.as_deref(), Some(bundle.join("config.toml").as_path()));
+    assert_eq!(
+        loaded.config.as_deref(),
+        Some(bundle.join("config.toml").as_path())
+    );
     assert_eq!(
         resolved.engine.workflow_file.as_deref(),
         Some(bundle.join("flows/workflow.json").as_path())
@@ -478,7 +481,10 @@ fn explicit_config_file_resolves_relative_paths_under_file_parent() {
         resolved.engine.webhook_secret_file.as_deref(),
         Some(profile_dir.join("secrets/webhook-secret").as_path())
     );
-    assert_eq!(resolved.worker.workspace_root, profile_dir.join("workspace"));
+    assert_eq!(
+        resolved.worker.workspace_root,
+        profile_dir.join("workspace")
+    );
     assert_eq!(
         resolved.agent.config_dir.as_deref(),
         Some(profile_dir.join("agent-config").as_path())
@@ -526,7 +532,10 @@ fn default_config_resolves_relative_paths_under_default_config_root() {
         resolved.engine.webhook_secret_file.as_deref(),
         Some(config_root.join("secrets/webhook-secret").as_path())
     );
-    assert_eq!(resolved.worker.workspace_root, config_root.join("workspace"));
+    assert_eq!(
+        resolved.worker.workspace_root,
+        config_root.join("workspace")
+    );
     assert_eq!(
         resolved.agent.config_dir.as_deref(),
         Some(config_root.join("agent-config").as_path())
@@ -552,7 +561,7 @@ fn config_relative_resolution_preserves_absolute_and_tilde_paths() {
              [worker]\n\
              workspace = \"{}\"\n\
              [agent]\n\
-             config_dir = \"~\"\n",
+             config_dir = \"~service/prompts\"\n",
             absolute_workflow.display(),
             absolute_workspace.display(),
         ),
@@ -578,7 +587,10 @@ fn config_relative_resolution_preserves_absolute_and_tilde_paths() {
         Some(home.join(".temper/webhook-secret").as_path())
     );
     assert_eq!(resolved.worker.workspace_root, absolute_workspace);
-    assert_eq!(resolved.agent.config_dir.as_deref(), Some(home.as_path()));
+    assert_eq!(
+        resolved.agent.config_dir.as_deref(),
+        Some(std::path::Path::new("~service/prompts"))
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

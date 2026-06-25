@@ -64,10 +64,10 @@ impl PathReport {
             .and_then(parent_dir)
             .map(ResolveOptions::from_config_base_dir)
             .unwrap_or_default();
-        let resolved = resolve_with_options(&config, &Credentials::default(), env, &resolve_options)
-            .map_err(|error| {
-                format!("resolving path-related settings from the config file: {error}")
-            })?;
+        let resolved =
+            resolve_with_options(&config, &Credentials::default(), env, &resolve_options).map_err(
+                |error| format!("resolving path-related settings from the config file: {error}"),
+            )?;
 
         Ok(Self {
             config_root,

@@ -509,11 +509,12 @@ fn trimmed(value: Option<&str>) -> Option<String> {
 
 /// Resolves a path-valued field from `config.toml`.
 ///
-/// Absolute paths and `~`/`~/…` keep the long-standing behavior (absolute paths
-/// are used verbatim, and tilde paths expand through the injected HOME). Only
-/// plain relative paths use the optional config-file parent context.
+/// Absolute paths and any `~`-prefixed path keep the long-standing behavior
+/// (absolute paths are used verbatim; bare `~` / `~/…` expand through the
+/// injected HOME; `~user` forms stay verbatim). Only plain relative paths use
+/// the optional config-file parent context.
 fn resolve_config_path(value: &str, env: &impl EnvLookup, options: &ResolveOptions) -> PathBuf {
-    if is_expandable_tilde(value) {
+    if is_tilde_prefixed(value) {
         return expand_tilde(value, env);
     }
 
@@ -529,8 +530,8 @@ fn resolve_config_path(value: &str, env: &impl EnvLookup, options: &ResolveOptio
         .unwrap_or(path)
 }
 
-fn is_expandable_tilde(value: &str) -> bool {
-    value == "~" || value.starts_with("~/")
+fn is_tilde_prefixed(value: &str) -> bool {
+    value.starts_with('~')
 }
 
 /// Expands a leading `~` / `~/…` in a path value against `$HOME`, so a
