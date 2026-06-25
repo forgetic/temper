@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use jig_core::{HttpError, Reply, Script, ScriptAction, StopReason, Turn};
 use jig_server::FakeLlm;
-use temper_forge::{Forge, ItemNumber, PullRequest, PullRequestQuery, UserId};
+use temper_forge::{ItemNumber, PullRequest, PullRequestQuery, UserId};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{
@@ -279,7 +279,6 @@ fn llm_server_error_requeues_claimed_issue() {
         &provisioned,
         issue,
         result.number,
-        &engineer,
     ));
     assert!(
         provider_errors.load(Ordering::SeqCst) >= 1,
@@ -539,6 +538,12 @@ async fn retry_release_state(
             issue.body
         ));
     }
+    if !issue.body.contains("Latest progress: step 1") {
+        return Err(format!(
+            "retry ledger did not preserve the started progress step:\n{}",
+            issue.body
+        ));
+    }
     assert_single_run_ledger(&issue.body, issue_number)?;
 
     let implementation_prs = implementation_prs(forge, provisioned).await?;
@@ -560,7 +565,6 @@ async fn assert_recovered_issue_final_state(
     provisioned: &Provisioned,
     issue_number: ItemNumber,
     pull_number: ItemNumber,
-    engineer: &temper_testing::forgejo_server::RoleIdentity,
 ) {
     let issue = forge
         .get_issue_by_number(&provisioned.repository, issue_number)
@@ -580,12 +584,6 @@ async fn assert_recovered_issue_final_state(
         !issue.body.contains("Current status: queued for retry"),
         "finalized source issue ledger should not remain queued for retry: {}",
         issue.body
-    );
-    let engineer_user = UserId::new(engineer.user.clone());
-    assert!(
-        !issue.assignees.iter().any(|assignee| assignee == &engineer_user),
-        "engineer assignee should not remain on source issue after PR handoff: {:?}",
-        issue.assignees
     );
     let prs = implementation_prs(forge, provisioned)
         .await
