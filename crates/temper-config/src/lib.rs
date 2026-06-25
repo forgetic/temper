@@ -65,6 +65,7 @@ pub use schema::{
     AgentConfig, AgentCredentials, AgentProviderConfig, Config, Credentials, EngineConfig,
     ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
     ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
+    config_json_schema,
 };
 pub use template::{config_template, credentials_template};
 

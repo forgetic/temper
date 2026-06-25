@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 /// The schema version this binary reads and writes. A file declaring any other
 /// version is rejected with a clear message (see [`crate::load`]).
@@ -230,6 +231,206 @@ pub struct ModelMap {
     /// The (cheaper) model for read-only `investigate` sub-agents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub investigate: Option<String>,
+}
+
+/// Returns the canonical JSON Schema for the current Temper `config.toml` model.
+///
+/// The schema mirrors [`Config`] and its nested non-secret sections. Object
+/// sections use `additionalProperties: false` wherever serde currently applies
+/// `deny_unknown_fields`; provider maps keep arbitrary provider names while
+/// constraining each provider profile's value shape.
+pub fn config_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://temper.local/schemas/config.schema.json",
+        "title": "Temper config.toml",
+        "description": "JSON Schema for the non-secret Temper config.toml file model accepted by this build.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version"],
+        "properties": {
+            "schema_version": {
+                "description": "Config schema version accepted by this Temper build.",
+                "type": "integer",
+                "const": SCHEMA_VERSION,
+            },
+            "forge": {
+                "description": "Forge backend and connection settings.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "type": {
+                        "description": "Forge backend kind; only forgejo is supported today.",
+                        "type": "string",
+                    },
+                    "url": {
+                        "description": "Forge base URL, for example http://localhost:3000.",
+                        "type": "string",
+                    },
+                    "admin": {
+                        "description": "Default forge user key from credentials.toml.",
+                        "type": "string",
+                    },
+                    "ci_user": {
+                        "description": "Forge user key whose web UI credentials authenticate CI status reads.",
+                        "type": "string",
+                    },
+                },
+            },
+            "engine": {
+                "description": "Orchestrator settings.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "bind": {
+                        "description": "Full host:port bind address.",
+                        "type": "string",
+                    },
+                    "port": {
+                        "description": "Convenience port for binding 127.0.0.1:<port>.",
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 65535,
+                    },
+                    "workflow": {
+                        "description": "Path to a workflow definition JSON file.",
+                        "type": "string",
+                    },
+                    "repos": {
+                        "description": "Repositories to orchestrate, each owner/name.",
+                        "type": "array",
+                        "items": { "type": "string" },
+                    },
+                    "roles": {
+                        "description": "Workflow roles to drive.",
+                        "type": "array",
+                        "items": { "type": "string" },
+                    },
+                    "poll_cadence_secs": {
+                        "description": "Poll-backstop cadence in seconds.",
+                        "type": "integer",
+                        "minimum": 0,
+                    },
+                    "mechanical_cadence_secs": {
+                        "description": "Mechanical-backstop cadence in seconds; 0 disables it.",
+                        "type": "integer",
+                        "minimum": 0,
+                    },
+                    "lease_ttl_secs": {
+                        "description": "Lease TTL in seconds.",
+                        "type": "integer",
+                        "minimum": 0,
+                    },
+                    "daemon_id": {
+                        "description": "Stable daemon identity used for lease ownership.",
+                        "type": "string",
+                    },
+                    "webhook_secret_file": {
+                        "description": "Path to the Forgejo webhook HMAC secret file.",
+                        "type": "string",
+                    },
+                },
+            },
+            "worker": {
+                "description": "Worker settings.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "workspace": {
+                        "description": "Top-level directory for per-job agent workspaces.",
+                        "type": "string",
+                    },
+                    "worker_id": {
+                        "description": "Stable worker identity.",
+                        "type": "string",
+                    },
+                    "daemon_url": {
+                        "description": "Engine URL for distributed worker long-polling.",
+                        "type": "string",
+                    },
+                    "git_base_url": {
+                        "description": "Git base URL the agent pushes branches to.",
+                        "type": "string",
+                    },
+                    "max_concurrent_jobs": {
+                        "description": "Maximum jobs run by one worker at once.",
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295u64,
+                    },
+                    "poll_wait_ms": {
+                        "description": "Long-poll wait in milliseconds.",
+                        "type": "integer",
+                        "minimum": 0,
+                    },
+                    "heartbeat_interval_ms": {
+                        "description": "Heartbeat interval in milliseconds.",
+                        "type": "integer",
+                        "minimum": 0,
+                    },
+                    "capabilities": {
+                        "description": "Explicit owner/name:role capabilities.",
+                        "type": "array",
+                        "items": { "type": "string" },
+                    },
+                },
+            },
+            "agent": {
+                "description": "Coding agent provider, model, and limit settings.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "provider": {
+                        "description": "Provider profile key under agent.providers.",
+                        "type": "string",
+                    },
+                    "max_iterations": {
+                        "description": "Maximum model iterations per job.",
+                        "type": "integer",
+                        "minimum": 0,
+                    },
+                    "enable_subagents": {
+                        "description": "Enable the in-workspace investigate sub-agent tool.",
+                        "type": "boolean",
+                    },
+                    "config_dir": {
+                        "description": "Optional agent config directory for prompt overlays.",
+                        "type": "string",
+                    },
+                    "providers": {
+                        "description": "Provider profiles keyed by provider name.",
+                        "type": "object",
+                        "additionalProperties": {
+                            "description": "Non-secret provider profile settings.",
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "url": {
+                                    "description": "Optional provider base URL override.",
+                                    "type": "string",
+                                },
+                                "models": {
+                                    "description": "Provider model selections.",
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "main": {
+                                            "description": "Main coding model.",
+                                            "type": "string",
+                                        },
+                                        "investigate": {
+                                            "description": "Model for read-only investigate sub-agents.",
+                                            "type": "string",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    })
 }
 
 // ── credentials file ─────────────────────────────────────────────────────────
