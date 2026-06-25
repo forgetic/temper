@@ -5,7 +5,8 @@
 //!
 //! - the worker writes the [`WorkspaceContext`] to a temp file and passes its
 //!   path as the `--context` flag, the result path as `--result`, and the
-//!   prepared checkout as `--workspace` (also the child's cwd);
+//!   prepared coordination-scoped workspace root as `--workspace` (also the
+//!   child's cwd);
 //! - the program emits [`StepProgress`] records as line-delimited JSON on its
 //!   **stdout**; the worker parses each and hands it to the [`ProgressSink`] to
 //!   relay onward to the forge;

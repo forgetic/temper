@@ -118,11 +118,17 @@ pub fn assert_no_extra_origin_head_branches(fixture: &Fixture, expected: &[&str]
     assert_eq!(branches, expected);
 }
 
-pub fn assert_workspace_clean(fixture: &Fixture, role: &str) {
+pub fn assert_workspace_clean(fixture: &Fixture, role: &str, coordination_key: &str) {
     assert_eq!(
         git_output([
             "-C",
-            path_str(&fixture.workspace_root.join(role).join("service")),
+            path_str(
+                &fixture
+                    .workspace_root
+                    .join(role)
+                    .join(coordination_key)
+                    .join("service"),
+            ),
             "status",
             "--porcelain=v1",
             "--untracked-files=all",

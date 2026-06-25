@@ -64,7 +64,7 @@ impl Workspace {
     }
 
     /// Construct a workspace at an explicit checkout path (one sibling repo of a
-    /// coordinated multi-repo workspace, ADR 0023), rather than the persistent
+    /// coordination-scoped multi-repo workspace), rather than the legacy
     /// per-(repo, role) layout `Workspace::new` derives.
     pub fn at(
         path: PathBuf,

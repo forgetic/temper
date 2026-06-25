@@ -72,7 +72,7 @@ impl FakeAgentRunner {
             .expect("fake agent runner captured a context")
     }
 
-    /// The `git HEAD` sha the runner saw in the prepared checkout.
+    /// The `git HEAD` sha the runner saw in the prepared primary repo checkout.
     pub fn observed_head_sha(&self) -> String {
         self.observed_head_sha
             .lock()
@@ -94,8 +94,9 @@ impl AgentRunner for FakeAgentRunner {
         _progress: Arc<dyn ProgressSink>,
     ) -> Result<WorkspaceResult, AgentRunError> {
         *self.captured.lock().expect("capture lock") = Some(context.clone());
-        // The agent's cwd is the workspace root; it edits inside each repo's
-        // sibling dir. This fake operates on the primary repo (ADR 0023).
+        // The agent's cwd is the coordination-scoped workspace root; it edits
+        // inside each repo's sibling dir. This fake operates on the primary repo
+        // (ADR 0023).
         let primary_dir = context
             .primary()
             .map(|repo| repo.dir.clone())

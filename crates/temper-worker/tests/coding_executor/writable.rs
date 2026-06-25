@@ -71,7 +71,42 @@ fn success_path_commits_pushes_and_reports_branch() {
 }
 
 #[test]
-fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
+fn scoped_workspace_is_reused_for_same_coordination_key() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::Success.runner(), true);
+
+        let (_, first_head, _) = expect_success(
+            executor
+                .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+                .await,
+        );
+        let workspace_path = fixture
+            .workspace_root
+            .join("engineer")
+            .join("pr-for-code-7")
+            .join("service");
+        assert!(workspace_path.exists());
+        let sentinel = workspace_path.join(".git/smith-sentinel");
+        fs::write(&sentinel, "keep object cache").expect("write sentinel");
+
+        let (branch_name, head_sha, _) = expect_success(
+            executor
+                .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+                .await,
+        );
+
+        assert_eq!(branch_name, "agent/pr-for-code-7");
+        assert_eq!(head_sha, first_head);
+        assert!(
+            sentinel.exists(),
+            "prepare must reuse the existing scoped checkout for the same coordination key"
+        );
+    });
+}
+
+#[test]
+fn distinct_coordination_keys_use_distinct_checkout_directories() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::Success.runner(), true);
@@ -81,21 +116,36 @@ fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
                 .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
                 .await,
         );
-        let workspace_path = fixture.workspace_root.join("engineer/service");
-        assert!(workspace_path.exists());
-        let sentinel = workspace_path.join(".git/smith-sentinel");
-        fs::write(&sentinel, "keep object cache").expect("write sentinel");
+        let first_workspace_path = fixture
+            .workspace_root
+            .join("engineer")
+            .join("pr-for-code-7")
+            .join("service");
+        assert!(first_workspace_path.exists());
+        let first_sentinel = first_workspace_path.join(".git/smith-sentinel");
+        fs::write(&first_sentinel, "keep first job object cache").expect("write sentinel");
 
         let (branch_name, head_sha, _) = expect_success(
             executor
                 .execute(assign("agent/pr-for-code-8", "pr-for-code-8"))
                 .await,
         );
+        let second_workspace_path = fixture
+            .workspace_root
+            .join("engineer")
+            .join("pr-for-code-8")
+            .join("service");
 
+        assert_ne!(first_workspace_path, second_workspace_path);
         assert_eq!(branch_name, "agent/pr-for-code-8");
+        assert!(second_workspace_path.exists());
         assert!(
-            sentinel.exists(),
-            "prepare must reuse the existing checkout"
+            first_sentinel.exists(),
+            "preparing the second job must not wipe the first job's checkout"
+        );
+        assert!(
+            !second_workspace_path.join(".git/smith-sentinel").exists(),
+            "a distinct coordination key must not reuse the first job's checkout"
         );
         assert_eq!(
             git_output([
@@ -105,6 +155,33 @@ fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
                 "refs/heads/agent/pr-for-code-8",
             ]),
             head_sha
+        );
+    });
+}
+
+#[test]
+fn coordination_key_scope_is_encoded_as_one_safe_path_component() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::Success.runner(), true);
+
+        expect_success(
+            executor
+                .execute(assign("agent/escaped-scope", "../../escape/nested"))
+                .await,
+        );
+
+        let role_root = fixture.workspace_root.join("engineer");
+        let encoded_scope = "%2E%2E%2F%2E%2E%2Fescape%2Fnested";
+        assert!(role_root.join(encoded_scope).join("service").exists());
+        assert!(
+            !fixture
+                .workspace_root
+                .parent()
+                .expect("workspace root has temp parent")
+                .join("escape")
+                .exists(),
+            "an unsanitized coordination key would escape the workspace root"
         );
     });
 }
@@ -169,7 +246,7 @@ fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
         assert_eq!(summary.as_deref(), Some("cannot proceed"));
         assert!(children.is_empty());
         assert_no_origin_branch(&fixture, "agent/pr-for-code-7");
-        assert_workspace_clean(&fixture, "engineer");
+        assert_workspace_clean(&fixture, "engineer", "pr-for-code-7");
     });
 }
 

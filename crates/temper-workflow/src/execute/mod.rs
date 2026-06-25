@@ -107,16 +107,20 @@ use crate::ids::{RoleId, TransitionId};
 use crate::plan::TransitionPlan;
 use crate::validated::ValidatedWorkflow;
 use error::classify_plan_error;
-use temper_forge::{Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId};
+use temper_forge::{
+    Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId, Version,
+};
 
 /// A loaded Forge artifact with the handle needed to mutate it.
 enum Loaded {
     Issue {
         id: IssueId,
+        version: Version,
         classified: ClassifiedArtifact,
     },
     PullRequest {
         id: PullRequestId,
+        version: Version,
         /// Whether the freshly loaded pull request is already merged. Lets the
         /// merge effect be at-most-once: an already-merged target is skipped.
         merged: bool,
@@ -268,6 +272,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     .map_err(ExecutionError::Classification)?;
                 Ok(Loaded::Issue {
                     id: issue.id,
+                    version: issue.version,
                     classified,
                 })
             }
@@ -289,6 +294,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     .map_err(ExecutionError::Classification)?;
                 Ok(Loaded::PullRequest {
                     id: pull_request.id,
+                    version: pull_request.version,
                     merged,
                     terminal,
                     head_sha,

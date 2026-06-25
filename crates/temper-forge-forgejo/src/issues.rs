@@ -14,6 +14,7 @@ use crate::ids::{RepoCoord, parse_issue_id, parse_repository_id};
 use crate::map::map_issue;
 use crate::pulls::response_validator;
 use crate::types::IssueDto;
+use crate::version::content_validator;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
 use temper_forge_model::{
@@ -169,22 +170,24 @@ impl<C: HttpClient> ForgejoForge<C> {
         else {
             return Err(ForgeError::NotFound(format!("issue {id}")));
         };
-        let validator = response_validator(&response);
+        let header_validator = response_validator(&response);
         let current_dto: IssueDto = Self::decode("get issue", &response)?;
         // A pull request is never an issue: refuse to mutate it through the
         // issue surface.
         if current_dto.is_pull_request() {
             return Err(ForgeError::NotFound(format!("issue {id}")));
         }
-        let current = self.materialize_issue(&repo, current_dto, validator.as_deref());
+        let current = self.materialize_issue(&repo, current_dto, header_validator.as_deref());
+        let current_validator = issue_validator(&current, header_validator.as_deref());
 
         if let Some(expected) = input.expected_version {
-            self.versions.check(
-                id.as_str(),
-                validator.as_deref(),
-                expected,
+            let check_validator = conditional_check_validator(
+                current_validator.as_str(),
+                header_validator.as_deref(),
                 self.config.cas_mode,
-            )?;
+            );
+            self.versions
+                .check(id.as_str(), check_validator, expected, self.config.cas_mode)?;
         }
 
         let mut edit = serde_json::Map::new();
@@ -277,9 +280,9 @@ impl<C: HttpClient> ForgejoForge<C> {
 
     /// Maps an issue DTO and assigns a version from the validator cache.
     ///
-    /// The validator is the response `ETag` when present, else the weak
-    /// `updated_at` timestamp. Shared by the issue read, update, and
-    /// dependency-link paths so version capture lives in one place.
+    /// The validator is the response `ETag` when present, else a content
+    /// fingerprint. Shared by the issue read, update, and dependency-link paths
+    /// so version capture lives in one place.
     pub(crate) fn materialize_issue(
         &self,
         repo: &RepoCoord,
@@ -287,12 +290,60 @@ impl<C: HttpClient> ForgejoForge<C> {
         etag: Option<&str>,
     ) -> Issue {
         let mut issue = map_issue(repo, dto);
-        let validator = etag
-            .map(str::to_string)
-            .unwrap_or_else(|| issue.updated_at.to_rfc3339());
+        let validator = issue_validator(&issue, etag);
         issue.version = self.versions.observe(issue.id.as_str(), Some(&validator));
         issue
     }
+}
+
+fn issue_validator(issue: &Issue, etag: Option<&str>) -> String {
+    etag.map(str::to_string).unwrap_or_else(|| {
+        content_validator(
+            "issue",
+            &[
+                ("number", issue.number.get().to_string()),
+                ("title", issue.title.clone()),
+                ("body", issue.body.clone()),
+                ("state", issue_state(issue.state).to_string()),
+                ("labels", issue.labels.join("\n")),
+                ("assignees", user_ids(&issue.assignees)),
+                (
+                    "closed_at",
+                    issue
+                        .closed_at
+                        .map(|ts| ts.to_rfc3339())
+                        .unwrap_or_default(),
+                ),
+            ],
+        )
+    })
+}
+
+fn conditional_check_validator<'a>(
+    content: &'a str,
+    provider: Option<&'a str>,
+    mode: crate::CasMode,
+) -> Option<&'a str> {
+    match (provider, mode) {
+        (Some(provider), _) => Some(provider),
+        (None, crate::CasMode::BestEffort) => Some(content),
+        (None, crate::CasMode::Strict) => None,
+    }
+}
+
+fn issue_state(state: IssueState) -> &'static str {
+    match state {
+        IssueState::Open => "open",
+        IssueState::Closed => "closed",
+    }
+}
+
+fn user_ids(users: &[UserId]) -> String {
+    users
+        .iter()
+        .map(UserId::as_str)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Returns whether an issue satisfies the client-side filters of `query`.

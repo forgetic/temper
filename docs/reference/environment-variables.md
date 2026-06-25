@@ -68,7 +68,7 @@ environment variables.
 | --- | --- | --- |
 | `--context <FILE>` | Worker-written `WorkspaceContext` JSON path (required). | — (set per job by the worker) |
 | `--result <FILE>` | `WorkspaceResult` JSON path the agent must write (required). | — (set per job by the worker) |
-| `--workspace <DIR>` | Prepared checkout / workspace root. | process cwd |
+| `--workspace <DIR>` | Prepared coordination-scoped workspace root. | process cwd |
 | `--provider <anthropic\|chatgpt\|deepseek>` | Provider adapter to use. | `chatgpt` |
 | `--model <ID>` | Main model id. | provider built-in default |
 | `--investigate-model <ID>` | Cheaper read-only subagent model id. | provider built-in default |

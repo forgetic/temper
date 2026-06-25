@@ -47,7 +47,7 @@ fn review_job_changes_verdict_passes_review_body_through() {
         assert!(children.is_empty());
         assert_no_origin_branch(&fixture, "agent/review-changes-7");
         assert_no_extra_origin_head_branches(&fixture, &["main"]);
-        assert_workspace_clean(&fixture, "reviewer");
+        assert_workspace_clean(&fixture, "reviewer", "review-changes-7");
     });
 }
 

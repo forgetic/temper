@@ -152,8 +152,8 @@ fn is_directory_source(path: &Path) -> bool {
 /// `~/.local/state/temper`), per the XDG Base Directory spec, derived from the
 /// injected [`PathResolver`].
 ///
-/// State is mutable, machine-local data the daemon owns at runtime (the
-/// per-job worker workspaces live under [`default_workspace_root`]). It is
+/// State is mutable, machine-local data the daemon owns at runtime (the worker's
+/// top-level workspace root lives under [`default_workspace_root`]). It is
 /// deliberately separate from the *config* dir ([`config_dir`]): config is
 /// hand-edited and may be checked in, state is generated and disposable.
 pub fn state_dir(paths: &PathResolver) -> Option<PathBuf> {

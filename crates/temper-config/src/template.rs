@@ -41,7 +41,8 @@ lease_ttl_secs = 300
 # webhook_secret_file = \"/path/to/webhook-secret\"
 
 [worker]
-# Per-job agent workspace root. Omit to use the XDG state default
+# Top-level agent workspace root. Per-job scoped roots are created below this as
+# <role>/<safe-coordination-key>. Omit to use the XDG state default
 # ~/.local/state/temper/workspace ($XDG_STATE_HOME/temper/workspace). A leading
 # ~ is expanded at load time.
 # workspace = \"~/.local/state/temper/workspace\"

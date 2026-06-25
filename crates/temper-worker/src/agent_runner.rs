@@ -1,7 +1,8 @@
 //! The agent-turn seam.
 //!
 //! [`CodingExecutor`](crate::coding_executor::CodingExecutor) owns the workspace
-//! lifecycle — prepare the checkout, run one agent turn, map the result to a
+//! lifecycle — prepare the scoped checkout root, run one agent turn, map the
+//! result to a
 //! [`JobOutcome`](crate::executor::JobOutcome), commit/push or discard. The
 //! *agent turn itself* is abstracted behind [`AgentRunner`] so the orchestration
 //! is independent of how the turn is produced — and, crucially, so the worker
@@ -17,7 +18,7 @@
 //! - test fakes return scripted results (and may emit scripted progress)
 //!   without any subprocess.
 //!
-//! The agent has git credentials only via the prepared checkout (to push
+//! The agent has git credentials only via the prepared repo checkouts (to push
 //! commits/checkpoints); it never calls the forge API. Step-progress markers
 //! are crash-recovery checkpoints the worker relays onward to the forge.
 
@@ -105,13 +106,14 @@ impl std::fmt::Display for AgentRunError {
 
 impl std::error::Error for AgentRunError {}
 
-/// Runs one role-aware coding/triage/review turn in a prepared checkout.
+/// Runs one role-aware coding/triage/review turn in a prepared workspace root.
 ///
-/// `context` is the work-item context the worker assembled (repository, role,
-/// branch, verdict vocabulary, ...). `cwd` is the prepared checkout the turn
-/// operates on: a writable role leaves a product diff in it; a read-only role
-/// inspects it and returns a verdict. The runner must not commit, push, or
-/// otherwise mutate Forge state — the executor owns that.
+/// `context` is the work-item context the worker assembled (repositories, role,
+/// branch, verdict vocabulary, ...). `cwd` is the prepared scoped workspace root
+/// the turn operates on: writable repos live in sibling dirs where the agent
+/// leaves product diffs; read-only repos are inspected for verdicts. The runner
+/// must not commit, push, or otherwise mutate Forge state — the executor owns
+/// that.
 pub trait AgentRunner: Send + Sync {
     fn run(
         &self,
