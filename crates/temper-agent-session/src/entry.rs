@@ -39,7 +39,13 @@ pub(crate) fn run<I>(args: I) -> Result<(), String>
 where
     I: Iterator<Item = String>,
 {
-    let options = Options::parse(args)?;
+    let options = match Options::parse(args)? {
+        Some(options) => options,
+        None => {
+            println!("{}", crate::options::USAGE);
+            return Ok(());
+        }
+    };
     let context = read_context(&options)?;
 
     // The workspace (checkout) defaults to the process cwd: the worker runs us

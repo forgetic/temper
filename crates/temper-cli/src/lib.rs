@@ -187,8 +187,12 @@ pub fn dispatch(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::process::ExitCode;
 
-    use super::{USAGE, parse_top_level_args};
+    use temper_cli_common::{EnvMap, PathResolver};
+    use temper_config::LoadOptions;
+
+    use super::{USAGE, dispatch, parse_top_level_args};
 
     #[test]
     fn top_level_usage_lists_headline_commands_but_hides_internal_agent() {
@@ -197,6 +201,23 @@ mod tests {
         assert!(USAGE.contains("standalone supported"));
         assert!(USAGE.contains("--secrets"));
         assert!(!USAGE.contains("\n  agent "), "{USAGE}");
+    }
+
+    #[test]
+    fn internal_agent_help_remains_dispatchable() {
+        let env = EnvMap::new();
+        let paths = PathResolver::default();
+
+        assert_eq!(
+            dispatch(
+                "agent",
+                vec!["--help".to_string()],
+                &env,
+                &paths,
+                LoadOptions::default()
+            ),
+            ExitCode::SUCCESS
+        );
     }
 
     #[test]
