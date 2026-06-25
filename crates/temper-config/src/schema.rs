@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// The schema version this binary reads and writes. A file declaring any other
 /// version is rejected with a clear message (see [`crate::load`]).
@@ -339,7 +339,10 @@ fn engine_config_schema() -> Value {
             ),
             (
                 "mechanical_cadence_secs",
-                integer_schema("Mechanical-backstop cadence in seconds; 0 disables it.", None),
+                integer_schema(
+                    "Mechanical-backstop cadence in seconds; 0 disables it.",
+                    None,
+                ),
             ),
             (
                 "lease_ttl_secs",
@@ -376,7 +379,10 @@ fn worker_config_schema() -> Value {
             ),
             (
                 "max_concurrent_jobs",
-                integer_schema("Maximum jobs run by one worker at once.", Some(4_294_967_295)),
+                integer_schema(
+                    "Maximum jobs run by one worker at once.",
+                    Some(4_294_967_295),
+                ),
             ),
             (
                 "poll_wait_ms",
@@ -418,7 +424,7 @@ fn agent_config_schema() -> Value {
                 "providers",
                 object_schema(
                     "Provider profiles keyed by provider name.",
-                    [],
+                    Vec::<(&'static str, Value)>::new(),
                     agent_provider_config_schema(),
                 ),
             ),
@@ -500,10 +506,7 @@ fn string_array_schema(description: &'static str) -> Value {
     schema_object([
         ("description", Value::from(description)),
         ("type", Value::from("array")),
-        (
-            "items",
-            schema_object([("type", Value::from("string"))]),
-        ),
+        ("items", schema_object([("type", Value::from("string"))])),
     ])
 }
 
