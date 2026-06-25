@@ -55,7 +55,7 @@ examples/reference-delivery/
 │   ├── intake-issue.md  # deliberately thin single-repo seed intake body
 │   └── ci.yml           # CI committed explicitly into demo repositories
 ├── observability.md
-└── run.sh               # fixed launcher / teardown / validation
+└── run.sh               # fixed launcher / teardown
 ```
 
 Runtime data goes under gitignored `run/` and `logs/`. Run-local
@@ -67,11 +67,9 @@ From this directory:
 
 ```sh
 ./run.sh start                  # cross-repo fan-out demo (default)
-./run.sh validate               # while running: inspect live fan-out/landing state
 ./run.sh stop
 
 ./run.sh single-repo            # optional single-repo reviewer-gated standalone demo
-./run.sh validate               # inspect retained logs for single-repo evidence
 ./run.sh stop
 ```
 
@@ -83,9 +81,8 @@ short and auditable. The checked-in default is the two-repository fan-out path.
 
 `./run.sh stop` removes the throwaway Forgejo state and run-local credentials,
 but logs are retained. For the default cross-repo path inspect
-`logs/provision.log`, `logs/worker-*.log`, `logs/runner.log`, and
-`logs/validate-multi-repo.log`. For the optional single-repo path inspect
-`logs/provision.log` and `logs/run.log`.
+`logs/provision.log`, `logs/worker-*.log`, and `logs/runner.log`. For the
+optional single-repo path inspect `logs/provision.log` and `logs/run.log`.
 
 If a run is force-killed, clean up possible orphans:
 

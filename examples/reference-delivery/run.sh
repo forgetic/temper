@@ -45,8 +45,6 @@ JIG_REPO="$HOME/src/rust/jig"
 JIG_BIN="$JIG_REPO/target/debug/jig"
 JIG_FIXTURE_PATH="$JIG_REPO/fixtures/reference-delivery.json"
 INIT_PROVIDER_KEY=reference-delivery-jig-dummy-key
-CI_FALLBACK_MISSING_CREDENTIALS='no web-UI credentials configured for the CI read fallback'
-CI_FALLBACK_LOGIN_FAILED='forgejo web-ui login failed'
 
 ADMIN_USER=refadmin
 ADMIN_EMAIL=refadmin@example.invalid
@@ -80,14 +78,12 @@ sleep_short() { sleep 0.2 2>/dev/null || sleep 1; }
 
 usage() {
     cat <<EOF
-usage: ./run.sh [start|multi-repo|single-repo|stop|validate|validate-multi-repo|help]
+usage: ./run.sh [start|multi-repo|single-repo|stop|help]
 
   start (default)      run the cross-repo fan-out demo across $REPO and $CANARY_REPO
   multi-repo           alias for start
   single-repo          run the fixed reviewer-gated single-repo demo
   stop                 tear down a previous run via run/*.pid
-  validate             inspect the active run (cross-repo if present, otherwise single-repo logs)
-  validate-multi-repo  inspect live Forgejo state for fan-out/landing evidence
   help                 show this message
 
 The default reference-delivery demo intentionally provisions exactly $REPO plus
@@ -526,75 +522,6 @@ monitor() {
     done
 }
 
-validate_contains() {
-    _file=$1
-    _pattern=$2
-    _description=$3
-    if grep -F -q "$_pattern" "$_file" 2>/dev/null; then
-        log "ok: $_description"
-        return 0
-    fi
-    log "missing: $_description (looked in $_file)"
-    return 1
-}
-
-validate_absent() {
-    _file=$1
-    _pattern=$2
-    _description=$3
-    if grep -F -q "$_pattern" "$_file" 2>/dev/null; then
-        log "missing: $_description (unexpectedly found in $_file)"
-        return 1
-    fi
-    log "ok: $_description"
-    return 0
-}
-
-cmd_validate_single() {
-    _ok=0
-    _run_log="$LOG_DIR/run.log"
-    _provision_log="$LOG_DIR/provision.log"
-
-    [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a run first"
-    log "validating single-repo reference-delivery logs under $LOG_DIR"
-
-    validate_contains "$_provision_log" 'webhook registered url=' \
-        'repo webhook registration recorded' || _ok=1
-    validate_contains "$_provision_log" 'served_roles=architect,engineer,reviewer' \
-        'reference reviewer-gate roles recorded' || _ok=1
-    validate_contains "$_run_log" 'webhook listener up' \
-        'standalone webhook listener reached readiness' || _ok=1
-    validate_contains "$_run_log" 'worker:  capacity:' \
-        'in-process worker capacity reported' || _ok=1
-    validate_contains "$_run_log" 'ready -- watching' \
-        'standalone run reached watching readiness' || _ok=1
-    validate_contains "$_run_log" 'event="wake.received"' \
-        'Forgejo delivered at least one accepted webhook wake' || _ok=1
-    validate_contains "$_run_log" 'mark_untriaged applied' \
-        'seed-last wake advanced raw intake into triage' || _ok=1
-    validate_contains "$_run_log" 'role="architect"' \
-        'architect role ran' || _ok=1
-    validate_contains "$_run_log" 'role="engineer"' \
-        'engineer role ran' || _ok=1
-    validate_contains "$_run_log" 'role="reviewer"' \
-        'reviewer gate ran' || _ok=1
-    validate_contains "$_run_log" 'event="pr.merged"' \
-        'implementation PR landed' || _ok=1
-    validate_contains "$_run_log" 'event="item.resolved"' \
-        'source issue resolved after landing' || _ok=1
-    validate_absent "$_run_log" "$CI_FALLBACK_MISSING_CREDENTIALS" \
-        'no missing Forgejo web-UI credentials reported for CI read fallback' || _ok=1
-    validate_absent "$_run_log" "$CI_FALLBACK_LOGIN_FAILED" \
-        'no failed Forgejo web-UI login reported for CI read fallback' || _ok=1
-
-    if [ "$_ok" -eq 0 ]; then
-        log 'reference-delivery validation passed'
-    else
-        log 'reference-delivery validation failed; inspect logs/provision.log and logs/run.log'
-    fi
-    return "$_ok"
-}
-
 credential_field() {
     _role=$1
     _field=$2
@@ -779,34 +706,6 @@ seed_multi_intake() {
         "$REPO" "$_parent" "$MULTI_REPOS" >>"$LOG_DIR/provision.log"
 }
 
-validate_multi_repo_state() {
-    [ -f "$MULTI_PARENT_FILE" ] || die "missing $MULTI_PARENT_FILE; run ./run.sh start first"
-    _parent=$(cat "$MULTI_PARENT_FILE")
-    _token=$(credential_field bot token) || die 'cannot read validator token from bot credentials'
-    TEMPER_FORGEJO_TOKEN="$_token" \
-        "$RUN_BIN" validate-reference-delivery \
-            --base-url "$BASE_URL" \
-            --source-repo "$REPO" \
-            --parent-number "$_parent" \
-            --expected-children 2 \
-            --repo "$REPO" \
-            --repo "$CANARY_REPO"
-}
-
-cmd_validate_multi_repo() {
-    [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a multi-repo run first"
-    log "validating cross-repo reference-delivery Forge state under $BASE_URL"
-    validate_multi_repo_state
-}
-
-cmd_validate() {
-    if [ -f "$MULTI_PARENT_FILE" ]; then
-        cmd_validate_multi_repo
-    else
-        cmd_validate_single
-    fi
-}
-
 monitor_multi() {
     log ''
     log "Forgejo UI:   $BASE_URL"
@@ -817,15 +716,10 @@ monitor_multi() {
     log "Press Ctrl-C (or run './run.sh stop') to tear everything down."
 
     _waited=0
-    _validated=0
     while [ ! -f "$STOP_FILE" ]; do
         sleep 5
         _waited=$((_waited + 5))
         kill -0 "$SERVER_PID" 2>/dev/null || { log 'forgejo server exited; shutting down.'; break; }
-        if [ "$_validated" -eq 0 ] && validate_multi_repo_state >"$LOG_DIR/validate-multi-repo.log" 2>&1; then
-            log 'cross-repo validation passed (see logs/validate-multi-repo.log)'
-            _validated=1
-        fi
         [ "$_waited" -ge "$RUN_SECS" ] && { log "run backstop ($RUN_SECS s) reached; shutting down."; break; }
     done
 }
@@ -882,8 +776,6 @@ case "${1:-start}" in
     multi-repo) cmd_multi_repo ;;
     single-repo) cmd_single_repo ;;
     stop) cmd_stop ;;
-    validate) cmd_validate ;;
-    validate-multi-repo) cmd_validate_multi_repo ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;
 esac

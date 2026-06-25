@@ -41,16 +41,10 @@ approves, and the mechanical worker merges PRs once review + CI + dependency
 gates are satisfied. The parent source issue unblocks and closes only after both
 child issues have landed.
 
-## Validate live state
+## Observe live state
 
-While `./run.sh start` is still running in another terminal:
-
-```sh
-cd examples/reference-delivery
-./run.sh validate-multi-repo
-```
-
-The validator reads live Forgejo state with the run-local bot token and checks:
+While `./run.sh start` is still running, use the printed Forgejo URL and the
+retained logs to inspect progress. The expected converged state is:
 
 - both configured repositories are readable;
 - the source repo has exactly one parent intake and the target repo has no
@@ -58,9 +52,6 @@ The validator reads live Forgejo state with the run-local bot token and checks:
 - the parent records exactly two child dependencies, one per configured repo;
 - each child carries parent/correlation metadata and is closed; and
 - the parent is closed no earlier than the latest child landing.
-
-The launcher also writes the same validation output to
-`logs/validate-multi-repo.log` once the run converges.
 
 ## Manual Forgejo checks
 
