@@ -244,9 +244,11 @@ fn transient_failure_after_started_releases_claimed_source_issue() {
         );
         assert_one_run_ledger(&released.body, &correlation);
         assert!(released.body.contains("Current status: queued for retry"));
-        assert!(released.body.contains(
-            "Retry: released back to the ready queue after a transient failure"
-        ));
+        assert!(
+            released
+                .body
+                .contains("Retry: released back to the ready queue after a transient failure")
+        );
         assert!(released.body.contains("Latest progress: step 1"));
         assert!(released.body.contains("Worker: `worker-a`"));
         assert_no_pull_requests(&root, &repo).await;
@@ -368,12 +370,7 @@ fn local_correlation_key(number: ItemNumber) -> String {
     format!("pr-for-code-{}", number.get())
 }
 
-fn transient_progress(
-    correlation_key: &str,
-    step: u32,
-    state: &str,
-    status: &str,
-) -> JobProgress {
+fn transient_progress(correlation_key: &str, step: u32, state: &str, status: &str) -> JobProgress {
     JobProgress {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: "worker-a".to_string(),

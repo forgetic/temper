@@ -516,7 +516,10 @@ async fn retry_release_state(
         .map_err(|error| format!("get_issue_by_number failed: {error}"))?
         .ok_or("source issue missing")?;
     if !issue.labels.iter().any(|label| label == "ready") {
-        return Err(format!("ready label is not restored yet: {:?}", issue.labels));
+        return Err(format!(
+            "ready label is not restored yet: {:?}",
+            issue.labels
+        ));
     }
     if issue.labels.iter().any(|label| label == "in-progress") {
         return Err(format!(
@@ -525,7 +528,11 @@ async fn retry_release_state(
         ));
     }
     let engineer_user = UserId::new(engineer.user.clone());
-    if issue.assignees.iter().any(|assignee| assignee == &engineer_user) {
+    if issue
+        .assignees
+        .iter()
+        .any(|assignee| assignee == &engineer_user)
+    {
         return Err(format!(
             "engineer assignee is still present after transient failure: {:?}",
             issue.assignees
@@ -576,7 +583,9 @@ async fn assert_recovered_issue_final_state(
         .expect("no human-attention state after provider retry recovery");
     assert_single_run_ledger(&issue.body, issue_number).expect("one run ledger after recovery");
     assert!(
-        issue.body.contains(&format!("continued in PR #{}", pull_number.get())),
+        issue
+            .body
+            .contains(&format!("continued in PR #{}", pull_number.get())),
         "source issue ledger should finalize to the implementation PR: {}",
         issue.body
     );

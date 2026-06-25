@@ -34,6 +34,10 @@ crates/temper-reference-delivery-validator/src/reference_delivery_validator.rs
 # workflow artifact assertions share the same offline provisioner seam.
 crates/temper-cli-init/tests/run_init.rs
 
+# `temper run` Forgejo e2e keeps the baseline and provider-error recovery flows
+# beside their shared process/fake-LLM helpers until those helpers are split.
+tests/run_forgejo_e2e.rs
+
 # Memory/filesystem backend contract tests retain grouped backend behavior.
 crates/temper-forge-memory/tests/backend.rs
 crates/temper-forge-filesystem/tests/issues.rs
