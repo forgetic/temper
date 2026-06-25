@@ -75,7 +75,7 @@ Options:
   --workflow      <builtin|PATH>  Builtin workflow name or JSON/YAML workflow file
   --forge         <URL>         Forgejo URL; skips the Forge URL prompt
   --bind          <ADDR>        Daemon bind / webhook advertise address override
-  --workspace     <PATH>        Per-job worker workspace root to write
+  --workspace     <PATH>        Top-level worker workspace root to write
   --provider      <deepseek>    LLM provider profile (only deepseek today)
   --provider-url  <URL>         Base URL override for the provider
   --non-interactive             Run without prompts; all required values must
@@ -110,9 +110,9 @@ pub struct InitOptions {
     /// Run without prompts; all required values must be supplied via flags or
     /// environment variables.
     pub non_interactive: bool,
-    /// The per-job worker workspace root written into `[worker] workspace`.
+    /// The top-level worker workspace root written into `[worker] workspace`.
     /// `None` lets the daemon's default (`~/.local/state/temper/workspace`)
-    /// apply by omitting the key.
+    /// apply by omitting the key; workers create per-job scoped roots below it.
     pub workspace: Option<PathBuf>,
     /// The injected environment snapshot used to resolve default file targets
     /// (the snapshot `src/bin` captured; no `std::env` is read here).
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn usage_documents_workspace_and_apply_flags() {
         assert!(USAGE.contains("--workspace"), "{USAGE}");
-        assert!(USAGE.contains("Per-job worker workspace root"), "{USAGE}");
+        assert!(USAGE.contains("Top-level worker workspace root"), "{USAGE}");
         assert!(USAGE.contains("--apply"), "{USAGE}");
         assert!(USAGE.contains("--yes"), "{USAGE}");
         assert!(USAGE.contains("--admin-user"), "{USAGE}");

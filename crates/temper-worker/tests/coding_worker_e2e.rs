@@ -164,7 +164,13 @@ fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo() {
         .join("coord-for-code-7");
     assert!(scoped_root.join("service").join(".git").exists());
     assert!(scoped_root.join("lib").join(".git").exists());
-    assert!(!fixture.workspace_root.join("engineer").join("service").exists());
+    assert!(
+        !fixture
+            .workspace_root
+            .join("engineer")
+            .join("service")
+            .exists()
+    );
 
     // Two writable repos that each produced a diff → one outcome per repo.
     let mut reported: Vec<String> = result

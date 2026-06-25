@@ -302,9 +302,15 @@ fn pull_request_validator(pull: &PullRequest, etag: Option<&str>) -> String {
                 ("title", pull.title.clone()),
                 ("body", pull.body.clone()),
                 ("state", pull_request_state(pull.state).to_string()),
-                ("source_repo", pull.source.repository_id.as_str().to_string()),
+                (
+                    "source_repo",
+                    pull.source.repository_id.as_str().to_string(),
+                ),
                 ("source_branch", pull.source.branch.clone()),
-                ("target_repo", pull.target.repository_id.as_str().to_string()),
+                (
+                    "target_repo",
+                    pull.target.repository_id.as_str().to_string(),
+                ),
                 ("target_branch", pull.target.branch.clone()),
                 ("head_sha", pull.head_sha.clone().unwrap_or_default()),
                 ("base_sha", pull.base_sha.clone().unwrap_or_default()),

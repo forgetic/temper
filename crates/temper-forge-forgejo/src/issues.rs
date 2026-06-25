@@ -309,7 +309,10 @@ fn issue_validator(issue: &Issue, etag: Option<&str>) -> String {
                 ("assignees", user_ids(&issue.assignees)),
                 (
                     "closed_at",
-                    issue.closed_at.map(|ts| ts.to_rfc3339()).unwrap_or_default(),
+                    issue
+                        .closed_at
+                        .map(|ts| ts.to_rfc3339())
+                        .unwrap_or_default(),
                 ),
             ],
         )

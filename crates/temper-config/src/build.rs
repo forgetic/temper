@@ -65,8 +65,9 @@ pub struct ConfigInputs {
     /// `[agent.providers.<provider>].url` — base URL override for the active
     /// provider (e.g. a self-hosted gateway or a test LLM).
     pub provider_url: Option<String>,
-    /// `[worker] workspace` — the per-job workspace root (a `~`-prefixed value
-    /// is expanded at resolve time).
+    /// `[worker] workspace` — the top-level worker workspace root (a
+    /// `~`-prefixed value is expanded at resolve time; workers create per-job
+    /// scoped roots below it).
     pub workspace: Option<String>,
 }
 

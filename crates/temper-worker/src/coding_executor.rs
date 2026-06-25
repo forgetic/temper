@@ -35,9 +35,10 @@ pub struct CodingExecutorConfig {
     pub role_identities: BTreeMap<String, RoleGitIdentity>,
 }
 
-/// Runs coding/triage/review jobs by preparing a checkout, driving one agent
-/// turn through its [`AgentRunner`], and mapping the result to a [`JobOutcome`]
-/// (commit/push on the writable head path, verdict routing otherwise).
+/// Runs coding/triage/review jobs by preparing a scoped workspace, driving one
+/// agent turn through its [`AgentRunner`], and mapping the result to a
+/// [`JobOutcome`] (commit/push on the writable head path, verdict routing
+/// otherwise).
 #[derive(Clone)]
 pub struct CodingExecutor<R: AgentRunner> {
     config: CodingExecutorConfig,
@@ -476,7 +477,10 @@ mod tests {
 
     #[test]
     fn workspace_scope_component_keeps_common_keys_readable() {
-        assert_eq!(workspace_scope_component("pr-for-code-448"), "pr-for-code-448");
+        assert_eq!(
+            workspace_scope_component("pr-for-code-448"),
+            "pr-for-code-448"
+        );
         assert_eq!(
             workspace_scope_component("coord_for_code_448"),
             "coord_for_code_448"
@@ -496,7 +500,13 @@ mod tests {
 
     #[test]
     fn workspace_scope_component_is_collision_resistant_for_encoded_bytes() {
-        assert_ne!(workspace_scope_component("a/b"), workspace_scope_component("a%2Fb"));
-        assert_ne!(workspace_scope_component("a.b"), workspace_scope_component("a%2Eb"));
+        assert_ne!(
+            workspace_scope_component("a/b"),
+            workspace_scope_component("a%2Fb")
+        );
+        assert_ne!(
+            workspace_scope_component("a.b"),
+            workspace_scope_component("a%2Eb")
+        );
     }
 }

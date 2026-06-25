@@ -1,7 +1,8 @@
 //! The agent-turn seam.
 //!
 //! [`CodingExecutor`](crate::coding_executor::CodingExecutor) owns the workspace
-//! lifecycle — prepare the scoped checkout root, run one agent turn, map the result to a
+//! lifecycle — prepare the scoped checkout root, run one agent turn, map the
+//! result to a
 //! [`JobOutcome`](crate::executor::JobOutcome), commit/push or discard. The
 //! *agent turn itself* is abstracted behind [`AgentRunner`] so the orchestration
 //! is independent of how the turn is produced — and, crucially, so the worker
