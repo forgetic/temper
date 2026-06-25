@@ -52,19 +52,55 @@ const DEFAULT_CI_USER: &str = "bot";
 /// agree.
 const DEFAULT_MAX_ITERATIONS: usize = 250;
 
+/// Context for resolving path values that came from an on-disk config file.
+///
+/// Direct callers that build a [`Config`] in memory can keep using [`resolve`],
+/// which preserves the historical behavior: relative path strings stay relative
+/// to the caller's process. Loaders that know which `config.toml` supplied the
+/// values pass its parent directory here so relative config-file paths are
+/// interpreted beside that file.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct ResolveOptions {
+    /// Directory containing the loaded config file, if there was one.
+    pub config_base_dir: Option<PathBuf>,
+}
+
+impl ResolveOptions {
+    /// Builds options that resolve relative config-file paths against `dir`.
+    pub fn from_config_base_dir(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            config_base_dir: Some(dir.into()),
+        }
+    }
+}
+
 /// Resolves a full deployment from the config and credentials files. The
 /// injected environment is consulted only for `$HOME` / `$XDG_*` path expansion,
 /// never to override a deployment value.
+///
+/// Relative path strings remain relative in this direct API. Use
+/// [`resolve_with_options`] when the config came from a known file and should
+/// resolve relative paths against that file's parent directory.
 pub fn resolve(
     config: &Config,
     credentials: &Credentials,
     env: &impl EnvLookup,
 ) -> Result<Resolved, ConfigError> {
-    let engine = resolve_engine(config, env)?;
-    let worker = resolve_worker(config, env, &engine)?;
+    resolve_with_options(config, credentials, env, &ResolveOptions::default())
+}
+
+/// Resolves a deployment with file-location context for config path fields.
+pub fn resolve_with_options(
+    config: &Config,
+    credentials: &Credentials,
+    env: &impl EnvLookup,
+    options: &ResolveOptions,
+) -> Result<Resolved, ConfigError> {
+    let engine = resolve_engine(config, env, options)?;
+    let worker = resolve_worker(config, env, &engine, options)?;
     let roles = referenced_roles(&engine, &worker);
     let forge = resolve_forge(config, credentials, &roles);
-    let agent = resolve_agent(config, credentials, env)?;
+    let agent = resolve_agent(config, credentials, env, options)?;
     Ok(Resolved {
         forge,
         engine,
@@ -176,7 +212,11 @@ pub fn env_role_key(role: &str) -> String {
 
 // ── engine ──────────────────────────────────────────────────────────────────
 
-fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSettings, ConfigError> {
+fn resolve_engine(
+    config: &Config,
+    env: &impl EnvLookup,
+    options: &ResolveOptions,
+) -> Result<EngineSettings, ConfigError> {
     let bind = resolve_bind(config)?;
 
     let repos = config
@@ -200,8 +240,8 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
             .filter(|role| !role.is_empty()),
     );
 
-    let workflow_file =
-        trimmed(config.engine.workflow.as_deref()).map(|value| expand_tilde(&value, env));
+    let workflow_file = trimmed(config.engine.workflow.as_deref())
+        .map(|value| resolve_config_path(&value, env, options));
 
     let poll_cadence = positive_duration_secs(
         config
@@ -236,7 +276,7 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
         .unwrap_or_else(|| DEFAULT_DAEMON_ID.to_string());
 
     let webhook_secret_file = trimmed(config.engine.webhook_secret_file.as_deref())
-        .map(|value| expand_tilde(&value, env));
+        .map(|value| resolve_config_path(&value, env, options));
 
     Ok(EngineSettings {
         bind,
@@ -272,6 +312,7 @@ fn resolve_worker(
     config: &Config,
     env: &impl EnvLookup,
     engine: &EngineSettings,
+    options: &ResolveOptions,
 ) -> Result<WorkerSettings, ConfigError> {
     let worker_id = trimmed(config.worker.worker_id.as_deref())
         .unwrap_or_else(|| DEFAULT_WORKER_ID.to_string());
@@ -280,7 +321,7 @@ fn resolve_worker(
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", engine.bind.port()));
 
     let workspace_root = trimmed(config.worker.workspace.as_deref())
-        .map(|value| expand_tilde(&value, env))
+        .map(|value| resolve_config_path(&value, env, options))
         .unwrap_or_else(|| {
             default_workspace_root(env)
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_ROOT_FALLBACK))
@@ -369,6 +410,7 @@ fn resolve_agent(
     config: &Config,
     credentials: &Credentials,
     env: &impl EnvLookup,
+    options: &ResolveOptions,
 ) -> Result<AgentSettings, ConfigError> {
     let provider_name = trimmed(config.agent.provider.as_deref())
         .unwrap_or_else(|| ProviderKind::Anthropic.as_str().to_string());
@@ -401,7 +443,7 @@ fn resolve_agent(
             .unwrap_or(DEFAULT_MAX_ITERATIONS),
         enable_subagents: config.agent.enable_subagents.unwrap_or(false),
         config_dir: trimmed(config.agent.config_dir.as_deref())
-            .map(|value| expand_tilde(&value, env)),
+            .map(|value| resolve_config_path(&value, env, options)),
     })
 }
 
@@ -463,6 +505,33 @@ fn trimmed(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+/// Resolves a path-valued field from `config.toml`.
+///
+/// Absolute paths and any `~`-prefixed path keep the long-standing behavior
+/// (absolute paths are used verbatim; bare `~` / `~/…` expand through the
+/// injected HOME; `~user` forms stay verbatim). Only plain relative paths use
+/// the optional config-file parent context.
+fn resolve_config_path(value: &str, env: &impl EnvLookup, options: &ResolveOptions) -> PathBuf {
+    if is_tilde_prefixed(value) {
+        return expand_tilde(value, env);
+    }
+
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        return path;
+    }
+
+    options
+        .config_base_dir
+        .as_ref()
+        .map(|base| base.join(&path))
+        .unwrap_or(path)
+}
+
+fn is_tilde_prefixed(value: &str) -> bool {
+    value.starts_with('~')
 }
 
 /// Expands a leading `~` / `~/…` in a path value against `$HOME`, so a

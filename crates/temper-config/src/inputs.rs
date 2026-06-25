@@ -25,9 +25,10 @@ use std::path::{Path, PathBuf};
 
 use crate::env::{EnvLookup, SystemEnv};
 use crate::error::{ConfigError, FileKind};
+use crate::resolve::{self, ResolveOptions};
 use crate::resolved::Resolved;
 use crate::schema::{Config, Credentials};
-use crate::{LoadedPaths, paths, resolve};
+use crate::{LoadedPaths, paths};
 
 /// The base directories used to derive default file locations.
 ///
@@ -142,7 +143,13 @@ pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), Con
         Credentials::parse,
     )?;
 
-    let resolved = resolve::resolve(&config, &credentials, &inputs.env)?;
+    let resolve_options = config_file
+        .as_deref()
+        .and_then(config_base_dir)
+        .map(ResolveOptions::from_config_base_dir)
+        .unwrap_or_default();
+    let resolved =
+        resolve::resolve_with_options(&config, &credentials, &inputs.env, &resolve_options)?;
     Ok((
         resolved,
         LoadedPaths {
@@ -150,6 +157,10 @@ pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), Con
             credentials: credentials_file,
         },
     ))
+}
+
+fn config_base_dir(path: &Path) -> Option<PathBuf> {
+    path.parent().map(Path::to_path_buf)
 }
 
 #[derive(Debug, Clone)]
