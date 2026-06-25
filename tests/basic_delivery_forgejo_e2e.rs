@@ -88,12 +88,8 @@ fn basic_delivery_run_sh_equivalent_converges() {
         &fake.base_url(),
         &init_log,
     );
-    let workflow_path = bundle_dir.join("workflow.json");
-    assert_eq!(
-        std::fs::read_to_string(&workflow_path).expect("init workflow is readable"),
-        EXAMPLE_WORKFLOW,
-        "temper init must write the canonical basic-delivery workflow bytes"
-    );
+    let workflow_path = bundle_dir.join("workflow.yaml");
+    assert_init_workflow_yaml_matches(&workflow_path);
     process::tune_init_config(
         &bundle_dir.join("config.toml"),
         DAEMON_POLL_CADENCE_SECS,
@@ -169,6 +165,23 @@ fn basic_delivery_run_sh_equivalent_converges() {
         started.elapsed()
     );
     let _ = standalone.child.kill();
+}
+
+fn assert_init_workflow_yaml_matches(path: &std::path::Path) {
+    let workflow = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("init workflow {} is readable: {error}", path.display()));
+    let generated_spec = temper_reference_delivery::parse_workflow_spec(path, &workflow)
+        .expect("init workflow parses as YAML");
+    let generated = generated_spec.validate().expect("init workflow validates");
+    let validated = temper_reference_delivery::basic_delivery_workflow();
+    assert_eq!(
+        generated, validated,
+        "temper init must write the canonical basic-delivery workflow"
+    );
+    assert!(
+        !workflow.trim_start().starts_with('{'),
+        "temper init should write workflow.yaml as YAML, not JSON bytes: {workflow}"
+    );
 }
 
 fn assert_canonical_workflow_bytes() {
