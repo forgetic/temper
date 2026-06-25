@@ -30,6 +30,10 @@ crates/temper-runner/src/worker/automation.rs
 # its helper checks together for readable diagnostic sequencing.
 crates/temper-reference-delivery-validator/src/reference_delivery_validator.rs
 
+# Init flow tests keep prompt, local-write, and apply-path scenarios together so
+# workflow artifact assertions share the same offline provisioner seam.
+crates/temper-cli-init/tests/run_init.rs
+
 # Memory/filesystem backend contract tests retain grouped backend behavior.
 crates/temper-forge-memory/tests/backend.rs
 crates/temper-forge-filesystem/tests/issues.rs

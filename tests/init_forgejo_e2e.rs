@@ -13,9 +13,10 @@
 //!
 //! 1. **Local artifacts** — `config.toml` parses and `temper_config::load`
 //!    resolves with the expected forge URL, repo, roles, workspace, and webhook
-//!    secret; `lint` reports no errors; `workflow.json` byte-equals the embedded
-//!    basic-delivery bytes and validates; `credentials.toml` is `0600` and holds
-//!    the minted role/bot tokens, the admin identity, and the DeepSeek key.
+//!    secret; `lint` reports no errors; `workflow.yaml` parses as YAML and
+//!    matches the embedded basic-delivery workflow; `credentials.toml` is `0600`
+//!    and holds the minted role/bot tokens, the admin identity, and the DeepSeek
+//!    key.
 //! 2. **Forge state** — the org/owner, the repo (Actions enabled, with no
 //!    project/CI files committed), every basic-delivery label, the role users +
 //!    `bot`, and the webhook pointing at the configured address all exist on the
@@ -100,13 +101,13 @@ fn init_forgejo_drives_a_working_setup() {
     let bind_port = free_port();
     let webhook_addr = format!("http://127.0.0.1:{bind_port}");
 
-    // Per-test temp config dir: config.toml, credentials.toml, workflow.json, and
+    // Per-test temp config dir: config.toml, credentials.toml, workflow.yaml, and
     // the webhook secret all land here; the real ~/.config/temper is never read
     // or written.
     let config_dir = tempfile::tempdir().expect("config tempdir");
     let config_path = config_dir.path().join("config.toml");
     let credentials_path = config_dir.path().join("credentials.toml");
-    let workflow_path = config_dir.path().join("workflow.json");
+    let workflow_path = config_dir.path().join("workflow.yaml");
     let webhook_secret_path = config_dir.path().join("webhook-secret");
     let workspace_dir = tempfile::tempdir().expect("workspace tempdir");
 

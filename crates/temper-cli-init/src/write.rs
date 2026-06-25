@@ -13,10 +13,9 @@ use temper_config::{
     build_config, build_credentials, forge_users_from_provisioned, write_config,
 };
 use temper_reference_delivery::{
-    basic_delivery_workflow, basic_delivery_workflow_json, parse_workflow_spec,
-    reference_delivery_workflow_json, workflow as reference_delivery_workflow,
+    basic_delivery_workflow_json, parse_workflow_spec, reference_delivery_workflow_json,
 };
-use temper_workflow::ValidatedWorkflow;
+use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
 use crate::collect::{WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
 
@@ -37,10 +36,10 @@ pub struct InitArtifacts {
     pub config: temper_config::Config,
     /// Where `credentials.toml` is written.
     pub credentials_path: PathBuf,
-    /// Where `workflow.json` is written.
+    /// Where `workflow.yaml` is written.
     pub workflow_path: PathBuf,
-    /// The workflow JSON bytes to write into the deployment bundle.
-    pub workflow_json: String,
+    /// The workflow YAML bytes to write into the deployment bundle.
+    pub workflow_yaml: String,
     /// Where the generated webhook secret is written (chmod 600).
     pub webhook_secret_path: PathBuf,
     /// The freshly generated webhook secret value.
@@ -48,21 +47,21 @@ pub struct InitArtifacts {
 }
 
 /// Builds (pure, no I/O) every artifact `temper init` will write: the config
-/// document, the workflow JSON, and a freshly generated webhook secret.
+/// document, the workflow YAML, and a freshly generated webhook secret.
 ///
-/// `roles` come from the embedded basic-delivery workflow's queue-subscribing
-/// roles. The repo/provider come from defaults or local-dev flag overrides.
+/// `roles` come from the selected workflow's queue-subscribing roles. The
+/// repo/provider come from defaults or local-dev flag overrides.
 pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArtifacts, InitError> {
     let targets: FileTargets =
         resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
 
-    // Place workflow.json + webhook-secret beside config.toml.
+    // Place workflow.yaml + webhook-secret beside config.toml.
     let config_dir = targets
         .config
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let workflow_path = config_dir.join("workflow.json");
+    let workflow_path = config_dir.join("workflow.yaml");
     let webhook_secret_path = config_dir.join(WEBHOOK_SECRET_FILE);
 
     let workflow = workflow_artifact(&answers.workflow)?;
@@ -94,7 +93,7 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         config,
         credentials_path: targets.credentials,
         workflow_path,
-        workflow_json: workflow.json,
+        workflow_yaml: workflow.yaml,
         webhook_secret_path,
         webhook_secret,
     })
@@ -125,12 +124,12 @@ pub fn preflight_clobber(artifacts: &InitArtifacts, force: bool) -> Result<(), I
     }
 }
 
-/// Writes `config.toml`, `workflow.json`, and the webhook secret (chmod 600).
+/// Writes `config.toml`, `workflow.yaml`, and the webhook secret (chmod 600).
 /// Credentials are written separately, after provisioning.
 pub fn write_artifacts(artifacts: &InitArtifacts, force: bool) -> Result<(), InitError> {
     write_config(&artifacts.config, &artifacts.config_path, force)
         .map_err(|error| InitError::Write(error.to_string()))?;
-    write_new_file(&artifacts.workflow_path, &artifacts.workflow_json, force)
+    write_new_file(&artifacts.workflow_path, &artifacts.workflow_yaml, force)
         .map_err(InitError::Write)?;
     write_new_file(
         &artifacts.webhook_secret_path,
@@ -248,22 +247,40 @@ fn write_credentials_with_users(
 }
 
 struct WorkflowArtifact {
-    json: String,
+    yaml: String,
     validated: ValidatedWorkflow,
 }
 
 fn workflow_artifact(selection: &str) -> Result<WorkflowArtifact, InitError> {
     match selection {
-        WORKFLOW_BASIC_DELIVERY => Ok(WorkflowArtifact {
-            json: basic_delivery_workflow_json().to_string(),
-            validated: basic_delivery_workflow(),
-        }),
-        WORKFLOW_REFERENCE_DELIVERY => Ok(WorkflowArtifact {
-            json: reference_delivery_workflow_json().to_string(),
-            validated: reference_delivery_workflow(),
-        }),
+        WORKFLOW_BASIC_DELIVERY => {
+            builtin_workflow_artifact(WORKFLOW_BASIC_DELIVERY, basic_delivery_workflow_json())
+        }
+        WORKFLOW_REFERENCE_DELIVERY => builtin_workflow_artifact(
+            WORKFLOW_REFERENCE_DELIVERY,
+            reference_delivery_workflow_json(),
+        ),
         path => load_workflow_artifact(path),
     }
+}
+
+fn builtin_workflow_artifact(name: &str, json: &str) -> Result<WorkflowArtifact, InitError> {
+    let spec: RawWorkflowSpec = serde_json::from_str(json).map_err(|error| {
+        InitError::Unsupported(format!(
+            "built-in workflow `{name}` could not be parsed as JSON: {error}"
+        ))
+    })?;
+    let validated = spec.validate().map_err(|errors| {
+        InitError::Unsupported(format!(
+            "built-in workflow `{name}` failed validation:\n{errors}"
+        ))
+    })?;
+    let yaml = serde_yaml::to_string(&spec).map_err(|error| {
+        InitError::Unsupported(format!(
+            "built-in workflow `{name}` could not be rendered as YAML: {error}"
+        ))
+    })?;
+    Ok(WorkflowArtifact { yaml, validated })
 }
 
 fn load_workflow_artifact(path: &str) -> Result<WorkflowArtifact, InitError> {
@@ -279,25 +296,13 @@ fn load_workflow_artifact(path: &str) -> Result<WorkflowArtifact, InitError> {
             path.display()
         ))
     })?;
-    let json = if is_yaml_workflow_path(path) {
-        serde_json::to_string_pretty(&spec).map_err(|error| {
-            InitError::Unsupported(format!(
-                "workflow file {} could not be rendered as JSON: {error}",
-                path.display()
-            ))
-        })?
-    } else {
-        source
-    };
-    Ok(WorkflowArtifact { json, validated })
-}
-
-fn is_yaml_workflow_path(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|extension| extension.to_str()),
-        Some(extension)
-            if extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
-    )
+    let yaml = serde_yaml::to_string(&spec).map_err(|error| {
+        InitError::Unsupported(format!(
+            "workflow file {} could not be rendered as YAML: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(WorkflowArtifact { yaml, validated })
 }
 
 /// The roles `temper init` drives, derived from the selected workflow's

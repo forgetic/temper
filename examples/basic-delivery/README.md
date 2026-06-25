@@ -23,7 +23,7 @@ alone.
    with the fixed repo, forge URL, bind address, admin user, and provider. The explicit
    `run/` bundle supplies both `config.toml` and sibling `credentials.toml`; the
    apply step provisions the empty repo, labels, webhook, and writes
-   `run/config.toml`, `run/credentials.toml`, `run/workflow.json`, and
+   `run/config.toml`, `run/credentials.toml`, `run/workflow.yaml`, and
    `run/webhook-secret`.
 4. Because init does not seed project content, `run.sh` creates the initial
    default-branch commit explicitly: a tiny `README.md` plus

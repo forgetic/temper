@@ -120,10 +120,7 @@ pub(crate) fn explicit_config_location(path: PathBuf) -> ConfigLocation {
         };
     }
 
-    let root = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(PathBuf::new);
+    let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
     ConfigLocation { path, root }
 }
 

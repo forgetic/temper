@@ -56,7 +56,7 @@ JIG_PID_FILE="$RUN_DIR/jig.pid"
 JIG_STDIN="$RUN_DIR/jig.stdin"
 CONFIG_FILE="$RUN_DIR/config.toml"
 CREDENTIALS_FILE="$RUN_DIR/credentials.toml"
-INIT_WORKFLOW_PATH="$RUN_DIR/workflow.json"
+INIT_WORKFLOW_PATH="$RUN_DIR/workflow.yaml"
 WEBHOOK_SECRET_FILE="$RUN_DIR/webhook-secret"
 
 log() { printf '[run.sh] %s\n' "$*"; }

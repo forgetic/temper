@@ -8,13 +8,14 @@
 //! so these tests pass a [`StubProvisioner`] that returns a canned
 //! [`Provisioned`] without a forge. Everything else — collecting answers
 //! (including defaults-on-empty), building the documents, writing config.toml /
-//! workflow.json / webhook-secret / credentials.toml, and the 0600 mode on the
+//! workflow.yaml / webhook-secret / credentials.toml, and the 0600 mode on the
 //! two secret files — runs for real against a temp dir.
 //!
 //! Issue #183's e2e reuses this exact seam: `run_init` + `ScriptedPrompter` +
 //! `InitOptions`, but with a real `ForgejoProvisioner` instead of the stub.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use temper_cli_common::{LoadOptions, ScriptedPrompter};
 use temper_cli_init::{
@@ -58,6 +59,26 @@ impl Provisioner for StubProvisioner {
             admin_token: "admin-rest-token".to_string(),
         })
     }
+}
+
+fn basic_delivery_spec() -> RawWorkflowSpec {
+    serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
+        .expect("basic-delivery JSON parses")
+}
+
+fn assert_workflow_yaml_matches(path: &Path, expected_spec: &RawWorkflowSpec) {
+    let workflow = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("workflow.yaml written at {}: {error}", path.display()));
+    let generated_spec: RawWorkflowSpec =
+        serde_yaml::from_str(&workflow).expect("generated workflow artifact should be valid YAML");
+    assert_eq!(&generated_spec, expected_spec);
+    generated_spec
+        .validate()
+        .expect("generated workflow artifact validates");
+    assert!(
+        !workflow.trim_start().starts_with('{'),
+        "workflow.yaml should contain YAML, not JSON bytes: {workflow}"
+    );
 }
 
 #[test]
@@ -111,19 +132,14 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert!(config.contains("bind = \"127.0.0.1:8314\""), "{config}");
     // Provider profile + webhook secret + workflow file wired.
     assert!(config.contains("provider = \"deepseek\""), "{config}");
-    assert!(config.contains("workflow.json"), "{config}");
+    assert!(config.contains("workflow.yaml"), "{config}");
     assert!(config.contains("webhook-secret"), "{config}");
     // No explicit workspace is written unless requested; runtime defaults apply.
     assert!(!config.contains("workspace ="), "{config}");
 
-    // ── workflow.json ─────────────────────────────────────────────────────────
-    let workflow_path = dir.path().join("workflow.json");
-    let workflow = std::fs::read_to_string(&workflow_path).expect("workflow.json written");
-    assert_eq!(
-        workflow,
-        temper_reference_delivery::basic_delivery_workflow_json(),
-        "workflow.json is the embedded basic-delivery bytes verbatim"
-    );
+    // ── workflow.yaml ─────────────────────────────────────────────────────────
+    let workflow_path = dir.path().join("workflow.yaml");
+    assert_workflow_yaml_matches(&workflow_path, &basic_delivery_spec());
 
     // ── credentials.toml ──────────────────────────────────────────────────────
     let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
@@ -168,7 +184,7 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert!(seen.webhook_secret_file.ends_with("webhook-secret"));
     assert!(matches!(
         seen.workflow_path.as_ref(),
-        Some(path) if path.ends_with("workflow.json")
+        Some(path) if path.ends_with("workflow.yaml")
     ));
 
     // ── a final summary was emitted ──────────────────────────────────────────
@@ -289,8 +305,8 @@ fn run_init_without_apply_writes_local_artifacts_and_skips_provisioning() {
     );
     assert!(config_path.is_file(), "config.toml written");
     assert!(
-        dir.path().join("workflow.json").is_file(),
-        "workflow.json written"
+        dir.path().join("workflow.yaml").is_file(),
+        "workflow.yaml written"
     );
     assert!(
         dir.path().join("webhook-secret").is_file(),
@@ -312,14 +328,54 @@ fn run_init_without_apply_writes_local_artifacts_and_skips_provisioning() {
 }
 
 #[test]
-fn run_init_accepts_custom_yaml_workflow_and_writes_json_artifact() {
+fn run_init_accepts_custom_json_workflow_and_writes_yaml_artifact() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let source_workflow_path = dir.path().join("custom-workflow.json");
+    let source_spec = basic_delivery_spec();
+    let source_json =
+        serde_json::to_string_pretty(&source_spec).expect("workflow serializes as JSON");
+    std::fs::write(&source_workflow_path, source_json).expect("custom JSON workflow written");
+
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path),
+        },
+        non_interactive: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pass".to_string()),
+            provider_key: Some("sk-key".to_string()),
+            workflow: Some(source_workflow_path.display().to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut provisioner = StubProvisioner { seen: None };
+
+    run_init(&mut prompter, &mut provisioner, &opts).expect("custom JSON init succeeds");
+
+    assert!(
+        provisioner.seen.is_none(),
+        "local init should not provision without --apply"
+    );
+    let generated_workflow_path = dir.path().join("workflow.yaml");
+    assert_workflow_yaml_matches(&generated_workflow_path, &source_spec);
+    let config = std::fs::read_to_string(&config_path).expect("config.toml written");
+    assert!(config.contains("workflow.yaml"), "{config}");
+}
+
+#[test]
+fn run_init_accepts_custom_yaml_workflow_and_writes_yaml_artifact() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("config.toml");
     let credentials_path = dir.path().join("credentials.toml");
     let source_workflow_path = dir.path().join("custom-workflow.yaml");
-    let source_spec: RawWorkflowSpec =
-        serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
-            .expect("basic-delivery JSON parses");
+    let source_spec = basic_delivery_spec();
     let source_yaml = serde_yaml::to_string(&source_spec).expect("workflow serializes as YAML");
     std::fs::write(&source_workflow_path, source_yaml).expect("custom YAML workflow written");
 
@@ -348,21 +404,10 @@ fn run_init_accepts_custom_yaml_workflow_and_writes_json_artifact() {
         provisioner.seen.is_none(),
         "local init should not provision without --apply"
     );
-    let generated_workflow_path = dir.path().join("workflow.json");
-    let generated_workflow =
-        std::fs::read_to_string(&generated_workflow_path).expect("workflow.json written");
-    let generated_spec: RawWorkflowSpec = serde_json::from_str(&generated_workflow)
-        .expect("generated workflow artifact should be valid JSON");
-    assert_eq!(generated_spec, source_spec);
-    generated_spec
-        .validate()
-        .expect("generated workflow artifact validates");
-    assert!(
-        generated_workflow.trim_start().starts_with('{'),
-        "workflow.json should contain JSON, not copied YAML: {generated_workflow}"
-    );
+    let generated_workflow_path = dir.path().join("workflow.yaml");
+    assert_workflow_yaml_matches(&generated_workflow_path, &source_spec);
     let config = std::fs::read_to_string(&config_path).expect("config.toml written");
-    assert!(config.contains("workflow.json"), "{config}");
+    assert!(config.contains("workflow.yaml"), "{config}");
 }
 
 #[test]

@@ -11,8 +11,8 @@
 //!    provider API key). No disk or network I/O.
 //! 2. **Preflight** ([`preflight_clobber`]) — check *all* target paths up front
 //!    so the flow never writes file I then aborts at file III.
-//! 3. **Write** `config.toml`, `workflow.json` (the selected builtin or
-//!    normalized custom workflow JSON), and a freshly generated
+//! 3. **Write** `config.toml`, `workflow.yaml` (the selected builtin or
+//!    normalized custom workflow YAML), and a freshly generated
 //!    `webhook-secret` (chmod 600).
 //! 4. **Write** a local `credentials.toml` (chmod 600) with the operator-supplied
 //!    admin password and provider key.
@@ -59,7 +59,7 @@ pub const USAGE: &str = "\
 Interactively configure a temper deployment.
 
 Walks you through your forge URL, admin credentials, and LLM provider key, then
-writes config.toml + workflow.json + a webhook secret + credentials.toml.
+writes config.toml + workflow.yaml + a webhook secret + credentials.toml.
 Forge-side provisioning (repo/users/labels/webhook registration) only runs when
 --apply is set; --yes skips that apply confirmation.
 
@@ -255,7 +255,7 @@ pub fn run_init(
     let artifacts = build_artifacts(&answers, opts)?;
     preflight_clobber(&artifacts, opts.force)?;
 
-    // 3. Write config.toml, workflow.json, and the fresh webhook secret.
+    // 3. Write config.toml, workflow.yaml, and the fresh webhook secret.
     write_artifacts(&artifacts, opts.force)?;
 
     // 4. Write local credentials before any optional forge mutation. These
