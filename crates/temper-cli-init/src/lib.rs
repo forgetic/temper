@@ -355,7 +355,10 @@ mod tests {
         assert!(USAGE.contains("--yes"), "{USAGE}");
         assert!(USAGE.contains("--admin-user"), "{USAGE}");
         assert!(USAGE.contains("skips the admin prompt"), "{USAGE}");
-        assert!(!USAGE.contains("admin username (only non-interactive)"), "{USAGE}");
+        assert!(
+            !USAGE.contains("admin username (only non-interactive)"),
+            "{USAGE}"
+        );
         assert!(!USAGE.contains("  --config"), "{USAGE}");
         assert!(!USAGE.contains("  --secrets"), "{USAGE}");
     }

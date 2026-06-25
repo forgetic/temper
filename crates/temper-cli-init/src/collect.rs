@@ -410,6 +410,9 @@ mod tests {
 
         assert_eq!(a.webhook_addr, "127.0.0.1:38100");
         assert_eq!(a.webhook_url(), "http://127.0.0.1:38100/forgejo/webhook");
+        assert_eq!(a.admin_user, "root");
+        assert_eq!(a.admin_password, "admin-pw");
+        assert_eq!(a.provider_key, "sk-deepseek");
         assert!(p.answers.is_empty(), "non-interactive should not prompt");
     }
 
