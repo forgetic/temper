@@ -7,6 +7,7 @@
 //! - `show` — print the effective resolved deployment, with secrets redacted.
 //! - `paths` — print the config, secret, state, workspace, and workflow paths
 //!   Temper will use.
+//! - `schema` — print the canonical JSON Schema for `config.toml`.
 //! - `init` — write starter `config.toml` + `credentials.toml` templates.
 //!
 //! This crate owns only argv parsing, terminal output, and exit codes; the
@@ -14,6 +15,7 @@
 //! shared file-writing/exit-code helpers in [`temper_cli_common`].
 
 mod paths;
+mod schema;
 
 use std::process::ExitCode;
 
@@ -74,6 +76,7 @@ Commands:
   validate  Load and validate the config + credentials, reporting any problems
   show      Print the effective resolved configuration (secrets redacted)
   paths     Print resolved config, secret, state, workspace, and workflow paths
+  schema    Print the canonical JSON Schema for config.toml
   init      Write starter config.toml + credentials.toml templates
 
 Options:
@@ -81,7 +84,7 @@ Options:
   -h, --help  Print help
 
 Global options:
-  --format <human|json>  (paths) output format; accepted before `config` only";
+  --format <human|json>  (paths) output format; schema always emits JSON; accepted before `config` only";
 
 pub fn main(inputs: ConfigInputs) -> ExitCode {
     let ConfigInputs {
@@ -106,6 +109,7 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
             "temper config",
             paths::command(rest, &options, format, env, paths),
         ),
+        "schema" => run("temper config", schema::command(rest)),
         "init" => run("temper config", init(rest, &options, env, paths)),
         other => {
             eprintln!("temper config: unknown command `{other}`\n\n{USAGE}");
