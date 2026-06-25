@@ -11,15 +11,17 @@
 //! config schema, resolution, and writing all live in [`temper_config`], and the
 //! shared file-writing/exit-code helpers in [`temper_cli_common`].
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use temper_cli_common::{
-    EX_USAGE, EnvMap, LoadOptions, PathResolver, WriteOutcome, resolve_targets, restrict_600, run,
-    write_new_file,
+    EX_USAGE, EnvMap, LoadOptions, OutputFormat, PathResolver, WriteOutcome, resolve_targets,
+    restrict_600, run, write_new_file,
 };
 use temper_config::{
     ConfigError, Finding, LoadInputs, LoadedPaths, ProviderCredential, Resolved, WebUiCreds,
-    config_template, credentials_template, lint, load_explicit,
+    config_path, config_template, credentials_template, lint, load_explicit,
+    paired_credentials_path, state_dir,
 };
 
 /// Everything `temper config` needs, with no ambient environment access.
@@ -31,6 +33,8 @@ pub struct ConfigInputs<'a> {
     pub args: Vec<String>,
     /// Global file-location options parsed before `config`.
     pub options: LoadOptions,
+    /// Global output format parsed before `config`.
+    pub format: OutputFormat,
     /// The injected environment snapshot (used only for `$HOME` / `$XDG_*`
     /// path expansion; no environment variable selects the config files).
     pub env: &'a EnvMap,
@@ -67,11 +71,15 @@ Usage: temper [GLOBAL OPTIONS] config <COMMAND> [OPTIONS]
 Commands:
   validate  Load and validate the config + credentials, reporting any problems
   show      Print the effective resolved configuration (secrets redacted)
+  paths     Print resolved config, secret, state, workspace, and workflow paths
   init      Write starter config.toml + credentials.toml templates
 
 Options:
   --force     (init) overwrite existing files
-  -h, --help  Print help";
+  -h, --help  Print help
+
+Global options:
+  --format <human|json>  (paths) output format; accepted before `config` only";
 
 pub fn main(inputs: ConfigInputs) -> ExitCode {
     let ConfigInputs {
