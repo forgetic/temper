@@ -13,10 +13,10 @@ use temper_config::{
     build_config, build_credentials, forge_users_from_provisioned, write_config,
 };
 use temper_reference_delivery::{
-    basic_delivery_workflow, basic_delivery_workflow_json, reference_delivery_workflow_json,
-    workflow as reference_delivery_workflow,
+    basic_delivery_workflow, basic_delivery_workflow_json, parse_workflow_spec,
+    reference_delivery_workflow_json, workflow as reference_delivery_workflow,
 };
-use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
+use temper_workflow::ValidatedWorkflow;
 
 use crate::collect::{WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
 
@@ -267,25 +267,37 @@ fn workflow_artifact(selection: &str) -> Result<WorkflowArtifact, InitError> {
 }
 
 fn load_workflow_artifact(path: &str) -> Result<WorkflowArtifact, InitError> {
-    let json = std::fs::read_to_string(path).map_err(|error| {
-        InitError::Path(format!(
-            "read workflow file {}: {error}",
-            Path::new(path).display()
-        ))
+    let path = Path::new(path);
+    let source = std::fs::read_to_string(path).map_err(|error| {
+        InitError::Path(format!("read workflow file {}: {error}", path.display()))
     })?;
-    let spec: RawWorkflowSpec = serde_json::from_str(&json).map_err(|error| {
-        InitError::Unsupported(format!(
-            "workflow file {} is not valid JSON: {error}",
-            Path::new(path).display()
-        ))
-    })?;
+    let spec = parse_workflow_spec(path, &source)
+        .map_err(|error| InitError::Unsupported(error.to_string()))?;
     let validated = spec.validate().map_err(|errors| {
         InitError::Unsupported(format!(
             "workflow file {} failed validation:\n{errors}",
-            Path::new(path).display()
+            path.display()
         ))
     })?;
+    let json = if is_yaml_workflow_path(path) {
+        serde_json::to_string_pretty(&spec).map_err(|error| {
+            InitError::Unsupported(format!(
+                "workflow file {} could not be rendered as JSON: {error}",
+                path.display()
+            ))
+        })?
+    } else {
+        source
+    };
     Ok(WorkflowArtifact { json, validated })
+}
+
+fn is_yaml_workflow_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some(extension)
+            if extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
+    )
 }
 
 /// The roles `temper init` drives, derived from the selected workflow's

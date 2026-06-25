@@ -23,7 +23,7 @@ use temper_cli_init::{
 };
 use temper_forge::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
-use temper_workflow::RoleId;
+use temper_workflow::{RawWorkflowSpec, RoleId};
 
 /// Returns a canned `Provisioned` for `acme/service` with two role identities
 /// (architect, engineer) + a `bot` automation identity, and records the request
@@ -309,6 +309,60 @@ fn run_init_without_apply_writes_local_artifacts_and_skips_provisioning() {
         "summary should say provisioning was skipped: {:?}",
         prompter.notes
     );
+}
+
+#[test]
+fn run_init_accepts_custom_yaml_workflow_and_writes_json_artifact() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let source_workflow_path = dir.path().join("custom-workflow.yaml");
+    let source_spec: RawWorkflowSpec =
+        serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
+            .expect("basic-delivery JSON parses");
+    let source_yaml = serde_yaml::to_string(&source_spec).expect("workflow serializes as YAML");
+    std::fs::write(&source_workflow_path, source_yaml).expect("custom YAML workflow written");
+
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path),
+        },
+        non_interactive: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pass".to_string()),
+            provider_key: Some("sk-key".to_string()),
+            workflow: Some(source_workflow_path.display().to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut provisioner = StubProvisioner { seen: None };
+
+    run_init(&mut prompter, &mut provisioner, &opts).expect("custom YAML init succeeds");
+
+    assert!(
+        provisioner.seen.is_none(),
+        "local init should not provision without --apply"
+    );
+    let generated_workflow_path = dir.path().join("workflow.json");
+    let generated_workflow =
+        std::fs::read_to_string(&generated_workflow_path).expect("workflow.json written");
+    let generated_spec: RawWorkflowSpec = serde_json::from_str(&generated_workflow)
+        .expect("generated workflow artifact should be valid JSON");
+    assert_eq!(generated_spec, source_spec);
+    generated_spec
+        .validate()
+        .expect("generated workflow artifact validates");
+    assert!(
+        generated_workflow.trim_start().starts_with('{'),
+        "workflow.json should contain JSON, not copied YAML: {generated_workflow}"
+    );
+    let config = std::fs::read_to_string(&config_path).expect("config.toml written");
+    assert!(config.contains("workflow.json"), "{config}");
 }
 
 #[test]

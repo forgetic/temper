@@ -11,8 +11,9 @@
 //!    provider API key). No disk or network I/O.
 //! 2. **Preflight** ([`preflight_clobber`]) — check *all* target paths up front
 //!    so the flow never writes file I then aborts at file III.
-//! 3. **Write** `config.toml`, `workflow.json` (the selected builtin or copied
-//!    workflow bytes), and a freshly generated `webhook-secret` (chmod 600).
+//! 3. **Write** `config.toml`, `workflow.json` (the selected builtin or
+//!    normalized custom workflow JSON), and a freshly generated
+//!    `webhook-secret` (chmod 600).
 //! 4. **Write** a local `credentials.toml` (chmod 600) with the operator-supplied
 //!    admin password and provider key.
 //! 5. **Optionally provision** the forge idempotently when `--apply` is set
@@ -71,7 +72,7 @@ Options:
   --existing-repo               Provision onto a repo that already exists
   --topology      <standalone>  Local topology to initialize (only standalone today)
   --repo          <owner/name>  Managed repository to provision
-  --workflow      <builtin|PATH>  Builtin workflow name or JSON workflow file
+  --workflow      <builtin|PATH>  Builtin workflow name or JSON/YAML workflow file
   --forge         <URL>         Forgejo URL; skips the Forge URL prompt
   --bind          <ADDR>        Daemon bind / webhook advertise address override
   --workspace     <PATH>        Per-job worker workspace root to write
