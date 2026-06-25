@@ -35,7 +35,7 @@ pub const PROVIDER_DEEPSEEK: &str = "deepseek";
 pub struct Answers {
     /// The Forgejo base URL (`[forge] url`).
     pub forge_url: String,
-    /// The selected workflow: a builtin name or a JSON file path.
+    /// The selected workflow: a builtin name or a JSON/YAML file path.
     pub workflow: String,
     /// The webhook bind/advertise address (`[engine] bind`).
     pub webhook_addr: String,
@@ -209,7 +209,7 @@ fn validate_workflow_selection(workflow: &str) -> Result<(), InitError> {
     }
     Err(InitError::Unsupported(format!(
         "unknown workflow `{workflow}`; use `{WORKFLOW_BASIC_DELIVERY}`, \
-         `{WORKFLOW_REFERENCE_DELIVERY}`, or a workflow JSON file path"
+         `{WORKFLOW_REFERENCE_DELIVERY}`, or a workflow JSON/YAML file path"
     )))
 }
 
