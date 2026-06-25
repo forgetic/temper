@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: MPL-2.0
+
+use std::process::{Command, Output};
+
+use serde_json::{Value, json};
+
+fn temper(args: &[&str]) -> Output {
+    let dir = tempfile::tempdir().expect("tempdir");
+    Command::new(env!("CARGO_BIN_EXE_temper"))
+        .args(args)
+        .env("XDG_CONFIG_HOME", dir.path().join("xdg-config"))
+        .env("XDG_STATE_HOME", dir.path().join("xdg-state"))
+        .env("HOME", dir.path().join("home"))
+        .output()
+        .expect("run temper")
+}
+
+fn parse_schema(output: Output) -> Value {
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    serde_json::from_str(&stdout).expect("valid JSON schema")
+}
+
+#[test]
+fn config_schema_default_prints_valid_json_with_current_sections() {
+    let schema = parse_schema(temper(&["config", "schema"]));
+
+    assert_eq!(
+        schema["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["required"], json!(["schema_version"]));
+
+    let properties = &schema["properties"];
+    assert_eq!(properties["schema_version"]["type"], "integer");
+    assert_eq!(properties["schema_version"]["const"], 1);
+
+    for section in ["forge", "engine", "worker", "agent"] {
+        assert_eq!(properties[section]["type"], "object", "{section}");
+        assert_eq!(
+            properties[section]["additionalProperties"], false,
+            "{section} should reject unknown fields"
+        );
+    }
+
+    assert_eq!(properties["forge"]["properties"]["url"]["type"], "string");
+    assert_eq!(properties["engine"]["properties"]["repos"]["type"], "array");
+    assert_eq!(
+        properties["engine"]["properties"]["repos"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        properties["worker"]["properties"]["capabilities"]["items"]["type"],
+        "string"
+    );
+
+    assert!(
+        properties.get("deployment").is_none(),
+        "target-only config sections must not appear"
+    );
+    assert!(
+        properties.get("workflow").is_none(),
+        "target-only config sections must not appear"
+    );
+    assert!(
+        properties.get("paths").is_none(),
+        "target-only config sections must not appear"
+    );
+}
+
+#[test]
+fn config_schema_json_format_prints_same_machine_readable_schema() {
+    let default_schema = parse_schema(temper(&["config", "schema"]));
+    let json_schema = parse_schema(temper(&["--format", "json", "config", "schema"]));
+
+    assert_eq!(json_schema, default_schema);
+
+    let providers = &json_schema["properties"]["agent"]["properties"]["providers"];
+    assert_eq!(providers["type"], "object");
+    let provider_profile = &providers["additionalProperties"];
+    assert_eq!(provider_profile["type"], "object");
+    assert_eq!(provider_profile["additionalProperties"], false);
+    assert_eq!(provider_profile["properties"]["url"]["type"], "string");
+    assert_eq!(
+        provider_profile["properties"]["models"]["additionalProperties"],
+        false
+    );
+    assert_eq!(
+        provider_profile["properties"]["models"]["properties"]["main"]["type"],
+        "string"
+    );
+    assert_eq!(
+        provider_profile["properties"]["models"]["properties"]["investigate"]["type"],
+        "string"
+    );
+}
