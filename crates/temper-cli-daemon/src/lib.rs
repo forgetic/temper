@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! `temper daemon` / `temper serve standalone` — run the full standalone daemon,
-//! or one service of it.
+//! `temper daemon` / `temper serve` — run the full standalone daemon, or one
+//! service of it.
 //!
 //! `temper daemon` with no `--service` and `temper serve standalone` both run the
 //! all-in-one (engine + worker + agent in one process). `temper daemon --service
-//! engine` and `temper daemon --service worker` run a single service for a
-//! distributed topology, sharing the exact code the slim `temper-engine` /
-//! `temper-worker` binaries run.
+//! engine`, `temper serve engine`, `temper daemon --service worker`, and
+//! `temper serve worker` run a single service for a distributed topology,
+//! sharing the exact code the slim `temper-engine` / `temper-worker` binaries
+//! run.
 //!
 //! This crate carries the heavy engine/worker/agent wiring; the slimmer
 //! `temper-cli` dispatcher delegates `temper daemon` here and re-exports the
@@ -69,14 +70,17 @@ Usage: temper [GLOBAL OPTIONS] serve <COMPONENT> [OPTIONS]
 
 Components:
   standalone  Run all Temper planes in one local process
-  engine      Not implemented for `temper serve` in this UX shim
-  worker      Not implemented for `temper serve` in this UX shim
-  trigger     Not implemented for `temper serve` in this UX shim
+  engine      Run the engine service (`temper daemon --service engine`)
+  worker      Run the worker service (`temper daemon --service worker`)
+  trigger     Not implemented yet for `temper serve`
 
 Options:
   -h, --help  Print help
 
-Run `temper serve standalone --help` for the supported local-dev path.";
+Place `--config` / `--secrets` before `serve`, for example:
+  temper --config ./deploy --secrets ./deploy/credentials.toml serve engine
+
+Run `temper serve <component> --help` for component-specific usage.";
 
 pub const SERVE_STANDALONE_USAGE: &str = "\
 Run Temper in standalone mode.
@@ -89,12 +93,46 @@ Usage: temper [GLOBAL OPTIONS] serve standalone [OPTIONS]
 Options:
   -h, --help  Print help";
 
+pub const SERVE_ENGINE_USAGE: &str = "\
+Run the Temper engine service.
+
+This is a compatibility wrapper for the existing `temper daemon --service engine`
+path. Put deployment file flags before `serve`:
+  temper --config ./deploy --secrets ./deploy/credentials.toml serve engine
+
+Usage: temper [GLOBAL OPTIONS] serve engine [OPTIONS]
+
+Options:
+  -h, --help  Print help
+
+Not implemented yet: target flags such as `--id`, `--pool`, `--capacity`, and
+`--engine-url`. Do not pass them yet; future workitems will define their
+semantics.";
+
+pub const SERVE_WORKER_USAGE: &str = "\
+Run the Temper worker service.
+
+This is a compatibility wrapper for the existing `temper daemon --service worker`
+path. Put deployment file flags before `serve`:
+  temper --config ./deploy --secrets ./deploy/credentials.toml serve worker
+
+Usage: temper [GLOBAL OPTIONS] serve worker [OPTIONS]
+
+Options:
+  -h, --help  Print help
+
+Not implemented yet: target flags such as `--id`, `--pool`, `--capacity`, and
+`--engine-url`. Do not pass them yet; future workitems will define their
+semantics.";
+
 #[derive(Debug, Eq, PartialEq)]
 enum ServeInvocation {
     Help,
     Version,
     StandaloneHelp,
+    ServiceHelp(Service),
     Standalone,
+    Service(Service),
 }
 
 /// Which individual daemon service to run (`temper daemon --service <name>`).
@@ -115,6 +153,14 @@ impl Service {
             other => Err(format!(
                 "unknown --service `{other}` (expected `engine` or `worker`)"
             )),
+        }
+    }
+
+    /// Returns the command-line spelling for this service.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Service::Engine => "engine",
+            Service::Worker => "worker",
         }
     }
 }
@@ -159,10 +205,11 @@ impl std::error::Error for DaemonError {}
 
 /// `temper serve` entry point.
 ///
-/// This UX shim intentionally implements only `temper serve standalone`, mapping
-/// it to the existing standalone daemon path while keeping `temper daemon`
-/// unchanged for compatibility. Distributed `serve engine|worker|trigger` modes
-/// are rejected here instead of growing new topology semantics in this PR.
+/// `temper serve standalone` maps to the existing standalone daemon path while
+/// `temper serve engine|worker` dispatch to the same single-service paths as
+/// `temper daemon --service engine|worker`. `temper daemon` stays available as a
+/// compatibility surface, and `temper serve trigger` remains unimplemented until
+/// its topology is specified.
 pub fn serve_main(args: Vec<String>, env: &dyn EnvLookup, paths: &PathResolver) -> ExitCode {
     serve_main_with_options(args, env, paths, LoadOptions::default())
 }
@@ -186,7 +233,14 @@ pub fn serve_main_with_options(
             println!("{SERVE_STANDALONE_USAGE}");
             ExitCode::SUCCESS
         }
+        Ok(ServeInvocation::ServiceHelp(service)) => {
+            println!("{}", serve_service_usage(service));
+            ExitCode::SUCCESS
+        }
         Ok(ServeInvocation::Standalone) => main_with_options(Vec::new(), env, paths, options),
+        Ok(ServeInvocation::Service(service)) => {
+            serve_service_with_options(service, env, paths, options)
+        }
         Err(error) => {
             eprintln!("temper serve: {error}\n\n{SERVE_USAGE}");
             ExitCode::from(EX_USAGE)
@@ -194,40 +248,116 @@ pub fn serve_main_with_options(
     }
 }
 
+fn serve_service_with_options(
+    service: Service,
+    env: &dyn EnvLookup,
+    paths: &PathResolver,
+    options: LoadOptions,
+) -> ExitCode {
+    let inputs = DaemonInputs {
+        config: options.config,
+        credentials: options.credentials,
+        service: Some(service),
+        env,
+        paths,
+    };
+    match run(inputs) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("temper serve {}: {error}", service.as_str());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn serve_service_usage(service: Service) -> &'static str {
+    match service {
+        Service::Engine => SERVE_ENGINE_USAGE,
+        Service::Worker => SERVE_WORKER_USAGE,
+    }
+}
+
 fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocation, String> {
     let mut iter = args.into_iter();
     let Some(component) = iter.next() else {
-        return Err("missing component (expected `standalone`)".to_string());
+        return Err("missing component (expected `standalone`, `engine`, or `worker`)".to_string());
     };
     match component.as_str() {
         "-h" | "--help" | "help" => Ok(ServeInvocation::Help),
         "-V" | "--version" => Ok(ServeInvocation::Version),
         "standalone" => parse_serve_standalone(iter.collect()),
-        "engine" | "worker" | "trigger" => Err(format!(
-            "`temper serve {component}` is not implemented in this UX shim; use `temper serve standalone` for local development"
-        )),
+        "engine" => parse_serve_service(Service::Engine, iter.collect()),
+        "worker" => parse_serve_service(Service::Worker, iter.collect()),
+        "trigger" => Err(
+            "`temper serve trigger` is not implemented yet; trigger support remains a later workitem"
+                .to_string(),
+        ),
         other => Err(format!(
-            "unknown serve component `{other}` (expected `standalone`)"
+            "unknown serve component `{other}` (expected `standalone`, `engine`, or `worker`)"
         )),
     }
 }
 
 fn parse_serve_standalone(args: Vec<String>) -> Result<ServeInvocation, String> {
-    let Some(arg) = args.into_iter().next() else {
-        return Ok(ServeInvocation::Standalone);
+    parse_serve_component_args(
+        "standalone",
+        ServeInvocation::Standalone,
+        ServeInvocation::StandaloneHelp,
+        args,
+    )
+}
+
+fn parse_serve_service(service: Service, args: Vec<String>) -> Result<ServeInvocation, String> {
+    parse_serve_component_args(
+        service.as_str(),
+        ServeInvocation::Service(service),
+        ServeInvocation::ServiceHelp(service),
+        args,
+    )
+}
+
+fn parse_serve_component_args(
+    component: &str,
+    run: ServeInvocation,
+    help: ServeInvocation,
+    args: Vec<String>,
+) -> Result<ServeInvocation, String> {
+    let mut iter = args.into_iter();
+    let Some(arg) = iter.next() else {
+        return Ok(run);
     };
+    let extra = iter.next();
 
     match arg.as_str() {
-        "-h" | "--help" | "help" => Ok(ServeInvocation::StandaloneHelp),
-        "-V" | "--version" => Ok(ServeInvocation::Version),
-        "--service" => Err(
+        "-h" | "--help" | "help" => reject_extra_serve_arg(component, &arg, extra).map(|()| help),
+        "-V" | "--version" => {
+            reject_extra_serve_arg(component, &arg, extra).map(|()| ServeInvocation::Version)
+        }
+        "--service" => Err(if component == "standalone" {
             "`temper serve standalone` always runs the standalone path; `--service` is not accepted"
-                .to_string(),
-        ),
+                .to_string()
+        } else {
+            format!(
+                "`temper serve {component}` already selects the {component} service; `--service` is not accepted"
+            )
+        }),
         "-c" | "--config" | "--secrets" => Err(format!(
             "`{arg}` is a global option; place it before `serve`"
         )),
+        "--id" | "--pool" | "--capacity" | "--engine-url" => Err(format!(
+            "target flag `{arg}` is not implemented yet for `temper serve {component}`; do not pass it yet"
+        )),
         other => Err(format!("unexpected argument `{other}`")),
+    }
+}
+
+fn reject_extra_serve_arg(component: &str, arg: &str, extra: Option<String>) -> Result<(), String> {
+    if let Some(extra) = extra {
+        Err(format!(
+            "unexpected argument `{extra}` after `{arg}` for `temper serve {component}`"
+        ))
+    } else {
+        Ok(())
     }
 }
 

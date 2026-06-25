@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use temper_config::{EnvMap, ExposeSecret, PathResolver};
 
 use super::{
-    DaemonInputs, SERVE_STANDALONE_USAGE, SERVE_USAGE, ServeInvocation, load_for,
-    parse_daemon_args, parse_serve_invocation,
+    DaemonInputs, SERVE_ENGINE_USAGE, SERVE_STANDALONE_USAGE, SERVE_USAGE, SERVE_WORKER_USAGE,
+    ServeInvocation, Service, load_for, parse_daemon_args, parse_serve_invocation,
 };
 
 const POISONED_TOKEN: &str = "POISONED-GLOBAL-TOKEN-DO-NOT-USE";
@@ -260,14 +260,26 @@ fn without_explicit_paths_global_is_discovered() {
 }
 
 #[test]
-fn serve_usage_documents_supported_local_dev_path() {
+fn serve_usage_documents_supported_components() {
     assert!(
         SERVE_USAGE.contains("standalone"),
-        "serve help should advertise the supported component"
+        "serve help should advertise standalone mode"
     );
     assert!(
-        SERVE_USAGE.contains("Not implemented"),
-        "serve help should make unsupported distributed components explicit"
+        SERVE_USAGE.contains("engine      Run the engine service"),
+        "serve help should advertise engine as supported: {SERVE_USAGE}"
+    );
+    assert!(
+        SERVE_USAGE.contains("worker      Run the worker service"),
+        "serve help should advertise worker as supported: {SERVE_USAGE}"
+    );
+    assert!(
+        SERVE_USAGE.contains("trigger     Not implemented yet"),
+        "serve help should keep trigger explicitly unimplemented"
+    );
+    assert!(
+        SERVE_USAGE.contains("temper --config") && SERVE_USAGE.contains("--secrets"),
+        "serve help should show deployment file flags before `serve`"
     );
     assert!(SERVE_STANDALONE_USAGE.contains("serve standalone"));
     assert!(!SERVE_STANDALONE_USAGE.contains("--secrets"));
@@ -276,6 +288,26 @@ fn serve_usage_documents_supported_local_dev_path() {
         SERVE_STANDALONE_USAGE.contains("temper daemon"),
         "standalone help should identify the compatibility wrapper"
     );
+}
+
+#[test]
+fn serve_service_help_documents_current_thin_dispatch_surface() {
+    for (usage, component) in [
+        (SERVE_ENGINE_USAGE, "engine"),
+        (SERVE_WORKER_USAGE, "worker"),
+    ] {
+        assert!(usage.contains(&format!("serve {component}")), "{usage}");
+        assert!(
+            usage.contains(&format!("temper daemon --service {component}")),
+            "{usage}"
+        );
+        assert!(usage.contains("temper --config"), "{usage}");
+        assert!(usage.contains("--secrets"), "{usage}");
+        for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
+            assert!(usage.contains(flag), "{usage}");
+        }
+        assert!(usage.contains("Not implemented yet"), "{usage}");
+    }
 }
 
 #[test]
@@ -289,6 +321,16 @@ fn serve_help_forms_are_parsed_without_starting_daemon() {
             .expect("standalone help parses"),
         ServeInvocation::StandaloneHelp
     );
+    assert_eq!(
+        parse_serve_invocation(vec!["engine".to_string(), "--help".to_string()])
+            .expect("engine help parses"),
+        ServeInvocation::ServiceHelp(Service::Engine)
+    );
+    assert_eq!(
+        parse_serve_invocation(vec!["worker".to_string(), "--help".to_string()])
+            .expect("worker help parses"),
+        ServeInvocation::ServiceHelp(Service::Worker)
+    );
 }
 
 #[test]
@@ -300,31 +342,48 @@ fn serve_standalone_maps_to_daemon_standalone() {
 }
 
 #[test]
-fn serve_standalone_rejects_local_config_and_secrets_flags() {
-    for flag in ["--config", "--secrets", "-c"] {
-        let error = parse_serve_invocation(vec![
-            "standalone".to_string(),
-            flag.to_string(),
-            "deploy/config.toml".to_string(),
-        ])
-        .expect_err("file-location flags must be global-only");
+fn serve_engine_and_worker_map_to_daemon_services() {
+    assert_eq!(
+        parse_serve_invocation(vec!["engine".to_string()]).expect("engine command parses"),
+        ServeInvocation::Service(Service::Engine)
+    );
+    assert_eq!(
+        parse_serve_invocation(vec!["worker".to_string()]).expect("worker command parses"),
+        ServeInvocation::Service(Service::Worker)
+    );
+}
 
-        assert!(error.contains(flag), "{error}");
-        assert!(error.contains("global option"), "{error}");
+#[test]
+fn serve_components_reject_local_config_and_secrets_flags() {
+    for component in ["standalone", "engine", "worker"] {
+        for flag in ["--config", "--secrets", "-c"] {
+            let error = parse_serve_invocation(vec![
+                component.to_string(),
+                flag.to_string(),
+                "deploy/config.toml".to_string(),
+            ])
+            .expect_err("file-location flags must be global-only");
+
+            assert!(error.contains(flag), "{error}");
+            assert!(error.contains("global option"), "{error}");
+            assert!(error.contains("before `serve`"), "{error}");
+        }
     }
 }
 
 #[test]
-fn serve_standalone_rejects_legacy_secret_source_flag() {
+fn serve_components_reject_legacy_secret_source_flag() {
     let legacy = format!("--{}", "credentials");
-    let error = parse_serve_invocation(vec![
-        "standalone".to_string(),
-        legacy.clone(),
-        "deploy/credentials.toml".to_string(),
-    ])
-    .expect_err("legacy secret-source flag must not be accepted under serve standalone");
+    for component in ["standalone", "engine", "worker"] {
+        let error = parse_serve_invocation(vec![
+            component.to_string(),
+            legacy.clone(),
+            "deploy/credentials.toml".to_string(),
+        ])
+        .expect_err("legacy secret-source flag must not be accepted under serve component");
 
-    assert!(error.contains(&legacy), "{error}");
+        assert!(error.contains(&legacy), "{error}");
+    }
 }
 
 #[test]
@@ -341,13 +400,31 @@ fn serve_standalone_rejects_service_escape_hatch() {
 }
 
 #[test]
-fn serve_rejects_distributed_components_in_this_shim() {
-    for component in ["engine", "worker", "trigger"] {
-        let error = parse_serve_invocation(vec![component.to_string()])
-            .expect_err("distributed serve component should be rejected");
-        assert!(error.contains("not implemented"));
-        assert!(error.contains("temper serve standalone"));
+fn serve_services_reject_future_target_flags() {
+    for component in ["engine", "worker"] {
+        for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
+            let error = parse_serve_invocation(vec![
+                component.to_string(),
+                flag.to_string(),
+                "value".to_string(),
+            ])
+            .expect_err("future target flags must not be accepted yet");
+
+            assert!(error.contains(component), "{error}");
+            assert!(error.contains(flag), "{error}");
+            assert!(error.contains("not implemented yet"), "{error}");
+        }
     }
+}
+
+#[test]
+fn serve_trigger_remains_rejected_with_helpful_message() {
+    let error = parse_serve_invocation(vec!["trigger".to_string()])
+        .expect_err("trigger serve component should remain rejected");
+
+    assert!(error.contains("temper serve trigger"), "{error}");
+    assert!(error.contains("not implemented yet"), "{error}");
+    assert!(error.contains("later workitem"), "{error}");
 }
 
 #[test]

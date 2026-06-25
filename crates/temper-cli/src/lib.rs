@@ -43,7 +43,7 @@ Commands:
   init    Interactively configure a deployment bundle
   apply   Provision a deployment bundle on the forge
   check   Validate the resolved config and credentials offline
-  serve   Run a long-lived Temper process (standalone supported)
+  serve   Run a long-lived Temper process (standalone, engine, worker)
   config  Guided or programmatic configuration
   daemon  Run a full standalone daemon or one of its components (engine, worker)
 
@@ -215,7 +215,7 @@ mod tests {
         assert!(USAGE.contains("\n  apply "));
         assert!(USAGE.contains("\n  check "));
         assert!(USAGE.contains("\n  serve "));
-        assert!(USAGE.contains("standalone supported"));
+        assert!(USAGE.contains("standalone, engine, worker"));
         assert!(USAGE.contains("--secrets"));
         assert!(!USAGE.contains("\n  agent "), "{USAGE}");
     }
