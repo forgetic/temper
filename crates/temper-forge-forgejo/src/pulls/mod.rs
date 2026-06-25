@@ -6,12 +6,11 @@
 use crate::ids::{RepoCoord, parse_pull_request_id, parse_repository_id};
 use crate::map::{map_pull_request, merge_method_token};
 use crate::types::PullRequestDto;
-use crate::version::content_validator;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use temper_forge_model::{
     Comment, CreateComment, CreatePullRequest, ForgeError, ForgeResult, ItemNumber,
-    MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestState,
-    PullRequestUpdateState, RepositoryId, UpdatePullRequest, UserId,
+    MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestUpdateState,
+    RepositoryId, UpdatePullRequest,
 };
 
 mod list;
@@ -97,20 +96,17 @@ impl<C: HttpClient> ForgejoForge<C> {
         else {
             return Err(ForgeError::NotFound(format!("pull request {id}")));
         };
-        let header_validator = response_validator(&response);
+        let validator = response_validator(&response);
         let current_dto: PullRequestDto = Self::decode("get pull request", &response)?;
-        let current =
-            self.materialize_pull_request(&repo, current_dto, header_validator.as_deref());
-        let current_validator = pull_request_validator(&current, header_validator.as_deref());
+        let current = self.materialize_pull_request(&repo, current_dto, validator.as_deref());
 
         if let Some(expected) = input.expected_version {
-            let check_validator = conditional_check_validator(
-                current_validator.as_str(),
-                header_validator.as_deref(),
+            self.versions.check(
+                id.as_str(),
+                validator.as_deref(),
+                expected,
                 self.config.cas_mode,
-            );
-            self.versions
-                .check(id.as_str(), check_validator, expected, self.config.cas_mode)?;
+            )?;
         }
 
         let mut edit = serde_json::Map::new();
@@ -287,82 +283,16 @@ impl<C: HttpClient> ForgejoForge<C> {
         etag: Option<&str>,
     ) -> PullRequest {
         let mut pull = map_pull_request(repo, dto);
-        let validator = pull_request_validator(&pull, etag);
+        let validator = etag
+            .map(str::to_string)
+            .unwrap_or_else(|| pull.updated_at.to_rfc3339());
         pull.version = self.versions.observe(pull.id.as_str(), Some(&validator));
         pull
     }
 }
 
-fn pull_request_validator(pull: &PullRequest, etag: Option<&str>) -> String {
-    etag.map(str::to_string).unwrap_or_else(|| {
-        content_validator(
-            "pull_request",
-            &[
-                ("number", pull.number.get().to_string()),
-                ("title", pull.title.clone()),
-                ("body", pull.body.clone()),
-                ("state", pull_request_state(pull.state).to_string()),
-                (
-                    "source_repo",
-                    pull.source.repository_id.as_str().to_string(),
-                ),
-                ("source_branch", pull.source.branch.clone()),
-                (
-                    "target_repo",
-                    pull.target.repository_id.as_str().to_string(),
-                ),
-                ("target_branch", pull.target.branch.clone()),
-                ("head_sha", pull.head_sha.clone().unwrap_or_default()),
-                ("base_sha", pull.base_sha.clone().unwrap_or_default()),
-                ("labels", pull.labels.join("\n")),
-                ("assignees", user_ids(&pull.assignees)),
-                ("reviewers", user_ids(&pull.requested_reviewers)),
-                (
-                    "merge",
-                    pull.merge
-                        .as_ref()
-                        .map(|merge| merge.commit_sha.clone())
-                        .unwrap_or_default(),
-                ),
-                (
-                    "closed_at",
-                    pull.closed_at.map(|ts| ts.to_rfc3339()).unwrap_or_default(),
-                ),
-            ],
-        )
-    })
-}
-
-fn conditional_check_validator<'a>(
-    content: &'a str,
-    provider: Option<&'a str>,
-    mode: crate::CasMode,
-) -> Option<&'a str> {
-    match (provider, mode) {
-        (Some(provider), _) => Some(provider),
-        (None, crate::CasMode::BestEffort) => Some(content),
-        (None, crate::CasMode::Strict) => None,
-    }
-}
-
-fn pull_request_state(state: PullRequestState) -> &'static str {
-    match state {
-        PullRequestState::Open => "open",
-        PullRequestState::Closed => "closed",
-        PullRequestState::Merged => "merged",
-    }
-}
-
-fn user_ids(users: &[UserId]) -> String {
-    users
-        .iter()
-        .map(UserId::as_str)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Returns the response validator: the `ETag` header if present, else `None`
-/// (callers fall back to a content fingerprint).
+/// (callers fall back to `updated_at`).
 pub(crate) fn response_validator(response: &crate::HttpResponse) -> Option<String> {
     response.header("etag").map(str::to_string)
 }
