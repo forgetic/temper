@@ -221,6 +221,23 @@ mod tests {
     }
 
     #[test]
+    fn top_level_check_help_is_dispatchable() {
+        let env = EnvMap::new();
+        let paths = PathResolver::default();
+
+        assert_eq!(
+            dispatch(
+                "check",
+                vec!["--help".to_string()],
+                &env,
+                &paths,
+                GlobalOptions::default()
+            ),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
     fn internal_agent_help_remains_dispatchable() {
         let env = EnvMap::new();
         let paths = PathResolver::default();

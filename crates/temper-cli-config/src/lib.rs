@@ -2,8 +2,9 @@
 
 //! `temper config` — guided or programmatic configuration.
 //!
-//! - `validate` — load the config + credentials, resolve them, and report any
-//!   problems (and advisory notes) without starting anything.
+//! - `validate` — compatibility path for top-level `temper check`: load the
+//!   config + credentials, resolve them, and report any problems (and advisory
+//!   notes) without starting anything.
 //! - `show` — print the effective resolved deployment, with secrets redacted.
 //! - `paths` — print the config, secret, state, workspace, and workflow paths
 //!   Temper will use.
@@ -147,6 +148,60 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
     }
 }
 
+pub fn check(inputs: CheckInputs) -> ExitCode {
+    let CheckInputs {
+        args,
+        options,
+        format,
+        env,
+        paths,
+    } = inputs;
+    match parse_check_args(&args) {
+        Ok(CheckAction::Help) => {
+            println!("{CHECK_USAGE}");
+            ExitCode::SUCCESS
+        }
+        Ok(CheckAction::Run) => {
+            let report = validation_report(&options, env, paths);
+            match format {
+                OutputFormat::Human => print_validation_human(&report.loaded, &report.findings),
+                OutputFormat::Json => {
+                    if let Err(error) = print_validation_json(&report.loaded, &report.findings) {
+                        eprintln!("temper check: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            if report.load_failed {
+                ExitCode::FAILURE
+            } else {
+                // `temper check` is the non-strict top-level scaffold: lint
+                // findings are reported in-band, while the process exits
+                // successfully as long as the offline load + resolve path ran.
+                ExitCode::SUCCESS
+            }
+        }
+        Err(error) => {
+            eprintln!("temper check: {error}\n\n{CHECK_USAGE}");
+            ExitCode::from(EX_USAGE)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CheckAction {
+    Run,
+    Help,
+}
+
+fn parse_check_args(args: &[String]) -> Result<CheckAction, String> {
+    match args {
+        [] => Ok(CheckAction::Run),
+        [arg] if matches!(arg.as_str(), "-h" | "--help" | "help") => Ok(CheckAction::Help),
+        [arg, ..] => Err(format!("unexpected argument `{arg}`")),
+    }
+}
+
 /// Parses config-subcommand-local flags. File-location flags are global-only and
 /// are supplied via [`ConfigInputs::options`].
 fn parse_options(args: &[String], allow_force: bool) -> Result<bool, String> {
@@ -168,6 +223,45 @@ fn validate(
 ) -> Result<ExitCode, String> {
     parse_options(args, false)?;
     let (resolved, loaded) = load_for(options, env, paths).map_err(|error| error.to_string())?;
+    let findings = lint(&resolved);
+    print_validation_human(&loaded, &findings);
+    if has_error_findings(&findings) {
+        Ok(ExitCode::FAILURE)
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ValidationReport {
+    loaded: LoadedPaths,
+    findings: Vec<Finding>,
+    load_failed: bool,
+}
+
+fn validation_report(
+    options: &LoadOptions,
+    env: &EnvMap,
+    paths: &PathResolver,
+) -> ValidationReport {
+    match load_for(options, env, paths) {
+        Ok((resolved, loaded)) => ValidationReport {
+            loaded,
+            findings: lint(&resolved),
+            load_failed: false,
+        },
+        Err(error) => ValidationReport {
+            loaded: LoadedPaths::default(),
+            findings: vec![Finding {
+                error: true,
+                message: error.to_string(),
+            }],
+            load_failed: true,
+        },
+    }
+}
+
+fn print_validation_human(loaded: &LoadedPaths, findings: &[Finding]) {
     if let Some(path) = &loaded.config {
         println!("config:      {}", path.display());
     } else {
@@ -180,25 +274,61 @@ fn validate(
     }
     println!();
 
-    let findings = lint(&resolved);
     if findings.is_empty() {
         println!("OK — no problems found.");
-        return Ok(ExitCode::SUCCESS);
+        return;
     }
-    let mut has_error = false;
-    for Finding { error, message } in &findings {
+    for Finding { error, message } in findings {
         if *error {
-            has_error = true;
             println!("error: {message}");
         } else {
             println!("note:  {message}");
         }
     }
-    if has_error {
-        Ok(ExitCode::FAILURE)
+}
+
+fn print_validation_json(loaded: &LoadedPaths, findings: &[Finding]) -> Result<(), String> {
+    let status = if has_error_findings(findings) {
+        "error"
     } else {
-        Ok(ExitCode::SUCCESS)
-    }
+        "ok"
+    };
+    let config_path = loaded
+        .config
+        .as_ref()
+        .map(|path| path.display().to_string());
+    let credentials_path = loaded
+        .credentials
+        .as_ref()
+        .map(|path| path.display().to_string());
+    let findings = findings
+        .iter()
+        .map(|finding| {
+            serde_json::json!({
+                "severity": if finding.error { "error" } else { "note" },
+                "message": &finding.message,
+            })
+        })
+        .collect::<Vec<_>>();
+    let report = serde_json::json!({
+        "status": status,
+        "result": status,
+        "config_path": config_path.clone(),
+        "credentials_path": credentials_path.clone(),
+        "paths": {
+            "config": config_path,
+            "credentials": credentials_path,
+        },
+        "findings": findings,
+    });
+    let text = serde_json::to_string_pretty(&report)
+        .map_err(|error| format!("serialize validation report: {error}"))?;
+    println!("{text}");
+    Ok(())
+}
+
+fn has_error_findings(findings: &[Finding]) -> bool {
+    findings.iter().any(|finding| finding.error)
 }
 
 fn show(
@@ -229,7 +359,7 @@ fn init(
 
     println!("Wrote {}", targets.config.display());
     println!("Wrote {} (chmod 600)", targets.credentials.display());
-    println!("\nEdit both, then run `temper config validate`.");
+    println!("\nEdit both, then run `temper check`.");
     Ok(ExitCode::SUCCESS)
 }
 
