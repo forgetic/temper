@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use jig_core::{HttpError, Reply, Script, ScriptAction, StopReason, Turn};
 use jig_server::FakeLlm;
-use temper_forge::{ItemNumber, PullRequest, PullRequestQuery, UserId};
+use temper_forge::{Forge, ItemNumber, PullRequest, PullRequestQuery, UserId};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{
@@ -460,6 +460,189 @@ fn verify_correlated_engineer_pr(
         return Err(format!(
             "PR #{} authored by {:?}, not the engineer identity {:?}",
             pr.number, pr.author_id, engineer_user
+        ));
+    }
+    Ok(())
+}
+
+fn wait_for_retry_release(
+    forge: &ForgejoForge,
+    provisioned: &Provisioned,
+    issue: ItemNumber,
+    engineer: &temper_testing::forgejo_server::RoleIdentity,
+    run: &mut ChildGuard,
+    provider_errors: Arc<AtomicUsize>,
+    timeout: Duration,
+) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = run.child.try_wait().expect("run try_wait") {
+            panic!(
+                "`temper run` exited early with {status:?}\n--- temper run log ---\n{}",
+                run.log_tail()
+            );
+        }
+
+        match block_on(retry_release_state(
+            forge,
+            provisioned,
+            issue,
+            engineer,
+            provider_errors.load(Ordering::SeqCst),
+        )) {
+            Ok(body) => return body,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(250)),
+            Err(error) => panic!(
+                "`temper run` did not release the claimed issue for retry within {timeout:?}: {error}\n--- temper run log ---\n{}",
+                run.log_tail()
+            ),
+        }
+    }
+}
+
+async fn retry_release_state(
+    forge: &ForgejoForge,
+    provisioned: &Provisioned,
+    issue_number: ItemNumber,
+    engineer: &temper_testing::forgejo_server::RoleIdentity,
+    provider_error_count: usize,
+) -> Result<String, String> {
+    if provider_error_count == 0 {
+        return Err("provider server_error has not been injected yet".to_string());
+    }
+
+    let issue = forge
+        .get_issue_by_number(&provisioned.repository, issue_number)
+        .await
+        .map_err(|error| format!("get_issue_by_number failed: {error}"))?
+        .ok_or("source issue missing")?;
+    if !issue.labels.iter().any(|label| label == "ready") {
+        return Err(format!("ready label is not restored yet: {:?}", issue.labels));
+    }
+    if issue.labels.iter().any(|label| label == "in-progress") {
+        return Err(format!(
+            "in-progress label is still present after transient failure: {:?}",
+            issue.labels
+        ));
+    }
+    let engineer_user = UserId::new(engineer.user.clone());
+    if issue.assignees.iter().any(|assignee| assignee == &engineer_user) {
+        return Err(format!(
+            "engineer assignee is still present after transient failure: {:?}",
+            issue.assignees
+        ));
+    }
+    assert_no_human_attention(forge, &issue).await?;
+    if !issue.body.contains("Current status: queued for retry") {
+        return Err(format!(
+            "run ledger has not been marked queued for retry yet:\n{}",
+            issue.body
+        ));
+    }
+    assert_single_run_ledger(&issue.body, issue_number)?;
+
+    let implementation_prs = implementation_prs(forge, provisioned).await?;
+    if !implementation_prs.is_empty() {
+        return Err(format!(
+            "implementation PR opened before retry release was observed: {:?}",
+            implementation_prs
+                .iter()
+                .map(|pr| pr.number)
+                .collect::<Vec<_>>()
+        ));
+    }
+
+    Ok(issue.body)
+}
+
+async fn assert_recovered_issue_final_state(
+    forge: &ForgejoForge,
+    provisioned: &Provisioned,
+    issue_number: ItemNumber,
+    pull_number: ItemNumber,
+    engineer: &temper_testing::forgejo_server::RoleIdentity,
+) {
+    let issue = forge
+        .get_issue_by_number(&provisioned.repository, issue_number)
+        .await
+        .expect("issue lookup succeeds")
+        .expect("source issue exists after recovery");
+    assert_no_human_attention(forge, &issue)
+        .await
+        .expect("no human-attention state after provider retry recovery");
+    assert_single_run_ledger(&issue.body, issue_number).expect("one run ledger after recovery");
+    assert!(
+        issue.body.contains(&format!("continued in PR #{}", pull_number.get())),
+        "source issue ledger should finalize to the implementation PR: {}",
+        issue.body
+    );
+    assert!(
+        !issue.body.contains("Current status: queued for retry"),
+        "finalized source issue ledger should not remain queued for retry: {}",
+        issue.body
+    );
+    let engineer_user = UserId::new(engineer.user.clone());
+    assert!(
+        !issue.assignees.iter().any(|assignee| assignee == &engineer_user),
+        "engineer assignee should not remain on source issue after PR handoff: {:?}",
+        issue.assignees
+    );
+    let prs = implementation_prs(forge, provisioned)
+        .await
+        .expect("implementation PRs list");
+    assert_eq!(prs.len(), 1, "recovery must not duplicate PRs");
+}
+
+async fn assert_no_human_attention(
+    forge: &ForgejoForge,
+    issue: &temper_forge::Issue,
+) -> Result<(), String> {
+    if issue.labels.iter().any(|label| label == "needs-human") {
+        return Err(format!(
+            "source issue has needs-human after transient provider failure: {:?}",
+            issue.labels
+        ));
+    }
+    let comments = forge
+        .list_issue_comments(&issue.id)
+        .await
+        .map_err(|error| format!("list_issue_comments failed: {error}"))?;
+    if !comments.is_empty() {
+        return Err(format!(
+            "source issue has unexpected comments after transient provider failure: {:?}",
+            comments
+                .iter()
+                .map(|comment| comment.body.as_str())
+                .collect::<Vec<_>>()
+        ));
+    }
+    Ok(())
+}
+
+async fn implementation_prs(
+    forge: &ForgejoForge,
+    provisioned: &Provisioned,
+) -> Result<Vec<PullRequest>, String> {
+    forge
+        .list_pull_requests(&provisioned.repository, PullRequestQuery::default())
+        .await
+        .map_err(|error| format!("list_pull_requests failed: {error}"))
+        .map(|pulls| {
+            pulls
+                .into_iter()
+                .filter(|pr| pr.labels.iter().any(|label| label == "implementation"))
+                .collect()
+        })
+}
+
+fn assert_single_run_ledger(body: &str, issue: ItemNumber) -> Result<(), String> {
+    let correlation = format!("pr-for-code-{issue}");
+    let marker = format!("<!-- temper-run-ledger correlation_key={correlation} -->");
+    let marker_count = body.matches(&marker).count();
+    let end_count = body.matches("<!-- /temper-run-ledger -->").count();
+    if marker_count != 1 || end_count != 1 {
+        return Err(format!(
+            "expected exactly one run ledger for {correlation}, saw marker={marker_count} end={end_count}:\n{body}"
         ));
     }
     Ok(())

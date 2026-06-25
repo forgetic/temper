@@ -631,7 +631,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "jig-core"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/jig.git?rev=b836fdea4d26895c70e3a2586200a8e2bdc43eb0#b836fdea4d26895c70e3a2586200a8e2bdc43eb0"
+source = "git+http://127.0.0.1:3000/ai/jig.git?rev=2b069df2e69ff137528813472ea56f07ede7a1fe#2b069df2e69ff137528813472ea56f07ede7a1fe"
 dependencies = [
  "serde",
  "serde_json",
@@ -640,7 +640,7 @@ dependencies = [
 [[package]]
 name = "jig-record"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/jig.git?rev=b836fdea4d26895c70e3a2586200a8e2bdc43eb0#b836fdea4d26895c70e3a2586200a8e2bdc43eb0"
+source = "git+http://127.0.0.1:3000/ai/jig.git?rev=2b069df2e69ff137528813472ea56f07ede7a1fe#2b069df2e69ff137528813472ea56f07ede7a1fe"
 dependencies = [
  "jig-core",
  "jig-runtime",
@@ -652,7 +652,7 @@ dependencies = [
 [[package]]
 name = "jig-runtime"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/jig.git?rev=b836fdea4d26895c70e3a2586200a8e2bdc43eb0#b836fdea4d26895c70e3a2586200a8e2bdc43eb0"
+source = "git+http://127.0.0.1:3000/ai/jig.git?rev=2b069df2e69ff137528813472ea56f07ede7a1fe#2b069df2e69ff137528813472ea56f07ede7a1fe"
 dependencies = [
  "skein",
 ]
@@ -660,7 +660,7 @@ dependencies = [
 [[package]]
 name = "jig-server"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/jig.git?rev=b836fdea4d26895c70e3a2586200a8e2bdc43eb0#b836fdea4d26895c70e3a2586200a8e2bdc43eb0"
+source = "git+http://127.0.0.1:3000/ai/jig.git?rev=2b069df2e69ff137528813472ea56f07ede7a1fe#2b069df2e69ff137528813472ea56f07ede7a1fe"
 dependencies = [
  "jig-core",
  "jig-runtime",
