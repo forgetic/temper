@@ -4,7 +4,9 @@
 //!
 //! Two TOML files, both stamped with the same `schema_version`:
 //!
-//! - the **config** file ([`Config`]) — non-secret deployment settings;
+//! - the **config** file ([`Config`]) — non-secret deployment settings
+//!   (target-era deployment/workflow/path metadata plus legacy forge/engine/
+//!   worker/agent settings);
 //! - the **credentials** file ([`Credentials`]) — secrets.
 //!
 //! [`load`] reads both (honoring `--config` / `--secrets` overrides, systemd's

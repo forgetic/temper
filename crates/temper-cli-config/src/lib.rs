@@ -498,12 +498,12 @@ fn render(resolved: &Resolved) -> String {
     );
     let _ = writeln!(
         out,
-        "  workspace    = {}",
+        "  workspace_dir = {}",
         resolved.paths.workspace_dir.display()
     );
     let _ = writeln!(
         out,
-        "  workflow     = {}",
+        "  workflow_file = {}",
         resolved
             .paths
             .workflow_file
