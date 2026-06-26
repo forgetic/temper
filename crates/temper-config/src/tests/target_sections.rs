@@ -49,6 +49,228 @@ workspace_dir = "workspace"
 }
 
 #[test]
+fn target_worker_pools_and_agent_profiles_parse_and_resolve_without_runtime_switch() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["ai/temper"]
+roles = ["engineer"]
+[worker]
+max_concurrent_jobs = 3
+[[worker.pools]]
+name = "engineers"
+roles = ["engineer"]
+repos = ["ai/temper"]
+max_concurrent_jobs = 2
+agent_profile = "coding"
+worker_token = "worker-engineers-token"
+[agent]
+provider = "deepseek"
+[agent.profiles.coding]
+command = ["temper", "agent"]
+provider = "anthropic"
+model = "claude-opus-4-8"
+investigate_model = "claude-haiku-4-5"
+provider_url = "http://fake-llm"
+max_iterations = 250
+subagents = true
+credential = "agent-provider"
+"#,
+    );
+
+    assert_eq!(config.worker.pools.len(), 1);
+    assert_eq!(config.worker.pools[0].name.as_deref(), Some("engineers"));
+    assert!(config.agent.profiles.contains_key("coding"));
+
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+
+    // Target metadata is present for inspection/future work.
+    let pool = resolved.worker.pools.first().expect("pool resolves");
+    assert_eq!(pool.name, "engineers");
+    assert_eq!(pool.roles, vec!["engineer"]);
+    assert_eq!(pool.repos[0].display(), "ai/temper");
+    assert_eq!(pool.max_concurrent_jobs, Some(2));
+    assert_eq!(pool.agent_profile.as_deref(), Some("coding"));
+    assert_eq!(pool.worker_token.as_deref(), Some("worker-engineers-token"));
+
+    let profile = resolved.agent.profiles.get("coding").expect("profile resolves");
+    assert_eq!(profile.command, vec!["temper", "agent"]);
+    assert_eq!(profile.provider, Some(ProviderKind::Anthropic));
+    assert_eq!(profile.model.as_deref(), Some("claude-opus-4-8"));
+    assert_eq!(
+        profile.investigate_model.as_deref(),
+        Some("claude-haiku-4-5")
+    );
+    assert_eq!(profile.provider_url.as_deref(), Some("http://fake-llm"));
+    assert_eq!(profile.max_iterations, Some(250));
+    assert_eq!(profile.subagents, Some(true));
+    assert_eq!(profile.credential.as_deref(), Some("agent-provider"));
+
+    // Active runtime fields still come from legacy/default settings, not pools/profiles.
+    assert_eq!(resolved.worker.max_concurrent_jobs, 3);
+    assert_eq!(resolved.worker.capabilities.len(), 1);
+    assert_eq!(resolved.worker.capabilities[0].repo, "ai/temper");
+    assert_eq!(resolved.worker.capabilities[0].role, "engineer");
+    assert_eq!(resolved.agent.provider.kind, ProviderKind::DeepSeek);
+}
+
+#[test]
+fn legacy_only_config_has_no_target_metadata_and_preserves_runtime_fields() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["ai/temper"]
+roles = ["engineer", "architect"]
+[worker]
+max_concurrent_jobs = 4
+[agent]
+provider = "chatgpt"
+"#,
+    );
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+
+    assert!(resolved.worker.pools.is_empty());
+    assert!(resolved.agent.profiles.is_empty());
+    assert_eq!(resolved.worker.max_concurrent_jobs, 4);
+    assert_eq!(resolved.worker.capabilities.len(), 2);
+    assert!(
+        resolved
+            .worker
+            .capabilities
+            .iter()
+            .any(|capability| capability.repo == "ai/temper" && capability.role == "engineer")
+    );
+    assert_eq!(resolved.agent.provider.kind, ProviderKind::ChatGpt);
+}
+
+#[test]
+fn target_pool_and_profile_validation_errors_name_clear_fields() {
+    let cases: &[(&str, &str, &[&str])] = &[
+        (
+            "empty pool name",
+            r#"
+schema_version = 1
+[[worker.pools]]
+name = " "
+roles = ["engineer"]
+"#,
+            &["worker.pools[0].name"],
+        ),
+        (
+            "duplicate pool name",
+            r#"
+schema_version = 1
+[[worker.pools]]
+name = "engineers"
+roles = ["engineer"]
+[[worker.pools]]
+name = " engineers "
+roles = ["architect"]
+"#,
+            &["worker.pools.name", "duplicate", "engineers"],
+        ),
+        (
+            "empty pool roles",
+            r#"
+schema_version = 1
+[[worker.pools]]
+name = "engineers"
+roles = []
+"#,
+            &["worker.pools[0].roles"],
+        ),
+        (
+            "invalid pool repo",
+            r#"
+schema_version = 1
+[[worker.pools]]
+name = "engineers"
+roles = ["engineer"]
+repos = ["ai"]
+"#,
+            &["worker.pools[0].repos[0]", "owner/name"],
+        ),
+        (
+            "zero pool capacity",
+            r#"
+schema_version = 1
+[[worker.pools]]
+name = "engineers"
+roles = ["engineer"]
+max_concurrent_jobs = 0
+"#,
+            &["worker.pools[0].max_concurrent_jobs"],
+        ),
+        (
+            "missing referenced profile",
+            r#"
+schema_version = 1
+[[worker.pools]]
+name = "engineers"
+roles = ["engineer"]
+agent_profile = "missing"
+[agent.profiles.coding]
+provider = "anthropic"
+"#,
+            &["worker.pools[0].agent_profile", "missing"],
+        ),
+        (
+            "empty profile name",
+            r#"
+schema_version = 1
+[agent.profiles.""]
+provider = "anthropic"
+"#,
+            &["agent.profiles", "name"],
+        ),
+        (
+            "duplicate trimmed profile name",
+            r#"
+schema_version = 1
+[agent.profiles.coding]
+provider = "anthropic"
+[agent.profiles." coding "]
+provider = "deepseek"
+"#,
+            &["agent.profiles", "duplicate", "coding"],
+        ),
+        (
+            "invalid profile provider",
+            r#"
+schema_version = 1
+[agent.profiles.coding]
+provider = "bogus"
+"#,
+            &["agent.profiles.coding.provider", "bogus"],
+        ),
+        (
+            "zero profile max iterations",
+            r#"
+schema_version = 1
+[agent.profiles.coding]
+max_iterations = 0
+"#,
+            &["agent.profiles.coding.max_iterations"],
+        ),
+    ];
+
+    for (name, toml, expected) in cases {
+        let config = parse_config(toml);
+        let err = resolve(&config, &Credentials::default(), &NoEnv)
+            .expect_err(&format!("{name}: expected invalid config"));
+        let message = err.to_string();
+        for needle in *expected {
+            assert!(
+                message.contains(needle),
+                "{name}: expected `{needle}` in `{message}`"
+            );
+        }
+    }
+}
+
+#[test]
 fn target_state_dir_controls_default_workspace_root() {
     let config = parse_config(
         r#"
