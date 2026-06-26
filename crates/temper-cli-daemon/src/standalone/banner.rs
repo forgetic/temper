@@ -231,6 +231,10 @@ mod tests {
             capacity(&roles(), 1),
             "capacity: architect=1 engineer=1 mechanical=1 (per-role, shared across all repos)"
         );
+        assert_eq!(
+            capacity(&roles(), 2),
+            "capacity: architect=2 engineer=2 mechanical=2 (per-role, shared across all repos)"
+        );
     }
 
     #[test]

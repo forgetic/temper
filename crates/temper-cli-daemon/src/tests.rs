@@ -10,13 +10,16 @@
 //! paths and an env snapshot that has no legacy config-file selectors, and
 //! assert the poisoned token is never used.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use temper_config::{EnvMap, ExposeSecret, PathResolver};
+use temper_config::{EnvMap, ExposeSecret, PathResolver, WorkerSettings};
+use temper_worker::CapabilitySpec;
 
 use super::{
     DaemonInputs, SERVE_ENGINE_USAGE, SERVE_STANDALONE_USAGE, SERVE_USAGE, SERVE_WORKER_USAGE,
-    ServeInvocation, Service, load_for, parse_daemon_args, parse_serve_invocation,
+    ServeInvocation, Service, load_for, parse_daemon_args, parse_serve_invocation, standalone,
 };
 
 const POISONED_TOKEN: &str = "POISONED-GLOBAL-TOKEN-DO-NOT-USE";
@@ -70,6 +73,19 @@ fn write_credentials(path: &Path, token: &str) {
     .expect("write credentials");
 }
 
+fn worker_settings_with_capacity(max_concurrent_jobs: u32) -> WorkerSettings {
+    WorkerSettings {
+        worker_id: "standalone-worker".to_string(),
+        daemon_url: "http://unused-in-process".to_string(),
+        workspace_root: PathBuf::from("/tmp/temper-workspace"),
+        git_base_url: None,
+        max_concurrent_jobs,
+        poll_wait: Duration::from_secs(99),
+        heartbeat_interval: Duration::from_secs(98),
+        capabilities: Vec::new(),
+    }
+}
+
 /// Plants a poisoned global `~/.config/temper/{config,credentials}.toml` under
 /// `home` and returns an env snapshot whose `HOME` points there. This is exactly
 /// the incident box: a real operator with a global config + credentials in
@@ -84,6 +100,24 @@ fn poison_home(home: &Path) -> EnvMap {
     let mut env = EnvMap::new();
     env.insert("HOME", home.to_string_lossy().to_string());
     env
+}
+
+#[test]
+fn standalone_worker_config_uses_resolved_capacity() {
+    let config = standalone::standalone_worker_config(
+        &worker_settings_with_capacity(2),
+        vec![CapabilitySpec {
+            role: "engineer".to_string(),
+            repo: "ai/temper".to_string(),
+        }],
+        BTreeMap::new(),
+    );
+
+    assert_eq!(config.max_concurrent_jobs, 2);
+    assert_eq!(config.worker_id, "standalone-worker");
+    assert_eq!(config.capabilities.len(), 1);
+    assert_eq!(config.capabilities[0].role, "engineer");
+    assert_eq!(config.capabilities[0].repo, "ai/temper");
 }
 
 /// Explicit `--config` + `--secrets` must use ONLY the explicit pair, even
