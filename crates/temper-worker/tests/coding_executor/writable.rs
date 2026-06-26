@@ -108,6 +108,7 @@ fn stale_pr_fix_cancels_before_final_push() {
 
         let message = expect_failure_class(outcome, FailureClass::Canceled);
         assert!(message.contains("stale pull request job canceled before push"));
+        assert!(message.contains("pull request merged"));
         assert_no_origin_branch(&fixture, "agent/pr-for-code-7");
     });
 }
