@@ -284,9 +284,6 @@ fn resolve_engine(
             .unwrap_or(DEFAULT_POLL_CADENCE_SECS),
         "engine.poll_cadence_secs",
     )?;
-    // The mechanical backstop is on by default; webhooks are the primary
-    // reaction path and this backstop is the level-triggered safety net. An
-    // explicit `mechanical_cadence_secs = 0` disables the mechanical worker.
     let mechanical_cadence = match config
         .engine
         .mechanical_cadence_secs
@@ -413,8 +410,6 @@ fn resolve_worker(
     })
 }
 
-/// Default capabilities: the cross-product of the engine's repos and roles, so a
-/// single standalone worker covers the whole feed.
 fn default_capabilities(engine: &EngineSettings) -> Vec<Capability> {
     let mut capabilities = Vec::new();
     for repo in &engine.repos {
@@ -434,7 +429,6 @@ fn parse_capability(raw: &str) -> Result<Capability, ConfigError> {
     })?;
     let repo = repo.trim();
     let role = role.trim();
-    // Validate the repo half is owner/name.
     RepoPath::parse(repo).map_err(|_| {
         ConfigError::invalid(format!("capability `{raw}`: repo must be `owner/name`"))
     })?;
@@ -501,69 +495,6 @@ fn parse_provider_kind(name: &str) -> Result<ProviderKind, ConfigError> {
         "chatgpt" | "chatgpt-oauth" | "codex" => Ok(ProviderKind::ChatGpt),
         other => Err(ConfigError::invalid(format!(
             "unknown agent provider `{other}` (expected anthropic, deepseek, or chatgpt)"
-        ))),
-    }
-}
-
-fn resolve_agent_profiles(
-    config: &Config,
-) -> Result<BTreeMap<String, AgentProfileSettings>, ConfigError> {
-    let mut profiles = BTreeMap::new();
-    let mut seen_names = BTreeSet::new();
-
-    for (raw_name, profile) in &config.agent.profiles {
-        let name = trimmed(Some(raw_name.as_str()))
-            .ok_or_else(|| ConfigError::invalid("agent.profiles profile name must not be empty"))?;
-        if !seen_names.insert(name.clone()) {
-            return Err(ConfigError::invalid(format!(
-                "agent.profiles contains duplicate profile `{name}`"
-            )));
-        }
-
-        let field = format!("agent.profiles.{name}");
-        if profile.max_iterations == Some(0) {
-            return Err(ConfigError::invalid(format!(
-                "{field}.max_iterations must be greater than zero"
-            )));
-        }
-
-        let provider = trimmed(profile.provider.as_deref())
-            .map(|provider| parse_agent_profile_provider_kind(&provider, &field))
-            .transpose()?;
-
-        let command = profile
-            .command
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|part| part.trim().to_string())
-            .collect();
-
-        profiles.insert(
-            name,
-            AgentProfileSettings {
-                command,
-                provider,
-                model: trimmed(profile.model.as_deref()),
-                investigate_model: trimmed(profile.investigate_model.as_deref()),
-                provider_url: trimmed(profile.provider_url.as_deref()),
-                max_iterations: profile.max_iterations,
-                subagents: profile.subagents,
-                credential: trimmed(profile.credential.as_deref()),
-            },
-        );
-    }
-
-    Ok(profiles)
-}
-
-fn parse_agent_profile_provider_kind(name: &str, field: &str) -> Result<ProviderKind, ConfigError> {
-    match name {
-        "anthropic" => Ok(ProviderKind::Anthropic),
-        "deepseek" => Ok(ProviderKind::DeepSeek),
-        "chatgpt" => Ok(ProviderKind::ChatGpt),
-        other => Err(ConfigError::invalid(format!(
-            "{field}.provider has invalid provider `{other}` (expected anthropic, deepseek, or chatgpt)"
         ))),
     }
 }
