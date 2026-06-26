@@ -52,27 +52,7 @@ const DEFAULT_CI_USER: &str = "bot";
 /// agree.
 const DEFAULT_MAX_ITERATIONS: usize = 250;
 
-/// Context for resolving path values that came from an on-disk config file.
-///
-/// Direct callers that build a [`Config`] in memory can keep using [`resolve`],
-/// which preserves the historical behavior: relative path strings stay relative
-/// to the caller's process. Loaders that know which `config.toml` supplied the
-/// values pass its parent directory here so relative config-file paths are
-/// interpreted beside that file.
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub struct ResolveOptions {
-    /// Directory containing the loaded config file, if there was one.
-    pub config_base_dir: Option<PathBuf>,
-}
-
-impl ResolveOptions {
-    /// Builds options that resolve relative config-file paths against `dir`.
-    pub fn from_config_base_dir(dir: impl Into<PathBuf>) -> Self {
-        Self {
-            config_base_dir: Some(dir.into()),
-        }
-    }
-}
+pub use crate::resolve_options::ResolveOptions;
 
 /// Resolves a full deployment from the config and credentials files. The
 /// injected environment is consulted only for `$HOME` / `$XDG_*` path expansion,

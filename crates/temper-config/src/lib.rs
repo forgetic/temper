@@ -28,6 +28,7 @@ mod json_schema;
 mod paths;
 pub mod provider;
 mod resolve;
+mod resolve_options;
 mod resolved;
 mod schema;
 mod template;
