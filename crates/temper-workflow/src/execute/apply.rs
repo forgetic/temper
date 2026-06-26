@@ -58,7 +58,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         self.apply_merge(repo_id, loaded, prepared.merge).await?;
         self.apply_close_parent_issues(repo_id, loaded, prepared.close_parent_issues)
             .await?;
-        let committed = self.apply_update(loaded, prepared).await?;
+        let committed = self
+            .apply_update(repo_id, loaded, Some(plan), prepared)
+            .await?;
         if let Some(state) = committed {
             self.verify_state(&state, &plan.postconditions)?;
         } else {
@@ -276,7 +278,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     /// postcondition checks.
     pub(super) async fn apply_update(
         &self,
+        repo_id: &RepositoryId,
         loaded: &Loaded,
+        plan: Option<&TransitionPlan>,
         prepared: PreparedEffects,
     ) -> Result<Option<AppliedState>, ExecutionError> {
         if !prepared.has_update() {
@@ -284,18 +288,23 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         }
         match loaded {
             Loaded::Issue { id, version, .. } => {
+                let (id, version) = if let Some(plan) = plan {
+                    self.refresh_issue_commit_state(repo_id, plan).await?
+                } else {
+                    (id.clone(), *version)
+                };
                 let update = UpdateIssue {
                     body: prepared.body,
                     add_labels: prepared.add_labels,
                     remove_labels: prepared.remove_labels,
                     add_assignees: prepared.add_assignees,
                     remove_assignees: prepared.remove_assignees,
-                    expected_version: Some(*version),
+                    expected_version: Some(version),
                     ..UpdateIssue::default()
                 };
                 let issue = self
                     .forge
-                    .update_issue(id, update)
+                    .update_issue(&id, update)
                     .await
                     .map_err(|error| stale_update_error(error, loaded.classified().source))?;
                 Ok(Some(AppliedState {
@@ -318,6 +327,32 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                     assignees: pull_request.assignees,
                 }))
             }
+        }
+    }
+
+    async fn refresh_issue_commit_state(
+        &self,
+        repo_id: &RepositoryId,
+        plan: &TransitionPlan,
+    ) -> Result<(temper_forge::IssueId, temper_forge::Version), ExecutionError> {
+        let current = self.load(repo_id, plan.target).await?;
+        let needs = self.workflow.signal_needs_for_transition(&plan.transition);
+        let signals = self
+            .gate_signals_with_needs(repo_id, &current, needs)
+            .await?;
+        self.workflow
+            .planner()
+            .plan_transition_with(&plan.transition, &plan.role, current.classified(), &signals)
+            .map_err(|error| ExecutionError::TargetStale {
+                target: plan.target,
+                message: format!("target changed before commit: {error}"),
+            })?;
+        match current {
+            Loaded::Issue { id, version, .. } => Ok((id, version)),
+            Loaded::PullRequest { .. } => Err(ExecutionError::TargetStale {
+                target: plan.target,
+                message: "target changed artifact type before commit".to_string(),
+            }),
         }
     }
 
