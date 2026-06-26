@@ -6,18 +6,17 @@
 //! `<config-dir>/temper/config.toml`, where the config dir is `$XDG_CONFIG_HOME`
 //! or `~/.config`.
 //!
-//! Credentials resolution order: an explicit `--secrets` path wins; then
-//! systemd's `CREDENTIALS_DIRECTORY` contributes
-//! `<CREDENTIALS_DIRECTORY>/credentials.toml`; then local-bundle pairing may use
-//! an explicit config root's sibling `credentials.toml`; then the normal
+//! Credentials/secret source resolution order: an explicit `--secrets` source
+//! wins; then systemd's `CREDENTIALS_DIRECTORY` contributes the directory as a
+//! named-file secret source; then local-bundle pairing may use an explicit
+//! config root's sibling `credentials.toml`; then the normal
 //! `<config-dir>/temper/credentials.toml` default is used.
 //!
-//! Explicit file flags also accept a directory: `--config <dir>` resolves to
-//! `<dir>/config.toml`, and `--secrets <dir>` resolves to
-//! `<dir>/credentials.toml`. When the explicit path does not exist yet, a
-//! `.toml` suffix is treated as a file and any other path is treated as a
-//! directory; this lets `temper --config ./bundle init` create a new local
-//! bundle directory.
+//! Explicit config flags still accept a directory: `--config <dir>` resolves to
+//! `<dir>/config.toml`. Explicit secret flags accept either a TOML file or a
+//! directory secret source: an existing directory, or a missing path without a
+//! `.toml` suffix, is treated as a directory source; a `.toml` path is treated
+//! as a credentials TOML file.
 //!
 //! Every function here takes its inputs explicitly — a [`PathResolver`] for the
 //! base directories and an injected [`EnvLookup`] seam — so this module reads no
@@ -40,6 +39,23 @@ pub(crate) struct ConfigLocation {
     pub path: PathBuf,
     /// The local bundle root used for sibling files such as `credentials.toml`.
     pub root: PathBuf,
+}
+
+/// A resolved secret source.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum SecretSourceLocation {
+    /// A credentials TOML file.
+    File(PathBuf),
+    /// A directory whose regular files are named secrets.
+    Directory(PathBuf),
+}
+
+impl SecretSourceLocation {
+    pub(crate) fn into_path(self) -> PathBuf {
+        match self {
+            SecretSourceLocation::File(path) | SecretSourceLocation::Directory(path) => path,
+        }
+    }
 }
 
 /// The base `…/temper` configuration directory (`$XDG_CONFIG_HOME/temper` or
@@ -73,27 +89,29 @@ pub fn config_path(
         .or_else(|| config_dir(paths).map(|dir| dir.join(CONFIG_FILE_NAME)))
 }
 
-/// Resolves the credentials-file path: explicit override (the `--secrets` flag),
-/// else systemd's `CREDENTIALS_DIRECTORY`, else `<config-dir>/credentials.toml`.
+/// Resolves the selected secret source path: explicit override (the
+/// `--secrets` flag), else systemd's `CREDENTIALS_DIRECTORY`, else
+/// `<config-dir>/credentials.toml`.
 ///
-/// An explicit directory resolves to `<dir>/credentials.toml`; an explicit file
-/// path resolves to that exact file. `CREDENTIALS_DIRECTORY`, when set and
-/// non-blank in the injected environment, resolves to
-/// `<CREDENTIALS_DIRECTORY>/credentials.toml`.
+/// A directory source is reported as the directory itself; a TOML file source is
+/// reported as that file. This is the path-inspection/load model. Use
+/// [`paired_credentials_file_path`] when resolving a write target for
+/// `credentials.toml`.
 pub fn credentials_path(
     explicit: Option<PathBuf>,
     paths: &PathResolver,
     env: &dyn EnvLookup,
 ) -> Option<PathBuf> {
     explicit
-        .map(explicit_credentials_path)
-        .or_else(|| credentials_directory_path(env))
+        .map(explicit_secret_source_location)
+        .map(SecretSourceLocation::into_path)
+        .or_else(|| credentials_directory_source_location(env).map(SecretSourceLocation::into_path))
         .or_else(|| config_dir(paths).map(|dir| dir.join(CREDENTIALS_FILE_NAME)))
 }
 
-/// Resolves credentials using local-bundle pairing: an explicit credentials /
-/// secrets path wins; otherwise systemd's `CREDENTIALS_DIRECTORY` contributes
-/// `credentials.toml`; otherwise an explicit config root contributes its sibling
+/// Resolves the selected secret source using local-bundle pairing: an explicit
+/// secret source wins; otherwise systemd's `CREDENTIALS_DIRECTORY` contributes
+/// the directory; otherwise an explicit config root contributes its sibling
 /// `credentials.toml`; otherwise the default config directory is used.
 pub fn paired_credentials_path(
     explicit_credentials: Option<PathBuf>,
@@ -101,9 +119,20 @@ pub fn paired_credentials_path(
     paths: &PathResolver,
     env: &dyn EnvLookup,
 ) -> Option<PathBuf> {
+    paired_secret_source_location(explicit_credentials, explicit_config, paths, env)
+        .map(SecretSourceLocation::into_path)
+}
+
+/// Resolves the legacy credentials TOML write target. Directory-shaped explicit
+/// `--secrets` paths resolve to `<dir>/credentials.toml`; `CREDENTIALS_DIRECTORY`
+/// is intentionally ignored by callers that write local bundles.
+pub fn paired_credentials_file_path(
+    explicit_credentials: Option<PathBuf>,
+    explicit_config: Option<PathBuf>,
+    paths: &PathResolver,
+) -> Option<PathBuf> {
     explicit_credentials
-        .map(explicit_credentials_path)
-        .or_else(|| credentials_directory_path(env))
+        .map(explicit_credentials_file_path)
         .or_else(|| {
             explicit_config
                 .map(explicit_config_location)
@@ -124,7 +153,15 @@ pub(crate) fn explicit_config_location(path: PathBuf) -> ConfigLocation {
     ConfigLocation { path, root }
 }
 
-pub(crate) fn explicit_credentials_path(path: PathBuf) -> PathBuf {
+pub(crate) fn explicit_secret_source_location(path: PathBuf) -> SecretSourceLocation {
+    if is_directory_source(&path) {
+        SecretSourceLocation::Directory(path)
+    } else {
+        SecretSourceLocation::File(path)
+    }
+}
+
+pub(crate) fn explicit_credentials_file_path(path: PathBuf) -> PathBuf {
     if is_directory_source(&path) {
         path.join(CREDENTIALS_FILE_NAME)
     } else {
@@ -132,10 +169,33 @@ pub(crate) fn explicit_credentials_path(path: PathBuf) -> PathBuf {
     }
 }
 
-pub(crate) fn credentials_directory_path(env: &dyn EnvLookup) -> Option<PathBuf> {
+pub(crate) fn credentials_directory_source_location(
+    env: &dyn EnvLookup,
+) -> Option<SecretSourceLocation> {
     env.non_empty(CREDENTIALS_DIRECTORY_ENV)
         .map(PathBuf::from)
-        .map(|dir| dir.join(CREDENTIALS_FILE_NAME))
+        .map(SecretSourceLocation::Directory)
+}
+
+pub(crate) fn paired_secret_source_location(
+    explicit_credentials: Option<PathBuf>,
+    explicit_config: Option<PathBuf>,
+    paths: &PathResolver,
+    env: &dyn EnvLookup,
+) -> Option<SecretSourceLocation> {
+    explicit_credentials
+        .map(explicit_secret_source_location)
+        .or_else(|| credentials_directory_source_location(env))
+        .or_else(|| {
+            explicit_config
+                .map(explicit_config_location)
+                .map(|location| {
+                    SecretSourceLocation::File(location.root.join(CREDENTIALS_FILE_NAME))
+                })
+        })
+        .or_else(|| {
+            config_dir(paths).map(|dir| SecretSourceLocation::File(dir.join(CREDENTIALS_FILE_NAME)))
+        })
 }
 
 fn is_directory_source(path: &Path) -> bool {
@@ -228,11 +288,15 @@ mod tests {
     }
 
     #[test]
-    fn explicit_credentials_directory_resolves_to_credentials_toml() {
+    fn explicit_credentials_directory_resolves_to_directory_source() {
         let dir = scratch("credentials-dir");
 
         assert_eq!(
-            explicit_credentials_path(dir.clone()),
+            explicit_secret_source_location(dir.clone()),
+            SecretSourceLocation::Directory(dir.clone())
+        );
+        assert_eq!(
+            explicit_credentials_file_path(dir.clone()),
             dir.join(CREDENTIALS_FILE_NAME)
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -244,12 +308,16 @@ mod tests {
         let file = dir.join("local-secrets.toml");
         std::fs::write(&file, "schema_version = 1\n").expect("write file");
 
-        assert_eq!(explicit_credentials_path(file.clone()), file);
+        assert_eq!(
+            explicit_secret_source_location(file.clone()),
+            SecretSourceLocation::File(file.clone())
+        );
+        assert_eq!(explicit_credentials_file_path(file.clone()), file);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn credentials_directory_resolves_to_credentials_toml_before_default() {
+    fn credentials_directory_resolves_to_directory_source_before_default() {
         let credentials_dir = scratch("systemd-credentials");
         let xdg = scratch("systemd-credentials-xdg");
         let mut env = EnvMap::new();
@@ -264,7 +332,7 @@ mod tests {
 
         assert_eq!(
             credentials_path(None, &paths, &env),
-            Some(credentials_dir.join(CREDENTIALS_FILE_NAME))
+            Some(credentials_dir.clone())
         );
         let _ = std::fs::remove_dir_all(credentials_dir);
         let _ = std::fs::remove_dir_all(xdg);
@@ -284,7 +352,7 @@ mod tests {
 
         assert_eq!(
             paired_credentials_path(None, Some(config_file), &PathResolver::default(), &env),
-            Some(credentials_dir.join(CREDENTIALS_FILE_NAME))
+            Some(credentials_dir.clone())
         );
         let _ = std::fs::remove_dir_all(dir);
     }

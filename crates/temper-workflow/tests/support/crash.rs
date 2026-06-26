@@ -123,6 +123,7 @@ pub struct CrashForge<F: Forge> {
     faults: Vec<Fault>,
     counts: Mutex<HashMap<ForgeOp, usize>>,
     issue_queries: Mutex<Vec<IssueQuery>>,
+    issue_updates: Mutex<Vec<UpdateIssue>>,
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
 }
 
@@ -134,6 +135,7 @@ impl<F: Forge> CrashForge<F> {
             faults,
             counts: Mutex::new(HashMap::new()),
             issue_queries: Mutex::new(Vec::new()),
+            issue_updates: Mutex::new(Vec::new()),
             pull_request_queries: Mutex::new(Vec::new()),
         }
     }
@@ -158,6 +160,14 @@ impl<F: Forge> CrashForge<F> {
         self.issue_queries
             .lock()
             .expect("issue queries mutex")
+            .clone()
+    }
+
+    /// Returns the issue updates this wrapper observed.
+    pub fn issue_updates(&self) -> Vec<UpdateIssue> {
+        self.issue_updates
+            .lock()
+            .expect("issue updates mutex")
             .clone()
     }
 
@@ -278,6 +288,10 @@ impl<F: Forge> Forge for CrashForge<F> {
     async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue> {
         let n = self.tick(ForgeOp::UpdateIssue);
         self.guard(ForgeOp::UpdateIssue, n, FaultPoint::Before)?;
+        self.issue_updates
+            .lock()
+            .expect("issue updates mutex")
+            .push(input.clone());
         let result = self.inner.update_issue(id, input).await?;
         self.guard(ForgeOp::UpdateIssue, n, FaultPoint::After)?;
         Ok(result)

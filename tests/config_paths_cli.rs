@@ -114,6 +114,48 @@ fn config_paths_json_reports_explicit_bundle_and_configured_paths() {
 }
 
 #[test]
+fn config_paths_reports_directory_secret_source_without_requiring_named_secrets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("bundle");
+    let secrets = dir.path().join("secrets");
+    std::fs::create_dir_all(&bundle).expect("create bundle");
+    std::fs::create_dir_all(&secrets).expect("create secrets");
+    std::fs::write(
+        bundle.join("config.toml"),
+        "schema_version = 1\n\
+         [engine]\n\
+         forge_token = \"not-created-yet\"\n",
+    )
+    .expect("write config");
+
+    let bundle_arg = path_text(&bundle);
+    let secrets_arg = path_text(&secrets);
+    let output = temper(
+        &[
+            "--format",
+            "json",
+            "--config",
+            &bundle_arg,
+            "--secrets",
+            &secrets_arg,
+            "config",
+            "paths",
+        ],
+        dir.path(),
+    );
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let value: Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(value["credentials_source"], path_text(&secrets));
+}
+
+#[test]
 fn format_after_config_is_rejected_as_misplaced_global_option() {
     let dir = tempfile::tempdir().expect("tempdir");
     let output = temper(&["config", "--format", "json", "paths"], dir.path());

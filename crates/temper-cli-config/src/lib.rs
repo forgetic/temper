@@ -25,8 +25,8 @@ use temper_cli_common::{
     restrict_600, run, write_new_file,
 };
 use temper_config::{
-    ConfigError, Finding, LoadInputs, LoadedPaths, ProviderCredential, Resolved, WebUiCreds,
-    config_template, credentials_template, lint, load_explicit,
+    ConfigError, Finding, LoadInputs, LoadedPaths, ProviderCredential, Resolved, SecretReference,
+    WebUiCreds, config_template, credentials_template, lint, load_explicit,
 };
 
 /// Everything `temper config` needs, with no ambient environment access.
@@ -362,6 +362,21 @@ fn init(
     Ok(ExitCode::SUCCESS)
 }
 
+fn render_secret_reference(reference: Option<&SecretReference>) -> String {
+    match reference {
+        Some(reference) => format!(
+            "{} ({})",
+            reference.name,
+            if reference.available {
+                "available"
+            } else {
+                "missing"
+            }
+        ),
+        None => "(unset)".to_string(),
+    }
+}
+
 /// Renders the resolved deployment for `config show`, redacting every secret.
 fn render(resolved: &Resolved) -> String {
     use std::fmt::Write;
@@ -437,10 +452,20 @@ fn render(resolved: &Resolved) -> String {
         }
     );
     let _ = writeln!(out, "  lease_ttl    = {:?}", resolved.engine.lease_ttl);
+    let _ = writeln!(
+        out,
+        "  forge_token  = {}",
+        render_secret_reference(resolved.engine.forge_token.as_ref())
+    );
     let _ = writeln!(out, "  daemon_id    = {}", resolved.engine.daemon_id);
     let _ = writeln!(
         out,
-        "  webhook      = {}",
+        "  webhook_secret = {}",
+        render_secret_reference(resolved.engine.webhook_secret.as_ref())
+    );
+    let _ = writeln!(
+        out,
+        "  webhook_file = {}",
         resolved
             .engine
             .webhook_secret_file
@@ -486,7 +511,7 @@ fn render(resolved: &Resolved) -> String {
                 .map(|jobs| jobs.to_string())
                 .unwrap_or_else(|| "(unset)".to_string()),
             pool.agent_profile.as_deref().unwrap_or("(unset)"),
-            pool.worker_token.as_deref().unwrap_or("(unset)")
+            render_secret_reference(pool.worker_token.as_ref())
         );
     }
 
@@ -608,7 +633,7 @@ fn render(resolved: &Resolved) -> String {
                 .subagents
                 .map(|enabled| enabled.to_string())
                 .unwrap_or_else(|| "(unset)".to_string()),
-            profile.credential.as_deref().unwrap_or("(unset)")
+            render_secret_reference(profile.credential.as_ref())
         );
     }
 

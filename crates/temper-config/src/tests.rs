@@ -511,6 +511,7 @@ workspace = "~/.local/state/temper/workspace"
     );
 }
 
+mod secret_references;
 mod target_sections;
 
 #[test]

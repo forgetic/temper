@@ -388,7 +388,8 @@ fn record_expected_precondition(
 
 fn expected_precondition_outcome(error: &ExecutionError) -> Option<ExpectedPreconditionOutcome> {
     let ExecutionError::Precondition { diagnostics } = error else {
-        return None;
+        return matches!(error, ExecutionError::TargetStale { .. })
+            .then_some(ExpectedPreconditionOutcome::Unchanged);
     };
     if diagnostics.is_empty() || !diagnostics.iter().all(is_expected_precondition) {
         return None;

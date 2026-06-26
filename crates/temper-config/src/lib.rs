@@ -9,9 +9,10 @@
 //!   worker/agent settings);
 //! - the **credentials** file ([`Credentials`]) — secrets.
 //!
-//! [`load`] reads both (honoring `--config` / `--secrets` overrides, systemd's
-//! `CREDENTIALS_DIRECTORY` for credentials, and default `~/.config/temper`
-//! locations), validates each file's `schema_version`, then
+//! [`load`] reads config plus the selected secret source (a credentials TOML
+//! file, a named-file directory from `--secrets`/`CREDENTIALS_DIRECTORY`, or the
+//! default `~/.config/temper/credentials.toml`), validates each TOML file's
+//! `schema_version`, then
 //! [`resolve`](resolve::resolve)s everything — file, environment, and built-in
 //! defaults — into a [`Resolved`] the binary's adapters turn into runtime types.
 //!
@@ -19,6 +20,7 @@
 //! tier-agnostic so every binary (unified or slim per-service) can read config
 //! without pulling in the engine/worker/agent stacks.
 
+mod agent_resolve;
 mod build;
 mod cli;
 mod env;
@@ -31,6 +33,7 @@ mod resolve;
 mod resolve_options;
 mod resolved;
 mod schema;
+mod secret_refs;
 mod target;
 mod template;
 
@@ -58,28 +61,29 @@ pub use error::{ConfigError, FileKind};
 pub use inputs::{LoadInputs, PathResolver, load_explicit};
 pub use json_schema::config_json_schema;
 pub use paths::{
-    config_dir, config_path, credentials_path, default_workspace_root, paired_credentials_path,
-    state_dir,
+    config_dir, config_path, credentials_path, default_workspace_root,
+    paired_credentials_file_path, paired_credentials_path, state_dir,
 };
 pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
     AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
     EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerPoolSettings,
-    WorkerSettings,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, SecretReference, WebUiCreds,
+    WorkerPoolSettings, WorkerSettings,
 };
 pub use schema::{
     AgentConfig, AgentCredentials, AgentProfileConfig, AgentProviderConfig, Config, Credentials,
     DeploymentConfig, EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
-    PathsConfig, ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION,
-    WorkerConfig as WorkerFileConfig, WorkerPoolConfig, WorkflowConfig,
+    NamedSecret, NamedSecretEntry, PathsConfig, ProviderCredential as ProviderCredentialFile,
+    SCHEMA_VERSION, WorkerConfig as WorkerFileConfig, WorkerPoolConfig, WorkflowConfig,
 };
 pub use template::{config_template, credentials_template};
 
-/// Where to find the two files. `None` config falls back to the default
-/// `~/.config/temper` location. `None` credentials first checks the injected
-/// `CREDENTIALS_DIRECTORY`, then falls back to an explicit config root's sibling
-/// or the default `~/.config/temper` location.
+/// Where to find the config file and selected secret source. `None` config
+/// falls back to the default `~/.config/temper` location. `None` credentials
+/// first checks the injected `CREDENTIALS_DIRECTORY` as a named-file directory,
+/// then falls back to an explicit config root's sibling `credentials.toml` or
+/// the default `~/.config/temper` location.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct LoadOptions {
     /// Explicit `--config` path.
@@ -88,8 +92,9 @@ pub struct LoadOptions {
     pub credentials: Option<PathBuf>,
 }
 
-/// The files that actually fed a [`load`], for diagnostics (`None` = absent, so
-/// defaults + environment supplied everything).
+/// The sources that actually fed a [`load`], for diagnostics (`None` = absent,
+/// so defaults + environment supplied everything). `credentials` is the
+/// selected secret source, which may be a directory.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedPaths {
     pub config: Option<PathBuf>,
@@ -102,9 +107,9 @@ pub struct LoadedPaths {
 /// [`PathResolver`] is built from it via [`PathResolver::from_env`], so a caller
 /// whose `env` snapshot sets `HOME` / `XDG_CONFIG_HOME` still discovers
 /// `~/.config/temper/{config,credentials}.toml`, exactly as before paths/env
-/// were made injectable. Credentials also honor `CREDENTIALS_DIRECTORY` from the
-/// injected `env`, before sibling/default credentials. An `env` that sets none
-/// of those discovers nothing.
+/// were made injectable. Secret loading also honors `CREDENTIALS_DIRECTORY` from
+/// the injected `env` as a named-file directory, before sibling/default
+/// credentials. An `env` that sets none of those discovers nothing.
 ///
 /// For *strict* explicit-paths-only loads (the hermeticity contract) call
 /// [`load_explicit`] with an empty [`PathResolver`] directly.
@@ -208,11 +213,11 @@ pub const EX_USAGE: u8 = 64;
 ///
 /// Hermeticity: an explicit `--config` / `--secrets` suppresses default
 /// `~/.config/temper` discovery (an empty [`PathResolver`] is used).
-/// `CREDENTIALS_DIRECTORY` from the injected env may still supply the credentials
-/// file when `--secrets` is absent; otherwise an explicit config root may load
-/// sibling `credentials.toml`, but the operator's global credentials never
-/// ambiently layer in behind an explicit deployment — matching the unified
-/// `temper daemon` path.
+/// `CREDENTIALS_DIRECTORY` from the injected env may still supply a named-file
+/// directory secret source when `--secrets` is absent; otherwise an explicit
+/// config root may load sibling `credentials.toml`, but the operator's global
+/// credentials never ambiently layer in behind an explicit deployment — matching
+/// the unified `temper daemon` path.
 pub fn service_main(
     name: &str,
     usage: &str,
@@ -305,8 +310,8 @@ pub fn lint(resolved: &Resolved) -> Vec<Finding> {
     }
     if resolved.forge.admin_token.is_none() {
         findings.push(Finding::error(
-            "forge admin token is unset (set a `token` under \
-             `[forge.users.<admin>]` in credentials.toml, and name the admin \
+            "forge admin token is unset (set `[engine] forge_token` to a named secret, or set a `token` under \
+             `[forge.users.<admin>]` in credentials.toml and name the admin \
              via `[forge] admin`)",
         ));
     }

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use temper_config::Resolved;
+use temper_config::{ExposeSecret, Resolved};
 use temper_engine::{
     Daemon, DaemonRunConfig, EngineConfig, HintedMechanical, MechanicalBackstopConfig,
     PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget, WebhookConfig,
@@ -86,6 +86,7 @@ pub async fn run_async(
         forge,
         workflow,
         compiled,
+        resolved.engine.webhook_secret_value.as_ref(),
         config.webhook_secret_file.as_ref(),
         wake_targets,
         mechanical_trigger,
@@ -179,21 +180,28 @@ fn attach_webhook(
     forge: Arc<dyn Forge>,
     workflow: Arc<ValidatedWorkflow>,
     compiled: Arc<CompiledWorkflow>,
+    secret_value: Option<&temper_config::Secret>,
     secret_file: Option<&std::path::PathBuf>,
     wake_targets: Vec<RoleFeedTarget>,
     mechanical_trigger: Option<Arc<dyn HintedMechanical>>,
 ) -> Result<Daemon, String> {
-    let Some(path) = secret_file else {
+    let secret = if let Some(secret) = secret_value {
+        secret.expose_secret().trim().to_string()
+    } else if let Some(path) = secret_file {
+        std::fs::read_to_string(path)
+            .map_err(|error| {
+                format!(
+                    "failed to read webhook secret file {}: {error}",
+                    path.display()
+                )
+            })?
+            .trim()
+            .to_string()
+    } else {
         return Ok(daemon);
     };
-    let secret = std::fs::read_to_string(path).map_err(|error| {
-        format!(
-            "failed to read webhook secret file {}: {error}",
-            path.display()
-        )
-    })?;
     let webhook_config = Arc::new(WebhookConfig {
-        secret: secret.trim().to_string(),
+        secret,
         targets: wake_targets,
     });
     Ok(daemon.with_webhook_and_mechanical(

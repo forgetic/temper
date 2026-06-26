@@ -18,6 +18,8 @@
 //!   passwords/tokens and LLM provider OAuth/api-key material).
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -171,6 +173,16 @@ pub struct EngineConfig {
     /// Stable daemon identity used for lease ownership.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_id: Option<String>,
+    /// Secret-name reference for the engine/default Forge API token. When set,
+    /// the named secret supplies the runtime admin token; legacy `[forge] admin`
+    /// credentials remain supported as the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge_token: Option<String>,
+    /// Secret-name reference for the Forgejo webhook HMAC secret. When set, the
+    /// named secret supplies the runtime webhook secret value; legacy
+    /// `webhook_secret_file` remains supported as the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_secret: Option<String>,
     /// Path to the file holding the Forgejo webhook HMAC secret. Omit to run
     /// without a webhook listener (poll-only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +201,8 @@ impl EngineConfig {
             && self.mechanical_cadence_secs.is_none()
             && self.lease_ttl_secs.is_none()
             && self.daemon_id.is_none()
+            && self.forge_token.is_none()
+            && self.webhook_secret.is_none()
             && self.webhook_secret_file.is_none()
     }
 }
@@ -377,6 +391,154 @@ pub struct Credentials {
     pub forge: ForgeCredentials,
     #[serde(default, skip_serializing_if = "AgentCredentials::is_empty")]
     pub agent: AgentCredentials,
+    /// Local-development named secrets for target-era secret references.
+    ///
+    /// The compact form is `[secrets] name = "value"`; structured tables such
+    /// as `[secrets.forge-engine-token] token = "..."` are also accepted for
+    /// the target-era shapes. Runtime/inspection code treats the map as a named
+    /// secret source and never prints the values.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<String, NamedSecret>,
+    /// Named files loaded from a directory secret source. This is not serialized
+    /// back to credentials.toml; it records the selected directory's regular
+    /// files and intentionally takes lookup precedence over TOML entries.
+    #[serde(skip)]
+    pub named_files: BTreeMap<String, NamedFileSecret>,
+}
+
+impl Credentials {
+    pub(crate) fn named_secret(&self, name: &str) -> Option<NamedSecretLookup> {
+        if let Some(secret) = self.named_files.get(name) {
+            return Some(NamedSecretLookup {
+                value: Some(secret.value.clone()),
+            });
+        }
+        self.secrets.get(name).map(|secret| NamedSecretLookup {
+            value: secret.value().map(str::to_string),
+        })
+    }
+}
+
+pub(crate) struct NamedSecretLookup {
+    pub value: Option<String>,
+}
+
+/// A named secret loaded from a regular file in a directory secret source.
+#[derive(Clone, Eq, PartialEq)]
+pub struct NamedFileSecret {
+    pub value: String,
+    pub path: PathBuf,
+}
+
+impl fmt::Debug for NamedFileSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NamedFileSecret")
+            .field("value", &"[REDACTED]")
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
+/// A named secret entry in credentials.toml.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum NamedSecret {
+    /// Compact local-development form: `[secrets] name = "value"`.
+    Raw(String),
+    /// Structured target-era local-development form.
+    Structured(NamedSecretEntry),
+}
+
+impl NamedSecret {
+    fn value(&self) -> Option<&str> {
+        match self {
+            NamedSecret::Raw(value) => non_empty(value),
+            NamedSecret::Structured(entry) => entry.value(),
+        }
+    }
+}
+
+impl fmt::Debug for NamedSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NamedSecret::Raw(_) => f.debug_tuple("Raw").field(&"[REDACTED]").finish(),
+            NamedSecret::Structured(entry) => f.debug_tuple("Structured").field(entry).finish(),
+        }
+    }
+}
+
+/// Structured credentials.toml named-secret form.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamedSecretEntry {
+    /// Target-era semantic hint, e.g. `forge-token` or `provider-credentials`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Forge token payload for `kind = "forge-token"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Generic raw secret payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Generic secret payload alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Generic API-key payload alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Provider API-key payload used by the target shape in #375.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Provider name metadata for target provider credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Provider auth metadata for target provider credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
+}
+
+impl NamedSecretEntry {
+    fn value(&self) -> Option<&str> {
+        [
+            self.token.as_deref(),
+            self.value.as_deref(),
+            self.secret.as_deref(),
+            self.key.as_deref(),
+            self.api_key.as_deref(),
+        ]
+        .into_iter()
+        .find_map(|value| value.and_then(non_empty))
+    }
+}
+
+impl fmt::Debug for NamedSecretEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NamedSecretEntry")
+            .field("kind", &self.kind)
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .field("value", &self.value.as_ref().map(|_| "[REDACTED]"))
+            .field("secret", &self.secret.as_ref().map(|_| "[REDACTED]"))
+            .field("key", &self.key.as_ref().map(|_| "[REDACTED]"))
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("provider", &self.provider)
+            .field("auth", &self.auth)
+            .finish()
+    }
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() { None } else { Some(value) }
+}
+
+pub(crate) fn trim_secret_file_payload(value: &str) -> String {
+    value.trim().to_string()
+}
+
+pub(crate) fn file_name_secret_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
 }
 
 /// `[forge]` of the credentials file.
@@ -398,7 +560,7 @@ impl ForgeCredentials {
 }
 
 /// `[forge.users.<name>]` — one forge identity.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForgeUser {
     /// Forge login/username. Defaults to the section key.
@@ -413,6 +575,17 @@ pub struct ForgeUser {
     /// REST API token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+}
+
+impl fmt::Debug for ForgeUser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ForgeUser")
+            .field("user", &self.user)
+            .field("email", &self.email)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 /// `[agent]` of the credentials file.
@@ -434,7 +607,7 @@ impl AgentCredentials {
 }
 
 /// `[agent.providers.<name>]` of the credentials file — the provider secret.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderCredential {
     /// `"oauth"` (access/refresh/expires) or `"api-key"` (key).
@@ -456,4 +629,17 @@ pub struct ProviderCredential {
     /// OAuth fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_file: Option<String>,
+}
+
+impl fmt::Debug for ProviderCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderCredential")
+            .field("kind", &self.kind)
+            .field("access", &self.access.as_ref().map(|_| "[REDACTED]"))
+            .field("refresh", &self.refresh.as_ref().map(|_| "[REDACTED]"))
+            .field("expires", &self.expires)
+            .field("key", &self.key.as_ref().map(|_| "[REDACTED]"))
+            .field("auth_file", &self.auth_file)
+            .finish()
+    }
 }

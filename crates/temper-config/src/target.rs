@@ -7,11 +7,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::ConfigError;
 use crate::resolved::{AgentProfileSettings, ProviderKind, RepoPath, WorkerPoolSettings};
-use crate::schema::Config;
+use crate::schema::{Config, Credentials};
+use crate::secret_refs::resolve_secret_reference;
 
 pub(crate) fn resolve_worker_pools(
     config: &Config,
     agent_profiles: &BTreeMap<String, AgentProfileSettings>,
+    credentials: &Credentials,
+    validate_secret_references: bool,
 ) -> Result<Vec<WorkerPoolSettings>, ConfigError> {
     let mut seen_names = BTreeSet::new();
     let mut pools = Vec::with_capacity(config.worker.pools.len());
@@ -45,13 +48,21 @@ pub(crate) fn resolve_worker_pools(
             )));
         }
 
+        let worker_token = resolve_secret_reference(
+            &format!("{field}.worker_token"),
+            pool.worker_token.as_deref(),
+            credentials,
+            validate_secret_references,
+        )?
+        .map(|resolved| resolved.reference);
+
         pools.push(WorkerPoolSettings {
             name,
             roles,
             repos,
             max_concurrent_jobs: pool.max_concurrent_jobs,
             agent_profile,
-            worker_token: trimmed(pool.worker_token.as_deref()),
+            worker_token,
         });
     }
 
@@ -60,6 +71,8 @@ pub(crate) fn resolve_worker_pools(
 
 pub(crate) fn resolve_agent_profiles(
     config: &Config,
+    credentials: &Credentials,
+    validate_secret_references: bool,
 ) -> Result<BTreeMap<String, AgentProfileSettings>, ConfigError> {
     let mut profiles = BTreeMap::new();
     let mut seen_names = BTreeSet::new();
@@ -98,6 +111,14 @@ pub(crate) fn resolve_agent_profiles(
             .map(|part| part.trim().to_string())
             .collect();
 
+        let credential = resolve_secret_reference(
+            &format!("{field}.credential"),
+            profile.credential.as_deref(),
+            credentials,
+            validate_secret_references,
+        )?
+        .map(|resolved| resolved.reference);
+
         profiles.insert(
             name,
             AgentProfileSettings {
@@ -108,7 +129,7 @@ pub(crate) fn resolve_agent_profiles(
                 provider_url: trimmed(profile.provider_url.as_deref()),
                 max_iterations: profile.max_iterations,
                 subagents: profile.subagents,
-                credential: trimmed(profile.credential.as_deref()),
+                credential,
             },
         );
     }

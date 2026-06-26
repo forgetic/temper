@@ -111,7 +111,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 }
             }
         }
-        let committed = self.apply_update(&loaded, prepared).await?;
+        let committed = self.apply_update(repo_id, &loaded, None, prepared).await?;
         if let Some(state) = committed {
             self.verify_state(&state, &postconditions)?;
         } else {

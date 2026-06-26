@@ -149,6 +149,8 @@ pub fn build_config(inputs: &ConfigInputs) -> Config {
         mechanical_cadence_secs: None,
         lease_ttl_secs: None,
         daemon_id: None,
+        forge_token: None,
+        webhook_secret: None,
         webhook_secret_file: None,
     };
 
@@ -231,6 +233,7 @@ pub fn build_credentials(inputs: &CredentialInputs) -> Credentials {
             users: inputs.forge_users.clone(),
         },
         agent: AgentCredentials { providers },
+        ..Credentials::default()
     }
 }
 
@@ -403,12 +406,13 @@ pub fn default_config_path() -> Option<PathBuf> {
     crate::paths::config_path(None, &paths, &crate::SystemEnv)
 }
 
-/// The default credentials-file path (`CREDENTIALS_DIRECTORY/credentials.toml`
-/// when set in the process environment, otherwise `<config-dir>/credentials.toml`).
+/// The default local credentials-file path (`<config-dir>/credentials.toml`), if
+/// a config dir can be determined. Systemd `CREDENTIALS_DIRECTORY` is an input
+/// secret source and is intentionally not a write target.
 ///
 /// Binary-only shim; see [`default_config_path`].
 #[doc(hidden)]
 pub fn default_credentials_path() -> Option<PathBuf> {
     let paths = crate::PathResolver::from_system();
-    crate::paths::credentials_path(None, &paths, &crate::SystemEnv)
+    crate::paths::paired_credentials_file_path(None, None, &paths)
 }

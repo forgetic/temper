@@ -19,14 +19,16 @@ use std::time::Duration;
 
 use secrecy::SecretString;
 
+use crate::agent_resolve::{parse_provider_kind, resolve_provider_credential};
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
     AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
-    EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
+    EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderKind,
+    ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
+use crate::secret_refs::{EngineSecretReferences, resolve_engine_secret_references};
 use crate::target::{resolve_agent_profiles, resolve_worker_pools};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -79,10 +81,12 @@ pub fn resolve_with_options(
 ) -> Result<Resolved, ConfigError> {
     let deployment = resolve_deployment(config)?;
     let state_dir = resolve_state_dir(config, env, options);
-    let engine = resolve_engine(config, env, options)?;
+    let engine_secrets = resolve_engine_secret_references(config, credentials, options)?;
+    let engine = resolve_engine(config, env, options, &engine_secrets)?;
     let agent = resolve_agent(config, credentials, env, options)?;
     let worker = resolve_worker(
         config,
+        credentials,
         env,
         &engine,
         state_dir.as_ref(),
@@ -95,7 +99,12 @@ pub fn resolve_with_options(
         workflow_file: engine.workflow_file.clone(),
     };
     let roles = referenced_roles(&engine, &worker);
-    let forge = resolve_forge(config, credentials, &roles);
+    let forge = resolve_forge(
+        config,
+        credentials,
+        &roles,
+        engine_secrets.forge_token_value.clone(),
+    );
     Ok(Resolved {
         deployment,
         paths,
@@ -143,15 +152,17 @@ fn resolve_forge(
     config: &Config,
     credentials: &Credentials,
     roles: &BTreeSet<String>,
+    named_admin_token: Option<SecretString>,
 ) -> ForgeSettings {
     let url = trimmed(config.forge.url.as_deref()).map(|url| url.trim_end_matches('/').to_string());
 
     let admin = trimmed(config.forge.admin.as_deref());
-    let admin_token = admin
+    let legacy_admin_token = admin
         .as_deref()
         .and_then(|name| credentials.forge.users.get(name))
         .and_then(|user| trimmed(user.token.as_deref()))
         .map(SecretString::from);
+    let admin_token = named_admin_token.or(legacy_admin_token);
 
     let ci_user =
         trimmed(config.forge.ci_user.as_deref()).unwrap_or_else(|| DEFAULT_CI_USER.to_string());
@@ -244,6 +255,7 @@ fn resolve_engine(
     config: &Config,
     env: &impl EnvLookup,
     options: &ResolveOptions,
+    secrets: &EngineSecretReferences,
 ) -> Result<EngineSettings, ConfigError> {
     let bind = resolve_bind(config)?;
 
@@ -317,6 +329,9 @@ fn resolve_engine(
         poll_cadence,
         mechanical_cadence,
         lease_ttl,
+        forge_token: secrets.forge_token.clone(),
+        webhook_secret: secrets.webhook_secret.clone(),
+        webhook_secret_value: secrets.webhook_secret_value.clone(),
         webhook_secret_file,
         daemon_id,
     })
@@ -341,6 +356,7 @@ fn parse_bind(raw: &str) -> Result<SocketAddr, ConfigError> {
 
 fn resolve_worker(
     config: &Config,
+    credentials: &Credentials,
     env: &impl EnvLookup,
     engine: &EngineSettings,
     state_dir: Option<&PathBuf>,
@@ -395,7 +411,12 @@ fn resolve_worker(
         None => default_capabilities(engine),
     };
     let capabilities = dedup_by(capabilities, |a, b| a.repo == b.repo && a.role == b.role);
-    let pools = resolve_worker_pools(config, agent_profiles)?;
+    let pools = resolve_worker_pools(
+        config,
+        agent_profiles,
+        credentials,
+        options.validate_secret_references,
+    )?;
 
     Ok(WorkerSettings {
         worker_id,
@@ -473,7 +494,7 @@ fn resolve_agent(
         base_url,
         credential,
     };
-    let profiles = resolve_agent_profiles(config)?;
+    let profiles = resolve_agent_profiles(config, credentials, options.validate_secret_references)?;
 
     Ok(AgentSettings {
         provider,
@@ -486,47 +507,6 @@ fn resolve_agent(
             .map(|value| resolve_config_path(&value, env, options)),
         profiles,
     })
-}
-
-fn parse_provider_kind(name: &str) -> Result<ProviderKind, ConfigError> {
-    match name {
-        "anthropic" => Ok(ProviderKind::Anthropic),
-        "deepseek" => Ok(ProviderKind::DeepSeek),
-        "chatgpt" | "chatgpt-oauth" | "codex" => Ok(ProviderKind::ChatGpt),
-        other => Err(ConfigError::invalid(format!(
-            "unknown agent provider `{other}` (expected anthropic, deepseek, or chatgpt)"
-        ))),
-    }
-}
-
-fn resolve_provider_credential(
-    credentials: &Credentials,
-    provider_name: &str,
-    env: &impl EnvLookup,
-) -> ProviderCredential {
-    let Some(cred) = credentials.agent.providers.get(provider_name) else {
-        return ProviderCredential::Ambient;
-    };
-    if let Some(path) = trimmed(cred.auth_file.as_deref()) {
-        return ProviderCredential::OAuthFile(expand_tilde(&path, env));
-    }
-    let kind = trimmed(cred.kind.as_deref()).unwrap_or_default();
-    if (kind == "api-key" || kind == "api_key")
-        && let Some(key) = trimmed(cred.key.as_deref())
-    {
-        return ProviderCredential::ApiKey(SecretString::from(key));
-    }
-    if let Some(access) = trimmed(cred.access.as_deref()) {
-        return ProviderCredential::OAuthInline {
-            access: SecretString::from(access),
-            refresh: trimmed(cred.refresh.as_deref()).map(SecretString::from),
-            expires: cred.expires.unwrap_or(0),
-        };
-    }
-    if let Some(key) = trimmed(cred.key.as_deref()) {
-        return ProviderCredential::ApiKey(SecretString::from(key));
-    }
-    ProviderCredential::Ambient
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
