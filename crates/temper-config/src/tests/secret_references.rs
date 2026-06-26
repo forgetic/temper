@@ -30,7 +30,10 @@ webhook-secret = "named-webhook-secret"
 
     let resolved = resolve(&config, &credentials, &NoEnv).expect("resolves");
 
-    assert_eq!(exposed(&resolved.forge.admin_token), Some("named-forge-token"));
+    assert_eq!(
+        exposed(&resolved.forge.admin_token),
+        Some("named-forge-token")
+    );
     assert_eq!(
         resolved
             .engine
@@ -111,7 +114,10 @@ value = "structured-webhook-secret"
 #[test]
 fn missing_named_secret_references_error_with_clear_fields() {
     let cases: &[(&str, &str)] = &[
-        ("engine.forge_token", "[engine]\nforge_token = \"missing\"\n"),
+        (
+            "engine.forge_token",
+            "[engine]\nforge_token = \"missing\"\n",
+        ),
         (
             "engine.webhook_secret",
             "[engine]\nwebhook_secret = \"missing\"\n",

@@ -24,8 +24,8 @@ use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
     AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
-    EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
+    EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderKind,
+    ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
 use crate::secret_refs::{EngineSecretReferences, resolve_engine_secret_references};
@@ -250,51 +250,6 @@ pub fn env_role_key(role: &str) -> String {
 }
 
 // ── engine ──────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Default)]
-struct EngineSecretReferences {
-    forge_token: Option<SecretReference>,
-    forge_token_value: Option<SecretString>,
-    webhook_secret: Option<SecretReference>,
-    webhook_secret_value: Option<SecretString>,
-}
-
-fn resolve_engine_secret_references(
-    config: &Config,
-    credentials: &Credentials,
-    options: &ResolveOptions,
-) -> Result<EngineSecretReferences, ConfigError> {
-    let forge_token = resolve_secret_reference(
-        "engine.forge_token",
-        config.engine.forge_token.as_deref(),
-        credentials,
-        options.validate_secret_references,
-    )?;
-    let webhook_secret = resolve_secret_reference(
-        "engine.webhook_secret",
-        config.engine.webhook_secret.as_deref(),
-        credentials,
-        options.validate_secret_references,
-    )?;
-
-    let forge_token_value = forge_token
-        .as_ref()
-        .filter(|resolved| resolved.reference.available)
-        .map(|resolved| require_secret_payload("engine.forge_token", resolved))
-        .transpose()?;
-    let webhook_secret_value = webhook_secret
-        .as_ref()
-        .filter(|resolved| resolved.reference.available)
-        .map(|resolved| require_secret_payload("engine.webhook_secret", resolved))
-        .transpose()?;
-
-    Ok(EngineSecretReferences {
-        forge_token: forge_token.map(|resolved| resolved.reference),
-        forge_token_value,
-        webhook_secret: webhook_secret.map(|resolved| resolved.reference),
-        webhook_secret_value,
-    })
-}
 
 fn resolve_engine(
     config: &Config,
@@ -552,47 +507,6 @@ fn resolve_agent(
             .map(|value| resolve_config_path(&value, env, options)),
         profiles,
     })
-}
-
-fn parse_provider_kind(name: &str) -> Result<ProviderKind, ConfigError> {
-    match name {
-        "anthropic" => Ok(ProviderKind::Anthropic),
-        "deepseek" => Ok(ProviderKind::DeepSeek),
-        "chatgpt" | "chatgpt-oauth" | "codex" => Ok(ProviderKind::ChatGpt),
-        other => Err(ConfigError::invalid(format!(
-            "unknown agent provider `{other}` (expected anthropic, deepseek, or chatgpt)"
-        ))),
-    }
-}
-
-fn resolve_provider_credential(
-    credentials: &Credentials,
-    provider_name: &str,
-    env: &impl EnvLookup,
-) -> ProviderCredential {
-    let Some(cred) = credentials.agent.providers.get(provider_name) else {
-        return ProviderCredential::Ambient;
-    };
-    if let Some(path) = trimmed(cred.auth_file.as_deref()) {
-        return ProviderCredential::OAuthFile(expand_tilde(&path, env));
-    }
-    let kind = trimmed(cred.kind.as_deref()).unwrap_or_default();
-    if (kind == "api-key" || kind == "api_key")
-        && let Some(key) = trimmed(cred.key.as_deref())
-    {
-        return ProviderCredential::ApiKey(SecretString::from(key));
-    }
-    if let Some(access) = trimmed(cred.access.as_deref()) {
-        return ProviderCredential::OAuthInline {
-            access: SecretString::from(access),
-            refresh: trimmed(cred.refresh.as_deref()).map(SecretString::from),
-            expires: cred.expires.unwrap_or(0),
-        };
-    }
-    if let Some(key) = trimmed(cred.key.as_deref()) {
-        return ProviderCredential::ApiKey(SecretString::from(key));
-    }
-    ProviderCredential::Ambient
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
