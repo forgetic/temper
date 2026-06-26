@@ -31,6 +31,7 @@ mod resolve;
 mod resolve_options;
 mod resolved;
 mod schema;
+mod secret_refs;
 mod target;
 mod template;
 
@@ -65,14 +66,14 @@ pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
     AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
     EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerPoolSettings,
-    WorkerSettings,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, SecretReference, WebUiCreds,
+    WorkerPoolSettings, WorkerSettings,
 };
 pub use schema::{
     AgentConfig, AgentCredentials, AgentProfileConfig, AgentProviderConfig, Config, Credentials,
     DeploymentConfig, EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
-    PathsConfig, ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION,
-    WorkerConfig as WorkerFileConfig, WorkerPoolConfig, WorkflowConfig,
+    NamedSecret, NamedSecretEntry, PathsConfig, ProviderCredential as ProviderCredentialFile,
+    SCHEMA_VERSION, WorkerConfig as WorkerFileConfig, WorkerPoolConfig, WorkflowConfig,
 };
 pub use template::{config_template, credentials_template};
 

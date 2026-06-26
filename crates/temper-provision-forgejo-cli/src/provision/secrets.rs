@@ -52,6 +52,7 @@ pub fn credentials_document(provisioned: &Provisioned) -> Credentials {
             users: forge_users_from_provisioned(&provisioned_users),
         },
         agent: Default::default(),
+        ..Credentials::default()
     }
 }
 

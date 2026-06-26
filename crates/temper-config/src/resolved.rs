@@ -113,6 +113,16 @@ pub struct WebUiCreds {
     pub password: SecretString,
 }
 
+/// A resolved secret-name reference for inspection output.
+///
+/// This is deliberately name/status only: secret payloads live in dedicated
+/// [`SecretString`] runtime fields and never in this inspection model.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SecretReference {
+    pub name: String,
+    pub available: bool,
+}
+
 /// Resolved engine (orchestrator) settings.
 #[derive(Debug, Clone)]
 pub struct EngineSettings {
@@ -123,6 +133,12 @@ pub struct EngineSettings {
     pub poll_cadence: Duration,
     pub mechanical_cadence: Option<Duration>,
     pub lease_ttl: Duration,
+    /// Configured `engine.forge_token` secret-name reference, if any.
+    pub forge_token: Option<SecretReference>,
+    /// Configured `engine.webhook_secret` secret-name reference, if any.
+    pub webhook_secret: Option<SecretReference>,
+    /// Resolved webhook HMAC secret value from `engine.webhook_secret`, if any.
+    pub webhook_secret_value: Option<SecretString>,
     pub webhook_secret_file: Option<PathBuf>,
     pub daemon_id: String,
 }
@@ -181,7 +197,7 @@ pub struct WorkerPoolSettings {
     pub max_concurrent_jobs: Option<u32>,
     pub agent_profile: Option<String>,
     /// Secret-name reference only; no secret value is resolved in this model.
-    pub worker_token: Option<String>,
+    pub worker_token: Option<SecretReference>,
 }
 
 /// An `owner/name:role` worker capability.
@@ -214,7 +230,7 @@ pub struct AgentProfileSettings {
     pub max_iterations: Option<usize>,
     pub subagents: Option<bool>,
     /// Secret-name reference only; no secret value is resolved in this model.
-    pub credential: Option<String>,
+    pub credential: Option<SecretReference>,
 }
 
 /// Resolved LLM provider wiring.
@@ -278,7 +294,7 @@ impl ForgeSettings {
     pub fn require_admin_token(&self) -> Result<&SecretString, ConfigError> {
         self.admin_token.as_ref().ok_or_else(|| {
             ConfigError::missing(
-                "forge admin token is unset; set a `token` under \
+                "forge admin token is unset; set `[engine] forge_token` to a named secret, or set a `token` under \
                  `[forge.users.<admin>]` in credentials.toml (and name the \
                  admin via `[forge] admin`)",
             )

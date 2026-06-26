@@ -149,6 +149,8 @@ pub fn build_config(inputs: &ConfigInputs) -> Config {
         mechanical_cadence_secs: None,
         lease_ttl_secs: None,
         daemon_id: None,
+        forge_token: None,
+        webhook_secret: None,
         webhook_secret_file: None,
     };
 
@@ -231,6 +233,7 @@ pub fn build_credentials(inputs: &CredentialInputs) -> Credentials {
             users: inputs.forge_users.clone(),
         },
         agent: AgentCredentials { providers },
+        ..Credentials::default()
     }
 }
 
