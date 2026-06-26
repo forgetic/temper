@@ -22,9 +22,10 @@ use secrecy::SecretString;
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
-    AgentSettings, Capability, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
-    ForgeSettings, GitIdentity, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
-    RepoPath, Resolved, WebUiCreds, WorkerSettings,
+    AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
+    EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerPoolSettings,
+    WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
 
@@ -79,7 +80,15 @@ pub fn resolve_with_options(
     let deployment = resolve_deployment(config)?;
     let state_dir = resolve_state_dir(config, env, options);
     let engine = resolve_engine(config, env, options)?;
-    let worker = resolve_worker(config, env, &engine, state_dir.as_ref(), options)?;
+    let agent = resolve_agent(config, credentials, env, options)?;
+    let worker = resolve_worker(
+        config,
+        env,
+        &engine,
+        state_dir.as_ref(),
+        options,
+        &agent.profiles,
+    )?;
     let paths = PathSettings {
         state_dir,
         workspace_dir: worker.workspace_root.clone(),
@@ -87,7 +96,6 @@ pub fn resolve_with_options(
     };
     let roles = referenced_roles(&engine, &worker);
     let forge = resolve_forge(config, credentials, &roles);
-    let agent = resolve_agent(config, credentials, env, options)?;
     Ok(Resolved {
         deployment,
         paths,

@@ -224,6 +224,11 @@ pub struct WorkerConfig {
     /// `engine.repos` and `engine.roles` (one worker covers the whole feed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<String>>,
+    /// Target-era named capability classes, declared as `[[worker.pools]]`.
+    /// Parsed and validated for inspection/future dispatch, but not used by the
+    /// current worker runtime yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pools: Vec<WorkerPoolConfig>,
 }
 
 impl WorkerConfig {
@@ -237,7 +242,32 @@ impl WorkerConfig {
             && self.poll_wait_ms.is_none()
             && self.heartbeat_interval_ms.is_none()
             && self.capabilities.is_none()
+            && self.pools.is_empty()
     }
+}
+
+/// `[[worker.pools]]` — target-era named worker capability classes.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerPoolConfig {
+    /// Pool name (unique after trimming). Required during resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Workflow roles this pool is willing to run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<Vec<String>>,
+    /// Repositories this pool is willing to run, each `owner/name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repos: Option<Vec<String>>,
+    /// Maximum jobs a worker in this pool should run concurrently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_jobs: Option<u32>,
+    /// Target-era agent profile name used by this pool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
+    /// Secret-name reference for future worker authentication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_token: Option<String>,
 }
 
 /// `[agent]` — the coding agent: which LLM provider, models, and limits.
@@ -260,6 +290,11 @@ pub struct AgentConfig {
     /// Provider profiles, keyed by provider name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, AgentProviderConfig>,
+    /// Target-era agent profiles, keyed by profile name and declared as
+    /// `[agent.profiles.<name>]`. Parsed and validated for inspection/future
+    /// pool dispatch, but not selected by the active runtime yet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, AgentProfileConfig>,
 }
 
 impl AgentConfig {
@@ -270,7 +305,38 @@ impl AgentConfig {
             && self.enable_subagents.is_none()
             && self.config_dir.is_none()
             && self.providers.is_empty()
+            && self.profiles.is_empty()
     }
+}
+
+/// `[agent.profiles.<name>]` — target-era named agent execution profile.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentProfileConfig {
+    /// Agent command argv (for example `["temper", "agent"]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+    /// Provider kind: `anthropic`, `deepseek`, or `chatgpt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Main model selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Model for read-only investigate sub-agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub investigate_model: Option<String>,
+    /// Optional provider base URL override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_url: Option<String>,
+    /// Maximum model iterations per job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<usize>,
+    /// Enable the in-workspace investigate sub-agent tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<bool>,
+    /// Secret-name reference for future provider credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 /// `[agent.providers.<name>]` — non-secret provider wiring.
