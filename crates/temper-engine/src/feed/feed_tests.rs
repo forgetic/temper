@@ -6,9 +6,9 @@ use super::*;
 use serde_json::json;
 use std::sync::Arc;
 use temper_forge::{
-    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest,
-    CreateRepository, Forge, IssueState, ItemNumber, MergeMethod, MergePullRequest, RepositoryId,
-    UpdateIssue, UpdatePullRequest,
+    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest, CreateRepository,
+    Forge, IssueState, ItemNumber, MergeMethod, MergePullRequest, RepositoryId, UpdateIssue,
+    UpdatePullRequest,
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_protocol_worker::{
@@ -78,7 +78,10 @@ async fn create_ready_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemNum
         .number
 }
 
-async fn create_implementation_pr(forge: &MemoryForge, repo: &RepositoryId) -> temper_forge::PullRequest {
+async fn create_implementation_pr(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+) -> temper_forge::PullRequest {
     forge
         .create_pull_request(
             repo,
@@ -442,6 +445,10 @@ fn enqueue_scanned_role_work_prunes_stale_pr_and_preserves_current_work() {
                 .expect("first scan succeeds"),
             1
         );
+        let stale_pr_job = format!(
+            "ai/temper/pull_request-{}/engineer/pr_ci_failed",
+            pull_request.number.get()
+        );
         assert_eq!(
             daemon
                 .queued_jobs()
@@ -449,10 +456,7 @@ fn enqueue_scanned_role_work_prunes_stale_pr_and_preserves_current_work() {
                 .iter()
                 .map(|job| job.job_id.as_str())
                 .collect::<Vec<_>>(),
-            vec![format!(
-                "ai/temper/pull_request-{}/engineer/pr_ci_failed",
-                pull_request.number.get()
-            )]
+            vec![stale_pr_job.as_str()]
         );
 
         let issue_number = create_ready_issue(&forge, &repo).await;
@@ -479,7 +483,8 @@ fn enqueue_scanned_role_work_prunes_stale_pr_and_preserves_current_work() {
                 .expect("second scan succeeds"),
             1
         );
-        let current_issue_job = format!("ai/temper/issue-{}/engineer/code_ready", issue_number.get());
+        let current_issue_job =
+            format!("ai/temper/issue-{}/engineer/code_ready", issue_number.get());
         assert_eq!(
             daemon
                 .queued_jobs()
@@ -602,7 +607,7 @@ fn enqueue_scanned_role_work_prunes_pending_pr_after_merge_before_assignment() {
             daemon
                 .deliver_protocol_message(poll_worker("engineer-1"))
                 .await
-                .expect("poll succeeds")
+                .expect("poll succeeds"),
         );
     })
 }

@@ -251,7 +251,10 @@ fn scoped_pending_retain_prunes_only_matching_pending_jobs() {
     let removed = coordinator.retain_pending_by_scope("ai/temper", "engineer", &current);
 
     assert_eq!(
-        removed.iter().map(|item| item.job_id.as_str()).collect::<Vec<_>>(),
+        removed
+            .iter()
+            .map(|item| item.job_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["stale"]
     );
     assert_eq!(
