@@ -18,8 +18,9 @@ use temper_config::{EnvMap, ExposeSecret, PathResolver, WorkerSettings};
 use temper_worker::CapabilitySpec;
 
 use super::{
-    DaemonInputs, SERVE_ENGINE_USAGE, SERVE_STANDALONE_USAGE, SERVE_USAGE, SERVE_WORKER_USAGE,
-    ServeInvocation, Service, load_for, parse_daemon_args, parse_serve_invocation, standalone,
+    DaemonInputs, RuntimeOverrides, SERVE_ENGINE_USAGE, SERVE_STANDALONE_USAGE, SERVE_USAGE,
+    SERVE_WORKER_USAGE, ServeInvocation, Service, load_for, parse_daemon_args,
+    parse_serve_invocation, standalone,
 };
 
 const POISONED_TOKEN: &str = "POISONED-GLOBAL-TOKEN-DO-NOT-USE";
@@ -141,6 +142,7 @@ fn explicit_config_and_credentials_ignore_poisoned_global() {
         config: Some(config),
         credentials: Some(credentials),
         service: None,
+        runtime: RuntimeOverrides::default(),
         env: &env,
         paths: &paths,
     };
@@ -196,6 +198,7 @@ fn explicit_config_directory_uses_sibling_credentials_not_global() {
         config: Some(bundle.clone()),
         credentials: None,
         service: None,
+        runtime: RuntimeOverrides::default(),
         env: &env,
         paths: &paths,
     };
@@ -236,6 +239,7 @@ fn explicit_config_only_does_not_layer_poisoned_global() {
         config: Some(config),
         credentials: None,
         service: None,
+        runtime: RuntimeOverrides::default(),
         env: &env,
         paths: &paths,
     };
@@ -276,6 +280,7 @@ fn without_explicit_paths_global_is_discovered() {
         config: None,
         credentials: None,
         service: None,
+        runtime: RuntimeOverrides::default(),
         env: &env,
         paths: &paths,
     };
@@ -317,32 +322,41 @@ fn serve_usage_documents_supported_components() {
         "serve help should show deployment file flags before `serve`"
     );
     assert!(SERVE_STANDALONE_USAGE.contains("serve standalone"));
+    assert!(SERVE_STANDALONE_USAGE.contains("--id <ID>"));
     assert!(!SERVE_STANDALONE_USAGE.contains("--secrets"));
     assert!(!SERVE_STANDALONE_USAGE.contains("--config"));
     assert!(
         SERVE_STANDALONE_USAGE.contains("temper daemon"),
         "standalone help should identify the compatibility wrapper"
     );
+    for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
+        assert!(SERVE_USAGE.contains(flag), "serve help should mention {flag}: {SERVE_USAGE}");
+    }
 }
 
 #[test]
-fn serve_service_help_documents_current_thin_dispatch_surface() {
-    for (usage, component) in [
-        (SERVE_ENGINE_USAGE, "engine"),
-        (SERVE_WORKER_USAGE, "worker"),
-    ] {
-        assert!(usage.contains(&format!("serve {component}")), "{usage}");
-        assert!(
-            usage.contains(&format!("temper daemon --service {component}")),
-            "{usage}"
-        );
-        assert!(usage.contains("temper --config"), "{usage}");
-        assert!(usage.contains("--secrets"), "{usage}");
-        for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
-            assert!(usage.contains(flag), "{usage}");
-        }
-        assert!(usage.contains("Not implemented yet"), "{usage}");
+fn serve_service_help_documents_implemented_target_flags() {
+    assert!(SERVE_ENGINE_USAGE.contains("serve engine"), "{SERVE_ENGINE_USAGE}");
+    assert!(
+        SERVE_ENGINE_USAGE.contains("temper daemon --service engine"),
+        "{SERVE_ENGINE_USAGE}"
+    );
+    assert!(SERVE_ENGINE_USAGE.contains("temper --config"), "{SERVE_ENGINE_USAGE}");
+    assert!(SERVE_ENGINE_USAGE.contains("--secrets"), "{SERVE_ENGINE_USAGE}");
+    assert!(SERVE_ENGINE_USAGE.contains("--id <ID>"), "{SERVE_ENGINE_USAGE}");
+    assert!(!SERVE_ENGINE_USAGE.contains("Not implemented yet"), "{SERVE_ENGINE_USAGE}");
+
+    assert!(SERVE_WORKER_USAGE.contains("serve worker"), "{SERVE_WORKER_USAGE}");
+    assert!(
+        SERVE_WORKER_USAGE.contains("temper daemon --service worker"),
+        "{SERVE_WORKER_USAGE}"
+    );
+    assert!(SERVE_WORKER_USAGE.contains("temper --config"), "{SERVE_WORKER_USAGE}");
+    assert!(SERVE_WORKER_USAGE.contains("--secrets"), "{SERVE_WORKER_USAGE}");
+    for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
+        assert!(SERVE_WORKER_USAGE.contains(flag), "{SERVE_WORKER_USAGE}");
     }
+    assert!(!SERVE_WORKER_USAGE.contains("Not implemented yet"), "{SERVE_WORKER_USAGE}");
 }
 
 #[test]
@@ -368,11 +382,18 @@ fn serve_help_forms_are_parsed_without_starting_daemon() {
     );
 }
 
+fn runtime_with_id(id: &str) -> RuntimeOverrides {
+    RuntimeOverrides {
+        process_id: Some(id.to_string()),
+        ..RuntimeOverrides::default()
+    }
+}
+
 #[test]
 fn serve_standalone_maps_to_daemon_standalone() {
     assert_eq!(
         parse_serve_invocation(vec!["standalone".to_string()]).expect("standalone command parses"),
-        ServeInvocation::Standalone
+        ServeInvocation::Standalone(RuntimeOverrides::default())
     );
 }
 
@@ -380,11 +401,56 @@ fn serve_standalone_maps_to_daemon_standalone() {
 fn serve_engine_and_worker_map_to_daemon_services() {
     assert_eq!(
         parse_serve_invocation(vec!["engine".to_string()]).expect("engine command parses"),
-        ServeInvocation::Service(Service::Engine)
+        ServeInvocation::Service(Service::Engine, RuntimeOverrides::default())
     );
     assert_eq!(
         parse_serve_invocation(vec!["worker".to_string()]).expect("worker command parses"),
-        ServeInvocation::Service(Service::Worker)
+        ServeInvocation::Service(Service::Worker, RuntimeOverrides::default())
+    );
+}
+
+#[test]
+fn serve_components_parse_supported_target_flags() {
+    assert_eq!(
+        parse_serve_invocation(vec![
+            "standalone".to_string(),
+            "--id".to_string(),
+            "all-in-one-a".to_string(),
+        ])
+        .expect("standalone --id parses"),
+        ServeInvocation::Standalone(runtime_with_id("all-in-one-a"))
+    );
+    assert_eq!(
+        parse_serve_invocation(vec![
+            "engine".to_string(),
+            "--id".to_string(),
+            "engine-a".to_string(),
+        ])
+        .expect("engine --id parses"),
+        ServeInvocation::Service(Service::Engine, runtime_with_id("engine-a"))
+    );
+    assert_eq!(
+        parse_serve_invocation(vec![
+            "worker".to_string(),
+            "--pool".to_string(),
+            "builders".to_string(),
+            "--id".to_string(),
+            "worker-a".to_string(),
+            "--capacity".to_string(),
+            "3".to_string(),
+            "--engine-url".to_string(),
+            "http://engine.local:8080".to_string(),
+        ])
+        .expect("worker target flags parse"),
+        ServeInvocation::Service(
+            Service::Worker,
+            RuntimeOverrides {
+                process_id: Some("worker-a".to_string()),
+                worker_pool: Some("builders".to_string()),
+                worker_capacity: Some(3),
+                worker_engine_url: Some("http://engine.local:8080".to_string()),
+            },
+        )
     );
 }
 
@@ -404,6 +470,17 @@ fn serve_components_reject_local_config_and_secrets_flags() {
             assert!(error.contains("before `serve`"), "{error}");
         }
     }
+    let error = parse_serve_invocation(vec![
+        "worker".to_string(),
+        "--id".to_string(),
+        "worker-a".to_string(),
+        "--secrets".to_string(),
+        "deploy/credentials.toml".to_string(),
+    ])
+    .expect_err("file-location flags must remain global-only after target flags");
+    assert!(error.contains("--secrets"), "{error}");
+    assert!(error.contains("global option"), "{error}");
+    assert!(error.contains("before `serve`"), "{error}");
 }
 
 #[test]
@@ -435,20 +512,62 @@ fn serve_standalone_rejects_service_escape_hatch() {
 }
 
 #[test]
-fn serve_services_reject_future_target_flags() {
-    for component in ["engine", "worker"] {
-        for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
-            let error = parse_serve_invocation(vec![
-                component.to_string(),
-                flag.to_string(),
-                "value".to_string(),
-            ])
-            .expect_err("future target flags must not be accepted yet");
+fn serve_components_reject_missing_target_flag_values() {
+    for (component, flag) in [
+        ("standalone", "--id"),
+        ("engine", "--id"),
+        ("worker", "--id"),
+        ("worker", "--pool"),
+        ("worker", "--capacity"),
+        ("worker", "--engine-url"),
+    ] {
+        let error = parse_serve_invocation(vec![component.to_string(), flag.to_string()])
+            .expect_err("target flags require values");
 
-            assert!(error.contains(component), "{error}");
-            assert!(error.contains(flag), "{error}");
-            assert!(error.contains("not implemented yet"), "{error}");
-        }
+        assert!(error.contains(flag), "{error}");
+        assert!(error.contains("requires a value"), "{error}");
+    }
+}
+
+#[test]
+fn serve_worker_rejects_invalid_capacity_values() {
+    for (raw, expected) in [
+        ("0", "greater than zero"),
+        ("many", "invalid --capacity"),
+        ("-1", "invalid --capacity"),
+    ] {
+        let error = parse_serve_invocation(vec![
+            "worker".to_string(),
+            "--capacity".to_string(),
+            raw.to_string(),
+        ])
+        .expect_err("invalid capacity should be rejected");
+
+        assert!(error.contains(expected), "{error}");
+        assert!(error.contains("--capacity"), "{error}");
+    }
+}
+
+#[test]
+fn serve_components_reject_flags_for_wrong_component() {
+    for (component, flag) in [
+        ("standalone", "--pool"),
+        ("standalone", "--capacity"),
+        ("standalone", "--engine-url"),
+        ("engine", "--pool"),
+        ("engine", "--capacity"),
+        ("engine", "--engine-url"),
+    ] {
+        let error = parse_serve_invocation(vec![
+            component.to_string(),
+            flag.to_string(),
+            "value".to_string(),
+        ])
+        .expect_err("worker-only flags must be rejected on other components");
+
+        assert!(error.contains(component), "{error}");
+        assert!(error.contains(flag), "{error}");
+        assert!(error.contains("serve worker"), "{error}");
     }
 }
 
