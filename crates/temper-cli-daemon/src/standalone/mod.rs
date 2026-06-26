@@ -20,7 +20,9 @@ pub use agent_runner::InProcessAgentRunner;
 pub use transport::InProcessTransport;
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -218,13 +220,17 @@ async fn run_async(
     // before `worker_config` is moved into the worker task.
     let per_role_capacity = worker_config.max_concurrent_jobs as u64;
 
-    let runner = Arc::new(InProcessAgentRunner::new(
-        handle.clone(),
-        provider,
-        resolved.agent.max_iterations,
-        resolved.agent.config_dir.clone(),
-        resolved.agent.enable_subagents,
-    ));
+    let pr_freshness_guard = Arc::new(InProcessPrFreshnessGuard::new(daemon.clone()));
+    let runner = Arc::new(
+        InProcessAgentRunner::new(
+            handle.clone(),
+            provider,
+            resolved.agent.max_iterations,
+            resolved.agent.config_dir.clone(),
+            resolved.agent.enable_subagents,
+        )
+        .with_pr_freshness_guard(pr_freshness_guard.clone()),
+    );
     let executor = Arc::new(
         CodingExecutor::new(
             CodingExecutorConfig {
@@ -236,6 +242,7 @@ async fn run_async(
             },
             runner,
         )
+        .with_pr_freshness_guard(pr_freshness_guard)
         .with_progress_sink(Arc::new(InProcessProgressSink::new(
             handle.clone(),
             daemon.clone(),

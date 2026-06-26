@@ -16,6 +16,7 @@
 //! [`CheckpointHook`]: temper_agent::CheckpointHook
 
 mod backstop;
+mod freshness;
 mod resume;
 mod sync;
 
@@ -122,11 +123,18 @@ impl Checkpointer {
     ///
     /// [`CheckpointHook`]: temper_agent::CheckpointHook
     async fn do_checkpoint(&self, label: Option<&str>) -> Result<Option<String>, String> {
+        freshness::ensure_fresh(
+            self.freshness_url.as_deref(),
+            self.pull_request_freshness.as_ref(),
+        )
+        .await?;
         let step = self.step.fetch_add(1, Ordering::SeqCst);
         let job = CheckpointJob {
             cwd: self.cwd.clone(),
             repos: self.repos.clone(),
             correlation_key: self.correlation_key.clone(),
+            freshness_url: self.freshness_url.clone(),
+            pull_request_freshness: self.pull_request_freshness.clone(),
         };
         let label_owned = label.map(str::to_string);
         let outcome = skein::runtime::spawn_blocking(move || {
