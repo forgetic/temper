@@ -166,7 +166,11 @@ fn pr_fix_final_freshness_uses_latest_checkpoint_head() {
         let (_branch_name, head_sha, summary) = expect_success(outcome);
         assert_eq!(summary.as_deref(), Some("checkpointed the work"));
         let checks = guard.checks();
-        assert_eq!(checks.len(), 1, "final push freshness should be checked once");
+        assert_eq!(
+            checks.len(),
+            1,
+            "final push freshness should be checked once"
+        );
         assert_eq!(checks[0].head_sha.as_deref(), Some(head_sha.as_str()));
         assert_ne!(checks[0].head_sha.as_deref(), Some("assigned-head"));
         assert_eq!(checks[0].queue_condition, None);
@@ -174,6 +178,8 @@ fn pr_fix_final_freshness_uses_latest_checkpoint_head() {
     });
 }
 
+#[test]
+fn scoped_workspace_is_reused_for_same_coordination_key() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::Success.runner(), true);
