@@ -24,10 +24,10 @@ use crate::error::ConfigError;
 use crate::resolved::{
     AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
     EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerPoolSettings,
-    WorkerSettings,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
+use crate::target::{resolve_agent_profiles, resolve_worker_pools};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
 const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
@@ -447,91 +447,6 @@ fn parse_capability(raw: &str) -> Result<Capability, ConfigError> {
         repo: repo.to_string(),
         role: role.to_string(),
     })
-}
-
-fn resolve_worker_pools(
-    config: &Config,
-    agent_profiles: &BTreeMap<String, AgentProfileSettings>,
-) -> Result<Vec<WorkerPoolSettings>, ConfigError> {
-    let mut seen_names = BTreeSet::new();
-    let mut pools = Vec::with_capacity(config.worker.pools.len());
-
-    for (index, pool) in config.worker.pools.iter().enumerate() {
-        let field = format!("worker.pools[{index}]");
-        let name = trimmed(pool.name.as_deref())
-            .ok_or_else(|| ConfigError::invalid(format!("{field}.name must not be empty")))?;
-        if !seen_names.insert(name.clone()) {
-            return Err(ConfigError::invalid(format!(
-                "worker.pools.name contains duplicate pool `{name}`"
-            )));
-        }
-
-        let roles = resolve_pool_roles(pool.roles.as_deref().unwrap_or(&[]), &field)?;
-        let repos = resolve_pool_repos(pool.repos.as_deref().unwrap_or(&[]), &field)?;
-
-        if pool.max_concurrent_jobs == Some(0) {
-            return Err(ConfigError::invalid(format!(
-                "{field}.max_concurrent_jobs must be greater than zero"
-            )));
-        }
-
-        let agent_profile = trimmed(pool.agent_profile.as_deref());
-        if let Some(profile) = &agent_profile
-            && !agent_profiles.is_empty()
-            && !agent_profiles.contains_key(profile)
-        {
-            return Err(ConfigError::invalid(format!(
-                "{field}.agent_profile references unknown agent.profiles `{profile}`"
-            )));
-        }
-
-        pools.push(WorkerPoolSettings {
-            name,
-            roles,
-            repos,
-            max_concurrent_jobs: pool.max_concurrent_jobs,
-            agent_profile,
-            worker_token: trimmed(pool.worker_token.as_deref()),
-        });
-    }
-
-    Ok(pools)
-}
-
-fn resolve_pool_roles(raw_roles: &[String], field: &str) -> Result<Vec<String>, ConfigError> {
-    if raw_roles.is_empty() {
-        return Err(ConfigError::invalid(format!(
-            "{field}.roles must not be empty"
-        )));
-    }
-
-    let mut roles = Vec::with_capacity(raw_roles.len());
-    for (index, raw) in raw_roles.iter().enumerate() {
-        let role = raw.trim();
-        if role.is_empty() {
-            return Err(ConfigError::invalid(format!(
-                "{field}.roles[{index}] must not be empty"
-            )));
-        }
-        roles.push(role.to_string());
-    }
-    Ok(dedup_strings(roles))
-}
-
-fn resolve_pool_repos(raw_repos: &[String], field: &str) -> Result<Vec<RepoPath>, ConfigError> {
-    let mut repos = Vec::with_capacity(raw_repos.len());
-    for (index, raw) in raw_repos.iter().enumerate() {
-        let repo = raw.trim();
-        let parsed = RepoPath::parse(repo).map_err(|_| {
-            ConfigError::invalid(format!(
-                "{field}.repos[{index}] must be `owner/name` with non-empty parts"
-            ))
-        })?;
-        repos.push(parsed);
-    }
-    Ok(dedup_by(repos, |a, b| {
-        a.owner == b.owner && a.name == b.name
-    }))
 }
 
 // ── agent ───────────────────────────────────────────────────────────────────

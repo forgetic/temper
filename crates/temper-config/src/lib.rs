@@ -31,6 +31,7 @@ mod resolve;
 mod resolve_options;
 mod resolved;
 mod schema;
+mod target;
 mod template;
 
 use std::path::{Path, PathBuf};
