@@ -306,8 +306,8 @@ pub fn lint(resolved: &Resolved) -> Vec<Finding> {
     }
     if resolved.forge.admin_token.is_none() {
         findings.push(Finding::error(
-            "forge admin token is unset (set a `token` under \
-             `[forge.users.<admin>]` in credentials.toml, and name the admin \
+            "forge admin token is unset (set `[engine] forge_token` to a named secret, or set a `token` under \
+             `[forge.users.<admin>]` in credentials.toml and name the admin \
              via `[forge] admin`)",
         ));
     }

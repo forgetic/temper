@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use skein::runtime::RuntimeHandle;
-use temper_config::{Resolved, WorkerSettings};
+use temper_config::{ExposeSecret, Resolved, WorkerSettings};
 use temper_engine::{
     Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, PollBackstopConfig,
     RoleFeedMode, WebhookConfig, spawn_mechanical_backstop, spawn_poll_backstop,
@@ -262,8 +262,23 @@ async fn run_async(
     emit_worker_status(banner::capacity(&role_names, per_role_capacity));
 
     // --- Webhook route (optional) ---
-    let webhook_enabled = daemon_config.webhook_secret_file.is_some();
-    let daemon = if let Some(path) = daemon_config.webhook_secret_file.as_ref() {
+    let webhook_enabled =
+        resolved.engine.webhook_secret_value.is_some() || daemon_config.webhook_secret_file.is_some();
+    let daemon = if let Some(secret) = resolved.engine.webhook_secret_value.as_ref() {
+        let webhook_config = Arc::new(WebhookConfig {
+            secret: secret.expose_secret().trim().to_string(),
+            targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Wake),
+        });
+
+        daemon.with_webhook_and_mechanical(
+            forge,
+            workflow,
+            compiled,
+            webhook_config,
+            temper_engine::system_clock(),
+            mechanical_trigger,
+        )
+    } else if let Some(path) = daemon_config.webhook_secret_file.as_ref() {
         let secret = std::fs::read_to_string(path).map_err(|error| {
             format!(
                 "failed to read webhook secret file {}: {error}",

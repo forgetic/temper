@@ -100,13 +100,13 @@ pub struct LoadInputs<'a> {
 /// Loads + resolves the deployment from fully injected inputs.
 ///
 /// Resolution per config file: explicit override → `<config-dir>/config.toml`
-/// derived from `inputs.paths`. Credentials resolution is: explicit
-/// `--secrets` → `CREDENTIALS_DIRECTORY/credentials.toml` from the injected env
-/// → explicit-config sibling `credentials.toml` → default config-dir
-/// `credentials.toml`. An explicit config/credential path and a
-/// `CREDENTIALS_DIRECTORY` credential file are *required* (missing file errors);
-/// a default-location file or explicit-config sibling is *optional* (absent
-/// means built-in defaults supply everything).
+/// derived from `inputs.paths`. Secret source resolution is: explicit
+/// `--secrets` file/directory → `CREDENTIALS_DIRECTORY` as a named-file
+/// directory source from the injected env → explicit-config sibling
+/// `credentials.toml` → default config-dir `credentials.toml`. An explicit
+/// config path and an explicit/env-selected secret source are *required*
+/// (missing path errors); a default-location file or explicit-config sibling is
+/// *optional* (absent means built-in defaults supply everything).
 ///
 /// When `explicit_config` is set and neither `explicit_credentials` nor
 /// `CREDENTIALS_DIRECTORY` is present, the loader reads sibling

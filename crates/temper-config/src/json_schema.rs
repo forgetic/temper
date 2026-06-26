@@ -96,6 +96,7 @@ fn credentials_named_secrets_schema() -> Value {
     )
 }
 
+fn deployment_config_schema() -> Value {
     closed_object_schema(
         "Target-era deployment metadata.",
         [

@@ -38,6 +38,12 @@ poll_cadence_secs = 300
 # safety net. Omit for the default cadence; set 0 to disable.
 # mechanical_cadence_secs = 120
 lease_ttl_secs = 300
+# Optional target-era references into the selected secret source. Values are
+# secret *names*, not literal secrets. Directory secret sources use one file per
+# name; credentials.toml may use a [secrets] map for local development.
+# forge_token = \"forge-engine-token\"
+# webhook_secret = \"webhook-secret\"
+# Legacy path-based webhook secrets remain supported:
 # webhook_secret_file = \"/path/to/webhook-secret\"
 
 [worker]
@@ -87,6 +93,19 @@ token = \"<engineer-rest-token>\"
 password = \"<bot-password>\"
 token = \"<bot-rest-token>\"
 
+# Optional target-era named secrets for local development. Directory secret
+# sources use one regular file per secret name instead of this TOML map.
+# [secrets]
+# forge-engine-token = \"<engine-forge-token>\"
+# webhook-secret = \"<webhook-hmac-secret>\"
+#
+# Structured entries are also accepted:
+# [secrets.agent-provider]
+# kind = \"provider-credentials\"
+# provider = \"anthropic\"
+# auth = \"api-key\"
+# api_key = \"<provider-api-key>\"
+#
 # LLM provider secret, matching [agent.providers.<name>] in the config file.
 [agent.providers.anthropic]
 type = \"oauth\"
