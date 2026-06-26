@@ -61,8 +61,17 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
             // Both surfaces resolve to a command the out-of-process runner spawns:
             // the temper-agent surface assembles `temper-agent` + auth/iteration flags;
             // an external command is passed through verbatim.
-            let command = match surface.agent {
-                AgentSurface::AnvilNative(agent) => agent.into_command(),
+            let agent_surface = surface.agent;
+            let command = match agent_surface {
+                AgentSurface::AnvilNative(agent) => {
+                    let mut command = agent.into_command();
+                    command.push("--freshness-url".to_string());
+                    command.push(format!(
+                        "{}/v1/pr-freshness",
+                        config.daemon_url.trim_end_matches('/')
+                    ));
+                    command
+                }
                 AgentSurface::ExternalCommand(command) => command,
             };
             let runner = Arc::new(OutOfProcessRunner::new(command));
@@ -77,7 +86,11 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
                     config.worker_id.clone(),
                 ));
                 let executor = Arc::new(
-                    CodingExecutor::new(executor_config, runner).with_progress_sink(progress_sink),
+                    CodingExecutor::new(executor_config, runner)
+                        .with_pr_freshness_guard(Arc::new(
+                            temper_worker::HttpPrFreshnessGuard::new(&config.daemon_url),
+                        ))
+                        .with_progress_sink(progress_sink),
                 );
                 run_worker(handle, config, executor)
                     .await

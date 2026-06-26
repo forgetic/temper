@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicU32;
 use std::time::Instant;
 
+use temper_protocol_agent::PullRequestFreshness;
+
 use crate::config::DEFAULT_CHECKPOINT_INTERVAL;
 
 use super::{CheckpointRepo, Checkpointer};
@@ -19,6 +21,8 @@ pub(super) struct CheckpointJob {
     pub(super) cwd: PathBuf,
     pub(super) repos: Vec<CheckpointRepo>,
     pub(super) correlation_key: String,
+    pub(super) freshness_url: Option<String>,
+    pub(super) pull_request_freshness: Option<PullRequestFreshness>,
 }
 
 impl CheckpointJob {
@@ -29,6 +33,8 @@ impl CheckpointJob {
             cwd: self.cwd,
             repos: self.repos,
             correlation_key: self.correlation_key,
+            freshness_url: self.freshness_url,
+            pull_request_freshness: self.pull_request_freshness,
             deadline: None,
             interval: DEFAULT_CHECKPOINT_INTERVAL,
             last_checkpoint: Mutex::new(Instant::now()),

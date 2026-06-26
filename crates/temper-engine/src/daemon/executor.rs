@@ -48,6 +48,16 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     let _ = cq.send(DaemonCompletion::ProgressApplyFinished);
                 });
             }
+            DaemonRequest::RunPullRequestFreshnessCheck { check, responder } => {
+                let applier = Arc::clone(&self.applier);
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    let response = applier.check_pull_request_freshness(check).await;
+                    responder.respond(temper_engine_io::http::HttpResponseData::json(
+                        200,
+                        &serde_json::to_value(&response).expect("freshness response serializes"),
+                    ));
+                });
+            }
             DaemonRequest::RunWakeScan { token, hint } => {
                 let scanner = self.scanner_slot.lock().expect("scanner slot").clone();
                 let cq = self.cq.clone();

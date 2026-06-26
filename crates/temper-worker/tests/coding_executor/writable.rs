@@ -1,5 +1,26 @@
 use super::support::*;
 
+struct StaleGuard;
+
+impl temper_worker::PrFreshnessGuard for StaleGuard {
+    fn check<'a>(
+        &'a self,
+        _check: &'a temper_protocol_agent::PullRequestFreshness,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), temper_worker::PrFreshnessFailure>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async {
+            Err(temper_worker::PrFreshnessFailure::Stale(
+                "pull request merged".to_string(),
+            ))
+        })
+    }
+}
+
 #[test]
 fn success_path_commits_pushes_and_reports_branch() {
     temper_worker_io::block_on(async {
@@ -67,6 +88,28 @@ fn success_path_commits_pushes_and_reports_branch() {
             ]),
             "agent diff"
         );
+    });
+}
+
+#[test]
+fn stale_pr_fix_cancels_before_final_push() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture
+            .executor(AgentBehavior::Success.runner(), true)
+            .with_pr_freshness_guard(Arc::new(StaleGuard));
+
+        let outcome = executor
+            .execute(assign_with_context(
+                "pr-for-code-7",
+                pr_fix_job_context("agent/pr-for-code-7", "pr-for-code-7"),
+            ))
+            .await;
+
+        let message = expect_failure_class(outcome, FailureClass::Canceled);
+        assert!(message.contains("stale pull request job canceled before push"));
+        assert!(message.contains("pull request merged"));
+        assert_no_origin_branch(&fixture, "agent/pr-for-code-7");
     });
 }
 

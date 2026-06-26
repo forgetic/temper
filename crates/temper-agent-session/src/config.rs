@@ -51,6 +51,9 @@ pub struct AgentConfig {
     pub deadline: Option<SystemTime>,
     /// Checkpoint cadence for the time-based backstop (`--checkpoint-interval`).
     pub checkpoint_interval: Duration,
+    /// Optional daemon endpoint used to revalidate PR-head freshness before
+    /// checkpoint pushes.
+    pub freshness_url: Option<String>,
 }
 
 impl AgentConfig {
@@ -72,6 +75,7 @@ impl AgentConfig {
             config_dir,
             deadline: None,
             checkpoint_interval: DEFAULT_CHECKPOINT_INTERVAL,
+            freshness_url: None,
         }
     }
 
@@ -87,6 +91,13 @@ impl AgentConfig {
     #[must_use]
     pub fn with_checkpoint_interval(mut self, interval: Duration) -> Self {
         self.checkpoint_interval = interval;
+        self
+    }
+
+    /// Sets the daemon PR freshness endpoint.
+    #[must_use]
+    pub fn with_freshness_url(mut self, url: Option<String>) -> Self {
+        self.freshness_url = url;
         self
     }
 }

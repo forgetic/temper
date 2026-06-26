@@ -24,7 +24,7 @@ use temper_agent::{
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
 use temper_protocol_agent::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
-use temper_worker::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
+use temper_worker::{AgentRunError, AgentRunner, PrFreshnessGuard, ProgressSink, WorkspaceResult};
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {
@@ -33,6 +33,7 @@ pub struct InProcessAgentRunner {
     max_iterations: usize,
     config_dir: Option<PathBuf>,
     enable_subagents: bool,
+    pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
 }
 
 impl InProcessAgentRunner {
@@ -49,7 +50,13 @@ impl InProcessAgentRunner {
             max_iterations,
             config_dir,
             enable_subagents,
+            pr_freshness_guard: None,
         }
+    }
+
+    pub fn with_pr_freshness_guard(mut self, guard: Arc<dyn PrFreshnessGuard>) -> Self {
+        self.pr_freshness_guard = Some(guard);
+        self
     }
 }
 
@@ -98,8 +105,14 @@ impl AgentRunner for InProcessAgentRunner {
         let max_iterations = self.max_iterations;
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
-        let hook_set =
-            super::hooks::hooks_for_context(context, cwd, Arc::clone(&progress), Arc::clone(&step));
+        let pr_freshness_guard = self.pr_freshness_guard.clone();
+        let hook_set = super::hooks::hooks_for_context(
+            context,
+            cwd,
+            Arc::clone(&progress),
+            pr_freshness_guard,
+            Arc::clone(&step),
+        );
         let context = context.clone();
         let cwd = cwd.to_path_buf();
 
@@ -415,6 +428,7 @@ mod tests {
             checkout: None,
             allowed_verdicts: Vec::new(),
             guidance: Default::default(),
+            pull_request_freshness: None,
         }
     }
 

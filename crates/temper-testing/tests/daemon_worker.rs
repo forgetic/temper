@@ -107,6 +107,7 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
             checkout_capability: Some("writable".to_string()),
             allowed_verdicts: Vec::new(),
             guidance: None,
+            pull_request_freshness: None,
         };
         daemon
             .enqueue_job(

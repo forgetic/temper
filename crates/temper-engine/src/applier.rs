@@ -9,7 +9,9 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use temper_protocol_worker::{JobProgress, JobResult};
+use temper_protocol_worker::{
+    JobProgress, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
+};
 
 use crate::InFlightJob;
 
@@ -32,6 +34,15 @@ pub trait ResultApplier: Send + Sync {
     /// re-deliver after retry or daemon restart.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
         let _ = (job, progress);
+    }
+
+    /// Validates whether a PR-targeted in-flight job may still publish work.
+    async fn check_pull_request_freshness(
+        &self,
+        check: PullRequestFreshness,
+    ) -> PullRequestFreshnessResponse {
+        let _ = check;
+        PullRequestFreshnessResponse::unavailable("pull request freshness checks are unavailable")
     }
 }
 
@@ -78,6 +89,16 @@ impl ResultApplier for RoleRoutingApplier {
         match self.routes.get(&job.role) {
             Some(applier) => applier.apply_progress(job, progress).await,
             None => self.default.apply_progress(job, progress).await,
+        }
+    }
+
+    async fn check_pull_request_freshness(
+        &self,
+        check: PullRequestFreshness,
+    ) -> PullRequestFreshnessResponse {
+        match self.routes.get(&check.role) {
+            Some(applier) => applier.check_pull_request_freshness(check).await,
+            None => self.default.check_pull_request_freshness(check).await,
         }
     }
 }

@@ -27,7 +27,10 @@ mod result;
 mod workspace;
 
 pub use assignment::{Artifact, Assign, Capability, Capacity, Poll, Register};
-pub use job::{JobArtifactSnapshot, JobContext};
+pub use job::{
+    JobArtifactSnapshot, JobContext, PullRequestFreshness, PullRequestFreshnessResponse,
+    PullRequestFreshnessStatus,
+};
 pub use lifecycle::{
     ErrorCode, Heartbeat, HeartbeatState, JobHeartbeat, JobProgress, LeaseAck, LeaseAckDisposition,
     ProtocolError, Release, ReleaseDisposition,

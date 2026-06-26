@@ -21,6 +21,7 @@ pub mod config;
 pub mod executor;
 pub mod observability;
 pub mod out_of_process_runner;
+pub mod pr_freshness;
 pub mod progress_relay;
 pub mod run;
 pub mod transport;
@@ -41,6 +42,10 @@ pub use config::{
 pub use executor::{JobExecutor, JobOutcome, StubExecutor, job_result};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
 pub use out_of_process_runner::OutOfProcessRunner;
+pub use pr_freshness::{
+    HttpPrFreshnessGuard, PrFreshnessFailure, PrFreshnessGuard,
+    map_response as map_pr_freshness_response,
+};
 pub use progress_relay::{DaemonRelayProgressSink, progress_message};
 pub use run::{run_worker, run_worker_with_transport};
 pub use transport::{HttpTransport, Transport};

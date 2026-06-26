@@ -4,7 +4,10 @@
 //! checkpoints it records.
 
 use temper_forge::{CreateComment, Forge};
-use temper_protocol_worker::{JobContext, JobProgress, JobResult, ResultStatus};
+use temper_protocol_worker::{
+    JobContext, JobProgress, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
+    ResultStatus,
+};
 use temper_workflow::{Effect, RoleId};
 
 use crate::InFlightJob;
@@ -14,6 +17,9 @@ use crate::forge_applier::ForgeApplier;
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     async fn apply(&self, job: InFlightJob, result: JobResult) {
+        if self.drop_stale_pr_job(&job).await {
+            return;
+        }
         match result.status {
             ResultStatus::Success => self.apply_success(job, result).await,
             ResultStatus::Failure => self.apply_failure(job, result).await,
@@ -30,6 +36,9 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     /// and replayed checkpoints no longer mutate the source issue. Non-engineer
     /// final-summary progress keeps the previous idempotent comment behavior.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        if self.drop_stale_pr_job(&job).await {
+            return;
+        }
         let use_run_ledger = progress_uses_run_ledger(&job);
 
         if progress.state == "started" {
@@ -100,9 +109,37 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
             );
         }
     }
+    async fn check_pull_request_freshness(
+        &self,
+        check: PullRequestFreshness,
+    ) -> PullRequestFreshnessResponse {
+        crate::pr_freshness::check_pull_request_freshness(self.forge.as_ref(), &check).await
+    }
 }
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
+    async fn drop_stale_pr_job(&self, job: &InFlightJob) -> bool {
+        let Ok(context) = serde_json::from_value::<JobContext>(job.job_payload.clone()) else {
+            return false;
+        };
+        let Some(check) = context.pull_request_freshness.as_ref() else {
+            return false;
+        };
+        let response =
+            crate::pr_freshness::check_pull_request_freshness(self.forge.as_ref(), check).await;
+        if !crate::pr_freshness::is_stale(&response) {
+            return false;
+        }
+        tracing::debug!(
+            target: "temper_daemon",
+            job_id = %job.job_id,
+            repo = %job.repo,
+            reason = response.reason.as_deref().unwrap_or("stale"),
+            "forge applier dropped stale pull request job update"
+        );
+        true
+    }
+
     pub(super) fn final_progress_uses_implementation_pr_body(&self, job: &InFlightJob) -> bool {
         if job.role != "engineer" || job.artifact.kind != "issue" {
             return false;

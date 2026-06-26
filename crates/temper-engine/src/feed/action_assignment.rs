@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use temper_forge::{CiJobConclusion, CiJobQuery, Forge, ForgeError, RepositoryId};
-use temper_protocol_worker::{JobContext, RepoAccess};
+use temper_forge::{CiJobConclusion, CiJobQuery, Forge, ForgeError, PullRequest, RepositoryId};
+use temper_protocol_worker::{JobContext, PullRequestFreshness, RepoAccess};
 use temper_runner::{ScanError, WorkItem};
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, Effect, GateCondition, QueueManifest, ToolManifest,
@@ -231,12 +231,70 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
         commit_sha: pull_request.head_sha.clone(),
         ..CiJobQuery::default()
     };
-    let action = context.action.as_deref().unwrap_or("assigned action");
+    let action = context
+        .action
+        .clone()
+        .unwrap_or_else(|| "assigned action".to_string());
+    context.pull_request_freshness = Some(pull_request_freshness(
+        repo,
+        item,
+        compiled,
+        context,
+        &pull_request,
+        &action,
+    ));
     let guidance =
-        pull_request_writable_guidance(forge, repo, compiled, item, &query, action, &head_branch)
+        pull_request_writable_guidance(forge, repo, compiled, item, &query, &action, &head_branch)
             .await;
     append_guidance(context, guidance);
     Ok(())
+}
+
+fn pull_request_freshness(
+    repo: &RepositoryId,
+    item: &WorkItem,
+    compiled: &CompiledWorkflow,
+    context: &JobContext,
+    pull_request: &PullRequest,
+    action: &str,
+) -> PullRequestFreshness {
+    let queue = compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == item.queue.as_str());
+    PullRequestFreshness {
+        repository_id: repo.as_str().to_string(),
+        repo: context.repo.clone(),
+        role: context.role.clone(),
+        queue: item.queue.as_str().to_string(),
+        action: action.to_string(),
+        number: pull_request.number.get(),
+        pull_request_id: pull_request.id.as_str().to_string(),
+        head_sha: pull_request.head_sha.clone(),
+        queue_condition: queue.and_then(|queue| queue.condition.as_ref().and_then(condition_token)),
+        queue_labels: queue
+            .map(|queue| {
+                queue
+                    .labels
+                    .iter()
+                    .map(|label| label.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn condition_token(condition: &GateCondition) -> Option<String> {
+    let token = match condition {
+        GateCondition::CiPassed => "ci_passed",
+        GateCondition::CiFailed => "ci_failed",
+        GateCondition::ReviewApproved => "review_approved",
+        GateCondition::ReviewChangesRequested => "review_changes_requested",
+        GateCondition::DependenciesResolved
+        | GateCondition::LabelPresent(_)
+        | GateCondition::StateEquals { .. } => return None,
+    };
+    Some(token.to_string())
 }
 
 async fn pull_request_writable_guidance<F: Forge + ?Sized>(

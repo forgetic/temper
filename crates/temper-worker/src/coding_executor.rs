@@ -9,6 +9,7 @@ use temper_protocol_worker::{
 
 use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink};
 use crate::executor::{JobExecutor, JobOutcome};
+use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{RoleGitIdentity, Workspace, WorkspaceError, forgejo_remote_url};
 
 mod context;
@@ -46,6 +47,8 @@ pub struct CodingExecutor<R: AgentRunner> {
     /// Where agent step-progress checkpoints are relayed (logging by default;
     /// the worker→daemon→forge relay plugs in here later).
     progress: Arc<dyn ProgressSink>,
+    /// Optional host-provided guard for PR-head freshness checks before pushes.
+    pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
 }
 
 impl<R: AgentRunner> CodingExecutor<R> {
@@ -54,7 +57,15 @@ impl<R: AgentRunner> CodingExecutor<R> {
             config,
             runner,
             progress: Arc::new(crate::agent_runner::LoggingProgressSink),
+            pr_freshness_guard: None,
         }
+    }
+
+    /// Installs a host/daemon freshness guard used by `pull_request_writable`
+    /// jobs before final PR-head pushes.
+    pub fn with_pr_freshness_guard(mut self, guard: Arc<dyn PrFreshnessGuard>) -> Self {
+        self.pr_freshness_guard = Some(guard);
+        self
     }
 
     /// Overrides the step-progress sink (e.g. a daemon-relay sink, or a test
@@ -70,7 +81,8 @@ impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
         let config = self.config.clone();
         let runner = Arc::clone(&self.runner);
         let progress = Arc::clone(&self.progress);
-        async move { execute(config, runner, progress, assign).await }
+        let pr_freshness_guard = self.pr_freshness_guard.clone();
+        async move { execute(config, runner, progress, pr_freshness_guard, assign).await }
     }
 }
 
@@ -78,6 +90,7 @@ async fn execute<R: AgentRunner>(
     config: CodingExecutorConfig,
     runner: Arc<R>,
     progress: Arc<dyn ProgressSink>,
+    pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
     assign: Assign,
 ) -> JobOutcome {
     let artifact_item = assign.artifact.item.clone();
@@ -102,6 +115,7 @@ async fn execute<R: AgentRunner>(
         checkout_capability,
         allowed_verdicts,
         guidance,
+        pull_request_freshness,
     } = context;
 
     let manifest = match require_enriched_field(manifest, "workspace") {
@@ -175,6 +189,7 @@ async fn execute<R: AgentRunner>(
         &checkout,
         &allowed_verdicts,
         guidance.as_deref(),
+        pull_request_freshness.as_ref(),
     );
 
     // Run one agent turn with the cwd set to the workspace root (not a single
@@ -200,6 +215,8 @@ async fn execute<R: AgentRunner>(
                 &coordination_key,
                 &artifact_item,
                 mode == JobMode::PullRequestWritable,
+                pull_request_freshness.as_ref(),
+                pr_freshness_guard.as_deref(),
             )
             .await
         }

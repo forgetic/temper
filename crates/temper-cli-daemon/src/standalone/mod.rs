@@ -20,7 +20,9 @@ pub use agent_runner::InProcessAgentRunner;
 pub use transport::InProcessTransport;
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -218,13 +220,17 @@ async fn run_async(
     // before `worker_config` is moved into the worker task.
     let per_role_capacity = worker_config.max_concurrent_jobs as u64;
 
-    let runner = Arc::new(InProcessAgentRunner::new(
-        handle.clone(),
-        provider,
-        resolved.agent.max_iterations,
-        resolved.agent.config_dir.clone(),
-        resolved.agent.enable_subagents,
-    ));
+    let pr_freshness_guard = Arc::new(InProcessPrFreshnessGuard::new(daemon.clone()));
+    let runner = Arc::new(
+        InProcessAgentRunner::new(
+            handle.clone(),
+            provider,
+            resolved.agent.max_iterations,
+            resolved.agent.config_dir.clone(),
+            resolved.agent.enable_subagents,
+        )
+        .with_pr_freshness_guard(pr_freshness_guard.clone()),
+    );
     let executor = Arc::new(
         CodingExecutor::new(
             CodingExecutorConfig {
@@ -236,6 +242,7 @@ async fn run_async(
             },
             runner,
         )
+        .with_pr_freshness_guard(pr_freshness_guard)
         .with_progress_sink(Arc::new(InProcessProgressSink::new(
             handle.clone(),
             daemon.clone(),
@@ -384,6 +391,49 @@ impl temper_worker::ProgressSink for InProcessProgressSink {
         self.handle.spawn_with_cx(move |_cx| async move {
             let _ = daemon.deliver_protocol_message(message).await;
         });
+    }
+}
+
+struct InProcessPrFreshnessGuard {
+    daemon: Daemon,
+}
+
+impl InProcessPrFreshnessGuard {
+    fn new(daemon: Daemon) -> Self {
+        Self { daemon }
+    }
+}
+
+impl temper_worker::PrFreshnessGuard for InProcessPrFreshnessGuard {
+    fn check<'a>(
+        &'a self,
+        check: &'a temper_protocol_agent::PullRequestFreshness,
+    ) -> Pin<Box<dyn Future<Output = Result<(), temper_worker::PrFreshnessFailure>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let response = self
+                .daemon
+                .check_pull_request_freshness(protocol_worker_freshness(check))
+                .await;
+            temper_worker::map_pr_freshness_response(response)
+        })
+    }
+}
+
+fn protocol_worker_freshness(
+    check: &temper_protocol_agent::PullRequestFreshness,
+) -> temper_protocol_worker::PullRequestFreshness {
+    temper_protocol_worker::PullRequestFreshness {
+        repository_id: check.repository_id.clone(),
+        repo: check.repo.clone(),
+        role: check.role.clone(),
+        queue: check.queue.clone(),
+        action: check.action.clone(),
+        number: check.number,
+        pull_request_id: check.pull_request_id.clone(),
+        head_sha: check.head_sha.clone(),
+        queue_condition: check.queue_condition.clone(),
+        queue_labels: check.queue_labels.clone(),
     }
 }
 

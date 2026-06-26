@@ -1,7 +1,10 @@
 use temper_protocol_agent::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
 };
-use temper_protocol_worker::{JobArtifactSnapshot, RepoAccess, WorkspaceManifest};
+use temper_protocol_worker::{
+    JobArtifactSnapshot, PullRequestFreshness as WorkerPullRequestFreshness, RepoAccess,
+    WorkspaceManifest,
+};
 
 /// Assembles the typed [`WorkspaceContext`] the agent turn receives, listing
 /// every manifest repo with its sibling dir and access (ADR 0023).
@@ -23,6 +26,7 @@ pub(super) fn build_workspace_context(
     checkout: &str,
     allowed_verdicts: &[String],
     guidance: Option<&str>,
+    pull_request_freshness: Option<&WorkerPullRequestFreshness>,
 ) -> WorkspaceContext {
     let (artifact_type, target_kind) = match artifact_wire_kind {
         "pull_request" => ("pull_request", "PullRequest"),
@@ -95,5 +99,23 @@ pub(super) fn build_workspace_context(
             role_guidance: guidance.map(str::to_string),
             ..WorkspaceGuidance::default()
         },
+        pull_request_freshness: pull_request_freshness.map(agent_pull_request_freshness),
+    }
+}
+
+fn agent_pull_request_freshness(
+    freshness: &WorkerPullRequestFreshness,
+) -> temper_protocol_agent::PullRequestFreshness {
+    temper_protocol_agent::PullRequestFreshness {
+        repository_id: freshness.repository_id.clone(),
+        repo: freshness.repo.clone(),
+        role: freshness.role.clone(),
+        queue: freshness.queue.clone(),
+        action: freshness.action.clone(),
+        number: freshness.number,
+        pull_request_id: freshness.pull_request_id.clone(),
+        head_sha: freshness.head_sha.clone(),
+        queue_condition: freshness.queue_condition.clone(),
+        queue_labels: freshness.queue_labels.clone(),
     }
 }

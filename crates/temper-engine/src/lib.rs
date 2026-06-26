@@ -37,6 +37,7 @@ pub mod feed;
 pub mod forge_applier;
 pub mod lease_applier;
 pub mod mechanical;
+pub mod pr_freshness;
 mod webhook;
 mod workflow_meta;
 
@@ -60,6 +61,7 @@ pub use mechanical::{
     MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger, run_mechanical_backstop_tick,
     spawn_mechanical_backstop,
 };
+pub use pr_freshness::check_pull_request_freshness;
 // Public so out-of-crate `ResultApplier` implementations can name the job type
 // the trait passes them.
 pub use temper_protocol_worker::{JobArtifactSnapshot, JobContext, RepoOutcome};

@@ -190,6 +190,7 @@ fn maps_issue_work_item_to_daemon_job() {
             checkout_capability: None,
             allowed_verdicts: Vec::new(),
             guidance: None,
+            pull_request_freshness: None,
         }
     );
 }
@@ -464,6 +465,14 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
             context.checkout_capability.as_deref(),
             Some("pull_request_writable")
         );
+        let freshness = context
+            .pull_request_freshness
+            .as_ref()
+            .expect("PR-head freshness guard is present");
+        assert_eq!(freshness.queue, "pr_ci_failed");
+        assert_eq!(freshness.queue_condition.as_deref(), Some("ci_failed"));
+        assert_eq!(freshness.pull_request_id, pull_request.id.as_str());
+        assert_eq!(freshness.head_sha, pull_request.head_sha);
         let primary = context
             .workspace
             .as_ref()

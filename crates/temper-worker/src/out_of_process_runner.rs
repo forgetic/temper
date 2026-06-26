@@ -363,6 +363,7 @@ mod tests {
             checkout: Some("writable".to_string()),
             allowed_verdicts: Vec::new(),
             guidance: Default::default(),
+            pull_request_freshness: None,
         }
     }
 }

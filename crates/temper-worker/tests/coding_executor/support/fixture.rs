@@ -111,6 +111,7 @@ pub struct TestJobContext {
     pub action: Option<String>,
     checkout_capability: Option<String>,
     pub allowed_verdicts: Vec<String>,
+    pub pull_request_freshness: Option<Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -136,6 +137,7 @@ impl TestJobContext {
             "action": self.action,
             "checkout_capability": self.checkout_capability,
             "allowed_verdicts": self.allowed_verdicts,
+            "pull_request_freshness": self.pull_request_freshness,
             "workspace": {
                 "coordination_key": self.correlation_key,
                 "repos": [{
@@ -171,6 +173,7 @@ pub fn job_context(branch_hint: &str, correlation_key: &str) -> TestJobContext {
         action: Some("open_pr".to_string()),
         checkout_capability: Some("writable".to_string()),
         allowed_verdicts: vec![],
+        pull_request_freshness: None,
     }
 }
 
@@ -212,6 +215,26 @@ pub fn pr_job_context(branch_hint: &str, correlation_key: &str) -> TestJobContex
         "changes".to_string(),
         "escalate".to_string(),
     ];
+    context
+}
+
+pub fn pr_fix_job_context(branch_hint: &str, correlation_key: &str) -> TestJobContext {
+    let mut context = job_context(branch_hint, correlation_key);
+    context.queue = "pr_ci_failed".to_string();
+    context.artifact_kind = "implementation_pr".to_string();
+    context.action = Some("address_ci_failure".to_string());
+    context.checkout_capability = Some("pull_request_writable".to_string());
+    context.pull_request_freshness = Some(json!({
+        "repository_id": "repo-1",
+        "repo": "acme/service",
+        "role": "engineer",
+        "queue": "pr_ci_failed",
+        "action": "address_ci_failure",
+        "number": 7,
+        "pull_request_id": "pr-7",
+        "head_sha": "assigned-head",
+        "queue_condition": "ci_failed"
+    }));
     context
 }
 

@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use temper_agent::CheckpointHook;
 use temper_protocol_agent::{StepProgress, StepState, WorkspaceContext};
-use temper_worker::ProgressSink;
+use temper_worker::{PrFreshnessGuard, ProgressSink};
 
 #[derive(Default)]
 pub(super) struct HookSet {
@@ -26,12 +26,19 @@ pub(super) fn hooks_for_context(
     context: &WorkspaceContext,
     cwd: &Path,
     progress: Arc<dyn ProgressSink>,
+    pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
     step: Arc<AtomicU32>,
 ) -> HookSet {
     if !checkpoint_hooks_enabled(context) {
         return HookSet::default();
     }
-    let hook = Arc::new(WritableHooks::new(context, cwd, progress, step));
+    let hook = Arc::new(WritableHooks::new(
+        context,
+        cwd,
+        progress,
+        pr_freshness_guard,
+        step,
+    ));
     let turn_hook: Arc<dyn temper_agent::TurnHook> = hook.clone();
     let checkpoint_hook: Arc<dyn CheckpointHook> = hook.clone();
     HookSet {
@@ -58,6 +65,8 @@ struct WritableHooks {
     repos: Vec<HookRepo>,
     correlation_key: String,
     progress: Arc<dyn ProgressSink>,
+    pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
+    pull_request_freshness: Option<temper_protocol_agent::PullRequestFreshness>,
     step: Arc<AtomicU32>,
     last_checkpoint: Mutex<Instant>,
 }
@@ -67,6 +76,7 @@ impl WritableHooks {
         context: &WorkspaceContext,
         cwd: &Path,
         progress: Arc<dyn ProgressSink>,
+        pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
         step: Arc<AtomicU32>,
     ) -> Self {
         let repos = context
@@ -83,12 +93,15 @@ impl WritableHooks {
             repos,
             correlation_key: context.correlation_key.clone(),
             progress,
+            pr_freshness_guard,
+            pull_request_freshness: context.pull_request_freshness.clone(),
             step,
             last_checkpoint: Mutex::new(Instant::now()),
         }
     }
 
     async fn do_checkpoint(&self, label: Option<&str>) -> Result<Option<String>, String> {
+        self.ensure_fresh().await?;
         let step = self.step.fetch_add(1, Ordering::SeqCst);
         let job = HookJob {
             cwd: self.cwd.clone(),
@@ -133,6 +146,23 @@ impl WritableHooks {
         let _ = self
             .step
             .compare_exchange(step + 1, step, Ordering::SeqCst, Ordering::SeqCst);
+    }
+
+    async fn ensure_fresh(&self) -> Result<(), String> {
+        let Some(guard) = self.pr_freshness_guard.as_deref() else {
+            return Ok(());
+        };
+        let Some(freshness) = self.pull_request_freshness.as_ref() else {
+            return Ok(());
+        };
+        guard.check(freshness).await.map_err(|error| match error {
+            temper_worker::PrFreshnessFailure::Stale(reason) => {
+                format!("pull request is stale: {reason}")
+            }
+            temper_worker::PrFreshnessFailure::Unavailable(reason) => {
+                format!("pull request freshness unavailable: {reason}")
+            }
+        })
     }
 
     fn backstop_due(&self) -> bool {
@@ -269,6 +299,7 @@ mod tests {
             checkout: checkout.map(str::to_string),
             allowed_verdicts: Vec::new(),
             guidance: WorkspaceGuidance::default(),
+            pull_request_freshness: None,
         }
     }
 }

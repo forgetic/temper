@@ -67,6 +67,7 @@ fn prepare_checkpointer(
             context,
             config.deadline,
             config.checkpoint_interval,
+            config.freshness_url.clone(),
         ))
     });
     let resume = checkpointer

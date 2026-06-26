@@ -18,6 +18,7 @@
 //! --subagents <on|off>        enable investigate/read-only subagents
 //! --deadline-unix-seconds <N> job deadline/lease expiry hint
 //! --checkpoint-interval <DUR> checkpoint cadence, e.g. `60s`, `5m`
+//! --freshness-url <URL>      optional daemon PR freshness check endpoint
 //! --capture-dir <DIR>         optional debug capture / prompt-overlay dir
 //! ```
 
@@ -44,6 +45,8 @@ pub(crate) struct Options {
     pub(crate) result: PathBuf,
     /// Checkout/workspace dir (`--workspace`); `None` defaults to cwd.
     pub(crate) workspace: Option<PathBuf>,
+    /// Optional daemon PR freshness check endpoint (`--freshness-url`).
+    pub(crate) freshness_url: Option<String>,
     /// Optional debug capture / prompt-overlay dir (`--capture-dir`).
     pub(crate) capture_dir: Option<PathBuf>,
     /// Maximum model/tool iterations (`--max-iterations`).
@@ -71,6 +74,7 @@ impl Options {
         let mut subagents = false;
         let mut deadline_unix_seconds = None;
         let mut checkpoint_interval = None;
+        let mut freshness_url = None;
 
         let mut iter = args.into_iter();
         while let Some(arg) = iter.next() {
@@ -107,6 +111,7 @@ impl Options {
                     checkpoint_interval =
                         Some(parse_duration(&value(&mut iter, "--checkpoint-interval")?)?)
                 }
+                "--freshness-url" => freshness_url = Some(value(&mut iter, "--freshness-url")?),
                 "--help" | "-h" => return Ok(None),
                 other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
             }
@@ -128,6 +133,7 @@ impl Options {
             subagents,
             deadline_unix_seconds,
             checkpoint_interval,
+            freshness_url,
         }))
     }
 }
@@ -135,7 +141,7 @@ impl Options {
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
 [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] \
-[--deadline-unix-seconds <N>] [--checkpoint-interval <DURATION>] [--capture-dir <DIR>]\n  \
+[--deadline-unix-seconds <N>] [--checkpoint-interval <DURATION>] [--freshness-url <URL>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
 --workspace (default cwd), emits step-progress JSON lines on stdout, writes the result \
 to --result";

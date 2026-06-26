@@ -67,6 +67,7 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
         guidance: None,
+        pull_request_freshness: None,
     };
 
     WorkItemJob {
@@ -129,6 +130,7 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
         guidance: None,
+        pull_request_freshness: None,
     };
     enrich_job_context_from_workflow(item, compiled, &mut context)?;
 
