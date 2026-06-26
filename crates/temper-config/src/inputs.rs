@@ -142,7 +142,8 @@ pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), Con
     });
     let credentials_source = mark_selected_credentials_required(
         credentials_source,
-        inputs.explicit_credentials.is_some() || paths::credentials_directory_source_location(inputs.env).is_some(),
+        inputs.explicit_credentials.is_some()
+            || paths::credentials_directory_source_location(inputs.env).is_some(),
     );
 
     let (config, config_file) = load_optional(config_source, FileKind::Config, Config::parse)?;
@@ -215,10 +216,9 @@ fn mark_selected_credentials_required(
             file.required = required;
             LocatedCredentials::File(file)
         }
-        LocatedCredentials::Directory { path, .. } => LocatedCredentials::Directory {
-            path,
-            required,
-        },
+        LocatedCredentials::Directory { path, .. } => {
+            LocatedCredentials::Directory { path, required }
+        }
     })
 }
 
@@ -232,7 +232,9 @@ fn load_credentials_optional(
 
     match source {
         LocatedCredentials::File(file) => load_credentials_file(file),
-        LocatedCredentials::Directory { path, required } => load_credentials_directory(path, required),
+        LocatedCredentials::Directory { path, required } => {
+            load_credentials_directory(path, required)
+        }
     }
 }
 

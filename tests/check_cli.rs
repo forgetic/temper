@@ -267,8 +267,7 @@ fn check_json_fails_for_missing_named_secret_reference() {
     assert!(
         findings.iter().any(|finding| finding["severity"] == "error"
             && finding["message"].as_str().is_some_and(|message| {
-                message.contains("engine.forge_token")
-                    && message.contains("missing-engine-token")
+                message.contains("engine.forge_token") && message.contains("missing-engine-token")
             })),
         "{value}"
     );

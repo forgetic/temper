@@ -72,27 +72,25 @@ fn credentials_named_secrets_schema() -> Value {
     object_schema(
         "Credentials TOML named secrets map. Compact raw values are accepted under `[secrets]`; structured `[secrets.<name>]` tables may carry target-era metadata plus one payload field such as `token`, `value`, `secret`, `key`, or `api_key`.",
         Vec::<(&'static str, Value)>::new(),
-        schema_object([
-            (
-                "oneOf",
-                Value::Array(vec![
-                    string_schema("Raw named secret payload."),
-                    closed_object_schema(
-                        "Structured named secret payload.",
-                        [
-                            ("kind", string_schema("Semantic secret kind.")),
-                            ("token", string_schema("Forge token payload.")),
-                            ("value", string_schema("Generic secret payload.")),
-                            ("secret", string_schema("Generic secret payload alias.")),
-                            ("key", string_schema("API-key payload alias.")),
-                            ("api_key", string_schema("Provider API-key payload.")),
-                            ("provider", string_schema("Provider name metadata.")),
-                            ("auth", string_schema("Provider auth metadata.")),
-                        ],
-                    ),
-                ]),
-            ),
-        ]),
+        schema_object([(
+            "oneOf",
+            Value::Array(vec![
+                string_schema("Raw named secret payload."),
+                closed_object_schema(
+                    "Structured named secret payload.",
+                    [
+                        ("kind", string_schema("Semantic secret kind.")),
+                        ("token", string_schema("Forge token payload.")),
+                        ("value", string_schema("Generic secret payload.")),
+                        ("secret", string_schema("Generic secret payload alias.")),
+                        ("key", string_schema("API-key payload alias.")),
+                        ("api_key", string_schema("Provider API-key payload.")),
+                        ("provider", string_schema("Provider name metadata.")),
+                        ("auth", string_schema("Provider auth metadata.")),
+                    ],
+                ),
+            ]),
+        )]),
     )
 }
 
@@ -206,9 +204,7 @@ fn engine_config_schema() -> Value {
             ),
             (
                 "forge_token",
-                string_schema(
-                    "Secret-name reference for the engine/default Forge API token.",
-                ),
+                string_schema("Secret-name reference for the engine/default Forge API token."),
             ),
             (
                 "webhook_secret",

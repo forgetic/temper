@@ -262,8 +262,8 @@ async fn run_async(
     emit_worker_status(banner::capacity(&role_names, per_role_capacity));
 
     // --- Webhook route (optional) ---
-    let webhook_enabled =
-        resolved.engine.webhook_secret_value.is_some() || daemon_config.webhook_secret_file.is_some();
+    let webhook_enabled = resolved.engine.webhook_secret_value.is_some()
+        || daemon_config.webhook_secret_file.is_some();
     let daemon = if let Some(secret) = resolved.engine.webhook_secret_value.as_ref() {
         let webhook_config = Arc::new(WebhookConfig {
             secret: secret.expose_secret().trim().to_string(),

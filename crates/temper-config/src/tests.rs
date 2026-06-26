@@ -456,7 +456,10 @@ webhook-secret = "named-webhook-secret"
 
     let resolved = resolve(&config, &credentials, &NoEnv).expect("resolves");
 
-    assert_eq!(exposed(&resolved.forge.admin_token), Some("named-forge-token"));
+    assert_eq!(
+        exposed(&resolved.forge.admin_token),
+        Some("named-forge-token")
+    );
     assert_eq!(
         resolved
             .engine
@@ -482,8 +485,14 @@ webhook-secret = "named-webhook-secret"
         Some("named-webhook-secret")
     );
     let rendered = format!("{resolved:?}");
-    assert!(!rendered.contains("named-forge-token"), "secret leaked: {rendered}");
-    assert!(!rendered.contains("named-webhook-secret"), "secret leaked: {rendered}");
+    assert!(
+        !rendered.contains("named-forge-token"),
+        "secret leaked: {rendered}"
+    );
+    assert!(
+        !rendered.contains("named-webhook-secret"),
+        "secret leaked: {rendered}"
+    );
 }
 
 #[test]
@@ -514,7 +523,10 @@ value = "structured-webhook-secret"
 
     let resolved = resolve(&config, &credentials, &NoEnv).expect("resolves");
 
-    assert_eq!(exposed(&resolved.forge.admin_token), Some("structured-forge-token"));
+    assert_eq!(
+        exposed(&resolved.forge.admin_token),
+        Some("structured-forge-token")
+    );
     assert_eq!(
         resolved
             .engine
@@ -528,7 +540,10 @@ value = "structured-webhook-secret"
 #[test]
 fn missing_named_secret_references_error_with_clear_fields() {
     let cases: &[(&str, &str)] = &[
-        ("engine.forge_token", "[engine]\nforge_token = \"missing\"\n"),
+        (
+            "engine.forge_token",
+            "[engine]\nforge_token = \"missing\"\n",
+        ),
         (
             "engine.webhook_secret",
             "[engine]\nwebhook_secret = \"missing\"\n",
@@ -751,13 +766,21 @@ named = "named-secret-value"
 "#,
     );
     let rendered = format!("{credentials:?}");
-    for secret in ["agent-pw", "agent-token", "provider-key", "named-secret-value"] {
+    for secret in [
+        "agent-pw",
+        "agent-token",
+        "provider-key",
+        "named-secret-value",
+    ] {
         assert!(
             !rendered.contains(secret),
             "secret `{secret}` leaked into Credentials Debug: {rendered}"
         );
     }
-    assert!(rendered.contains("[REDACTED]"), "no redaction marker: {rendered}");
+    assert!(
+        rendered.contains("[REDACTED]"),
+        "no redaction marker: {rendered}"
+    );
 }
 
 /// The `Secret` alias round-trips: `expose_secret()` returns the raw value while

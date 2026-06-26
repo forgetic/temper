@@ -187,13 +187,14 @@ pub(crate) fn paired_secret_source_location(
         .map(explicit_secret_source_location)
         .or_else(|| credentials_directory_source_location(env))
         .or_else(|| {
-            explicit_config.map(explicit_config_location).map(|location| {
-                SecretSourceLocation::File(location.root.join(CREDENTIALS_FILE_NAME))
-            })
+            explicit_config
+                .map(explicit_config_location)
+                .map(|location| {
+                    SecretSourceLocation::File(location.root.join(CREDENTIALS_FILE_NAME))
+                })
         })
         .or_else(|| {
-            config_dir(paths)
-                .map(|dir| SecretSourceLocation::File(dir.join(CREDENTIALS_FILE_NAME)))
+            config_dir(paths).map(|dir| SecretSourceLocation::File(dir.join(CREDENTIALS_FILE_NAME)))
         })
 }
 
@@ -329,7 +330,10 @@ mod tests {
             ..PathResolver::default()
         };
 
-        assert_eq!(credentials_path(None, &paths, &env), Some(credentials_dir.clone()));
+        assert_eq!(
+            credentials_path(None, &paths, &env),
+            Some(credentials_dir.clone())
+        );
         let _ = std::fs::remove_dir_all(credentials_dir);
         let _ = std::fs::remove_dir_all(xdg);
     }

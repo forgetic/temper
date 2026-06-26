@@ -106,7 +106,10 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
         "{stdout}"
     );
     assert!(!stdout.contains("super-secret-forge-token"), "{stdout}");
-    assert!(!stdout.contains("super-secret-named-forge-token"), "{stdout}");
+    assert!(
+        !stdout.contains("super-secret-named-forge-token"),
+        "{stdout}"
+    );
     assert!(!stdout.contains("super-secret-webhook-value"), "{stdout}");
     assert!(!stdout.contains("super-secret-worker-token"), "{stdout}");
     assert!(!stdout.contains("super-secret-agent-provider"), "{stdout}");

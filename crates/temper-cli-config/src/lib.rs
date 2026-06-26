@@ -367,7 +367,11 @@ fn render_secret_reference(reference: Option<&SecretReference>) -> String {
         Some(reference) => format!(
             "{} ({})",
             reference.name,
-            if reference.available { "available" } else { "missing" }
+            if reference.available {
+                "available"
+            } else {
+                "missing"
+            }
         ),
         None => "(unset)".to_string(),
     }

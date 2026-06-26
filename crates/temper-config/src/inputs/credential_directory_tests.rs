@@ -88,8 +88,11 @@ fn explicit_secrets_directory_loads_named_files_without_credentials_toml() {
     let secrets_dir = dir.join("secrets");
     std::fs::create_dir_all(&secrets_dir).expect("create secrets dir");
     std::fs::write(&config_path, CONFIG_WITH_NAMED_ENGINE_SECRETS).expect("write config");
-    std::fs::write(secrets_dir.join("forge-engine-token"), "named-forge-token\n")
-        .expect("write forge token");
+    std::fs::write(
+        secrets_dir.join("forge-engine-token"),
+        "named-forge-token\n",
+    )
+    .expect("write forge token");
     std::fs::write(secrets_dir.join("webhook-secret"), "named-webhook-secret\n")
         .expect("write webhook secret");
 
@@ -105,7 +108,10 @@ fn explicit_secrets_directory_loads_named_files_without_credentials_toml() {
     assert_eq!(loaded.credentials.as_deref(), Some(secrets_dir.as_path()));
     assert_named_engine_secrets_resolve(&resolved);
     let rendered = format!("{resolved:?}");
-    assert!(!rendered.contains("named-forge-token"), "secret leaked: {rendered}");
+    assert!(
+        !rendered.contains("named-forge-token"),
+        "secret leaked: {rendered}"
+    );
     assert!(
         !rendered.contains("named-webhook-secret"),
         "secret leaked: {rendered}"
@@ -120,10 +126,16 @@ fn credentials_directory_loads_named_files_without_credentials_toml() {
     let credentials_dir = dir.join("systemd-creds");
     std::fs::create_dir_all(&credentials_dir).expect("create credentials dir");
     std::fs::write(&config_path, CONFIG_WITH_NAMED_ENGINE_SECRETS).expect("write config");
-    std::fs::write(credentials_dir.join("forge-engine-token"), "named-forge-token\n")
-        .expect("write forge token");
-    std::fs::write(credentials_dir.join("webhook-secret"), "named-webhook-secret\n")
-        .expect("write webhook secret");
+    std::fs::write(
+        credentials_dir.join("forge-engine-token"),
+        "named-forge-token\n",
+    )
+    .expect("write forge token");
+    std::fs::write(
+        credentials_dir.join("webhook-secret"),
+        "named-webhook-secret\n",
+    )
+    .expect("write webhook secret");
 
     let mut env = EnvMap::new();
     env.insert(
@@ -139,7 +151,10 @@ fn credentials_directory_loads_named_files_without_credentials_toml() {
     let (resolved, loaded) = load_explicit(&inputs).expect("systemd named files load");
 
     assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
-    assert_eq!(loaded.credentials.as_deref(), Some(credentials_dir.as_path()));
+    assert_eq!(
+        loaded.credentials.as_deref(),
+        Some(credentials_dir.as_path())
+    );
     assert_named_engine_secrets_resolve(&resolved);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -180,7 +195,10 @@ fn credentials_directory_credentials_load_when_no_explicit_secrets() {
     let (resolved, loaded) = load_explicit(&inputs).expect("systemd credentials load");
 
     assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
-    assert_eq!(loaded.credentials.as_deref(), Some(credentials_dir.as_path()));
+    assert_eq!(
+        loaded.credentials.as_deref(),
+        Some(credentials_dir.as_path())
+    );
     assert_eq!(
         resolved
             .forge
