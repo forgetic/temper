@@ -4,7 +4,10 @@
 //! checkpoints it records.
 
 use temper_forge::{CreateComment, Forge};
-use temper_protocol_worker::{JobContext, JobProgress, JobResult, ResultStatus};
+use temper_protocol_worker::{
+    JobContext, JobProgress, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
+    ResultStatus,
+};
 use temper_workflow::{Effect, RoleId};
 
 use crate::InFlightJob;
@@ -14,6 +17,9 @@ use crate::forge_applier::ForgeApplier;
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     async fn apply(&self, job: InFlightJob, result: JobResult) {
+        if self.drop_stale_pr_job(&job).await {
+            return;
+        }
         match result.status {
             ResultStatus::Success => self.apply_success(job, result).await,
             ResultStatus::Failure => self.apply_failure(job, result).await,
@@ -30,6 +36,9 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     /// and replayed checkpoints no longer mutate the source issue. Non-engineer
     /// final-summary progress keeps the previous idempotent comment behavior.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        if self.drop_stale_pr_job(&job).await {
+            return;
+        }
         let use_run_ledger = progress_uses_run_ledger(&job);
 
         if progress.state == "started" {
@@ -99,6 +108,12 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
                 "forge applier could not record progress"
             );
         }
+    }
+    async fn check_pull_request_freshness(
+        &self,
+        check: PullRequestFreshness,
+    ) -> PullRequestFreshnessResponse {
+        crate::pr_freshness::check_pull_request_freshness(self.forge.as_ref(), &check).await
     }
 }
 

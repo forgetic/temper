@@ -111,6 +111,23 @@ pub const CONTEXT_ENV: &str = "TEMPER_CODING_WORKSPACE_CONTEXT";
 /// Legacy; the worker now passes the path as the `--result` CLI flag.
 pub const RESULT_ENV: &str = "TEMPER_CODING_WORKSPACE_RESULT";
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PullRequestFreshness {
+    pub repository_id: String,
+    pub repo: String,
+    pub role: String,
+    pub queue: String,
+    pub action: String,
+    pub number: u64,
+    pub pull_request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_condition: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queue_labels: Vec<String>,
+}
+
 /// The work-item context the worker hands the agent for one turn.
 ///
 /// Moved here from the agent's coding-loop crate so it is owned by the wire
@@ -140,6 +157,10 @@ pub struct WorkspaceContext {
     pub allowed_verdicts: Vec<String>,
     #[serde(default)]
     pub guidance: WorkspaceGuidance,
+    /// Freshness guard facts for PR-head writable jobs. Agents and host hooks
+    /// revalidate these before pushing checkpoints; absent for ordinary jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_freshness: Option<PullRequestFreshness>,
 }
 
 impl WorkspaceContext {
