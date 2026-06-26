@@ -30,15 +30,22 @@
 //! incident this fixes.
 
 mod provider;
+mod runtime_overrides;
+mod serve_args;
 mod standalone;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_config::{
-    Capability, ConfigError, EX_USAGE, EnvLookup, LoadInputs, LoadOptions, LoadedPaths,
-    PathResolver, Resolved, WorkerPoolSettings, load_explicit,
+    ConfigError, EX_USAGE, EnvLookup, LoadInputs, LoadOptions, LoadedPaths, PathResolver, Resolved,
+    load_explicit,
 };
+
+pub use runtime_overrides::RuntimeOverrides;
+pub use serve_args::{SERVE_ENGINE_USAGE, SERVE_STANDALONE_USAGE, SERVE_USAGE, SERVE_WORKER_USAGE};
+use runtime_overrides::apply_runtime_overrides;
+use serve_args::{ServeInvocation, parse_serve_invocation, serve_service_usage};
 
 // Exposed (re-exported up through `temper-cli`) for the root package's
 // in-process-transport integration test, which proves the standalone
@@ -408,7 +415,9 @@ fn parse_serve_component_args(
             }
             "--service" => return Err(service_flag_error(component)),
             "-c" | "--config" | "--secrets" => {
-                return Err(format!("`{arg}` is a global option; place it before `serve`"));
+                return Err(format!(
+                    "`{arg}` is a global option; place it before `serve`"
+                ));
             }
             "--id" => {
                 runtime.process_id = Some(next_non_empty_serve_value(component, &mut iter, &arg)?);

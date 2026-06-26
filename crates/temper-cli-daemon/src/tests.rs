@@ -330,33 +330,63 @@ fn serve_usage_documents_supported_components() {
         "standalone help should identify the compatibility wrapper"
     );
     for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
-        assert!(SERVE_USAGE.contains(flag), "serve help should mention {flag}: {SERVE_USAGE}");
+        assert!(
+            SERVE_USAGE.contains(flag),
+            "serve help should mention {flag}: {SERVE_USAGE}"
+        );
     }
 }
 
 #[test]
 fn serve_service_help_documents_implemented_target_flags() {
-    assert!(SERVE_ENGINE_USAGE.contains("serve engine"), "{SERVE_ENGINE_USAGE}");
+    assert!(
+        SERVE_ENGINE_USAGE.contains("serve engine"),
+        "{SERVE_ENGINE_USAGE}"
+    );
     assert!(
         SERVE_ENGINE_USAGE.contains("temper daemon --service engine"),
         "{SERVE_ENGINE_USAGE}"
     );
-    assert!(SERVE_ENGINE_USAGE.contains("temper --config"), "{SERVE_ENGINE_USAGE}");
-    assert!(SERVE_ENGINE_USAGE.contains("--secrets"), "{SERVE_ENGINE_USAGE}");
-    assert!(SERVE_ENGINE_USAGE.contains("--id <ID>"), "{SERVE_ENGINE_USAGE}");
-    assert!(!SERVE_ENGINE_USAGE.contains("Not implemented yet"), "{SERVE_ENGINE_USAGE}");
+    assert!(
+        SERVE_ENGINE_USAGE.contains("temper --config"),
+        "{SERVE_ENGINE_USAGE}"
+    );
+    assert!(
+        SERVE_ENGINE_USAGE.contains("--secrets"),
+        "{SERVE_ENGINE_USAGE}"
+    );
+    assert!(
+        SERVE_ENGINE_USAGE.contains("--id <ID>"),
+        "{SERVE_ENGINE_USAGE}"
+    );
+    assert!(
+        !SERVE_ENGINE_USAGE.contains("Not implemented yet"),
+        "{SERVE_ENGINE_USAGE}"
+    );
 
-    assert!(SERVE_WORKER_USAGE.contains("serve worker"), "{SERVE_WORKER_USAGE}");
+    assert!(
+        SERVE_WORKER_USAGE.contains("serve worker"),
+        "{SERVE_WORKER_USAGE}"
+    );
     assert!(
         SERVE_WORKER_USAGE.contains("temper daemon --service worker"),
         "{SERVE_WORKER_USAGE}"
     );
-    assert!(SERVE_WORKER_USAGE.contains("temper --config"), "{SERVE_WORKER_USAGE}");
-    assert!(SERVE_WORKER_USAGE.contains("--secrets"), "{SERVE_WORKER_USAGE}");
+    assert!(
+        SERVE_WORKER_USAGE.contains("temper --config"),
+        "{SERVE_WORKER_USAGE}"
+    );
+    assert!(
+        SERVE_WORKER_USAGE.contains("--secrets"),
+        "{SERVE_WORKER_USAGE}"
+    );
     for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
         assert!(SERVE_WORKER_USAGE.contains(flag), "{SERVE_WORKER_USAGE}");
     }
-    assert!(!SERVE_WORKER_USAGE.contains("Not implemented yet"), "{SERVE_WORKER_USAGE}");
+    assert!(
+        !SERVE_WORKER_USAGE.contains("Not implemented yet"),
+        "{SERVE_WORKER_USAGE}"
+    );
 }
 
 #[test]
@@ -591,3 +621,5 @@ fn daemon_rejects_local_config_and_secrets_flags() {
         assert!(error.contains("global option"), "{error}");
     }
 }
+
+mod serve_runtime;

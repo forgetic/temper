@@ -6,9 +6,7 @@ use std::path::PathBuf;
 use temper_config::{EnvMap, PathResolver, Resolved};
 
 use super::scratch;
-use crate::{
-    DaemonInputs, RuntimeOverrides, Service, apply_runtime_overrides, load_for,
-};
+use crate::{DaemonInputs, RuntimeOverrides, Service, apply_runtime_overrides, load_for};
 
 fn resolved_from_config(tag: &str, config_text: &str) -> (PathBuf, Resolved) {
     let dir = scratch(tag);
@@ -118,8 +116,8 @@ fn worker_flags_override_worker_runtime_config() {
     )
     .expect("worker overrides apply");
 
-    let worker_config = temper_worker_service::worker_config(&resolved)
-        .expect("worker runtime config builds");
+    let worker_config =
+        temper_worker_service::worker_config(&resolved).expect("worker runtime config builds");
     assert_eq!(worker_config.worker_id, "worker-a");
     assert_eq!(worker_config.daemon_url, "http://engine.local:9000");
     assert_eq!(worker_config.max_concurrent_jobs, 4);
@@ -142,8 +140,8 @@ fn worker_pool_derives_capabilities_and_default_capacity() {
     )
     .expect("pool applies");
 
-    let worker_config = temper_worker_service::worker_config(&resolved)
-        .expect("worker runtime config builds");
+    let worker_config =
+        temper_worker_service::worker_config(&resolved).expect("worker runtime config builds");
     assert_eq!(worker_config.max_concurrent_jobs, 2);
     let capabilities: BTreeSet<(String, String)> = worker_config
         .capabilities
@@ -232,7 +230,10 @@ fn worker_pool_without_repos_fails_instead_of_using_legacy_capabilities() {
     .expect_err("empty pool should fail");
 
     assert!(error.contains("empty"), "{error}");
-    assert!(error.contains("cannot produce runtime capabilities"), "{error}");
+    assert!(
+        error.contains("cannot produce runtime capabilities"),
+        "{error}"
+    );
     assert_eq!(resolved.worker.capabilities[0].repo, "legacy/repo");
     assert_eq!(resolved.worker.capabilities[0].role, "legacy");
 
@@ -259,8 +260,8 @@ fn worker_without_pool_preserves_legacy_capabilities() {
     )
     .expect("default worker runtime applies");
 
-    let worker_config = temper_worker_service::worker_config(&resolved)
-        .expect("worker runtime config builds");
+    let worker_config =
+        temper_worker_service::worker_config(&resolved).expect("worker runtime config builds");
     assert_eq!(worker_config.max_concurrent_jobs, 6);
     assert_eq!(worker_config.capabilities.len(), 1);
     assert_eq!(worker_config.capabilities[0].repo, "legacy/repo");
