@@ -38,6 +38,9 @@ pub fn config_json_schema() -> Value {
             "properties",
             property_map([
                 ("schema_version", schema_version_schema()),
+                ("deployment", deployment_config_schema()),
+                ("workflow", workflow_config_schema()),
+                ("paths", paths_config_schema()),
                 ("forge", forge_config_schema()),
                 ("engine", engine_config_schema()),
                 ("worker", worker_config_schema()),
@@ -56,6 +59,48 @@ fn schema_version_schema() -> Value {
         ("type", Value::from("integer")),
         ("const", Value::from(SCHEMA_VERSION)),
     ])
+}
+
+fn deployment_config_schema() -> Value {
+    closed_object_schema(
+        "Target-era deployment metadata.",
+        [
+            ("name", string_schema("Optional deployment name metadata.")),
+            (
+                "topology",
+                enum_string_schema(
+                    "Deployment topology declaration. Runtime branching is not enabled yet.",
+                    ["standalone", "distributed"],
+                ),
+            ),
+        ],
+    )
+}
+
+fn workflow_config_schema() -> Value {
+    closed_object_schema(
+        "Target-era workflow settings.",
+        [(
+            "file",
+            string_schema("Path to a workflow definition file, resolved relative to config.toml."),
+        )],
+    )
+}
+
+fn paths_config_schema() -> Value {
+    closed_object_schema(
+        "Target-era runtime path settings.",
+        [
+            (
+                "state_dir",
+                string_schema("Mutable state directory, resolved relative to config.toml."),
+            ),
+            (
+                "workspace_dir",
+                string_schema("Top-level worker workspace root, resolved relative to config.toml."),
+            ),
+        ],
+    )
 }
 
 fn forge_config_schema() -> Value {
@@ -253,6 +298,20 @@ fn string_schema(description: &'static str) -> Value {
 
 fn bool_schema(description: &'static str) -> Value {
     primitive_schema(description, "boolean")
+}
+
+fn enum_string_schema(
+    description: &'static str,
+    values: impl IntoIterator<Item = &'static str>,
+) -> Value {
+    schema_object([
+        ("description", Value::from(description)),
+        ("type", Value::from("string")),
+        (
+            "enum",
+            Value::Array(values.into_iter().map(Value::from).collect()),
+        ),
+    ])
 }
 
 fn primitive_schema(description: &'static str, kind: &'static str) -> Value {

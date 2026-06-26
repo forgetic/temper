@@ -22,9 +22,9 @@ use secrecy::SecretString;
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
-    AgentSettings, Capability, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
-    ProviderCredential, ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds,
-    WorkerSettings,
+    AgentSettings, Capability, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
+    ForgeSettings, GitIdentity, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
+    RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
 
@@ -52,27 +52,7 @@ const DEFAULT_CI_USER: &str = "bot";
 /// agree.
 const DEFAULT_MAX_ITERATIONS: usize = 250;
 
-/// Context for resolving path values that came from an on-disk config file.
-///
-/// Direct callers that build a [`Config`] in memory can keep using [`resolve`],
-/// which preserves the historical behavior: relative path strings stay relative
-/// to the caller's process. Loaders that know which `config.toml` supplied the
-/// values pass its parent directory here so relative config-file paths are
-/// interpreted beside that file.
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub struct ResolveOptions {
-    /// Directory containing the loaded config file, if there was one.
-    pub config_base_dir: Option<PathBuf>,
-}
-
-impl ResolveOptions {
-    /// Builds options that resolve relative config-file paths against `dir`.
-    pub fn from_config_base_dir(dir: impl Into<PathBuf>) -> Self {
-        Self {
-            config_base_dir: Some(dir.into()),
-        }
-    }
-}
+pub use crate::resolve_options::ResolveOptions;
 
 /// Resolves a full deployment from the config and credentials files. The
 /// injected environment is consulted only for `$HOME` / `$XDG_*` path expansion,
@@ -96,17 +76,57 @@ pub fn resolve_with_options(
     env: &impl EnvLookup,
     options: &ResolveOptions,
 ) -> Result<Resolved, ConfigError> {
+    let deployment = resolve_deployment(config)?;
+    let state_dir = resolve_state_dir(config, env, options);
     let engine = resolve_engine(config, env, options)?;
-    let worker = resolve_worker(config, env, &engine, options)?;
+    let worker = resolve_worker(config, env, &engine, state_dir.as_ref(), options)?;
+    let paths = PathSettings {
+        state_dir,
+        workspace_dir: worker.workspace_root.clone(),
+        workflow_file: engine.workflow_file.clone(),
+    };
     let roles = referenced_roles(&engine, &worker);
     let forge = resolve_forge(config, credentials, &roles);
     let agent = resolve_agent(config, credentials, env, options)?;
     Ok(Resolved {
+        deployment,
+        paths,
         forge,
         engine,
         worker,
         agent,
     })
+}
+
+// ── deployment ──────────────────────────────────────────────────────────────
+
+fn resolve_deployment(config: &Config) -> Result<DeploymentSettings, ConfigError> {
+    let name = trimmed(config.deployment.name.as_deref());
+    let topology = trimmed(config.deployment.topology.as_deref())
+        .map(|topology| parse_deployment_topology(&topology))
+        .transpose()?;
+
+    Ok(DeploymentSettings { name, topology })
+}
+
+fn parse_deployment_topology(raw: &str) -> Result<DeploymentTopology, ConfigError> {
+    match raw {
+        "standalone" => Ok(DeploymentTopology::Standalone),
+        "distributed" => Ok(DeploymentTopology::Distributed),
+        other => Err(ConfigError::invalid(format!(
+            "invalid deployment.topology `{other}` (expected `standalone` or `distributed`)"
+        ))),
+    }
+}
+
+fn resolve_state_dir(
+    config: &Config,
+    env: &impl EnvLookup,
+    options: &ResolveOptions,
+) -> Option<PathBuf> {
+    trimmed(config.paths.state_dir.as_deref())
+        .map(|value| resolve_config_path(&value, env, options))
+        .or_else(|| default_state_dir(env))
 }
 
 // ── forge ───────────────────────────────────────────────────────────────────
@@ -240,8 +260,14 @@ fn resolve_engine(
             .filter(|role| !role.is_empty()),
     );
 
-    let workflow_file = trimmed(config.engine.workflow.as_deref())
-        .map(|value| resolve_config_path(&value, env, options));
+    let workflow_file = resolve_preferred_config_path(
+        "workflow.file",
+        config.workflow.file.as_deref(),
+        "engine.workflow",
+        config.engine.workflow.as_deref(),
+        env,
+        options,
+    )?;
 
     let poll_cadence = positive_duration_secs(
         config
@@ -312,6 +338,7 @@ fn resolve_worker(
     config: &Config,
     env: &impl EnvLookup,
     engine: &EngineSettings,
+    state_dir: Option<&PathBuf>,
     options: &ResolveOptions,
 ) -> Result<WorkerSettings, ConfigError> {
     let worker_id = trimmed(config.worker.worker_id.as_deref())
@@ -320,12 +347,19 @@ fn resolve_worker(
     let daemon_url = trimmed(config.worker.daemon_url.as_deref())
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", engine.bind.port()));
 
-    let workspace_root = trimmed(config.worker.workspace.as_deref())
-        .map(|value| resolve_config_path(&value, env, options))
-        .unwrap_or_else(|| {
-            default_workspace_root(env)
-                .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_ROOT_FALLBACK))
-        });
+    let workspace_root = resolve_preferred_config_path(
+        "paths.workspace_dir",
+        config.paths.workspace_dir.as_deref(),
+        "worker.workspace",
+        config.worker.workspace.as_deref(),
+        env,
+        options,
+    )?
+    .unwrap_or_else(|| {
+        state_dir
+            .map(|dir| dir.join("workspace"))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_ROOT_FALLBACK))
+    });
 
     let git_base_url = trimmed(config.worker.git_base_url.as_deref());
 
@@ -507,6 +541,30 @@ fn trimmed(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn resolve_preferred_config_path(
+    preferred_field: &str,
+    preferred_raw: Option<&str>,
+    legacy_field: &str,
+    legacy_raw: Option<&str>,
+    env: &impl EnvLookup,
+    options: &ResolveOptions,
+) -> Result<Option<PathBuf>, ConfigError> {
+    let preferred = trimmed(preferred_raw);
+    let legacy = trimmed(legacy_raw);
+
+    match (preferred, legacy) {
+        (Some(preferred), Some(legacy)) if preferred != legacy => {
+            Err(ConfigError::invalid(format!(
+                "conflicting config values: `{preferred_field}` and `{legacy_field}` are both set but differ (`{preferred}` vs `{legacy}`); set only one or make them match"
+            )))
+        }
+        (Some(value), _) | (None, Some(value)) => {
+            Ok(Some(resolve_config_path(&value, env, options)))
+        }
+        (None, None) => Ok(None),
+    }
+}
+
 /// Resolves a path-valued field from `config.toml`.
 ///
 /// Absolute paths and any `~`-prefixed path keep the long-standing behavior
@@ -557,7 +615,7 @@ fn expand_tilde(value: &str, env: &impl EnvLookup) -> PathBuf {
 /// The base `…/temper` state directory, computed from the injected environment
 /// (mirrors [`crate::paths::state_dir`], which reads the process environment;
 /// kept env-aware here so resolution stays unit-testable).
-fn state_dir(env: &impl EnvLookup) -> Option<PathBuf> {
+fn default_state_dir(env: &impl EnvLookup) -> Option<PathBuf> {
     if let Some(xdg) = env.non_empty("XDG_STATE_HOME") {
         return Some(PathBuf::from(xdg).join("temper"));
     }
@@ -567,12 +625,6 @@ fn state_dir(env: &impl EnvLookup) -> Option<PathBuf> {
             .join("state")
             .join("temper")
     })
-}
-
-/// The default worker workspace root (`<state-dir>/workspace`) from the injected
-/// environment. `None` only when neither `$XDG_STATE_HOME` nor `$HOME` is set.
-fn default_workspace_root(env: &impl EnvLookup) -> Option<PathBuf> {
-    state_dir(env).map(|dir| dir.join("workspace"))
 }
 
 fn positive_duration_secs(secs: u64, field: &str) -> Result<Duration, ConfigError> {

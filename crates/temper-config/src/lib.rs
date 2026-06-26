@@ -4,7 +4,9 @@
 //!
 //! Two TOML files, both stamped with the same `schema_version`:
 //!
-//! - the **config** file ([`Config`]) — non-secret deployment settings;
+//! - the **config** file ([`Config`]) — non-secret deployment settings
+//!   (target-era deployment/workflow/path metadata plus legacy forge/engine/
+//!   worker/agent settings);
 //! - the **credentials** file ([`Credentials`]) — secrets.
 //!
 //! [`load`] reads both (honoring `--config` / `--secrets` overrides, systemd's
@@ -26,6 +28,7 @@ mod json_schema;
 mod paths;
 pub mod provider;
 mod resolve;
+mod resolve_options;
 mod resolved;
 mod schema;
 mod template;
@@ -59,14 +62,15 @@ pub use paths::{
 };
 pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
-    AgentSettings, Capability, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
-    ProviderCredential, ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds,
-    WorkerSettings,
+    AgentSettings, Capability, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
+    ForgeSettings, GitIdentity, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
+    RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 pub use schema::{
-    AgentConfig, AgentCredentials, AgentProviderConfig, Config, Credentials, EngineConfig,
-    ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
+    AgentConfig, AgentCredentials, AgentProviderConfig, Config, Credentials, DeploymentConfig,
+    EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap, PathsConfig,
     ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
+    WorkflowConfig,
 };
 pub use template::{config_template, credentials_template};
 

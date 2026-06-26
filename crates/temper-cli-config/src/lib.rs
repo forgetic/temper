@@ -469,6 +469,49 @@ fn render(resolved: &Resolved) -> String {
             .join(", ")
     );
 
+    let _ = writeln!(out, "\n[deployment]");
+    let _ = writeln!(
+        out,
+        "  name         = {}",
+        resolved.deployment.name.as_deref().unwrap_or("(unset)")
+    );
+    let _ = writeln!(
+        out,
+        "  topology     = {}",
+        resolved
+            .deployment
+            .topology
+            .map(|topology| topology.as_str())
+            .unwrap_or("(unset)")
+    );
+
+    let _ = writeln!(out, "\n[paths]");
+    let _ = writeln!(
+        out,
+        "  state_dir    = {}",
+        resolved
+            .paths
+            .state_dir
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(unavailable)".to_string())
+    );
+    let _ = writeln!(
+        out,
+        "  workspace_dir = {}",
+        resolved.paths.workspace_dir.display()
+    );
+    let _ = writeln!(
+        out,
+        "  workflow_file = {}",
+        resolved
+            .paths
+            .workflow_file
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(bundled reference-delivery)".to_string())
+    );
+
     let _ = writeln!(out, "\n[agent]");
     let _ = writeln!(
         out,

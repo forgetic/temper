@@ -32,10 +32,44 @@ use crate::error::ConfigError;
 /// [`crate::Credentials`] schema, never `Resolved`.
 #[derive(Debug, Clone)]
 pub struct Resolved {
+    pub deployment: DeploymentSettings,
+    pub paths: PathSettings,
     pub forge: ForgeSettings,
     pub engine: EngineSettings,
     pub worker: WorkerSettings,
     pub agent: AgentSettings,
+}
+
+/// Resolved target-era deployment metadata.
+#[derive(Debug, Clone)]
+pub struct DeploymentSettings {
+    pub name: Option<String>,
+    pub topology: Option<DeploymentTopology>,
+}
+
+/// The supported deployment topology declarations.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum DeploymentTopology {
+    Standalone,
+    Distributed,
+}
+
+impl DeploymentTopology {
+    /// The config-file spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeploymentTopology::Standalone => "standalone",
+            DeploymentTopology::Distributed => "distributed",
+        }
+    }
+}
+
+/// Resolved target-era path information.
+#[derive(Debug, Clone)]
+pub struct PathSettings {
+    pub state_dir: Option<PathBuf>,
+    pub workspace_dir: PathBuf,
+    pub workflow_file: Option<PathBuf>,
 }
 
 /// Resolved forge connection + identities.

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use temper_cli_common::{EnvMap, LoadOptions, OutputFormat, PathResolver};
 use temper_config::{
     Config, ConfigError, Credentials, ResolveOptions, config_path, paired_credentials_path,
-    resolve_with_options, state_dir,
+    resolve_with_options,
 };
 
 /// Runs `temper config paths`.
@@ -73,9 +73,9 @@ impl PathReport {
             config_root,
             config_file,
             credentials_source,
-            state_dir: state_dir(base_paths),
-            workspace_dir: resolved.worker.workspace_root,
-            workflow_file: resolved.engine.workflow_file,
+            state_dir: resolved.paths.state_dir,
+            workspace_dir: resolved.paths.workspace_dir,
+            workflow_file: resolved.paths.workflow_file,
         })
     }
 
@@ -256,6 +256,97 @@ mod tests {
             report.workflow_file.as_deref(),
             Some(bundle.join("flows/workflow.json").as_path())
         );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn report_resolves_target_runtime_paths_against_loaded_config_root() {
+        let dir = scratch("explicit-bundle-target-runtime");
+        let bundle = dir.join("bundle");
+        std::fs::create_dir_all(&bundle).expect("create bundle");
+        std::fs::write(
+            bundle.join("config.toml"),
+            "schema_version = 1\n\
+             [workflow]\n\
+             file = \"flows/workflow.json\"\n\
+             [paths]\n\
+             state_dir = \"state\"\n\
+             workspace_dir = \"workspace\"\n",
+        )
+        .expect("write config");
+
+        let home = dir.join("home");
+        let env = env_with_home(&home);
+        let base_paths = PathResolver::from_env(&env);
+        let report = PathReport::resolve(
+            &LoadOptions {
+                config: Some(bundle.clone()),
+                credentials: None,
+            },
+            &env,
+            &base_paths,
+        )
+        .expect("report resolves");
+
+        assert_eq!(
+            report.state_dir.as_deref(),
+            Some(bundle.join("state").as_path())
+        );
+        assert_eq!(report.workspace_dir, bundle.join("workspace"));
+        assert_eq!(
+            report.workflow_file.as_deref(),
+            Some(bundle.join("flows/workflow.json").as_path())
+        );
+
+        let rendered = report.render_json().expect("json renders");
+        let value: Value = serde_json::from_str(&rendered).expect("valid json");
+        assert_eq!(
+            value["state_dir"],
+            Value::String(bundle.join("state").display().to_string())
+        );
+        assert_eq!(
+            value["workspace_dir"],
+            Value::String(bundle.join("workspace").display().to_string())
+        );
+        assert_eq!(
+            value["workflow_file"],
+            Value::String(bundle.join("flows/workflow.json").display().to_string())
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn report_uses_target_state_dir_for_default_workspace_root() {
+        let dir = scratch("target-state-default-workspace");
+        let bundle = dir.join("bundle");
+        std::fs::create_dir_all(&bundle).expect("create bundle");
+        std::fs::write(
+            bundle.join("config.toml"),
+            "schema_version = 1\n\
+             [paths]\n\
+             state_dir = \"state\"\n",
+        )
+        .expect("write config");
+
+        let env = env_with_home(&dir.join("home"));
+        let base_paths = PathResolver::from_env(&env);
+        let report = PathReport::resolve(
+            &LoadOptions {
+                config: Some(bundle.clone()),
+                credentials: None,
+            },
+            &env,
+            &base_paths,
+        )
+        .expect("report resolves");
+
+        assert_eq!(
+            report.state_dir.as_deref(),
+            Some(bundle.join("state").as_path())
+        );
+        assert_eq!(report.workspace_dir, bundle.join("state/workspace"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

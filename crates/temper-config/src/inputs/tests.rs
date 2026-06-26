@@ -445,6 +445,8 @@ fn explicit_config_directory_resolves_relative_paths_under_bundle_root() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+mod target_paths;
+
 #[test]
 fn explicit_config_file_resolves_relative_paths_under_file_parent() {
     let dir = temp_dir("relative-file-paths");

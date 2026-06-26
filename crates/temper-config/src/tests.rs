@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::{
-    Config, Credentials, FileKind, NoEnv, ProviderCredential, ProviderKind, lint, resolve,
+    Config, Credentials, DeploymentTopology, FileKind, NoEnv, ProviderCredential, ProviderKind,
+    ResolveOptions, lint, resolve, resolve_with_options,
 };
 
 /// The raw value behind an optional secret, for assertions.
@@ -509,6 +510,8 @@ workspace = "~/.local/state/temper/workspace"
         std::path::Path::new("/home/op/.local/state/temper/workspace")
     );
 }
+
+mod target_sections;
 
 #[test]
 fn direct_resolve_keeps_relative_paths_relative_without_config_context() {
