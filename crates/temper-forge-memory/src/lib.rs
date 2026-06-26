@@ -33,7 +33,10 @@ use crate::hint::HintBus;
 use crate::state::State;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use temper_forge_model::{CiJob, RepoPermission, RepositoryId, User, WebhookSpec};
+use temper_forge_model::{
+    CiJob, ForgeError, ForgeResult, PullRequest, PullRequestId, RepoPermission, RepositoryId, User,
+    WebhookSpec,
+};
 
 pub use crate::fault::FaultOp;
 pub use crate::hint::MemoryHintReceiver;
@@ -121,6 +124,40 @@ impl MemoryForge {
         let mut inner = self.lock();
         inner.state.set_ci_jobs(repo_id, jobs);
         inner.publish_repo_hint(repo_id, temper_forge_model::ChangeKind::Ci);
+    }
+
+    /// Sets a pull request's current head SHA in the memory backend.
+    ///
+    /// Real hosted backends learn this from the provider's branch/PR metadata;
+    /// the portable Forge trait intentionally has no operation for arbitrary PR
+    /// head mutation. Tests use this companion hook to simulate a PR branch being
+    /// advanced by a push before exercising freshness predicates.
+    pub fn set_pull_request_head(
+        &self,
+        id: &PullRequestId,
+        head_sha: Option<String>,
+    ) -> ForgeResult<PullRequest> {
+        let mut inner = self.lock();
+        let (repo_id, _) = inner
+            .state
+            .find_pull_request(id)
+            .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
+        let now = inner.state.next_timestamp()?;
+        let pull_requests = inner.state.pull_requests_mut(&repo_id);
+        let pull_request = pull_requests
+            .iter_mut()
+            .find(|pull_request| &pull_request.id == id)
+            .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
+        pull_request.head_sha = head_sha;
+        pull_request.version = pull_request.version.next();
+        pull_request.updated_at = now;
+        let updated = pull_request.clone();
+        inner.publish_item_hint(
+            &repo_id,
+            updated.number,
+            temper_forge_model::ChangeKind::PullRequest,
+        );
+        Ok(updated)
     }
 
     /// Returns every user provisioned via

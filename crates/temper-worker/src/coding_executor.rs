@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use temper_protocol_agent::WorkspaceResult;
+use temper_protocol_agent::{StepProgress, WorkspaceResult};
 use temper_protocol_worker::{
     Assign, FailureClass, JobChild, JobContext, WorkspaceManifest, WorkspaceRepo,
 };
@@ -83,6 +83,50 @@ impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
         let progress = Arc::clone(&self.progress);
         let pr_freshness_guard = self.pr_freshness_guard.clone();
         async move { execute(config, runner, progress, pr_freshness_guard, assign).await }
+    }
+}
+
+#[derive(Default)]
+struct PushedHeadTracker {
+    latest: Mutex<Option<String>>,
+}
+
+impl PushedHeadTracker {
+    fn record(&self, sha: &str) {
+        let sha = sha.trim();
+        if sha.is_empty() {
+            return;
+        }
+        if let Ok(mut latest) = self.latest.lock() {
+            *latest = Some(sha.to_string());
+        }
+    }
+
+    fn latest(&self) -> Option<String> {
+        self.latest.lock().ok().and_then(|latest| latest.clone())
+    }
+}
+
+struct TrackingProgressSink {
+    inner: Arc<dyn ProgressSink>,
+    pushed_heads: Arc<PushedHeadTracker>,
+}
+
+impl TrackingProgressSink {
+    fn new(inner: Arc<dyn ProgressSink>, pushed_heads: Arc<PushedHeadTracker>) -> Self {
+        Self {
+            inner,
+            pushed_heads,
+        }
+    }
+}
+
+impl ProgressSink for TrackingProgressSink {
+    fn report(&self, progress: StepProgress) {
+        if let Some(sha) = progress.pushed_sha.as_deref() {
+            self.pushed_heads.record(sha);
+        }
+        self.inner.report(progress);
     }
 }
 
@@ -192,12 +236,18 @@ async fn execute<R: AgentRunner>(
         pull_request_freshness.as_ref(),
     );
 
+    let pushed_heads = Arc::new(PushedHeadTracker::default());
+    let progress_for_runner: Arc<dyn ProgressSink> = Arc::new(TrackingProgressSink::new(
+        Arc::clone(&progress),
+        Arc::clone(&pushed_heads),
+    ));
+
     // Run one agent turn with the cwd set to the workspace root (not a single
     // repo), so the agent can read and build every sibling. The runner owns the
     // agent mechanism and streams step-progress checkpoints to the sink; the
     // executor owns the workspace lifecycle around it.
     let result = match runner
-        .run(&workspace_context, &workspace_root, Arc::clone(&progress))
+        .run(&workspace_context, &workspace_root, progress_for_runner)
         .await
     {
         Ok(result) => result,
@@ -205,6 +255,8 @@ async fn execute<R: AgentRunner>(
             return failure(class, message);
         }
     };
+
+    let latest_self_pushed_sha = pushed_heads.latest();
 
     match mode {
         JobMode::Writable | JobMode::PullRequestWritable => {
@@ -217,6 +269,7 @@ async fn execute<R: AgentRunner>(
                 mode == JobMode::PullRequestWritable,
                 pull_request_freshness.as_ref(),
                 pr_freshness_guard.as_deref(),
+                latest_self_pushed_sha.as_deref(),
             )
             .await
         }

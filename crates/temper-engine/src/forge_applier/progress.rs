@@ -17,7 +17,16 @@ use crate::forge_applier::ForgeApplier;
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     async fn apply(&self, job: InFlightJob, result: JobResult) {
-        if self.drop_stale_pr_job(&job).await {
+        let self_pushed_head = result
+            .repos
+            .iter()
+            .find(|repo| repo.repo == job.repo)
+            .or_else(|| result.repos.first())
+            .map(|repo| repo.branch.head_sha.clone());
+        if self
+            .drop_stale_pr_job(&job, self_pushed_head.as_deref())
+            .await
+        {
             return;
         }
         match result.status {
@@ -36,7 +45,10 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     /// and replayed checkpoints no longer mutate the source issue. Non-engineer
     /// final-summary progress keeps the previous idempotent comment behavior.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
-        if self.drop_stale_pr_job(&job).await {
+        if self
+            .drop_stale_pr_job(&job, progress.pushed_sha.as_deref())
+            .await
+        {
             return;
         }
         let use_run_ledger = progress_uses_run_ledger(&job);
@@ -118,15 +130,19 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
 }
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
-    async fn drop_stale_pr_job(&self, job: &InFlightJob) -> bool {
+    async fn drop_stale_pr_job(&self, job: &InFlightJob, self_pushed_head: Option<&str>) -> bool {
         let Ok(context) = serde_json::from_value::<JobContext>(job.job_payload.clone()) else {
             return false;
         };
         let Some(check) = context.pull_request_freshness.as_ref() else {
             return false;
         };
-        let response =
-            crate::pr_freshness::check_pull_request_freshness(self.forge.as_ref(), check).await;
+        let response = crate::pr_freshness::check_pull_request_freshness_with_self_pushed_head(
+            self.forge.as_ref(),
+            check,
+            self_pushed_head,
+        )
+        .await;
         if !crate::pr_freshness::is_stale(&response) {
             return false;
         }

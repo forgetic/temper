@@ -13,8 +13,11 @@ on:
 # ~/.cargo/config.toml on the host runner), so a clean checkout still gets warm
 # builds for everything that emits real artifacts (rlibs, test executables, the
 # final binary). Two caching notes drive the step layout below:
-#   1. Build the cacheable test executables BEFORE linting, so the expensive
-#      shared lib compiles are warmed once and reused by clippy.
+#   1. Build and run the cacheable test executables BEFORE linting, so the
+#      expensive shared lib compiles are warmed once and reused by clippy.
+#      Linked test binaries are then discarded before linting; otherwise the
+#      full no-run test set plus clippy metadata can exceed the host runner's
+#      local checkout budget even though kache has the reusable artifacts.
 #   2. Every cargo invocation uses the SAME `--all-targets` scope so feature
 #      unification matches and the cached lib artifacts key-match across steps
 #      (see the comment in .cargo/config.toml). clippy/check still recompile
@@ -47,8 +50,6 @@ jobs:
         # support may read std::env::{var,var_os,vars,args}. Fails fast on a new
         # stray reader. Compiles nothing.
         run: scripts/check-no-ambient-env.sh
-      - name: Lint
-        run: cargo dev-clippy
       - name: Build
         run:  cargo dev-test-build
       - name: Test
@@ -63,6 +64,13 @@ jobs:
         env:
           TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "300"
         run: cargo dev-test-full
+      - name: Free linked test binaries
+        # Keep kache-warmed libraries, but drop the linked executables that
+        # clippy does not consume; this keeps the checkout target dir below the
+        # host runner's disk ceiling.
+        run: find target/debug target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
+      - name: Lint
+        run: cargo dev-clippy
 
   # The temper-web TypeScript UI (crates/temper-web/ui). Kept a separate job from
   # the Rust `validate` job above so a TS failure is legible on its own and does
