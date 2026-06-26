@@ -6,14 +6,18 @@ use super::*;
 use serde_json::json;
 use std::sync::Arc;
 use temper_forge::{
-    BranchRef, CreatePullRequest, CreateRepository, Forge, IssueState, ItemNumber, UpdateIssue,
+    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest, CreateRepository,
+    Forge, IssueState, ItemNumber, MergeMethod, MergePullRequest, RepositoryId, UpdateIssue,
     UpdatePullRequest,
 };
-use temper_forge_memory::MemoryForge;
-use temper_protocol_worker::{Artifact, JobContext};
+use temper_forge_memory::{FaultOp, MemoryForge};
+use temper_protocol_worker::{
+    Artifact, Capability, Capacity, ErrorCode, JobContext, JobResult, Poll, Register, ResultStatus,
+    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
+};
 use temper_workflow::{
-    ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId, WorkflowMetadata,
-    render_metadata_block,
+    ArtifactKindId, ArtifactSource, CompiledWorkflow, QueueId, RawWorkflowSpec, RoleId,
+    ValidatedWorkflow, WorkflowMetadata, render_metadata_block,
 };
 
 use crate::Daemon;
@@ -25,6 +29,8 @@ const REFERENCE_DELIVERY_FIXTURE: &str =
 
 #[path = "feed_tests/action_assignment.rs"]
 mod action_assignment;
+#[path = "feed_tests/reconciliation.rs"]
+mod reconciliation;
 
 fn work_item(target: ArtifactSource) -> WorkItem {
     WorkItem {

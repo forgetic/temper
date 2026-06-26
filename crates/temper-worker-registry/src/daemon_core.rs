@@ -7,7 +7,7 @@
 //! networking, async work, I/O, clock reads, sleeps, or transport-level
 //! long-poll waiting; callers are responsible for transport behavior.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_worker::{
     Artifact, Assign, ErrorCode, Heartbeat, JobResult, LeaseAck, Poll, ProtocolError, Register,
@@ -90,6 +90,28 @@ impl DaemonCore {
                 })
             })
             .collect()
+    }
+
+    /// Reconcile pending daemon jobs for one `(repo, role)` scan scope.
+    ///
+    /// Only pending jobs are pruned. Assigned/in-flight jobs remain in the
+    /// dispatch coordinator and keep their job context so result/progress
+    /// handling can complete normally.
+    pub fn retain_pending_jobs_for_scope(
+        &mut self,
+        repo: &str,
+        role: &str,
+        current_job_ids: &BTreeSet<String>,
+    ) -> Vec<String> {
+        let removed = self
+            .coordinator
+            .retain_pending_by_scope(repo, role, current_job_ids);
+        let mut job_ids = Vec::with_capacity(removed.len());
+        for item in removed {
+            self.job_context.remove(&item.job_id);
+            job_ids.push(item.job_id);
+        }
+        job_ids
     }
 
     /// Reports whether a role is saturated and, if so, what is queued behind it.
