@@ -76,6 +76,82 @@ fn success_result_finalizes_source_issue_claim_state() {
 }
 
 #[test]
+fn stale_pr_guard_accepts_success_result_at_self_pushed_head() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let pull_request = create_guarded_pull_request(&forge, &repo).await;
+        let assignment_head = "assigned-head";
+        let self_head = "self-head";
+        let pull_request = forge
+            .set_pull_request_head(&pull_request.id, Some(assignment_head.to_string()))
+            .expect("seed assignment head");
+        forge
+            .set_pull_request_head(&pull_request.id, Some(self_head.to_string()))
+            .expect("advance to self head");
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
+        let branch = "agent/pr-for-code-self";
+        let job = pr_freshness_issue_job(
+            "acme/service",
+            issue,
+            branch,
+            pull_request_freshness(&repo, &pull_request, assignment_head),
+        );
+        let mut result = success_result("worker-a", &job.job_id, &job.repo, branch, "fixed CI");
+        result.repos[0].branch.head_sha = self_head.to_string();
+
+        applier.apply(job, result).await;
+
+        let pulls = forge
+            .list_pull_requests(&repo, PullRequestQuery::default())
+            .await
+            .expect("list pull requests");
+        assert_eq!(pulls.len(), 2, "self-pushed result should not be dropped");
+        assert!(pulls.iter().any(|pull| pull.source.branch == branch));
+    })
+}
+
+#[test]
+fn stale_pr_guard_drops_success_result_after_external_head_change() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let pull_request = create_guarded_pull_request(&forge, &repo).await;
+        let assignment_head = "assigned-head";
+        let self_head = "self-head";
+        let pull_request = forge
+            .set_pull_request_head(&pull_request.id, Some(assignment_head.to_string()))
+            .expect("seed assignment head");
+        forge
+            .set_pull_request_head(&pull_request.id, Some("external-head".to_string()))
+            .expect("advance to external head");
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
+        let branch = "agent/pr-for-code-self";
+        let job = pr_freshness_issue_job(
+            "acme/service",
+            issue,
+            branch,
+            pull_request_freshness(&repo, &pull_request, assignment_head),
+        );
+        let mut result = success_result("worker-a", &job.job_id, &job.repo, branch, "fixed CI");
+        result.repos[0].branch.head_sha = self_head.to_string();
+
+        applier.apply(job, result).await;
+
+        let pulls = forge
+            .list_pull_requests(&repo, PullRequestQuery::default())
+            .await
+            .expect("list pull requests");
+        assert_eq!(pulls.len(), 1, "external head result should be dropped");
+        assert!(!pulls.iter().any(|pull| pull.source.branch == branch));
+    })
+}
+
+#[test]
 fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
     temper_engine_io::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
@@ -408,4 +484,75 @@ fn coordinated_result_opens_one_pull_request_per_writable_repo() {
             Some(coordination_key.as_str())
         );
     })
+}
+
+async fn create_guarded_pull_request(forge: &MemoryForge, repo: &RepositoryId) -> PullRequest {
+    forge
+        .create_pull_request(
+            repo,
+            CreatePullRequest {
+                title: "Existing implementation".to_string(),
+                body: "PR under repair".to_string(),
+                source: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: "agent/existing-pr".to_string(),
+                },
+                target: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: "stable".to_string(),
+                },
+                labels: vec!["implementation".to_string()],
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("pull request is created")
+}
+
+fn pull_request_freshness(
+    repo: &RepositoryId,
+    pull_request: &PullRequest,
+    assignment_head: &str,
+) -> temper_protocol_worker::PullRequestFreshness {
+    temper_protocol_worker::PullRequestFreshness {
+        repository_id: repo.as_str().to_string(),
+        repo: "acme/service".to_string(),
+        role: "engineer".to_string(),
+        queue: "pr_ci_failed".to_string(),
+        action: "address_ci_failure".to_string(),
+        number: pull_request.number.get(),
+        pull_request_id: pull_request.id.as_str().to_string(),
+        head_sha: Some(assignment_head.to_string()),
+        queue_condition: Some("ci_failed".to_string()),
+        queue_labels: Vec::new(),
+    }
+}
+
+fn pr_freshness_issue_job(
+    repo_path: &str,
+    number: ItemNumber,
+    branch: &str,
+    freshness: temper_protocol_worker::PullRequestFreshness,
+) -> InFlightJob {
+    job_for_context(
+        repo_path,
+        number,
+        "issue",
+        JobContext {
+            role: "engineer".to_string(),
+            repo: repo_path.to_string(),
+            queue: "code_ready".to_string(),
+            artifact_kind: "code".to_string(),
+            artifact: None,
+            workspace: Some(WorkspaceManifest {
+                coordination_key: format!("pr-for-code-{}", number.get()),
+                repos: vec![writable_repo(repo_path, branch)],
+            }),
+            action: Some("open_pr".to_string()),
+            checkout_capability: Some("pull_request_writable".to_string()),
+            allowed_verdicts: Vec::new(),
+            guidance: None,
+            pull_request_freshness: Some(freshness),
+        },
+    )
 }

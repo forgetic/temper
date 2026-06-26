@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex};
 
+use temper_protocol_agent::{StepProgress, StepState};
+
 use super::*;
 
 /// What the fake agent does for one turn. Each variant mirrors a behavior the
@@ -91,7 +93,7 @@ impl AgentRunner for FakeAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        _progress: Arc<dyn ProgressSink>,
+        progress: Arc<dyn ProgressSink>,
     ) -> Result<WorkspaceResult, AgentRunError> {
         *self.captured.lock().expect("capture lock") = Some(context.clone());
         // The agent's cwd is the coordination-scoped workspace root; it edits
@@ -145,6 +147,15 @@ impl AgentRunner for FakeAgentRunner {
                     "origin",
                     &format!("HEAD:refs/heads/{work_branch}"),
                 ]);
+                let pushed_sha = git_output(["-C", path_str(&repo_cwd), "rev-parse", "HEAD"]);
+                progress.report(StepProgress {
+                    correlation_key: context.correlation_key.clone(),
+                    step: 2,
+                    status: "push checkpoint".to_string(),
+                    state: StepState::Done,
+                    pushed_sha: Some(pushed_sha),
+                    note: None,
+                });
                 Ok(WorkspaceResult {
                     summary: Some("checkpointed the work".to_string()),
                     ..WorkspaceResult::default()

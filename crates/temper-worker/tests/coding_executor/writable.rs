@@ -21,6 +21,40 @@ impl temper_worker::PrFreshnessGuard for StaleGuard {
     }
 }
 
+struct RecordingFreshGuard {
+    checks: std::sync::Mutex<Vec<temper_protocol_agent::PullRequestFreshness>>,
+}
+
+impl RecordingFreshGuard {
+    fn new() -> Self {
+        Self {
+            checks: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn checks(&self) -> Vec<temper_protocol_agent::PullRequestFreshness> {
+        self.checks.lock().expect("checks lock").clone()
+    }
+}
+
+impl temper_worker::PrFreshnessGuard for RecordingFreshGuard {
+    fn check<'a>(
+        &'a self,
+        check: &'a temper_protocol_agent::PullRequestFreshness,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), temper_worker::PrFreshnessFailure>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.checks.lock().expect("checks lock").push(check.clone());
+            Ok(())
+        })
+    }
+}
+
 #[test]
 fn success_path_commits_pushes_and_reports_branch() {
     temper_worker_io::block_on(async {
@@ -114,7 +148,32 @@ fn stale_pr_fix_cancels_before_final_push() {
 }
 
 #[test]
-fn scoped_workspace_is_reused_for_same_coordination_key() {
+fn pr_fix_final_freshness_uses_latest_checkpoint_head() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let guard = Arc::new(RecordingFreshGuard::new());
+        let executor = fixture
+            .executor(AgentBehavior::CheckpointCommits.runner(), true)
+            .with_pr_freshness_guard(guard.clone());
+
+        let outcome = executor
+            .execute(assign_with_context(
+                "pr-for-code-7",
+                pr_fix_job_context("agent/pr-for-code-7", "pr-for-code-7"),
+            ))
+            .await;
+
+        let (_branch_name, head_sha, summary) = expect_success(outcome);
+        assert_eq!(summary.as_deref(), Some("checkpointed the work"));
+        let checks = guard.checks();
+        assert_eq!(checks.len(), 1, "final push freshness should be checked once");
+        assert_eq!(checks[0].head_sha.as_deref(), Some(head_sha.as_str()));
+        assert_ne!(checks[0].head_sha.as_deref(), Some("assigned-head"));
+        assert_eq!(checks[0].queue_condition, None);
+        assert!(checks[0].queue_labels.is_empty());
+    });
+}
+
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::Success.runner(), true);
