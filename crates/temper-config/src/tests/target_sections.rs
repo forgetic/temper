@@ -94,7 +94,11 @@ credential = "agent-provider"
     assert_eq!(pool.agent_profile.as_deref(), Some("coding"));
     assert_eq!(pool.worker_token.as_deref(), Some("worker-engineers-token"));
 
-    let profile = resolved.agent.profiles.get("coding").expect("profile resolves");
+    let profile = resolved
+        .agent
+        .profiles
+        .get("coding")
+        .expect("profile resolves");
     assert_eq!(profile.command, vec!["temper", "agent"]);
     assert_eq!(profile.provider, Some(ProviderKind::Anthropic));
     assert_eq!(profile.model.as_deref(), Some("claude-opus-4-8"));

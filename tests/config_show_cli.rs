@@ -70,11 +70,20 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
 
     assert!(stdout.contains("pools        = 1"), "{stdout}");
-    assert!(stdout.contains("engineers: roles=[engineer], repos=[ai/temper]"), "{stdout}");
+    assert!(
+        stdout.contains("engineers: roles=[engineer], repos=[ai/temper]"),
+        "{stdout}"
+    );
     assert!(stdout.contains("agent_profile=coding"), "{stdout}");
-    assert!(stdout.contains("worker_token=worker-engineers-token"), "{stdout}");
+    assert!(
+        stdout.contains("worker_token=worker-engineers-token"),
+        "{stdout}"
+    );
     assert!(stdout.contains("profiles     = 1"), "{stdout}");
-    assert!(stdout.contains("coding: command=[temper agent]"), "{stdout}");
+    assert!(
+        stdout.contains("coding: command=[temper agent]"),
+        "{stdout}"
+    );
     assert!(stdout.contains("provider=anthropic"), "{stdout}");
     assert!(stdout.contains("model=claude-opus-4-8"), "{stdout}");
     assert!(stdout.contains("credential=agent-provider"), "{stdout}");

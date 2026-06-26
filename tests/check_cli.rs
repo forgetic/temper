@@ -228,8 +228,9 @@ fn check_json_fails_for_target_pool_profile_validation_error() {
     let findings = value["findings"].as_array().expect("findings array");
     assert!(
         findings.iter().any(|finding| finding["severity"] == "error"
-            && finding["message"].as_str().is_some_and(|message| message
-                .contains("worker.pools[0].max_concurrent_jobs"))),
+            && finding["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("worker.pools[0].max_concurrent_jobs"))),
         "{value}"
     );
 }

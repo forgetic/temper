@@ -164,16 +164,7 @@ fn config_schema_json_format_prints_same_machine_readable_schema() {
         agent_profile["properties"]["provider_url"]["type"],
         "string"
     );
-    assert_eq!(
-        agent_profile["properties"]["max_iterations"]["minimum"],
-        1
-    );
-    assert_eq!(
-        agent_profile["properties"]["subagents"]["type"],
-        "boolean"
-    );
-    assert_eq!(
-        agent_profile["properties"]["credential"]["type"],
-        "string"
-    );
+    assert_eq!(agent_profile["properties"]["max_iterations"]["minimum"], 1);
+    assert_eq!(agent_profile["properties"]["subagents"]["type"], "boolean");
+    assert_eq!(agent_profile["properties"]["credential"]["type"], "string");
 }

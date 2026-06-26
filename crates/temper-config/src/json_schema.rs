@@ -229,8 +229,14 @@ fn worker_pool_config_schema() -> Value {
         "Target-era named worker capability class.",
         [
             ("name", string_schema("Unique worker pool name.")),
-            ("roles", string_array_schema("Workflow roles this pool runs.")),
-            ("repos", string_array_schema("Repositories this pool runs, each owner/name.")),
+            (
+                "roles",
+                string_array_schema("Workflow roles this pool runs."),
+            ),
+            (
+                "repos",
+                string_array_schema("Repositories this pool runs, each owner/name."),
+            ),
             (
                 "max_concurrent_jobs",
                 positive_integer_schema("Maximum jobs run concurrently by a worker in this pool."),

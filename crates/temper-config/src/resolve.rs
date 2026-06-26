@@ -458,9 +458,8 @@ fn resolve_worker_pools(
 
     for (index, pool) in config.worker.pools.iter().enumerate() {
         let field = format!("worker.pools[{index}]");
-        let name = trimmed(pool.name.as_deref()).ok_or_else(|| {
-            ConfigError::invalid(format!("{field}.name must not be empty"))
-        })?;
+        let name = trimmed(pool.name.as_deref())
+            .ok_or_else(|| ConfigError::invalid(format!("{field}.name must not be empty")))?;
         if !seen_names.insert(name.clone()) {
             return Err(ConfigError::invalid(format!(
                 "worker.pools.name contains duplicate pool `{name}`"
@@ -591,14 +590,15 @@ fn parse_provider_kind(name: &str) -> Result<ProviderKind, ConfigError> {
     }
 }
 
-fn resolve_agent_profiles(config: &Config) -> Result<BTreeMap<String, AgentProfileSettings>, ConfigError> {
+fn resolve_agent_profiles(
+    config: &Config,
+) -> Result<BTreeMap<String, AgentProfileSettings>, ConfigError> {
     let mut profiles = BTreeMap::new();
     let mut seen_names = BTreeSet::new();
 
     for (raw_name, profile) in &config.agent.profiles {
-        let name = trimmed(Some(raw_name.as_str())).ok_or_else(|| {
-            ConfigError::invalid("agent.profiles profile name must not be empty")
-        })?;
+        let name = trimmed(Some(raw_name.as_str()))
+            .ok_or_else(|| ConfigError::invalid("agent.profiles profile name must not be empty"))?;
         if !seen_names.insert(name.clone()) {
             return Err(ConfigError::invalid(format!(
                 "agent.profiles contains duplicate profile `{name}`"
@@ -642,10 +642,7 @@ fn resolve_agent_profiles(config: &Config) -> Result<BTreeMap<String, AgentProfi
     Ok(profiles)
 }
 
-fn parse_agent_profile_provider_kind(
-    name: &str,
-    field: &str,
-) -> Result<ProviderKind, ConfigError> {
+fn parse_agent_profile_provider_kind(name: &str, field: &str) -> Result<ProviderKind, ConfigError> {
     match name {
         "anthropic" => Ok(ProviderKind::Anthropic),
         "deepseek" => Ok(ProviderKind::DeepSeek),
