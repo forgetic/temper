@@ -68,15 +68,18 @@ fn config_paths_json_reports_explicit_bundle_and_configured_paths() {
     std::fs::create_dir_all(&bundle).expect("create bundle");
     let workflow = dir.path().join("workflow.json");
     let workspace = dir.path().join("workspaces");
+    let state = dir.path().join("state-root");
     std::fs::write(
         bundle.join("config.toml"),
         format!(
             "schema_version = 1\n\
-             [engine]\n\
-             workflow = \"{}\"\n\
-             [worker]\n\
-             workspace = \"{}\"\n",
+             [workflow]\n\
+             file = \"{}\"\n\
+             [paths]\n\
+             state_dir = \"{}\"\n\
+             workspace_dir = \"{}\"\n",
             toml_path(&workflow),
+            toml_path(&state),
             toml_path(&workspace),
         ),
     )
@@ -105,10 +108,7 @@ fn config_paths_json_reports_explicit_bundle_and_configured_paths() {
         value["credentials_source"],
         path_text(&bundle.join("credentials.toml"))
     );
-    assert_eq!(
-        value["state_dir"],
-        path_text(&dir.path().join("xdg-state").join("temper"))
-    );
+    assert_eq!(value["state_dir"], path_text(&state));
     assert_eq!(value["workspace_dir"], path_text(&workspace));
     assert_eq!(value["workflow_file"], path_text(&workflow));
 }

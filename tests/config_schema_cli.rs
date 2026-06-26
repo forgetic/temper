@@ -42,13 +42,39 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
     assert_eq!(properties["schema_version"]["type"], "integer");
     assert_eq!(properties["schema_version"]["const"], 1);
 
-    for section in ["forge", "engine", "worker", "agent"] {
+    for section in [
+        "deployment",
+        "workflow",
+        "paths",
+        "forge",
+        "engine",
+        "worker",
+        "agent",
+    ] {
         assert_eq!(properties[section]["type"], "object", "{section}");
         assert_eq!(
             properties[section]["additionalProperties"], false,
             "{section} should reject unknown fields"
         );
     }
+
+    assert_eq!(
+        properties["deployment"]["properties"]["name"]["type"],
+        "string"
+    );
+    assert_eq!(
+        properties["deployment"]["properties"]["topology"]["enum"],
+        json!(["standalone", "distributed"])
+    );
+    assert_eq!(properties["workflow"]["properties"]["file"]["type"], "string");
+    assert_eq!(
+        properties["paths"]["properties"]["state_dir"]["type"],
+        "string"
+    );
+    assert_eq!(
+        properties["paths"]["properties"]["workspace_dir"]["type"],
+        "string"
+    );
 
     assert_eq!(properties["forge"]["properties"]["url"]["type"], "string");
     assert_eq!(properties["engine"]["properties"]["repos"]["type"], "array");
@@ -59,19 +85,6 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
     assert_eq!(
         properties["worker"]["properties"]["capabilities"]["items"]["type"],
         "string"
-    );
-
-    assert!(
-        properties.get("deployment").is_none(),
-        "target-only config sections must not appear"
-    );
-    assert!(
-        properties.get("workflow").is_none(),
-        "target-only config sections must not appear"
-    );
-    assert!(
-        properties.get("paths").is_none(),
-        "target-only config sections must not appear"
     );
 }
 
