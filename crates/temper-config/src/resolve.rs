@@ -24,9 +24,11 @@ use crate::error::ConfigError;
 use crate::resolved::{
     AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
     EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, SecretReference, WebUiCreds,
+    WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
+use crate::secret_refs::{require_secret_payload, resolve_secret_reference};
 use crate::target::{resolve_agent_profiles, resolve_worker_pools};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -79,10 +81,12 @@ pub fn resolve_with_options(
 ) -> Result<Resolved, ConfigError> {
     let deployment = resolve_deployment(config)?;
     let state_dir = resolve_state_dir(config, env, options);
-    let engine = resolve_engine(config, env, options)?;
+    let engine_secrets = resolve_engine_secret_references(config, credentials, options)?;
+    let engine = resolve_engine(config, env, options, &engine_secrets)?;
     let agent = resolve_agent(config, credentials, env, options)?;
     let worker = resolve_worker(
         config,
+        credentials,
         env,
         &engine,
         state_dir.as_ref(),
@@ -95,7 +99,12 @@ pub fn resolve_with_options(
         workflow_file: engine.workflow_file.clone(),
     };
     let roles = referenced_roles(&engine, &worker);
-    let forge = resolve_forge(config, credentials, &roles);
+    let forge = resolve_forge(
+        config,
+        credentials,
+        &roles,
+        engine_secrets.forge_token_value.clone(),
+    );
     Ok(Resolved {
         deployment,
         paths,
@@ -143,15 +152,17 @@ fn resolve_forge(
     config: &Config,
     credentials: &Credentials,
     roles: &BTreeSet<String>,
+    named_admin_token: Option<SecretString>,
 ) -> ForgeSettings {
     let url = trimmed(config.forge.url.as_deref()).map(|url| url.trim_end_matches('/').to_string());
 
     let admin = trimmed(config.forge.admin.as_deref());
-    let admin_token = admin
+    let legacy_admin_token = admin
         .as_deref()
         .and_then(|name| credentials.forge.users.get(name))
         .and_then(|user| trimmed(user.token.as_deref()))
         .map(SecretString::from);
+    let admin_token = named_admin_token.or(legacy_admin_token);
 
     let ci_user =
         trimmed(config.forge.ci_user.as_deref()).unwrap_or_else(|| DEFAULT_CI_USER.to_string());
@@ -240,10 +251,56 @@ pub fn env_role_key(role: &str) -> String {
 
 // ── engine ──────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Default)]
+struct EngineSecretReferences {
+    forge_token: Option<SecretReference>,
+    forge_token_value: Option<SecretString>,
+    webhook_secret: Option<SecretReference>,
+    webhook_secret_value: Option<SecretString>,
+}
+
+fn resolve_engine_secret_references(
+    config: &Config,
+    credentials: &Credentials,
+    options: &ResolveOptions,
+) -> Result<EngineSecretReferences, ConfigError> {
+    let forge_token = resolve_secret_reference(
+        "engine.forge_token",
+        config.engine.forge_token.as_deref(),
+        credentials,
+        options.validate_secret_references,
+    )?;
+    let webhook_secret = resolve_secret_reference(
+        "engine.webhook_secret",
+        config.engine.webhook_secret.as_deref(),
+        credentials,
+        options.validate_secret_references,
+    )?;
+
+    let forge_token_value = forge_token
+        .as_ref()
+        .filter(|resolved| resolved.reference.available)
+        .map(|resolved| require_secret_payload("engine.forge_token", resolved))
+        .transpose()?;
+    let webhook_secret_value = webhook_secret
+        .as_ref()
+        .filter(|resolved| resolved.reference.available)
+        .map(|resolved| require_secret_payload("engine.webhook_secret", resolved))
+        .transpose()?;
+
+    Ok(EngineSecretReferences {
+        forge_token: forge_token.map(|resolved| resolved.reference),
+        forge_token_value,
+        webhook_secret: webhook_secret.map(|resolved| resolved.reference),
+        webhook_secret_value,
+    })
+}
+
 fn resolve_engine(
     config: &Config,
     env: &impl EnvLookup,
     options: &ResolveOptions,
+    secrets: &EngineSecretReferences,
 ) -> Result<EngineSettings, ConfigError> {
     let bind = resolve_bind(config)?;
 
@@ -317,6 +374,9 @@ fn resolve_engine(
         poll_cadence,
         mechanical_cadence,
         lease_ttl,
+        forge_token: secrets.forge_token.clone(),
+        webhook_secret: secrets.webhook_secret.clone(),
+        webhook_secret_value: secrets.webhook_secret_value.clone(),
         webhook_secret_file,
         daemon_id,
     })

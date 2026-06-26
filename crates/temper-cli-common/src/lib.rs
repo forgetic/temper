@@ -214,11 +214,10 @@ pub fn resolve_targets(
         temper_config::config_path(options.config.clone(), paths, env).ok_or_else(|| {
             "cannot determine a default config path (no HOME); pass --config".to_string()
         })?;
-    let credentials = temper_config::paired_credentials_path(
+    let credentials = temper_config::paired_credentials_file_path(
         options.credentials.clone(),
         options.config.clone(),
         paths,
-        &temper_config::NoEnv,
     )
     .ok_or_else(|| {
         "cannot determine a default credentials path (no HOME); pass --secrets".to_string()

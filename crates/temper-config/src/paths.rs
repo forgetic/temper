@@ -159,7 +159,15 @@ pub(crate) fn explicit_config_location(path: PathBuf) -> ConfigLocation {
     ConfigLocation { path, root }
 }
 
-pub(crate) fn explicit_credentials_path(path: PathBuf) -> PathBuf {
+pub(crate) fn explicit_secret_source_location(path: PathBuf) -> SecretSourceLocation {
+    if is_directory_source(&path) {
+        SecretSourceLocation::Directory(path)
+    } else {
+        SecretSourceLocation::File(path)
+    }
+}
+
+pub(crate) fn explicit_credentials_file_path(path: PathBuf) -> PathBuf {
     if is_directory_source(&path) {
         path.join(CREDENTIALS_FILE_NAME)
     } else {
@@ -167,10 +175,32 @@ pub(crate) fn explicit_credentials_path(path: PathBuf) -> PathBuf {
     }
 }
 
-pub(crate) fn credentials_directory_path(env: &dyn EnvLookup) -> Option<PathBuf> {
+pub(crate) fn credentials_directory_source_location(
+    env: &dyn EnvLookup,
+) -> Option<SecretSourceLocation> {
     env.non_empty(CREDENTIALS_DIRECTORY_ENV)
         .map(PathBuf::from)
-        .map(|dir| dir.join(CREDENTIALS_FILE_NAME))
+        .map(SecretSourceLocation::Directory)
+}
+
+pub(crate) fn paired_secret_source_location(
+    explicit_credentials: Option<PathBuf>,
+    explicit_config: Option<PathBuf>,
+    paths: &PathResolver,
+    env: &dyn EnvLookup,
+) -> Option<SecretSourceLocation> {
+    explicit_credentials
+        .map(explicit_secret_source_location)
+        .or_else(|| credentials_directory_source_location(env))
+        .or_else(|| {
+            explicit_config.map(explicit_config_location).map(|location| {
+                SecretSourceLocation::File(location.root.join(CREDENTIALS_FILE_NAME))
+            })
+        })
+        .or_else(|| {
+            config_dir(paths)
+                .map(|dir| SecretSourceLocation::File(dir.join(CREDENTIALS_FILE_NAME)))
+        })
 }
 
 fn is_directory_source(path: &Path) -> bool {
@@ -263,11 +293,15 @@ mod tests {
     }
 
     #[test]
-    fn explicit_credentials_directory_resolves_to_credentials_toml() {
+    fn explicit_credentials_directory_resolves_to_directory_source() {
         let dir = scratch("credentials-dir");
 
         assert_eq!(
-            explicit_credentials_path(dir.clone()),
+            explicit_secret_source_location(dir.clone()),
+            SecretSourceLocation::Directory(dir.clone())
+        );
+        assert_eq!(
+            explicit_credentials_file_path(dir.clone()),
             dir.join(CREDENTIALS_FILE_NAME)
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -279,12 +313,16 @@ mod tests {
         let file = dir.join("local-secrets.toml");
         std::fs::write(&file, "schema_version = 1\n").expect("write file");
 
-        assert_eq!(explicit_credentials_path(file.clone()), file);
+        assert_eq!(
+            explicit_secret_source_location(file.clone()),
+            SecretSourceLocation::File(file.clone())
+        );
+        assert_eq!(explicit_credentials_file_path(file.clone()), file);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn credentials_directory_resolves_to_credentials_toml_before_default() {
+    fn credentials_directory_resolves_to_directory_source_before_default() {
         let credentials_dir = scratch("systemd-credentials");
         let xdg = scratch("systemd-credentials-xdg");
         let mut env = EnvMap::new();
@@ -297,10 +335,7 @@ mod tests {
             ..PathResolver::default()
         };
 
-        assert_eq!(
-            credentials_path(None, &paths, &env),
-            Some(credentials_dir.join(CREDENTIALS_FILE_NAME))
-        );
+        assert_eq!(credentials_path(None, &paths, &env), Some(credentials_dir.clone()));
         let _ = std::fs::remove_dir_all(credentials_dir);
         let _ = std::fs::remove_dir_all(xdg);
     }
@@ -319,7 +354,7 @@ mod tests {
 
         assert_eq!(
             paired_credentials_path(None, Some(config_file), &PathResolver::default(), &env),
-            Some(credentials_dir.join(CREDENTIALS_FILE_NAME))
+            Some(credentials_dir.clone())
         );
         let _ = std::fs::remove_dir_all(dir);
     }

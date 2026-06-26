@@ -59,8 +59,8 @@ pub use error::{ConfigError, FileKind};
 pub use inputs::{LoadInputs, PathResolver, load_explicit};
 pub use json_schema::config_json_schema;
 pub use paths::{
-    config_dir, config_path, credentials_path, default_workspace_root, paired_credentials_path,
-    state_dir,
+    config_dir, config_path, credentials_path, default_workspace_root,
+    paired_credentials_file_path, paired_credentials_path, state_dir,
 };
 pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{

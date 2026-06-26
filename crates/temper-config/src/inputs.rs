@@ -28,7 +28,9 @@ use crate::env::{EnvLookup, SystemEnv};
 use crate::error::{ConfigError, FileKind};
 use crate::resolve::{self, ResolveOptions};
 use crate::resolved::Resolved;
-use crate::schema::{Config, Credentials};
+use crate::schema::{
+    Config, Credentials, NamedFileSecret, file_name_secret_name, trim_secret_file_payload,
+};
 use crate::{LoadedPaths, paths};
 
 /// The base directories used to derive default file locations.
@@ -128,28 +130,23 @@ pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), Con
             paths::config_dir(inputs.paths)
                 .map(|dir| LocatedFile::optional(dir.join(paths::CONFIG_FILE_NAME)))
         });
-    let credentials_source = inputs
-        .explicit_credentials
-        .clone()
-        .map(paths::explicit_credentials_path)
-        .map(LocatedFile::required)
-        .or_else(|| paths::credentials_directory_path(inputs.env).map(LocatedFile::required))
-        .or_else(|| {
-            explicit_config.as_ref().map(|location| {
-                LocatedFile::optional(location.root.join(paths::CREDENTIALS_FILE_NAME))
-            })
-        })
-        .or_else(|| {
-            paths::config_dir(inputs.paths)
-                .map(|dir| LocatedFile::optional(dir.join(paths::CREDENTIALS_FILE_NAME)))
-        });
+    let credentials_source = paths::paired_secret_source_location(
+        inputs.explicit_credentials.clone(),
+        inputs.explicit_config.clone(),
+        inputs.paths,
+        inputs.env,
+    )
+    .map(|source| match source {
+        paths::SecretSourceLocation::File(path) => LocatedCredentials::file(path, false),
+        paths::SecretSourceLocation::Directory(path) => LocatedCredentials::directory(path, true),
+    });
+    let credentials_source = mark_selected_credentials_required(
+        credentials_source,
+        inputs.explicit_credentials.is_some() || paths::credentials_directory_source_location(inputs.env).is_some(),
+    );
 
     let (config, config_file) = load_optional(config_source, FileKind::Config, Config::parse)?;
-    let (credentials, credentials_file) = load_optional(
-        credentials_source,
-        FileKind::Credentials,
-        Credentials::parse,
-    )?;
+    let (credentials, credentials_file) = load_credentials_optional(credentials_source)?;
 
     let resolve_options = config_file
         .as_deref()
@@ -193,8 +190,121 @@ impl LocatedFile {
     }
 }
 
-/// Reads + parses a located file, or returns a defaulted value when an optional
-/// file is absent. The only sources are `inputs`: no ambient `std::env` access;
+#[derive(Debug, Clone)]
+enum LocatedCredentials {
+    File(LocatedFile),
+    Directory { path: PathBuf, required: bool },
+}
+
+impl LocatedCredentials {
+    fn file(path: PathBuf, required: bool) -> Self {
+        Self::File(LocatedFile { path, required })
+    }
+
+    fn directory(path: PathBuf, required: bool) -> Self {
+        Self::Directory { path, required }
+    }
+}
+
+fn mark_selected_credentials_required(
+    source: Option<LocatedCredentials>,
+    required: bool,
+) -> Option<LocatedCredentials> {
+    source.map(|source| match source {
+        LocatedCredentials::File(mut file) => {
+            file.required = required;
+            LocatedCredentials::File(file)
+        }
+        LocatedCredentials::Directory { path, .. } => LocatedCredentials::Directory {
+            path,
+            required,
+        },
+    })
+}
+
+/// Reads + parses a credentials file or named-file directory source.
+fn load_credentials_optional(
+    source: Option<LocatedCredentials>,
+) -> Result<(Credentials, Option<PathBuf>), ConfigError> {
+    let Some(source) = source else {
+        return Ok((Credentials::default(), None));
+    };
+
+    match source {
+        LocatedCredentials::File(file) => load_credentials_file(file),
+        LocatedCredentials::Directory { path, required } => load_credentials_directory(path, required),
+    }
+}
+
+fn load_credentials_file(
+    source: LocatedFile,
+) -> Result<(Credentials, Option<PathBuf>), ConfigError> {
+    load_optional(Some(source), FileKind::Credentials, Credentials::parse)
+}
+
+fn load_credentials_directory(
+    path: PathBuf,
+    required: bool,
+) -> Result<(Credentials, Option<PathBuf>), ConfigError> {
+    let entries = match std::fs::read_dir(&path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !required => {
+            return Ok((Credentials::default(), None));
+        }
+        Err(source) => {
+            return Err(ConfigError::Read {
+                kind: FileKind::Credentials,
+                path,
+                source,
+            });
+        }
+    };
+
+    let mut credentials = Credentials::default();
+    let legacy_path = path.join(paths::CREDENTIALS_FILE_NAME);
+    if legacy_path.is_file() {
+        let (legacy, _loaded) = load_credentials_file(LocatedFile::required(legacy_path))?;
+        credentials = legacy;
+    }
+
+    for entry in entries {
+        let entry = entry.map_err(|source| ConfigError::Read {
+            kind: FileKind::Credentials,
+            path: path.clone(),
+            source,
+        })?;
+        let file_path = entry.path();
+        let metadata = entry.metadata().map_err(|source| ConfigError::Read {
+            kind: FileKind::Credentials,
+            path: file_path.clone(),
+            source,
+        })?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let Some(name) = file_name_secret_name(&file_path) else {
+            continue;
+        };
+        if name == paths::CREDENTIALS_FILE_NAME {
+            continue;
+        }
+        let text = std::fs::read_to_string(&file_path).map_err(|source| ConfigError::Read {
+            kind: FileKind::Credentials,
+            path: file_path.clone(),
+            source,
+        })?;
+        credentials.named_files.insert(
+            name,
+            NamedFileSecret {
+                value: trim_secret_file_payload(&text),
+                path: file_path,
+            },
+        );
+    }
+
+    Ok((credentials, Some(path)))
+}
+
 /// environment-driven locations must arrive through the injected [`EnvLookup`].
 fn load_optional<T: Default>(
     source: Option<LocatedFile>,
