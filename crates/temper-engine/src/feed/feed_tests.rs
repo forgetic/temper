@@ -190,6 +190,7 @@ fn maps_issue_work_item_to_daemon_job() {
             checkout_capability: None,
             allowed_verdicts: Vec::new(),
             guidance: None,
+            pull_request_freshness: None,
         }
     );
 }

@@ -299,6 +299,7 @@ mod tests {
             checkout: checkout.map(str::to_string),
             allowed_verdicts: Vec::new(),
             guidance: WorkspaceGuidance::default(),
+            pull_request_freshness: None,
         }
     }
 }

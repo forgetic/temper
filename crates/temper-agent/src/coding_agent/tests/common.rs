@@ -69,6 +69,7 @@ pub(super) fn context_with_writable_dir(dir: &str) -> WorkspaceContext {
         checkout: Some("writable".to_string()),
         allowed_verdicts: Vec::new(),
         guidance: WorkspaceGuidance::default(),
+        pull_request_freshness: None,
     }
 }
 

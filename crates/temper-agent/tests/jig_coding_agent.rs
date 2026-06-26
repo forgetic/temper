@@ -127,6 +127,7 @@ fn workspace_context() -> WorkspaceContext {
             tool_guidance: Some("Use the available workspace tools to edit files.".to_string()),
             tool_constraints: vec!["Do not run git commit.".to_string()],
         },
+        pull_request_freshness: None,
     }
 }
 
@@ -260,6 +261,7 @@ fn multi_repo_context() -> WorkspaceContext {
             tool_guidance: Some("Use the available workspace tools to edit files.".to_string()),
             tool_constraints: vec!["Do not run git commit.".to_string()],
         },
+        pull_request_freshness: None,
     }
 }
 

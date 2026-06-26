@@ -394,6 +394,50 @@ impl temper_worker::ProgressSink for InProcessProgressSink {
     }
 }
 
+struct InProcessPrFreshnessGuard {
+    daemon: Daemon,
+}
+
+impl InProcessPrFreshnessGuard {
+    fn new(daemon: Daemon) -> Self {
+        Self { daemon }
+    }
+}
+
+impl temper_worker::PrFreshnessGuard for InProcessPrFreshnessGuard {
+    fn check<'a>(
+        &'a self,
+        check: &'a temper_protocol_agent::PullRequestFreshness,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<(), temper_worker::PrFreshnessFailure>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let response = self
+                .daemon
+                .check_pull_request_freshness(protocol_worker_freshness(check))
+                .await;
+            temper_worker::map_pr_freshness_response(response)
+        })
+    }
+}
+
+fn protocol_worker_freshness(
+    check: &temper_protocol_agent::PullRequestFreshness,
+) -> temper_protocol_worker::PullRequestFreshness {
+    temper_protocol_worker::PullRequestFreshness {
+        repository_id: check.repository_id.clone(),
+        repo: check.repo.clone(),
+        role: check.role.clone(),
+        queue: check.queue.clone(),
+        action: check.action.clone(),
+        number: check.number,
+        pull_request_id: check.pull_request_id.clone(),
+        head_sha: check.head_sha.clone(),
+        queue_condition: check.queue_condition.clone(),
+        queue_labels: check.queue_labels.clone(),
+    }
+}
+
 fn serving_debug_message(addr: impl std::fmt::Display) -> String {
     format!(
         "{}serving on {addr}",

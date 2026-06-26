@@ -430,6 +430,7 @@ mod tests {
             checkout: None,
             allowed_verdicts: Vec::new(),
             guidance: Default::default(),
+            pull_request_freshness: None,
         }
     }
 
