@@ -579,7 +579,6 @@ fn assert_recovered_issue_final_state(
 ) {
     let deadline = Instant::now() + timeout;
     let expected = format!("continued in PR #{}", pull_number.get());
-    let mut last_body = String::new();
 
     loop {
         if let Some(status) = run.child.try_wait().expect("run try_wait") {
@@ -599,16 +598,16 @@ fn assert_recovered_issue_final_state(
         let finalized = issue.body.contains(&expected)
             && !issue.body.contains("Current status: queued for retry");
         if finalized {
-            let prs = block_on(implementation_prs(forge, provisioned))
-                .expect("implementation PRs list");
+            let prs =
+                block_on(implementation_prs(forge, provisioned)).expect("implementation PRs list");
             assert_eq!(prs.len(), 1, "recovery must not duplicate PRs");
             return;
         }
-        last_body = issue.body;
 
         if Instant::now() >= deadline {
             panic!(
-                "source issue ledger should finalize to the implementation PR within {timeout:?}: {last_body}\n--- temper run log ---\n{}",
+                "source issue ledger should finalize to the implementation PR within {timeout:?}: {}\n--- temper run log ---\n{}",
+                issue.body,
                 run.log_tail()
             );
         }
