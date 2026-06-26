@@ -735,6 +735,31 @@ fn resolved_debug_leaks_no_secret() {
     }
 }
 
+#[test]
+fn credentials_debug_leaks_no_secret() {
+    let credentials = parse_credentials(
+        r#"
+schema_version = 1
+[forge.users.agent]
+password = "agent-pw"
+token = "agent-token"
+[agent.providers.anthropic]
+type = "api-key"
+key = "provider-key"
+[secrets]
+named = "named-secret-value"
+"#,
+    );
+    let rendered = format!("{credentials:?}");
+    for secret in ["agent-pw", "agent-token", "provider-key", "named-secret-value"] {
+        assert!(
+            !rendered.contains(secret),
+            "secret `{secret}` leaked into Credentials Debug: {rendered}"
+        );
+    }
+    assert!(rendered.contains("[REDACTED]"), "no redaction marker: {rendered}");
+}
+
 /// The `Secret` alias round-trips: `expose_secret()` returns the raw value while
 /// `Debug` renders `[REDACTED]`.
 #[test]

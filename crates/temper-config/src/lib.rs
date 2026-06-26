@@ -106,9 +106,9 @@ pub struct LoadedPaths {
 /// [`PathResolver`] is built from it via [`PathResolver::from_env`], so a caller
 /// whose `env` snapshot sets `HOME` / `XDG_CONFIG_HOME` still discovers
 /// `~/.config/temper/{config,credentials}.toml`, exactly as before paths/env
-/// were made injectable. Credentials also honor `CREDENTIALS_DIRECTORY` from the
-/// injected `env`, before sibling/default credentials. An `env` that sets none
-/// of those discovers nothing.
+/// were made injectable. Secret loading also honors `CREDENTIALS_DIRECTORY` from
+/// the injected `env` as a named-file directory, before sibling/default
+/// credentials. An `env` that sets none of those discovers nothing.
 ///
 /// For *strict* explicit-paths-only loads (the hermeticity contract) call
 /// [`load_explicit`] with an empty [`PathResolver`] directly.
@@ -212,11 +212,11 @@ pub const EX_USAGE: u8 = 64;
 ///
 /// Hermeticity: an explicit `--config` / `--secrets` suppresses default
 /// `~/.config/temper` discovery (an empty [`PathResolver`] is used).
-/// `CREDENTIALS_DIRECTORY` from the injected env may still supply the credentials
-/// file when `--secrets` is absent; otherwise an explicit config root may load
-/// sibling `credentials.toml`, but the operator's global credentials never
-/// ambiently layer in behind an explicit deployment — matching the unified
-/// `temper daemon` path.
+/// `CREDENTIALS_DIRECTORY` from the injected env may still supply a named-file
+/// directory secret source when `--secrets` is absent; otherwise an explicit
+/// config root may load sibling `credentials.toml`, but the operator's global
+/// credentials never ambiently layer in behind an explicit deployment — matching
+/// the unified `temper daemon` path.
 pub fn service_main(
     name: &str,
     usage: &str,

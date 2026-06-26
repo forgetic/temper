@@ -560,7 +560,7 @@ impl ForgeCredentials {
 }
 
 /// `[forge.users.<name>]` — one forge identity.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForgeUser {
     /// Forge login/username. Defaults to the section key.
@@ -575,6 +575,17 @@ pub struct ForgeUser {
     /// REST API token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+}
+
+impl fmt::Debug for ForgeUser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ForgeUser")
+            .field("user", &self.user)
+            .field("email", &self.email)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 /// `[agent]` of the credentials file.
@@ -596,7 +607,7 @@ impl AgentCredentials {
 }
 
 /// `[agent.providers.<name>]` of the credentials file — the provider secret.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderCredential {
     /// `"oauth"` (access/refresh/expires) or `"api-key"` (key).
@@ -618,4 +629,17 @@ pub struct ProviderCredential {
     /// OAuth fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_file: Option<String>,
+}
+
+impl fmt::Debug for ProviderCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderCredential")
+            .field("kind", &self.kind)
+            .field("access", &self.access.as_ref().map(|_| "[REDACTED]"))
+            .field("refresh", &self.refresh.as_ref().map(|_| "[REDACTED]"))
+            .field("expires", &self.expires)
+            .field("key", &self.key.as_ref().map(|_| "[REDACTED]"))
+            .field("auth_file", &self.auth_file)
+            .finish()
+    }
 }
