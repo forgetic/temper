@@ -7,8 +7,6 @@
 //! named payload through the selected secret source without exposing it to
 //! inspection output.
 
-use std::path::PathBuf;
-
 use secrecy::SecretString;
 
 use crate::error::ConfigError;
@@ -19,7 +17,6 @@ use crate::schema::Credentials;
 pub(crate) struct ResolvedSecretReference {
     pub reference: SecretReference,
     pub value: Option<SecretString>,
-    pub source_path: Option<PathBuf>,
 }
 
 pub(crate) fn resolve_secret_reference(
@@ -44,7 +41,6 @@ pub(crate) fn resolve_secret_reference(
                 available: false,
             },
             value: None,
-            source_path: None,
         }));
     };
 
@@ -54,7 +50,6 @@ pub(crate) fn resolve_secret_reference(
             available: true,
         },
         value: secret.value.map(SecretString::from),
-        source_path: secret.source_path,
     }))
 }
 

@@ -411,19 +411,16 @@ impl Credentials {
         if let Some(secret) = self.named_files.get(name) {
             return Some(NamedSecretLookup {
                 value: Some(secret.value.clone()),
-                source_path: Some(secret.path.clone()),
             });
         }
         self.secrets.get(name).map(|secret| NamedSecretLookup {
             value: secret.value().map(str::to_string),
-            source_path: None,
         })
     }
 }
 
 pub(crate) struct NamedSecretLookup {
     pub value: Option<String>,
-    pub source_path: Option<PathBuf>,
 }
 
 /// A named secret loaded from a regular file in a directory secret source.

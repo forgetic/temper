@@ -82,6 +82,14 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
     assert_eq!(properties["forge"]["properties"]["url"]["type"], "string");
     assert_eq!(properties["engine"]["properties"]["repos"]["type"], "array");
     assert_eq!(
+        properties["engine"]["properties"]["forge_token"]["type"],
+        "string"
+    );
+    assert_eq!(
+        properties["engine"]["properties"]["webhook_secret"]["type"],
+        "string"
+    );
+    assert_eq!(
         properties["engine"]["properties"]["repos"]["items"]["type"],
         "string"
     );
@@ -114,6 +122,8 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
         pools["items"]["properties"]["worker_token"]["type"],
         "string"
     );
+    let named_secrets = &schema["$defs"]["credentials_named_secrets"]["additionalProperties"];
+    assert_eq!(named_secrets["oneOf"][0]["type"], "string");
 }
 
 #[test]

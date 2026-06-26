@@ -9,9 +9,10 @@
 //!   worker/agent settings);
 //! - the **credentials** file ([`Credentials`]) — secrets.
 //!
-//! [`load`] reads both (honoring `--config` / `--secrets` overrides, systemd's
-//! `CREDENTIALS_DIRECTORY` for credentials, and default `~/.config/temper`
-//! locations), validates each file's `schema_version`, then
+//! [`load`] reads config plus the selected secret source (a credentials TOML
+//! file, a named-file directory from `--secrets`/`CREDENTIALS_DIRECTORY`, or the
+//! default `~/.config/temper/credentials.toml`), validates each TOML file's
+//! `schema_version`, then
 //! [`resolve`](resolve::resolve)s everything — file, environment, and built-in
 //! defaults — into a [`Resolved`] the binary's adapters turn into runtime types.
 //!
@@ -77,10 +78,11 @@ pub use schema::{
 };
 pub use template::{config_template, credentials_template};
 
-/// Where to find the two files. `None` config falls back to the default
-/// `~/.config/temper` location. `None` credentials first checks the injected
-/// `CREDENTIALS_DIRECTORY`, then falls back to an explicit config root's sibling
-/// or the default `~/.config/temper` location.
+/// Where to find the config file and selected secret source. `None` config
+/// falls back to the default `~/.config/temper` location. `None` credentials
+/// first checks the injected `CREDENTIALS_DIRECTORY` as a named-file directory,
+/// then falls back to an explicit config root's sibling `credentials.toml` or
+/// the default `~/.config/temper` location.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct LoadOptions {
     /// Explicit `--config` path.
@@ -89,8 +91,9 @@ pub struct LoadOptions {
     pub credentials: Option<PathBuf>,
 }
 
-/// The files that actually fed a [`load`], for diagnostics (`None` = absent, so
-/// defaults + environment supplied everything).
+/// The sources that actually fed a [`load`], for diagnostics (`None` = absent,
+/// so defaults + environment supplied everything). `credentials` is the
+/// selected secret source, which may be a directory.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedPaths {
     pub config: Option<PathBuf>,

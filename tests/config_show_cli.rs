@@ -25,6 +25,8 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
          url = \"http://localhost:3000\"\n\
          admin = \"agent\"\n\
          [engine]\n\
+         forge_token = \"forge-engine-token\"\n\
+         webhook_secret = \"webhook-secret\"\n\
          repos = [\"ai/temper\"]\n\
          roles = [\"engineer\"]\n\
          [[worker.pools]]\n\
@@ -52,6 +54,11 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
         "schema_version = 1\n\
          [forge.users.agent]\n\
          token = \"super-secret-forge-token\"\n\
+         [secrets]\n\
+         forge-engine-token = \"super-secret-named-forge-token\"\n\
+         webhook-secret = \"super-secret-webhook-value\"\n\
+         worker-engineers-token = \"super-secret-worker-token\"\n\
+         agent-provider = \"super-secret-agent-provider\"\n\
          [agent.providers.anthropic]\n\
          type = \"api-key\"\n\
          key = \"super-secret-provider-key\"\n",
@@ -69,6 +76,14 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
 
+    assert!(
+        stdout.contains("forge_token  = forge-engine-token (available)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("webhook_secret = webhook-secret (available)"),
+        "{stdout}"
+    );
     assert!(stdout.contains("pools        = 1"), "{stdout}");
     assert!(
         stdout.contains("engineers: roles=[engineer], repos=[ai/temper]"),
@@ -76,7 +91,7 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
     );
     assert!(stdout.contains("agent_profile=coding"), "{stdout}");
     assert!(
-        stdout.contains("worker_token=worker-engineers-token"),
+        stdout.contains("worker_token=worker-engineers-token (available)"),
         "{stdout}"
     );
     assert!(stdout.contains("profiles     = 1"), "{stdout}");
@@ -86,7 +101,14 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
     );
     assert!(stdout.contains("provider=anthropic"), "{stdout}");
     assert!(stdout.contains("model=claude-opus-4-8"), "{stdout}");
-    assert!(stdout.contains("credential=agent-provider"), "{stdout}");
+    assert!(
+        stdout.contains("credential=agent-provider (available)"),
+        "{stdout}"
+    );
     assert!(!stdout.contains("super-secret-forge-token"), "{stdout}");
+    assert!(!stdout.contains("super-secret-named-forge-token"), "{stdout}");
+    assert!(!stdout.contains("super-secret-webhook-value"), "{stdout}");
+    assert!(!stdout.contains("super-secret-worker-token"), "{stdout}");
+    assert!(!stdout.contains("super-secret-agent-provider"), "{stdout}");
     assert!(!stdout.contains("super-secret-provider-key"), "{stdout}");
 }
