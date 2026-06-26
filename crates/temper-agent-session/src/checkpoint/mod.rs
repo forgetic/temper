@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use temper_protocol_agent::{StepProgress, StepState, WorkspaceContext};
+use temper_protocol_agent::{PullRequestFreshness, StepProgress, StepState, WorkspaceContext};
 
 use crate::progress::emit;
 
@@ -47,6 +47,8 @@ pub(crate) struct Checkpointer {
     /// primary — home of the coordinating artifact).
     repos: Vec<CheckpointRepo>,
     correlation_key: String,
+    freshness_url: Option<String>,
+    pull_request_freshness: Option<PullRequestFreshness>,
     /// Wall-clock job deadline (lease expiry) from `--deadline-unix-seconds`, if
     /// the worker supplied one. The backstop fires within
     /// [`CHECKPOINT_DEADLINE_MARGIN`] of it.
@@ -76,6 +78,7 @@ impl Checkpointer {
         context: &WorkspaceContext,
         deadline: Option<SystemTime>,
         interval: Duration,
+        freshness_url: Option<String>,
     ) -> Self {
         let repos = context
             .repos
@@ -91,6 +94,8 @@ impl Checkpointer {
             cwd: cwd.to_path_buf(),
             repos,
             correlation_key: context.correlation_key.clone(),
+            freshness_url,
+            pull_request_freshness: context.pull_request_freshness.clone(),
             deadline,
             interval,
             last_checkpoint: Mutex::new(Instant::now()),

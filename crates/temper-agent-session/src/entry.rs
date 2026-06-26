@@ -106,7 +106,8 @@ fn build_config(
         options
             .checkpoint_interval
             .unwrap_or(crate::DEFAULT_CHECKPOINT_INTERVAL),
-    );
+    )
+    .with_freshness_url(options.freshness_url);
     Ok((config, auth_dir))
 }
 

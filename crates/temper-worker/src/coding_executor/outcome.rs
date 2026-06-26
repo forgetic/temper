@@ -1,7 +1,10 @@
 use temper_protocol_agent::WorkspaceResult;
-use temper_protocol_worker::{Branch, FailureClass, RepoOutcome};
+use temper_protocol_worker::{
+    Branch, FailureClass, PullRequestFreshness as WorkerPullRequestFreshness, RepoOutcome,
+};
 
 use crate::executor::JobOutcome;
+use crate::pr_freshness::{PrFreshnessFailure, PrFreshnessGuard};
 
 use super::{PreparedRepo, failure, workspace_failure};
 
@@ -12,6 +15,8 @@ pub(super) async fn writable_outcome(
     coordination_key: &str,
     artifact_item: &serde_json::Value,
     pull_request_fix: bool,
+    pull_request_freshness: Option<&WorkerPullRequestFreshness>,
+    freshness_guard: Option<&dyn PrFreshnessGuard>,
 ) -> JobOutcome {
     if let Some(verdict) = result.verdict.clone() {
         return writable_verdict_outcome(
@@ -22,6 +27,16 @@ pub(super) async fn writable_outcome(
             coordination_key,
         )
         .await;
+    }
+
+    if let Err(outcome) = ensure_fresh_before_pr_push(
+        pull_request_fix,
+        pull_request_freshness,
+        freshness_guard,
+    )
+    .await
+    {
+        return outcome;
     }
 
     let outcomes = match push_writable_repos(
@@ -82,6 +97,50 @@ async fn writable_verdict_outcome(
             .summary
             .or_else(|| Some(format!("implemented {coordination_key}"))),
         children: Vec::new(),
+    }
+}
+
+fn agent_freshness(
+    freshness: &WorkerPullRequestFreshness,
+) -> temper_protocol_agent::PullRequestFreshness {
+    temper_protocol_agent::PullRequestFreshness {
+        repository_id: freshness.repository_id.clone(),
+        repo: freshness.repo.clone(),
+        role: freshness.role.clone(),
+        queue: freshness.queue.clone(),
+        action: freshness.action.clone(),
+        number: freshness.number,
+        pull_request_id: freshness.pull_request_id.clone(),
+        head_sha: freshness.head_sha.clone(),
+        queue_condition: freshness.queue_condition.clone(),
+        queue_labels: freshness.queue_labels.clone(),
+    }
+}
+
+async fn ensure_fresh_before_pr_push(
+    pull_request_fix: bool,
+    pull_request_freshness: Option<&WorkerPullRequestFreshness>,
+    freshness_guard: Option<&dyn PrFreshnessGuard>,
+) -> Result<(), JobOutcome> {
+    if !pull_request_fix {
+        return Ok(());
+    }
+    let Some(freshness) = pull_request_freshness else {
+        return Ok(());
+    };
+    let Some(guard) = freshness_guard else {
+        return Ok(());
+    };
+    match guard.check(&agent_freshness(freshness)).await {
+        Ok(()) => Ok(()),
+        Err(PrFreshnessFailure::Stale(reason)) => Err(failure(
+            FailureClass::Canceled,
+            format!("stale pull request job canceled before push: {reason}"),
+        )),
+        Err(PrFreshnessFailure::Unavailable(reason)) => Err(failure(
+            FailureClass::Transient,
+            format!("could not revalidate pull request before push: {reason}"),
+        )),
     }
 }
 

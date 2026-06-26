@@ -46,6 +46,7 @@ pub struct CodingExecutor<R: AgentRunner> {
     runner: Arc<R>,
     /// Where agent step-progress checkpoints are relayed (logging by default;
     /// the worker→daemon→forge relay plugs in here later).
+    progress: Arc<dyn ProgressSink>,
     /// Optional host-provided guard for PR-head freshness checks before pushes.
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
 }
