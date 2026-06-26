@@ -486,6 +486,16 @@ fn serve_components_parse_supported_target_flags() {
 
 #[test]
 fn serve_components_reject_local_config_and_secrets_flags() {
+    for flag in ["--config", "--secrets", "-c"] {
+        let error =
+            parse_serve_invocation(vec![flag.to_string(), "deploy/config.toml".to_string()])
+                .expect_err("file-location flags must be global-only directly after serve");
+
+        assert!(error.contains(flag), "{error}");
+        assert!(error.contains("global option"), "{error}");
+        assert!(error.contains("before `serve`"), "{error}");
+    }
+
     for component in ["standalone", "engine", "worker"] {
         for flag in ["--config", "--secrets", "-c"] {
             let error = parse_serve_invocation(vec![

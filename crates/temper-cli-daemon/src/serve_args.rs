@@ -94,6 +94,9 @@ pub(crate) fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocatio
     match component.as_str() {
         "-h" | "--help" | "help" => Ok(ServeInvocation::Help),
         "-V" | "--version" => Ok(ServeInvocation::Version),
+        "-c" | "--config" | "--secrets" => Err(format!(
+            "`{component}` is a global option; place it before `serve`"
+        )),
         "standalone" => parse_serve_standalone(iter.collect()),
         "engine" => parse_serve_service(Service::Engine, iter.collect()),
         "worker" => parse_serve_service(Service::Worker, iter.collect()),
