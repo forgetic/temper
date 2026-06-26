@@ -274,7 +274,7 @@ fn llm_server_error_requeues_claimed_issue() {
         }
     };
 
-    wait_for_recovered_issue_final_state(
+    assert_recovered_issue_final_state(
         &forge,
         &provisioned,
         issue,
@@ -569,7 +569,7 @@ async fn retry_release_state(
     Ok(issue.body)
 }
 
-fn wait_for_recovered_issue_final_state(
+fn assert_recovered_issue_final_state(
     forge: &ForgejoForge,
     provisioned: &Provisioned,
     issue_number: ItemNumber,
@@ -578,6 +578,9 @@ fn wait_for_recovered_issue_final_state(
     timeout: Duration,
 ) {
     let deadline = Instant::now() + timeout;
+    let expected = format!("continued in PR #{}", pull_number.get());
+    let mut last_body = String::new();
+
     loop {
         if let Some(status) = run.child.try_wait().expect("run try_wait") {
             panic!(
@@ -586,58 +589,31 @@ fn wait_for_recovered_issue_final_state(
             );
         }
 
-        match block_on(recovered_issue_final_state(
-            forge,
-            provisioned,
-            issue_number,
-            pull_number,
-        )) {
-            Ok(()) => return,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(250)),
-            Err(error) => panic!(
-                "`temper run` opened the engineer PR but did not finalize the source issue within {timeout:?}: {error}\n--- temper run log ---\n{}",
-                run.log_tail()
-            ),
-        }
-    }
-}
+        let issue = block_on(forge.get_issue_by_number(&provisioned.repository, issue_number))
+            .expect("issue lookup succeeds")
+            .expect("source issue exists after recovery");
+        block_on(assert_no_human_attention(forge, &issue))
+            .expect("no human-attention state after provider retry recovery");
+        assert_single_run_ledger(&issue.body, issue_number).expect("one run ledger after recovery");
 
-async fn recovered_issue_final_state(
-    forge: &ForgejoForge,
-    provisioned: &Provisioned,
-    issue_number: ItemNumber,
-    pull_number: ItemNumber,
-) -> Result<(), String> {
-    let issue = forge
-        .get_issue_by_number(&provisioned.repository, issue_number)
-        .await
-        .map_err(|error| format!("issue lookup failed: {error}"))?
-        .ok_or("source issue missing after recovery")?;
-    assert_no_human_attention(forge, &issue).await?;
-    assert_single_run_ledger(&issue.body, issue_number)?;
-    if !issue
-        .body
-        .contains(&format!("continued in PR #{}", pull_number.get()))
-    {
-        return Err(format!(
-            "source issue ledger has not finalized to the implementation PR yet: {}",
-            issue.body
-        ));
+        let finalized = issue.body.contains(&expected)
+            && !issue.body.contains("Current status: queued for retry");
+        if finalized {
+            let prs = block_on(implementation_prs(forge, provisioned))
+                .expect("implementation PRs list");
+            assert_eq!(prs.len(), 1, "recovery must not duplicate PRs");
+            return;
+        }
+        last_body = issue.body;
+
+        if Instant::now() >= deadline {
+            panic!(
+                "source issue ledger should finalize to the implementation PR within {timeout:?}: {last_body}\n--- temper run log ---\n{}",
+                run.log_tail()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(250));
     }
-    if issue.body.contains("Current status: queued for retry") {
-        return Err(format!(
-            "finalized source issue ledger still says queued for retry: {}",
-            issue.body
-        ));
-    }
-    let prs = implementation_prs(forge, provisioned).await?;
-    if prs.len() != 1 {
-        return Err(format!(
-            "recovery must not duplicate PRs; found {} implementation PRs",
-            prs.len()
-        ));
-    }
-    Ok(())
 }
 
 async fn assert_no_human_attention(
