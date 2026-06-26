@@ -66,7 +66,7 @@ struct WritableHooks {
     correlation_key: String,
     progress: Arc<dyn ProgressSink>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
-    pull_request_freshness: Option<temper_protocol_agent::PullRequestFreshness>,
+    pull_request_freshness: Mutex<Option<temper_protocol_agent::PullRequestFreshness>>,
     step: Arc<AtomicU32>,
     last_checkpoint: Mutex<Instant>,
 }
@@ -94,7 +94,7 @@ impl WritableHooks {
             correlation_key: context.correlation_key.clone(),
             progress,
             pr_freshness_guard,
-            pull_request_freshness: context.pull_request_freshness.clone(),
+            pull_request_freshness: Mutex::new(context.pull_request_freshness.clone()),
             step,
             last_checkpoint: Mutex::new(Instant::now()),
         }
@@ -114,7 +114,7 @@ impl WritableHooks {
         .await;
         match outcome {
             Ok(Some(sha)) => {
-                self.mark_checkpoint_pushed();
+                self.mark_checkpoint_pushed(&sha);
                 self.progress.report(StepProgress {
                     correlation_key: self.correlation_key.clone(),
                     step,
@@ -136,9 +136,20 @@ impl WritableHooks {
         }
     }
 
-    fn mark_checkpoint_pushed(&self) {
+    fn mark_checkpoint_pushed(&self, sha: &str) {
         if let Ok(mut last) = self.last_checkpoint.lock() {
             *last = Instant::now();
+        }
+        let sha = sha.trim();
+        if sha.is_empty() {
+            return;
+        }
+        if let Ok(mut freshness) = self.pull_request_freshness.lock() {
+            if let Some(freshness) = freshness.as_mut() {
+                freshness.head_sha = Some(sha.to_string());
+                freshness.queue_condition = None;
+                freshness.queue_labels.clear();
+            }
         }
     }
 
@@ -152,10 +163,15 @@ impl WritableHooks {
         let Some(guard) = self.pr_freshness_guard.as_deref() else {
             return Ok(());
         };
-        let Some(freshness) = self.pull_request_freshness.as_ref() else {
+        let Some(freshness) = self
+            .pull_request_freshness
+            .lock()
+            .ok()
+            .and_then(|freshness| freshness.clone())
+        else {
             return Ok(());
         };
-        guard.check(freshness).await.map_err(|error| match error {
+        guard.check(&freshness).await.map_err(|error| match error {
             temper_worker::PrFreshnessFailure::Stale(reason) => {
                 format!("pull request is stale: {reason}")
             }

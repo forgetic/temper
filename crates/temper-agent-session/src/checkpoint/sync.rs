@@ -34,7 +34,7 @@ impl CheckpointJob {
             repos: self.repos,
             correlation_key: self.correlation_key,
             freshness_url: self.freshness_url,
-            pull_request_freshness: self.pull_request_freshness,
+            pull_request_freshness: Mutex::new(self.pull_request_freshness),
             deadline: None,
             interval: DEFAULT_CHECKPOINT_INTERVAL,
             last_checkpoint: Mutex::new(Instant::now()),

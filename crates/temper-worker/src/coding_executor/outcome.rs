@@ -17,6 +17,7 @@ pub(super) async fn writable_outcome(
     pull_request_fix: bool,
     pull_request_freshness: Option<&WorkerPullRequestFreshness>,
     freshness_guard: Option<&dyn PrFreshnessGuard>,
+    latest_self_pushed_sha: Option<&str>,
 ) -> JobOutcome {
     if let Some(verdict) = result.verdict.clone() {
         return writable_verdict_outcome(
@@ -29,8 +30,13 @@ pub(super) async fn writable_outcome(
         .await;
     }
 
-    if let Err(outcome) =
-        ensure_fresh_before_pr_push(pull_request_fix, pull_request_freshness, freshness_guard).await
+    if let Err(outcome) = ensure_fresh_before_pr_push(
+        pull_request_fix,
+        pull_request_freshness,
+        freshness_guard,
+        latest_self_pushed_sha,
+    )
+    .await
     {
         return outcome;
     }
@@ -98,8 +104,9 @@ async fn writable_verdict_outcome(
 
 fn agent_freshness(
     freshness: &WorkerPullRequestFreshness,
+    latest_self_pushed_sha: Option<&str>,
 ) -> temper_protocol_agent::PullRequestFreshness {
-    temper_protocol_agent::PullRequestFreshness {
+    let mut check = temper_protocol_agent::PullRequestFreshness {
         repository_id: freshness.repository_id.clone(),
         repo: freshness.repo.clone(),
         role: freshness.role.clone(),
@@ -110,13 +117,26 @@ fn agent_freshness(
         head_sha: freshness.head_sha.clone(),
         queue_condition: freshness.queue_condition.clone(),
         queue_labels: freshness.queue_labels.clone(),
+    };
+    if let Some(sha) = latest_self_pushed_sha.and_then(non_empty)
+        && Some(sha) != freshness.head_sha.as_deref().and_then(non_empty)
+    {
+        check.head_sha = Some(sha.to_string());
+        check.queue_condition = None;
+        check.queue_labels.clear();
     }
+    check
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    (!value.is_empty()).then_some(value)
 }
 
 async fn ensure_fresh_before_pr_push(
     pull_request_fix: bool,
     pull_request_freshness: Option<&WorkerPullRequestFreshness>,
     freshness_guard: Option<&dyn PrFreshnessGuard>,
+    latest_self_pushed_sha: Option<&str>,
 ) -> Result<(), JobOutcome> {
     if !pull_request_fix {
         return Ok(());
@@ -127,7 +147,10 @@ async fn ensure_fresh_before_pr_push(
     let Some(guard) = freshness_guard else {
         return Ok(());
     };
-    match guard.check(&agent_freshness(freshness)).await {
+    match guard
+        .check(&agent_freshness(freshness, latest_self_pushed_sha))
+        .await
+    {
         Ok(()) => Ok(()),
         Err(PrFreshnessFailure::Stale(reason)) => Err(failure(
             FailureClass::Canceled,

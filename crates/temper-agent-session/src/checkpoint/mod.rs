@@ -49,7 +49,7 @@ pub(crate) struct Checkpointer {
     repos: Vec<CheckpointRepo>,
     correlation_key: String,
     freshness_url: Option<String>,
-    pull_request_freshness: Option<PullRequestFreshness>,
+    pull_request_freshness: Mutex<Option<PullRequestFreshness>>,
     /// Wall-clock job deadline (lease expiry) from `--deadline-unix-seconds`, if
     /// the worker supplied one. The backstop fires within
     /// [`CHECKPOINT_DEADLINE_MARGIN`] of it.
@@ -96,7 +96,7 @@ impl Checkpointer {
             repos,
             correlation_key: context.correlation_key.clone(),
             freshness_url,
-            pull_request_freshness: context.pull_request_freshness.clone(),
+            pull_request_freshness: Mutex::new(context.pull_request_freshness.clone()),
             deadline,
             interval,
             last_checkpoint: Mutex::new(Instant::now()),
@@ -123,18 +123,15 @@ impl Checkpointer {
     ///
     /// [`CheckpointHook`]: temper_agent::CheckpointHook
     async fn do_checkpoint(&self, label: Option<&str>) -> Result<Option<String>, String> {
-        freshness::ensure_fresh(
-            self.freshness_url.as_deref(),
-            self.pull_request_freshness.as_ref(),
-        )
-        .await?;
+        let freshness = self.pull_request_freshness_snapshot();
+        freshness::ensure_fresh(self.freshness_url.as_deref(), freshness.as_ref()).await?;
         let step = self.step.fetch_add(1, Ordering::SeqCst);
         let job = CheckpointJob {
             cwd: self.cwd.clone(),
             repos: self.repos.clone(),
             correlation_key: self.correlation_key.clone(),
             freshness_url: self.freshness_url.clone(),
-            pull_request_freshness: self.pull_request_freshness.clone(),
+            pull_request_freshness: self.pull_request_freshness_snapshot(),
         };
         let label_owned = label.map(str::to_string);
         let outcome = skein::runtime::spawn_blocking(move || {
@@ -144,9 +141,7 @@ impl Checkpointer {
         .await;
         match outcome {
             Ok(Some(sha)) => {
-                if let Ok(mut last) = self.last_checkpoint.lock() {
-                    *last = Instant::now();
-                }
+                self.mark_checkpoint_pushed(&sha);
                 emit(&StepProgress {
                     correlation_key: self.correlation_key.clone(),
                     step,
@@ -166,6 +161,30 @@ impl Checkpointer {
                 Ok(None)
             }
             Err(error) => Err(error),
+        }
+    }
+
+    fn pull_request_freshness_snapshot(&self) -> Option<PullRequestFreshness> {
+        self.pull_request_freshness
+            .lock()
+            .ok()
+            .and_then(|freshness| freshness.clone())
+    }
+
+    fn mark_checkpoint_pushed(&self, sha: &str) {
+        if let Ok(mut last) = self.last_checkpoint.lock() {
+            *last = Instant::now();
+        }
+        let sha = sha.trim();
+        if sha.is_empty() {
+            return;
+        }
+        if let Ok(mut freshness) = self.pull_request_freshness.lock() {
+            if let Some(freshness) = freshness.as_mut() {
+                freshness.head_sha = Some(sha.to_string());
+                freshness.queue_condition = None;
+                freshness.queue_labels.clear();
+            }
         }
     }
 
