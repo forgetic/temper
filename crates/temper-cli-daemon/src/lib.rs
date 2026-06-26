@@ -77,6 +77,11 @@ Components:
 Options:
   -h, --help  Print help
 
+Component options:
+  standalone  --id <ID>
+  engine      --id <ID>
+  worker      --pool <NAME> --id <ID> --capacity <N> --engine-url <URL>
+
 Place `--config` / `--secrets` before `serve`, for example:
   temper --config ./deploy --secrets ./deploy/credentials.toml serve engine
 
@@ -88,10 +93,11 @@ Run Temper in standalone mode.
 This is a compatibility wrapper for the existing all-in-one `temper daemon` path
 without `--service`: engine, worker, and agent execution run in one process.
 
-Usage: temper [GLOBAL OPTIONS] serve standalone [OPTIONS]
+Usage: temper [GLOBAL OPTIONS] serve standalone [--id <ID>]
 
 Options:
-  -h, --help  Print help";
+      --id <ID>  Stable process identity for the all-in-one runtime
+  -h, --help    Print help";
 
 pub const SERVE_ENGINE_USAGE: &str = "\
 Run the Temper engine service.
@@ -100,14 +106,11 @@ This is a compatibility wrapper for the existing `temper daemon --service engine
 path. Put deployment file flags before `serve`:
   temper --config ./deploy --secrets ./deploy/credentials.toml serve engine
 
-Usage: temper [GLOBAL OPTIONS] serve engine [OPTIONS]
+Usage: temper [GLOBAL OPTIONS] serve engine [--id <ID>]
 
 Options:
-  -h, --help  Print help
-
-Not implemented yet: target flags such as `--id`, `--pool`, `--capacity`, and
-`--engine-url`. Do not pass them yet; future workitems will define their
-semantics.";
+      --id <ID>  Override the engine daemon/process identity
+  -h, --help    Print help";
 
 pub const SERVE_WORKER_USAGE: &str = "\
 Run the Temper worker service.
@@ -119,11 +122,25 @@ path. Put deployment file flags before `serve`:
 Usage: temper [GLOBAL OPTIONS] serve worker [OPTIONS]
 
 Options:
-  -h, --help  Print help
+      --pool <NAME>       Select a resolved [[worker.pools]] capability class
+      --id <ID>           Override the worker registration/logging identity
+      --capacity <N>      Override max concurrent jobs for this worker (N > 0)
+      --engine-url <URL>  Override the engine/daemon URL for this worker
+  -h, --help             Print help";
 
-Not implemented yet: target flags such as `--id`, `--pool`, `--capacity`, and
-`--engine-url`. Do not pass them yet; future workitems will define their
-semantics.";
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct RuntimeOverrides {
+    /// Stable process identity override. For standalone this is applied to both
+    /// the in-process engine daemon id and worker id; for single-service modes it
+    /// applies to the selected service identity.
+    pub process_id: Option<String>,
+    /// Selected target-era worker pool name (`temper serve worker --pool`).
+    pub worker_pool: Option<String>,
+    /// Per-process worker capacity override (`temper serve worker --capacity`).
+    pub worker_capacity: Option<u32>,
+    /// Per-process worker daemon/engine URL override (`temper serve worker --engine-url`).
+    pub worker_engine_url: Option<String>,
+}
 
 #[derive(Debug, Eq, PartialEq)]
 enum ServeInvocation {
@@ -131,8 +148,8 @@ enum ServeInvocation {
     Version,
     StandaloneHelp,
     ServiceHelp(Service),
-    Standalone,
-    Service(Service),
+    Standalone(RuntimeOverrides),
+    Service(Service, RuntimeOverrides),
 }
 
 /// Which individual daemon service to run (`temper daemon --service <name>`).
@@ -176,6 +193,9 @@ pub struct DaemonInputs<'a> {
     pub credentials: Option<PathBuf>,
     /// Which single service to run, or `None` for the all-in-one standalone.
     pub service: Option<Service>,
+    /// Per-process runtime overrides parsed by `temper serve`. The legacy
+    /// `temper daemon` path supplies the default (no overrides).
+    pub runtime: RuntimeOverrides,
     /// The injected environment snapshot (used for path expansion and for
     /// systemd `CREDENTIALS_DIRECTORY` credentials discovery).
     pub env: &'a dyn EnvLookup,
@@ -237,9 +257,11 @@ pub fn serve_main_with_options(
             println!("{}", serve_service_usage(service));
             ExitCode::SUCCESS
         }
-        Ok(ServeInvocation::Standalone) => main_with_options(Vec::new(), env, paths, options),
-        Ok(ServeInvocation::Service(service)) => {
-            serve_service_with_options(service, env, paths, options)
+        Ok(ServeInvocation::Standalone(runtime)) => {
+            serve_standalone_with_options(runtime, env, paths, options)
+        }
+        Ok(ServeInvocation::Service(service, runtime)) => {
+            serve_service_with_options(service, runtime, env, paths, options)
         }
         Err(error) => {
             eprintln!("temper serve: {error}\n\n{SERVE_USAGE}");
@@ -248,8 +270,32 @@ pub fn serve_main_with_options(
     }
 }
 
+fn serve_standalone_with_options(
+    runtime: RuntimeOverrides,
+    env: &dyn EnvLookup,
+    paths: &PathResolver,
+    options: LoadOptions,
+) -> ExitCode {
+    let inputs = DaemonInputs {
+        config: options.config,
+        credentials: options.credentials,
+        service: None,
+        runtime,
+        env,
+        paths,
+    };
+    match run(inputs) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("temper serve standalone: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn serve_service_with_options(
     service: Service,
+    runtime: RuntimeOverrides,
     env: &dyn EnvLookup,
     paths: &PathResolver,
     options: LoadOptions,
@@ -258,6 +304,7 @@ fn serve_service_with_options(
         config: options.config,
         credentials: options.credentials,
         service: Some(service),
+        runtime,
         env,
         paths,
     };
@@ -299,66 +346,176 @@ fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocation, String> 
 }
 
 fn parse_serve_standalone(args: Vec<String>) -> Result<ServeInvocation, String> {
-    parse_serve_component_args(
-        "standalone",
-        ServeInvocation::Standalone,
-        ServeInvocation::StandaloneHelp,
-        args,
-    )
-}
-
-fn parse_serve_service(service: Service, args: Vec<String>) -> Result<ServeInvocation, String> {
-    parse_serve_component_args(
-        service.as_str(),
-        ServeInvocation::Service(service),
-        ServeInvocation::ServiceHelp(service),
-        args,
-    )
-}
-
-fn parse_serve_component_args(
-    component: &str,
-    run: ServeInvocation,
-    help: ServeInvocation,
-    args: Vec<String>,
-) -> Result<ServeInvocation, String> {
-    let mut iter = args.into_iter();
-    let Some(arg) = iter.next() else {
-        return Ok(run);
-    };
-    let extra = iter.next();
-
-    match arg.as_str() {
-        "-h" | "--help" | "help" => reject_extra_serve_arg(component, &arg, extra).map(|()| help),
-        "-V" | "--version" => {
-            reject_extra_serve_arg(component, &arg, extra).map(|()| ServeInvocation::Version)
-        }
-        "--service" => Err(if component == "standalone" {
-            "`temper serve standalone` always runs the standalone path; `--service` is not accepted"
-                .to_string()
-        } else {
-            format!(
-                "`temper serve {component}` already selects the {component} service; `--service` is not accepted"
-            )
-        }),
-        "-c" | "--config" | "--secrets" => Err(format!(
-            "`{arg}` is a global option; place it before `serve`"
-        )),
-        "--id" | "--pool" | "--capacity" | "--engine-url" => Err(format!(
-            "target flag `{arg}` is not implemented yet for `temper serve {component}`; do not pass it yet"
-        )),
-        other => Err(format!("unexpected argument `{other}`")),
+    match parse_serve_component_args(ServeComponent::Standalone, args)? {
+        ServeComponentAction::Help => Ok(ServeInvocation::StandaloneHelp),
+        ServeComponentAction::Version => Ok(ServeInvocation::Version),
+        ServeComponentAction::Run(runtime) => Ok(ServeInvocation::Standalone(runtime)),
     }
 }
 
-fn reject_extra_serve_arg(component: &str, arg: &str, extra: Option<String>) -> Result<(), String> {
+fn parse_serve_service(service: Service, args: Vec<String>) -> Result<ServeInvocation, String> {
+    let component = match service {
+        Service::Engine => ServeComponent::Engine,
+        Service::Worker => ServeComponent::Worker,
+    };
+    match parse_serve_component_args(component, args)? {
+        ServeComponentAction::Help => Ok(ServeInvocation::ServiceHelp(service)),
+        ServeComponentAction::Version => Ok(ServeInvocation::Version),
+        ServeComponentAction::Run(runtime) => Ok(ServeInvocation::Service(service, runtime)),
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ServeComponent {
+    Standalone,
+    Engine,
+    Worker,
+}
+
+impl ServeComponent {
+    fn as_str(self) -> &'static str {
+        match self {
+            ServeComponent::Standalone => "standalone",
+            ServeComponent::Engine => "engine",
+            ServeComponent::Worker => "worker",
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ServeComponentAction {
+    Help,
+    Version,
+    Run(RuntimeOverrides),
+}
+
+fn parse_serve_component_args(
+    component: ServeComponent,
+    args: Vec<String>,
+) -> Result<ServeComponentAction, String> {
+    let mut runtime = RuntimeOverrides::default();
+    let mut iter = args.into_iter();
+
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-h" | "--help" | "help" => {
+                reject_remaining_serve_args(component, &arg, iter.next())?;
+                return Ok(ServeComponentAction::Help);
+            }
+            "-V" | "--version" => {
+                reject_remaining_serve_args(component, &arg, iter.next())?;
+                return Ok(ServeComponentAction::Version);
+            }
+            "--service" => return Err(service_flag_error(component)),
+            "-c" | "--config" | "--secrets" => {
+                return Err(format!("`{arg}` is a global option; place it before `serve`"));
+            }
+            "--id" => {
+                runtime.process_id = Some(next_non_empty_serve_value(component, &mut iter, &arg)?);
+            }
+            "--pool" => {
+                require_worker_flag(component, &arg)?;
+                runtime.worker_pool = Some(next_non_empty_serve_value(component, &mut iter, &arg)?);
+            }
+            "--capacity" => {
+                require_worker_flag(component, &arg)?;
+                let raw = next_serve_value(component, &mut iter, &arg)?;
+                runtime.worker_capacity = Some(parse_serve_capacity(&raw)?);
+            }
+            "--engine-url" => {
+                require_worker_flag(component, &arg)?;
+                runtime.worker_engine_url =
+                    Some(next_non_empty_serve_value(component, &mut iter, &arg)?);
+            }
+            other => return Err(format!("unexpected argument `{other}`")),
+        }
+    }
+
+    Ok(ServeComponentAction::Run(runtime))
+}
+
+fn reject_remaining_serve_args(
+    component: ServeComponent,
+    arg: &str,
+    extra: Option<String>,
+) -> Result<(), String> {
     if let Some(extra) = extra {
         Err(format!(
-            "unexpected argument `{extra}` after `{arg}` for `temper serve {component}`"
+            "unexpected argument `{extra}` after `{arg}` for `temper serve {}`",
+            component.as_str()
         ))
     } else {
         Ok(())
     }
+}
+
+fn service_flag_error(component: ServeComponent) -> String {
+    if component == ServeComponent::Standalone {
+        "`temper serve standalone` always runs the standalone path; `--service` is not accepted"
+            .to_string()
+    } else {
+        format!(
+            "`temper serve {}` already selects the {} service; `--service` is not accepted",
+            component.as_str(),
+            component.as_str()
+        )
+    }
+}
+
+fn require_worker_flag(component: ServeComponent, flag: &str) -> Result<(), String> {
+    if component == ServeComponent::Worker {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{flag}` cannot be used with `temper serve {}`; use it with `temper serve worker`",
+            component.as_str()
+        ))
+    }
+}
+
+fn next_non_empty_serve_value(
+    component: ServeComponent,
+    iter: &mut impl Iterator<Item = String>,
+    flag: &str,
+) -> Result<String, String> {
+    let value = next_serve_value(component, iter, flag)?;
+    if value.trim().is_empty() {
+        return Err(format!(
+            "`{flag}` requires a non-empty value for `temper serve {}`",
+            component.as_str()
+        ));
+    }
+    Ok(value)
+}
+
+fn next_serve_value(
+    component: ServeComponent,
+    iter: &mut impl Iterator<Item = String>,
+    flag: &str,
+) -> Result<String, String> {
+    let Some(value) = iter.next() else {
+        return Err(format!(
+            "`{flag}` requires a value for `temper serve {}`",
+            component.as_str()
+        ));
+    };
+    if value.starts_with("--") {
+        return Err(format!(
+            "`{flag}` requires a value for `temper serve {}`",
+            component.as_str()
+        ));
+    }
+    Ok(value)
+}
+
+fn parse_serve_capacity(raw: &str) -> Result<u32, String> {
+    let capacity = raw.parse::<u32>().map_err(|_| {
+        format!("invalid --capacity `{raw}` (expected a positive integer greater than zero)")
+    })?;
+    if capacity == 0 {
+        return Err("--capacity must be greater than zero".to_string());
+    }
+    Ok(capacity)
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -401,6 +558,7 @@ pub fn main_with_options(
         config: options.config,
         credentials: options.credentials,
         service: parsed.service,
+        runtime: RuntimeOverrides::default(),
         env,
         paths,
     };
@@ -445,7 +603,9 @@ fn parse_daemon_args(args: Vec<String>) -> Result<ParsedDaemonArgs, String> {
 /// otherwise an explicit config root may load sibling `credentials.toml`, but the
 /// global credentials file never layers in behind an explicit deployment.
 pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
-    let (resolved, loaded_paths) = load_for(&inputs).map_err(DaemonError::Load)?;
+    let (mut resolved, loaded_paths) = load_for(&inputs).map_err(DaemonError::Load)?;
+    apply_runtime_overrides(&mut resolved, inputs.service, &inputs.runtime)
+        .map_err(DaemonError::Run)?;
     let result = match inputs.service {
         None => standalone::run(&resolved, loaded_paths.config.as_deref()),
         Some(Service::Engine) => temper_engine_service::run(&resolved),
@@ -454,6 +614,132 @@ pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
         }
     };
     result.map_err(DaemonError::Run)
+}
+
+fn apply_runtime_overrides(
+    resolved: &mut Resolved,
+    service: Option<Service>,
+    runtime: &RuntimeOverrides,
+) -> Result<(), String> {
+    match service {
+        None => apply_standalone_runtime_overrides(resolved, runtime),
+        Some(Service::Engine) => apply_engine_runtime_overrides(resolved, runtime),
+        Some(Service::Worker) => apply_worker_runtime_overrides(resolved, runtime),
+    }
+}
+
+fn apply_standalone_runtime_overrides(
+    resolved: &mut Resolved,
+    runtime: &RuntimeOverrides,
+) -> Result<(), String> {
+    reject_worker_only_runtime_overrides(runtime, "standalone")?;
+    if let Some(process_id) = runtime.process_id.as_deref() {
+        let process_id = non_empty_runtime_override("--id", process_id)?;
+        resolved.engine.daemon_id = process_id.to_string();
+        resolved.worker.worker_id = process_id.to_string();
+    }
+    Ok(())
+}
+
+fn apply_engine_runtime_overrides(
+    resolved: &mut Resolved,
+    runtime: &RuntimeOverrides,
+) -> Result<(), String> {
+    reject_worker_only_runtime_overrides(runtime, "engine")?;
+    if let Some(process_id) = runtime.process_id.as_deref() {
+        resolved.engine.daemon_id = non_empty_runtime_override("--id", process_id)?.to_string();
+    }
+    Ok(())
+}
+
+fn apply_worker_runtime_overrides(
+    resolved: &mut Resolved,
+    runtime: &RuntimeOverrides,
+) -> Result<(), String> {
+    if let Some(process_id) = runtime.process_id.as_deref() {
+        resolved.worker.worker_id = non_empty_runtime_override("--id", process_id)?.to_string();
+    }
+    if let Some(engine_url) = runtime.worker_engine_url.as_deref() {
+        resolved.worker.daemon_url =
+            non_empty_runtime_override("--engine-url", engine_url)?.to_string();
+    }
+    if let Some(pool_name) = runtime.worker_pool.as_deref() {
+        let pool_name = non_empty_runtime_override("--pool", pool_name)?;
+        let pool = resolved
+            .worker
+            .pools
+            .iter()
+            .find(|pool| pool.name == pool_name)
+            .ok_or_else(|| format!("unknown worker pool `{pool_name}`"))?;
+        let capabilities = capabilities_from_pool(pool)?;
+        if let Some(capacity) = pool.max_concurrent_jobs {
+            resolved.worker.max_concurrent_jobs = capacity;
+        }
+        resolved.worker.capabilities = capabilities;
+    }
+    if let Some(capacity) = runtime.worker_capacity {
+        if capacity == 0 {
+            return Err("--capacity must be greater than zero".to_string());
+        }
+        resolved.worker.max_concurrent_jobs = capacity;
+    }
+    Ok(())
+}
+
+fn reject_worker_only_runtime_overrides(
+    runtime: &RuntimeOverrides,
+    component: &str,
+) -> Result<(), String> {
+    if let Some(pool) = &runtime.worker_pool {
+        return Err(format!(
+            "`--pool` cannot be used with `temper serve {component}` (got `{pool}`); use `temper serve worker`"
+        ));
+    }
+    if runtime.worker_capacity.is_some() {
+        return Err(format!(
+            "`--capacity` cannot be used with `temper serve {component}`; use `temper serve worker`"
+        ));
+    }
+    if let Some(url) = &runtime.worker_engine_url {
+        return Err(format!(
+            "`--engine-url` cannot be used with `temper serve {component}` (got `{url}`); use `temper serve worker`"
+        ));
+    }
+    Ok(())
+}
+
+fn capabilities_from_pool(pool: &WorkerPoolSettings) -> Result<Vec<Capability>, String> {
+    if pool.roles.is_empty() {
+        return Err(format!(
+            "worker pool `{}` does not declare any roles, so it cannot produce runtime capabilities",
+            pool.name
+        ));
+    }
+    if pool.repos.is_empty() {
+        return Err(format!(
+            "worker pool `{}` does not declare any repos, so it cannot produce runtime capabilities",
+            pool.name
+        ));
+    }
+
+    let mut capabilities = Vec::with_capacity(pool.roles.len() * pool.repos.len());
+    for repo in &pool.repos {
+        for role in &pool.roles {
+            capabilities.push(Capability {
+                repo: repo.display(),
+                role: role.clone(),
+            });
+        }
+    }
+    Ok(capabilities)
+}
+
+fn non_empty_runtime_override<'a>(flag: &str, value: &'a str) -> Result<&'a str, String> {
+    if value.trim().is_empty() {
+        Err(format!("{flag} requires a non-empty value"))
+    } else {
+        Ok(value)
+    }
 }
 
 /// Loads + resolves the deployment from the injected inputs.
