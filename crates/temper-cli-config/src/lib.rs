@@ -468,6 +468,27 @@ fn render(resolved: &Resolved) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let _ = writeln!(out, "  pools        = {}", resolved.worker.pools.len());
+    for pool in &resolved.worker.pools {
+        let repos = pool
+            .repos
+            .iter()
+            .map(|repo| repo.display())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            out,
+            "    - {}: roles=[{}], repos=[{}], max_jobs={}, agent_profile={}, worker_token={}",
+            pool.name,
+            pool.roles.join(", "),
+            repos,
+            pool.max_concurrent_jobs
+                .map(|jobs| jobs.to_string())
+                .unwrap_or_else(|| "(unset)".to_string()),
+            pool.agent_profile.as_deref().unwrap_or("(unset)"),
+            pool.worker_token.as_deref().unwrap_or("(unset)")
+        );
+    }
 
     let _ = writeln!(out, "\n[deployment]");
     let _ = writeln!(
@@ -560,6 +581,36 @@ fn render(resolved: &Resolved) -> String {
     );
     let _ = writeln!(out, "  max_iters    = {}", resolved.agent.max_iterations);
     let _ = writeln!(out, "  subagents    = {}", resolved.agent.enable_subagents);
+    let _ = writeln!(out, "  profiles     = {}", resolved.agent.profiles.len());
+    for (name, profile) in &resolved.agent.profiles {
+        let command = if profile.command.is_empty() {
+            "(unset)".to_string()
+        } else {
+            format!("[{}]", profile.command.join(" "))
+        };
+        let _ = writeln!(
+            out,
+            "    - {}: command={}, provider={}, model={}, investigate={}, url={}, max_iters={}, subagents={}, credential={}",
+            name,
+            command,
+            profile
+                .provider
+                .map(|provider| provider.as_str())
+                .unwrap_or("(unset)"),
+            profile.model.as_deref().unwrap_or("(unset)"),
+            profile.investigate_model.as_deref().unwrap_or("(unset)"),
+            profile.provider_url.as_deref().unwrap_or("(unset)"),
+            profile
+                .max_iterations
+                .map(|iterations| iterations.to_string())
+                .unwrap_or_else(|| "(unset)".to_string()),
+            profile
+                .subagents
+                .map(|enabled| enabled.to_string())
+                .unwrap_or_else(|| "(unset)".to_string()),
+            profile.credential.as_deref().unwrap_or("(unset)")
+        );
+    }
 
     out
 }
