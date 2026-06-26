@@ -2,7 +2,7 @@
 
 //! Pure in-memory dispatch coordination over the soft worker registry.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_protocol_worker::Register;
 
@@ -192,6 +192,33 @@ impl DispatchCoordinator {
 
     pub fn pending(&self) -> &VecDeque<WorkItem> {
         &self.pending
+    }
+
+    /// Retain only `current_job_ids` among pending jobs in the `(repo, role)`
+    /// scope, returning the stale pending items that were removed.
+    ///
+    /// Assigned/in-flight jobs are intentionally not inspected or modified:
+    /// this reconciliation seam is only for daemon queue entries that have not
+    /// yet been handed to a worker.
+    pub fn retain_pending_by_scope(
+        &mut self,
+        repo: &str,
+        role: &str,
+        current_job_ids: &BTreeSet<String>,
+    ) -> Vec<WorkItem> {
+        let mut retained = VecDeque::with_capacity(self.pending.len());
+        let mut removed = Vec::new();
+
+        while let Some(item) = self.pending.pop_front() {
+            if item.repo == repo && item.role == role && !current_job_ids.contains(&item.job_id) {
+                removed.push(item);
+            } else {
+                retained.push_back(item);
+            }
+        }
+
+        self.pending = retained;
+        removed
     }
 
     /// The in-flight work item for `job_id`, if currently assigned.
