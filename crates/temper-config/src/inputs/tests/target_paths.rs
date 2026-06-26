@@ -73,4 +73,3 @@ fn explicit_config_directory_uses_target_state_for_default_workspace() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
-
