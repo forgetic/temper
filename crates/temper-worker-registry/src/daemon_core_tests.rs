@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::collections::BTreeSet;
+
 use serde_json::json;
 use temper_protocol_worker::{
     Assign, ErrorCode, Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
@@ -86,6 +88,39 @@ fn pending_job_is_not_in_flight() {
     core.enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({"k":1}));
 
     assert_eq!(core.in_flight_job("job-1"), None);
+}
+
+#[test]
+fn scoped_pending_reconcile_removes_job_context_only_for_pruned_pending_jobs() {
+    let mut core = DaemonCore::new();
+    core.coordinator_mut()
+        .register(&register("worker-a", "engineer", "ai/temper", 1));
+    core.enqueue_job("assigned", "engineer", "ai/temper", artifact(), json!({"n":0}));
+    match core.handle(poll("worker-a")) {
+        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "assigned"),
+        other => panic!("expected assign, got {other:?}"),
+    }
+
+    core.enqueue_job("stale", "engineer", "ai/temper", artifact(), json!({"n":1}));
+    core.enqueue_job("current", "engineer", "ai/temper", artifact(), json!({"n":2}));
+    core.enqueue_job("other-role", "architect", "ai/temper", artifact(), json!({"n":3}));
+    core.enqueue_job("other-repo", "engineer", "ai/other", artifact(), json!({"n":4}));
+
+    let current = BTreeSet::from(["current".to_string()]);
+    assert_eq!(
+        core.retain_pending_jobs_for_scope("ai/temper", "engineer", &current),
+        vec!["stale".to_string()]
+    );
+
+    assert_eq!(
+        core.queued_jobs()
+            .iter()
+            .map(|job| job.job_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["current", "other-role", "other-repo"]
+    );
+    assert!(core.in_flight_job("assigned").is_some());
+    assert_eq!(core.in_flight_job("stale"), None);
 }
 
 #[test]

@@ -4,7 +4,7 @@
 //! protocol dispatch, webhook delivery verification, enqueue gating, and
 //! long-poll waiter fulfilment. Pure transitions returning [`DaemonRequest`]s.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
@@ -270,6 +270,26 @@ impl DaemonMachine {
         }
         requests.extend(self.fulfil_waiters());
         requests
+    }
+
+    pub(super) fn handle_reconcile_pending_role_jobs(
+        &mut self,
+        repo: String,
+        role: String,
+        current_job_ids: BTreeSet<String>,
+    ) -> Vec<DaemonRequest> {
+        let pruned = self
+            .core
+            .retain_pending_jobs_for_scope(&repo, &role, &current_job_ids);
+        if pruned.is_empty() {
+            return Vec::new();
+        }
+
+        vec![DaemonRequest::Log(format!(
+            "engine: pruned stale pending jobs repo={repo} role={role} count={} job_ids={}",
+            pruned.len(),
+            pruned.join(",")
+        ))]
     }
 
     /// Builds the §7 `role.saturated` request when the just-enqueued role is at

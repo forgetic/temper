@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::collections::BTreeSet;
+
 use crate::test_support::{coordinated, register, register_multi, work};
 use crate::{Assignment, DispatchCoordinator};
 
@@ -231,6 +233,37 @@ fn reclaim_worker_requeues_in_flight_jobs_for_reassignment() {
     let reassignment = coordinator.dispatch_next().unwrap();
     assert_eq!(reassignment.job_id, "job-1");
     assert_eq!(reassignment.worker_id, "worker-a");
+}
+
+#[test]
+fn scoped_pending_retain_prunes_only_matching_pending_jobs() {
+    let mut coordinator = DispatchCoordinator::new();
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));
+    coordinator.enqueue(work("assigned", "engineer", "ai/temper"));
+    assert_eq!(coordinator.dispatch_next().unwrap().job_id, "assigned");
+
+    coordinator.enqueue(work("stale", "engineer", "ai/temper"));
+    coordinator.enqueue(work("current", "engineer", "ai/temper"));
+    coordinator.enqueue(work("other-role", "architect", "ai/temper"));
+    coordinator.enqueue(work("other-repo", "engineer", "ai/other"));
+
+    let current = BTreeSet::from(["current".to_string()]);
+    let removed = coordinator.retain_pending_by_scope("ai/temper", "engineer", &current);
+
+    assert_eq!(
+        removed.iter().map(|item| item.job_id.as_str()).collect::<Vec<_>>(),
+        vec!["stale"]
+    );
+    assert_eq!(
+        coordinator
+            .pending()
+            .iter()
+            .map(|item| item.job_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["current", "other-role", "other-repo"]
+    );
+    assert_eq!(coordinator.in_flight_len(), 1);
+    assert!(coordinator.assigned_work_item("assigned").is_some());
 }
 
 #[test]

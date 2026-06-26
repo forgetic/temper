@@ -44,6 +44,12 @@ pub(super) enum DaemonCompletion {
         artifact: Artifact,
         job_payload: serde_json::Value,
     },
+    /// Daemon API: reconcile stale pending jobs after a successful role scan.
+    ReconcilePendingRoleJobs {
+        repo: String,
+        role: String,
+        current_job_ids: BTreeSet<String>,
+    },
     /// A webhook wake scan completed; release the held `202` response.
     WakeScanFinished { token: u64 },
     /// Adjust the post-apply re-enqueue grace window.
@@ -187,6 +193,11 @@ impl Machine for DaemonMachine {
                 artifact,
                 job_payload,
             } => self.handle_enqueue(job_id, role, repo, artifact, job_payload),
+            DaemonCompletion::ReconcilePendingRoleJobs {
+                repo,
+                role,
+                current_job_ids,
+            } => self.handle_reconcile_pending_role_jobs(repo, role, current_job_ids),
             DaemonCompletion::WakeScanFinished { token } => {
                 match self.webhook_waiters.remove(&token) {
                     Some(responder) => vec![DaemonRequest::Respond {

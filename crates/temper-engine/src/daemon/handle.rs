@@ -3,6 +3,7 @@
 //! The public [`Daemon`] handle: construction, job enqueue, in-process delivery,
 //! scanned-role feeding, and the HTTP serving entry points.
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -83,6 +84,19 @@ impl Daemon {
             repo: repo.into(),
             artifact,
             job_payload,
+        });
+    }
+
+    pub(crate) async fn reconcile_pending_role_jobs(
+        &self,
+        repo: impl Into<String>,
+        role: impl Into<String>,
+        current_job_ids: BTreeSet<String>,
+    ) {
+        let _ = self.cq.send(DaemonCompletion::ReconcilePendingRoleJobs {
+            repo: repo.into(),
+            role: role.into(),
+            current_job_ids,
         });
     }
 

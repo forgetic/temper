@@ -14,6 +14,8 @@ mod action_assignment;
 mod workspace;
 
 use self::action_assignment::{enrich_job_context_from_workflow, enrich_pull_request_writable_job};
+use std::collections::BTreeSet;
+
 use serde_json::json;
 use temper_forge::{Forge, ForgeError, PullRequestState, RepositoryId};
 use temper_protocol_worker::{Artifact, JobContext};
@@ -257,10 +259,12 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
         RoleFeedMode::Wake => scan_role_wake(forge, repo, workflow, compiled, now, role).await?,
     };
     let mut enqueued = 0;
+    let mut current_job_ids = BTreeSet::new();
     for item in &items {
         let mut job = job_from_work_item(&repo_label, item);
         match enrich_work_item_job(forge, repo, item, &mut job, workflow, compiled).await {
             Ok(EnrichOutcome::Enriched) => {
+                current_job_ids.insert(job.job_id.clone());
                 daemon
                     .enqueue_job(
                         job.job_id,
@@ -295,6 +299,9 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
             ),
         }
     }
+    daemon
+        .reconcile_pending_role_jobs(&repo_label, role.as_str(), current_job_ids)
+        .await;
     Ok(enqueued)
 }
 
