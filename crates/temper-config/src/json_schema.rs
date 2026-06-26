@@ -213,6 +213,42 @@ fn worker_config_schema() -> Value {
                 "capabilities",
                 string_array_schema("Explicit owner/name:role capabilities."),
             ),
+            (
+                "pools",
+                array_schema(
+                    "Target-era named worker capability classes.",
+                    worker_pool_config_schema(),
+                ),
+            ),
+        ],
+    )
+}
+
+fn worker_pool_config_schema() -> Value {
+    closed_object_schema(
+        "Target-era named worker capability class.",
+        [
+            ("name", string_schema("Unique worker pool name.")),
+            (
+                "roles",
+                string_array_schema("Workflow roles this pool runs."),
+            ),
+            (
+                "repos",
+                string_array_schema("Repositories this pool runs, each owner/name."),
+            ),
+            (
+                "max_concurrent_jobs",
+                positive_integer_schema("Maximum jobs run concurrently by a worker in this pool."),
+            ),
+            (
+                "agent_profile",
+                string_schema("Target-era agent profile name used by this pool."),
+            ),
+            (
+                "worker_token",
+                string_schema("Secret-name reference for future worker authentication."),
+            ),
         ],
     )
 }
@@ -244,6 +280,54 @@ fn agent_config_schema() -> Value {
                     Vec::<(&'static str, Value)>::new(),
                     agent_provider_config_schema(),
                 ),
+            ),
+            (
+                "profiles",
+                object_schema(
+                    "Target-era agent profiles keyed by profile name.",
+                    Vec::<(&'static str, Value)>::new(),
+                    agent_profile_config_schema(),
+                ),
+            ),
+        ],
+    )
+}
+
+fn agent_profile_config_schema() -> Value {
+    closed_object_schema(
+        "Target-era named agent execution profile.",
+        [
+            (
+                "command",
+                string_array_schema("Agent command argv, for example [\"temper\", \"agent\"]."),
+            ),
+            (
+                "provider",
+                enum_string_schema(
+                    "Provider kind for this profile.",
+                    ["anthropic", "deepseek", "chatgpt"],
+                ),
+            ),
+            ("model", string_schema("Main model selection.")),
+            (
+                "investigate_model",
+                string_schema("Model for read-only investigate sub-agents."),
+            ),
+            (
+                "provider_url",
+                string_schema("Optional provider base URL override."),
+            ),
+            (
+                "max_iterations",
+                positive_integer_schema("Maximum model iterations per job."),
+            ),
+            (
+                "subagents",
+                bool_schema("Enable the in-workspace investigate sub-agent tool."),
+            ),
+            (
+                "credential",
+                string_schema("Secret-name reference for future provider credentials."),
             ),
         ],
     )
@@ -333,11 +417,26 @@ fn integer_schema(description: &'static str, maximum: Option<u64>) -> Value {
     schema_object(fields)
 }
 
+fn positive_integer_schema(description: &'static str) -> Value {
+    schema_object([
+        ("description", Value::from(description)),
+        ("type", Value::from("integer")),
+        ("minimum", Value::from(1)),
+    ])
+}
+
 fn string_array_schema(description: &'static str) -> Value {
+    array_schema(
+        description,
+        schema_object([("type", Value::from("string"))]),
+    )
+}
+
+fn array_schema(description: &'static str, items: Value) -> Value {
     schema_object([
         ("description", Value::from(description)),
         ("type", Value::from("array")),
-        ("items", schema_object([("type", Value::from("string"))])),
+        ("items", items),
     ])
 }
 

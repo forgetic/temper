@@ -22,11 +22,12 @@ use secrecy::SecretString;
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
-    AgentSettings, Capability, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
-    ForgeSettings, GitIdentity, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
-    RepoPath, Resolved, WebUiCreds, WorkerSettings,
+    AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
+    EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
+use crate::target::{resolve_agent_profiles, resolve_worker_pools};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
 const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
@@ -79,7 +80,15 @@ pub fn resolve_with_options(
     let deployment = resolve_deployment(config)?;
     let state_dir = resolve_state_dir(config, env, options);
     let engine = resolve_engine(config, env, options)?;
-    let worker = resolve_worker(config, env, &engine, state_dir.as_ref(), options)?;
+    let agent = resolve_agent(config, credentials, env, options)?;
+    let worker = resolve_worker(
+        config,
+        env,
+        &engine,
+        state_dir.as_ref(),
+        options,
+        &agent.profiles,
+    )?;
     let paths = PathSettings {
         state_dir,
         workspace_dir: worker.workspace_root.clone(),
@@ -87,7 +96,6 @@ pub fn resolve_with_options(
     };
     let roles = referenced_roles(&engine, &worker);
     let forge = resolve_forge(config, credentials, &roles);
-    let agent = resolve_agent(config, credentials, env, options)?;
     Ok(Resolved {
         deployment,
         paths,
@@ -276,9 +284,6 @@ fn resolve_engine(
             .unwrap_or(DEFAULT_POLL_CADENCE_SECS),
         "engine.poll_cadence_secs",
     )?;
-    // The mechanical backstop is on by default; webhooks are the primary
-    // reaction path and this backstop is the level-triggered safety net. An
-    // explicit `mechanical_cadence_secs = 0` disables the mechanical worker.
     let mechanical_cadence = match config
         .engine
         .mechanical_cadence_secs
@@ -340,6 +345,7 @@ fn resolve_worker(
     engine: &EngineSettings,
     state_dir: Option<&PathBuf>,
     options: &ResolveOptions,
+    agent_profiles: &BTreeMap<String, AgentProfileSettings>,
 ) -> Result<WorkerSettings, ConfigError> {
     let worker_id = trimmed(config.worker.worker_id.as_deref())
         .unwrap_or_else(|| DEFAULT_WORKER_ID.to_string());
@@ -389,6 +395,7 @@ fn resolve_worker(
         None => default_capabilities(engine),
     };
     let capabilities = dedup_by(capabilities, |a, b| a.repo == b.repo && a.role == b.role);
+    let pools = resolve_worker_pools(config, agent_profiles)?;
 
     Ok(WorkerSettings {
         worker_id,
@@ -399,11 +406,10 @@ fn resolve_worker(
         poll_wait,
         heartbeat_interval,
         capabilities,
+        pools,
     })
 }
 
-/// Default capabilities: the cross-product of the engine's repos and roles, so a
-/// single standalone worker covers the whole feed.
 fn default_capabilities(engine: &EngineSettings) -> Vec<Capability> {
     let mut capabilities = Vec::new();
     for repo in &engine.repos {
@@ -423,7 +429,6 @@ fn parse_capability(raw: &str) -> Result<Capability, ConfigError> {
     })?;
     let repo = repo.trim();
     let role = role.trim();
-    // Validate the repo half is owner/name.
     RepoPath::parse(repo).map_err(|_| {
         ConfigError::invalid(format!("capability `{raw}`: repo must be `owner/name`"))
     })?;
@@ -468,6 +473,7 @@ fn resolve_agent(
         base_url,
         credential,
     };
+    let profiles = resolve_agent_profiles(config)?;
 
     Ok(AgentSettings {
         provider,
@@ -478,6 +484,7 @@ fn resolve_agent(
         enable_subagents: config.agent.enable_subagents.unwrap_or(false),
         config_dir: trimmed(config.agent.config_dir.as_deref())
             .map(|value| resolve_config_path(&value, env, options)),
+        profiles,
     })
 }
 

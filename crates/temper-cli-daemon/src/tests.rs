@@ -83,6 +83,7 @@ fn worker_settings_with_capacity(max_concurrent_jobs: u32) -> WorkerSettings {
         poll_wait: Duration::from_secs(99),
         heartbeat_interval: Duration::from_secs(98),
         capabilities: Vec::new(),
+        pools: Vec::new(),
     }
 }
 

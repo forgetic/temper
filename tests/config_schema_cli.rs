@@ -89,6 +89,31 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
         properties["worker"]["properties"]["capabilities"]["items"]["type"],
         "string"
     );
+    let pools = &properties["worker"]["properties"]["pools"];
+    assert_eq!(pools["type"], "array");
+    assert_eq!(pools["items"]["type"], "object");
+    assert_eq!(pools["items"]["additionalProperties"], false);
+    assert_eq!(pools["items"]["properties"]["name"]["type"], "string");
+    assert_eq!(
+        pools["items"]["properties"]["roles"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        pools["items"]["properties"]["repos"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        pools["items"]["properties"]["max_concurrent_jobs"]["minimum"],
+        1
+    );
+    assert_eq!(
+        pools["items"]["properties"]["agent_profile"]["type"],
+        "string"
+    );
+    assert_eq!(
+        pools["items"]["properties"]["worker_token"]["type"],
+        "string"
+    );
 }
 
 #[test]
@@ -116,4 +141,30 @@ fn config_schema_json_format_prints_same_machine_readable_schema() {
         provider_profile["properties"]["models"]["properties"]["investigate"]["type"],
         "string"
     );
+
+    let profiles = &json_schema["properties"]["agent"]["properties"]["profiles"];
+    assert_eq!(profiles["type"], "object");
+    let agent_profile = &profiles["additionalProperties"];
+    assert_eq!(agent_profile["type"], "object");
+    assert_eq!(agent_profile["additionalProperties"], false);
+    assert_eq!(
+        agent_profile["properties"]["command"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        agent_profile["properties"]["provider"]["enum"],
+        json!(["anthropic", "deepseek", "chatgpt"])
+    );
+    assert_eq!(agent_profile["properties"]["model"]["type"], "string");
+    assert_eq!(
+        agent_profile["properties"]["investigate_model"]["type"],
+        "string"
+    );
+    assert_eq!(
+        agent_profile["properties"]["provider_url"]["type"],
+        "string"
+    );
+    assert_eq!(agent_profile["properties"]["max_iterations"]["minimum"], 1);
+    assert_eq!(agent_profile["properties"]["subagents"]["type"], "boolean");
+    assert_eq!(agent_profile["properties"]["credential"]["type"], "string");
 }

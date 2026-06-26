@@ -202,6 +202,40 @@ fn check_json_fails_for_target_legacy_workflow_conflict() {
 }
 
 #[test]
+fn check_json_fails_for_target_pool_profile_validation_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("bundle");
+    std::fs::create_dir_all(&bundle).expect("create bundle");
+    std::fs::write(
+        bundle.join("config.toml"),
+        "schema_version = 1\n\
+         [[worker.pools]]\n\
+         name = \"engineers\"\n\
+         roles = [\"engineer\"]\n\
+         max_concurrent_jobs = 0\n",
+    )
+    .expect("write config");
+
+    let bundle_arg = bundle.to_string_lossy();
+    let output = temper(
+        &["--config", &bundle_arg, "--format", "json", "check"],
+        dir.path(),
+    );
+
+    assert!(!output.status.success(), "invalid pool should fail check");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let value: Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let findings = value["findings"].as_array().expect("findings array");
+    assert!(
+        findings.iter().any(|finding| finding["severity"] == "error"
+            && finding["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("worker.pools[0].max_concurrent_jobs"))),
+        "{value}"
+    );
+}
+
+#[test]
 fn config_validate_remains_dispatchable_for_compatibility() {
     let dir = tempfile::tempdir().expect("tempdir");
     let output = temper(&["config", "validate"], dir.path());

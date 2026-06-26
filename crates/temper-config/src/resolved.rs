@@ -167,6 +167,21 @@ pub struct WorkerSettings {
     pub poll_wait: Duration,
     pub heartbeat_interval: Duration,
     pub capabilities: Vec<Capability>,
+    /// Target-era named worker pools. Resolved for inspection/future dispatch,
+    /// but not used to derive [`capabilities`](Self::capabilities) yet.
+    pub pools: Vec<WorkerPoolSettings>,
+}
+
+/// A target-era `[[worker.pools]]` capability class.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct WorkerPoolSettings {
+    pub name: String,
+    pub roles: Vec<String>,
+    pub repos: Vec<RepoPath>,
+    pub max_concurrent_jobs: Option<u32>,
+    pub agent_profile: Option<String>,
+    /// Secret-name reference only; no secret value is resolved in this model.
+    pub worker_token: Option<String>,
 }
 
 /// An `owner/name:role` worker capability.
@@ -183,6 +198,23 @@ pub struct AgentSettings {
     pub max_iterations: usize,
     pub enable_subagents: bool,
     pub config_dir: Option<PathBuf>,
+    /// Target-era named agent profiles. Resolved for inspection/future pool
+    /// dispatch, but not selected by the active agent runtime yet.
+    pub profiles: BTreeMap<String, AgentProfileSettings>,
+}
+
+/// A target-era `[agent.profiles.<name>]` execution profile.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct AgentProfileSettings {
+    pub command: Vec<String>,
+    pub provider: Option<ProviderKind>,
+    pub model: Option<String>,
+    pub investigate_model: Option<String>,
+    pub provider_url: Option<String>,
+    pub max_iterations: Option<usize>,
+    pub subagents: Option<bool>,
+    /// Secret-name reference only; no secret value is resolved in this model.
+    pub credential: Option<String>,
 }
 
 /// Resolved LLM provider wiring.
