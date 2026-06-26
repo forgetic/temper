@@ -30,6 +30,8 @@
 //! incident this fixes.
 
 mod provider;
+mod runtime_overrides;
+mod serve_args;
 mod standalone;
 
 use std::path::PathBuf;
@@ -39,6 +41,12 @@ use temper_config::{
     ConfigError, EX_USAGE, EnvLookup, LoadInputs, LoadOptions, LoadedPaths, PathResolver, Resolved,
     load_explicit,
 };
+
+pub use runtime_overrides::RuntimeOverrides;
+pub(crate) use runtime_overrides::apply_runtime_overrides;
+use serve_args::serve_service_usage;
+pub use serve_args::{SERVE_ENGINE_USAGE, SERVE_STANDALONE_USAGE, SERVE_USAGE, SERVE_WORKER_USAGE};
+pub(crate) use serve_args::{ServeInvocation, parse_serve_invocation};
 
 // Exposed (re-exported up through `temper-cli`) for the root package's
 // in-process-transport integration test, which proves the standalone
@@ -62,78 +70,6 @@ Options:
   --service <NAME>  Which individual service to run (engine, worker). If not
                     given, run as standalone.
   -h, --help        Print help";
-
-pub const SERVE_USAGE: &str = "\
-Run a Temper process.
-
-Usage: temper [GLOBAL OPTIONS] serve <COMPONENT> [OPTIONS]
-
-Components:
-  standalone  Run all Temper planes in one local process
-  engine      Run the engine service (`temper daemon --service engine`)
-  worker      Run the worker service (`temper daemon --service worker`)
-  trigger     Not implemented yet for `temper serve`
-
-Options:
-  -h, --help  Print help
-
-Place `--config` / `--secrets` before `serve`, for example:
-  temper --config ./deploy --secrets ./deploy/credentials.toml serve engine
-
-Run `temper serve <component> --help` for component-specific usage.";
-
-pub const SERVE_STANDALONE_USAGE: &str = "\
-Run Temper in standalone mode.
-
-This is a compatibility wrapper for the existing all-in-one `temper daemon` path
-without `--service`: engine, worker, and agent execution run in one process.
-
-Usage: temper [GLOBAL OPTIONS] serve standalone [OPTIONS]
-
-Options:
-  -h, --help  Print help";
-
-pub const SERVE_ENGINE_USAGE: &str = "\
-Run the Temper engine service.
-
-This is a compatibility wrapper for the existing `temper daemon --service engine`
-path. Put deployment file flags before `serve`:
-  temper --config ./deploy --secrets ./deploy/credentials.toml serve engine
-
-Usage: temper [GLOBAL OPTIONS] serve engine [OPTIONS]
-
-Options:
-  -h, --help  Print help
-
-Not implemented yet: target flags such as `--id`, `--pool`, `--capacity`, and
-`--engine-url`. Do not pass them yet; future workitems will define their
-semantics.";
-
-pub const SERVE_WORKER_USAGE: &str = "\
-Run the Temper worker service.
-
-This is a compatibility wrapper for the existing `temper daemon --service worker`
-path. Put deployment file flags before `serve`:
-  temper --config ./deploy --secrets ./deploy/credentials.toml serve worker
-
-Usage: temper [GLOBAL OPTIONS] serve worker [OPTIONS]
-
-Options:
-  -h, --help  Print help
-
-Not implemented yet: target flags such as `--id`, `--pool`, `--capacity`, and
-`--engine-url`. Do not pass them yet; future workitems will define their
-semantics.";
-
-#[derive(Debug, Eq, PartialEq)]
-enum ServeInvocation {
-    Help,
-    Version,
-    StandaloneHelp,
-    ServiceHelp(Service),
-    Standalone,
-    Service(Service),
-}
 
 /// Which individual daemon service to run (`temper daemon --service <name>`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -176,6 +112,9 @@ pub struct DaemonInputs<'a> {
     pub credentials: Option<PathBuf>,
     /// Which single service to run, or `None` for the all-in-one standalone.
     pub service: Option<Service>,
+    /// Per-process runtime overrides parsed by `temper serve`. The legacy
+    /// `temper daemon` path supplies the default (no overrides).
+    pub runtime: RuntimeOverrides,
     /// The injected environment snapshot (used for path expansion and for
     /// systemd `CREDENTIALS_DIRECTORY` credentials discovery).
     pub env: &'a dyn EnvLookup,
@@ -237,9 +176,11 @@ pub fn serve_main_with_options(
             println!("{}", serve_service_usage(service));
             ExitCode::SUCCESS
         }
-        Ok(ServeInvocation::Standalone) => main_with_options(Vec::new(), env, paths, options),
-        Ok(ServeInvocation::Service(service)) => {
-            serve_service_with_options(service, env, paths, options)
+        Ok(ServeInvocation::Standalone(runtime)) => {
+            serve_standalone_with_options(runtime, env, paths, options)
+        }
+        Ok(ServeInvocation::Service(service, runtime)) => {
+            serve_service_with_options(service, runtime, env, paths, options)
         }
         Err(error) => {
             eprintln!("temper serve: {error}\n\n{SERVE_USAGE}");
@@ -248,8 +189,32 @@ pub fn serve_main_with_options(
     }
 }
 
+fn serve_standalone_with_options(
+    runtime: RuntimeOverrides,
+    env: &dyn EnvLookup,
+    paths: &PathResolver,
+    options: LoadOptions,
+) -> ExitCode {
+    let inputs = DaemonInputs {
+        config: options.config,
+        credentials: options.credentials,
+        service: None,
+        runtime,
+        env,
+        paths,
+    };
+    match run(inputs) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("temper serve standalone: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn serve_service_with_options(
     service: Service,
+    runtime: RuntimeOverrides,
     env: &dyn EnvLookup,
     paths: &PathResolver,
     options: LoadOptions,
@@ -258,6 +223,7 @@ fn serve_service_with_options(
         config: options.config,
         credentials: options.credentials,
         service: Some(service),
+        runtime,
         env,
         paths,
     };
@@ -267,97 +233,6 @@ fn serve_service_with_options(
             eprintln!("temper serve {}: {error}", service.as_str());
             ExitCode::FAILURE
         }
-    }
-}
-
-fn serve_service_usage(service: Service) -> &'static str {
-    match service {
-        Service::Engine => SERVE_ENGINE_USAGE,
-        Service::Worker => SERVE_WORKER_USAGE,
-    }
-}
-
-fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocation, String> {
-    let mut iter = args.into_iter();
-    let Some(component) = iter.next() else {
-        return Err("missing component (expected `standalone`, `engine`, or `worker`)".to_string());
-    };
-    match component.as_str() {
-        "-h" | "--help" | "help" => Ok(ServeInvocation::Help),
-        "-V" | "--version" => Ok(ServeInvocation::Version),
-        "standalone" => parse_serve_standalone(iter.collect()),
-        "engine" => parse_serve_service(Service::Engine, iter.collect()),
-        "worker" => parse_serve_service(Service::Worker, iter.collect()),
-        "trigger" => Err(
-            "`temper serve trigger` is not implemented yet; trigger support remains a later workitem"
-                .to_string(),
-        ),
-        other => Err(format!(
-            "unknown serve component `{other}` (expected `standalone`, `engine`, or `worker`)"
-        )),
-    }
-}
-
-fn parse_serve_standalone(args: Vec<String>) -> Result<ServeInvocation, String> {
-    parse_serve_component_args(
-        "standalone",
-        ServeInvocation::Standalone,
-        ServeInvocation::StandaloneHelp,
-        args,
-    )
-}
-
-fn parse_serve_service(service: Service, args: Vec<String>) -> Result<ServeInvocation, String> {
-    parse_serve_component_args(
-        service.as_str(),
-        ServeInvocation::Service(service),
-        ServeInvocation::ServiceHelp(service),
-        args,
-    )
-}
-
-fn parse_serve_component_args(
-    component: &str,
-    run: ServeInvocation,
-    help: ServeInvocation,
-    args: Vec<String>,
-) -> Result<ServeInvocation, String> {
-    let mut iter = args.into_iter();
-    let Some(arg) = iter.next() else {
-        return Ok(run);
-    };
-    let extra = iter.next();
-
-    match arg.as_str() {
-        "-h" | "--help" | "help" => reject_extra_serve_arg(component, &arg, extra).map(|()| help),
-        "-V" | "--version" => {
-            reject_extra_serve_arg(component, &arg, extra).map(|()| ServeInvocation::Version)
-        }
-        "--service" => Err(if component == "standalone" {
-            "`temper serve standalone` always runs the standalone path; `--service` is not accepted"
-                .to_string()
-        } else {
-            format!(
-                "`temper serve {component}` already selects the {component} service; `--service` is not accepted"
-            )
-        }),
-        "-c" | "--config" | "--secrets" => Err(format!(
-            "`{arg}` is a global option; place it before `serve`"
-        )),
-        "--id" | "--pool" | "--capacity" | "--engine-url" => Err(format!(
-            "target flag `{arg}` is not implemented yet for `temper serve {component}`; do not pass it yet"
-        )),
-        other => Err(format!("unexpected argument `{other}`")),
-    }
-}
-
-fn reject_extra_serve_arg(component: &str, arg: &str, extra: Option<String>) -> Result<(), String> {
-    if let Some(extra) = extra {
-        Err(format!(
-            "unexpected argument `{extra}` after `{arg}` for `temper serve {component}`"
-        ))
-    } else {
-        Ok(())
     }
 }
 
@@ -401,6 +276,7 @@ pub fn main_with_options(
         config: options.config,
         credentials: options.credentials,
         service: parsed.service,
+        runtime: RuntimeOverrides::default(),
         env,
         paths,
     };
@@ -445,7 +321,9 @@ fn parse_daemon_args(args: Vec<String>) -> Result<ParsedDaemonArgs, String> {
 /// otherwise an explicit config root may load sibling `credentials.toml`, but the
 /// global credentials file never layers in behind an explicit deployment.
 pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
-    let (resolved, loaded_paths) = load_for(&inputs).map_err(DaemonError::Load)?;
+    let (mut resolved, loaded_paths) = load_for(&inputs).map_err(DaemonError::Load)?;
+    apply_runtime_overrides(&mut resolved, inputs.service, &inputs.runtime)
+        .map_err(DaemonError::Run)?;
     let result = match inputs.service {
         None => standalone::run(&resolved, loaded_paths.config.as_deref()),
         Some(Service::Engine) => temper_engine_service::run(&resolved),
