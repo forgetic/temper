@@ -368,50 +368,7 @@ fn render(resolved: &Resolved) -> String {
     let mut out = String::new();
     let present = |value: &Option<_>| if value.is_some() { "set" } else { "unset" };
 
-    let _ = writeln!(out, "[deployment]");
-    let _ = writeln!(
-        out,
-        "  name         = {}",
-        resolved.deployment.name.as_deref().unwrap_or("(unset)")
-    );
-    let _ = writeln!(
-        out,
-        "  topology     = {}",
-        resolved
-            .deployment
-            .topology
-            .map(|topology| topology.as_str())
-            .unwrap_or("(unset)")
-    );
-
-    let _ = writeln!(out, "\n[paths]");
-    let _ = writeln!(
-        out,
-        "  state_dir    = {}",
-        resolved
-            .paths
-            .state_dir
-            .as_deref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(unavailable)".to_string())
-    );
-    let _ = writeln!(
-        out,
-        "  workspace    = {}",
-        resolved.paths.workspace_dir.display()
-    );
-    let _ = writeln!(
-        out,
-        "  workflow     = {}",
-        resolved
-            .paths
-            .workflow_file
-            .as_deref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(bundled reference-delivery)".to_string())
-    );
-
-    let _ = writeln!(out, "\n[forge]");
+    let _ = writeln!(out, "[forge]");
     let _ = writeln!(
         out,
         "  url          = {}",
@@ -510,6 +467,49 @@ fn render(resolved: &Resolved) -> String {
             .map(|c| format!("{}:{}", c.repo, c.role))
             .collect::<Vec<_>>()
             .join(", ")
+    );
+
+    let _ = writeln!(out, "\n[deployment]");
+    let _ = writeln!(
+        out,
+        "  name         = {}",
+        resolved.deployment.name.as_deref().unwrap_or("(unset)")
+    );
+    let _ = writeln!(
+        out,
+        "  topology     = {}",
+        resolved
+            .deployment
+            .topology
+            .map(|topology| topology.as_str())
+            .unwrap_or("(unset)")
+    );
+
+    let _ = writeln!(out, "\n[paths]");
+    let _ = writeln!(
+        out,
+        "  state_dir    = {}",
+        resolved
+            .paths
+            .state_dir
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(unavailable)".to_string())
+    );
+    let _ = writeln!(
+        out,
+        "  workspace    = {}",
+        resolved.paths.workspace_dir.display()
+    );
+    let _ = writeln!(
+        out,
+        "  workflow     = {}",
+        resolved
+            .paths
+            .workflow_file
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(bundled reference-delivery)".to_string())
     );
 
     let _ = writeln!(out, "\n[agent]");
