@@ -58,12 +58,13 @@ impl PathReport {
         );
         let config_root = config_file.as_deref().and_then(parent_dir);
         let config = load_config_if_present(config_file.as_deref())?;
-        let resolve_options = config_file
+        let mut resolve_options = config_file
             .as_deref()
             .filter(|path| path.exists())
             .and_then(parent_dir)
             .map(ResolveOptions::from_config_base_dir)
             .unwrap_or_default();
+        resolve_options.validate_secret_references = false;
         let resolved =
             resolve_with_options(&config, &Credentials::default(), env, &resolve_options).map_err(
                 |error| format!("resolving path-related settings from the config file: {error}"),
@@ -414,7 +415,7 @@ mod tests {
 
         assert_eq!(
             report.credentials_source.as_deref(),
-            Some(explicit_dir.join("credentials.toml").as_path())
+            Some(explicit_dir.as_path())
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -441,7 +442,7 @@ mod tests {
 
         let report = PathReport::resolve(&LoadOptions::default(), &env, &base_paths)
             .expect("report resolves");
-        let credentials_path = credentials_dir.join("credentials.toml");
+        let credentials_path = credentials_dir.clone();
         assert_eq!(
             report.credentials_source.as_deref(),
             Some(credentials_path.as_path())

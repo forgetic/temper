@@ -83,7 +83,15 @@ credential = "agent-provider"
     assert_eq!(config.worker.pools[0].name.as_deref(), Some("engineers"));
     assert!(config.agent.profiles.contains_key("coding"));
 
-    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+    let credentials = parse_credentials(
+        r#"
+schema_version = 1
+[secrets]
+worker-engineers-token = "worker-secret-value"
+agent-provider = "provider-secret-value"
+"#,
+    );
+    let resolved = resolve(&config, &credentials, &NoEnv).expect("resolves");
 
     // Target metadata is present for inspection/future work.
     let pool = resolved.worker.pools.first().expect("pool resolves");
@@ -92,7 +100,16 @@ credential = "agent-provider"
     assert_eq!(pool.repos[0].display(), "ai/temper");
     assert_eq!(pool.max_concurrent_jobs, Some(2));
     assert_eq!(pool.agent_profile.as_deref(), Some("coding"));
-    assert_eq!(pool.worker_token.as_deref(), Some("worker-engineers-token"));
+    assert_eq!(
+        pool.worker_token.as_ref().map(|reference| reference.name.as_str()),
+        Some("worker-engineers-token")
+    );
+    assert_eq!(
+        pool.worker_token
+            .as_ref()
+            .map(|reference| reference.available),
+        Some(true)
+    );
 
     let profile = resolved
         .agent
@@ -109,7 +126,13 @@ credential = "agent-provider"
     assert_eq!(profile.provider_url.as_deref(), Some("http://fake-llm"));
     assert_eq!(profile.max_iterations, Some(250));
     assert_eq!(profile.subagents, Some(true));
-    assert_eq!(profile.credential.as_deref(), Some("agent-provider"));
+    assert_eq!(
+        profile
+            .credential
+            .as_ref()
+            .map(|reference| reference.name.as_str()),
+        Some("agent-provider")
+    );
 
     // Active runtime fields still come from legacy/default settings, not pools/profiles.
     assert_eq!(resolved.worker.max_concurrent_jobs, 3);

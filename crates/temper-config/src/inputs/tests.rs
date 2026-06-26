@@ -239,17 +239,14 @@ fn explicit_credentials_directory_loads_credentials_toml() {
 
     let inputs = LoadInputs {
         explicit_config: Some(config_path.clone()),
-        explicit_credentials: Some(credentials_dir),
+        explicit_credentials: Some(credentials_dir.clone()),
         env: &NoEnv,
         paths: &PathResolver::default(),
     };
     let (resolved, loaded) = load_explicit(&inputs).expect("explicit credentials dir loads");
 
     assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
-    assert_eq!(
-        loaded.credentials.as_deref(),
-        Some(credentials_path.as_path())
-    );
+    assert_eq!(loaded.credentials.as_deref(), Some(credentials_dir.as_path()));
     assert_eq!(
         resolved
             .forge

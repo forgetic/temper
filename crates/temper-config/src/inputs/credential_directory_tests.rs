@@ -72,10 +72,7 @@ fn credentials_directory_credentials_load_when_no_explicit_secrets() {
     let (resolved, loaded) = load_explicit(&inputs).expect("systemd credentials load");
 
     assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
-    assert_eq!(
-        loaded.credentials.as_deref(),
-        Some(credentials_path.as_path())
-    );
+    assert_eq!(loaded.credentials.as_deref(), Some(credentials_dir.as_path()));
     assert_eq!(
         resolved
             .forge
@@ -123,7 +120,7 @@ fn explicit_secrets_win_over_credentials_directory() {
     let (resolved, loaded) = load_explicit(&inputs).expect("explicit credentials load");
 
     assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
-    assert_eq!(loaded.credentials.as_deref(), Some(explicit_path.as_path()));
+    assert_eq!(loaded.credentials.as_deref(), Some(explicit_dir.as_path()));
     assert_eq!(
         resolved
             .forge

@@ -31,6 +31,13 @@ pub fn config_json_schema() -> Value {
         ("type", Value::from("object")),
         ("additionalProperties", Value::Bool(false)),
         (
+            "$defs",
+            property_map([(
+                "credentials_named_secrets",
+                credentials_named_secrets_schema(),
+            )]),
+        ),
+        (
             "required",
             Value::Array(vec![Value::from("schema_version")]),
         ),
@@ -61,7 +68,34 @@ fn schema_version_schema() -> Value {
     ])
 }
 
-fn deployment_config_schema() -> Value {
+fn credentials_named_secrets_schema() -> Value {
+    object_schema(
+        "Credentials TOML named secrets map. Compact raw values are accepted under `[secrets]`; structured `[secrets.<name>]` tables may carry target-era metadata plus one payload field such as `token`, `value`, `secret`, `key`, or `api_key`.",
+        Vec::<(&'static str, Value)>::new(),
+        schema_object([
+            (
+                "oneOf",
+                Value::Array(vec![
+                    string_schema("Raw named secret payload."),
+                    closed_object_schema(
+                        "Structured named secret payload.",
+                        [
+                            ("kind", string_schema("Semantic secret kind.")),
+                            ("token", string_schema("Forge token payload.")),
+                            ("value", string_schema("Generic secret payload.")),
+                            ("secret", string_schema("Generic secret payload alias.")),
+                            ("key", string_schema("API-key payload alias.")),
+                            ("api_key", string_schema("Provider API-key payload.")),
+                            ("provider", string_schema("Provider name metadata.")),
+                            ("auth", string_schema("Provider auth metadata.")),
+                        ],
+                    ),
+                ]),
+            ),
+        ]),
+    )
+}
+
     closed_object_schema(
         "Target-era deployment metadata.",
         [
@@ -168,6 +202,16 @@ fn engine_config_schema() -> Value {
             (
                 "daemon_id",
                 string_schema("Stable daemon identity used for lease ownership."),
+            ),
+            (
+                "forge_token",
+                string_schema(
+                    "Secret-name reference for the engine/default Forge API token.",
+                ),
+            ),
+            (
+                "webhook_secret",
+                string_schema("Secret-name reference for the Forgejo webhook HMAC secret."),
             ),
             (
                 "webhook_secret_file",

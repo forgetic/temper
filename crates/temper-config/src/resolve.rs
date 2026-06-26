@@ -401,6 +401,7 @@ fn parse_bind(raw: &str) -> Result<SocketAddr, ConfigError> {
 
 fn resolve_worker(
     config: &Config,
+    credentials: &Credentials,
     env: &impl EnvLookup,
     engine: &EngineSettings,
     state_dir: Option<&PathBuf>,
@@ -455,7 +456,12 @@ fn resolve_worker(
         None => default_capabilities(engine),
     };
     let capabilities = dedup_by(capabilities, |a, b| a.repo == b.repo && a.role == b.role);
-    let pools = resolve_worker_pools(config, agent_profiles)?;
+    let pools = resolve_worker_pools(
+        config,
+        agent_profiles,
+        credentials,
+        options.validate_secret_references,
+    )?;
 
     Ok(WorkerSettings {
         worker_id,
@@ -533,7 +539,7 @@ fn resolve_agent(
         base_url,
         credential,
     };
-    let profiles = resolve_agent_profiles(config)?;
+    let profiles = resolve_agent_profiles(config, credentials, options.validate_secret_references)?;
 
     Ok(AgentSettings {
         provider,

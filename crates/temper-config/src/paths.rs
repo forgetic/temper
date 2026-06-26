@@ -51,12 +51,6 @@ pub(crate) enum SecretSourceLocation {
 }
 
 impl SecretSourceLocation {
-    pub(crate) fn path(&self) -> &Path {
-        match self {
-            SecretSourceLocation::File(path) | SecretSourceLocation::Directory(path) => path,
-        }
-    }
-
     pub(crate) fn into_path(self) -> PathBuf {
         match self {
             SecretSourceLocation::File(path) | SecretSourceLocation::Directory(path) => path,
