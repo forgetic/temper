@@ -36,8 +36,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_config::{
-    ConfigError, EX_USAGE, EnvLookup, LoadInputs, LoadOptions, LoadedPaths, PathResolver, Resolved,
-    load_explicit,
+    Capability, ConfigError, EX_USAGE, EnvLookup, LoadInputs, LoadOptions, LoadedPaths,
+    PathResolver, Resolved, WorkerPoolSettings, load_explicit,
 };
 
 // Exposed (re-exported up through `temper-cli`) for the root package's
