@@ -289,7 +289,10 @@ mod tests {
         )
         .expect("report resolves");
 
-        assert_eq!(report.state_dir.as_deref(), Some(bundle.join("state").as_path()));
+        assert_eq!(
+            report.state_dir.as_deref(),
+            Some(bundle.join("state").as_path())
+        );
         assert_eq!(report.workspace_dir, bundle.join("workspace"));
         assert_eq!(
             report.workflow_file.as_deref(),
@@ -339,7 +342,10 @@ mod tests {
         )
         .expect("report resolves");
 
-        assert_eq!(report.state_dir.as_deref(), Some(bundle.join("state").as_path()));
+        assert_eq!(
+            report.state_dir.as_deref(),
+            Some(bundle.join("state").as_path())
+        );
         assert_eq!(report.workspace_dir, bundle.join("state/workspace"));
 
         let _ = std::fs::remove_dir_all(dir);

@@ -66,7 +66,10 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
         properties["deployment"]["properties"]["topology"]["enum"],
         json!(["standalone", "distributed"])
     );
-    assert_eq!(properties["workflow"]["properties"]["file"]["type"], "string");
+    assert_eq!(
+        properties["workflow"]["properties"]["file"]["type"],
+        "string"
+    );
     assert_eq!(
         properties["paths"]["properties"]["state_dir"]["type"],
         "string"

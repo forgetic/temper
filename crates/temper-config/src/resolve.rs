@@ -573,12 +573,14 @@ fn resolve_preferred_config_path(
     let legacy = trimmed(legacy_raw);
 
     match (preferred, legacy) {
-        (Some(preferred), Some(legacy)) if preferred != legacy => Err(ConfigError::invalid(
-            format!(
+        (Some(preferred), Some(legacy)) if preferred != legacy => {
+            Err(ConfigError::invalid(format!(
                 "conflicting config values: `{preferred_field}` and `{legacy_field}` are both set but differ (`{preferred}` vs `{legacy}`); set only one or make them match"
-            ),
-        )),
-        (Some(value), _) | (None, Some(value)) => Ok(Some(resolve_config_path(&value, env, options))),
+            )))
+        }
+        (Some(value), _) | (None, Some(value)) => {
+            Ok(Some(resolve_config_path(&value, env, options)))
+        }
         (None, None) => Ok(None),
     }
 }

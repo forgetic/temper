@@ -12,7 +12,8 @@
 //! Two files, same `schema_version`:
 //!
 //! - the **config** file ([`Config`]) holds non-secret deployment settings
-//!   (forge URL, engine/worker knobs, which agent provider + models to use);
+//!   (target-era deployment/workflow/path metadata plus legacy forge,
+//!   engine/worker knobs, and which agent provider + models to use);
 //! - the **credentials** file ([`Credentials`]) holds secrets (per-user forge
 //!   passwords/tokens and LLM provider OAuth/api-key material).
 

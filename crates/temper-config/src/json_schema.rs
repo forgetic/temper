@@ -82,9 +82,7 @@ fn workflow_config_schema() -> Value {
         "Target-era workflow settings.",
         [(
             "file",
-            string_schema(
-                "Path to a workflow definition file, resolved relative to config.toml.",
-            ),
+            string_schema("Path to a workflow definition file, resolved relative to config.toml."),
         )],
     )
 }
@@ -99,9 +97,7 @@ fn paths_config_schema() -> Value {
             ),
             (
                 "workspace_dir",
-                string_schema(
-                    "Top-level worker workspace root, resolved relative to config.toml.",
-                ),
+                string_schema("Top-level worker workspace root, resolved relative to config.toml."),
             ),
         ],
     )
