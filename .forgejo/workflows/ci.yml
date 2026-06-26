@@ -47,10 +47,10 @@ jobs:
         # support may read std::env::{var,var_os,vars,args}. Fails fast on a new
         # stray reader. Compiles nothing.
         run: scripts/check-no-ambient-env.sh
-      - name: Lint
-        run: cargo dev-clippy
       - name: Build
         run:  cargo dev-test-build
+      - name: Lint
+        run: cargo dev-clippy
       - name: Test
         # The ignored daemon e2e scenarios boot a real Forgejo + CI runner and
         # wait for convergence (PR opened, CI red→green, mechanical merge). On a
