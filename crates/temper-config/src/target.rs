@@ -80,9 +80,15 @@ pub(crate) fn resolve_agent_profiles(
             )));
         }
 
-        let provider = trimmed(profile.provider.as_deref())
-            .map(|provider| parse_agent_profile_provider_kind(&provider, &field))
-            .transpose()?;
+        let provider = match profile.provider.as_deref() {
+            Some(raw) if raw.trim().is_empty() => {
+                return Err(ConfigError::invalid(format!(
+                    "{field}.provider must not be empty"
+                )));
+            }
+            Some(raw) => Some(parse_agent_profile_provider_kind(raw.trim(), &field)?),
+            None => None,
+        };
 
         let command = profile
             .command

@@ -241,6 +241,15 @@ provider = "deepseek"
             &["agent.profiles", "duplicate", "coding"],
         ),
         (
+            "empty profile provider",
+            r#"
+schema_version = 1
+[agent.profiles.coding]
+provider = " "
+"#,
+            &["agent.profiles.coding.provider"],
+        ),
+        (
             "invalid profile provider",
             r#"
 schema_version = 1
