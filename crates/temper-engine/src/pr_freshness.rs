@@ -187,11 +187,156 @@ async fn current_review_status<F: Forge + ?Sized>(
     pull_request: &temper_forge::PullRequest,
 ) -> Result<ReviewStatus, temper_forge::ForgeError> {
     let reviews = forge.list_pull_request_reviews(&pull_request.id).await?;
-    let aggregate = PullRequestReviewStatus::from_reviews(&pull_request.requested_reviewers, &reviews);
+    let aggregate =
+        PullRequestReviewStatus::from_reviews(&pull_request.requested_reviewers, &reviews);
     Ok(ReviewStatus::from_aggregate(&aggregate))
 }
 
 /// Convenience for daemon-side stale drops.
 pub fn is_stale(response: &PullRequestFreshnessResponse) -> bool {
     response.status == PullRequestFreshnessStatus::Stale
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use temper_forge::{
+        BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest,
+        CreateRepository, Forge, PullRequestUpdateState, UpdatePullRequest,
+    };
+    use temper_forge_memory::MemoryForge;
+
+    async fn setup() -> (MemoryForge, RepositoryId, temper_forge::PullRequest) {
+        let forge = MemoryForge::new();
+        let repo = forge
+            .create_repository(CreateRepository {
+                owner: "ai".to_string(),
+                name: "temper".to_string(),
+                default_branch: "main".to_string(),
+                description: None,
+            })
+            .await
+            .expect("repository created")
+            .id;
+        let pr = forge
+            .create_pull_request(
+                &repo,
+                CreatePullRequest {
+                    title: "Implement".to_string(),
+                    body: "body".to_string(),
+                    source: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "agent/pr-for-code-1".to_string(),
+                    },
+                    target: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "main".to_string(),
+                    },
+                    labels: vec!["implementation".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("pull request created");
+        (forge, repo, pr)
+    }
+
+    fn check(repo: &RepositoryId, pr: &temper_forge::PullRequest) -> PullRequestFreshness {
+        PullRequestFreshness {
+            repository_id: repo.as_str().to_string(),
+            repo: "ai/temper".to_string(),
+            role: "engineer".to_string(),
+            queue: "pr_ci_failed".to_string(),
+            action: "address_ci_failure".to_string(),
+            number: pr.number.get(),
+            pull_request_id: pr.id.as_str().to_string(),
+            head_sha: pr.head_sha.clone(),
+            queue_condition: Some("ci_failed".to_string()),
+            queue_labels: Vec::new(),
+        }
+    }
+
+    fn ci_job(
+        repo: &RepositoryId,
+        pr: &temper_forge::PullRequest,
+        conclusion: CiJobConclusion,
+    ) -> CiJob {
+        let now = chrono::Utc.timestamp_opt(1, 0).unwrap();
+        CiJob {
+            id: CiJobId::new(format!("ci-{conclusion:?}")),
+            repo_id: repo.clone(),
+            pull_request_id: Some(pr.id.clone()),
+            commit_sha: pr.head_sha.clone().unwrap_or_default(),
+            name: "validate".to_string(),
+            status: CiJobStatus::Completed,
+            conclusion: Some(conclusion),
+            url: None,
+            created_at: now,
+            started_at: None,
+            completed_at: Some(now),
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn ci_failed_pr_is_fresh() {
+        temper_engine_io::block_on(async {
+            let (forge, repo, pr) = setup().await;
+            forge.seed_ci_jobs(&repo, vec![ci_job(&repo, &pr, CiJobConclusion::Failure)]);
+
+            let response = check_pull_request_freshness(&forge, &check(&repo, &pr)).await;
+
+            assert_eq!(response.status, PullRequestFreshnessStatus::Fresh);
+        });
+    }
+
+    #[test]
+    fn passed_ci_makes_pr_stale_for_ci_failed_job() {
+        temper_engine_io::block_on(async {
+            let (forge, repo, pr) = setup().await;
+            forge.seed_ci_jobs(&repo, vec![ci_job(&repo, &pr, CiJobConclusion::Success)]);
+
+            let response = check_pull_request_freshness(&forge, &check(&repo, &pr)).await;
+
+            assert_eq!(response.status, PullRequestFreshnessStatus::Stale);
+            assert!(response.reason.unwrap().contains("not failed"));
+        });
+    }
+
+    #[test]
+    fn closed_pr_is_stale() {
+        temper_engine_io::block_on(async {
+            let (forge, repo, pr) = setup().await;
+            forge
+                .update_pull_request(
+                    &pr.id,
+                    UpdatePullRequest {
+                        state: Some(PullRequestUpdateState::Closed),
+                        ..UpdatePullRequest::default()
+                    },
+                )
+                .await
+                .expect("close pull request");
+
+            let response = check_pull_request_freshness(&forge, &check(&repo, &pr)).await;
+
+            assert_eq!(response.status, PullRequestFreshnessStatus::Stale);
+            assert!(response.reason.unwrap().contains("Closed"));
+        });
+    }
+
+    #[test]
+    fn head_mismatch_is_stale() {
+        temper_engine_io::block_on(async {
+            let (forge, repo, pr) = setup().await;
+            let mut check = check(&repo, &pr);
+            check.head_sha = Some("old-head".to_string());
+
+            let response = check_pull_request_freshness(&forge, &check).await;
+
+            assert_eq!(response.status, PullRequestFreshnessStatus::Stale);
+            assert!(response.reason.unwrap().contains("head changed"));
+        });
+    }
 }

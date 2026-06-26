@@ -243,16 +243,9 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
         &pull_request,
         &action,
     ));
-    let guidance = pull_request_writable_guidance(
-        forge,
-        repo,
-        compiled,
-        item,
-        &query,
-        &action,
-        &head_branch,
-    )
-    .await;
+    let guidance =
+        pull_request_writable_guidance(forge, repo, compiled, item, &query, &action, &head_branch)
+            .await;
     append_guidance(context, guidance);
     Ok(())
 }

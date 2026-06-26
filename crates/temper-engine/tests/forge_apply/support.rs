@@ -318,6 +318,7 @@ pub(crate) fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob 
             checkout_capability: None,
             allowed_verdicts: Vec::new(),
             guidance: None,
+            pull_request_freshness: None,
         },
     )
 }
@@ -338,6 +339,7 @@ pub(crate) fn open_pr_in_flight_job(repo_path: &str, number: ItemNumber) -> InFl
             checkout_capability: Some("writable".to_string()),
             allowed_verdicts: vec!["needs_architect".to_string(), "needs_human".to_string()],
             guidance: None,
+            pull_request_freshness: None,
         },
     )
 }
@@ -379,6 +381,7 @@ pub(crate) fn coordinated_in_flight_job(
             checkout_capability: Some("writable".to_string()),
             allowed_verdicts: Vec::new(),
             guidance: None,
+            pull_request_freshness: None,
         },
     )
 }
@@ -403,6 +406,7 @@ pub(crate) fn triage_in_flight_job(repo_path: &str, number: ItemNumber) -> InFli
                 "needs_breakdown".to_string(),
             ],
             guidance: None,
+            pull_request_freshness: None,
         },
     )
 }
@@ -427,6 +431,7 @@ pub(crate) fn review_in_flight_job(repo_path: &str, number: ItemNumber) -> InFli
                 "escalate".to_string(),
             ],
             guidance: None,
+            pull_request_freshness: None,
         },
     )
 }

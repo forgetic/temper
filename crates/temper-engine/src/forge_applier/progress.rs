@@ -125,8 +125,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         let Some(check) = context.pull_request_freshness.as_ref() else {
             return false;
         };
-        let response = crate::pr_freshness::check_pull_request_freshness(self.forge.as_ref(), check)
-            .await;
+        let response =
+            crate::pr_freshness::check_pull_request_freshness(self.forge.as_ref(), check).await;
         if !crate::pr_freshness::is_stale(&response) {
             return false;
         }

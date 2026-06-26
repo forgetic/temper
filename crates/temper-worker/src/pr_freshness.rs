@@ -48,7 +48,8 @@ impl PrFreshnessGuard for HttpPrFreshnessGuard {
             let body = serde_json::to_vec(check).map_err(|error| {
                 PrFreshnessFailure::Unavailable(format!("serialize PR freshness check: {error}"))
             })?;
-            let response = skein::runtime::spawn_blocking(move || post_json(&endpoint, &body)).await;
+            let response =
+                skein::runtime::spawn_blocking(move || post_json(&endpoint, &body)).await;
             map_response(response)
         })
     }
@@ -61,7 +62,9 @@ pub fn map_response(
         Ok(response) => match response.status {
             PullRequestFreshnessStatus::Fresh => Ok(()),
             PullRequestFreshnessStatus::Stale => Err(PrFreshnessFailure::Stale(
-                response.reason.unwrap_or_else(|| "pull request is stale".to_string()),
+                response
+                    .reason
+                    .unwrap_or_else(|| "pull request is stale".to_string()),
             )),
             PullRequestFreshnessStatus::Unavailable => Err(PrFreshnessFailure::Unavailable(
                 response
@@ -153,11 +156,7 @@ mod tests {
     fn parses_http_url_with_default_port() {
         assert_eq!(
             parse_http_url("http://127.0.0.1/v1/pr-freshness").unwrap(),
-            (
-                "127.0.0.1".to_string(),
-                80,
-                "/v1/pr-freshness".to_string()
-            )
+            ("127.0.0.1".to_string(), 80, "/v1/pr-freshness".to_string())
         );
     }
 

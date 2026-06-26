@@ -17,7 +17,8 @@ pub(super) async fn ensure_fresh(
     let Some(check) = check else {
         return Ok(());
     };
-    let body = serde_json::to_vec(check).map_err(|error| format!("serialize freshness check: {error}"))?;
+    let body =
+        serde_json::to_vec(check).map_err(|error| format!("serialize freshness check: {error}"))?;
     let url = url.to_string();
     let response = skein::runtime::spawn_blocking(move || post_json(&url, &body)).await?;
     let status = response

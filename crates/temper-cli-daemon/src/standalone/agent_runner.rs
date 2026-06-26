@@ -24,9 +24,7 @@ use temper_agent::{
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
 use temper_protocol_agent::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
-use temper_worker::{
-    AgentRunError, AgentRunner, PrFreshnessGuard, ProgressSink, WorkspaceResult,
-};
+use temper_worker::{AgentRunError, AgentRunner, PrFreshnessGuard, ProgressSink, WorkspaceResult};
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {

@@ -408,9 +408,8 @@ impl temper_worker::PrFreshnessGuard for InProcessPrFreshnessGuard {
     fn check<'a>(
         &'a self,
         check: &'a temper_protocol_agent::PullRequestFreshness,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<(), temper_worker::PrFreshnessFailure>> + Send + 'a>,
-    > {
+    ) -> Pin<Box<dyn Future<Output = Result<(), temper_worker::PrFreshnessFailure>> + Send + 'a>>
+    {
         Box::pin(async move {
             let response = self
                 .daemon

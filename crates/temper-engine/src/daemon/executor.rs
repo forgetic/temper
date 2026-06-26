@@ -54,8 +54,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     let response = applier.check_pull_request_freshness(check).await;
                     responder.respond(temper_engine_io::http::HttpResponseData::json(
                         200,
-                        &serde_json::to_value(&response)
-                            .expect("freshness response serializes"),
+                        &serde_json::to_value(&response).expect("freshness response serializes"),
                     ));
                 });
             }

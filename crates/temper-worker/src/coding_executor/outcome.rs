@@ -29,12 +29,8 @@ pub(super) async fn writable_outcome(
         .await;
     }
 
-    if let Err(outcome) = ensure_fresh_before_pr_push(
-        pull_request_fix,
-        pull_request_freshness,
-        freshness_guard,
-    )
-    .await
+    if let Err(outcome) =
+        ensure_fresh_before_pr_push(pull_request_fix, pull_request_freshness, freshness_guard).await
     {
         return outcome;
     }

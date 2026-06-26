@@ -87,9 +87,9 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
                 ));
                 let executor = Arc::new(
                     CodingExecutor::new(executor_config, runner)
-                        .with_pr_freshness_guard(Arc::new(temper_worker::HttpPrFreshnessGuard::new(
-                            &config.daemon_url,
-                        )))
+                        .with_pr_freshness_guard(Arc::new(
+                            temper_worker::HttpPrFreshnessGuard::new(&config.daemon_url),
+                        ))
                         .with_progress_sink(progress_sink),
                 );
                 run_worker(handle, config, executor)
