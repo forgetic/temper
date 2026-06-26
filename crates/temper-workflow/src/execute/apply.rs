@@ -24,7 +24,7 @@ use crate::ids::RoleId;
 use crate::metadata::parse_metadata_block;
 use crate::plan::{TransitionPlan, WorkflowEffect};
 use temper_forge::{
-    CreatePullRequest, Forge, IssueState, RepositoryId, ReviewDecision, UpdateIssue,
+    CreatePullRequest, Forge, ForgeError, IssueState, RepositoryId, ReviewDecision, UpdateIssue,
     UpdatePullRequest, UserId,
 };
 
@@ -283,16 +283,21 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             return Ok(None);
         }
         match loaded {
-            Loaded::Issue { id, .. } => {
+            Loaded::Issue { id, version, .. } => {
                 let update = UpdateIssue {
                     body: prepared.body,
                     add_labels: prepared.add_labels,
                     remove_labels: prepared.remove_labels,
                     add_assignees: prepared.add_assignees,
                     remove_assignees: prepared.remove_assignees,
+                    expected_version: Some(*version),
                     ..UpdateIssue::default()
                 };
-                let issue = self.forge.update_issue(id, update).await?;
+                let issue = self
+                    .forge
+                    .update_issue(id, update)
+                    .await
+                    .map_err(|error| stale_update_error(error, loaded.classified().source))?;
                 Ok(Some(AppliedState {
                     labels: issue.labels,
                     assignees: issue.assignees,
@@ -376,10 +381,19 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                         } else {
                             Vec::new()
                         },
+                        expected_version: Some(issue.version),
                         ..UpdateIssue::default()
                     },
                 )
-                .await?;
+                .await
+                .map_err(|error| {
+                    stale_update_error(
+                        error,
+                        crate::classify::ArtifactSource::Issue {
+                            number: issue.number,
+                        },
+                    )
+                })?;
         }
         Ok(())
     }
@@ -451,6 +465,16 @@ impl PreparedEffects {
 struct PreparedPullRequestCreate {
     correlation_key: String,
     input: CreatePullRequest,
+}
+
+fn stale_update_error(
+    error: ForgeError,
+    target: crate::classify::ArtifactSource,
+) -> ExecutionError {
+    match error {
+        ForgeError::Conflict(message) => ExecutionError::TargetStale { target, message },
+        other => other.into(),
+    }
 }
 
 fn validate_pull_request_effects(

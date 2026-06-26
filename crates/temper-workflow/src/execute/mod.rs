@@ -107,7 +107,9 @@ use crate::ids::{RoleId, TransitionId};
 use crate::plan::TransitionPlan;
 use crate::validated::ValidatedWorkflow;
 use error::classify_plan_error;
-use temper_forge::{Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId, Version};
+use temper_forge::{
+    Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId, Version,
+};
 
 /// A loaded Forge artifact with the handle needed to mutate it.
 enum Loaded {
