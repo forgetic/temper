@@ -20,6 +20,7 @@
 //! tier-agnostic so every binary (unified or slim per-service) can read config
 //! without pulling in the engine/worker/agent stacks.
 
+mod agent_resolve;
 mod build;
 mod cli;
 mod env;

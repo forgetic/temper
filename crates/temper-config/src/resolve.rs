@@ -19,16 +19,16 @@ use std::time::Duration;
 
 use secrecy::SecretString;
 
+use crate::agent_resolve::{parse_provider_kind, resolve_provider_credential};
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
     AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
     EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, SecretReference, WebUiCreds,
-    WorkerSettings,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
-use crate::secret_refs::{require_secret_payload, resolve_secret_reference};
+use crate::secret_refs::{EngineSecretReferences, resolve_engine_secret_references};
 use crate::target::{resolve_agent_profiles, resolve_worker_pools};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";

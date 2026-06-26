@@ -10,8 +10,54 @@
 use secrecy::SecretString;
 
 use crate::error::ConfigError;
+use crate::resolve_options::ResolveOptions;
 use crate::resolved::SecretReference;
-use crate::schema::Credentials;
+use crate::schema::{Config, Credentials};
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EngineSecretReferences {
+    pub forge_token: Option<SecretReference>,
+    pub forge_token_value: Option<SecretString>,
+    pub webhook_secret: Option<SecretReference>,
+    pub webhook_secret_value: Option<SecretString>,
+}
+
+pub(crate) fn resolve_engine_secret_references(
+    config: &Config,
+    credentials: &Credentials,
+    options: &ResolveOptions,
+) -> Result<EngineSecretReferences, ConfigError> {
+    let forge_token = resolve_secret_reference(
+        "engine.forge_token",
+        config.engine.forge_token.as_deref(),
+        credentials,
+        options.validate_secret_references,
+    )?;
+    let webhook_secret = resolve_secret_reference(
+        "engine.webhook_secret",
+        config.engine.webhook_secret.as_deref(),
+        credentials,
+        options.validate_secret_references,
+    )?;
+
+    let forge_token_value = forge_token
+        .as_ref()
+        .filter(|resolved| resolved.reference.available)
+        .map(|resolved| require_secret_payload("engine.forge_token", resolved))
+        .transpose()?;
+    let webhook_secret_value = webhook_secret
+        .as_ref()
+        .filter(|resolved| resolved.reference.available)
+        .map(|resolved| require_secret_payload("engine.webhook_secret", resolved))
+        .transpose()?;
+
+    Ok(EngineSecretReferences {
+        forge_token: forge_token.map(|resolved| resolved.reference),
+        forge_token_value,
+        webhook_secret: webhook_secret.map(|resolved| resolved.reference),
+        webhook_secret_value,
+    })
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedSecretReference {
