@@ -12,7 +12,9 @@ use std::{
 
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
-use temper_protocol_worker::{Artifact, JobProgress, JobResult, Poll, WorkerProtocolMessage};
+use temper_protocol_worker::{
+    Artifact, JobProgress, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
+};
 use temper_worker_registry::DaemonCore;
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -79,6 +81,10 @@ pub(super) enum DaemonRequest {
     RunProgressApply {
         job: InFlightJob,
         progress: JobProgress,
+    },
+    RunPullRequestFreshnessCheck {
+        check: PullRequestFreshness,
+        responder: HttpResponder,
     },
     RunWakeScan {
         token: u64,

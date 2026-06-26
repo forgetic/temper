@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
-use temper_protocol_worker::{Artifact, JobProgress, JobResult, Poll, WorkerProtocolMessage};
+use temper_protocol_worker::{
+    Artifact, JobProgress, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
+};
 
 use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
 
@@ -28,6 +30,9 @@ impl DaemonMachine {
     ) -> Vec<DaemonRequest> {
         match (request.method.as_str(), request.uri.as_str()) {
             ("POST", "/v1/message") => self.handle_protocol_message(&request.body, responder),
+            ("POST", "/v1/pr-freshness") => {
+                self.handle_pull_request_freshness_check(&request.body, responder)
+            }
             ("POST", "/forgejo/webhook") if self.webhook.is_some() => {
                 self.handle_webhook_delivery(&request, responder)
             }
@@ -67,6 +72,20 @@ impl DaemonMachine {
             responder,
             response,
         }]
+    }
+
+    fn handle_pull_request_freshness_check(
+        &mut self,
+        body: &[u8],
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
+        let Ok(check) = serde_json::from_slice::<PullRequestFreshness>(body) else {
+            return vec![DaemonRequest::Respond {
+                responder,
+                response: HttpResponseData::status_only(400),
+            }];
+        };
+        vec![DaemonRequest::RunPullRequestFreshnessCheck { check, responder }]
     }
 
     fn handle_protocol_message(

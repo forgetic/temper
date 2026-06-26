@@ -118,6 +118,28 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
 }
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
+    async fn drop_stale_pr_job(&self, job: &InFlightJob) -> bool {
+        let Ok(context) = serde_json::from_value::<JobContext>(job.job_payload.clone()) else {
+            return false;
+        };
+        let Some(check) = context.pull_request_freshness.as_ref() else {
+            return false;
+        };
+        let response = crate::pr_freshness::check_pull_request_freshness(self.forge.as_ref(), check)
+            .await;
+        if !crate::pr_freshness::is_stale(&response) {
+            return false;
+        }
+        tracing::debug!(
+            target: "temper_daemon",
+            job_id = %job.job_id,
+            repo = %job.repo,
+            reason = response.reason.as_deref().unwrap_or("stale"),
+            "forge applier dropped stale pull request job update"
+        );
+        true
+    }
+
     pub(super) fn final_progress_uses_implementation_pr_body(&self, job: &InFlightJob) -> bool {
         if job.role != "engineer" || job.artifact.kind != "issue" {
             return false;

@@ -12,7 +12,9 @@ use chrono::{DateTime, Utc};
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
 use temper_forge::{Forge, RepositoryId};
-use temper_protocol_worker::{Artifact, WorkerProtocolMessage};
+use temper_protocol_worker::{
+    Artifact, PullRequestFreshness, PullRequestFreshnessResponse, WorkerProtocolMessage,
+};
 use temper_runner::WorkItem;
 use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
 
@@ -135,6 +137,37 @@ impl Daemon {
             Some(response) => decode_in_process_reply(response),
             None => Err("daemon dropped the in-process responder".to_string()),
         }
+    }
+
+    pub async fn check_pull_request_freshness(
+        &self,
+        check: PullRequestFreshness,
+    ) -> Result<PullRequestFreshnessResponse, String> {
+        let (reply_tx, reply_rx) = temper_engine_io::oneshot::<HttpResponseData>();
+        let request = HttpRequestData {
+            method: "POST".to_string(),
+            uri: "/v1/pr-freshness".to_string(),
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: serde_json::to_vec(&check)
+                .map_err(|error| format!("serialize PR freshness check: {error}"))?,
+        };
+        let _ = self.cq.send(DaemonCompletion::Http {
+            request,
+            responder: HttpResponder::from_oneshot(reply_tx),
+        });
+        let response = reply_rx
+            .recv()
+            .await
+            .ok_or_else(|| "daemon dropped the PR freshness responder".to_string())?;
+        if response.status != 200 {
+            return Err(format!(
+                "daemon PR freshness check returned HTTP {}: {}",
+                response.status,
+                String::from_utf8_lossy(&response.body)
+            ));
+        }
+        serde_json::from_slice::<PullRequestFreshnessResponse>(&response.body)
+            .map_err(|error| format!("parse PR freshness response: {error}"))
     }
 
     /// Map a scanned `WorkItem` to a job and enqueue it.

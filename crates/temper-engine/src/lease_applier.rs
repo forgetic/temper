@@ -13,6 +13,7 @@ use temper_log::emit::{
 use temper_log::{WorkItemRef, format_duration, strip_provider_scheme, work_item_span};
 use temper_protocol_worker::JobProgress;
 use temper_protocol_worker::JobResult;
+use temper_protocol_worker::{PullRequestFreshness, PullRequestFreshnessResponse};
 use temper_workflow::{ArtifactSource, LeaseError, LeaseManager, LeasePolicy, RoleId};
 use tracing::Instrument;
 
@@ -69,6 +70,13 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     /// role-authored workflow mutations, so they bypass the lease gate.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
         self.inner.apply_progress(job, progress).await;
+    }
+
+    async fn check_pull_request_freshness(
+        &self,
+        check: PullRequestFreshness,
+    ) -> PullRequestFreshnessResponse {
+        self.inner.check_pull_request_freshness(check).await
     }
 
     async fn apply(&self, job: InFlightJob, result: JobResult) {
