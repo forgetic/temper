@@ -22,9 +22,9 @@ use secrecy::SecretString;
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
-    AgentSettings, Capability, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
-    ProviderCredential, ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds,
-    WorkerSettings,
+    AgentSettings, Capability, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
+    ForgeSettings, GitIdentity, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
+    RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
 

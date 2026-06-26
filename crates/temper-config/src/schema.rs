@@ -34,6 +34,12 @@ pub struct Config {
     /// is built; defaulted only so a version-less in-memory `Config` is valid).
     #[serde(default)]
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "DeploymentConfig::is_empty")]
+    pub deployment: DeploymentConfig,
+    #[serde(default, skip_serializing_if = "WorkflowConfig::is_empty")]
+    pub workflow: WorkflowConfig,
+    #[serde(default, skip_serializing_if = "PathsConfig::is_empty")]
+    pub paths: PathsConfig,
     #[serde(default, skip_serializing_if = "ForgeConfig::is_empty")]
     pub forge: ForgeConfig,
     #[serde(default, skip_serializing_if = "EngineConfig::is_empty")]
@@ -42,6 +48,64 @@ pub struct Config {
     pub worker: WorkerConfig,
     #[serde(default, skip_serializing_if = "AgentConfig::is_empty")]
     pub agent: AgentConfig,
+}
+
+/// `[deployment]` — target-era deployment metadata.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentConfig {
+    /// Optional deployment name. Metadata only during the migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Topology declaration: `standalone` or `distributed`. Validated during
+    /// resolution; it does not select runtime behavior yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology: Option<String>,
+}
+
+impl DeploymentConfig {
+    /// `true` when every field is unset, so the section can be omitted entirely.
+    fn is_empty(&self) -> bool {
+        self.name.is_none() && self.topology.is_none()
+    }
+}
+
+/// `[workflow]` — target-era workflow settings.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowConfig {
+    /// Path to the workflow definition. Preferred over legacy
+    /// `[engine] workflow` when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+impl WorkflowConfig {
+    /// `true` when every field is unset, so the section can be omitted entirely.
+    fn is_empty(&self) -> bool {
+        self.file.is_none()
+    }
+}
+
+/// `[paths]` — target-era runtime path settings.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathsConfig {
+    /// Mutable state directory. When set, the default workspace root becomes
+    /// `<state_dir>/workspace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_dir: Option<String>,
+    /// Top-level worker workspace root. Preferred over legacy
+    /// `[worker] workspace` when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
+}
+
+impl PathsConfig {
+    /// `true` when every field is unset, so the section can be omitted entirely.
+    fn is_empty(&self) -> bool {
+        self.state_dir.is_none() && self.workspace_dir.is_none()
+    }
 }
 
 /// `[forge]` — which forge backend and how to reach it.

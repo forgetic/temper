@@ -59,14 +59,15 @@ pub use paths::{
 };
 pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
-    AgentSettings, Capability, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
-    ProviderCredential, ProviderKind, ProviderSettings, RepoPath, Resolved, WebUiCreds,
-    WorkerSettings,
+    AgentSettings, Capability, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
+    ForgeSettings, GitIdentity, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
+    RepoPath, Resolved, WebUiCreds, WorkerSettings,
 };
 pub use schema::{
-    AgentConfig, AgentCredentials, AgentProviderConfig, Config, Credentials, EngineConfig,
-    ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
+    AgentConfig, AgentCredentials, AgentProviderConfig, Config, Credentials, DeploymentConfig,
+    EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap, PathsConfig,
     ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
+    WorkflowConfig,
 };
 pub use template::{config_template, credentials_template};
 
