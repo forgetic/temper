@@ -107,12 +107,13 @@ use crate::ids::{RoleId, TransitionId};
 use crate::plan::TransitionPlan;
 use crate::validated::ValidatedWorkflow;
 use error::classify_plan_error;
-use temper_forge::{Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId};
+use temper_forge::{Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId, Version};
 
 /// A loaded Forge artifact with the handle needed to mutate it.
 enum Loaded {
     Issue {
         id: IssueId,
+        version: Version,
         classified: ClassifiedArtifact,
     },
     PullRequest {
@@ -268,6 +269,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     .map_err(ExecutionError::Classification)?;
                 Ok(Loaded::Issue {
                     id: issue.id,
+                    version: issue.version,
                     classified,
                 })
             }
