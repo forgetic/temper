@@ -19,12 +19,13 @@ mod transport;
 pub use agent_runner::InProcessAgentRunner;
 pub use transport::InProcessTransport;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use skein::runtime::RuntimeHandle;
-use temper_config::Resolved;
+use temper_config::{Resolved, WorkerSettings};
 use temper_engine::{
     Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, PollBackstopConfig,
     RoleFeedMode, WebhookConfig, spawn_mechanical_backstop, spawn_poll_backstop,
@@ -35,8 +36,8 @@ use temper_engine_service::{
 use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
 use temper_worker::{
-    CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, WorkerConfig,
-    run_worker_with_transport,
+    CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, RoleGitIdentity,
+    WorkerConfig, run_worker_with_transport,
 };
 use temper_workflow::LeasePolicy;
 
@@ -206,17 +207,11 @@ async fn run_async(
         })
         .collect();
 
-    let worker_config = WorkerConfig {
-        // Unused on the in-process transport, but the struct carries it.
-        daemon_url: String::new(),
-        worker_id: resolved.worker.worker_id.clone(),
+    let worker_config = standalone_worker_config(
+        &resolved.worker,
         capabilities,
-        role_identities: temper_worker_service::role_identities(resolved),
-        max_concurrent_jobs: 1,
-        poll_wait: Duration::from_secs(20),
-        heartbeat_interval: Duration::from_secs(10),
-        executor: ExecutorSelection::Stub, // not consulted: the executor is built directly
-    };
+        temper_worker_service::role_identities(resolved),
+    );
 
     // Per-role concurrency for the §7 `capacity:` line — the standalone worker
     // runs `max_concurrent_jobs` per role, shared across all repos. Captured
@@ -327,6 +322,24 @@ async fn run_async(
     .await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
+}
+
+pub(super) fn standalone_worker_config(
+    worker: &WorkerSettings,
+    capabilities: Vec<CapabilitySpec>,
+    role_identities: BTreeMap<String, RoleGitIdentity>,
+) -> WorkerConfig {
+    WorkerConfig {
+        // Unused on the in-process transport, but the struct carries it.
+        daemon_url: String::new(),
+        worker_id: worker.worker_id.clone(),
+        capabilities,
+        role_identities,
+        max_concurrent_jobs: worker.max_concurrent_jobs,
+        poll_wait: Duration::from_secs(20),
+        heartbeat_interval: Duration::from_secs(10),
+        executor: ExecutorSelection::Stub, // not consulted: the executor is built directly
+    }
 }
 
 /// Builds the §7 forge banner line after a `current_user` connectivity/auth
