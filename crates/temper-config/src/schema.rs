@@ -18,6 +18,8 @@
 //!   passwords/tokens and LLM provider OAuth/api-key material).
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
