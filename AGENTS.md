@@ -23,5 +23,6 @@ Always run `cargo dev-fmt` before committing changes.
 ## Useful docs
 
 - [Codebase map](docs/explanation/codebase-map.md)
+- [Write Temper tests](docs/how-to/write-temper-tests.md)
 - [Iterate quickly during local development](docs/how-to/fast-local-iteration.md)
 - [End a development session cleanly](docs/how-to/end-a-development-session.md)

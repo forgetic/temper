@@ -6,6 +6,7 @@ Current guides:
 
 - [Iterate quickly during local development](fast-local-iteration.md)
 - [End a development session cleanly](end-a-development-session.md)
+- [Write Temper tests](write-temper-tests.md)
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
 - [Run the cross-repo reference-delivery demo](run-cross-repo-reference-delivery-demo.md)
 - [Run the daemon end-to-end fixture](run-daemon-e2e.md)

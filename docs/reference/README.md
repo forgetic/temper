@@ -27,3 +27,5 @@ Current reference pages:
 - [Interactive process responder protocol](interactive-process-responder-protocol.md)
 - [Worker/Daemon wire protocol](worker-daemon-wire-protocol.md)
 - [Workflow runtime robustness guarantees](robustness-guarantees.md)
+- [Testing pyramid](testing-pyramid.md)
+- [Test inventory](testing-inventory.md)
