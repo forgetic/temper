@@ -127,7 +127,7 @@ mod tests {
         // The factory accepts the bundled daemon config + per-role tokens.
         let _applier = result_applier(
             forge,
-            config.forge.base_url.clone(),
+            config.forge.clone(),
             workflow,
             &config.daemon,
             &config.role_tokens,

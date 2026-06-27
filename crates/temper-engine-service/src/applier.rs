@@ -18,7 +18,7 @@ use temper_workflow::LeasePolicy;
 /// default identity).
 pub fn result_applier(
     default_forge: Arc<dyn Forge>,
-    forge_base_url: String,
+    forge_config: ForgejoConfig,
     workflow: Arc<temper_workflow::ValidatedWorkflow>,
     config: &DaemonRunConfig,
     role_tokens: &BTreeMap<String, Secret>,
@@ -42,10 +42,10 @@ pub fn result_applier(
         let role = role.as_str().to_string();
         if let Some(token) = role_tokens.get(&role) {
             // I/O boundary: the per-role token is handed to its Forgejo client.
-            let role_forge = temper_forge::factory::new_forgejo(ForgejoConfig::new(
-                forge_base_url.clone(),
-                token.expose_secret(),
-            ));
+            // Preserve all non-token defaults from the deployment Forgejo
+            // config, especially the web-UI CI fallback credentials.
+            let role_forge =
+                temper_forge::factory::new_forgejo(role_forgejo_config(&forge_config, token));
             let role_chain = applier_chain(
                 role_forge,
                 workflow.clone(),
@@ -73,6 +73,12 @@ pub fn result_applier(
     );
 
     Arc::new(routing)
+}
+
+fn role_forgejo_config(base: &ForgejoConfig, token: &Secret) -> ForgejoConfig {
+    let mut config = base.clone();
+    config.token = token.expose_secret().to_string();
+    config
 }
 
 fn applier_chain(
@@ -112,6 +118,26 @@ fn role_list(roles: impl IntoIterator<Item = impl AsRef<str>>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn role_forgejo_config_preserves_ci_web_ui_and_replaces_only_token() {
+        let base = ForgejoConfig::new("https://forge.example/", "admin-token")
+            .with_default_repo("acme", "widgets")
+            .with_page_limit(7)
+            .with_cas_mode(temper_forge::config::ForgejoCasMode::Strict)
+            .with_web_ui_credentials("ci-reader", "s3cret")
+            .with_ci_diagnostics(true);
+
+        let role = role_forgejo_config(&base, &Secret::from("role-token"));
+        let mut expected = base.clone();
+        expected.token = "role-token".to_string();
+
+        assert_eq!(role, expected);
+        assert_eq!(base.token, "admin-token");
+        let web_ui = role.web_ui.expect("web-ui credentials preserved");
+        assert_eq!(web_ui.username, "ci-reader");
+        assert_eq!(web_ui.password, "s3cret");
+    }
 
     #[test]
     fn role_identities_debug_message_uses_padded_engine_prefix() {

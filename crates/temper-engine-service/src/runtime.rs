@@ -40,7 +40,7 @@ pub async fn run_async(
         forge: forge_config,
         role_tokens,
     } = engine_config(resolved)?;
-    let forge_base_url = forge_config.base_url.clone();
+    let forge_config_for_roles = forge_config.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);
 
     let (workflow, compiled) = load_workflow(&config)?;
@@ -53,7 +53,7 @@ pub async fn run_async(
         Arc::clone(&spawner),
         result_applier(
             forge.clone(),
-            forge_base_url,
+            forge_config_for_roles,
             workflow.clone(),
             &config,
             &role_tokens,
