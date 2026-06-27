@@ -82,6 +82,7 @@ async fn run_async(
         role_tokens,
     } = engine_config(resolved)?;
     let forge_base_url = forge_config.base_url.clone();
+    let forge_config_for_roles = forge_config.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);
 
     // §7 forge line, emitted after a connectivity/auth probe (current_user is the
@@ -132,7 +133,7 @@ async fn run_async(
     // --- Daemon (orchestrator) on this loop, with per-role token routing ---
     let applier = result_applier(
         forge.clone(),
-        forge_base_url,
+        forge_config_for_roles,
         workflow.clone(),
         &daemon_config,
         &role_tokens,
