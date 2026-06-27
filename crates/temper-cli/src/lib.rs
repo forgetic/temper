@@ -24,8 +24,9 @@ use temper_config::EX_USAGE;
 // snapshot with `temper_cli::CliEnv`.
 pub use temper_cli_common::CliEnv;
 
-// Re-exported from `temper-cli-daemon` so the root package's in-process-transport
-// integration test and `src/bin/temper.rs` keep the same `temper_cli::*` paths.
+// Re-exported from `temper-cli-daemon` so existing standalone helpers and
+// `src/bin/temper.rs` keep the same `temper_cli::*` paths. The transport
+// implementation itself is reusable outside the CLI via `temper-daemon-transport`.
 pub use temper_cli_daemon::{InProcessAgentRunner, InProcessTransport};
 
 /// Top-level usage, shown for `temper`, `temper --help`, and unknown commands.

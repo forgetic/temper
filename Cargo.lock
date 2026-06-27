@@ -1471,6 +1471,7 @@ dependencies = [
  "temper-cli-common",
  "temper-cli-init",
  "temper-config",
+ "temper-daemon-transport",
  "temper-engine",
  "temper-engine-io",
  "temper-forge",
@@ -1600,6 +1601,7 @@ dependencies = [
  "temper-agent",
  "temper-agent-session",
  "temper-config",
+ "temper-daemon-transport",
  "temper-engine",
  "temper-engine-io",
  "temper-engine-service",
@@ -1641,6 +1643,16 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "temper-daemon-transport"
+version = "0.1.0"
+dependencies = [
+ "skein",
+ "temper-engine",
+ "temper-protocol-worker",
+ "temper-worker",
 ]
 
 [[package]]
@@ -1919,6 +1931,7 @@ dependencies = [
  "chrono",
  "serde_json",
  "skein",
+ "temper-daemon-transport",
  "temper-engine",
  "temper-engine-io",
  "temper-forge",
@@ -2005,6 +2018,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skein",
+ "temper-daemon-transport",
  "temper-engine",
  "temper-engine-io",
  "temper-forge",

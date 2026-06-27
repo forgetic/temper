@@ -10,6 +10,9 @@ members = [
     "crates/temper-cli-daemon",
     "crates/temper-cli-init",
     "crates/temper-engine",
+    # Cross-tier composition glue for co-resident daemon/worker stacks; kept
+    # outside temper-worker so slim worker builds do not link temper-engine.
+    "crates/temper-daemon-transport",
     "crates/temper-workflow",
     "crates/temper-forge-model",
     "crates/temper-forge",
@@ -84,6 +87,7 @@ temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
 temper-workflow = { path = "crates/temper-workflow" }
 temper-engine = { path = "crates/temper-engine" }
 temper-engine-io = { path = "crates/temper-engine-io" }
+temper-daemon-transport = { path = "crates/temper-daemon-transport" }
 temper-worker = { path = "crates/temper-worker" }
 jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
 jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }

@@ -4,12 +4,12 @@
 //! single-threaded event loop.
 //!
 //! Assembles all three planes in one process: a [`Daemon`] (the orchestrator),
-//! an in-process worker driving an [`InProcessAgentRunner`], wired by an
-//! [`InProcessTransport`] (no HTTP byte round-trip), and the coding agent running
-//! as per-job futures on the same loop. The engine half reuses the exact wiring
-//! the slim `temper-engine` binary runs (via [`temper_engine_service`]); only the
-//! worker→daemon carrier and the worker→agent runner differ (in-memory and
-//! in-process, vs. HTTP + subprocess).
+//! an in-process worker driving an [`InProcessAgentRunner`], wired by the
+//! reusable [`InProcessTransport`] (no HTTP byte round-trip), and the coding
+//! agent running as per-job futures on the same loop. The engine half reuses the
+//! exact wiring the slim `temper-engine` binary runs (via
+//! [`temper_engine_service`]); only the worker→daemon carrier and the
+//! worker→agent runner differ (in-memory and in-process, vs. HTTP + subprocess).
 
 mod agent_runner;
 mod banner;

@@ -21,7 +21,8 @@ For a numeric snapshot, see [Test inventory](testing-inventory.md).
 4. **Simulation / machine tests** cover timing, retries, concurrency, recovery,
    and chaos under seeded virtual time. Use them when sleeps or races would be
    required in ordinary tests. Issue #165 tracks the next fidelity step: drive
-   the real `WorkerMachine`/`WorkerShell` over `InProcessTransport` in sim.
+   the real `WorkerMachine`/`WorkerShell` over the `temper-daemon-transport`
+   crate's `InProcessTransport` in sim.
 5. **UI model and DOM tests** protect web reducers, feed contracts, server/read
    model seams, and rendered interactions with fake feeds.
 6. **Live e2e tests** are ignored capstones. They prove real Forgejo, git,
@@ -153,8 +154,9 @@ Weaknesses and debt:
 4. Add shared `file://` git fixtures for worker and daemon rehearsals.
 5. Add explicit nextest groups or naming conventions for every live category if
    ignored provider smoke tests grow beyond self-skipping probes.
-6. Resolve issue #165 by adding a real-worker `temper-sim` harness, after a
-   dependency-layering decision for reusable `InProcessTransport` glue.
+6. Resolve issue #165 by adding a real-worker `temper-sim` harness now that the
+   reusable `temper-daemon-transport` glue provides the co-resident daemon
+   carrier outside CLI internals.
 7. Set `TEMPER_SIM_SEED_BASE` in CI so deterministic chaos explores new seeds
    while still printing reproducible failures.
 8. Consider a repo-level web validation alias/script if agents keep missing

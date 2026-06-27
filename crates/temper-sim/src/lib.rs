@@ -21,6 +21,11 @@ pub mod model;
 pub mod scenarios;
 pub mod worker;
 
+// Re-export the shared co-resident daemon carrier so upcoming real-worker sim
+// scenarios can wire `temper_worker::WorkerShell` without depending on CLI
+// standalone internals. Existing simulants below still exercise the HTTP path.
+pub use temper_daemon_transport::InProcessTransport;
+
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 

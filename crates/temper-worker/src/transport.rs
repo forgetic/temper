@@ -5,10 +5,12 @@
 //! [`Transport`] is the one capability the [`WorkerShell`](crate::worker_shell::WorkerShell)
 //! needs to reach the daemon: deliver one worker-protocol message and yield the
 //! daemon's reply. The split deployment uses [`HttpTransport`] (POST over the
-//! skein HTTP client); the unified single-process mode supplies an in-process
-//! transport that hands the message straight to a co-resident `DaemonCore` over
-//! an in-memory channel. The protocol (`temper-protocol-worker`) is identical
-//! across both — only the carrier under it changes.
+//! skein HTTP client); co-resident daemon/worker deployments use the tiny
+//! `temper-daemon-transport` glue crate, which hands the message straight to a
+//! co-resident `Daemon` over an in-memory channel. Keeping that glue outside
+//! `temper-worker` preserves the normal worker crate's engine-free dependency
+//! graph. The protocol (`temper-protocol-worker`) is identical across both —
+//! only the carrier under it changes.
 
 use std::future::Future;
 use std::sync::Arc;

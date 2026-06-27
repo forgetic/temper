@@ -25,6 +25,9 @@ uuid.workspace = true
 [dev-dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+# Test-only cross-tier glue: proves the reusable in-process Daemon transport
+# without making temper-worker depend on temper-engine in normal builds.
+temper-daemon-transport = { path = "../temper-daemon-transport" }
 temper-protocol-agent = { path = "../temper-protocol-agent" }
 # Transport e2e tests drive the real daemon through its in-process carrier on the
 # skein runtime (no fake daemon, no tokio/axum): the daemon now lives in this

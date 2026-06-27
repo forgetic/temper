@@ -1,9 +1,10 @@
 //! Shared harness for driving a **real** Temper daemon from worker e2e tests.
 //!
 //! The daemon now lives in this workspace, so tests run the real thing instead
-//! of a fake. The worker reaches the daemon through its in-process carrier
-//! (`deliver_protocol_message`) — the same path the unified single-process
-//! worker uses in production. No tokio, no axum, no socket.
+//! of a fake. The worker reaches the daemon through the reusable in-process
+//! carrier (`temper-daemon-transport`, backed by `deliver_protocol_message`) —
+//! the same path the unified single-process worker uses in production. No tokio,
+//! no axum, no socket.
 //!
 //! Result observation taps the `Result` the worker posts over the transport,
 //! rather than a recording applier: the daemon routes a *transient* failure to
@@ -16,31 +17,32 @@
 use std::sync::Arc;
 
 use skein::cx::Cx;
+use temper_daemon_transport::InProcessTransport as DaemonInProcessTransport;
 use temper_engine::{Daemon, ResultApplier};
 use temper_protocol_worker::{Assign, JobResult, WorkerProtocolMessage};
-use temper_worker::transport::Transport;
+use temper_worker::Transport;
 
-/// In-process transport: hands each worker→daemon message to the real daemon's
-/// in-process carrier, and taps the `Result` the worker posts onto `result_tx`.
-pub struct InProcessTransport {
-    daemon: Arc<Daemon>,
+/// In-process transport wrapper: delegates worker→daemon delivery to the
+/// reusable transport, and taps the `Result` the worker posts onto `result_tx`.
+pub struct ResultTappingTransport {
+    inner: DaemonInProcessTransport,
     result_tx: temper_engine_io::CqSender<JobResult>,
 }
 
-impl Transport for InProcessTransport {
+impl Transport for ResultTappingTransport {
     fn send(
         &self,
-        _cx: Cx,
+        cx: Cx,
         message: WorkerProtocolMessage,
     ) -> impl std::future::Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send
     {
-        let daemon = Arc::clone(&self.daemon);
+        let inner = self.inner.clone();
         let result_tx = self.result_tx.clone();
         async move {
             if let WorkerProtocolMessage::Result(result) = &message {
                 let _ = result_tx.send(result.clone());
             }
-            daemon.deliver_protocol_message(message).await
+            inner.send(cx, message).await
         }
     }
 }
@@ -93,9 +95,9 @@ impl DaemonHarness {
     }
 
     /// An in-process transport bound to this daemon that taps posted results.
-    pub fn transport(&self) -> Arc<InProcessTransport> {
-        Arc::new(InProcessTransport {
-            daemon: Arc::clone(&self.daemon),
+    pub fn transport(&self) -> Arc<ResultTappingTransport> {
+        Arc::new(ResultTappingTransport {
+            inner: DaemonInProcessTransport::new(self.daemon.as_ref().clone()),
             result_tx: self.result_tx.clone(),
         })
     }

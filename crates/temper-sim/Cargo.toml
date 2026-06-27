@@ -14,6 +14,9 @@ skein.workspace = true
 serde_json.workspace = true
 temper-engine-io = { path = "../temper-engine-io" }
 temper-engine = { path = "../temper-engine" }
+# Reusable co-resident worker→daemon carrier for future real WorkerShell sim
+# scenarios; this issue only exposes the dependency, it does not add a harness.
+temper-daemon-transport = { path = "../temper-daemon-transport" }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
 
 [dev-dependencies]
