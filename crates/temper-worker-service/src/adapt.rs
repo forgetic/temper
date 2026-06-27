@@ -55,7 +55,7 @@ pub fn git_base_url(resolved: &Resolved) -> Result<String, String> {
 
 /// Role → git identity for the coding executor. The executor configures each
 /// writable checkout's local `.git/config` (author identity + push credential)
-/// before spawning the agent, so the agent's checkpoint commits/pushes use the
+/// before spawning the agent, so any opt-in checkpoint commits/pushes use the
 /// right identity without the push token ever crossing the agent boundary.
 pub fn role_identities(resolved: &Resolved) -> BTreeMap<String, RoleGitIdentity> {
     resolved

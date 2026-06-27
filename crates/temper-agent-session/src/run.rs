@@ -49,9 +49,10 @@ pub(crate) fn drive(
     finalize(&result_path, &context, checkpointer.as_deref(), &result)
 }
 
-/// Builds the checkpointer for writable jobs, recovers any prior pushed
+/// Builds the opt-in checkpointer for writable jobs, recovers any prior pushed
 /// checkpoints, emits the resume marker, and aligns step numbering. Returns the
-/// checkpointer (absent for read-only jobs) and the resume note for the model.
+/// checkpointer (absent by default and for read-only jobs) and the resume note
+/// for the model.
 fn prepare_checkpointer(
     cwd: &Path,
     context: &WorkspaceContext,
@@ -101,9 +102,9 @@ fn prepare_checkpointer(
     (checkpointer, resume_note)
 }
 
-/// Runs the native coding loop on the async runtime, wiring the checkpointer in
-/// as both the mechanical backstop ([`TurnHook`]) and the model-driven
-/// `checkpoint` tool ([`CheckpointHook`]).
+/// Runs the native coding loop on the async runtime. When checkpointing is
+/// enabled, wires the checkpointer in as both the mechanical backstop
+/// ([`TurnHook`]) and the model-driven `checkpoint` tool ([`CheckpointHook`]).
 ///
 /// Takes the session's per-subsystem [`AgentConfig`] (issue #199): the provider,
 /// iteration cap, config dir, and sub-agent toggle all come from it.
@@ -149,7 +150,7 @@ fn drive_coding_loop(
 }
 
 /// Emits the terminal Done marker (taking the next free step index after any
-/// pushed checkpoints) and writes the result file.
+/// opt-in pushed checkpoints) and writes the result file.
 fn finalize(
     result_path: &str,
     context: &WorkspaceContext,

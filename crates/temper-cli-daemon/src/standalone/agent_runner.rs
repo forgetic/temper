@@ -75,7 +75,7 @@ impl AgentRunner for InProcessAgentRunner {
         progress: Arc<dyn ProgressSink>,
     ) -> impl std::future::Future<Output = Result<WorkspaceResult, AgentRunError>> + Send {
         // Emit the same outer start/finish boundary markers as the subprocess
-        // wrapper; writable in-process runs also get live checkpoint and plan
+        // wrapper; checkpoint-enabled in-process runs also get live checkpoint
         // hooks wired below.
         let step = Arc::new(AtomicU32::new(1));
         let role = context.work_item.role.clone();

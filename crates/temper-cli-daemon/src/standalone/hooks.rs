@@ -3,9 +3,9 @@
 //! Writable in-process agent hooks for standalone mode.
 //!
 //! The distributed worker gets these hooks from the `temper-agent` subprocess.
-//! Standalone runs the same coding loop in-process, so it provides equivalent
-//! checkpoint hooks here and routes progress through the worker's in-memory
-//! [`ProgressSink`].
+//! Standalone runs the same coding loop in-process, so when checkpointing is
+//! explicitly enabled it provides equivalent checkpoint hooks here and routes
+//! progress through the worker's in-memory [`ProgressSink`].
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
