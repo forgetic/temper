@@ -62,6 +62,17 @@ impl Fixture {
             Arc::new(runner),
         )
     }
+
+    pub fn seed_pr_head_branch(&self, branch: &str) -> String {
+        git([
+            "-C",
+            path_str(&self.origin),
+            "update-ref",
+            &format!("refs/heads/{branch}"),
+            self.pull_request_head_sha.as_str(),
+        ]);
+        self.pull_request_head_sha.clone()
+    }
 }
 
 pub fn assign(branch_hint: &str, correlation_key: &str) -> Assign {
@@ -236,6 +247,21 @@ pub fn pr_fix_job_context(branch_hint: &str, correlation_key: &str) -> TestJobCo
         "queue_condition": "ci_failed"
     }));
     context
+}
+
+pub fn pr_fix_assign(branch_hint: &str, correlation_key: &str) -> Assign {
+    let context = pr_fix_job_context(branch_hint, correlation_key);
+    Assign {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        job_id: "acme/service/pull_request-7/engineer/pr_ci_failed".to_string(),
+        role: "engineer".to_string(),
+        repo: "acme/service".to_string(),
+        artifact: Artifact {
+            item: json!(7),
+            kind: "pull_request".to_string(),
+        },
+        job_payload: context.to_payload(),
+    }
 }
 
 pub fn assign_with_context(correlation_key: &str, context: TestJobContext) -> Assign {

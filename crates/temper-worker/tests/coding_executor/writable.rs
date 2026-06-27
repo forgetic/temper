@@ -179,6 +179,107 @@ fn pr_fix_final_freshness_uses_latest_checkpoint_head() {
 }
 
 #[test]
+fn pr_writable_prepares_existing_pr_head_and_pushes_fix_to_same_branch() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let branch = "agent/pr-for-code-7";
+        let assigned_head = fixture.seed_pr_head_branch(branch);
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
+
+        let outcome = executor
+            .execute(pr_fix_assign(branch, "pr-for-code-7"))
+            .await;
+
+        let (branch_name, head_sha, summary) = expect_success(outcome);
+        assert_eq!(branch_name, branch);
+        assert_eq!(summary.as_deref(), Some("did the work"));
+        assert_eq!(
+            agent.observed_head_sha(),
+            assigned_head,
+            "pull_request_writable must start from the existing PR head"
+        );
+        assert_ne!(head_sha, assigned_head);
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "rev-parse",
+                &format!("refs/heads/{branch}"),
+            ]),
+            head_sha
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "rev-parse",
+                &format!("refs/heads/{branch}^"),
+            ]),
+            assigned_head
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "log",
+                "-1",
+                "--format=%s",
+                &format!("refs/heads/{branch}"),
+            ]),
+            "Fix CI for pr-for-code-7"
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "show",
+                &format!("refs/heads/{branch}:pr-change.txt"),
+            ]),
+            "pull request change"
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "show",
+                &format!("refs/heads/{branch}:agent-output.txt"),
+            ]),
+            "agent diff"
+        );
+    });
+}
+
+#[test]
+fn pr_writable_no_diff_on_existing_pr_head_is_not_success() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let branch = "agent/pr-for-code-7";
+        let assigned_head = fixture.seed_pr_head_branch(branch);
+        let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
+
+        let outcome = executor
+            .execute(pr_fix_assign(branch, "pr-for-code-7"))
+            .await;
+
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("agent made no change to the pull request head"),
+            "unexpected message: {message}"
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "rev-parse",
+                &format!("refs/heads/{branch}"),
+            ]),
+            assigned_head
+        );
+    });
+}
+
+#[test]
 fn scoped_workspace_is_reused_for_same_coordination_key() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
