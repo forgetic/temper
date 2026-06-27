@@ -362,9 +362,7 @@ impl ReadModel {
     }
 
     fn emit_clear_problem(&mut self, id: &str) -> Option<BoardEvent> {
-        if self.state.problems.remove(id).is_none() {
-            return None;
-        }
+        self.state.problems.remove(id)?;
         let seq = self.next_seq();
         Some(BoardEvent::ProblemClear {
             seq,

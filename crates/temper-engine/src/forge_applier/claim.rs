@@ -161,9 +161,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 return None;
             }
         };
-        let Some(action) = context.action else {
-            return None;
-        };
+        let action = context.action?;
         let transition = self
             .workflow
             .transitions()

@@ -305,6 +305,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn update_existing_coordinated_pr(
         &self,
         set: &CoordinatedSet<'_>,

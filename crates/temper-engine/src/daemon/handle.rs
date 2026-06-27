@@ -289,6 +289,15 @@ fn serving_debug_message(addr: impl std::fmt::Display) -> String {
     )
 }
 
+/// The daemon's h1 request handler — the same request→completion conversion
+/// [`serve`] installs on the TCP listener, exposed so in-memory simulation
+/// gateways can serve connections against the daemon's queue.
+pub fn h1_handler(daemon: &Daemon) -> temper_engine_io::http::H1CompletionHandler {
+    temper_engine_io::http::h1_completion_handler(daemon.cq.clone(), |request, responder| {
+        DaemonCompletion::Http { request, responder }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::serving_debug_message;
@@ -300,13 +309,4 @@ mod tests {
         assert_eq!(message, "engine:  serving on 127.0.0.1:8314");
         assert_eq!(&message[.."engine:  ".len()], "engine:  ");
     }
-}
-
-/// The daemon's h1 request handler — the same request→completion conversion
-/// [`serve`] installs on the TCP listener, exposed so in-memory simulation
-/// gateways can serve connections against the daemon's queue.
-pub fn h1_handler(daemon: &Daemon) -> temper_engine_io::http::H1CompletionHandler {
-    temper_engine_io::http::h1_completion_handler(daemon.cq.clone(), |request, responder| {
-        DaemonCompletion::Http { request, responder }
-    })
 }

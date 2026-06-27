@@ -177,6 +177,31 @@ fn checkpoint_hooks_enabled(context: &WorkspaceContext, config: &AgentConfig) ->
         )
 }
 
+fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), String> {
+    let bytes =
+        serde_json::to_vec_pretty(result).map_err(|error| format!("serialize result: {error}"))?;
+    std::fs::write(result_path, bytes)
+        .map_err(|error| format!("write result file {result_path}: {error}"))
+}
+
+/// Renders a coding-agent error for stderr. The worker re-derives the
+/// transient/permanent class from the process exit (non-zero ⇒ transient) plus
+/// a missing result file (⇒ permanent); the message here is for humans.
+///
+/// A model-unavailability rejection (a suspended model alias, or a tier that
+/// does not grant the configured model) is flagged with an explicit
+/// `model-unavailable:` prefix so it stands out in logs as a configuration
+/// problem the `Display` text already explains how to fix — not a transient
+/// network blip to be retried blindly.
+fn describe_agent_error(error: &CodingAgentError) -> String {
+    match error {
+        CodingAgentError::ModelUnavailable { .. } => {
+            format!("model-unavailable: {error}")
+        }
+        _ => format!("coding agent failed: {error}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,30 +287,5 @@ mod tests {
             pull_request_freshness: None,
             agent_session: None,
         }
-    }
-}
-
-fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), String> {
-    let bytes =
-        serde_json::to_vec_pretty(result).map_err(|error| format!("serialize result: {error}"))?;
-    std::fs::write(result_path, bytes)
-        .map_err(|error| format!("write result file {result_path}: {error}"))
-}
-
-/// Renders a coding-agent error for stderr. The worker re-derives the
-/// transient/permanent class from the process exit (non-zero ⇒ transient) plus
-/// a missing result file (⇒ permanent); the message here is for humans.
-///
-/// A model-unavailability rejection (a suspended model alias, or a tier that
-/// does not grant the configured model) is flagged with an explicit
-/// `model-unavailable:` prefix so it stands out in logs as a configuration
-/// problem the `Display` text already explains how to fix — not a transient
-/// network blip to be retried blindly.
-fn describe_agent_error(error: &CodingAgentError) -> String {
-    match error {
-        CodingAgentError::ModelUnavailable { .. } => {
-            format!("model-unavailable: {error}")
-        }
-        _ => format!("coding agent failed: {error}"),
     }
 }

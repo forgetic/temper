@@ -8,17 +8,30 @@ use crate::pr_freshness::{PrFreshnessFailure, PrFreshnessGuard};
 
 use super::{PreparedRepo, failure, workspace_failure};
 
-pub(super) async fn writable_outcome(
-    prepared: &[PreparedRepo],
-    result: WorkspaceResult,
-    allowed_verdicts: &[String],
-    coordination_key: &str,
-    artifact_item: &serde_json::Value,
-    pull_request_fix: bool,
-    pull_request_freshness: Option<&WorkerPullRequestFreshness>,
-    freshness_guard: Option<&dyn PrFreshnessGuard>,
-    latest_self_pushed_sha: Option<&str>,
-) -> JobOutcome {
+pub(super) struct WritableOutcomeRequest<'a> {
+    pub(super) prepared: &'a [PreparedRepo],
+    pub(super) result: WorkspaceResult,
+    pub(super) allowed_verdicts: &'a [String],
+    pub(super) coordination_key: &'a str,
+    pub(super) artifact_item: &'a serde_json::Value,
+    pub(super) pull_request_fix: bool,
+    pub(super) pull_request_freshness: Option<&'a WorkerPullRequestFreshness>,
+    pub(super) freshness_guard: Option<&'a dyn PrFreshnessGuard>,
+    pub(super) latest_self_pushed_sha: Option<&'a str>,
+}
+
+pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> JobOutcome {
+    let WritableOutcomeRequest {
+        prepared,
+        result,
+        allowed_verdicts,
+        coordination_key,
+        artifact_item,
+        pull_request_fix,
+        pull_request_freshness,
+        freshness_guard,
+        latest_self_pushed_sha,
+    } = request;
     if let Some(verdict) = result.verdict.clone() {
         return writable_verdict_outcome(
             prepared,
@@ -118,12 +131,12 @@ fn agent_freshness(
         queue_condition: freshness.queue_condition.clone(),
         queue_labels: freshness.queue_labels.clone(),
     };
-    if let Some(sha) = latest_self_pushed_sha.and_then(non_empty) {
-        if Some(sha) != freshness.head_sha.as_deref().and_then(non_empty) {
-            check.head_sha = Some(sha.to_string());
-            check.queue_condition = None;
-            check.queue_labels.clear();
-        }
+    if let Some(sha) = latest_self_pushed_sha.and_then(non_empty)
+        && Some(sha) != freshness.head_sha.as_deref().and_then(non_empty)
+    {
+        check.head_sha = Some(sha.to_string());
+        check.queue_condition = None;
+        check.queue_labels.clear();
     }
     check
 }

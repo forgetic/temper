@@ -179,12 +179,12 @@ impl Checkpointer {
         if sha.is_empty() {
             return;
         }
-        if let Ok(mut freshness) = self.pull_request_freshness.lock() {
-            if let Some(freshness) = freshness.as_mut() {
-                freshness.head_sha = Some(sha.to_string());
-                freshness.queue_condition = None;
-                freshness.queue_labels.clear();
-            }
+        if let Ok(mut freshness) = self.pull_request_freshness.lock()
+            && let Some(freshness) = freshness.as_mut()
+        {
+            freshness.head_sha = Some(sha.to_string());
+            freshness.queue_condition = None;
+            freshness.queue_labels.clear();
         }
     }
 
