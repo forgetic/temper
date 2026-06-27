@@ -52,6 +52,12 @@ pub(super) enum DaemonCompletion {
         role: String,
         current_job_ids: BTreeSet<String>,
     },
+    /// Daemon API: answer whether a correlation key still has pending or
+    /// in-flight work known to the dispatch core.
+    WorkstreamActive {
+        correlation_key: String,
+        reply: temper_engine_io::OneshotSender<bool>,
+    },
     /// A webhook wake scan completed; release the held `202` response.
     WakeScanFinished { token: u64 },
     /// Adjust the post-apply re-enqueue grace window.
@@ -99,6 +105,7 @@ pub(super) enum DaemonRequest {
         waiting: Vec<String>,
     },
     Log(String),
+    WorkstreamActiveReply(temper_engine_io::OneshotSender<bool>, bool),
     #[cfg(test)]
     QueuedJobsReply(
         temper_engine_io::OneshotSender<Vec<QueuedJob>>,
@@ -204,6 +211,14 @@ impl Machine for DaemonMachine {
                 role,
                 current_job_ids,
             } => self.handle_reconcile_pending_role_jobs(repo, role, current_job_ids),
+            DaemonCompletion::WorkstreamActive {
+                correlation_key,
+                reply,
+            } => vec![DaemonRequest::WorkstreamActiveReply(
+                reply,
+                self.core
+                    .workstream_active_by_correlation_key(&correlation_key),
+            )],
             DaemonCompletion::WakeScanFinished { token } => {
                 match self.webhook_waiters.remove(&token) {
                     Some(responder) => vec![DaemonRequest::Respond {

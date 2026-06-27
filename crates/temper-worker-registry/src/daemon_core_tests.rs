@@ -113,6 +113,37 @@ fn engineer_source_issue_and_pr_repair_share_one_workstream_slot() {
 }
 
 #[test]
+fn active_workstream_covers_pending_and_assigned_jobs() {
+    let mut core = DaemonCore::new();
+    core.coordinator_mut()
+        .register(&register("worker-a", "engineer", "ai/temper", 1));
+    core.enqueue_job(
+        "assigned",
+        "engineer",
+        "ai/temper",
+        artifact(),
+        coordinated_payload("pr-for-code-7", &["ai/temper"]),
+    );
+    core.enqueue_job(
+        "pending",
+        "engineer",
+        "ai/temper",
+        artifact(),
+        coordinated_payload("pr-for-code-8", &["ai/temper"]),
+    );
+
+    match core.handle(poll("worker-a")) {
+        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "assigned"),
+        other => panic!("expected assign, got {other:?}"),
+    }
+
+    assert!(core.workstream_active_by_correlation_key("pr-for-code-7"));
+    assert!(core.workstream_active_by_correlation_key(" pr-for-code-8 "));
+    assert!(!core.workstream_active_by_correlation_key("pr-for-code-9"));
+    assert!(!core.workstream_active_by_correlation_key(" "));
+}
+
+#[test]
 fn assigned_job_is_recoverable_as_in_flight() {
     let mut core = DaemonCore::new();
     core.coordinator_mut()

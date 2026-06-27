@@ -164,6 +164,10 @@ async fn spawn_mechanical(
         repositories,
         cadence,
         lease_policy: LeasePolicy::new(lease_ttl),
+        // TODO(#477 split-worker): distributed engine deployments observe the
+        // merge but do not own worker workspaces; add a worker-protocol cleanup
+        // request before enabling landed-workstream cleanup outside standalone.
+        pull_request_merge_observer: None,
     };
     let trigger = spawn_mechanical_backstop(
         spawner,

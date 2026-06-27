@@ -112,7 +112,9 @@ pub use stage::{
     ScenarioStep, Stage, StageError, WorkerProcess, run_scenario, run_scenario_with_budget,
 };
 pub use trigger::{ChangeHint, ChangeKind, TriggerScheduler, WakeTarget, broad_targets};
-pub use worker::{MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};
+pub use worker::{
+    MechanicalWorker, Progress, PullRequestMergeObserver, RoleWorker, Worker, WorkerError,
+};
 pub use workspace_request::{
     implementation_pr_body, implementation_pr_pull_request_input, pr_branch_hint,
     pr_correlation_key, workspace_content_key,

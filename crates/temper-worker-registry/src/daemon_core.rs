@@ -188,6 +188,23 @@ impl DaemonCore {
         })
     }
 
+    /// Whether any pending or assigned job is still known for this workspace
+    /// correlation key. This is broader than [`Self::in_flight_job_by_correlation_key`]:
+    /// cleanup must not remove a workstream that is queued behind the active
+    /// holder, either.
+    pub fn workstream_active_by_correlation_key(&self, correlation_key: &str) -> bool {
+        let correlation_key = correlation_key.trim();
+        if correlation_key.is_empty() {
+            return false;
+        }
+        self.job_context.iter().any(|(_, (_, payload))| {
+            payload_coordination_key(payload)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                == Some(correlation_key)
+        })
+    }
+
     pub fn handle(&mut self, msg: WorkerProtocolMessage) -> Option<WorkerProtocolMessage> {
         if protocol_version(&msg) != WORKER_PROTOCOL_VERSION {
             return Some(error(

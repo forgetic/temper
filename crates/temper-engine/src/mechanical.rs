@@ -8,13 +8,13 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use temper_forge::{ChangeHint, Forge, ForgeError};
 use temper_runner::{
-    MultiRepoMechanicalWorker, MultiRepoTickReport, Progress, RepositoryJournal, RepositorySet,
-    WorkerError,
+    MultiRepoMechanicalWorker, MultiRepoTickReport, Progress, PullRequestMergeObserver,
+    RepositoryJournal, RepositorySet, WorkerError,
 };
 use temper_workflow::{InMemoryJournal, LeasePolicy, ValidatedWorkflow};
 
 /// Configuration for the daemon's mechanical backstop loop.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MechanicalBackstopConfig {
     /// Repositories ticked in order on each pass.
     pub repositories: RepositorySet,
@@ -22,6 +22,10 @@ pub struct MechanicalBackstopConfig {
     pub cadence: Duration,
     /// Lease policy for mechanical transitions (reuse the daemon's lease TTL).
     pub lease_policy: LeasePolicy,
+    /// Worker/standalone-owned hook for filesystem cleanup after a landed PR.
+    /// Split deployments leave this unbound until a worker protocol cleanup
+    /// message exists.
+    pub pull_request_merge_observer: Option<Arc<dyn PullRequestMergeObserver>>,
 }
 
 /// Which repositories a mechanical pass covers.
@@ -75,7 +79,7 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
             journal,
         })
         .collect();
-    let worker = match MultiRepoMechanicalWorker::new(
+    let mut worker = match MultiRepoMechanicalWorker::new(
         workflow,
         forge,
         config.repositories.clone(),
@@ -89,6 +93,9 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
             return Err(error);
         }
     };
+    if let Some(observer) = &config.pull_request_merge_observer {
+        worker = worker.with_pull_request_merge_observer(Arc::clone(observer));
+    }
 
     let report: MultiRepoTickReport = match scope {
         MechanicalScope::All => worker.tick_report(now).await,

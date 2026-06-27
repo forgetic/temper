@@ -31,5 +31,8 @@ temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-agent = { path = "../temper-agent" }
 temper-protocol-agent = { path = "../temper-protocol-agent" }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

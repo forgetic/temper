@@ -15,6 +15,7 @@ mod agent_runner;
 mod banner;
 mod hooks;
 mod transport;
+mod workstream_cleanup;
 
 pub use agent_runner::InProcessAgentRunner;
 pub use transport::InProcessTransport;
@@ -42,6 +43,7 @@ use temper_worker::{
     WorkerConfig, run_worker_with_transport,
 };
 use temper_workflow::LeasePolicy;
+use workstream_cleanup::StandaloneWorkstreamCleaner;
 
 /// Runs the standalone daemon on the skein runtime until SIGINT/SIGTERM.
 ///
@@ -184,6 +186,10 @@ async fn run_async(
                 repositories,
                 cadence,
                 lease_policy: LeasePolicy::new(lease_ttl),
+                pull_request_merge_observer: Some(Arc::new(StandaloneWorkstreamCleaner::new(
+                    daemon.clone(),
+                    resolved.worker.workspace_root.clone(),
+                ))),
             },
             temper_engine::system_clock(),
         );
@@ -462,7 +468,7 @@ fn serving_debug_message(addr: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::serving_debug_message;
+    use super::*;
 
     #[test]
     fn serving_debug_message_uses_padded_engine_prefix() {

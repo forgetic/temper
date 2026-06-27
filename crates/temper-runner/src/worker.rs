@@ -16,6 +16,7 @@ mod role;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use temper_forge::PullRequest;
 
 pub use error::WorkerError;
 pub use mechanical::MechanicalWorker;
@@ -43,6 +44,16 @@ impl Progress {
             self.actions = self.actions.saturating_add(1);
         }
     }
+}
+
+/// Observer notified after the mechanical worker observes a pull request merge.
+///
+/// Standalone uses this to ask the co-resident worker plane to clean a scoped
+/// workspace after an implementation PR lands. Split deployments intentionally
+/// leave this unbound until a worker-owned protocol message exists.
+#[async_trait]
+pub trait PullRequestMergeObserver: Send + Sync {
+    async fn pull_request_merged(&self, pull_request: &PullRequest);
 }
 
 /// Tickable runner unit.

@@ -2,10 +2,14 @@
 
 use super::report::{MultiRepoConfigError, MultiRepoTickReport, RepositoryJournal};
 use super::repository_set::{RepositorySet, RepositoryTarget, hinted_paths, path_key};
-use crate::{ExternalToolExecutors, MechanicalWorker, Progress, Worker, WorkerError};
+use crate::{
+    ExternalToolExecutors, MechanicalWorker, Progress, PullRequestMergeObserver, Worker,
+    WorkerError,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
 use temper_workflow::{
     CommandJournal, DefaultRecoveryPolicy, LeasePolicy, ReconciliationMode, RecoveryPolicy,
@@ -26,6 +30,7 @@ pub struct MultiRepoMechanicalWorker<
     lease_policy: LeasePolicy,
     policy: P,
     external_tool_executors: ExternalToolExecutors,
+    pull_request_merge_observer: Option<Arc<dyn PullRequestMergeObserver>>,
 }
 
 struct RepositoryMechanical<'a, J: CommandJournal> {
@@ -95,6 +100,7 @@ where
             lease_policy,
             policy,
             external_tool_executors: ExternalToolExecutors::new(),
+            pull_request_merge_observer: None,
         })
     }
 
@@ -103,6 +109,16 @@ where
     /// every tick.
     pub fn with_external_tool_executors(mut self, executors: ExternalToolExecutors) -> Self {
         self.external_tool_executors = executors;
+        self
+    }
+
+    /// Binds an observer that each per-repo mechanical worker notifies after a
+    /// pull request merge is observed.
+    pub fn with_pull_request_merge_observer(
+        mut self,
+        observer: Arc<dyn PullRequestMergeObserver>,
+    ) -> Self {
+        self.pull_request_merge_observer = Some(observer);
         self
     }
 
@@ -177,7 +193,7 @@ where
                 continue;
             }
             report.record_attempt(&repository.target);
-            let worker = MechanicalWorker::with_policy(
+            let mut worker = MechanicalWorker::with_policy(
                 self.workflow,
                 self.forge,
                 &repository.target.id,
@@ -186,6 +202,9 @@ where
                 self.policy.clone(),
             )
             .with_external_tool_executors(self.external_tool_executors.clone());
+            if let Some(observer) = &self.pull_request_merge_observer {
+                worker = worker.with_pull_request_merge_observer(Arc::clone(observer));
+            }
             let mut progress = Progress::unchanged();
             let mut failure = None;
             for (item, kind) in repo_targets {
@@ -218,7 +237,7 @@ where
         let mut report = MultiRepoTickReport::default();
         for repository in repositories {
             report.record_attempt(&repository.target);
-            let worker = MechanicalWorker::with_policy(
+            let mut worker = MechanicalWorker::with_policy(
                 self.workflow,
                 self.forge,
                 &repository.target.id,
@@ -227,6 +246,9 @@ where
                 self.policy.clone(),
             )
             .with_external_tool_executors(self.external_tool_executors.clone());
+            if let Some(observer) = &self.pull_request_merge_observer {
+                worker = worker.with_pull_request_merge_observer(Arc::clone(observer));
+            }
             let tick = match mode {
                 ReconciliationMode::Bounded => worker.tick(now).await,
                 ReconciliationMode::DeepAudit => worker.tick_deep_audit(now).await,

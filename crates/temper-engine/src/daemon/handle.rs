@@ -170,6 +170,25 @@ impl Daemon {
             .map_err(|error| format!("parse PR freshness response: {error}"))
     }
 
+    pub async fn workstream_active_by_correlation_key(&self, correlation_key: &str) -> bool {
+        let correlation_key = correlation_key.trim();
+        if correlation_key.is_empty() {
+            return false;
+        }
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::WorkstreamActive {
+                correlation_key: correlation_key.to_string(),
+                reply,
+            })
+            .is_err()
+        {
+            return true;
+        }
+        rx.recv().await.unwrap_or(true)
+    }
+
     /// Map a scanned `WorkItem` to a job and enqueue it.
     pub async fn enqueue_work_item(&self, repo: &str, item: &WorkItem) {
         let job = job_from_work_item(repo, item);
