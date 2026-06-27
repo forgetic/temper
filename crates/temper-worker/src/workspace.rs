@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 mod git;
 
@@ -21,6 +21,35 @@ pub struct Workspace {
     base_branch: String,
     remote_url: String,
     identity: RoleGitIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ScopedWorkspaceCleanupOutcome {
+    Removed { path: PathBuf },
+    NotFound { path: PathBuf },
+    SkippedActive { path: PathBuf },
+    SkippedEmptyCorrelationKey,
+    SkippedNotDirectory { path: PathBuf },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ScopedWorkspacePathError {
+    #[error("invalid workspace role path component `{0}`")]
+    InvalidRole(String),
+    #[error("scoped workspace path `{path}` escapes workspace root `{root}`")]
+    EscapesRoot { root: PathBuf, path: PathBuf },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ScopedWorkspaceCleanupError {
+    #[error(transparent)]
+    UnsafePath(#[from] ScopedWorkspacePathError),
+    #[error("io error while cleaning scoped workspace `{path}`: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
