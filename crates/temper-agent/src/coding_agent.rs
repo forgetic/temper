@@ -69,9 +69,7 @@ pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabu
 #[cfg(test)]
 pub(crate) use run::classify_run_error;
 #[cfg(test)]
-pub(crate) use tools::{
-    CHECKPOINT_GUIDANCE, SubAgentTier, add_subagents, subagent_specs,
-};
+pub(crate) use tools::{CHECKPOINT_GUIDANCE, SubAgentTier, add_subagents, subagent_specs};
 
 // The provider/tool types the unit tests construct through `super::*`.
 #[cfg(test)]

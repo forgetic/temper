@@ -105,8 +105,8 @@ pub struct CodingSurface {
 /// operator-provided coder). Trailing `--agent-arg` values are the agent's
 /// flags: for the anvil-native surface they are parsed here and re-rendered
 /// onto the agent command (`--agent-program` / `--provider` / `--model` /
-/// `--max-iterations` / `--capture-dir` / `--subagents` / `--checkpoints`); for an external
-/// command they are passed through verbatim.
+/// `--max-iterations` / `--capture-dir` / `--subagents` / `--checkpoints`);
+/// for an external command they are passed through verbatim.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentSurface {
     /// The native anvil coding agent, spawned out-of-process as `anvil-agent`.

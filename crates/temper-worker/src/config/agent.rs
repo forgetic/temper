@@ -132,7 +132,9 @@ fn parse_anvil_native_agent_surface(args: Vec<String>) -> Result<AnvilNativeAgen
                     "on" => true,
                     "off" => false,
                     other => {
-                        return Err(format!("--checkpoints expects `on` or `off`, got `{other}`"));
+                        return Err(format!(
+                            "--checkpoints expects `on` or `off`, got `{other}`"
+                        ));
                     }
                 };
             }
