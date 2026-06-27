@@ -1996,14 +1996,19 @@ dependencies = [
 name = "temper-worker"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "chrono",
  "serde",
  "serde_json",
  "skein",
  "temper-engine",
  "temper-engine-io",
+ "temper-forge",
+ "temper-forge-memory",
  "temper-protocol-agent",
  "temper-protocol-worker",
  "temper-worker-io",
+ "temper-workflow",
  "tempfile",
  "thiserror",
  "tracing",
