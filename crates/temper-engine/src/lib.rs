@@ -65,6 +65,6 @@ pub use pr_freshness::check_pull_request_freshness;
 // Public so out-of-crate `ResultApplier` implementations can name the job type
 // the trait passes them.
 pub use temper_protocol_worker::{JobArtifactSnapshot, JobContext, RepoOutcome};
-pub use temper_runner::{RepositorySet, RepositoryTarget};
+pub use temper_runner::{PullRequestMergeObserver, RepositorySet, RepositoryTarget};
 pub use temper_worker_registry::InFlightJob;
 pub use webhook::*;

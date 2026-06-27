@@ -90,6 +90,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
             // so they sit at debug; `RUST_LOG=info` shows only the §7 events +
             // startup banner. The §7 events go through `emit_*`, not this sink.
             DaemonRequest::Log(line) => tracing::debug!("{line}"),
+            DaemonRequest::WorkstreamActiveReply(reply, active) => reply.send(active),
             #[cfg(test)]
             DaemonRequest::QueuedJobsReply(reply, jobs) => reply.send(jobs),
         }

@@ -1,4 +1,4 @@
-use super::{Progress, WorkerError, saturating_u64};
+use super::{Progress, PullRequestMergeObserver, WorkerError, saturating_u64};
 use crate::ExternalToolExecutors;
 use crate::observability::{
     artifact_ref, execution_error_diagnostic_classes, execution_error_failure_class, labels_delta,
@@ -7,6 +7,7 @@ use crate::observability::{
 use crate::scan::{AutomatedWorkItem, scan_automated_queues};
 use crate::workspace_automation::{WorkspaceAutomationOutcome, execute_workspace_automation};
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 use temper_forge::{Forge, ItemNumber, RepositoryId};
 use temper_log::emit::{
     ItemResolved, PrMerged, QueueEntered, TransitionApplied, emit_item_resolved, emit_pr_merged,
@@ -59,6 +60,7 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
     executors: &ExternalToolExecutors,
     forge: &F,
     now: DateTime<Utc>,
+    pull_request_merge_observer: Option<&Arc<dyn PullRequestMergeObserver>>,
 ) -> Result<Progress, WorkerError> {
     if !compiled
         .queues()
@@ -70,7 +72,15 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
 
     let items = scan_automated_queues(forge, repo, workflow, compiled, now).await?;
     execute_automated_items(
-        worker, repo, workflow, compiled, executor, executors, forge, items,
+        worker,
+        repo,
+        workflow,
+        compiled,
+        executor,
+        executors,
+        forge,
+        items,
+        pull_request_merge_observer,
     )
     .await
 }
@@ -85,6 +95,7 @@ pub(crate) async fn execute_automated_items<F: Forge + ?Sized>(
     executors: &ExternalToolExecutors,
     forge: &F,
     items: Vec<AutomatedWorkItem>,
+    pull_request_merge_observer: Option<&Arc<dyn PullRequestMergeObserver>>,
 ) -> Result<Progress, WorkerError> {
     let mut counts = AutomationCounts {
         candidates: items.len(),
@@ -121,7 +132,14 @@ pub(crate) async fn execute_automated_items<F: Forge + ?Sized>(
                 counts.applied = counts.applied.saturating_add(1);
                 progress.record(true);
                 emit_automation_transition_applied(&context, &item, &report.applied);
-                emit_pr_merged_if_landed(&context, forge, &item, &report.applied).await;
+                emit_pr_merged_if_landed(
+                    &context,
+                    forge,
+                    &item,
+                    &report.applied,
+                    pull_request_merge_observer,
+                )
+                .await;
                 log_automation_item(
                     context.worker,
                     context.repo,
@@ -475,6 +493,7 @@ async fn emit_pr_merged_if_landed<F: Forge + ?Sized>(
     forge: &F,
     item: &AutomatedWorkItem,
     applied: &[WorkflowEffect],
+    pull_request_merge_observer: Option<&Arc<dyn PullRequestMergeObserver>>,
 ) {
     if !applied
         .iter()
@@ -508,6 +527,10 @@ async fn emit_pr_merged_if_landed<F: Forge + ?Sized>(
 
     // §7 pairs the merge with `item.resolved` on the coordinating issue.
     emit_item_resolved_for_landed_pr(context, forge, &pull_request, number).await;
+
+    if let Some(observer) = pull_request_merge_observer {
+        observer.pull_request_merged(&pull_request).await;
+    }
 }
 
 /// Emits the §7 `engine` / `item.resolved` line for the issue a just-merged PR

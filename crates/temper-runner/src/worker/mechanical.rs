@@ -4,8 +4,10 @@ use super::automation;
 use super::{Progress, Worker, WorkerError, saturating_u32, saturating_u64};
 use crate::coding_workspace::ExternalToolExecutors;
 use crate::scan::targeted_automated_work_items;
+use crate::worker::PullRequestMergeObserver;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use temper_forge::{ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId};
 use temper_workflow::{
@@ -42,6 +44,7 @@ pub struct MechanicalWorker<
     /// invoke. Empty when no executor is bound; such automations no-op until a
     /// binding exists, never failing the tick.
     external_tool_executors: ExternalToolExecutors,
+    pull_request_merge_observer: Option<Arc<dyn PullRequestMergeObserver>>,
     advisory_actions: AtomicU64,
 }
 
@@ -95,6 +98,7 @@ where
             journal,
             policy,
             external_tool_executors: ExternalToolExecutors::new(),
+            pull_request_merge_observer: None,
             advisory_actions: AtomicU64::new(0),
         }
     }
@@ -104,6 +108,16 @@ where
     /// automations; workspace-backed ones no-op until a binding exists.
     pub fn with_external_tool_executors(mut self, executors: ExternalToolExecutors) -> Self {
         self.external_tool_executors = executors;
+        self
+    }
+
+    /// Binds an observer that is notified after this worker observes a pull
+    /// request merge.
+    pub fn with_pull_request_merge_observer(
+        mut self,
+        observer: Arc<dyn PullRequestMergeObserver>,
+    ) -> Self {
+        self.pull_request_merge_observer = Some(observer);
         self
     }
 
@@ -203,6 +217,7 @@ where
             &self.external_tool_executors,
             self.forge,
             automation_items,
+            self.pull_request_merge_observer.as_ref(),
         )
         .await?;
         if targeted_snapshots.is_empty() {
@@ -295,6 +310,7 @@ where
             &self.external_tool_executors,
             self.forge,
             now,
+            self.pull_request_merge_observer.as_ref(),
         )
         .await?;
         Ok(combine_progress(

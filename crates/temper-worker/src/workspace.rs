@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
 mod git;
@@ -72,6 +72,128 @@ pub fn forgejo_remote_url(base_url: &str, repo: &str) -> Result<String, Workspac
     validate_repo(repo)?;
 
     Ok(format!("{}/{}.git", base_url.trim_end_matches('/'), repo))
+}
+
+/// Percent-encodes a coordination key into one safe path component.
+///
+/// Common queue-generated keys stay readable (`pr-for-code-7`), while
+/// separators, dots, absolute-path markers, percent signs, and non-ASCII bytes
+/// are encoded so an unusual key cannot escape the role root or create nested
+/// paths.
+pub fn workspace_scope_component(coordination_key: &str) -> String {
+    if coordination_key.is_empty() {
+        return "%EMPTY".to_string();
+    }
+
+    let mut component = String::with_capacity(coordination_key.len());
+    for &byte in coordination_key.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => {
+                component.push(char::from(byte));
+            }
+            _ => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                component.push('%');
+                component.push(char::from(HEX[(byte >> 4) as usize]));
+                component.push(char::from(HEX[(byte & 0x0F) as usize]));
+            }
+        }
+    }
+    component
+}
+
+/// Returns the coordination-scoped workspace root
+/// `<workspace_root>/<role>/<safe-coordination-key>`.
+///
+/// The role is expected to be a configured workflow role id and must already be
+/// one normal path component; the coordination key is percent-encoded by
+/// [`workspace_scope_component`]. This keeps cleanup and checkout preparation on
+/// the same layout without duplicating ad-hoc path logic.
+pub fn scoped_workspace_root(
+    workspace_root: &Path,
+    role: &str,
+    coordination_key: &str,
+) -> Result<PathBuf, ScopedWorkspacePathError> {
+    validate_role_component(role)?;
+    let path = workspace_root
+        .join(role)
+        .join(workspace_scope_component(coordination_key));
+    if !path.starts_with(workspace_root) {
+        return Err(ScopedWorkspacePathError::EscapesRoot {
+            root: workspace_root.to_path_buf(),
+            path,
+        });
+    }
+    Ok(path)
+}
+
+/// Removes a coordination-scoped workspace directory when it is not known
+/// active. Intended for worker-owned cleanup after an implementation PR lands.
+///
+/// This synchronous core is deterministic and easy to unit test; async callers
+/// should use [`cleanup_scoped_workspace`] so filesystem work runs off the
+/// runtime thread.
+pub fn cleanup_scoped_workspace_sync(
+    workspace_root: &Path,
+    role: &str,
+    correlation_key: &str,
+    active: bool,
+) -> Result<ScopedWorkspaceCleanupOutcome, ScopedWorkspaceCleanupError> {
+    let correlation_key = correlation_key.trim();
+    if correlation_key.is_empty() {
+        return Ok(ScopedWorkspaceCleanupOutcome::SkippedEmptyCorrelationKey);
+    }
+    let path = scoped_workspace_root(workspace_root, role, correlation_key)?;
+    if active {
+        return Ok(ScopedWorkspaceCleanupOutcome::SkippedActive { path });
+    }
+
+    remove_scoped_workspace_dir(path)
+}
+
+/// Async wrapper for [`cleanup_scoped_workspace_sync`] that offloads blocking
+/// filesystem traversal to the worker runtime's blocking pool.
+pub async fn cleanup_scoped_workspace(
+    workspace_root: PathBuf,
+    role: String,
+    correlation_key: String,
+    active: bool,
+) -> Result<ScopedWorkspaceCleanupOutcome, ScopedWorkspaceCleanupError> {
+    skein::runtime::spawn_blocking(move || {
+        cleanup_scoped_workspace_sync(&workspace_root, &role, &correlation_key, active)
+    })
+    .await
+}
+
+fn remove_scoped_workspace_dir(
+    path: PathBuf,
+) -> Result<ScopedWorkspaceCleanupOutcome, ScopedWorkspaceCleanupError> {
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ScopedWorkspaceCleanupOutcome::NotFound { path });
+        }
+        Err(source) => return Err(ScopedWorkspaceCleanupError::Io { path, source }),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(ScopedWorkspaceCleanupOutcome::SkippedNotDirectory { path });
+    }
+    std::fs::remove_dir_all(&path).map_err(|source| ScopedWorkspaceCleanupError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(ScopedWorkspaceCleanupOutcome::Removed { path })
+}
+
+fn validate_role_component(role: &str) -> Result<(), ScopedWorkspacePathError> {
+    let mut components = Path::new(role).components();
+    let valid = matches!(components.next(), Some(Component::Normal(component)) if component == OsStr::new(role))
+        && components.next().is_none();
+    if valid {
+        Ok(())
+    } else {
+        Err(ScopedWorkspacePathError::InvalidRole(role.to_string()))
+    }
 }
 
 impl Workspace {
@@ -424,5 +546,116 @@ mod tests {
                 other => panic!("unexpected error for {repo:?}: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn workspace_scope_component_keeps_common_keys_readable() {
+        assert_eq!(
+            workspace_scope_component("pr-for-code-448"),
+            "pr-for-code-448"
+        );
+        assert_eq!(
+            workspace_scope_component("coord_for_code_448"),
+            "coord_for_code_448"
+        );
+    }
+
+    #[test]
+    fn workspace_scope_component_encodes_path_syntax_as_one_component() {
+        assert_eq!(
+            workspace_scope_component("../agent/pr-for-code-448"),
+            "%2E%2E%2Fagent%2Fpr-for-code-448"
+        );
+        assert_eq!(workspace_scope_component("/absolute"), "%2Fabsolute");
+        assert_eq!(workspace_scope_component("windows\\path"), "windows%5Cpath");
+        assert_eq!(workspace_scope_component(""), "%EMPTY");
+    }
+
+    #[test]
+    fn workspace_scope_component_is_collision_resistant_for_encoded_bytes() {
+        assert_ne!(
+            workspace_scope_component("a/b"),
+            workspace_scope_component("a%2Fb")
+        );
+        assert_ne!(
+            workspace_scope_component("a.b"),
+            workspace_scope_component("a%2Eb")
+        );
+    }
+
+    #[test]
+    fn scoped_workspace_root_keeps_escaped_correlation_under_workspace_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path =
+            scoped_workspace_root(temp.path(), "engineer", "../escape").expect("scoped path");
+
+        assert!(path.starts_with(temp.path()));
+        let relative = path.strip_prefix(temp.path()).expect("under root");
+        assert_eq!(relative.components().count(), 2);
+        assert_eq!(relative, Path::new("engineer").join("%2E%2E%2Fescape"));
+    }
+
+    #[test]
+    fn scoped_workspace_root_rejects_role_escape() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let root = parent.path().join("root");
+        let outside = parent.path().join("outside");
+        std::fs::create_dir_all(&root).expect("root dir");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+
+        let error = scoped_workspace_root(&root, "../outside", "pr-for-code-7")
+            .expect_err("role escape rejected");
+
+        assert!(matches!(error, ScopedWorkspacePathError::InvalidRole(_)));
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn cleanup_scoped_workspace_removes_inactive_workstream() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path =
+            scoped_workspace_root(temp.path(), "engineer", "pr-for-code-7").expect("scoped path");
+        std::fs::create_dir_all(path.join("temper")).expect("workspace dir");
+        std::fs::write(path.join("temper/README.md"), "product").expect("workspace file");
+
+        let outcome =
+            cleanup_scoped_workspace_sync(temp.path(), "engineer", "pr-for-code-7", false)
+                .expect("cleanup");
+
+        assert_eq!(
+            outcome,
+            ScopedWorkspaceCleanupOutcome::Removed { path: path.clone() }
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn cleanup_scoped_workspace_preserves_active_workstream() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path =
+            scoped_workspace_root(temp.path(), "engineer", "pr-for-code-7").expect("scoped path");
+        std::fs::create_dir_all(&path).expect("workspace dir");
+
+        let outcome = cleanup_scoped_workspace_sync(temp.path(), "engineer", "pr-for-code-7", true)
+            .expect("cleanup");
+
+        assert_eq!(
+            outcome,
+            ScopedWorkspaceCleanupOutcome::SkippedActive { path: path.clone() }
+        );
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn cleanup_scoped_workspace_skips_empty_correlation_key() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let outcome =
+            cleanup_scoped_workspace_sync(temp.path(), "engineer", "  ", false).expect("cleanup");
+
+        assert_eq!(
+            outcome,
+            ScopedWorkspaceCleanupOutcome::SkippedEmptyCorrelationKey
+        );
     }
 }

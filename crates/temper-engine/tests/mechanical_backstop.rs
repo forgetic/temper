@@ -119,6 +119,7 @@ fn run_mechanical_backstop_tick_applies_dependency_unblock_once() {
             repositories: RepositorySet::new(vec![repo.clone()]),
             cadence: Duration::from_millis(10),
             lease_policy: lease_policy(),
+            pull_request_merge_observer: None,
         };
         let journals = vec![InMemoryJournal::new()];
 
@@ -181,6 +182,7 @@ fn hinted_scope_ticks_only_the_matching_repository() {
             repositories: RepositorySet::new(vec![repo.clone()]),
             cadence: Duration::from_millis(10),
             lease_policy: lease_policy(),
+            pull_request_merge_observer: None,
         };
         let journals = vec![InMemoryJournal::new()];
 
@@ -244,6 +246,7 @@ fn mechanical_trigger_run_hinted_accelerates_the_named_repo() {
             repositories: RepositorySet::new(vec![repo.clone()]),
             cadence: Duration::from_secs(300),
             lease_policy: lease_policy(),
+            pull_request_merge_observer: None,
         };
         let clock: temper_engine::WallClock = Arc::new(|| ts("2026-05-29T00:00:00Z"));
         let trigger =
@@ -271,6 +274,7 @@ fn run_mechanical_backstop_tick_with_no_repositories_is_unchanged() {
             repositories: RepositorySet::new(Vec::new()),
             cadence: Duration::from_millis(10),
             lease_policy: lease_policy(),
+            pull_request_merge_observer: None,
         };
         let journals = Vec::new();
 

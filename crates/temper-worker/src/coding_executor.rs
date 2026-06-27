@@ -10,7 +10,9 @@ use temper_protocol_worker::{
 use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink};
 use crate::executor::{JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
-use crate::workspace::{RoleGitIdentity, Workspace, WorkspaceError, forgejo_remote_url};
+use crate::workspace::{
+    RoleGitIdentity, Workspace, WorkspaceError, forgejo_remote_url, scoped_workspace_root,
+};
 
 mod context;
 mod outcome;
@@ -202,10 +204,16 @@ async fn execute<R: AgentRunner>(
     // with capacity > 1 never run distinct jobs for the same role/repo in the
     // same mutable checkout tree; retry/resume still comes from the remote work
     // branch during prepare, not from a role-shared local checkout.
-    let workspace_root = config
-        .workspace_root
-        .join(&role)
-        .join(workspace_scope_component(&coordination_key));
+    let workspace_root =
+        match scoped_workspace_root(&config.workspace_root, &role, &coordination_key) {
+            Ok(path) => path,
+            Err(error) => {
+                return failure(
+                    FailureClass::Protocol,
+                    format!("invalid scoped workspace path: {error}"),
+                );
+            }
+        };
 
     let prepared = match prepare_repos(PrepareRequest {
         git_base_url: &config.git_base_url,
@@ -511,72 +519,5 @@ fn allowed_verdicts_display(allowed_verdicts: &[String]) -> String {
         "[]".to_string()
     } else {
         allowed_verdicts.join(", ")
-    }
-}
-
-/// Percent-encodes a coordination key into one safe path component.
-///
-/// Keep common queue-generated keys readable (`pr-for-code-7`) while encoding
-/// separators, dots, absolute-path markers, percent signs, and non-ASCII bytes so
-/// an unusual key cannot escape the role root or create arbitrary nested paths.
-fn workspace_scope_component(coordination_key: &str) -> String {
-    if coordination_key.is_empty() {
-        return "%EMPTY".to_string();
-    }
-
-    let mut component = String::with_capacity(coordination_key.len());
-    for &byte in coordination_key.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => {
-                component.push(char::from(byte));
-            }
-            _ => {
-                const HEX: &[u8; 16] = b"0123456789ABCDEF";
-                component.push('%');
-                component.push(char::from(HEX[(byte >> 4) as usize]));
-                component.push(char::from(HEX[(byte & 0x0F) as usize]));
-            }
-        }
-    }
-    component
-}
-
-#[cfg(test)]
-mod tests {
-    use super::workspace_scope_component;
-
-    #[test]
-    fn workspace_scope_component_keeps_common_keys_readable() {
-        assert_eq!(
-            workspace_scope_component("pr-for-code-448"),
-            "pr-for-code-448"
-        );
-        assert_eq!(
-            workspace_scope_component("coord_for_code_448"),
-            "coord_for_code_448"
-        );
-    }
-
-    #[test]
-    fn workspace_scope_component_encodes_path_syntax() {
-        assert_eq!(
-            workspace_scope_component("../agent/pr-for-code-448"),
-            "%2E%2E%2Fagent%2Fpr-for-code-448"
-        );
-        assert_eq!(workspace_scope_component("/absolute"), "%2Fabsolute");
-        assert_eq!(workspace_scope_component("windows\\path"), "windows%5Cpath");
-        assert_eq!(workspace_scope_component(""), "%EMPTY");
-    }
-
-    #[test]
-    fn workspace_scope_component_is_collision_resistant_for_encoded_bytes() {
-        assert_ne!(
-            workspace_scope_component("a/b"),
-            workspace_scope_component("a%2Fb")
-        );
-        assert_ne!(
-            workspace_scope_component("a.b"),
-            workspace_scope_component("a%2Eb")
-        );
     }
 }
