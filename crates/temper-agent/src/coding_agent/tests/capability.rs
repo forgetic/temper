@@ -124,6 +124,8 @@ fn tool_registry_writability_matches_capability() {
     let readonly_names: Vec<&str> = readonly.tools().iter().map(|tool| tool.name()).collect();
     assert!(writable_names.contains(&"write"));
     assert!(writable_names.contains(&"edit"));
+    assert!(!writable_names.contains(&"checkpoint"));
+    assert!(!readonly_names.contains(&"checkpoint"));
     assert!(!writable_names.contains(&"publish_plan"));
     assert!(!readonly_names.contains(&"publish_plan"));
     assert!(Capability::CodingWorkspace.is_writable());

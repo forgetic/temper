@@ -12,7 +12,8 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("Do NOT run git commit"));
     assert!(engineer.contains("needs_architect"));
     assert!(engineer.contains("needs_human"));
-    assert!(engineer.contains("checkpoint(label)"));
+    assert!(!engineer.contains("checkpoint(label)"));
+    assert!(!engineer.contains("CHECKPOINTS:"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(architect.contains("ROLE: architect"));
@@ -41,12 +42,10 @@ fn system_prompt_is_role_specific() {
 }
 
 #[test]
-fn system_prompt_engineer_uses_checkpoint_only_progress_discipline() {
+fn system_prompt_engineer_omits_checkpoint_guidance_by_default() {
     let engineer = system_prompt(Capability::CodingWorkspace, &[]);
-    assert!(engineer.contains("checkpoint(label)"));
-    assert!(engineer.contains("meaningful, diff-bearing"));
-    assert!(engineer.contains("do not create up-front"));
-    assert!(engineer.contains("checklist ceremony"));
+    assert!(!engineer.contains("checkpoint(label)"));
+    assert!(!engineer.contains("checkpoint tool"));
     assert!(engineer.contains("validation in `summary`"));
     assert!(!engineer.contains("publish_plan"));
     assert!(!engineer.contains("`plan`"));
@@ -56,6 +55,15 @@ fn system_prompt_engineer_uses_checkpoint_only_progress_discipline() {
     assert!(!architect.contains("checkpoint(label)"));
     assert!(!architect.contains("publish_plan"));
     assert!(!architect.contains("validation in `summary`"));
+}
+
+#[test]
+fn checkpoint_guidance_is_only_in_the_opt_in_guidance_block() {
+    let engineer = system_prompt(Capability::CodingWorkspace, &[]);
+    assert!(!engineer.contains("CHECKPOINTS:"));
+    assert!(CHECKPOINT_GUIDANCE.contains("CHECKPOINTS:"));
+    assert!(CHECKPOINT_GUIDANCE.contains("checkpoint` tool"));
+    assert!(CHECKPOINT_GUIDANCE.contains("meaningful checkpoints"));
 }
 
 #[test]

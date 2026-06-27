@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 //! The worker ↔ agent protocol driver: drive the native coding loop in cwd
-//! (checkpointing on writable jobs) and write the result.
+//! and write the result.
 //!
 //! Every input — the [`AgentConfig`], the [`WorkspaceContext`], the cwd, and the
 //! result-file path — is supplied by [`crate::entry`], the single env-reading
@@ -31,7 +31,7 @@ pub(crate) fn drive(
     cwd: PathBuf,
     result_path: String,
 ) -> Result<(), String> {
-    // Emit the Started checkpoint before any preamble so the worker sees the
+    // Emit the Started marker before any preamble so the worker sees the
     // correlation/start even if the coding loop fails early.
     emit(&StepProgress {
         correlation_key: context.correlation_key.clone(),
@@ -57,11 +57,11 @@ fn prepare_checkpointer(
     context: &WorkspaceContext,
     config: &AgentConfig,
 ) -> (Option<Arc<Checkpointer>>, Option<String>) {
-    // Writable jobs checkpoint: commit + push at turn boundaries, resume from
-    // prior checkpoints found on the prepared branch. Read-only jobs never
-    // mutate the tree, so they run hook-less.
-    let writable = checkpoint_hooks_enabled(context);
-    let checkpointer = writable.then(|| {
+    // Checkpointing is opt-in. Writable jobs can checkpoint only when the host
+    // explicitly enables the model tool/backstop hooks; read-only jobs never
+    // mutate the tree, so they run hook-less either way.
+    let enabled = checkpoint_hooks_enabled(context, config);
+    let checkpointer = enabled.then(|| {
         Arc::new(Checkpointer::new(
             cwd,
             context,
@@ -168,11 +168,99 @@ fn finalize(
     write_result(result_path, result)
 }
 
-fn checkpoint_hooks_enabled(context: &WorkspaceContext) -> bool {
-    matches!(
-        context.checkout.as_deref().unwrap_or("writable"),
-        "writable" | "pull_request_writable"
-    )
+fn checkpoint_hooks_enabled(context: &WorkspaceContext, config: &AgentConfig) -> bool {
+    config.checkpointing_enabled
+        && matches!(
+            context.checkout.as_deref().unwrap_or("writable"),
+            "writable" | "pull_request_writable"
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_agent::ProviderConfig;
+    use temper_protocol_agent::{WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem};
+
+    #[test]
+    fn writable_contexts_do_not_prepare_checkpointer_by_default() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = agent_config(false);
+
+        for checkout in [Some("writable"), Some("pull_request_writable"), None] {
+            let (checkpointer, resume_note) =
+                prepare_checkpointer(temp.path(), &context(checkout), &config);
+
+            assert!(checkpointer.is_none(), "checkout {checkout:?}");
+            assert!(resume_note.is_none(), "checkout {checkout:?}");
+        }
+    }
+
+    #[test]
+    fn checkpoint_opt_in_restores_writable_checkpointer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = agent_config(true);
+
+        for checkout in [Some("writable"), Some("pull_request_writable"), None] {
+            let (checkpointer, resume_note) =
+                prepare_checkpointer(temp.path(), &context(checkout), &config);
+
+            assert!(checkpointer.is_some(), "checkout {checkout:?}");
+            assert!(resume_note.is_none(), "checkout {checkout:?}");
+        }
+    }
+
+    #[test]
+    fn read_only_contexts_stay_hookless_even_when_checkpointing_is_enabled() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = agent_config(true);
+
+        for checkout in [Some("read_only"), Some("pull_request_read_only")] {
+            let (checkpointer, resume_note) =
+                prepare_checkpointer(temp.path(), &context(checkout), &config);
+
+            assert!(checkpointer.is_none(), "checkout {checkout:?}");
+            assert!(resume_note.is_none(), "checkout {checkout:?}");
+        }
+    }
+
+    fn agent_config(checkpointing_enabled: bool) -> AgentConfig {
+        AgentConfig::new(
+            ProviderConfig::new("test-provider", "test-model", "https://llm.example", "key"),
+            3,
+            false,
+            None,
+        )
+        .with_checkpointing_enabled(checkpointing_enabled)
+    }
+
+    fn context(checkout: Option<&str>) -> WorkspaceContext {
+        WorkspaceContext {
+            repos: vec![WorkspaceRepository {
+                id: "repo".to_string(),
+                owner: "acme".to_string(),
+                name: "service".to_string(),
+                default_branch: "main".to_string(),
+                dir: "service".to_string(),
+                access: "writable".to_string(),
+                base_branch: "main".to_string(),
+                branch_hint: Some("agent/pr-for-code-7".to_string()),
+            }],
+            work_item: WorkspaceWorkItem {
+                role: "engineer".to_string(),
+                queue: "code".to_string(),
+                kind: "issue".to_string(),
+                target: "Issue { number: ItemNumber(7) }".to_string(),
+                context: "{}".to_string(),
+            },
+            action: "open_pr".to_string(),
+            correlation_key: "pr-for-code-7".to_string(),
+            checkout: checkout.map(str::to_string),
+            allowed_verdicts: Vec::new(),
+            guidance: WorkspaceGuidance::default(),
+            pull_request_freshness: None,
+        }
+    }
 }
 
 fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), String> {
