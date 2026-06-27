@@ -20,9 +20,10 @@ For a numeric snapshot, see [Test inventory](testing-inventory.md).
    in-process transports while staying deterministic and fast.
 4. **Simulation / machine tests** cover timing, retries, concurrency, recovery,
    and chaos under seeded virtual time. Use them when sleeps or races would be
-   required in ordinary tests. Issue #165 tracks the next fidelity step: drive
-   the real `WorkerMachine`/`WorkerShell` over the `temper-daemon-transport`
-   crate's `InProcessTransport` in sim.
+   required in ordinary tests. `temper-sim` offers hand-rolled protocol workers
+   for cheap HTTP-path/misbehavior coverage plus a real `WorkerMachine` /
+   `WorkerShell` harness over `temper-daemon-transport::InProcessTransport` for
+   high-fidelity worker-loop coverage under `LabRuntime`.
 5. **UI model and DOM tests** protect web reducers, feed contracts, server/read
    model seams, and rendered interactions with fake feeds.
 6. **Live e2e tests** are ignored capstones. They prove real Forgejo, git,

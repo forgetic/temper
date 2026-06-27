@@ -15,10 +15,11 @@ current inventory, see [Testing pyramid](../reference/testing-pyramid.md) and
    agent behavior, prefer memory/filesystem forges, in-process transports,
    deterministic fake agents, jig fake LLMs, and local `file://` git.
 4. **Simulation for time and races.** Use `temper-sim` when behavior depends on
-   timers, long-poll interleavings, retries, cancellation, or chaos. Issue #165
-   tracks the next fidelity improvement here: driving the real `WorkerMachine`
-   and `WorkerShell` over the `temper-daemon-transport` crate's
-   `InProcessTransport` under `LabRuntime`.
+   timers, long-poll interleavings, retries, cancellation, or chaos. It has two
+   worker fidelities: hand-rolled protocol simulants for cheap HTTP-path and
+   misbehavior scenarios, and a real `WorkerMachine`/`WorkerShell` harness over
+   `temper-daemon-transport::InProcessTransport` for production worker-loop
+   coverage under `LabRuntime`.
 5. **Live e2e last.** Add ignored Forgejo/provider tests only for real webhooks,
    git auth, host-mode Actions CI, binary wiring, close-on-merge, or real
    provider credentials that no hermetic layer can prove.

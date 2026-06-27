@@ -14,7 +14,7 @@ where confidence comes from, not a coverage target.
 | Hermetic workflow / role | 450 | 0 | 79 | workflow/engine/runner/worker |
 | Hermetic scenario | 19 | 0 | 4 | memory-forge delivery worlds |
 | Hermetic process e2e | 5 | 0 | 2 | real daemon/fake agent |
-| Simulation / machine | 27 | 0 | 8 | sim and machine tests |
+| Simulation / machine | 29 | 0 | 9 | sim and machine tests |
 | UI model/feed | 44 | 0 | 3 | web UI reducers/contracts |
 | UI DOM/component | 33 | 0 | 3 | happy-dom component tests |
 | Crate integration | 172 | 0 | 39 | crate-local public API seams |
@@ -22,7 +22,7 @@ where confidence comes from, not a coverage target.
 | Live Forgejo preflight | 10 | 10 | 8 | fixture/provider smoke |
 | Live provider smoke | 3 | 3 | 3 | real OAuth/provider request checks |
 
-Total: 1,982 test cases across 383 files; 19 are ignored live tests.
+Total: 1,984 test cases across 384 files; 19 are ignored live tests.
 
 ## By package
 
@@ -48,7 +48,7 @@ Total: 1,982 test cases across 383 files; 19 are ignored live tests.
 | `temper-agent-core` | 30 | 0 | 7 |
 | `temper-forge-memory` | 27 | 0 | 4 |
 | `temper-engine-io` | 26 | 0 | 6 |
-| `temper-sim` | 23 | 0 | 6 |
+| `temper-sim` | 25 | 0 | 7 |
 | `temper-provision-forgejo-cli` | 20 | 3 | 5 |
 | root `temper` package | 19 | 6 | 9 |
 | `temper-agent-io` | 16 | 0 | 7 |
@@ -79,9 +79,10 @@ Total: 1,982 test cases across 383 files; 19 are ignored live tests.
   `crates/temper-runner/tests/`, and `crates/temper-worker/tests/` exercise
   role feeds, appliers, worker protocol, local git workspaces, and fake agents.
 - Simulation: `crates/temper-sim/tests/` and the machine-sim tests run real
-  production machines under deterministic scheduling and virtual time. Issue
-  #165 tracks replacing the sim's hand-rolled worker client with the real
-  `WorkerMachine`/`WorkerShell` over in-process transport.
+  production machines under deterministic scheduling and virtual time. The sim
+  crate keeps hand-rolled worker clients for cheap HTTP/misbehavior coverage and
+  now also includes a real `WorkerMachine`/`WorkerShell` harness over in-process
+  daemon transport.
 - Web UI: Rust server/read-model tests plus Vitest reducer, feed-contract, and
   happy-dom component tests protect both event shapes and rendered behavior.
 - Default live capstones plus the manual live lane prove the residual real-world
