@@ -95,6 +95,7 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
         "{stdout}"
     );
     assert!(stdout.contains("profiles     = 1"), "{stdout}");
+    assert!(stdout.contains("checkpoints  = false"), "{stdout}");
     assert!(
         stdout.contains("coding: command=[temper agent]"),
         "{stdout}"

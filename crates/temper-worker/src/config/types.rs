@@ -105,7 +105,7 @@ pub struct CodingSurface {
 /// operator-provided coder). Trailing `--agent-arg` values are the agent's
 /// flags: for the anvil-native surface they are parsed here and re-rendered
 /// onto the agent command (`--agent-program` / `--provider` / `--model` /
-/// `--max-iterations` / `--capture-dir` / `--subagents`); for an external
+/// `--max-iterations` / `--capture-dir` / `--subagents` / `--checkpoints`); for an external
 /// command they are passed through verbatim.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentSurface {
@@ -129,6 +129,9 @@ pub struct AnvilNativeAgentSurface {
     pub max_iterations: Option<usize>,
     /// Enable the in-workspace `investigate` sub-agent tool (off by default).
     pub enable_subagents: bool,
+    /// Enable mid-run checkpoint commit/push hooks and the model-facing
+    /// checkpoint tool (off by default).
+    pub enable_checkpoints: bool,
 }
 
 /// Which provider the agent authenticates against. Mirrors the agent's

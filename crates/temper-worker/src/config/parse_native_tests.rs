@@ -46,6 +46,7 @@ fn parses_anvil_native_agent_surface_from_agent_args() {
                 capture_dir: None,
                 max_iterations: Some(42),
                 enable_subagents: false,
+                enable_checkpoints: false,
             }),
         })
     );
@@ -80,6 +81,39 @@ fn anvil_native_enable_subagents_flag_is_parsed() {
         panic!("expected anvil-native agent");
     };
     assert!(native.enable_subagents);
+    assert!(!native.enable_checkpoints);
+}
+
+#[test]
+fn anvil_native_enable_checkpoints_flag_is_parsed() {
+    let config = parse_ok(&[
+        "--daemon-url",
+        "http://daemon.example",
+        "--worker-id",
+        "worker-1",
+        "--capability",
+        "ai/temper:coder",
+        "--executor",
+        "coding",
+        "--workspace-root",
+        "/workspaces",
+        "--git-base-url",
+        "https://forgejo.example",
+        "--agent-command",
+        "anvil-native",
+        "--agent-arg",
+        "--checkpoints",
+        "--agent-arg",
+        "on",
+    ]);
+    let ExecutorSelection::Coding(surface) = config.executor else {
+        panic!("expected coding executor");
+    };
+    let AgentSurface::AnvilNative(native) = surface.agent else {
+        panic!("expected anvil-native agent");
+    };
+    assert!(native.enable_checkpoints);
+    assert!(!native.enable_subagents);
 }
 
 #[test]
@@ -113,6 +147,7 @@ fn anvil_native_defaults_to_chatgpt_when_no_args() {
             capture_dir: None,
             max_iterations: None,
             enable_subagents: false,
+            enable_checkpoints: false,
         })
     );
 }

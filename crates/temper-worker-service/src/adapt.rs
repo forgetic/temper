@@ -104,6 +104,10 @@ pub fn agent_invocation(
     command.push(agent.max_iterations.to_string());
     command.push("--subagents".to_string());
     command.push(if agent.enable_subagents { "on" } else { "off" }.to_string());
+    if agent.enable_checkpoints {
+        command.push("--checkpoints".to_string());
+        command.push("on".to_string());
+    }
     if let Some(capture_dir) = &agent.config_dir {
         command.push("--capture-dir".to_string());
         command.push(capture_dir.display().to_string());

@@ -229,6 +229,7 @@ async fn run_async(
             resolved.agent.config_dir.clone(),
             resolved.agent.enable_subagents,
         )
+        .with_checkpoints_enabled(resolved.agent.enable_checkpoints)
         .with_pr_freshness_guard(pr_freshness_guard.clone()),
     );
     let executor = Arc::new(
