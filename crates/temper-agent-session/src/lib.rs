@@ -9,13 +9,13 @@
 //! 1. read the [`WorkspaceContext`] JSON from the file named by `--context`;
 //! 2. run the native sans-IO coding loop in `--workspace` (default cwd — the
 //!    prepared checkout the worker handed us);
-//! 3. emit [`StepProgress`] records as line-delimited JSON on **stdout** — each
-//!    a crash-recovery checkpoint the worker relays to the forge. On writable
-//!    jobs the run **checkpoints**: before each model turn it commits + pushes
-//!    whatever the previous turn changed and emits a marker carrying the
-//!    pushed sha (the marker never claims more than the branch holds). A
-//!    re-dispatched agent finds those commits on the prepared branch, resumes
-//!    its step numbering from them, and tells the model what already landed;
+//! 3. emit ordinary [`StepProgress`] start/finish records as line-delimited JSON
+//!    on **stdout**. Mid-run checkpoint progress is opt-in: when `--checkpoints
+//!    on` is set for a writable job, the agent also wires the model-facing
+//!    `checkpoint` tool and the deadline/interval backstop that commit + push
+//!    checkpoint diffs and emit markers carrying the pushed sha. A re-dispatched
+//!    opt-in agent can find those commits on the prepared branch, resume its
+//!    step numbering from them, and tell the model what already landed;
 //! 4. write the [`WorkspaceResult`] JSON to the file named by `--result`.
 //!
 //! The agent has git credentials only via the prepared checkout (the worker
@@ -27,9 +27,9 @@
 //! Every non-secret input is a flag: `--provider <anthropic|chatgpt|deepseek>`,
 //! `--model <id>`, `--investigate-model <id>`, `--provider-url <url>`,
 //! `--max-iterations <n>`, `--subagents <on|off>`, `--deadline-unix-seconds <n>`,
-//! `--checkpoint-interval <dur>`, `--capture-dir <dir>`, plus the required
-//! `--context`/`--result` paths and the optional `--workspace`. The **one**
-//! secret, the provider credential, arrives via
+//! `--checkpoints <on|off>`, `--checkpoint-interval <dur>`, `--capture-dir
+//! <dir>`, plus the required `--context`/`--result` paths and the optional
+//! `--workspace`. The **one** secret, the provider credential, arrives via
 //! `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`.
 //!
 //! ## Config objects
@@ -37,7 +37,7 @@
 //! The agent session is configured by one struct, [`AgentConfig`], which the
 //! coding-loop factory accepts. It bundles the provider wiring plus every
 //! loop/session knob (iterations, sub-agents, capture dir, deadline, checkpoint
-//! cadence) so the factory takes a single struct rather than a growing parameter
+//! opt-in/cadence) so the factory takes a single struct rather than a growing parameter
 //! list. It is constructible in memory for tests. Per the per-subsystem
 //! config-object rule, big factories take a config object; small ones stay as-is.
 //!

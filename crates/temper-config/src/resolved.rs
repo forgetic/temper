@@ -213,6 +213,7 @@ pub struct AgentSettings {
     pub provider: ProviderSettings,
     pub max_iterations: usize,
     pub enable_subagents: bool,
+    pub enable_checkpoints: bool,
     pub config_dir: Option<PathBuf>,
     /// Target-era named agent profiles. Resolved for inspection/future pool
     /// dispatch, but not selected by the active agent runtime yet.

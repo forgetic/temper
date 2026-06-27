@@ -86,6 +86,7 @@ roles = ["architect", "engineer", "code-reviewer"]
 provider = "anthropic"          # selects the [agent.providers.<name>] block below
 max_iterations = 250
 enable_subagents = false        # the investigate read-only sub-agent tool
+enable_checkpoints = false      # opt-in mid-run checkpoint commits/tool
 
 [agent.providers.anthropic]
 # url = "https://api.anthropic.com"   # optional base-URL override → --provider-url
@@ -113,7 +114,8 @@ expires = 0                     # access-token expiry, unix milliseconds
 From this resolved config the worker renders the agent command. The non-secret
 provider knobs become flags — `--provider <kind>`, and `--model`,
 `--investigate-model`, `--provider-url` when set — alongside `--max-iterations`,
-`--subagents on|off`, and a per-job `--context`, `--result`, and `--workspace`.
+`--subagents on|off`, opt-in `--checkpoints on`, and a per-job `--context`,
+`--result`, and `--workspace`.
 The credential becomes the single `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON` env
 the child reads. (For the full flag inventory and defaults, see
 [`docs/reference/environment-variables.md`](../reference/environment-variables.md).)
@@ -210,10 +212,12 @@ The worker chooses one of two paths based on whether `verdict` is present:
 `changed_files` is always computed by the worker from `git status` on the head
 path; the agent never reports it.
 
-The agent may also emit line-delimited `StepProgress` records on its stdout as it
-goes — one per pushed step boundary — which the worker relays to the daemon as
-crash-recovery progress. These markers make interrupted work resumable and may
-feed the managed run ledger; they are not model-authored PR checklist ceremony.
+By default the agent emits only the ordinary start/final `StepProgress` markers
+on stdout. If `enable_checkpoints = true` is set, writable jobs also get the
+model-facing `checkpoint` tool plus a deadline/interval backstop; successful
+checkpoint pushes emit additional progress with a `pushed_sha` for crash-recovery
+experiments. These markers may feed the managed run ledger; they are not
+model-authored PR checklist ceremony.
 
 ## 4. Safety behavior
 

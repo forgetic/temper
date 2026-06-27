@@ -503,6 +503,7 @@ fn resolve_agent(
             .max_iterations
             .unwrap_or(DEFAULT_MAX_ITERATIONS),
         enable_subagents: config.agent.enable_subagents.unwrap_or(false),
+        enable_checkpoints: config.agent.enable_checkpoints.unwrap_or(false),
         config_dir: trimmed(config.agent.config_dir.as_deref())
             .map(|value| resolve_config_path(&value, env, options)),
         profiles,

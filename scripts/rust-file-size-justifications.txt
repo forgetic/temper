@@ -41,3 +41,9 @@ tests/run_forgejo_e2e.rs
 # Memory/filesystem backend contract tests retain grouped backend behavior.
 crates/temper-forge-memory/tests/backend.rs
 crates/temper-forge-filesystem/tests/issues.rs
+
+# Configuration surfaces intentionally remain façade modules while checkpoint
+# policy is threaded through schema/resolution; split after the config model
+# is next refactored.
+crates/temper-cli-config/src/lib.rs
+crates/temper-config/src/schema.rs

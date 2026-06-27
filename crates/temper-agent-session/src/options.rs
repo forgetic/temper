@@ -17,7 +17,8 @@
 //! --max-iterations <N>        maximum model/tool iterations
 //! --subagents <on|off>        enable investigate/read-only subagents
 //! --deadline-unix-seconds <N> job deadline/lease expiry hint
-//! --checkpoint-interval <DUR> checkpoint cadence, e.g. `60s`, `5m`
+//! --checkpoints <on|off>    enable model/backstop checkpoints (default off)
+//! --checkpoint-interval <DUR> checkpoint cadence when checkpoints are on
 //! --freshness-url <URL>      optional daemon PR freshness check endpoint
 //! --capture-dir <DIR>         optional debug capture / prompt-overlay dir
 //! ```
@@ -55,8 +56,11 @@ pub(crate) struct Options {
     pub(crate) subagents: bool,
     /// Job deadline as a unix-seconds timestamp (`--deadline-unix-seconds`).
     pub(crate) deadline_unix_seconds: Option<u64>,
+    /// Whether checkpoint hooks/tools are explicitly enabled (`--checkpoints`).
+    /// Defaults off.
+    pub(crate) checkpoints: bool,
     /// Checkpoint backstop cadence (`--checkpoint-interval`); `None` uses the
-    /// session default.
+    /// session default. Only used when checkpointing is enabled.
     pub(crate) checkpoint_interval: Option<Duration>,
 }
 
@@ -73,6 +77,7 @@ impl Options {
         let mut max_iterations = DEFAULT_MAX_ITERATIONS;
         let mut subagents = false;
         let mut deadline_unix_seconds = None;
+        let mut checkpoints = false;
         let mut checkpoint_interval = None;
         let mut freshness_url = None;
 
@@ -107,6 +112,7 @@ impl Options {
                         format!("--deadline-unix-seconds expects a unix timestamp, got `{raw}`")
                     })?);
                 }
+                "--checkpoints" => checkpoints = parse_toggle(&value(&mut iter, "--checkpoints")?)?,
                 "--checkpoint-interval" => {
                     checkpoint_interval =
                         Some(parse_duration(&value(&mut iter, "--checkpoint-interval")?)?)
@@ -132,6 +138,7 @@ impl Options {
             max_iterations,
             subagents,
             deadline_unix_seconds,
+            checkpoints,
             checkpoint_interval,
             freshness_url,
         }))
@@ -141,7 +148,7 @@ impl Options {
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
 [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] \
-[--deadline-unix-seconds <N>] [--checkpoint-interval <DURATION>] [--freshness-url <URL>] [--capture-dir <DIR>]\n  \
+[--deadline-unix-seconds <N>] [--checkpoints <on|off>] [--checkpoint-interval <DURATION>] [--freshness-url <URL>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
 --workspace (default cwd), emits step-progress JSON lines on stdout, writes the result \
 to --result";
@@ -224,6 +231,7 @@ mod tests {
         assert!(options.workspace.is_none());
         assert_eq!(options.provider, AuthChoice::ChatGptOAuth);
         assert!(!options.subagents);
+        assert!(!options.checkpoints);
     }
 
     #[test]
@@ -255,6 +263,8 @@ mod tests {
             "on",
             "--deadline-unix-seconds",
             "1781701200",
+            "--checkpoints",
+            "on",
             "--checkpoint-interval",
             "5m",
             "--capture-dir",
@@ -273,6 +283,7 @@ mod tests {
         assert_eq!(options.max_iterations, 250);
         assert!(options.subagents);
         assert_eq!(options.deadline_unix_seconds, Some(1_781_701_200));
+        assert!(options.checkpoints);
         assert_eq!(options.checkpoint_interval, Some(Duration::from_secs(300)));
     }
 

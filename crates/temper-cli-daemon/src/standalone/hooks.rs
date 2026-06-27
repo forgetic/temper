@@ -3,9 +3,9 @@
 //! Writable in-process agent hooks for standalone mode.
 //!
 //! The distributed worker gets these hooks from the `temper-agent` subprocess.
-//! Standalone runs the same coding loop in-process, so it provides equivalent
-//! checkpoint hooks here and routes progress through the worker's in-memory
-//! [`ProgressSink`].
+//! Standalone runs the same coding loop in-process, so when checkpointing is
+//! explicitly enabled it provides equivalent checkpoint hooks here and routes
+//! progress through the worker's in-memory [`ProgressSink`].
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -28,8 +28,9 @@ pub(super) fn hooks_for_context(
     progress: Arc<dyn ProgressSink>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
     step: Arc<AtomicU32>,
+    checkpointing_enabled: bool,
 ) -> HookSet {
-    if !checkpoint_hooks_enabled(context) {
+    if !checkpoint_hooks_enabled(context, checkpointing_enabled) {
         return HookSet::default();
     }
     let hook = Arc::new(WritableHooks::new(
@@ -47,11 +48,12 @@ pub(super) fn hooks_for_context(
     }
 }
 
-fn checkpoint_hooks_enabled(context: &WorkspaceContext) -> bool {
-    matches!(
-        context.checkout.as_deref().unwrap_or("writable"),
-        "writable" | "pull_request_writable"
-    )
+fn checkpoint_hooks_enabled(context: &WorkspaceContext, checkpointing_enabled: bool) -> bool {
+    checkpointing_enabled
+        && matches!(
+            context.checkout.as_deref().unwrap_or("writable"),
+            "writable" | "pull_request_writable"
+        )
 }
 
 #[derive(Clone)]
@@ -271,24 +273,64 @@ mod tests {
     use temper_protocol_agent::{WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem};
 
     #[test]
-    fn writable_jobs_get_checkpoint_hooks() {
-        assert!(checkpoint_hooks_enabled(&context(Some("writable"))));
-        assert!(checkpoint_hooks_enabled(&context(None)));
+    fn writable_jobs_are_checkpoint_capable_when_opted_in() {
+        assert!(checkpoint_hooks_enabled(&context(Some("writable")), true));
+        assert!(checkpoint_hooks_enabled(&context(None), true));
     }
 
     #[test]
-    fn pull_request_writable_gets_checkpoint_hooks() {
-        assert!(checkpoint_hooks_enabled(&context(Some(
-            "pull_request_writable"
-        ))));
+    fn pull_request_writable_is_checkpoint_capable_when_opted_in() {
+        assert!(checkpoint_hooks_enabled(
+            &context(Some("pull_request_writable")),
+            true
+        ));
+    }
+
+    #[test]
+    fn writable_jobs_do_not_get_hooks_by_default() {
+        let cwd = std::env::temp_dir();
+        let hooks = hooks_for_context(
+            &context(Some("writable")),
+            &cwd,
+            Arc::new(NoopProgress),
+            None,
+            Arc::new(AtomicU32::new(2)),
+            false,
+        );
+
+        assert!(hooks.turn_hook.is_none());
+        assert!(hooks.checkpoint_hook.is_none());
+    }
+
+    #[test]
+    fn opt_in_writable_jobs_get_checkpoint_and_turn_hooks() {
+        let cwd = std::env::temp_dir();
+        let hooks = hooks_for_context(
+            &context(Some("pull_request_writable")),
+            &cwd,
+            Arc::new(NoopProgress),
+            None,
+            Arc::new(AtomicU32::new(2)),
+            true,
+        );
+
+        assert!(hooks.turn_hook.is_some());
+        assert!(hooks.checkpoint_hook.is_some());
     }
 
     #[test]
     fn read_only_jobs_are_hookless() {
-        assert!(!checkpoint_hooks_enabled(&context(Some("read_only"))));
-        assert!(!checkpoint_hooks_enabled(&context(Some(
-            "pull_request_read_only"
-        ))));
+        assert!(!checkpoint_hooks_enabled(&context(Some("read_only")), true));
+        assert!(!checkpoint_hooks_enabled(
+            &context(Some("pull_request_read_only")),
+            true
+        ));
+    }
+
+    struct NoopProgress;
+
+    impl ProgressSink for NoopProgress {
+        fn report(&self, _progress: StepProgress) {}
     }
 
     fn context(checkout: Option<&str>) -> WorkspaceContext {

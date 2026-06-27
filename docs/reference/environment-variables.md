@@ -75,21 +75,24 @@ environment variables.
 | `--provider-url <URL>` | Provider base-URL override (e.g. a local fake LLM). | provider built-in URL |
 | `--max-iterations <N>` | Maximum model/tool iterations. | compiled default |
 | `--subagents <on\|off>` | Enable investigate/read-only subagents. | `off` |
-| `--deadline-unix-seconds <N>` | Job deadline / lease-expiry hint for the checkpoint backstop. | unset |
-| `--checkpoint-interval <DURATION>` | Checkpoint backstop cadence, e.g. `60s`, `5m`. | `300s` |
+| `--checkpoints <on\|off>` | Enable mid-run checkpoint commit/push hooks and the model-facing `checkpoint` tool. | `off` |
+| `--deadline-unix-seconds <N>` | Job deadline / lease-expiry hint for the checkpoint backstop (used only when checkpoints are on). | unset |
+| `--checkpoint-interval <DURATION>` | Checkpoint backstop cadence when checkpoints are on, e.g. `60s`, `5m`. | `300s` |
 | `--capture-dir <DIR>` | Optional prompt-overlay / debug-capture dir. | `$XDG_CONFIG_HOME/anvil`, else `$HOME/.config/anvil` |
 
 For an OAuth provider credential the agent materializes the tokens into a
 temporary `auth.json` its OAuth loader reads (and refreshes) for the run; no
 worker-written auth file or model/url env crosses the boundary.
 
-### Git checkpoint identity (no env)
+### Git checkpoint identity (opt-in, no env)
 
-The agent commits + pushes checkpoints against the prepared checkout. The worker
-configures the git author identity (`user.name`/`user.email`) and the push
-credential (`http.extraheader`) in each writable repo's **local `.git/config`**
-before spawning the agent, so the agent needs no per-role token env and the push
-token never reaches the agent's argv or environment.
+Checkpoint commits/pushes are disabled by default. When an operator explicitly
+sets `--checkpoints on` (or the corresponding deployment config), the agent uses
+the prepared checkout for git credentials. The worker configures the git author
+identity (`user.name`/`user.email`) and the push credential (`http.extraheader`)
+in each writable repo's **local `.git/config`** before spawning the agent, so the
+agent needs no per-role token env and the push token never reaches the agent's
+argv or environment.
 
 ### Still-internal child env
 

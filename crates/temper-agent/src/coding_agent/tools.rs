@@ -116,7 +116,7 @@ fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::to
 }
 
 /// Guidance appended to the role prompt when the `checkpoint` tool is wired.
-pub(super) const CHECKPOINT_GUIDANCE: &str = "\nCHECKPOINTS:\n\
+pub(crate) const CHECKPOINT_GUIDANCE: &str = "\nCHECKPOINTS:\n\
     - You have a `checkpoint` tool. Call it when you finish a coherent \
     sub-milestone (a failing test added, a function implemented, a bug fixed) — \
     NOT after every edit, and not for trivial intermediate states. The host \

@@ -97,6 +97,10 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
         properties["worker"]["properties"]["capabilities"]["items"]["type"],
         "string"
     );
+    assert_eq!(
+        properties["agent"]["properties"]["enable_checkpoints"]["type"],
+        "boolean"
+    );
     let pools = &properties["worker"]["properties"]["pools"];
     assert_eq!(pools["type"], "array");
     assert_eq!(pools["items"]["type"], "object");

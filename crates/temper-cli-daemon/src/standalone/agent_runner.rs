@@ -33,6 +33,7 @@ pub struct InProcessAgentRunner {
     max_iterations: usize,
     config_dir: Option<PathBuf>,
     enable_subagents: bool,
+    enable_checkpoints: bool,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
 }
 
@@ -50,12 +51,18 @@ impl InProcessAgentRunner {
             max_iterations,
             config_dir,
             enable_subagents,
+            enable_checkpoints: false,
             pr_freshness_guard: None,
         }
     }
 
     pub fn with_pr_freshness_guard(mut self, guard: Arc<dyn PrFreshnessGuard>) -> Self {
         self.pr_freshness_guard = Some(guard);
+        self
+    }
+
+    pub fn with_checkpoints_enabled(mut self, enabled: bool) -> Self {
+        self.enable_checkpoints = enabled;
         self
     }
 }
@@ -68,7 +75,7 @@ impl AgentRunner for InProcessAgentRunner {
         progress: Arc<dyn ProgressSink>,
     ) -> impl std::future::Future<Output = Result<WorkspaceResult, AgentRunError>> + Send {
         // Emit the same outer start/finish boundary markers as the subprocess
-        // wrapper; writable in-process runs also get live checkpoint and plan
+        // wrapper; checkpoint-enabled in-process runs also get live checkpoint
         // hooks wired below.
         let step = Arc::new(AtomicU32::new(1));
         let role = context.work_item.role.clone();
@@ -105,6 +112,7 @@ impl AgentRunner for InProcessAgentRunner {
         let max_iterations = self.max_iterations;
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
+        let enable_checkpoints = self.enable_checkpoints;
         let pr_freshness_guard = self.pr_freshness_guard.clone();
         let hook_set = super::hooks::hooks_for_context(
             context,
@@ -112,6 +120,7 @@ impl AgentRunner for InProcessAgentRunner {
             Arc::clone(&progress),
             pr_freshness_guard,
             Arc::clone(&step),
+            enable_checkpoints,
         );
         let context = context.clone();
         let cwd = cwd.to_path_buf();

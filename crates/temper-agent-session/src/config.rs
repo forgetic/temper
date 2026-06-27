@@ -47,10 +47,16 @@ pub struct AgentConfig {
     /// `entry` (`--capture-dir`, falling back to `XDG_CONFIG_HOME`/`HOME`).
     pub config_dir: Option<PathBuf>,
     /// Optional job deadline the checkpoint backstop respects (the worker passes
-    /// a unix timestamp via `--deadline-unix-seconds`).
+    /// a unix timestamp via `--deadline-unix-seconds`). Used only when
+    /// checkpointing is explicitly enabled.
     pub deadline: Option<SystemTime>,
     /// Checkpoint cadence for the time-based backstop (`--checkpoint-interval`).
+    /// Used only when checkpointing is explicitly enabled.
     pub checkpoint_interval: Duration,
+    /// Whether to wire the model-facing checkpoint tool and the timed/deadline
+    /// backstop hooks. Defaults off for the ordinary engineer path; hosts can
+    /// opt in for checkpoint-resume experiments.
+    pub checkpointing_enabled: bool,
     /// Optional daemon endpoint used to revalidate PR-head freshness before
     /// checkpoint pushes.
     pub freshness_url: Option<String>,
@@ -75,6 +81,7 @@ impl AgentConfig {
             config_dir,
             deadline: None,
             checkpoint_interval: DEFAULT_CHECKPOINT_INTERVAL,
+            checkpointing_enabled: false,
             freshness_url: None,
         }
     }
@@ -87,10 +94,19 @@ impl AgentConfig {
     }
 
     /// Sets the checkpoint backstop cadence (defaults to
-    /// [`DEFAULT_CHECKPOINT_INTERVAL`]).
+    /// [`DEFAULT_CHECKPOINT_INTERVAL`]). This has no effect unless
+    /// checkpointing is explicitly enabled.
     #[must_use]
     pub fn with_checkpoint_interval(mut self, interval: Duration) -> Self {
         self.checkpoint_interval = interval;
+        self
+    }
+
+    /// Enables or disables the model-facing checkpoint tool and the checkpoint
+    /// backstop hooks. Defaults to disabled.
+    #[must_use]
+    pub fn with_checkpointing_enabled(mut self, enabled: bool) -> Self {
+        self.checkpointing_enabled = enabled;
         self
     }
 
@@ -122,6 +138,7 @@ mod tests {
         assert!(config.enable_subagents);
         assert_eq!(config.config_dir, Some(PathBuf::from("/cfg")));
         assert_eq!(config.checkpoint_interval, DEFAULT_CHECKPOINT_INTERVAL);
+        assert!(!config.checkpointing_enabled);
         assert!(config.deadline.is_none());
         assert_eq!(config.provider.base_url(), "https://llm.example");
     }
@@ -134,9 +151,11 @@ mod tests {
         let provider = ProviderConfig::new("p", "m", "https://llm.example", "k");
         let config = AgentConfig::new(provider, 1, false, None)
             .with_deadline(Some(UNIX_EPOCH + Duration::from_secs(100)))
-            .with_checkpoint_interval(Duration::from_secs(42));
+            .with_checkpoint_interval(Duration::from_secs(42))
+            .with_checkpointing_enabled(true);
 
         assert_eq!(config.checkpoint_interval, Duration::from_secs(42));
+        assert!(config.checkpointing_enabled);
         assert_eq!(config.deadline, Some(UNIX_EPOCH + Duration::from_secs(100)));
     }
 }
