@@ -12,6 +12,10 @@ use crate::{RegistryError, WorkerRegistry};
 pub struct WorkItem {
     pub job_id: String,
     pub role: String,
+    /// Optional logical workstream key. When present, only one in-flight job for
+    /// the same `(role, coordination_key)` may hold worker capacity at a time,
+    /// even if distinct queue scans produced different job ids.
+    pub coordination_key: Option<String>,
     /// Primary repository (home of the coordinating artifact) — carried on the
     /// resulting [`Assignment`] and the `Assign` envelope.
     pub repo: String,
@@ -32,9 +36,15 @@ impl WorkItem {
         Self {
             job_id: job_id.into(),
             role: role.into(),
+            coordination_key: None,
             repos: vec![repo.clone()],
             repo,
         }
+    }
+
+    pub fn with_coordination_key(mut self, coordination_key: impl Into<String>) -> Self {
+        self.coordination_key = Some(coordination_key.into());
+        self
     }
 }
 
@@ -85,6 +95,9 @@ impl DispatchCoordinator {
 
     pub fn dispatch_next(&mut self) -> Option<Assignment> {
         let (index, worker_id) = self.pending.iter().enumerate().find_map(|(index, item)| {
+            if self.in_flight_workstream_conflicts(item) {
+                return None;
+            }
             self.registry
                 .assign_candidate_all(&item.role, &item.repos)
                 .map(|worker_id| (index, worker_id))
@@ -123,8 +136,10 @@ impl DispatchCoordinator {
         }
 
         let index = self.pending.iter().position(|item| {
-            self.registry
-                .can_handle_all(worker_id, &item.role, &item.repos)
+            !self.in_flight_workstream_conflicts(item)
+                && self
+                    .registry
+                    .can_handle_all(worker_id, &item.role, &item.repos)
         })?;
 
         let item = self
@@ -236,6 +251,26 @@ impl DispatchCoordinator {
 
     pub fn in_flight_len(&self) -> usize {
         self.assigned.len()
+    }
+
+    fn in_flight_workstream_conflicts(&self, item: &WorkItem) -> bool {
+        let Some(coordination_key) = item
+            .coordination_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        else {
+            return false;
+        };
+
+        self.assigned.values().any(|(_worker_id, assigned)| {
+            assigned.role == item.role
+                && assigned
+                    .coordination_key
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|key| key == coordination_key)
+        })
     }
 }
 

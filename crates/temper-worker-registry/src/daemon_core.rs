@@ -69,6 +69,10 @@ impl DaemonCore {
         self.coordinator.enqueue(WorkItem {
             job_id: job_id.clone(),
             role,
+            coordination_key: payload_coordination_key(&job_payload)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string),
             repo,
             repos,
         });

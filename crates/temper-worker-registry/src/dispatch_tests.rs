@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::test_support::{coordinated, register, register_multi, work};
+use crate::test_support::{coordinated, coordinated_workstream, register, register_multi, work};
 use crate::{Assignment, DispatchCoordinator};
 
 #[test]
@@ -188,6 +188,49 @@ fn dispatch_ready_places_up_to_capacity_then_defers() {
     let assignments = coordinator.dispatch_ready();
     assert_eq!(assignments.len(), 2);
     assert_eq!(coordinator.pending_len(), 1);
+    assert_eq!(coordinator.in_flight_len(), 2);
+}
+
+#[test]
+fn same_role_same_workstream_is_not_dispatched_concurrently() {
+    let mut coordinator = DispatchCoordinator::new();
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 3));
+    coordinator.enqueue(coordinated_workstream(
+        "source-issue-job",
+        "engineer",
+        "ai/temper",
+        "pr-for-code-463",
+    ));
+    coordinator.enqueue(coordinated_workstream(
+        "pr-repair-job",
+        "engineer",
+        "ai/temper",
+        "pr-for-code-463",
+    ));
+    coordinator.enqueue(coordinated_workstream(
+        "unrelated-job",
+        "engineer",
+        "ai/temper",
+        "pr-for-code-999",
+    ));
+
+    assert_eq!(
+        coordinator.dispatch_for_worker("worker-a").unwrap().job_id,
+        "source-issue-job"
+    );
+    assert_eq!(
+        coordinator.dispatch_for_worker("worker-a").unwrap().job_id,
+        "unrelated-job"
+    );
+    assert_eq!(coordinator.dispatch_for_worker("worker-a"), None);
+    assert_eq!(
+        coordinator
+            .pending()
+            .iter()
+            .map(|item| item.job_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pr-repair-job"]
+    );
     assert_eq!(coordinator.in_flight_len(), 2);
 }
 

@@ -59,9 +59,19 @@ pub(crate) fn coordinated(job_id: &str, role: &str, repos: &[&str]) -> WorkItem 
     WorkItem {
         job_id: job_id.to_string(),
         role: role.to_string(),
+        coordination_key: None,
         repo: repos[0].to_string(),
         repos: repos.iter().map(|repo| (*repo).to_string()).collect(),
     }
+}
+
+pub(crate) fn coordinated_workstream(
+    job_id: &str,
+    role: &str,
+    repo: &str,
+    coordination_key: &str,
+) -> WorkItem {
+    WorkItem::single(job_id, role, repo).with_coordination_key(coordination_key)
 }
 
 pub(crate) fn poll(worker_id: &str) -> WorkerProtocolMessage {

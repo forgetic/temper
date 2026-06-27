@@ -24,6 +24,7 @@ use temper_runner::{
 };
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, RoleId, ValidatedWorkflow, find_pull_request_by_correlation,
+    parse_metadata_block,
 };
 
 use crate::workflow_meta::implementation_pr_labels;
@@ -106,8 +107,11 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     // Assemble the job's workspace manifest: the primary (writable) repo, plus
     // any additional repos the coordinating issue declares in a `temper:workspace`
     // metadata block (ADR 0023). Absent that block, the manifest is a single
-    // writable primary — the degenerate single-repo job.
-    let coordination_key = pr_correlation_key(&item.kind, number);
+    // writable primary — the degenerate single-repo job. PR-targeted jobs inherit
+    // the implementation PR's stamped correlation key when present so PR-head
+    // repair work shares the source issue's engineer workstream.
+    let coordination_key = inherited_pull_request_coordination_key(item, &artifact.body)
+        .unwrap_or_else(|| pr_correlation_key(&item.kind, number));
     let branch_hint = pr_branch_hint(&item.kind, number);
     let workspace = build_workspace_manifest(
         forge,
@@ -165,6 +169,19 @@ pub(crate) enum EnrichOutcome {
 fn is_writable_issue_job(item: &WorkItem, context: &JobContext) -> bool {
     matches!(item.target, ArtifactSource::Issue { .. })
         && context.checkout_capability.as_deref() == Some("writable")
+}
+
+fn inherited_pull_request_coordination_key(item: &WorkItem, artifact_body: &str) -> Option<String> {
+    if !matches!(item.target, ArtifactSource::PullRequest { .. }) {
+        return None;
+    }
+
+    parse_metadata_block(artifact_body)
+        .ok()
+        .flatten()
+        .and_then(|metadata| metadata.correlation_key)
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
 }
 
 async fn implementation_pull_request_exists_for_correlation<F: Forge + ?Sized>(

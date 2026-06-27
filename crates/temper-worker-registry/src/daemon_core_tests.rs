@@ -51,6 +51,68 @@ fn coordinated_job_dispatches_only_to_an_all_repo_capable_worker() {
 }
 
 #[test]
+fn engineer_source_issue_and_pr_repair_share_one_workstream_slot() {
+    let mut core = DaemonCore::new();
+    core.coordinator_mut()
+        .register(&register("engineer-1", "engineer", "ai/temper", 3));
+
+    core.enqueue_job(
+        "ai/temper/issue-463/engineer/code_ready",
+        "engineer",
+        "ai/temper",
+        artifact(),
+        coordinated_payload("pr-for-code-463", &["ai/temper"]),
+    );
+    core.enqueue_job(
+        "ai/temper/pull_request-464/engineer/pr_ci_failed",
+        "engineer",
+        "ai/temper",
+        artifact(),
+        coordinated_payload("pr-for-code-463", &["ai/temper"]),
+    );
+    core.enqueue_job(
+        "ai/temper/issue-999/engineer/code_ready",
+        "engineer",
+        "ai/temper",
+        artifact(),
+        coordinated_payload("pr-for-code-999", &["ai/temper"]),
+    );
+
+    match core.handle(poll("engineer-1")) {
+        Some(WorkerProtocolMessage::Assign(assign)) => {
+            assert_eq!(assign.job_id, "ai/temper/issue-463/engineer/code_ready")
+        }
+        other => panic!("expected source issue assign, got {other:?}"),
+    }
+    // Capacity is still available, but the PR repair job shares the issue job's
+    // engineer workstream key, so the unrelated engineer job gets the next slot.
+    match core.handle(poll("engineer-1")) {
+        Some(WorkerProtocolMessage::Assign(assign)) => {
+            assert_eq!(assign.job_id, "ai/temper/issue-999/engineer/code_ready")
+        }
+        other => panic!("expected unrelated assign, got {other:?}"),
+    }
+
+    assert_eq!(core.in_flight_role_count("engineer"), 2);
+    assert_eq!(
+        core.in_flight_job("ai/temper/pull_request-464/engineer/pr_ci_failed"),
+        None
+    );
+    assert_eq!(
+        core.queued_jobs()
+            .iter()
+            .map(|job| job.job_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ai/temper/pull_request-464/engineer/pr_ci_failed"]
+    );
+    assert_error(
+        core.handle(poll("engineer-1")),
+        ErrorCode::PollTimeout,
+        "no work available",
+    );
+}
+
+#[test]
 fn assigned_job_is_recoverable_as_in_flight() {
     let mut core = DaemonCore::new();
     core.coordinator_mut()
