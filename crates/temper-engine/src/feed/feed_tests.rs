@@ -392,12 +392,19 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
             .await
             .expect("repository is created")
             .id;
+        let source_coordination_key = "pr-for-code-226";
         let pull_request = forge
             .create_pull_request(
                 &repo,
                 CreatePullRequest {
                     title: "Implement #226".to_string(),
-                    body: "Applied the change.".to_string(),
+                    body: format!(
+                        "Applied the change.\n\n{}",
+                        render_metadata_block(&WorkflowMetadata {
+                            correlation_key: Some(source_coordination_key.to_string()),
+                            ..WorkflowMetadata::default()
+                        })
+                    ),
                     source: BranchRef {
                         repository_id: repo.clone(),
                         branch: "agent/pr-for-code-226".to_string(),
@@ -473,12 +480,9 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
         assert_eq!(freshness.queue_condition.as_deref(), Some("ci_failed"));
         assert_eq!(freshness.pull_request_id, pull_request.id.as_str());
         assert_eq!(freshness.head_sha, pull_request.head_sha);
-        let primary = context
-            .workspace
-            .as_ref()
-            .expect("manifest present")
-            .primary()
-            .expect("primary repo present");
+        let workspace = context.workspace.as_ref().expect("manifest present");
+        assert_eq!(workspace.coordination_key, source_coordination_key);
+        let primary = workspace.primary().expect("primary repo present");
         assert!(primary.is_writable());
         assert_eq!(
             primary.branch_hint.as_deref(),
