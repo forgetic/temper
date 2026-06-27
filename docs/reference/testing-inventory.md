@@ -84,28 +84,57 @@ Total: 1,982 test cases across 383 files; 19 are ignored live tests.
   `WorkerMachine`/`WorkerShell` over in-process transport.
 - Web UI: Rust server/read-model tests plus Vitest reducer, feed-contract, and
   happy-dom component tests protect both event shapes and rendered behavior.
-- Live capstones: ignored root tests prove real Forgejo, real git, real
-  webhooks, real host-mode Actions CI, and real `temper` binaries.
+- Default live capstones plus the manual live lane prove the residual real-world
+  risks: real Forgejo, real git, real webhooks, host-mode Actions CI, binary
+  wiring, and provider behavior.
 
 ## Ignored live suites
 
-Run the calibrated Forgejo set with `cargo dev-test-e2e`; it also executes the
-provider smoke tests, which must self-skip unless their opt-in env is present.
+Run the default live capstone lane with `cargo dev-test-e2e-capstones` (or the
+short `cargo dev-test-e2e` shorthand). Run every ignored/manual live test with
+`cargo dev-test-e2e-all`; that lane also executes provider smoke tests, which
+must self-skip unless their opt-in env is present.
+
+### Lane inventory note
+
+- **Default live capstones** should assert only real-stack risks that still need
+  routine proof after the hermetic suite passes: daemon topology with webhook,
+  git auth, host-mode Actions red→green merge gating; `temper init --apply`
+  provisioning/config/daemon boot; and the temporary checkpointed `temper run`
+  fake-LLM PR handoff until a hermetic standalone harness replaces it.
+- **Manual/all-e2e live tests** hold the remaining ignored scenarios: extra root
+  Forgejo stories, provider/OAuth probes, lower-level Forgejo fixture smokes,
+  provisioning edge cases, CI web-UI checks, and diagnostic/preflight coverage.
+  These scenarios are not deleted or deprecated by the slim full lane; they are
+  explicit because they are slower, environment-sensitive, redundant with
+  hermetic coverage, or useful mainly when debugging the live fixture stack.
+- **Future hermetic real-stack tests** should absorb assertions about workflow
+  logic, retry/idempotency, role routing, CLI artifact validation, worker/daemon
+  protocol behavior, and provider request shaping whenever those assertions can
+  be proven with memory/filesystem forges, fake HTTP, local git, in-process
+  transports, jig fake LLMs, or simulation without live Forgejo/provider state.
+
+### Current ignored live files
 
 - `tests/basic_delivery_forgejo_e2e.rs` — full `temper init` + standalone run,
-  fake LLM, real Forgejo, real Actions, and merge.
+  fake LLM, real Forgejo, real Actions, and merge (manual/all-e2e lane).
 - `tests/daemon_forgejo_e2e.rs` — daemon binary + deterministic wire worker,
-  happy path and CI red-then-green.
+  happy path and CI red-then-green. Only
+  `daemon_forgejo_ci_fails_then_passes_converges` is in the default capstone
+  lane; the happy path remains in manual/all-e2e.
 - `tests/init_forgejo_e2e.rs` — `temper init --apply` local artifacts,
-  live Forgejo state, idempotency, and daemon boot.
+  live Forgejo state, idempotency, and daemon boot (default capstone lane).
 - `tests/run_forgejo_e2e.rs` — single-process `temper run` with fake LLM,
-  checkpointed PR handoff, and provider-failure retry.
+  checkpointed PR handoff, and provider-failure retry. Only
+  `temper_run_opens_pr_from_checkpointed_product_diff_via_fake_llm` is in the
+  default capstone lane; `llm_server_error_requeues_claimed_issue` remains in
+  manual/all-e2e.
 - `crates/temper-testing/tests/forgejo_*.rs` — server, runner, provision,
-  PR-prep, CI web-UI, and parallel-fixture preflights.
+  PR-prep, CI web-UI, and parallel-fixture preflights (manual/all-e2e lane).
 - `crates/temper-forge-forgejo/tests/live.rs` — provider smoke against a live
-  Forgejo fixture.
+  Forgejo fixture (manual/all-e2e lane).
 - `crates/temper-provision-forgejo-cli/tests/existing_repo_access.rs` — live
-  existing-repository provisioning cases.
+  existing-repository provisioning cases (manual/all-e2e lane).
 - `crates/temper-agent/tests/*oauth_live.rs` and
   `crates/temper-agent/tests/jig_request_oracle.rs` — real provider/OAuth
-  checks, each gated by an explicit environment variable.
+  checks, each gated by an explicit environment variable (manual/all-e2e lane).

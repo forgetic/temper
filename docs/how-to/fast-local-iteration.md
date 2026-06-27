@@ -28,10 +28,23 @@ cargo dev-test-build
 Use it before the full suite when you want `cargo dev-test-full` to start with
 fresh test artifacts already compiled.
 
-For the calibrated ignored Forgejo/e2e suite, use the dedicated nextest profile:
+For the default live Forgejo capstones, use:
 
 ```sh
-cargo dev-test-e2e
+cargo dev-test-e2e-capstones
+```
+
+This runs only the three ignored capstone tests named in the
+`e2e-capstones` nextest profile: daemon CI red→green convergence,
+`temper init --apply`, and the checkpointed `temper run` fake-LLM PR handoff.
+The shorter `cargo dev-test-e2e` shorthand points at this same capstone lane.
+
+For every ignored/manual live test, including lower-level Forgejo fixture
+smokes, provisioning checks, provider/OAuth self-skipping probes, and the root
+Forgejo scenarios outside the capstone list, use:
+
+```sh
+cargo dev-test-e2e-all
 ```
 
 This expands to `cargo nextest run --workspace --run-ignored only -P e2e`
@@ -45,7 +58,9 @@ For the full self-contained local suite:
 cargo dev-test-full
 ```
 
-`cargo dev-test-full` runs the quick suite plus the ignored Forgejo-based
-integration tests. It may boot throwaway Forgejo servers, host-mode
-`forgejo-runner` processes, daemon processes, and worker processes (see
+`cargo dev-test-full` runs `cargo dev-test-quick --no-fail-fast` and then
+`cargo dev-test-e2e-capstones`. It deliberately does **not** use
+`--run-ignored all`: excluded live scenarios are still present in
+`cargo dev-test-e2e-all` until their assertions are either promoted to the
+capstone list or covered by future hermetic real-stack tests (see
 [run-daemon-e2e.md](run-daemon-e2e.md)).

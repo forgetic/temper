@@ -174,6 +174,9 @@ temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-c
 # snapshots the real environment into a CliEnv via temper-config's env shims, so
 # it depends on temper-config in addition to the temper-cli dispatcher.
 temper = ["temper-cli", "temper-config"]
+# Repo-local developer command driver for Cargo aliases that need to sequence
+# other Cargo aliases. No internal deps.
+temper-dev = []
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
 temper-sim = ["temper-engine", "temper-engine-io", "temper-protocol-worker"]
 # The web dashboard (read-model, SSE fan-out, static UI, log-tail feed). A
