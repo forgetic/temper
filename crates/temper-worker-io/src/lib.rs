@@ -49,6 +49,7 @@ pub mod http_client;
 pub mod machine;
 pub mod queue;
 pub mod runtime;
+pub mod spawn;
 pub mod timer;
 
 pub use engine::{Executor, drive, drive_sync};
@@ -59,4 +60,5 @@ pub use runtime::{
     EngineRuntime, block_on, block_on_runtime, block_on_runtime_with, block_on_with, build_runtime,
     current_cx, engine_now, sleep_for, timer_now,
 };
+pub use spawn::Spawner;
 pub use timer::arm_timer;

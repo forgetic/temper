@@ -8,22 +8,26 @@
 //! [`LabRuntime`]: seeded deterministic scheduling, a virtual clock that
 //! auto-advances to timer deadlines (long-poll waits complete in
 //! microseconds of wall time), and optional chaos injection at scheduling
-//! points. HTTP traffic runs through the **production h1 connection code**
-//! (`Http1Server::serve` / `Http1Client::request`) over in-memory
-//! [`VirtualTcpStream`] pairs, so the only production code not exercised is
-//! the OS accept loop.
+//! points. HTTP traffic for the hand-rolled worker simulants runs through the
+//! **production h1 connection code** (`Http1Server::serve` /
+//! `Http1Client::request`) over in-memory [`VirtualTcpStream`] pairs, so the
+//! only production code not exercised on that path is the OS accept loop. The
+//! higher-fidelity real-worker harness in [`real_worker`] instead runs the
+//! production `WorkerMachine`/`WorkerShell` loop over the shared in-process
+//! daemon transport, trading away the HTTP byte round-trip to exercise the real
+//! worker control loop under the same lab scheduler.
 //!
 //! Determinism contract: the same seed and scenario produce the identical
 //! schedule, trace fingerprint, and observable responses. Failures reproduce
 //! from `(seed, scenario)` alone.
 
 pub mod model;
+pub mod real_worker;
 pub mod scenarios;
 pub mod worker;
 
-// Re-export the shared co-resident daemon carrier so upcoming real-worker sim
-// scenarios can wire `temper_worker::WorkerShell` without depending on CLI
-// standalone internals. Existing simulants below still exercise the HTTP path.
+// Re-export the shared co-resident daemon carrier used by the real-worker sim
+// harness. Existing hand-rolled simulants below still exercise the HTTP path.
 pub use temper_daemon_transport::InProcessTransport;
 
 use std::net::SocketAddr;

@@ -17,7 +17,7 @@ use temper_protocol_worker::JobResult;
 
 /// Recorded world state. All maps are ordered so snapshots compare and print
 /// deterministically.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ModelState {
     /// Jobs the coordinator handed to the daemon.
     pub enqueued: BTreeSet<String>,

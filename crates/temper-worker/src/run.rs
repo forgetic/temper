@@ -4,14 +4,16 @@
 //! [`WorkerMachine`](crate::worker_machine::WorkerMachine), the imperative
 //! [`WorkerShell`](crate::worker_shell::WorkerShell), and a completion queue,
 //! then hands them to [`temper_worker_io::drive`]. It must run inside an engine
-//! task (the drive loop reads the runtime clock and the shell spawns I/O), so
-//! callers wrap it in [`temper_worker_io::block_on_with`] and pass the
-//! [`RuntimeHandle`] it yields.
+//! task (the drive loop reads the runtime clock and the shell spawns I/O). The
+//! HTTP entry point takes the [`RuntimeHandle`] from
+//! [`temper_worker_io::block_on_with`]; the transport-generic entry point takes
+//! any [`temper_worker_io::Spawner`], including the lab spawner used by
+//! `temper-sim`.
 
 use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
-use temper_worker_io::{channel, drive};
+use temper_worker_io::{Spawner, channel, drive};
 
 use crate::client::WorkerError;
 use crate::config::{WorkerConfig, WorkerParams};
@@ -42,11 +44,11 @@ where
 }
 
 /// [`run_worker`] over an arbitrary [`Transport`] — the seam the unified
-/// single-process mode uses to point the worker at a co-resident daemon over an
-/// in-memory channel instead of HTTP. The protocol and the whole machine/shell
-/// loop are identical; only the carrier differs.
-pub async fn run_worker_with_transport<E, T>(
-    handle: RuntimeHandle,
+/// single-process mode and deterministic simulation use to point the worker at
+/// a co-resident daemon over an in-memory channel instead of HTTP. The protocol
+/// and the whole machine/shell loop are identical; only the carrier differs.
+pub async fn run_worker_with_transport<E, T, S>(
+    spawner: S,
     config: WorkerConfig,
     executor: Arc<E>,
     transport: Arc<T>,
@@ -54,12 +56,18 @@ pub async fn run_worker_with_transport<E, T>(
 where
     E: JobExecutor + Send + Sync + 'static,
     T: Transport,
+    S: Spawner,
 {
     let params = WorkerParams::from_config(&config);
     let (cq_tx, cq_rx) = channel();
 
-    let shell =
-        WorkerShell::with_transport(handle, cq_tx, transport, config.worker_id.clone(), executor);
+    let shell = WorkerShell::with_transport(
+        spawner,
+        cq_tx,
+        transport,
+        config.worker_id.clone(),
+        executor,
+    );
     let machine = WorkerMachine::new(params);
 
     // drive() owns the loop; it returns when the machine stops or the queue
@@ -72,5 +80,6 @@ where
 mod tests {
     // Loop behavior is unit-tested on the pure WorkerMachine in
     // `worker_machine_tests.rs` (deterministic, runtime-free); end-to-end wiring
-    // against a real daemon is covered by `tests/fake_daemon.rs`.
+    // against a real daemon is covered by `tests/daemon_transport.rs` and the
+    // `temper-sim` real-worker harness.
 }

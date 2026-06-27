@@ -17,22 +17,22 @@ use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
 use temper_protocol_worker::WorkerProtocolMessage;
-use temper_worker_io::{CqSender, arm_timer};
+use temper_worker_io::{CqSender, Spawner, arm_timer};
 
 use crate::executor::{JobExecutor, job_result};
 use crate::transport::{HttpTransport, Transport};
 use crate::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 
-/// Performs the worker's I/O on the skein runtime.
-pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport> {
-    handle: RuntimeHandle,
+/// Performs the worker's I/O on a skein spawn capability (production runtime or lab).
+pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner = RuntimeHandle> {
+    spawner: S,
     cq: CqSender<WorkerCompletion>,
     transport: Arc<T>,
     worker_id: String,
     executor: Arc<E>,
 }
 
-impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport> {
+impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, RuntimeHandle> {
     /// Builds the shell with the HTTP transport (split deployment). `daemon_url`
     /// is the base daemon URL; the worker posts every message to
     /// `<daemon_url>/v1/message`.
@@ -53,18 +53,18 @@ impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport> {
     }
 }
 
-impl<E: JobExecutor + Send + Sync + 'static, T: Transport> WorkerShell<E, T> {
+impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShell<E, T, S> {
     /// Builds the shell over an arbitrary [`Transport`] (e.g. the unified
     /// in-process transport that delivers to a co-resident `DaemonCore`).
     pub fn with_transport(
-        handle: RuntimeHandle,
+        spawner: S,
         cq: CqSender<WorkerCompletion>,
         transport: Arc<T>,
         worker_id: String,
         executor: Arc<E>,
     ) -> Self {
         Self {
-            handle,
+            spawner,
             cq,
             transport,
             worker_id,
@@ -82,15 +82,15 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport> WorkerShell<E, T> {
     {
         let transport = Arc::clone(&self.transport);
         let cq = self.cq.clone();
-        self.handle.spawn_with_cx(move |cx| async move {
+        self.spawner.spawn_task_with_cx(move |cx| async move {
             let decoded = transport.send(cx, message).await;
             let _ = cq.send(to_completion(decoded));
         });
     }
 }
 
-impl<E: JobExecutor + Send + Sync + 'static, T: Transport> temper_worker_io::Executor<WorkerMachine>
-    for WorkerShell<E, T>
+impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
+    temper_worker_io::Executor<WorkerMachine> for WorkerShell<E, T, S>
 {
     fn execute(&self, request: WorkerRequest) {
         match request {
@@ -118,19 +118,19 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport> temper_worker_io::Exe
                 let cq = self.cq.clone();
                 let worker_id = self.worker_id.clone();
                 let job_id = assign.job_id.clone();
-                self.handle.spawn(async move {
+                self.spawner.spawn_task(async move {
                     let outcome = executor.execute(assign).await;
                     let result = job_result(&worker_id, &job_id, outcome);
                     let _ = cq.send(WorkerCompletion::JobFinished { job_id, result });
                 });
             }
             WorkerRequest::ArmPollTimer(delay) => {
-                arm_timer(&self.handle, &self.cq, delay, || {
+                arm_timer(&self.spawner, &self.cq, delay, || {
                     WorkerCompletion::PollTimer
                 });
             }
             WorkerRequest::ArmHeartbeatTimer(delay) => {
-                arm_timer(&self.handle, &self.cq, delay, || {
+                arm_timer(&self.spawner, &self.cq, delay, || {
                     WorkerCompletion::HeartbeatTimer
                 });
             }

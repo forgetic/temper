@@ -185,10 +185,10 @@ temper = ["temper-cli", "temper-config"]
 # other Cargo aliases. No internal deps.
 temper-dev = []
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
-# It also depends on the reusable co-resident worker→daemon carrier so the next
-# real-worker sim scenario can use the production WorkerShell without reaching
-# through CLI internals; no real-worker scenario is added here.
-temper-sim = ["temper-daemon-transport", "temper-engine", "temper-engine-io", "temper-protocol-worker"]
+# It keeps the hand-rolled HTTP worker simulants for cheap/misbehavior paths and
+# also composes the production WorkerMachine/WorkerShell over the reusable
+# in-process daemon carrier for high-fidelity worker scenarios.
+temper-sim = ["temper-daemon-transport", "temper-engine", "temper-engine-io", "temper-protocol-worker", "temper-worker"]
 # The web dashboard (read-model, SSE fan-out, static UI, log-tail feed). A
 # depgraph leaf: it is a UI consumer, never depended-upon by a tier crate. It
 # runs its OWN dependency-light blocking std::net HTTP+SSE server (no skein —

@@ -11,8 +11,9 @@
 //! Because it is pure, the whole worker control flow — the poll/dispatch/result
 //! interleavings the tokio `select!` loop used to hide — is unit-testable with
 //! [`temper_worker_io::drive_sync`]: feed a completion sequence and assert on the
-//! emitted requests, with no runtime and no races. That is also what makes it a
-//! target for skein-lab simulation later.
+//! emitted requests, with no runtime and no races. The production shell is also
+//! driven under `temper-sim`'s skein-lab runtime for high-fidelity worker/daemon
+//! scenarios over in-process transport.
 
 use std::collections::BTreeSet;
 
