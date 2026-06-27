@@ -288,10 +288,10 @@ mod tests {
 
     #[test]
     fn writable_jobs_do_not_get_hooks_by_default() {
-        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = std::env::temp_dir();
         let hooks = hooks_for_context(
             &context(Some("writable")),
-            temp.path(),
+            &cwd,
             Arc::new(NoopProgress),
             None,
             Arc::new(AtomicU32::new(2)),
@@ -304,10 +304,10 @@ mod tests {
 
     #[test]
     fn opt_in_writable_jobs_get_checkpoint_and_turn_hooks() {
-        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = std::env::temp_dir();
         let hooks = hooks_for_context(
             &context(Some("pull_request_writable")),
-            temp.path(),
+            &cwd,
             Arc::new(NoopProgress),
             None,
             Arc::new(AtomicU32::new(2)),

@@ -18,7 +18,7 @@
 //! --subagents <on|off>        enable investigate/read-only subagents
 //! --deadline-unix-seconds <N> job deadline/lease expiry hint
 //! --checkpoints <on|off>    enable model/backstop checkpoints (default off)
-//! --checkpoint-interval <DUR> checkpoint cadence when checkpoints are on, e.g. `60s`, `5m`
+//! --checkpoint-interval <DUR> checkpoint cadence when checkpoints are on
 //! --freshness-url <URL>      optional daemon PR freshness check endpoint
 //! --capture-dir <DIR>         optional debug capture / prompt-overlay dir
 //! ```
