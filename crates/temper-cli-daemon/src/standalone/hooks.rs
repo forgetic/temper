@@ -358,6 +358,7 @@ mod tests {
             allowed_verdicts: Vec::new(),
             guidance: WorkspaceGuidance::default(),
             pull_request_freshness: None,
+            agent_session: None,
         }
     }
 }

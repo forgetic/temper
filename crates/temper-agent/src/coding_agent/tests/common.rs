@@ -70,6 +70,7 @@ pub(super) fn context_with_writable_dir(dir: &str) -> WorkspaceContext {
         allowed_verdicts: Vec::new(),
         guidance: WorkspaceGuidance::default(),
         pull_request_freshness: None,
+        agent_session: None,
     }
 }
 

@@ -99,7 +99,7 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 250;
 // ---------------------------------------------------------------------------
 
 pub use temper_protocol_agent::{
-    WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult,
+    AgentSessionState, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult,
     WorkspaceResultChild, WorkspaceWorkItem,
 };
 

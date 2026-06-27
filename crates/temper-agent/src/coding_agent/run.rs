@@ -134,7 +134,7 @@ pub async fn run_coding_agent_native_with_hooks(
         api_key: Some(provider_config.resolve_bearer().await?),
         temperature: provider_config.temperature(),
         thinking_level: provider_config.coding_thinking_level(),
-        headers: provider_config.request_headers(),
+        headers: provider_config.request_headers_for_session(context.agent_session.as_ref()),
         ..tongs::provider::StreamOptions::default()
     };
 

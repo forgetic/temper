@@ -235,6 +235,36 @@ fn same_role_same_workstream_is_not_dispatched_concurrently() {
 }
 
 #[test]
+fn completed_paused_workstream_does_not_suppress_later_same_key_job() {
+    let mut coordinator = DispatchCoordinator::new();
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));
+    coordinator.enqueue(coordinated_workstream(
+        "source-issue-job",
+        "engineer",
+        "ai/temper",
+        "pr-for-code-483",
+    ));
+
+    assert_eq!(
+        coordinator.dispatch_for_worker("worker-a").unwrap().job_id,
+        "source-issue-job"
+    );
+    coordinator.complete("source-issue-job").unwrap();
+    assert_eq!(coordinator.in_flight_len(), 0);
+
+    coordinator.enqueue(coordinated_workstream(
+        "pr-feedback-job",
+        "engineer",
+        "ai/temper",
+        "pr-for-code-483",
+    ));
+    assert_eq!(
+        coordinator.dispatch_for_worker("worker-a").unwrap().job_id,
+        "pr-feedback-job"
+    );
+}
+
+#[test]
 fn complete_routes_to_the_correct_worker_and_frees_capacity() {
     let mut coordinator = DispatchCoordinator::new();
     coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));

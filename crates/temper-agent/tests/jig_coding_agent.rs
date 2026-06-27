@@ -128,6 +128,7 @@ fn workspace_context() -> WorkspaceContext {
             tool_constraints: vec!["Do not run git commit.".to_string()],
         },
         pull_request_freshness: None,
+        agent_session: None,
     }
 }
 
@@ -262,6 +263,7 @@ fn multi_repo_context() -> WorkspaceContext {
             tool_constraints: vec!["Do not run git commit.".to_string()],
         },
         pull_request_freshness: None,
+        agent_session: None,
     }
 }
 
