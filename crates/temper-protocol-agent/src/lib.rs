@@ -111,6 +111,30 @@ pub const CONTEXT_ENV: &str = "TEMPER_CODING_WORKSPACE_CONTEXT";
 /// Legacy; the worker now passes the path as the `--result` CLI flag.
 pub const RESULT_ENV: &str = "TEMPER_CODING_WORKSPACE_RESULT";
 
+/// Durable per-workstream agent-session state that the worker can persist while
+/// an implementation PR waits for CI/review/landing, then pass back to a later
+/// PR-feedback run for the same `(role, coordination_key)`.
+///
+/// The protocol keeps this deliberately small and provider-agnostic. `session_id`
+/// is the stable host-visible id (also useful as a provider session header when
+/// supported); `state` is an optional extension bag for future agents that need
+/// more than an id. Agents that do not understand session state can ignore it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AgentSessionState {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<serde_json::Value>,
+}
+
+impl AgentSessionState {
+    pub fn new(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            state: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PullRequestFreshness {
     pub repository_id: String,
@@ -161,6 +185,12 @@ pub struct WorkspaceContext {
     /// revalidate these before pushing checkpoints; absent for ordinary jobs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request_freshness: Option<PullRequestFreshness>,
+    /// Persisted agent-session state for this workstream, when the worker has a
+    /// saved or newly-created session to attach. This is host control-plane
+    /// state, not prompt context; the reference agent consumes it for provider
+    /// session identity and does not render it into the work-item prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session: Option<AgentSessionState>,
 }
 
 impl WorkspaceContext {

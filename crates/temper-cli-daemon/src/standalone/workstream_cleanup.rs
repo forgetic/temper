@@ -160,6 +160,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = workstream_path(&temp);
         std::fs::create_dir_all(path.join("temper")).expect("workspace dir");
+        let store = save_session(&temp);
 
         let outcome = cleanup_engineer_workstream_for_merged_pr_sync(
             temp.path(),
@@ -175,6 +176,7 @@ mod tests {
             )
         );
         assert!(!path.exists());
+        assert_eq!(store.load_sync().expect("session removed"), None);
     }
 
     #[test]
@@ -231,6 +233,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = workstream_path(&temp);
         std::fs::create_dir_all(&path).expect("workspace dir");
+        let store = save_session(&temp);
 
         let outcome = cleanup_engineer_workstream_for_merged_pr_sync(
             temp.path(),
@@ -246,6 +249,7 @@ mod tests {
             )
         );
         assert!(path.exists());
+        assert!(store.load_sync().expect("session preserved").is_some());
     }
 
     fn workstream_path(temp: &tempfile::TempDir) -> PathBuf {
@@ -255,6 +259,21 @@ mod tests {
             "pr-for-code-477",
         )
         .expect("scoped path")
+    }
+
+    fn save_session(temp: &tempfile::TempDir) -> temper_worker::AgentSessionStore {
+        let store = temper_worker::AgentSessionStore::for_workspace_root(
+            temp.path(),
+            ENGINEER_WORKSTREAM_ROLE,
+            "pr-for-code-477",
+        )
+        .expect("session store");
+        store
+            .save_sync(&temper_protocol_agent::AgentSessionState::new(
+                "session-477",
+            ))
+            .expect("save session");
+        store
     }
 
     fn pull_request(

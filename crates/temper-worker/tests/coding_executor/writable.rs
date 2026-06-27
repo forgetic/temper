@@ -251,6 +251,74 @@ fn pr_writable_prepares_existing_pr_head_and_pushes_fix_to_same_branch() {
 }
 
 #[test]
+fn pr_feedback_resumes_saved_engineer_session_for_same_coordination_key() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let branch = "agent/pr-for-code-7";
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
+
+        expect_success(executor.execute(assign(branch, "pr-for-code-7")).await);
+        let initial_session = agent
+            .captured_context()
+            .agent_session
+            .expect("issue job received an agent session");
+
+        // Make the PR-head repair job produce a fresh diff while keeping the
+        // same coordination key and saved session.
+        fixture.seed_pr_head_branch(branch);
+        expect_success(
+            executor
+                .execute(pr_fix_assign(branch, "pr-for-code-7"))
+                .await,
+        );
+        let feedback_session = agent
+            .captured_context()
+            .agent_session
+            .expect("feedback job received an agent session");
+
+        assert_eq!(feedback_session, initial_session);
+    });
+}
+
+#[test]
+fn corrupt_session_state_falls_back_to_new_session_for_pr_feedback() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let branch = "agent/pr-for-code-7";
+        fixture.seed_pr_head_branch(branch);
+        let store = temper_worker::AgentSessionStore::for_workspace_root(
+            &fixture.workspace_root,
+            "engineer",
+            "pr-for-code-7",
+        )
+        .expect("session store");
+        fs::create_dir_all(store.path().parent().expect("session parent"))
+            .expect("create corrupt session parent");
+        fs::write(store.path(), "{not valid json").expect("write corrupt session");
+
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
+        expect_success(
+            executor
+                .execute(pr_fix_assign(branch, "pr-for-code-7"))
+                .await,
+        );
+
+        let fallback_session = agent
+            .captured_context()
+            .agent_session
+            .expect("feedback job received fallback session");
+        assert!(!fallback_session.session_id.trim().is_empty());
+        assert_eq!(
+            store.load_sync().expect("saved fallback session"),
+            Some(fallback_session),
+            "successful feedback run should replace the corrupt saved state"
+        );
+    });
+}
+
+#[test]
 fn pr_writable_no_diff_on_existing_pr_head_is_not_success() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

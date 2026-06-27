@@ -15,6 +15,7 @@
 //! small ones stay as-is.
 
 pub mod agent_runner;
+pub mod agent_session;
 pub mod client;
 pub mod coding_executor;
 pub mod config;
@@ -33,6 +34,7 @@ pub use agent_runner::{
     AgentRunError, AgentRunner, LoggingProgressSink, NullProgressSink, ProgressSink,
     WorkspaceResult,
 };
+pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
 pub use config::{
     AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,

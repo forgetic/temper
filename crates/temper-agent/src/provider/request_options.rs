@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use secrecy::ExposeSecret;
+use temper_protocol_agent::AgentSessionState;
 use tongs::model::ThinkingLevel;
 
 use super::auth::AuthMode;
@@ -40,6 +41,27 @@ impl ProviderConfig {
             AuthMode::AnthropicOAuth { .. } => anthropic_oauth::request_headers(self.model_id()),
             AuthMode::ApiKey { .. } | AuthMode::ChatGptOAuth { .. } => HashMap::new(),
         }
+    }
+
+    /// Extra per-request headers with durable workstream session identity
+    /// applied when the backend supports one. The current session-aware backend
+    /// is Anthropic OAuth / Claude Code, whose API accepts
+    /// `X-Claude-Code-Session-Id`; other providers keep their default headers.
+    pub(crate) fn request_headers_for_session(
+        &self,
+        session: Option<&AgentSessionState>,
+    ) -> HashMap<String, String> {
+        let mut headers = self.request_headers();
+        if matches!(self.auth(), AuthMode::AnthropicOAuth { .. })
+            && let Some(session) = session
+            && !session.session_id.trim().is_empty()
+        {
+            headers.insert(
+                "X-Claude-Code-Session-Id".to_string(),
+                session.session_id.clone(),
+            );
+        }
+        headers
     }
 
     /// The mandatory first `system` block for this mode, if any.

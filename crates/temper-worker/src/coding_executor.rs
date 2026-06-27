@@ -16,9 +16,11 @@ use crate::workspace::{
 
 mod context;
 mod outcome;
+mod session;
 
 use context::build_workspace_context;
 use outcome::writable_outcome;
+use session::{attach_agent_session, persist_after_success};
 
 /// Configuration for the real coding-job executor.
 ///
@@ -230,7 +232,7 @@ async fn execute<R: AgentRunner>(
         Err(outcome) => return outcome,
     };
 
-    let workspace_context = build_workspace_context(
+    let mut workspace_context = build_workspace_context(
         &role,
         &queue,
         &action,
@@ -243,6 +245,18 @@ async fn execute<R: AgentRunner>(
         guidance.as_deref(),
         pull_request_freshness.as_ref(),
     );
+    let agent_session = match attach_agent_session(
+        &mut workspace_context,
+        &config.workspace_root,
+        &role,
+        &coordination_key,
+        mode,
+    )
+    .await
+    {
+        Ok(agent_session) => agent_session,
+        Err(outcome) => return outcome,
+    };
 
     let pushed_heads = Arc::new(PushedHeadTracker::default());
     let progress_for_runner: Arc<dyn ProgressSink> = Arc::new(TrackingProgressSink::new(
@@ -266,7 +280,7 @@ async fn execute<R: AgentRunner>(
 
     let latest_self_pushed_sha = pushed_heads.latest();
 
-    match mode {
+    let outcome = match mode {
         JobMode::Writable | JobMode::PullRequestWritable => {
             writable_outcome(
                 &prepared,
@@ -290,7 +304,12 @@ async fn execute<R: AgentRunner>(
             )
             .await
         }
+    };
+
+    if let Some(failure) = persist_after_success(agent_session.as_ref(), &outcome).await {
+        return failure;
     }
+    outcome
 }
 
 /// One prepared sibling checkout plus its manifest entry.

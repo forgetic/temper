@@ -100,6 +100,7 @@ pub(super) fn build_workspace_context(
             ..WorkspaceGuidance::default()
         },
         pull_request_freshness: pull_request_freshness.map(agent_pull_request_freshness),
+        agent_session: None,
     }
 }
 
