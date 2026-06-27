@@ -6,15 +6,11 @@ use super::*;
 use serde_json::json;
 use std::sync::Arc;
 use temper_forge::{
-    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest, CreateRepository,
-    Forge, IssueState, ItemNumber, MergeMethod, MergePullRequest, RepositoryId, UpdateIssue,
-    UpdatePullRequest,
+    BranchRef, CreatePullRequest, CreateRepository, Forge, IssueState, ItemNumber, RepositoryId,
+    UpdateIssue, UpdatePullRequest,
 };
-use temper_forge_memory::{FaultOp, MemoryForge};
-use temper_protocol_worker::{
-    Artifact, Capability, Capacity, ErrorCode, JobContext, JobResult, Poll, Register, ResultStatus,
-    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
-};
+use temper_forge_memory::MemoryForge;
+use temper_protocol_worker::{Artifact, JobContext};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, CompiledWorkflow, QueueId, RawWorkflowSpec, RoleId,
     ValidatedWorkflow, WorkflowMetadata, render_metadata_block,

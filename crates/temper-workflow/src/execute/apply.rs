@@ -21,7 +21,6 @@ use super::verify::AppliedState;
 use super::{ExecutionError, Executor, Loaded};
 use crate::context::CreateIssuesChild;
 use crate::ids::RoleId;
-use crate::metadata::parse_metadata_block;
 use crate::plan::{TransitionPlan, WorkflowEffect};
 use temper_forge::{
     CreatePullRequest, Forge, ForgeError, IssueState, RepositoryId, ReviewDecision, UpdateIssue,
@@ -356,8 +355,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         }
     }
 
-    /// Closes parent issues of a pull request after merge, reading the parent
-    /// list from the PR's workflow metadata block.
+    /// Closes parent issues of a pull request after merge, using the parent
+    /// list parsed during the pre-merge load/classification.
     ///
     /// For each same-repo parent that is still open, closes the issue and
     /// removes the `in-progress` label. Already-closed parents are idempotent
@@ -371,25 +370,12 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         if !close {
             return Ok(());
         }
-        let Loaded::PullRequest { id, classified, .. } = loaded else {
+        let Loaded::PullRequest { classified, .. } = loaded else {
             return Err(ExecutionError::UnsupportedEffect {
                 effect: WorkflowEffect::CloseParentIssues,
             });
         };
-        // Read the PR body to get metadata
-        let pull_request = self.forge.get_pull_request(id).await?.ok_or_else(|| {
-            ExecutionError::TargetMissing {
-                target: classified.source,
-            }
-        })?;
-        let Some(metadata) =
-            parse_metadata_block(&pull_request.body).map_err(|error| ExecutionError::Backend {
-                message: format!("invalid PR workflow metadata: {error}"),
-            })?
-        else {
-            return Ok(()); // No metadata block — nothing to close, not an error
-        };
-        for parent in &metadata.parents {
+        for parent in &classified.metadata.parents {
             // Resolve same-repo shorthand; cross-repo parents are skipped for now
             if !parent.is_in_repository(repo_id) {
                 continue;

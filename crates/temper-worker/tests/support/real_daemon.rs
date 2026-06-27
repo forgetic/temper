@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use skein::cx::Cx;
-use temper_engine::Daemon;
+use temper_engine::{Daemon, ResultApplier};
 use temper_protocol_worker::{Assign, JobResult, WorkerProtocolMessage};
 use temper_worker::transport::Transport;
 
@@ -55,7 +55,21 @@ pub struct DaemonHarness {
 impl DaemonHarness {
     /// Build a real daemon on the given runtime handle.
     pub fn start(handle: &skein::runtime::RuntimeHandle) -> Self {
-        let daemon = Arc::new(Daemon::new(Arc::new(handle.clone())));
+        Self::start_with_daemon(Arc::new(Daemon::new(Arc::new(handle.clone()))))
+    }
+
+    /// Build a real daemon with a caller-provided result applier.
+    pub fn start_with_applier(
+        handle: &skein::runtime::RuntimeHandle,
+        applier: Arc<dyn ResultApplier>,
+    ) -> Self {
+        Self::start_with_daemon(Arc::new(Daemon::with_applier(
+            Arc::new(handle.clone()),
+            applier,
+        )))
+    }
+
+    fn start_with_daemon(daemon: Arc<Daemon>) -> Self {
         let (result_tx, result_rx) = temper_engine_io::channel();
         Self {
             daemon,

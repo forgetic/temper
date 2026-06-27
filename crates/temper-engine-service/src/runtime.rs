@@ -179,6 +179,7 @@ async fn spawn_mechanical(
     Ok(Some(Arc::new(trigger)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn attach_webhook(
     daemon: Daemon,
     forge: Arc<dyn Forge>,

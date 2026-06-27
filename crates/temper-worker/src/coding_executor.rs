@@ -19,7 +19,7 @@ mod outcome;
 mod session;
 
 use context::build_workspace_context;
-use outcome::writable_outcome;
+use outcome::{WritableOutcomeRequest, writable_outcome};
 use session::{attach_agent_session, persist_after_success};
 
 /// Configuration for the real coding-job executor.
@@ -282,17 +282,17 @@ async fn execute<R: AgentRunner>(
 
     let outcome = match mode {
         JobMode::Writable | JobMode::PullRequestWritable => {
-            writable_outcome(
-                &prepared,
+            writable_outcome(WritableOutcomeRequest {
+                prepared: &prepared,
                 result,
-                &allowed_verdicts,
-                &coordination_key,
-                &artifact_item,
-                mode == JobMode::PullRequestWritable,
-                pull_request_freshness.as_ref(),
-                pr_freshness_guard.as_deref(),
-                latest_self_pushed_sha.as_deref(),
-            )
+                allowed_verdicts: &allowed_verdicts,
+                coordination_key: &coordination_key,
+                artifact_item: &artifact_item,
+                pull_request_fix: mode == JobMode::PullRequestWritable,
+                pull_request_freshness: pull_request_freshness.as_ref(),
+                freshness_guard: pr_freshness_guard.as_deref(),
+                latest_self_pushed_sha: latest_self_pushed_sha.as_deref(),
+            })
             .await
         }
         JobMode::ReadOnly | JobMode::PullRequestReadOnly => {
