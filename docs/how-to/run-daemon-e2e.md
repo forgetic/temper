@@ -16,23 +16,40 @@ quirks, read [Forgejo e2e fixture reference](../reference/forgejo-e2e-fixture.md
 For design rationale, read
 [Daemon e2e topology](../explanation/forgejo-e2e-topology.md).
 
-## Run the calibrated ignored Forgejo suite
+## Run the default live capstone lane
 
-Use the dedicated nextest profile when you want the whole ignored Forgejo/e2e
-set (the root daemon/init/run e2es plus the Forgejo smoke/preflight tests):
+Use the narrow capstone profile for the ignored live tests that run as part of
+`cargo dev-test-full`:
 
 ```sh
-cargo dev-test-e2e
+cargo dev-test-e2e-capstones
+# equivalent core command:
+cargo nextest run --workspace --run-ignored only -P e2e-capstones
+```
+
+For the daemon topology this lane runs only
+`daemon_forgejo_ci_fails_then_passes_converges`, the red→green Actions/merge
+capstone. The daemon happy path and other live scenarios remain available in
+the manual/all-e2e lane below.
+
+## Run every ignored live test
+
+Use the all-e2e profile when you want every ignored/manual live test: the root
+daemon/init/run e2es, Forgejo smoke/preflight tests, provisioning checks, and
+provider/OAuth probes that self-skip unless their opt-in env is present.
+
+```sh
+cargo dev-test-e2e-all
 # equivalent core command:
 cargo nextest run --workspace --run-ignored only -P e2e
 ```
 
-The `e2e` profile caps nextest at 4 test threads. That keeps the live Forgejo
-servers, host-mode runners, daemon/worker processes, and root-e2e lock waiters
-within the capacity of typical shared developer/CI hosts. The root package e2es
-still use nextest's `root-forgejo-e2e` test group (`max-threads = 1`) and the
-profile runs with fail-fast disabled, so the profile changes scheduling without
-hiding test failures.
+The `e2e` and `e2e-capstones` profiles cap nextest at 4 test threads. That
+keeps the live Forgejo servers, host-mode runners, daemon/worker processes,
+and root-e2e lock waiters within the capacity of typical shared developer/CI
+hosts. The root package e2es still use nextest's `root-forgejo-e2e` test group
+(`max-threads = 1`) and the profiles run with fail-fast disabled, so the
+profiles change scheduling without hiding test failures.
 
 ## Run both daemon scenarios
 
@@ -121,19 +138,19 @@ rm -rf /tmp/temper-daemon-forgejo-e2e-* /tmp/temper-forgejo-*
 
 ## Running it in CI
 
-Keep this suite separate from the default hermetic job. `cargo dev-test-full`
-includes ignored tests via `--run-ignored all`, but a dedicated Forgejo/e2e job
-should use the calibrated profile:
+Keep the default hermetic job separate from the live lanes. `cargo dev-test-full`
+runs the hermetic quick suite plus the three default live capstones; a dedicated
+exhaustive Forgejo/e2e job should use the all-e2e lane:
 
 1. allow pinned-binary resolution or pre-stage binaries with
    `BENCH_FORGEJO_BINARY` and `BENCH_FORGEJO_RUNNER_BINARY` (or the legacy
    `TEMPER_FORGEJO_*` aliases);
 2. run on a host that permits child processes, localhost ports, and host-mode
    CI jobs (no containers required by the runner label);
-3. invoke the calibrated nextest profile:
+3. invoke the all-e2e nextest profile:
 
    ```sh
-   cargo dev-test-e2e
+   cargo dev-test-e2e-all
    ```
 
    Use the expanded form (`cargo nextest run --workspace --run-ignored only -P e2e`)

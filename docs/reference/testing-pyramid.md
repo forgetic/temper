@@ -95,8 +95,10 @@ Use the aliases in `.cargo/config.toml`:
 cargo dev-check          # fast workspace type check
 cargo dev-test-quick     # default non-ignored suite via nextest
 cargo dev-test-build     # prebuild all test binaries
-cargo dev-test-e2e       # ignored Forgejo/provider profile
-cargo dev-test-full      # quick + ignored tests
+cargo dev-test-e2e-capstones  # ignored live capstones used by dev-test-full
+cargo dev-test-e2e            # short shorthand for the capstone lane
+cargo dev-test-e2e-all        # every ignored/manual live test
+cargo dev-test-full           # quick + ignored live capstones
 ```
 
 The web UI is separate from Cargo:
@@ -132,8 +134,9 @@ Weaknesses and debt:
   between memory, filesystem, Forgejo, and GitHub.
 - Root Forgejo e2es share patterns but not one common process/world harness.
   More of `tests/support/*` could move into `temper-testing`.
-- Ignored tests share one `--run-ignored` lane. Provider live tests rely on
-  internal env self-skips; keep that contract explicit.
+- Ignored tests now have separate capstone and manual/all-e2e lanes, but
+  provider live tests still rely on internal env self-skips; keep that contract
+  explicit as provider probes grow.
 - `temper-sim` still has a fidelity gap: its worker simulant is hand-rolled.
   Issue #165 should move the real worker machine/shell into that layer.
 - The UI test command is not represented by a Cargo alias, so agents must read

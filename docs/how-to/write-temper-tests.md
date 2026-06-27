@@ -49,7 +49,9 @@ current inventory, see [Testing pyramid](../reference/testing-pyramid.md) and
 - Live/network/provider tests must be `#[ignore]`, self-skip without opt-in env,
   and never print secrets.
 - New heavyweight root Forgejo e2es must use the root e2e lock and nextest group
-  unless they are proven lightweight.
+  unless they are proven lightweight. Add them to the manual/all-e2e lane first;
+  promote a test to the default capstone list only when it protects a distinct
+  real-stack risk that should run in `cargo dev-test-full`.
 - Prefer shared helpers in `temper-testing` when a setup pattern appears in more
   than one crate; keep one-off helpers local.
 
@@ -78,10 +80,11 @@ cargo dev-check
 cargo dev-test-quick
 ```
 
-Ignored Forgejo/provider lane:
+Ignored live lanes:
 
 ```sh
-cargo dev-test-e2e
+cargo dev-test-e2e-capstones  # default live capstones; also run by dev-test-full
+cargo dev-test-e2e-all        # every ignored/manual live test
 ```
 
 Web UI:

@@ -32,8 +32,9 @@
 //! No LLM provider is ever contacted: the DeepSeek key is a dummy and `run_init`
 //! does not talk to the provider. The flow writes only into a per-test temp dir.
 //!
-//! Run with `cargo test --test init_forgejo_e2e -- --ignored`, or under CI's
-//! `cargo dev-test-full` (which passes `--run-ignored all`).
+//! Run with `cargo test --test init_forgejo_e2e -- --ignored`, or via the
+//! default live capstone lane (`cargo dev-test-full` /
+//! `cargo dev-test-e2e-capstones`).
 
 #![cfg(unix)]
 

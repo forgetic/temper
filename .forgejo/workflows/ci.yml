@@ -53,14 +53,15 @@ jobs:
       - name: Build
         run:  cargo dev-test-build
       - name: Test
-        # The ignored daemon e2e scenarios boot a real Forgejo + CI runner and
-        # wait for convergence (PR opened, CI red→green, mechanical merge). On a
-        # cold CI machine the fixture provisioning alone can take ~2min, so the
-        # budget needs headroom over the 300s default — but not so much that a
-        # genuinely-stuck e2e burns ten minutes before failing. The convergence
-        # timer starts after provisioning and the checkpoint-to-final-PR path can
-        # occasionally contend with the host runner under load, so keep a full
-        # five-minute convergence window while still failing stuck runs promptly.
+        # The default live capstones boot real Forgejo + CI runners and wait for
+        # convergence (daemon CI red→green, init provisioning/daemon boot, and
+        # checkpointed standalone run PR handoff). On a cold CI machine the
+        # fixture provisioning alone can take ~2min, so the budget needs
+        # headroom over the 300s default — but not so much that a genuinely-stuck
+        # e2e burns ten minutes before failing. The convergence timer starts
+        # after provisioning and the checkpoint-to-final-PR path can occasionally
+        # contend with the host runner under load, so keep a full five-minute
+        # convergence window while still failing stuck runs promptly.
         env:
           TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "300"
         run: cargo dev-test-full

@@ -21,14 +21,21 @@ cargo dev-check
 cargo dev-test-quick
 ```
 
-If you're touching areas that might break or affect current Forgejo-based
-integration tests, or you are adding new Forgejo-based integration tests, run:
+If you're touching areas covered by the default Forgejo capstones (daemon
+red→green live convergence, `temper init --apply`, or checkpointed standalone
+`temper run`), run:
 
 ```sh
 cargo dev-test-full
 ```
 
-instead of `cargo dev-test-quick`.
+instead of `cargo dev-test-quick`. If you're touching an ignored live scenario
+outside that capstone set, run the targeted ignored test or the explicit
+manual/all-e2e lane:
+
+```sh
+cargo dev-test-e2e-all
+```
 
 Keep Clippy output clean.
 
@@ -37,8 +44,9 @@ complete in under about 10 seconds on a warmed local checkout. If a change makes
 the quick suite slower, prefer moving slow coverage behind `#[ignore]` and
 document how to run it before handoff.
 
-Keep the whole full suite fast too; as a soft target for agent changes, it
-should complete in under about 2 minutes on a warmed local checkout.
+Keep the whole full capstone suite fast too; as a soft target for agent
+changes, it should complete in under about 2 minutes on a warmed local checkout.
+The exhaustive `cargo dev-test-e2e-all` lane is manual and may take longer.
 
 ## 3. Review documentation from the top
 

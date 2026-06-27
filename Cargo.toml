@@ -33,6 +33,9 @@ members = [
     "crates/temper-provision-forgejo-cli",
     "crates/temper-reference-delivery-validator",
     "crates/temper-sim",
+    # Tiny repo-local driver for developer aliases that need to sequence cargo
+    # commands.
+    "crates/temper-dev",
     # The web dashboard (its own HTTP/SSE server + the bundled TS UI in ui/).
     "crates/temper-web",
     # Merged from smith (the orchestration worker):

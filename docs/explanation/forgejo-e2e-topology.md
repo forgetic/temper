@@ -150,8 +150,10 @@ after the daemon/worker consolidation. The topology-agnostic fixture proofs
 
 It boots real OS processes, executes CI **on the host**, and detects
 convergence by wall-clock polling. Like the `temper-forge-forgejo` live test
-it is `#[ignore]`d, so default `cargo test` stays hermetic and deterministic
-(the repo's `cargo dev-test-full` alias includes it).
+it is `#[ignore]`d, so default `cargo test` stays hermetic and deterministic.
+The red→green scenario is one of the repo's default live capstones, so
+`cargo dev-test-full` includes that test; the daemon happy path remains in the
+explicit `cargo dev-test-e2e-all` manual lane.
 
 Ignored startup may download pinned binaries into `.cache/forgejo/` when
 explicit overrides and cached files are absent. Binary and state caches are

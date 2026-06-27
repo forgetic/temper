@@ -4,14 +4,29 @@
 [test-groups]
 root-forgejo-e2e = { max-threads = 1 }
 
-# Calibrated profile for the ignored Forgejo/e2e suite. The default nextest
-# scheduler can start too many Forgejo servers, runners, daemons, and lock
-# waiters on shared developer/CI hosts. Four threads leaves one root scenario
-# room to make progress while still running the smaller Forgejo smoke tests in
-# parallel; three threads was measured to starve on lock waiters.
+# Calibrated profile for every ignored/manual Forgejo/provider live test. The
+# default nextest scheduler can start too many Forgejo servers, runners, daemons,
+# and lock waiters on shared developer/CI hosts. Four threads leaves one root
+# scenario room to make progress while still running the smaller Forgejo smoke
+# tests in parallel; three threads was measured to starve on lock waiters.
 [profile.e2e]
 test-threads = 4
 fail-fast = false
+
+# Everyday full runs use this narrower live lane after the non-ignored quick
+# suite. Keep the list exact and readable: adding/removing a default live
+# capstone should be a deliberate edit here, not a side effect of adding an
+# arbitrary new #[ignore] test.
+[profile.e2e-capstones]
+test-threads = 4
+fail-fast = false
+default-filter = '''
+package(temper) & (
+    (binary(daemon_forgejo_e2e) & test(/^daemon_forgejo_ci_fails_then_passes_converges$/)) |
+    (binary(init_forgejo_e2e) & test(/^init_forgejo_drives_a_working_setup$/)) |
+    (binary(run_forgejo_e2e) & test(/^temper_run_opens_pr_from_checkpointed_product_diff_via_fake_llm$/))
+)
+'''
 
 [[profile.default.overrides]]
 filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
@@ -19,4 +34,8 @@ test-group = 'root-forgejo-e2e'
 
 [[profile.e2e.overrides]]
 filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
+test-group = 'root-forgejo-e2e'
+
+[[profile.e2e-capstones.overrides]]
+filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
 test-group = 'root-forgejo-e2e'
