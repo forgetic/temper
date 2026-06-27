@@ -476,14 +476,22 @@ impl Workspace {
     /// empty checkpoint commit leaves this false even though HEAD is ahead.
     pub async fn tree_differs_from_base(&self) -> Result<bool, WorkspaceError> {
         let base = format!("origin/{}", self.base_branch);
+        self.tree_differs_from_ref(&base).await
+    }
+
+    /// True when HEAD's tree differs from another commit/ref. This ignores
+    /// commit metadata, so an empty checkpoint commit does not count as product
+    /// work; callers that start from an existing PR branch can use the prepared
+    /// head SHA as the baseline instead of the target base branch.
+    pub async fn tree_differs_from_ref(&self, reference: &str) -> Result<bool, WorkspaceError> {
         let output = self
             .run_workspace_git(
                 false,
-                format!("git diff --name-only {base} HEAD"),
+                format!("git diff --name-only {reference} HEAD"),
                 vec![
                     OsString::from("diff"),
                     OsString::from("--name-only"),
-                    OsString::from(base),
+                    OsString::from(reference),
                     OsString::from("HEAD"),
                 ],
             )

@@ -298,6 +298,11 @@ pub(super) struct PreparedRepo {
     pub(super) repo: String,
     pub(super) writable: bool,
     pub(super) branch_hint: Option<String>,
+    /// The commit checked out before the agent ran. PR-head repair jobs use this
+    /// as their product-diff baseline: an existing implementation PR already
+    /// differs from its base branch, so a clean no-op turn must not be counted
+    /// as a successful CI fix merely because the PR branch contains prior work.
+    pub(super) start_head_sha: String,
     pub(super) workspace: Workspace,
 }
 
@@ -348,10 +353,15 @@ async fn prepare_repo(
     );
 
     prepare_workspace(&workspace, request, repo_spec).await?;
+    let start_head_sha = workspace
+        .head_sha()
+        .await
+        .map_err(|error| workspace_failure("inspect prepared workspace head", error))?;
     Ok(PreparedRepo {
         repo: repo_spec.repo.clone(),
         writable: repo_spec.is_writable(),
         branch_hint: repo_spec.branch_hint.clone(),
+        start_head_sha,
         workspace,
     })
 }

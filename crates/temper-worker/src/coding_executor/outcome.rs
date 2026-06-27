@@ -201,7 +201,7 @@ async fn push_writable_repo(
         .clone()
         .expect("writable repo carries a branch hint (checked at prepare)");
     let has_tree_changes = repo_has_tree_changes(prepared).await?;
-    if !repo_produced_diff(prepared, has_tree_changes).await? {
+    if !repo_produced_diff(prepared, has_tree_changes, pull_request_fix).await? {
         return Ok(None);
     }
     if has_tree_changes {
@@ -241,9 +241,17 @@ async fn repo_has_tree_changes(prepared: &PreparedRepo) -> Result<bool, JobOutco
 async fn repo_produced_diff(
     prepared: &PreparedRepo,
     has_tree_changes: bool,
+    pull_request_fix: bool,
 ) -> Result<bool, JobOutcome> {
     if has_tree_changes {
         return Ok(true);
+    }
+    if pull_request_fix {
+        return prepared
+            .workspace
+            .tree_differs_from_ref(&prepared.start_head_sha)
+            .await
+            .map_err(|error| workspace_failure("inspect workspace tree diff", error));
     }
     prepared
         .workspace
