@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "The `temper daemon` subcommand: run the full standalone (all-in-one) daemon, or one of its services (engine, worker). Carries the heavy engine/worker/agent wiring; the in-process transport + agent runner live here."
+description = "The `temper daemon` subcommand: run the full standalone (all-in-one) daemon, or one of its services (engine, worker). Carries the heavy engine/worker/agent wiring; the in-process agent runner lives here while the worker→daemon transport is shared via temper-daemon-transport."
 
 [dependencies]
 async-trait = { workspace = true }
@@ -21,6 +21,7 @@ temper-worker-service = { path = "../temper-worker-service" }
 temper-agent-session = { path = "../temper-agent-session" }
 
 # In-process all-in-one glue spans all three tiers (composition root).
+temper-daemon-transport = { path = "../temper-daemon-transport" }
 temper-engine = { path = "../temper-engine" }
 temper-engine-io = { path = "../temper-engine-io" }
 temper-forge = { path = "../temper-forge" }

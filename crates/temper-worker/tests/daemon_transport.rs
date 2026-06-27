@@ -1,10 +1,10 @@
 //! Worker ↔ daemon transport e2e against the **real** Temper daemon.
 //!
 //! Both the daemon and the worker run on one skein runtime and communicate via
-//! the daemon's in-process carrier — the exact path the unified single-process
-//! worker uses in production. The [`DaemonHarness`] instruments the real daemon
-//! with a recording applier so the test can observe the result the worker
-//! posted. No fake daemon, no tokio/axum.
+//! the reusable in-process carrier — the exact path the unified single-process
+//! worker uses in production. The [`DaemonHarness`] taps the posted worker
+//! result so the test can observe what the real daemon received. No fake daemon,
+//! no tokio/axum.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -204,7 +204,7 @@ where
 }
 
 #[test]
-fn success_stub_registers_polls_runs_and_posts_result() {
+fn daemon_transport_success_stub_registers_polls_runs_and_posts_result() {
     let result = run_until_result(StubExecutor::success().into());
 
     assert_eq!(result.job_id, "job-123");
@@ -214,7 +214,7 @@ fn success_stub_registers_polls_runs_and_posts_result() {
 }
 
 #[test]
-fn standalone_in_process_worker_runs_two_engineer_jobs_concurrently() {
+fn daemon_transport_standalone_in_process_worker_runs_two_engineer_jobs_concurrently() {
     temper_engine_io::block_on_with(move |cx, handle| async move {
         let mut harness = DaemonHarness::start(&handle);
         let config = worker_config_with_capacity(2);
@@ -251,7 +251,7 @@ fn standalone_in_process_worker_runs_two_engineer_jobs_concurrently() {
 }
 
 #[test]
-fn failure_stub_registers_polls_runs_and_posts_failure_result() {
+fn daemon_transport_failure_stub_registers_polls_runs_and_posts_failure_result() {
     let result = run_until_result(
         StubExecutor::failure(FailureClass::Permanent, "configured failure").into(),
     );

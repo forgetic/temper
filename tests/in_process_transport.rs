@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! B2: the in-process worker→daemon transport delivers worker-protocol messages
-//! straight to a co-resident `Daemon` and gets the identical replies an HTTP
-//! worker would — register, then poll an enqueued job into an `Assign` — with no
-//! socket and no HTTP byte round-trip.
+//! B2: the reusable in-process worker→daemon transport delivers
+//! worker-protocol messages straight to a co-resident `Daemon` and gets the
+//! identical replies an HTTP worker would — register, then poll an enqueued job
+//! into an `Assign` — with no socket and no HTTP byte round-trip.
 
 use std::sync::Arc;
 
-use temper_cli::InProcessTransport;
+use temper_daemon_transport::InProcessTransport;
 use temper_engine::Daemon;
 use temper_protocol_worker::{
     Artifact, Branch, Capability, Capacity, JobResult, Poll, Register, RepoOutcome, ResultStatus,

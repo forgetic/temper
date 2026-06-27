@@ -138,6 +138,12 @@ temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "
 temper-worker-service = ["temper-config", "temper-worker", "temper-worker-io", "temper-log"]
 temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-protocol-agent", "temper-log"]
 
+# Reusable co-resident worker→daemon carrier. This is deliberate cross-tier
+# composition glue kept out of `temper-worker` so slim worker builds do not
+# depend on the engine, while standalone/sim/hermetic tests can share one real
+# `Daemon` → `Transport` implementation.
+temper-daemon-transport = ["temper-engine", "temper-protocol-worker", "temper-worker"]
+
 # ---------------------------------------------------------------------------
 # CLI crates. The monolithic composition root is split into a thin dispatcher
 # (`temper-cli`) plus per-subcommand crates, so building one subcommand does not
@@ -156,9 +162,10 @@ temper-cli-config = ["temper-cli-common", "temper-config"]
 
 # `temper daemon`: the standalone all-in-one + per-service runners. Inherits the
 # heavy engine/worker/agent wiring the monolithic CLI used to carry (the
-# in-process transport + agent runner live here). Builds its forge through the
-# facade factory — no concrete backend dep.
-temper-cli-daemon = ["temper-config", "temper-log", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-protocol-agent", "temper-engine", "temper-engine-io", "temper-forge", "temper-reference-delivery", "temper-worker", "temper-protocol-worker", "temper-workflow"]
+# in-process agent runner lives here; reusable worker→daemon transport glue is
+# pulled from temper-daemon-transport). Builds its forge through the facade
+# factory — no concrete backend dep.
+temper-cli-daemon = ["temper-config", "temper-log", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-protocol-agent", "temper-daemon-transport", "temper-engine", "temper-engine-io", "temper-forge", "temper-reference-delivery", "temper-worker", "temper-protocol-worker", "temper-workflow"]
 
 # `temper init`: interactive first-run. Orchestration only — config writing in
 # temper-config, provisioning inlined directly via temper-provision. Builds its
@@ -178,7 +185,10 @@ temper = ["temper-cli", "temper-config"]
 # other Cargo aliases. No internal deps.
 temper-dev = []
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
-temper-sim = ["temper-engine", "temper-engine-io", "temper-protocol-worker"]
+# It also depends on the reusable co-resident worker→daemon carrier so the next
+# real-worker sim scenario can use the production WorkerShell without reaching
+# through CLI internals; no real-worker scenario is added here.
+temper-sim = ["temper-daemon-transport", "temper-engine", "temper-engine-io", "temper-protocol-worker"]
 # The web dashboard (read-model, SSE fan-out, static UI, log-tail feed). A
 # depgraph leaf: it is a UI consumer, never depended-upon by a tier crate. It
 # runs its OWN dependency-light blocking std::net HTTP+SSE server (no skein —

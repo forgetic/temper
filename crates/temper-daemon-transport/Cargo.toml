@@ -1,0 +1,19 @@
+[package]
+name = "temper-daemon-transport"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reusable in-process worker-to-daemon transport glue for co-resident Temper daemon/worker stacks."
+
+[dependencies]
+skein.workspace = true
+# Deliberate cross-tier composition glue: this crate depends on both the engine
+# Daemon handle and the worker Transport trait so slim temper-worker builds do
+# not acquire a production dependency on temper-engine.
+temper-engine = { path = "../temper-engine" }
+temper-protocol-worker = { path = "../temper-protocol-worker" }
+temper-worker = { path = "../temper-worker" }
+
+[lints]
+workspace = true

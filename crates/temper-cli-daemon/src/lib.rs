@@ -12,9 +12,9 @@
 //!
 //! This crate carries the heavy engine/worker/agent wiring; the slimmer
 //! `temper-cli` dispatcher delegates `temper daemon` here and re-exports the
-//! in-process transport + agent runner from this crate so the root integration
-//! test keeps the same `temper_cli::{InProcessTransport, InProcessAgentRunner}`
-//! path.
+//! reusable in-process transport + in-process agent runner from this crate so
+//! existing `temper_cli::{InProcessTransport, InProcessAgentRunner}` users keep
+//! the same path.
 //!
 //! ## Hermeticity
 //!
@@ -48,9 +48,9 @@ use serve_args::serve_service_usage;
 pub use serve_args::{SERVE_ENGINE_USAGE, SERVE_STANDALONE_USAGE, SERVE_USAGE, SERVE_WORKER_USAGE};
 pub(crate) use serve_args::{ServeInvocation, parse_serve_invocation};
 
-// Exposed (re-exported up through `temper-cli`) for the root package's
-// in-process-transport integration test, which proves the standalone
-// worker→daemon carrier in isolation.
+// Exposed (re-exported up through `temper-cli`) for backwards-compatible
+// standalone wiring/tests. The transport implementation itself lives in the
+// reusable `temper-daemon-transport` crate, not in the CLI module.
 pub use standalone::{InProcessAgentRunner, InProcessTransport};
 
 pub const USAGE: &str = "\
