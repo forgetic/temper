@@ -9,7 +9,7 @@ use temper_agent::{
     run_coding_agent_native_with_options,
 };
 use temper_engine::Daemon;
-use temper_protocol_agent::{PullRequestFreshness, StepProgress};
+use temper_protocol_agent::{PROTOCOL_VERSION, PullRequestFreshness, StepProgress, StepState};
 use temper_worker::{
     AgentRunError, AgentRunner, PrFreshnessFailure, PrFreshnessGuard, ProgressSink,
 };
@@ -31,9 +31,20 @@ impl AgentRunner for NativeJigAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        _progress: Arc<dyn ProgressSink>,
+        progress: Arc<dyn ProgressSink>,
     ) -> Result<WorkspaceResult, AgentRunError> {
-        run_coding_agent_native_with_options(
+        let role = context.work_item.role.clone();
+        let correlation_key = context.correlation_key.clone();
+        progress.report(StepProgress {
+            correlation_key: correlation_key.clone(),
+            step: 1,
+            status: format!("start {role} run"),
+            state: StepState::Started,
+            pushed_sha: None,
+            note: Some(format!("protocol v{PROTOCOL_VERSION} (native jig)")),
+        });
+
+        let result = run_coding_agent_native_with_options(
             self.handle.clone(),
             &self.provider,
             context,
@@ -43,7 +54,20 @@ impl AgentRunner for NativeJigAgentRunner {
             self.enable_subagents,
         )
         .await
-        .map_err(agent_error)
+        .map_err(agent_error);
+
+        if let Ok(result) = &result {
+            progress.report(StepProgress {
+                correlation_key,
+                step: 2,
+                status: format!("finish {role} run"),
+                state: StepState::Done,
+                pushed_sha: None,
+                note: result.summary.clone(),
+            });
+        }
+
+        result
     }
 }
 

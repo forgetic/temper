@@ -64,6 +64,10 @@ skein.workspace = true
 temper-engine-io = { path = "../temper-engine-io" }
 
 [dev-dependencies]
+# The hermetic real-stack retry regression shortens the agent-core provider
+# retry backoff through test-support API while preserving the production retry
+# classification path.
+temper-agent-core = { path = "../temper-agent-core", features = ["test-support"] }
 # The observability smoke test captures the runner's `temper-log` emit sites with
 # a custom in-process layer and asserts on the structured fields + human message.
 temper-log = { path = "../temper-log" }
