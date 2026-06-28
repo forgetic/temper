@@ -14,19 +14,19 @@ use temper_worker::{
 };
 use temper_workflow::{LeasePolicy, ValidatedWorkflow};
 
+use super::DEFAULT_MAX_ITERATIONS;
 use super::git::{path_str, seed_origin};
 use super::runner::{DaemonPrFreshnessGuard, DaemonProgressSink, NativeJigAgentRunner};
 use super::stack::HermeticRealStack;
 use super::types::{
     FakeModelResponse, FakeModelSetup, HermeticIssueSpec, HermeticRepoSpec, WorkerRoleSpec,
 };
-use super::{DEFAULT_MAX_ITERATIONS, DEFAULT_WORKER_ID};
 
 /// Builder for a hermetic daemon + worker + coding-agent world.
 pub struct HermeticRealStackBuilder {
     repos: Vec<HermeticRepoSpec>,
     issue: HermeticIssueSpec,
-    worker_role: WorkerRoleSpec,
+    worker_roles: Vec<WorkerRoleSpec>,
     fake_model: Option<FakeModelSetup>,
     workflow: Option<ValidatedWorkflow>,
     max_iterations: usize,
@@ -52,14 +52,7 @@ impl HermeticRealStackBuilder {
                 "Hermetic real-stack smoke",
                 "Create HERMETIC_AGENT_OUTPUT.md with deterministic content.",
             ),
-            worker_role: WorkerRoleSpec {
-                role: "engineer".to_string(),
-                worker_id: DEFAULT_WORKER_ID.to_string(),
-                git_user: "Hermetic Engineer".to_string(),
-                git_email: "engineer@example.test".to_string(),
-                git_token: "test-token".to_string(),
-                max_concurrent_jobs: 1,
-            },
+            worker_roles: vec![WorkerRoleSpec::engineer()],
             fake_model: None,
             workflow: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
@@ -94,10 +87,19 @@ impl HermeticRealStackBuilder {
         self
     }
 
-    /// Replaces the worker role identity/capacity.
+    /// Replaces the worker role identity/capacity list with one role.
     #[must_use]
     pub fn worker_role(mut self, worker_role: WorkerRoleSpec) -> Self {
-        self.worker_role = worker_role;
+        self.worker_roles = vec![worker_role];
+        self
+    }
+
+    /// Adds another role identity/capability to the same hermetic worker.
+    /// Useful for fast stories that run a read-only architect turn followed by
+    /// an engineer coding turn through one daemon/worker stack.
+    #[must_use]
+    pub fn add_worker_role(mut self, worker_role: WorkerRoleSpec) -> Self {
+        self.worker_roles.push(worker_role);
         self
     }
 
@@ -163,6 +165,11 @@ impl HermeticRealStackBuilder {
             .repos
             .first()
             .ok_or_else(|| "at least one repository is required".to_string())?
+            .clone();
+        let primary_worker_role = self
+            .worker_roles
+            .first()
+            .ok_or_else(|| "at least one worker role is required".to_string())?
             .clone();
         let primary_repo_path = primary.path();
         let temp = tempfile::tempdir().map_err(|error| format!("create temp dir: {error}"))?;
@@ -253,20 +260,27 @@ impl HermeticRealStackBuilder {
             enable_checkpoints: self.enable_checkpoints,
         });
 
-        let role_identities = role_identities(&self.worker_role);
+        let role_identities = role_identities(&self.worker_roles);
         let worker_config = WorkerConfig {
             daemon_url: "in-process".to_string(),
-            worker_id: self.worker_role.worker_id.clone(),
+            worker_id: primary_worker_role.worker_id.clone(),
             capabilities: self
-                .repos
+                .worker_roles
                 .iter()
-                .map(|repo| CapabilitySpec {
-                    repo: repo.path(),
-                    role: self.worker_role.role.clone(),
+                .flat_map(|role| {
+                    self.repos.iter().map(move |repo| CapabilitySpec {
+                        repo: repo.path(),
+                        role: role.role.clone(),
+                    })
                 })
                 .collect(),
             role_identities: role_identities.clone(),
-            max_concurrent_jobs: self.worker_role.max_concurrent_jobs,
+            max_concurrent_jobs: self
+                .worker_roles
+                .iter()
+                .map(|role| role.max_concurrent_jobs)
+                .min()
+                .unwrap_or(1),
             poll_wait: Duration::from_millis(25),
             heartbeat_interval: Duration::from_millis(50),
             executor: ExecutorSelection::Stub,
@@ -298,11 +312,12 @@ impl HermeticRealStackBuilder {
             result_tx,
             result_rx,
             origins,
+            repo_ids,
             workspace_root,
             primary_repo_path,
             primary_repo_id,
             issue_number: issue.number,
-            role: self.worker_role.role,
+            role: primary_worker_role.role,
             worker_config,
             executor,
             worker_started: false,
@@ -310,15 +325,18 @@ impl HermeticRealStackBuilder {
     }
 }
 
-fn role_identities(role: &WorkerRoleSpec) -> BTreeMap<String, RoleGitIdentity> {
-    let mut identities = BTreeMap::new();
-    identities.insert(
-        role.role.clone(),
-        RoleGitIdentity {
-            user: role.git_user.clone(),
-            email: role.git_email.clone(),
-            token: role.git_token.clone(),
-        },
-    );
-    identities
+fn role_identities(roles: &[WorkerRoleSpec]) -> BTreeMap<String, RoleGitIdentity> {
+    roles
+        .iter()
+        .map(|role| {
+            (
+                role.role.clone(),
+                RoleGitIdentity {
+                    user: role.git_user.clone(),
+                    email: role.git_email.clone(),
+                    token: role.git_token.clone(),
+                },
+            )
+        })
+        .collect()
 }

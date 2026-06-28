@@ -10,9 +10,10 @@
 //! Forge state lives in [`temper_forge_memory::MemoryForge`].
 //!
 //! The API intentionally stays narrow: tests describe one primary repo, one
-//! ready issue, one worker role identity, and the fake model's edit plan; the
-//! fixture handles daemon/worker/agent wiring and exposes the resulting worker
-//! result, pull requests, Forge handle, and pushed git branches for assertions.
+//! ready issue, one or more worker role identities, and the fake model's edit
+//! plan; the fixture handles daemon/worker/agent wiring and exposes the
+//! resulting worker result, pull requests, Forge handle, and pushed git branches
+//! for assertions.
 //!
 //! ```no_run
 //! use temper_testing::real_stack::{

@@ -32,6 +32,7 @@ pub struct HermeticRealStack {
     pub(crate) result_tx: temper_engine_io::CqSender<JobResult>,
     pub(crate) result_rx: temper_engine_io::CqReceiver<JobResult>,
     pub(crate) origins: BTreeMap<String, PathBuf>,
+    pub(crate) repo_ids: BTreeMap<String, RepositoryId>,
     pub(crate) workspace_root: PathBuf,
     pub(crate) primary_repo_path: String,
     pub(crate) primary_repo_id: RepositoryId,
@@ -43,6 +44,46 @@ pub struct HermeticRealStack {
 }
 
 impl HermeticRealStack {
+    /// Repository id for any seeded repo path (`owner/name`).
+    pub fn repo_id(&self, repo: &str) -> Option<&RepositoryId> {
+        self.repo_ids.get(repo)
+    }
+
+    /// Pull requests in any seeded repo.
+    pub async fn pull_requests_for_repo(&self, repo: &str) -> Result<Vec<PullRequest>, String> {
+        let repo_id = self
+            .repo_id(repo)
+            .ok_or_else(|| format!("unknown seeded repository `{repo}`"))?;
+        self.forge
+            .list_pull_requests(repo_id, PullRequestQuery::default())
+            .await
+            .map_err(|error| format!("list pull requests for {repo}: {error}"))
+    }
+
+    /// Waits until a seeded repo has `expected` pull requests.
+    pub async fn wait_for_pull_request_count_for_repo(
+        &self,
+        cx: &Cx,
+        repo: &str,
+        expected: usize,
+        timeout: Duration,
+    ) -> Result<Vec<PullRequest>, String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let pulls = self.pull_requests_for_repo(repo).await?;
+            if pulls.len() == expected {
+                return Ok(pulls);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "timed out after {timeout:?} waiting for {expected} pull request(s) in {repo}, saw {}",
+                    pulls.len()
+                ));
+            }
+            temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
+        }
+    }
+
     /// Shared in-memory Forge state. Tests can use MemoryForge-specific helpers
     /// such as `seed_ci_jobs` for follow-on scenarios.
     pub fn forge(&self) -> &MemoryForge {
@@ -90,10 +131,21 @@ impl HermeticRealStack {
         });
     }
 
-    /// Enqueues the currently seeded issue by running the daemon's real role
-    /// feed against the MemoryForge state.
+    /// Enqueues the currently seeded issue for the builder's primary worker
+    /// role by running the daemon's real role feed against the MemoryForge state.
     pub async fn enqueue_scanned_role_work(&self, now: DateTime<Utc>) -> Result<usize, String> {
-        let role = RoleId::new(self.role.clone());
+        self.enqueue_scanned_role_work_for_role(&self.role, now)
+            .await
+    }
+
+    /// Enqueues the currently seeded issue for a specific role by running the
+    /// daemon's real role feed against the MemoryForge state.
+    pub async fn enqueue_scanned_role_work_for_role(
+        &self,
+        role: &str,
+        now: DateTime<Utc>,
+    ) -> Result<usize, String> {
+        let role = RoleId::new(role.to_string());
         self.daemon
             .enqueue_scanned_role_work(
                 self.forge.as_ref(),
