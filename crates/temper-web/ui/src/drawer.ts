@@ -4,8 +4,8 @@
 // Two registers stacked (UX §5):
 //   • a LIVE ACTIVITY STREAM — the ephemeral, bounded ring buffer of agent
 //     activity (think / text / tool), the "watch it think" view; and
-//   • a DURABLE STEP LEDGER — the StepProgress checklist derived from
-//     `steps {done,total}`, the "what has it accomplished" view.
+//   • a DURABLE STEP LEDGER — a compact checklist derived from `steps
+//     {done,total}`, the "what has it accomplished" view.
 //
 // Markup/classes are ported from the mockup's `.drawer` / `.scrim` and
 // renderDrawer (docs/plans/temper-web-mockup.html). Tested in Layer 2 via

@@ -9,20 +9,16 @@
 //! - for a writable role: writes `$SMITH_FAKE_AGENT_FILE` (default `GREETING.md`)
 //!   with `$SMITH_FAKE_AGENT_CONTENT` into writable repo dirs, so the worker has
 //!   a diff to commit/push;
-//! - emits two step-progress lines on stdout (a `Started` and a `Done` marker),
-//!   both stamped with the context's `correlation_key`;
 //! - writes a [`WorkspaceResult`] to the `--result` path. If
 //!   `$SMITH_FAKE_AGENT_VERDICT` is set, the result carries that verdict (the
 //!   read-only / triage path); otherwise it is a head-path result with a summary.
-//! - if the `--crash-after-progress` argument is passed, the process exits
-//!   non-zero *after* emitting progress but *before* writing the result — the
-//!   crash-recovery scenario. (An argument, not an env var, so concurrent test
-//!   threads cannot race on a process-global knob.)
+//! - if the `--crash-before-result` argument is passed, the process exits
+//!   non-zero before writing the result. (An argument, not an env var, so
+//!   concurrent test threads cannot race on a process-global knob.)
 
-use std::io::Write;
 use std::path::PathBuf;
 
-use temper_protocol_agent::{StepProgress, StepState, WorkspaceContext, WorkspaceResult};
+use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -34,15 +30,6 @@ fn main() {
     let context: WorkspaceContext =
         serde_json::from_slice(&std::fs::read(&context_path).expect("read context"))
             .expect("parse context");
-
-    emit(&StepProgress {
-        correlation_key: context.correlation_key.clone(),
-        step: 1,
-        status: format!("start {} run", context.work_item.role),
-        state: StepState::Started,
-        pushed_sha: None,
-        note: None,
-    });
 
     let verdict = std::env::var("SMITH_FAKE_AGENT_VERDICT").ok();
 
@@ -59,17 +46,8 @@ fn main() {
         }
     }
 
-    emit(&StepProgress {
-        correlation_key: context.correlation_key.clone(),
-        step: 2,
-        status: "produce work product".to_string(),
-        state: StepState::Done,
-        pushed_sha: None,
-        note: Some("fake agent done".to_string()),
-    });
-
-    if std::env::args().any(|arg| arg == "--crash-after-progress") {
-        eprintln!("smith-fake-agent: simulated crash after progress");
+    if std::env::args().any(|arg| arg == "--crash-before-result") {
+        eprintln!("smith-fake-agent: simulated crash before result");
         std::process::exit(7);
     }
 
@@ -97,11 +75,4 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
         .position(|arg| arg == flag)
         .and_then(|index| args.get(index + 1))
         .cloned()
-}
-
-fn emit(progress: &StepProgress) {
-    let line = progress.to_line().expect("serialize progress");
-    let mut stdout = std::io::stdout().lock();
-    writeln!(stdout, "{line}").expect("write progress line");
-    stdout.flush().expect("flush");
 }

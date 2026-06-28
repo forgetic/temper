@@ -11,7 +11,6 @@ use temper_log::emit::{
     emit_lease_released,
 };
 use temper_log::{WorkItemRef, format_duration, strip_provider_scheme, work_item_span};
-use temper_protocol_worker::JobProgress;
 use temper_protocol_worker::JobResult;
 use temper_protocol_worker::{PullRequestFreshness, PullRequestFreshnessResponse};
 use temper_workflow::{ArtifactSource, LeaseError, LeaseManager, LeasePolicy, RoleId};
@@ -66,12 +65,6 @@ impl<F: Forge + ?Sized> LeaseApplier<F> {
 
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
-    /// Progress checkpoints are daemon-authored bookkeeping comments, not
-    /// role-authored workflow mutations, so they bypass the lease gate.
-    async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
-        self.inner.apply_progress(job, progress).await;
-    }
-
     async fn check_pull_request_freshness(
         &self,
         check: PullRequestFreshness,

@@ -1,5 +1,5 @@
-//! Tool registry, the model-driven `checkpoint` tool, and the read-only
-//! sub-agent roles (`investigate` / `delegate`) the coding agent can fan out to.
+//! Tool registry and the read-only sub-agent roles (`investigate` / `delegate`)
+//! the coding agent can fan out to.
 
 use std::path::Path;
 
@@ -10,83 +10,6 @@ use tongs::tools::{
 };
 
 use super::Capability;
-
-/// Orchestration callback the `checkpoint` tool invokes: commit + push the
-/// current work as a coherent, labeled checkpoint, returning the pushed head sha
-/// (`None` when nothing changed). Implemented by the worker/agent host (which
-/// owns the git credentials); the model only *decides when* to checkpoint by
-/// calling the tool, keeping the push token out of the model's hands.
-#[async_trait::async_trait]
-pub trait CheckpointHook: Send + Sync {
-    async fn checkpoint(&self, label: &str) -> Result<Option<String>, String>;
-}
-
-/// The model-facing `checkpoint` tool: at a coherent sub-milestone the agent
-/// calls it to have the host commit + push its work so far. The push happens in
-/// orchestration (via [`CheckpointHook`]), not in the model.
-pub(super) struct CheckpointTool {
-    pub(super) hook: std::sync::Arc<dyn CheckpointHook>,
-}
-
-#[async_trait::async_trait]
-impl tongs::tools::Tool for CheckpointTool {
-    fn name(&self) -> &str {
-        "checkpoint"
-    }
-
-    fn description(&self) -> &str {
-        "Commit and push your work so far as a coherent checkpoint. Call this \
-         after completing a meaningful sub-milestone (e.g. a failing test added, \
-         a function implemented, a bug fixed) — NOT after every edit. The host \
-         performs the commit and push for you; you only choose when. Pass a \
-         short imperative `label` describing what you just finished."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "label": {
-                    "type": "string",
-                    "description": "Short imperative summary of the sub-milestone just completed, e.g. 'add failing test for parser'"
-                }
-            },
-            "required": ["label"]
-        })
-    }
-
-    fn effects(&self) -> tongs::tools::ToolEffects {
-        // It commits and pushes: process (git) + network.
-        tongs::tools::ToolEffects {
-            reads: false,
-            writes: false,
-            network: true,
-            process: true,
-        }
-    }
-
-    async fn execute(
-        &self,
-        _tool_call_id: &str,
-        input: serde_json::Value,
-        _on_update: Option<Box<dyn Fn(tongs::tools::ToolUpdate) + Send + Sync>>,
-    ) -> tongs::Result<tongs::tools::ToolOutput> {
-        let label = input
-            .get("label")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("checkpoint")
-            .to_string();
-        match self.hook.checkpoint(&label).await {
-            Ok(Some(sha)) => Ok(tongs::tools::ToolOutput::text(format!(
-                "Checkpointed: committed and pushed \"{label}\" at {sha}."
-            ))),
-            Ok(None) => Ok(tongs::tools::ToolOutput::text(
-                "Nothing to checkpoint: no changes since the last checkpoint.",
-            )),
-            Err(error) => Err(tongs::Error::Tool(format!("checkpoint failed: {error}"))),
-        }
-    }
-}
 
 /// Builds the tool registry for a capability, scoped to `cwd`.
 ///
@@ -114,17 +37,6 @@ fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::to
     }
     tools
 }
-
-/// Guidance appended to the role prompt when the `checkpoint` tool is wired.
-pub(crate) const CHECKPOINT_GUIDANCE: &str = "\nCHECKPOINTS:\n\
-    - You have a `checkpoint` tool. Call it when you finish a coherent \
-    sub-milestone (a failing test added, a function implemented, a bug fixed) — \
-    NOT after every edit, and not for trivial intermediate states. The host \
-    commits and pushes your work for you (you must not run git yourself); pass a \
-    short imperative `label` for what you just finished.\n\
-    - Checkpointing makes your progress durable: if the run is interrupted, work \
-    you have checkpointed is recovered and you resume from it. Aim for a few \
-    meaningful checkpoints over a task rather than many tiny ones or none.\n";
 
 /// Guidance appended to the role prompt when the sub-agent tools are
 /// registered: tells the model which sub-agent to delegate to, that several run

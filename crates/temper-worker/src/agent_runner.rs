@@ -10,61 +10,20 @@
 //! `smith-agent-protocol` wire contract.
 //!
 //! - [`OutOfProcessRunner`](crate::out_of_process_runner::OutOfProcessRunner)
-//!   spawns an agent program (the `anvil-agent` binary by default, or any coder)
-//!   speaking the protocol: context in via `TEMPER_CODING_WORKSPACE_CONTEXT`,
-//!   step-progress out on stdout (relayed via a [`ProgressSink`]), result back
-//!   via `TEMPER_CODING_WORKSPACE_RESULT`. This is the production path and the
-//!   reuse contract — "bring any agent that speaks the protocol".
-//! - test fakes return scripted results (and may emit scripted progress)
-//!   without any subprocess.
+//!   spawns an agent program (the `temper-agent` binary by default, or any
+//!   coder) speaking the protocol: context in via `--context`, result back via
+//!   `--result`.
+//! - test fakes return scripted results without any subprocess.
 //!
-//! The agent has git credentials only via the prepared repo checkouts (to push
-//! commits/checkpoints); it never calls the forge API. Step-progress markers
-//! are crash-recovery checkpoints the worker relays onward to the forge.
+//! The agent has git credentials only via the prepared repo checkouts; it never
+//! calls the forge API. The executor owns the final branch push.
 
 use std::path::Path;
-use std::sync::Arc;
 
-use temper_protocol_agent::{StepProgress, WorkspaceContext};
+use temper_protocol_agent::WorkspaceContext;
 use temper_protocol_worker::FailureClass;
 
 pub use temper_protocol_agent::WorkspaceResult;
-
-/// Where an [`AgentRunner`] reports step-progress checkpoints during a turn.
-///
-/// The runner emits one [`StepProgress`] per coherent step boundary (a marker
-/// of what was done and what was pushed); the sink is the worker's hook to
-/// relay it onward to the forge (via the daemon — the worker has no forge API
-/// client itself; the forge API is the daemon's job). Implementations must be
-/// cheap and non-blocking: a slow or failing sink must never stall or fail the
-/// agent turn, whose real product is the result + the pushed commits.
-pub trait ProgressSink: Send + Sync {
-    /// Records one checkpoint. Infallible by contract — swallow transport
-    /// trouble rather than surfacing it into the turn.
-    fn report(&self, progress: StepProgress);
-}
-
-/// A [`ProgressSink`] that logs each checkpoint via [`crate::observability`] and
-/// does nothing else. The default sink until the worker→daemon progress relay
-/// lands; safe in production now.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LoggingProgressSink;
-
-impl ProgressSink for LoggingProgressSink {
-    fn report(&self, progress: StepProgress) {
-        // Per-step progress trace, not a §7 catalog line (§5): keep it at debug.
-        tracing::debug!(target: "temper_worker", "{}", crate::observability::step_progress_line(&progress));
-    }
-}
-
-/// A [`ProgressSink`] that discards every checkpoint. For paths that do not
-/// relay progress (e.g. the stub executor, or tests not asserting on it).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NullProgressSink;
-
-impl ProgressSink for NullProgressSink {
-    fn report(&self, _progress: StepProgress) {}
-}
 
 /// Why an agent turn could not produce a [`WorkspaceResult`].
 ///
@@ -119,6 +78,5 @@ pub trait AgentRunner: Send + Sync {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        progress: Arc<dyn ProgressSink>,
     ) -> impl std::future::Future<Output = Result<WorkspaceResult, AgentRunError>> + Send;
 }

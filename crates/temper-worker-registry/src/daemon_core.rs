@@ -99,8 +99,8 @@ impl DaemonCore {
     /// Reconcile pending daemon jobs for one `(repo, role)` scan scope.
     ///
     /// Only pending jobs are pruned. Assigned/in-flight jobs remain in the
-    /// dispatch coordinator and keep their job context so result/progress
-    /// handling can complete normally.
+    /// dispatch coordinator and keep their job context so result handling can
+    /// complete normally.
     pub fn retain_pending_jobs_for_scope(
         &mut self,
         repo: &str,
@@ -177,21 +177,8 @@ impl DaemonCore {
         })
     }
 
-    /// The in-flight job whose payload carries this workspace correlation key
-    /// (the one cross-plane identifier; step-progress messages are keyed by
-    /// it rather than `job_id`). `None` when no assigned job matches.
-    pub fn in_flight_job_by_correlation_key(&self, correlation_key: &str) -> Option<InFlightJob> {
-        self.job_context.iter().find_map(|(job_id, (_, payload))| {
-            (payload_coordination_key(payload) == Some(correlation_key))
-                .then(|| self.in_flight_job(job_id))
-                .flatten()
-        })
-    }
-
     /// Whether any pending or assigned job is still known for this workspace
-    /// correlation key. This is broader than [`Self::in_flight_job_by_correlation_key`]:
-    /// cleanup must not remove a workstream that is queued behind the active
-    /// holder, either.
+    /// correlation key.
     pub fn workstream_active_by_correlation_key(&self, correlation_key: &str) -> bool {
         let correlation_key = correlation_key.trim();
         if correlation_key.is_empty() {
@@ -225,10 +212,6 @@ impl DaemonCore {
             WorkerProtocolMessage::Heartbeat(heartbeat) => self.handle_heartbeat(heartbeat),
             WorkerProtocolMessage::Result(result) => Some(self.handle_result(result)),
             WorkerProtocolMessage::LeaseAck(lease_ack) => self.handle_lease_ack(lease_ack),
-            // Progress is observability bookkeeping the daemon machine routes
-            // to the forge applier before reaching the core; no reply either
-            // way (fire-and-forget by contract).
-            WorkerProtocolMessage::Progress(_) => None,
             WorkerProtocolMessage::Error(_) => None,
         }
     }
@@ -320,8 +303,7 @@ fn manifest_repos(job_payload: &serde_json::Value, primary: &str) -> Vec<String>
     }
 }
 
-/// The job's coordination key (`workspace.coordination_key`), the one
-/// cross-plane identifier step-progress is keyed by.
+/// The job's coordination key (`workspace.coordination_key`).
 fn payload_coordination_key(job_payload: &serde_json::Value) -> Option<&str> {
     job_payload
         .get("workspace")
@@ -336,7 +318,6 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::Assign(msg) => msg.protocol_version,
         WorkerProtocolMessage::Heartbeat(msg) => msg.protocol_version,
         WorkerProtocolMessage::Result(msg) => msg.protocol_version,
-        WorkerProtocolMessage::Progress(msg) => msg.protocol_version,
         WorkerProtocolMessage::Release(msg) => msg.protocol_version,
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,

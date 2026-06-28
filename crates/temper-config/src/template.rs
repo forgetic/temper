@@ -62,9 +62,6 @@ lease_ttl_secs = 300
 provider = \"anthropic\"
 max_iterations = 250
 enable_subagents = false
-# Mid-run checkpoint commits/pushes and the model-facing checkpoint tool are off
-# by default. Enable only for explicit checkpoint-resume experiments.
-enable_checkpoints = false
 
 [agent.providers.anthropic]
 # url = \"https://api.anthropic.com\"

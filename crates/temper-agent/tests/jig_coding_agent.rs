@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_agent::{
-    CheckpointHook, ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
-    WorkspaceWorkItem, run_coding_agent_native, run_coding_agent_native_with_hooks,
+    ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
+    run_coding_agent_native,
 };
 
 #[path = "support/coding_agent_workspace.rs"]
@@ -265,107 +265,4 @@ fn multi_repo_context() -> WorkspaceContext {
         pull_request_freshness: None,
         agent_session: None,
     }
-}
-
-/// Records `checkpoint` tool calls so the test can assert the agent invoked it
-/// at its milestone (the real host commits + pushes; here we just record).
-struct RecordingCheckpoint {
-    labels: std::sync::Mutex<Vec<String>>,
-}
-
-#[async_trait::async_trait]
-impl CheckpointHook for RecordingCheckpoint {
-    async fn checkpoint(&self, label: &str) -> Result<Option<String>, String> {
-        self.labels
-            .lock()
-            .expect("labels lock")
-            .push(label.to_string());
-        Ok(Some("recorded-checkpoint-sha".to_string()))
-    }
-}
-
-/// The agent, given the `checkpoint` tool (a writable host hook), calls it at a
-/// coherent sub-milestone — proving the tool is registered and routes to the
-/// host's [`CheckpointHook`] (which is where the real commit+push lives).
-#[test]
-fn agent_invokes_the_checkpoint_tool_at_a_milestone() {
-    let checkout = TempCheckout::new("jig-coding-agent-checkpoint-tool");
-    checkout.init_git();
-
-    let recorder = Arc::new(RecordingCheckpoint {
-        labels: std::sync::Mutex::new(Vec::new()),
-    });
-    let fake = checkpoint_tool_fake();
-    let provider = ProviderConfig::new(
-        "jig-openai-compatible",
-        "jig-coding-agent-checkpoint-tool",
-        "https://example.invalid/unused-production-url",
-        "sk-jig-test",
-    )
-    .with_base_url_override(fake.base_url());
-
-    let context = workspace_context();
-    let cwd = checkout.path().to_path_buf();
-    let hook = recorder.clone();
-    let result = temper_agent_io::block_on_with(move |_cx, handle| async move {
-        run_coding_agent_native_with_hooks(
-            handle,
-            &provider,
-            &context,
-            &cwd,
-            6,
-            None,
-            false,
-            None,
-            None,
-            Some(hook as Arc<dyn CheckpointHook>),
-        )
-        .await
-        .map(|(result, _totals)| result)
-    })
-    .expect("native coding agent with a checkpoint hook succeeds");
-
-    assert_eq!(result.verdict, None);
-    assert_eq!(
-        recorder.labels.lock().expect("labels lock").clone(),
-        vec!["wrote NOTES.md".to_string()],
-        "the agent called the checkpoint tool with its milestone label"
-    );
-    // The product diff the agent left is still committed/pushed by the worker on
-    // the head path; here we just confirm NOTES.md was written.
-    assert_eq!(
-        fs::read_to_string(checkout.repo_path().join("NOTES.md")).expect("NOTES.md written"),
-        "project notes\n"
-    );
-}
-
-/// A fake LLM that, in one turn, writes the product file AND calls `checkpoint`,
-/// then returns the engineer success result.
-fn checkpoint_tool_fake() -> FakeLlm {
-    FakeLlm::start(Script::rule(move |view| {
-        if view.prior_tool_results == 0 {
-            Reply {
-                turns: vec![
-                    Turn::ToolCall {
-                        id: "call_write".to_string(),
-                        name: "write".to_string(),
-                        args: serde_json::json!({
-                            "path": "demo/NOTES.md",
-                            "content": "project notes\n"
-                        }),
-                    },
-                    Turn::ToolCall {
-                        id: "call_checkpoint".to_string(),
-                        name: "checkpoint".to_string(),
-                        args: serde_json::json!({ "label": "wrote NOTES.md" }),
-                    },
-                ],
-                usage: Default::default(),
-                stop: StopReason::ToolCalls,
-            }
-        } else {
-            Reply::text(r#"{"summary":"wrote NOTES.md and checkpointed"}"#)
-        }
-    }))
-    .expect("start fake LLM")
 }

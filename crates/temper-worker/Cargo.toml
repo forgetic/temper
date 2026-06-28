@@ -40,8 +40,8 @@ temper-worker-io = { path = "../temper-worker-io" }
 temper-workflow = { path = "../temper-workflow" }
 
 # A deterministic, hermetic agent that speaks the temper-protocol-agent: writes
-# a product file, emits step-progress, writes a result. Lets the worker e2e drive
-# the real out-of-process boundary without a cross-repo binary path or an LLM, via
+# a product file and a terminal result. Lets the worker e2e drive the real
+# out-of-process boundary without a cross-repo binary path or an LLM, via
 # CARGO_BIN_EXE_temper-fake-agent.
 [[bin]]
 name = "temper-fake-agent"

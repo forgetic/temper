@@ -41,10 +41,8 @@ impl EventSink for NullEventSink {
 ///
 /// A model call only starts once the previous turn's tool batch has fully
 /// drained (the machine sequences `CallLlm` strictly after the batch), so the
-/// hook runs with **no tool in flight** — the natural coherent step boundary
-/// for committing and pushing a workspace checkpoint (phase 6b). `turn` is
-/// zero-based; the first model call of a run is turn 0 (nothing has happened
-/// yet, so checkpoint hooks typically skip it).
+/// hook runs with **no tool in flight** — a natural coherent turn boundary.
+/// `turn` is zero-based; the first model call of a run is turn 0.
 ///
 /// The hook must not fail the run: it returns nothing and implementations
 /// swallow their own errors.

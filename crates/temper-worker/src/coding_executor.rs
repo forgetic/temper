@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use temper_protocol_agent::{StepProgress, WorkspaceResult};
+use temper_protocol_agent::WorkspaceResult;
 use temper_protocol_worker::{
     Assign, FailureClass, JobChild, JobContext, WorkspaceManifest, WorkspaceRepo,
 };
 
-use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink};
+use crate::agent_runner::{AgentRunError, AgentRunner};
 use crate::executor::{JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{
@@ -48,9 +48,6 @@ pub struct CodingExecutorConfig {
 pub struct CodingExecutor<R: AgentRunner> {
     config: CodingExecutorConfig,
     runner: Arc<R>,
-    /// Where agent step-progress checkpoints are relayed (logging by default;
-    /// the worker→daemon→forge relay plugs in here later).
-    progress: Arc<dyn ProgressSink>,
     /// Optional host-provided guard for PR-head freshness checks before pushes.
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
 }
@@ -60,7 +57,6 @@ impl<R: AgentRunner> CodingExecutor<R> {
         Self {
             config,
             runner,
-            progress: Arc::new(crate::agent_runner::LoggingProgressSink),
             pr_freshness_guard: None,
         }
     }
@@ -71,73 +67,20 @@ impl<R: AgentRunner> CodingExecutor<R> {
         self.pr_freshness_guard = Some(guard);
         self
     }
-
-    /// Overrides the step-progress sink (e.g. a daemon-relay sink, or a test
-    /// recorder).
-    pub fn with_progress_sink(mut self, progress: Arc<dyn ProgressSink>) -> Self {
-        self.progress = progress;
-        self
-    }
 }
 
 impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
     fn execute(&self, assign: Assign) -> impl std::future::Future<Output = JobOutcome> + Send {
         let config = self.config.clone();
         let runner = Arc::clone(&self.runner);
-        let progress = Arc::clone(&self.progress);
         let pr_freshness_guard = self.pr_freshness_guard.clone();
-        async move { execute(config, runner, progress, pr_freshness_guard, assign).await }
-    }
-}
-
-#[derive(Default)]
-struct PushedHeadTracker {
-    latest: Mutex<Option<String>>,
-}
-
-impl PushedHeadTracker {
-    fn record(&self, sha: &str) {
-        let sha = sha.trim();
-        if sha.is_empty() {
-            return;
-        }
-        if let Ok(mut latest) = self.latest.lock() {
-            *latest = Some(sha.to_string());
-        }
-    }
-
-    fn latest(&self) -> Option<String> {
-        self.latest.lock().ok().and_then(|latest| latest.clone())
-    }
-}
-
-struct TrackingProgressSink {
-    inner: Arc<dyn ProgressSink>,
-    pushed_heads: Arc<PushedHeadTracker>,
-}
-
-impl TrackingProgressSink {
-    fn new(inner: Arc<dyn ProgressSink>, pushed_heads: Arc<PushedHeadTracker>) -> Self {
-        Self {
-            inner,
-            pushed_heads,
-        }
-    }
-}
-
-impl ProgressSink for TrackingProgressSink {
-    fn report(&self, progress: StepProgress) {
-        if let Some(sha) = progress.pushed_sha.as_deref() {
-            self.pushed_heads.record(sha);
-        }
-        self.inner.report(progress);
+        async move { execute(config, runner, pr_freshness_guard, assign).await }
     }
 }
 
 async fn execute<R: AgentRunner>(
     config: CodingExecutorConfig,
     runner: Arc<R>,
-    progress: Arc<dyn ProgressSink>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
     assign: Assign,
 ) -> JobOutcome {
@@ -258,27 +201,17 @@ async fn execute<R: AgentRunner>(
         Err(outcome) => return outcome,
     };
 
-    let pushed_heads = Arc::new(PushedHeadTracker::default());
-    let progress_for_runner: Arc<dyn ProgressSink> = Arc::new(TrackingProgressSink::new(
-        Arc::clone(&progress),
-        Arc::clone(&pushed_heads),
-    ));
-
     // Run one agent turn with the cwd set to the workspace root (not a single
     // repo), so the agent can read and build every sibling. The runner owns the
-    // agent mechanism and streams step-progress checkpoints to the sink; the
-    // executor owns the workspace lifecycle around it.
-    let result = match runner
-        .run(&workspace_context, &workspace_root, progress_for_runner)
-        .await
-    {
+    // agent mechanism; the executor owns the workspace lifecycle around it.
+    let result = match runner.run(&workspace_context, &workspace_root).await {
         Ok(result) => result,
         Err(AgentRunError { class, message }) => {
             return failure(class, message);
         }
     };
 
-    let latest_self_pushed_sha = pushed_heads.latest();
+    let latest_self_pushed_sha = None;
 
     let outcome = match mode {
         JobMode::Writable | JobMode::PullRequestWritable => {
@@ -292,7 +225,7 @@ async fn execute<R: AgentRunner>(
                 pull_request_fix: mode == JobMode::PullRequestWritable,
                 pull_request_freshness: pull_request_freshness.as_ref(),
                 freshness_guard: pr_freshness_guard.as_deref(),
-                latest_self_pushed_sha: latest_self_pushed_sha.as_deref(),
+                latest_self_pushed_sha,
             })
             .await
         }
@@ -436,8 +369,8 @@ async fn prepare_writable(
         .await
         .map_err(|error| workspace_failure("prepare workspace", error))?;
     // Persist the role's git author identity + push credential into this
-    // writable checkout's local `.git/config`, so the spawned agent (which holds
-    // no token) can commit + push its checkpoints against the prepared branch.
+    // writable checkout's local `.git/config`; the worker owns the final branch
+    // push after the agent leaves a product diff.
     workspace
         .configure_local_identity()
         .await

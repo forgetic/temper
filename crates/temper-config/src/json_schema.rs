@@ -311,12 +311,6 @@ fn agent_config_schema() -> Value {
                 bool_schema("Enable the in-workspace investigate sub-agent tool."),
             ),
             (
-                "enable_checkpoints",
-                bool_schema(
-                    "Enable mid-run checkpoint commit/push hooks and the model-facing checkpoint tool.",
-                ),
-            ),
-            (
                 "config_dir",
                 string_schema("Optional agent config directory for prompt overlays."),
             ),

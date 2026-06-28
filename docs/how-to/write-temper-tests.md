@@ -28,7 +28,7 @@ current inventory, see [Testing pyramid](../reference/testing-pyramid.md) and
 
 - **Default hermetic real-stack tests** own behavior that can be proven with a
   memory/filesystem forge, local `file://` git, in-process daemon/worker
-  transport, deterministic fake agents, or a jig fake LLM. Put checkpoint→PR
+  transport, deterministic fake agents, or a jig fake LLM. Put implementation-PR
   handoff, retry/idempotency, role routing, worker protocol, and PR-body
   assertions here before reaching for live Forgejo.
 - **Deterministic `temper-sim` tests** own time, scheduling, retries,

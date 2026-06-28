@@ -40,14 +40,6 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     let _ = cq.send(DaemonCompletion::ApplyFinished { job_id });
                 });
             }
-            DaemonRequest::RunProgressApply { job, progress } => {
-                let applier = Arc::clone(&self.applier);
-                let cq = self.cq.clone();
-                self.spawner.spawn_with_cx(move |_cx| async move {
-                    applier.apply_progress(job, progress).await;
-                    let _ = cq.send(DaemonCompletion::ProgressApplyFinished);
-                });
-            }
             DaemonRequest::RunPullRequestFreshnessCheck { check, responder } => {
                 let applier = Arc::clone(&self.applier);
                 self.spawner.spawn_with_cx(move |_cx| async move {
@@ -85,7 +77,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 });
             }
             // Per-job daemon-protocol traces (`engine: assigned`, `engine:
-            // progress`, `engine: result received`, webhook/enqueue book-keeping).
+            // result received`, webhook/enqueue book-keeping).
             // These are between-step chatter, NOT the closed §7 info catalog (§5),
             // so they sit at debug; `RUST_LOG=info` shows only the §7 events +
             // startup banner. The §7 events go through `emit_*`, not this sink.

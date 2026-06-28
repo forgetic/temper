@@ -104,7 +104,7 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
     );
 }
 
-/// Records the `turn` of every hook invocation (phase 6b's checkpoint seam).
+/// Records the `turn` of every hook invocation.
 struct CountingHook {
     turns: std::sync::Mutex<Vec<usize>>,
 }

@@ -105,7 +105,7 @@ impl HermeticRealStack {
         self.issue_number
     }
 
-    /// Worker workspace root. Useful for inspecting session/checkpoint files.
+    /// Worker workspace root. Useful for inspecting session files.
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }

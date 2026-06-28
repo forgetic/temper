@@ -10,7 +10,7 @@ pub use temper_protocol_worker::{
 };
 pub use temper_worker::{
     AgentRunError, AgentRunner, CodingExecutor, CodingExecutorConfig, JobExecutor, JobOutcome,
-    ProgressSink, RoleGitIdentity, WorkspaceResult,
+    RoleGitIdentity, WorkspaceResult,
 };
 pub use tempfile::TempDir;
 

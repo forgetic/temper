@@ -105,10 +105,9 @@ snapshot.
   topology with webhook/git auth/host-mode Actions red→green merge gating and
   `temper init --apply` provisioning/config/daemon boot. The former live
   single-process `temper run` scenarios were deleted after hermetic real-stack
-  tests covered their value: checkpoint→PR handoff in
-  `crates/temper-testing/tests/hermetic_real_stack/checkpoint_pr.rs` and
-  provider server-error retry/requeue in
-  `crates/temper-testing/tests/hermetic_real_stack.rs`.
+  tests covered their value: implementation-PR handoff in
+  `crates/temper-testing/tests/hermetic_real_stack.rs` and provider
+  server-error retry/requeue in the same hermetic real-stack suite.
 - **Manual/all-e2e live tests** hold the remaining ignored scenarios: extra root
   Forgejo stories, provider/OAuth probes, lower-level Forgejo fixture smokes,
   provisioning edge cases, CI web-UI checks, and diagnostic/preflight coverage.
@@ -117,10 +116,10 @@ snapshot.
   hermetic coverage, or useful mainly when debugging the live fixture stack.
 - **Default hermetic real-stack tests** should absorb assertions about workflow
   logic, retry/idempotency, role routing, CLI artifact validation, worker/daemon
-  protocol behavior, checkpoint→PR handoff, and provider request shaping whenever
-  those assertions can be proven with memory/filesystem forges, fake HTTP, local
-  git, in-process transports, jig fake LLMs, or simulation without live
-  Forgejo/provider state.
+  protocol behavior, implementation-PR handoff, and provider request shaping
+  whenever those assertions can be proven with memory/filesystem forges, fake
+  HTTP, local git, in-process transports, jig fake LLMs, or simulation without
+  live Forgejo/provider state.
 
 ### Current ignored live files
 

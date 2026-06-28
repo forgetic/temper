@@ -28,9 +28,9 @@ fn main() {
 ///
 /// The worker links **no** agent/LLM code: every coding job runs out-of-process
 /// behind the `smith-agent-protocol`. The worker spawns the agent program
-/// (the `anvil-agent` binary by default, or any operator-provided coder),
-/// relaying its step-progress checkpoints. Credentials are the agent process's
-/// concern — it preflights its own provider login at job start.
+/// (the `temper-agent` binary by default, or any operator-provided coder).
+/// Credentials are the agent process's concern — it preflights its own provider
+/// login at job start.
 fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
     match config.executor.clone() {
         ExecutorSelection::Stub => {
@@ -63,34 +63,15 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
             // an external command is passed through verbatim.
             let agent_surface = surface.agent;
             let command = match agent_surface {
-                AgentSurface::AnvilNative(agent) => {
-                    let mut command = agent.into_command();
-                    command.push("--freshness-url".to_string());
-                    command.push(format!(
-                        "{}/v1/pr-freshness",
-                        config.daemon_url.trim_end_matches('/')
-                    ));
-                    command
-                }
+                AgentSurface::AnvilNative(agent) => agent.into_command(),
                 AgentSurface::ExternalCommand(command) => command,
             };
             let runner = Arc::new(OutOfProcessRunner::new(command));
             temper_worker_io::block_on_with(move |_cx, handle| async move {
-                // Relay agent step-progress checkpoints to the daemon (which
-                // applies them to the forge idempotently); transport trouble is
-                // logged and dropped, never failing the turn. Built inside the
-                // engine task so it holds the runtime handle explicitly.
-                let progress_sink = Arc::new(temper_worker::DaemonRelayProgressSink::new(
-                    handle.clone(),
-                    &config.daemon_url,
-                    config.worker_id.clone(),
-                ));
                 let executor = Arc::new(
-                    CodingExecutor::new(executor_config, runner)
-                        .with_pr_freshness_guard(Arc::new(
-                            temper_worker::HttpPrFreshnessGuard::new(&config.daemon_url),
-                        ))
-                        .with_progress_sink(progress_sink),
+                    CodingExecutor::new(executor_config, runner).with_pr_freshness_guard(Arc::new(
+                        temper_worker::HttpPrFreshnessGuard::new(&config.daemon_url),
+                    )),
                 );
                 run_worker(handle, config, executor)
                     .await

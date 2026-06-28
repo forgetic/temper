@@ -258,13 +258,12 @@ impl Workspace {
     pub async fn prepare(&self, work_branch: &str) -> Result<(), WorkspaceError> {
         self.prepare_base_checkout().await?;
 
-        // Crash-resume: when the work branch already exists on the forge (a
-        // prior dispatch pushed checkpoints or a full result before dying, or
-        // a revise round is re-entering an existing PR head), resume from it
-        // instead of resetting to base — resetting would orphan the pushed
-        // commits and make the agent's next checkpoint push non-fast-forward.
-        // A fetch failure (most commonly: the branch does not exist yet) falls
-        // back to a fresh branch from base.
+        // Resume from an existing work branch when it is already on the forge
+        // (for example after a worker pushed a full result before dying, or a
+        // revise round is re-entering an existing PR head) instead of resetting
+        // to base — resetting would orphan the pushed commits and make the
+        // final worker push non-fast-forward. A fetch failure (most commonly:
+        // the branch does not exist yet) falls back to a fresh branch from base.
         let start_point = match self.try_fetch_work_branch(work_branch).await {
             true => format!("origin/{work_branch}"),
             false => format!("origin/{}", self.base_branch),
@@ -472,17 +471,17 @@ impl Workspace {
     }
 
     /// True when HEAD's tree differs from the fetched base branch. A clean
-    /// working tree can still hold checkpoint-committed product work, but an
-    /// empty checkpoint commit leaves this false even though HEAD is ahead.
+    /// working tree can still hold committed product work from a recovered
+    /// branch; an empty commit leaves this false even though HEAD is ahead.
     pub async fn tree_differs_from_base(&self) -> Result<bool, WorkspaceError> {
         let base = format!("origin/{}", self.base_branch);
         self.tree_differs_from_ref(&base).await
     }
 
     /// True when HEAD's tree differs from another commit/ref. This ignores
-    /// commit metadata, so an empty checkpoint commit does not count as product
-    /// work; callers that start from an existing PR branch can use the prepared
-    /// head SHA as the baseline instead of the target base branch.
+    /// commit metadata, so an empty commit does not count as product work;
+    /// callers that start from an existing PR branch can use the prepared head
+    /// SHA as the baseline instead of the target base branch.
     pub async fn tree_differs_from_ref(&self, reference: &str) -> Result<bool, WorkspaceError> {
         let output = self
             .run_workspace_git(

@@ -5,22 +5,10 @@
 //! lines as data ([`WorkerRequest::Log`](crate::worker_machine::WorkerRequest))
 //! without doing I/O.
 
-use temper_protocol_agent::StepProgress;
 use temper_protocol_worker::{Assign, FailureClass, JobResult, ResultStatus};
 
 pub fn registered_worker_line(worker_id: &str, capability_count: usize) -> String {
     format!("worker: registered worker_id={worker_id} capabilities={capability_count}")
-}
-
-/// One operational line per agent step-progress checkpoint the worker relays.
-/// The `correlation_key` joins it to the job (and to the out-of-band control
-/// plane); `sha` is the pushed checkpoint, when present, for crash recovery.
-pub fn step_progress_line(progress: &StepProgress) -> String {
-    let sha = progress.pushed_sha.as_deref().unwrap_or("-");
-    format!(
-        "worker: step-progress correlation={} step={} status={:?} sha={} :: {}",
-        progress.correlation_key, progress.step, progress.state, sha, progress.status
-    )
 }
 
 pub fn assigned_job_line(assign: &Assign) -> String {

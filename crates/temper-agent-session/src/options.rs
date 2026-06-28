@@ -16,15 +16,10 @@
 //! --provider-url <URL>        provider base URL override
 //! --max-iterations <N>        maximum model/tool iterations
 //! --subagents <on|off>        enable investigate/read-only subagents
-//! --deadline-unix-seconds <N> job deadline/lease expiry hint
-//! --checkpoints <on|off>    enable model/backstop checkpoints (default off)
-//! --checkpoint-interval <DUR> checkpoint cadence when checkpoints are on
-//! --freshness-url <URL>      optional daemon PR freshness check endpoint
 //! --capture-dir <DIR>         optional debug capture / prompt-overlay dir
 //! ```
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use temper_agent::{AuthChoice, DEFAULT_MAX_ITERATIONS};
 
@@ -46,22 +41,12 @@ pub(crate) struct Options {
     pub(crate) result: PathBuf,
     /// Checkout/workspace dir (`--workspace`); `None` defaults to cwd.
     pub(crate) workspace: Option<PathBuf>,
-    /// Optional daemon PR freshness check endpoint (`--freshness-url`).
-    pub(crate) freshness_url: Option<String>,
     /// Optional debug capture / prompt-overlay dir (`--capture-dir`).
     pub(crate) capture_dir: Option<PathBuf>,
     /// Maximum model/tool iterations (`--max-iterations`).
     pub(crate) max_iterations: usize,
     /// Whether investigate/read-only subagents are enabled (`--subagents`).
     pub(crate) subagents: bool,
-    /// Job deadline as a unix-seconds timestamp (`--deadline-unix-seconds`).
-    pub(crate) deadline_unix_seconds: Option<u64>,
-    /// Whether checkpoint hooks/tools are explicitly enabled (`--checkpoints`).
-    /// Defaults off.
-    pub(crate) checkpoints: bool,
-    /// Checkpoint backstop cadence (`--checkpoint-interval`); `None` uses the
-    /// session default. Only used when checkpointing is enabled.
-    pub(crate) checkpoint_interval: Option<Duration>,
 }
 
 impl Options {
@@ -76,10 +61,6 @@ impl Options {
         let mut capture_dir = None;
         let mut max_iterations = DEFAULT_MAX_ITERATIONS;
         let mut subagents = false;
-        let mut deadline_unix_seconds = None;
-        let mut checkpoints = false;
-        let mut checkpoint_interval = None;
-        let mut freshness_url = None;
 
         let mut iter = args.into_iter();
         while let Some(arg) = iter.next() {
@@ -106,18 +87,6 @@ impl Options {
                     }
                 }
                 "--subagents" => subagents = parse_toggle(&value(&mut iter, "--subagents")?)?,
-                "--deadline-unix-seconds" => {
-                    let raw = value(&mut iter, "--deadline-unix-seconds")?;
-                    deadline_unix_seconds = Some(raw.trim().parse::<u64>().map_err(|_| {
-                        format!("--deadline-unix-seconds expects a unix timestamp, got `{raw}`")
-                    })?);
-                }
-                "--checkpoints" => checkpoints = parse_toggle(&value(&mut iter, "--checkpoints")?)?,
-                "--checkpoint-interval" => {
-                    checkpoint_interval =
-                        Some(parse_duration(&value(&mut iter, "--checkpoint-interval")?)?)
-                }
-                "--freshness-url" => freshness_url = Some(value(&mut iter, "--freshness-url")?),
                 "--help" | "-h" => return Ok(None),
                 other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
             }
@@ -137,21 +106,15 @@ impl Options {
             capture_dir,
             max_iterations,
             subagents,
-            deadline_unix_seconds,
-            checkpoints,
-            checkpoint_interval,
-            freshness_url,
         }))
     }
 }
 
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
 [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
-[--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] \
-[--deadline-unix-seconds <N>] [--checkpoints <on|off>] [--checkpoint-interval <DURATION>] [--freshness-url <URL>] [--capture-dir <DIR>]\n  \
+[--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
---workspace (default cwd), emits step-progress JSON lines on stdout, writes the result \
-to --result";
+--workspace (default cwd), writes the result to --result";
 
 fn value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     iter.next()
@@ -177,26 +140,6 @@ fn parse_toggle(value: &str) -> Result<bool, String> {
         "off" => Ok(false),
         other => Err(format!("expected `on` or `off`, got `{other}`")),
     }
-}
-
-/// Parses a duration with a `s`/`m`/`h` suffix (e.g. `60s`, `5m`, `1h`). A bare
-/// number is treated as seconds.
-fn parse_duration(raw: &str) -> Result<Duration, String> {
-    let raw = raw.trim();
-    let (digits, scale) = match raw.strip_suffix('s') {
-        Some(digits) => (digits, 1),
-        None => match raw.strip_suffix('m') {
-            Some(digits) => (digits, 60),
-            None => match raw.strip_suffix('h') {
-                Some(digits) => (digits, 3_600),
-                None => (raw, 1),
-            },
-        },
-    };
-    let amount = digits.trim().parse::<u64>().map_err(|_| {
-        format!("--checkpoint-interval expects a duration like `60s` or `5m`, got `{raw}`")
-    })?;
-    Ok(Duration::from_secs(amount.saturating_mul(scale)))
 }
 
 #[cfg(test)]
@@ -231,7 +174,6 @@ mod tests {
         assert!(options.workspace.is_none());
         assert_eq!(options.provider, AuthChoice::ChatGptOAuth);
         assert!(!options.subagents);
-        assert!(!options.checkpoints);
     }
 
     #[test]
@@ -261,12 +203,6 @@ mod tests {
             "250",
             "--subagents",
             "on",
-            "--deadline-unix-seconds",
-            "1781701200",
-            "--checkpoints",
-            "on",
-            "--checkpoint-interval",
-            "5m",
             "--capture-dir",
             "/cap",
         ])
@@ -282,9 +218,6 @@ mod tests {
         assert_eq!(options.capture_dir, Some(PathBuf::from("/cap")));
         assert_eq!(options.max_iterations, 250);
         assert!(options.subagents);
-        assert_eq!(options.deadline_unix_seconds, Some(1_781_701_200));
-        assert!(options.checkpoints);
-        assert_eq!(options.checkpoint_interval, Some(Duration::from_secs(300)));
     }
 
     #[test]
@@ -303,14 +236,5 @@ mod tests {
         assert!(parse_toggle("on").unwrap());
         assert!(!parse_toggle("off").unwrap());
         assert!(parse_toggle("yes").is_err());
-    }
-
-    #[test]
-    fn duration_parses_suffixes() {
-        assert_eq!(parse_duration("60s").unwrap(), Duration::from_secs(60));
-        assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3_600));
-        assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
-        assert!(parse_duration("5x").is_err());
     }
 }

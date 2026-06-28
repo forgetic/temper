@@ -58,15 +58,6 @@ fn system_prompt_engineer_omits_checkpoint_guidance_by_default() {
 }
 
 #[test]
-fn checkpoint_guidance_is_only_in_the_opt_in_guidance_block() {
-    let engineer = system_prompt(Capability::CodingWorkspace, &[]);
-    assert!(!engineer.contains("CHECKPOINTS:"));
-    assert!(CHECKPOINT_GUIDANCE.contains("CHECKPOINTS:"));
-    assert!(CHECKPOINT_GUIDANCE.contains("checkpoint` tool"));
-    assert!(CHECKPOINT_GUIDANCE.contains("meaningful checkpoints"));
-}
-
-#[test]
 fn system_prompt_without_allowed_verdicts_has_no_constraint_block() {
     // Back-compat: an empty vocabulary leaves the built-in per-role menu and adds
     // no constraint section.

@@ -9,9 +9,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use temper_protocol_worker::{
-    JobProgress, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
-};
+use temper_protocol_worker::{JobResult, PullRequestFreshness, PullRequestFreshnessResponse};
 
 use crate::InFlightJob;
 
@@ -24,17 +22,6 @@ use crate::InFlightJob;
 #[async_trait::async_trait]
 pub trait ResultApplier: Send + Sync {
     async fn apply(&self, job: InFlightJob, result: JobResult);
-
-    /// Applies one agent step-progress checkpoint for an in-flight job.
-    ///
-    /// Default: no-op. Implementations must be **idempotent for re-delivery** —
-    /// PR checklist progress is naturally keyed by `(correlation_key, status,
-    /// state)`, while terminal final-summary comments use a
-    /// `(correlation_key, step, state)` marker. Workers fire-and-forget and may
-    /// re-deliver after retry or daemon restart.
-    async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
-        let _ = (job, progress);
-    }
 
     /// Validates whether a PR-targeted in-flight job may still publish work.
     async fn check_pull_request_freshness(
@@ -82,13 +69,6 @@ impl ResultApplier for RoleRoutingApplier {
         match self.routes.get(&job.role) {
             Some(applier) => applier.apply(job, result).await,
             None => self.default.apply(job, result).await,
-        }
-    }
-
-    async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
-        match self.routes.get(&job.role) {
-            Some(applier) => applier.apply_progress(job, progress).await,
-            None => self.default.apply_progress(job, progress).await,
         }
     }
 

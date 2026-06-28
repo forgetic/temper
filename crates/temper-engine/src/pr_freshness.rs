@@ -3,9 +3,9 @@
 //! Freshness predicate for in-flight PR-head jobs.
 //!
 //! A `pull_request_writable` job is assigned against a specific PR head and a
-//! queue condition. Before that job publishes more work (checkpoint/final push)
-//! or the daemon applies late progress/results, the current Forge state must
-//! still describe the same actionable PR.
+//! queue condition. Before that job publishes its final fix push or the daemon
+//! applies late results, the current Forge state must still describe the same
+//! actionable PR.
 
 use temper_forge::{
     CiJobQuery, Forge, ItemNumber, PullRequestReviewStatus, PullRequestState, RepositoryId,
@@ -414,7 +414,7 @@ mod tests {
         temper_engine_io::block_on(async {
             let (forge, repo, pr) = setup().await;
             let check = check(&repo, &pr);
-            let self_head = "checkpoint-head";
+            let self_head = "self-pushed-head";
             forge
                 .set_pull_request_head(&pr.id, Some(self_head.to_string()))
                 .expect("advance PR head");
@@ -449,7 +449,7 @@ mod tests {
             let response = check_pull_request_freshness_with_self_pushed_head(
                 &forge,
                 &check,
-                Some("checkpoint-head"),
+                Some("self-pushed-head"),
             )
             .await;
 

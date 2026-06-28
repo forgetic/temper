@@ -12,9 +12,6 @@ use temper_testing::real_stack::{
     HermeticRepoSpec,
 };
 
-#[path = "hermetic_real_stack/checkpoint_pr.rs"]
-mod checkpoint_pr;
-
 #[test]
 fn hermetic_real_stack_smoke_runs_worker_daemon_native_agent_and_opens_pr() {
     temper_engine_io::block_on_with(|cx, handle| async move {
@@ -102,8 +99,6 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             .build(&handle)
             .await
             .expect("hermetic real stack builds");
-        let correlation_key = format!("pr-for-code-{}", stack.issue_number().get());
-
         assert_eq!(
             stack
                 .enqueue_scanned_role_work(default_now())
@@ -112,21 +107,6 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             1
         );
         stack.start_worker(&handle);
-
-        let claimed = wait_for_issue_matching(
-            &cx,
-            &stack,
-            Duration::from_secs(5),
-            "source issue to be claimed by started progress",
-            |issue| {
-                issue.labels.iter().any(|label| label == "in-progress")
-                    && !issue.labels.iter().any(|label| label == "ready")
-                    && !issue.assignees.is_empty()
-                    && issue.body.contains("Current status: editing")
-            },
-        )
-        .await;
-        assert_one_run_ledger(&claimed.body, &correlation_key);
 
         let first_result = stack
             .await_worker_result(&cx, Duration::from_secs(10))
@@ -149,24 +129,23 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             "fake provider should see the initial HTTP 500 plus configured stream retries"
         );
 
-        let released = wait_for_issue_matching(
-            &cx,
-            &stack,
-            Duration::from_secs(5),
-            "transient failure retry release",
-            |issue| {
-                issue.labels.iter().any(|label| label == "ready")
-                    && !issue.labels.iter().any(|label| label == "in-progress")
-                    && issue.assignees.is_empty()
-                    && issue.body.contains("Current status: queued for retry")
-                    && issue
-                        .body
-                        .contains("Retry: released back to the ready queue")
-            },
-        )
-        .await;
-        assert_one_run_ledger(&released.body, &correlation_key);
-        assert!(released.body.contains("Latest progress: step 1"));
+        let issue_after_failure = current_issue(&stack).await;
+        assert!(
+            issue_after_failure
+                .labels
+                .iter()
+                .any(|label| label == "ready")
+        );
+        assert!(
+            !issue_after_failure
+                .labels
+                .iter()
+                .any(|label| label == "in-progress"),
+            "transient failure should not leave a source claim behind: {:?}",
+            issue_after_failure.labels
+        );
+        assert!(issue_after_failure.assignees.is_empty());
+        assert!(!issue_after_failure.body.contains("Temper run ledger"));
         assert_no_human_attention(&stack).await;
         assert!(
             stack
@@ -209,24 +188,13 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             pull.body
         );
 
-        let expected_handoff = format!("continued in PR #{}", pull.number.get());
-        let finalized = wait_for_issue_matching(
-            &cx,
-            &stack,
-            Duration::from_secs(5),
-            "source issue ledger to finalize to the implementation PR",
-            |issue| {
-                issue.body.contains(&expected_handoff)
-                    && !issue.body.contains("Current status: queued for retry")
-            },
-        )
-        .await;
-        assert_one_run_ledger(&finalized.body, &correlation_key);
+        let finalized = current_issue(&stack).await;
         assert!(
             !finalized.labels.iter().any(|label| label == "needs-human"),
             "recovered issue should not be marked for human attention: {:?}",
             finalized.labels
         );
+        assert!(!finalized.body.contains("Temper run ledger"));
         assert_eq!(
             observed_success_continuation.load(Ordering::SeqCst),
             1,
@@ -356,20 +324,6 @@ async fn assert_no_human_attention(stack: &HermeticRealStack) {
             .iter()
             .map(|comment| comment.body.as_str())
             .collect::<Vec<_>>()
-    );
-}
-
-fn assert_one_run_ledger(body: &str, correlation_key: &str) {
-    let marker = format!("<!-- temper-run-ledger correlation_key={correlation_key} -->");
-    assert_eq!(
-        body.matches(&marker).count(),
-        1,
-        "expected exactly one run ledger marker in issue body: {body}"
-    );
-    assert_eq!(
-        body.matches("<!-- /temper-run-ledger -->").count(),
-        1,
-        "expected exactly one run ledger end marker in issue body: {body}"
     );
 }
 

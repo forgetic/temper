@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::agent::agent_surface;
 use super::types::{CapabilitySpec, CodingSurface, ExecutorSelection, ParseOutcome, WorkerConfig};
 
-pub const USAGE: &str = "smith-worker --daemon-url <url> --worker-id <id> --capability <owner/name>:<role> [--capability ...] [--max-concurrent <n>] [--poll-wait-ms <n>] [--heartbeat-interval-ms <n>] [--executor <stub|coding>] [--workspace-root <path>] [--git-base-url <url>] [--agent-command <anvil-native|program>] [--agent-arg <arg> ...]\n  --agent-command anvil-native spawns the out-of-process anvil-agent; its --agent-arg values (--agent-program, --provider, --model, --capture-dir, --max-iterations, --subagents, --checkpoints) become the agent's flags. Any other --agent-command is spawned verbatim over the same protocol.";
+pub const USAGE: &str = "smith-worker --daemon-url <url> --worker-id <id> --capability <owner/name>:<role> [--capability ...] [--max-concurrent <n>] [--poll-wait-ms <n>] [--heartbeat-interval-ms <n>] [--executor <stub|coding>] [--workspace-root <path>] [--git-base-url <url>] [--agent-command <anvil-native|program>] [--agent-arg <arg> ...]\n  --agent-command anvil-native spawns the out-of-process temper-agent; its --agent-arg values (--agent-program, --provider, --model, --capture-dir, --max-iterations, --subagents) become the agent's flags. Any other --agent-command is spawned verbatim over the same protocol.";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome, String> {
     let args: Vec<String> = args.into_iter().collect();

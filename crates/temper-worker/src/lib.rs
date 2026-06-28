@@ -23,17 +23,13 @@ pub mod executor;
 pub mod observability;
 pub mod out_of_process_runner;
 pub mod pr_freshness;
-pub mod progress_relay;
 pub mod run;
 pub mod transport;
 pub mod worker_machine;
 pub mod worker_shell;
 pub mod workspace;
 
-pub use agent_runner::{
-    AgentRunError, AgentRunner, LoggingProgressSink, NullProgressSink, ProgressSink,
-    WorkspaceResult,
-};
+pub use agent_runner::{AgentRunError, AgentRunner, WorkspaceResult};
 pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
 pub use config::{
@@ -48,7 +44,6 @@ pub use pr_freshness::{
     HttpPrFreshnessGuard, PrFreshnessFailure, PrFreshnessGuard,
     map_response as map_pr_freshness_response,
 };
-pub use progress_relay::{DaemonRelayProgressSink, progress_message};
 pub use run::{run_worker, run_worker_with_transport};
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};

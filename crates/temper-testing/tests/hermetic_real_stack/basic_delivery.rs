@@ -145,16 +145,12 @@ fn hermetic_real_stack_basic_delivery_architect_triages_then_engineer_opens_pr()
             &cx,
             &stack,
             Duration::from_secs(5),
-            "basic-delivery source issue finalized to the implementation PR",
-            |issue| {
-                issue.labels == vec!["code".to_string()]
-                    && issue
-                        .body
-                        .contains(&format!("continued in PR #{}", pull.number.get()))
-            },
+            "basic-delivery source issue finalized after implementation PR creation",
+            |issue| issue.labels == vec!["code".to_string()],
         )
         .await;
         assert!(finalized.body.contains("## Code spec"));
+        assert!(!finalized.body.contains("Temper run ledger"));
         assert_eq!(
             observed_engineer_continuation.load(Ordering::SeqCst),
             1,

@@ -148,12 +148,12 @@ fn stale_pr_fix_cancels_before_final_push() {
 }
 
 #[test]
-fn pr_fix_final_freshness_uses_latest_checkpoint_head() {
+fn pr_fix_final_freshness_uses_assignment_head() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let guard = Arc::new(RecordingFreshGuard::new());
         let executor = fixture
-            .executor(AgentBehavior::CheckpointCommits.runner(), true)
+            .executor(AgentBehavior::Success.runner(), true)
             .with_pr_freshness_guard(guard.clone());
 
         let outcome = executor
@@ -163,18 +163,16 @@ fn pr_fix_final_freshness_uses_latest_checkpoint_head() {
             ))
             .await;
 
-        let (_branch_name, head_sha, summary) = expect_success(outcome);
-        assert_eq!(summary.as_deref(), Some("checkpointed the work"));
+        let (_branch_name, _head_sha, summary) = expect_success(outcome);
+        assert_eq!(summary.as_deref(), Some("did the work"));
         let checks = guard.checks();
         assert_eq!(
             checks.len(),
             1,
             "final push freshness should be checked once"
         );
-        assert_eq!(checks[0].head_sha.as_deref(), Some(head_sha.as_str()));
-        assert_ne!(checks[0].head_sha.as_deref(), Some("assigned-head"));
-        assert_eq!(checks[0].queue_condition, None);
-        assert!(checks[0].queue_labels.is_empty());
+        assert_eq!(checks[0].head_sha.as_deref(), Some("assigned-head"));
+        assert_eq!(checks[0].queue_condition.as_deref(), Some("ci_failed"));
     });
 }
 
@@ -528,10 +526,10 @@ fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
 }
 
 #[test]
-fn empty_checkpoint_commit_is_not_a_successful_product_diff() {
+fn empty_local_commit_is_not_a_successful_product_diff() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
-        let executor = fixture.executor(AgentBehavior::EmptyCheckpointCommit.runner(), true);
+        let executor = fixture.executor(AgentBehavior::EmptyCommit.runner(), true);
 
         let outcome = executor
             .execute(assign("agent/pr-for-code-10", "pr-for-code-10"))
@@ -547,10 +545,10 @@ fn empty_checkpoint_commit_is_not_a_successful_product_diff() {
 }
 
 #[test]
-fn checkpoint_committed_work_with_clean_tree_succeeds() {
+fn locally_committed_work_with_clean_tree_succeeds() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
-        let executor = fixture.executor(AgentBehavior::CheckpointCommits.runner(), true);
+        let executor = fixture.executor(AgentBehavior::LocalCommit.runner(), true);
 
         let outcome = executor
             .execute(assign("agent/pr-for-code-11", "pr-for-code-11"))
@@ -558,7 +556,7 @@ fn checkpoint_committed_work_with_clean_tree_succeeds() {
 
         let (branch_name, head_sha, summary) = expect_success(outcome);
         assert_eq!(branch_name, "agent/pr-for-code-11");
-        assert_eq!(summary.as_deref(), Some("checkpointed the work"));
+        assert_eq!(summary.as_deref(), Some("committed the work locally"));
         assert_eq!(
             git_output([
                 "-C",
@@ -577,18 +575,18 @@ fn checkpoint_committed_work_with_clean_tree_succeeds() {
                 "--format=%s",
                 "refs/heads/agent/pr-for-code-11",
             ]),
-            "checkpoint(step 2): push checkpoint"
+            "agent local product commit"
         );
     });
 }
 
-/// Phase 6b: a re-dispatch for the same branch resumes from the pushed remote
-/// branch (the prior dispatch's checkpoints) instead of resetting to base.
+/// A re-dispatch for the same branch resumes from the pushed remote branch
+/// instead of resetting to base.
 #[test]
 fn redispatch_resumes_from_pushed_work_branch() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
-        let first = AgentBehavior::CheckpointCommits.runner();
+        let first = AgentBehavior::LocalCommit.runner();
         let executor = fixture.executor(first, true);
         let (_, first_head, _) = expect_success(
             executor
@@ -597,7 +595,7 @@ fn redispatch_resumes_from_pushed_work_branch() {
         );
 
         // Second dispatch, same branch: the runner must observe the prior
-        // checkpoint as HEAD, not a fresh base checkout.
+        // pushed work as HEAD, not a fresh base checkout.
         let second = AgentBehavior::Success.runner();
         let executor = fixture.executor(second.clone(), true);
         expect_success(

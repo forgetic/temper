@@ -43,11 +43,6 @@ fn coordinated_job_dispatches_only_to_an_all_repo_capable_worker() {
         }
         other => panic!("expected assign, got {other:?}"),
     }
-
-    let resolved = core
-        .in_flight_job_by_correlation_key("coord-1")
-        .expect("coordination key resolves to the in-flight job");
-    assert_eq!(resolved.job_id, "job-coord");
 }
 
 #[test]
