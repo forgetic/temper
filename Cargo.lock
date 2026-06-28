@@ -2038,6 +2038,7 @@ dependencies = [
  "temper-workflow",
  "tempfile",
  "thiserror",
+ "toml",
  "tracing",
  "uuid",
 ]

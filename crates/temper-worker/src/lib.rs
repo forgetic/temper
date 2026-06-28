@@ -23,6 +23,7 @@ pub mod executor;
 pub mod observability;
 pub mod out_of_process_runner;
 pub mod pr_freshness;
+pub mod pre_push;
 pub mod run;
 pub mod transport;
 pub mod worker_machine;
@@ -43,6 +44,9 @@ pub use out_of_process_runner::OutOfProcessRunner;
 pub use pr_freshness::{
     HttpPrFreshnessGuard, PrFreshnessFailure, PrFreshnessGuard,
     map_response as map_pr_freshness_response,
+};
+pub use pre_push::{
+    PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, run_pre_push_checks,
 };
 pub use run::{run_worker, run_worker_with_transport};
 pub use transport::{HttpTransport, Transport};
