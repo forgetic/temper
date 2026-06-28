@@ -68,6 +68,11 @@ fn hermetic_real_stack_smoke_runs_worker_daemon_native_agent_and_opens_pr() {
     });
 }
 
+#[path = "hermetic_real_stack/basic_delivery.rs"]
+mod basic_delivery;
+#[path = "hermetic_real_stack/multi_repo.rs"]
+mod multi_repo;
+
 #[test]
 fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
     let _retry_override = install_stream_retry_config_override(StreamRetryConfig {

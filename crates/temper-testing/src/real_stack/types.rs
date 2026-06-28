@@ -66,6 +66,15 @@ impl HermeticIssueSpec {
         }
     }
 
+    /// Creates an untriaged intake issue for the basic-delivery architect queue.
+    pub fn untriaged_intake(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+            labels: vec!["untriaged".to_string()],
+        }
+    }
+
     /// Replaces the issue labels.
     #[must_use]
     pub fn labels(mut self, labels: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -93,6 +102,18 @@ pub struct WorkerRoleSpec {
 }
 
 impl WorkerRoleSpec {
+    /// Default architect identity used by read-only triage tests.
+    pub fn architect() -> Self {
+        Self {
+            role: "architect".to_string(),
+            worker_id: DEFAULT_WORKER_ID.to_string(),
+            git_user: "Hermetic Architect".to_string(),
+            git_email: "architect@example.test".to_string(),
+            git_token: "test-token".to_string(),
+            max_concurrent_jobs: 1,
+        }
+    }
+
     /// Default engineer identity used by `code_ready` smoke tests.
     pub fn engineer() -> Self {
         Self {
