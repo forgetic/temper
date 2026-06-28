@@ -69,9 +69,9 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
             let runner = Arc::new(OutOfProcessRunner::new(command));
             temper_worker_io::block_on_with(move |_cx, handle| async move {
                 let executor = Arc::new(
-                    CodingExecutor::new(executor_config, runner).with_pr_freshness_guard(
-                        Arc::new(temper_worker::HttpPrFreshnessGuard::new(&config.daemon_url)),
-                    ),
+                    CodingExecutor::new(executor_config, runner).with_pr_freshness_guard(Arc::new(
+                        temper_worker::HttpPrFreshnessGuard::new(&config.daemon_url),
+                    )),
                 );
                 run_worker(handle, config, executor)
                     .await

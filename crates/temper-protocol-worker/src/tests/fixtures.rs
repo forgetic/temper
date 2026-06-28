@@ -84,4 +84,3 @@ fn unknown_fields_are_ignored() {
 
     assert!(matches!(msg, WorkerProtocolMessage::Poll(_)));
 }
-

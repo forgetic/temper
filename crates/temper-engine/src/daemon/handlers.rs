@@ -17,8 +17,8 @@ use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_
 
 use super::machine::{DaemonMachine, DaemonRequest, PollWaiter};
 use super::protocol::{
-    ResultDisposition, assignment_log_line, is_poll_timeout, protocol_response,
-    result_disposition, result_disposition_log_value, result_received_log_line,
+    ResultDisposition, assignment_log_line, is_poll_timeout, protocol_response, result_disposition,
+    result_disposition_log_value, result_received_log_line,
 };
 use super::state_dto::{DaemonStateSnapshot, JobDto};
 

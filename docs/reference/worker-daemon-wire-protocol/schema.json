@@ -20,9 +20,6 @@
    "$ref": "#/$defs/result"
   },
   {
-   "$ref": "#/$defs/progress"
-  },
-  {
    "$ref": "#/$defs/release"
   },
   {
@@ -470,56 +467,6 @@
      }
     }
    ]
-  },
-  "progress": {
-   "type": "object",
-   "required": [
-    "type",
-    "protocol_version",
-    "worker_id",
-    "correlation_key",
-    "step",
-    "status",
-    "state"
-   ],
-   "properties": {
-    "type": {
-     "const": "progress"
-    },
-    "protocol_version": {
-     "type": "integer",
-     "minimum": 1
-    },
-    "worker_id": {
-     "type": "string",
-     "minLength": 1
-    },
-    "correlation_key": {
-     "type": "string",
-     "minLength": 1
-    },
-    "step": {
-     "type": "integer",
-     "minimum": 1
-    },
-    "status": {
-     "type": "string",
-     "minLength": 1
-    },
-    "state": {
-     "enum": [
-      "started",
-      "done"
-     ]
-    },
-    "pushed_sha": {
-     "type": "string",
-     "minLength": 1
-    },
-    "note": {
-     "type": "string"
-    }
-   }
   },
   "release": {
    "type": "object",

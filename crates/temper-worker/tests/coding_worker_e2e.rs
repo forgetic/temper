@@ -202,7 +202,6 @@ fn worker_reports_transient_failure_when_agent_crashes_before_result() {
         failure.class,
         temper_protocol_worker::FailureClass::Transient
     );
-
 }
 
 // ---------------------------------------------------------------------------

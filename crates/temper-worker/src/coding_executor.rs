@@ -67,7 +67,6 @@ impl<R: AgentRunner> CodingExecutor<R> {
         self.pr_freshness_guard = Some(guard);
         self
     }
-
 }
 
 impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {

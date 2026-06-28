@@ -39,9 +39,9 @@ The all/manual e2e lane is intentionally outside that target.
 - `temper::init_forgejo_e2e init_forgejo_drives_a_working_setup`
 
 `cargo nextest list --workspace --run-ignored only -P e2e` now lists 17 ignored
-live tests. The deleted entries are the former root `temper run` checkpoint→PR
-and provider server-error retry scenarios; their assertions live in hermetic
-real-stack coverage:
+live tests. The deleted entries are the former root `temper run` implementation
+PR handoff and provider server-error retry scenarios; their assertions live in
+hermetic real-stack coverage:
 
-- `crates/temper-testing/tests/hermetic_real_stack/checkpoint_pr.rs::hermetic_real_stack_checkpointed_product_diff_finalizes_implementation_pr`
+- `crates/temper-testing/tests/hermetic_real_stack/basic_delivery.rs::hermetic_real_stack_basic_delivery_architect_triages_then_engineer_opens_pr`
 - `crates/temper-testing/tests/hermetic_real_stack.rs::hermetic_real_stack_requeues_provider_server_error_and_later_succeeds`

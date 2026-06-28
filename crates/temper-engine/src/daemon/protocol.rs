@@ -8,7 +8,6 @@ use temper_protocol_worker::{
     Assign, ErrorCode, FailureClass, JobResult, ResultStatus, WorkerProtocolMessage,
 };
 
-
 pub(super) fn is_poll_timeout(message: &WorkerProtocolMessage) -> bool {
     matches!(
         message,

@@ -23,8 +23,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Wire-format version. Bumped on any breaking change to the context, result,
-/// or step-progress shapes. The context and each step-progress record embed it
-/// so a mismatch is a clean protocol error rather than a silent misparse.
+/// or provider-credential shapes. The context embeds it so a mismatch is a clean
+/// protocol error rather than a silent misparse.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// The **single** secret env var the agent consumes: the provider credential as
@@ -33,7 +33,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// The worker reads deployment config + secret sources, builds this JSON, and
 /// injects it into the spawned agent's environment. Every non-secret input (the
 /// context/result paths, the workspace, the provider/model/url, the
-/// deadline/cadence) is a CLI flag — only the credential crosses as env.
+/// workspace path) is a CLI flag — only the credential crosses as env.
 pub const PROVIDER_CREDENTIALS_ENV: &str = "TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON";
 
 /// The provider credential the worker hands the agent via

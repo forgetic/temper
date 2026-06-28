@@ -130,7 +130,12 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
         );
 
         let issue_after_failure = current_issue(&stack).await;
-        assert!(issue_after_failure.labels.iter().any(|label| label == "ready"));
+        assert!(
+            issue_after_failure
+                .labels
+                .iter()
+                .any(|label| label == "ready")
+        );
         assert!(
             !issue_after_failure
                 .labels

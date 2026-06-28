@@ -92,8 +92,8 @@ temper-worker = { path = "crates/temper-worker" }
 # engineer replies without real provider credentials.
 jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
 jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
-# `examples/checkpoint_progress_to_issue`: replays agent step-progress markers
-# through the daemon's apply_progress against an in-memory forge.
+# Root transport/config tests use in-memory Forge state and worker protocol DTOs
+# to assert daemon/worker behavior without a live Forge.
 temper-forge-memory = { path = "crates/temper-forge-memory" }
 temper-protocol-worker = { path = "crates/temper-protocol-worker" }
 # `temper init` e2e (`tests/init_forgejo_e2e.rs`): drives the `run_init` library

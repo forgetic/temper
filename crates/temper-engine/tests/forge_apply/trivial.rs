@@ -198,4 +198,3 @@ async fn wait_for_trivial_handoff(
         temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
-

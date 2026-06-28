@@ -26,8 +26,8 @@ pub(crate) fn drive(
     cwd: PathBuf,
     result_path: String,
 ) -> Result<(), String> {
-    let result = drive_coding_loop(&config, &context, &cwd)
-        .map_err(|error| describe_agent_error(&error))?;
+    let result =
+        drive_coding_loop(&config, &context, &cwd).map_err(|error| describe_agent_error(&error))?;
 
     write_result(&result_path, &result)
 }

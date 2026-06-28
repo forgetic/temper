@@ -266,4 +266,3 @@ fn multi_repo_context() -> WorkspaceContext {
         agent_session: None,
     }
 }
-

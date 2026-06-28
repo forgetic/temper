@@ -38,8 +38,8 @@ crates/temper-cli-init/tests/run_init.rs
 crates/temper-forge-memory/tests/backend.rs
 crates/temper-forge-filesystem/tests/issues.rs
 
-# Configuration surfaces intentionally remain façade modules while checkpoint
-# policy is threaded through schema/resolution; split after the config model
+# Configuration surfaces intentionally remain façade modules while the schema
+# and resolution layers carry deployment policy; split after the config model
 # is next refactored.
 crates/temper-cli-config/src/lib.rs
 crates/temper-config/src/schema.rs

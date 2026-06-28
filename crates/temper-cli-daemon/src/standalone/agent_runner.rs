@@ -12,7 +12,6 @@
 //! deployment keeps the subprocess `OutOfProcessRunner`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
@@ -49,7 +48,6 @@ impl InProcessAgentRunner {
             enable_subagents,
         }
     }
-
 }
 
 impl AgentRunner for InProcessAgentRunner {

@@ -98,7 +98,7 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
         "string"
     );
     assert_eq!(
-        properties["agent"]["properties"]["enable_checkpoints"]["type"],
+        properties["agent"]["properties"]["enable_subagents"]["type"],
         "boolean"
     );
     let pools = &properties["worker"]["properties"]["pools"];

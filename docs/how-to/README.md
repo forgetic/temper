@@ -10,7 +10,7 @@ Current guides:
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
 - [Run the cross-repo reference-delivery demo](run-cross-repo-reference-delivery-demo.md)
 - [Run the daemon end-to-end fixture](run-daemon-e2e.md)
-- [Verify checkpoint-only implementation PRs end to end](verify-checkpoint-implementation-prs.md)
+- [Verify implementation PR handoff end to end](verify-implementation-pr-handoff.md)
 - [Configure Smith LLM responders from Temper](use-chatgpt-oauth-auth.md)
 - [Configure a coding workspace external tool](configure-coding-workspace.md)
 - Run the operator demo: `examples/reference-delivery/` (`./run.sh`) —
