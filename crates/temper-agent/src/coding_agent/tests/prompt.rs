@@ -10,6 +10,8 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("ROLE: engineer"));
     assert!(engineer.contains("product diff"));
     assert!(engineer.contains("Do NOT run git commit"));
+    assert!(engineer.contains("submit_for_pr"));
+    assert!(engineer.contains("host responds with failure"));
     assert!(engineer.contains("needs_architect"));
     assert!(engineer.contains("needs_human"));
     assert!(!engineer.contains("checkpoint(label)"));

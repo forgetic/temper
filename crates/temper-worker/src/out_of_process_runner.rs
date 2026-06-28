@@ -18,15 +18,37 @@
 //! `tokio::process`: the worker runs on the skein runtime, which has no
 //! tokio reactor, so a blocking child must run on the blocking pool.
 
-use std::path::Path;
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
-use temper_protocol_agent::WorkspaceContext;
+use temper_protocol_agent::{
+    PROTOCOL_VERSION, SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest, SubmitForPrResponse,
+    WorkspaceContext,
+};
 
 use crate::agent_runner::{AgentRunError, AgentRunner, WorkspaceResult};
 
+/// Host-side submit gate used by the out-of-process carrier.
+type SubmitForPrHandler =
+    Arc<dyn Fn(SubmitForPrRequest, &WorkspaceContext, &Path) -> SubmitForPrResponse + Send + Sync>;
+
+fn default_submit_for_pr_handler() -> SubmitForPrHandler {
+    Arc::new(|request, _context, _cwd| {
+        SubmitForPrResponse::accepted(format!(
+            "host accepted submit_for_pr for {}; no submit gates are configured yet",
+            request.correlation_key
+        ))
+    })
+}
+
 /// Spawns an agent program speaking the `smith-agent-protocol`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct OutOfProcessRunner {
     /// Program followed by fixed arguments, e.g.
     /// `["temper", "agent", "--provider", "anthropic", "--model", "…"]`. The
@@ -37,6 +59,23 @@ pub struct OutOfProcessRunner {
     /// config-driven worker passes explicitly rather than relying on its own
     /// inherited environment.
     env: Vec<(String, String)>,
+    /// Host-controlled submit gate serviced over a worker-owned local channel
+    /// while the child process remains alive.
+    submit_for_pr: SubmitForPrHandler,
+}
+
+impl std::fmt::Debug for OutOfProcessRunner {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OutOfProcessRunner")
+            .field("command", &self.command)
+            .field(
+                "env",
+                &self.env.iter().map(|(key, _)| key).collect::<Vec<_>>(),
+            )
+            .field("submit_for_pr", &"<handler>")
+            .finish()
+    }
 }
 
 impl OutOfProcessRunner {
@@ -45,6 +84,7 @@ impl OutOfProcessRunner {
         Self {
             command,
             env: Vec::new(),
+            submit_for_pr: default_submit_for_pr_handler(),
         }
     }
 
@@ -52,6 +92,20 @@ impl OutOfProcessRunner {
     #[must_use]
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
         self.env = env;
+        self
+    }
+
+    /// Overrides the host-controlled `submit_for_pr` gate serviced for writable
+    /// engineer sessions.
+    #[must_use]
+    pub fn with_submit_for_pr_handler<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(SubmitForPrRequest, &WorkspaceContext, &Path) -> SubmitForPrResponse
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.submit_for_pr = Arc::new(handler);
         self
     }
 }
@@ -78,10 +132,26 @@ impl AgentRunner for OutOfProcessRunner {
             AgentRunError::transient(format!("write agent context file: {error}"))
         })?;
 
+        let submit_listener = if submit_for_pr_available(context) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+                AgentRunError::transient(format!("bind submit_for_pr side channel: {error}"))
+            })?;
+            let address = listener.local_addr().map_err(|error| {
+                AgentRunError::transient(format!(
+                    "read submit_for_pr side-channel address: {error}"
+                ))
+            })?;
+            Some((listener, address.to_string()))
+        } else {
+            None
+        };
+
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
         let env_owned: Vec<(String, String)> = self.env.clone();
         let cwd_owned = cwd.to_path_buf();
+        let context_owned = context.clone();
+        let submit_for_pr = self.submit_for_pr.clone();
         let context_path_owned = context_path.clone();
         let result_path_owned = result_path.clone();
         // `skein::runtime::spawn_blocking` returns the closure's value
@@ -93,8 +163,11 @@ impl AgentRunner for OutOfProcessRunner {
                 &args_owned,
                 &env_owned,
                 &cwd_owned,
+                &context_owned,
                 &context_path_owned,
                 &result_path_owned,
+                submit_listener,
+                submit_for_pr,
             )
         })
         .await;
@@ -141,8 +214,11 @@ fn run_child(
     args: &[String],
     env: &[(String, String)],
     cwd: &Path,
+    context: &WorkspaceContext,
     context_path: &Path,
     result_path: &Path,
+    submit_listener: Option<(TcpListener, String)>,
+    submit_for_pr: SubmitForPrHandler,
 ) -> Result<ChildOutcome, AgentRunError> {
     let mut command = Command::new(program);
     command
@@ -157,24 +233,128 @@ fn run_child(
         .arg(result_path)
         .arg("--workspace")
         .arg(cwd);
+    let submit_server = submit_listener.map(|(listener, address)| {
+        command.arg(SUBMIT_FOR_PR_ADDRESS_FLAG).arg(&address);
+        start_submit_server(
+            listener,
+            address,
+            submit_for_pr,
+            context.clone(),
+            cwd.to_path_buf(),
+        )
+    });
     // Inject the one secret (the provider credential) explicitly, so the agent
     // does not depend on the worker's own inherited environment.
     for (key, value) in env {
         command.env(key, value);
     }
-    let output = command
+    let output = match command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            AgentRunError::transient(format!("spawn agent command `{program}`: {error}"))
-        })?;
+        .spawn()
+    {
+        Ok(child) => child.wait_with_output().map_err(|error| {
+            AgentRunError::transient(format!("wait for agent command `{program}`: {error}"))
+        }),
+        Err(error) => Err(AgentRunError::transient(format!(
+            "spawn agent command `{program}`: {error}"
+        ))),
+    };
+    if let Some(server) = submit_server {
+        server.stop();
+    }
+    let output = output?;
 
     Ok(ChildOutcome {
         status_code: output.status.code(),
         stderr_tail: stderr_tail(&output.stderr, 2_000),
     })
+}
+
+struct SubmitServer {
+    stop: Arc<AtomicBool>,
+    address: String,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl SubmitServer {
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Wake a nonblocking accept loop promptly instead of waiting for the
+        // next poll interval.
+        let _ = TcpStream::connect(&self.address);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn start_submit_server(
+    listener: TcpListener,
+    address: String,
+    handler: SubmitForPrHandler,
+    context: WorkspaceContext,
+    cwd: PathBuf,
+) -> SubmitServer {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let thread = thread::spawn(move || {
+        if listener.set_nonblocking(true).is_err() {
+            return;
+        }
+        while !stop_for_thread.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((stream, _addr)) => handle_submit_stream(stream, &handler, &context, &cwd),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    SubmitServer {
+        stop,
+        address,
+        thread: Some(thread),
+    }
+}
+
+fn handle_submit_stream(
+    mut stream: TcpStream,
+    handler: &SubmitForPrHandler,
+    context: &WorkspaceContext,
+    cwd: &Path,
+) {
+    let mut request_bytes = Vec::new();
+    let response = match stream.read_to_end(&mut request_bytes) {
+        Ok(_) => match serde_json::from_slice::<SubmitForPrRequest>(&request_bytes) {
+            Ok(request) if request.protocol_version == PROTOCOL_VERSION => {
+                handler(request, context, cwd)
+            }
+            Ok(request) => SubmitForPrResponse::rejected(format!(
+                "submit_for_pr protocol version mismatch: got {}, expected {}",
+                request.protocol_version, PROTOCOL_VERSION
+            )),
+            Err(error) => {
+                SubmitForPrResponse::rejected(format!("invalid submit_for_pr request: {error}"))
+            }
+        },
+        Err(error) => SubmitForPrResponse::rejected(format!("read submit_for_pr request: {error}")),
+    };
+    if let Ok(bytes) = serde_json::to_vec(&response) {
+        let _ = stream.write_all(&bytes);
+        let _ = stream.shutdown(Shutdown::Write);
+    }
+}
+
+fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
+    context.work_item.role == "engineer"
+        && context.repos.iter().any(|repo| repo.is_writable())
+        && !matches!(
+            context.checkout.as_deref(),
+            Some("read_only" | "pull_request_read_only")
+        )
 }
 
 /// Last `max_len` bytes of captured stderr, on a char boundary, for error

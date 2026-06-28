@@ -10,6 +10,8 @@ use tongs::tools::{
 };
 
 use super::Capability;
+use super::submit::{SubmitForPrCallback, SubmitForPrTool, submit_for_pr_available};
+use temper_protocol_agent::WorkspaceContext;
 
 /// Builds the tool registry for a capability, scoped to `cwd`.
 ///
@@ -18,6 +20,21 @@ use super::Capability;
 /// `git log`, inspect CI artifacts, etc.) but no file-writing tools.
 pub fn tool_registry(capability: Capability, cwd: &Path) -> ToolRegistry {
     ToolRegistry::from_tools(coding_tools_vec(capability, cwd))
+}
+
+/// Builds the tool registry for a concrete workspace context, optionally adding
+/// the host-controlled `submit_for_pr` relay for writable engineer sessions.
+pub(crate) fn tool_registry_for_context(
+    capability: Capability,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    submit_for_pr: Option<SubmitForPrCallback>,
+) -> ToolRegistry {
+    let mut tools = coding_tools_vec(capability, cwd);
+    if let Some(callback) = submit_for_pr.filter(|_| submit_for_pr_available(context)) {
+        tools.push(Box::new(SubmitForPrTool::new(context, callback)));
+    }
+    ToolRegistry::from_tools(tools)
 }
 
 /// The base tool list for a capability (read-only inspection tools for everyone,

@@ -50,6 +50,7 @@ mod error;
 mod prompt;
 mod result;
 mod run;
+mod submit;
 mod tools;
 
 // Re-export of the test-visible symbols and the public API so callers (and the
@@ -59,7 +60,13 @@ pub use error::CodingAgentError;
 pub use prompt::{system_prompt, user_context};
 pub use run::{
     run_coding_agent_native, run_coding_agent_native_with_options,
-    run_coding_agent_native_with_totals,
+    run_coding_agent_native_with_options_and_submit_for_pr,
+    run_coding_agent_native_with_submit_for_pr, run_coding_agent_native_with_totals,
+    run_coding_agent_native_with_totals_and_submit_for_pr,
+};
+pub use submit::{
+    SubmitForPrCallback, SubmitForPrHost, bind_submit_for_pr_host, default_submit_for_pr_host,
+    submit_for_pr_available,
 };
 pub use tools::tool_registry;
 
@@ -69,7 +76,7 @@ pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabu
 #[cfg(test)]
 pub(crate) use run::classify_run_error;
 #[cfg(test)]
-pub(crate) use tools::{SubAgentTier, add_subagents, subagent_specs};
+pub(crate) use tools::{SubAgentTier, add_subagents, subagent_specs, tool_registry_for_context};
 
 // The provider/tool types the unit tests construct through `super::*`.
 #[cfg(test)]

@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use jig_core::{HttpError, Reply, Script, ScriptAction, StopReason, Turn};
 use temper_agent_core::{StreamRetryConfig, install_stream_retry_config_override};
 use temper_forge_model::{Forge, Issue};
+use temper_protocol_agent::{SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse};
 use temper_protocol_worker::{FailureClass, JobResult, ResultStatus};
 use temper_testing::real_stack::{
     FakeModelResponse, HermeticIssueSpec, HermeticRealStack, HermeticRealStackBuilder,
@@ -63,6 +64,114 @@ fn hermetic_real_stack_smoke_runs_worker_daemon_native_agent_and_opens_pr() {
             pull.body
         );
     });
+}
+
+#[test]
+fn hermetic_real_stack_submit_for_pr_failure_stays_in_session_until_retry_passes() {
+    temper_engine_io::block_on_with(|cx, handle| async move {
+        let submit_calls = Arc::new(std::sync::Mutex::new(Vec::<SubmitForPrRequest>::new()));
+        let submit_attempts = Arc::new(AtomicUsize::new(0));
+        let calls_for_host = Arc::clone(&submit_calls);
+        let attempts_for_host = Arc::clone(&submit_attempts);
+        let host: temper_agent::SubmitForPrHost =
+            Arc::new(move |request: SubmitForPrRequest, _context, cwd| {
+                calls_for_host
+                    .lock()
+                    .expect("submit calls lock")
+                    .push(request.clone());
+                let attempt = attempts_for_host.fetch_add(1, Ordering::SeqCst);
+                SubmitForPrResponse {
+                    accepted: attempt > 0,
+                    message: if attempt == 0 {
+                        "fake fail"
+                    } else {
+                        "fake pass"
+                    }
+                    .to_string(),
+                    gates: vec![SubmitForPrGate {
+                        command_id: format!("hermetic-submit-{attempt}"),
+                        argv: vec!["fake-gate".to_string()],
+                        cwd: cwd.display().to_string(),
+                        exit_status: if attempt == 0 { "failed" } else { "passed" }.to_string(),
+                        exit_code: Some(if attempt == 0 { 1 } else { 0 }),
+                        stdout_tail: format!("attempt {attempt}"),
+                        stderr_tail: if attempt == 0 {
+                            "needs fix".to_string()
+                        } else {
+                            String::new()
+                        },
+                        timed_out: false,
+                        elapsed_ms: 5,
+                    }],
+                }
+            });
+
+        let mut stack = HermeticRealStackBuilder::new()
+            .repo(HermeticRepoSpec::new("acme", "service"))
+            .issue(HermeticIssueSpec::ready_code(
+                "Submit gate retry",
+                "Submit first, fix the failure by adding SUBMIT_RETRY.md, then submit again.",
+            ))
+            .fake_model_script(submit_retry_real_stack_script())
+            .submit_for_pr_host(host)
+            .max_iterations(8)
+            .build(&handle)
+            .await
+            .expect("hermetic real stack builds");
+
+        let run = stack
+            .run_open_pr_job(&cx, &handle)
+            .await
+            .expect("real-stack submit retry completes");
+
+        assert_eq!(run.job_result.status, ResultStatus::Success);
+        assert_eq!(submit_attempts.load(Ordering::SeqCst), 2);
+        let calls = submit_calls.lock().expect("submit calls lock");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].summary.as_deref(), Some("initial submit"));
+        assert_eq!(calls[1].summary.as_deref(), Some("retry submit"));
+        let branch = &run.job_result.repos[0].branch.name;
+        assert_eq!(
+            stack
+                .origin_file(stack.primary_repo_path(), branch, "SUBMIT_RETRY.md")
+                .expect("retry product file exists on pushed branch"),
+            "fixed after host submit failure\n"
+        );
+    });
+}
+
+fn submit_retry_real_stack_script() -> Script {
+    Script::rule(move |view| match view.prior_tool_results {
+        0 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_initial_submit".to_string(),
+                name: "submit_for_pr".to_string(),
+                args: serde_json::json!({ "summary": "initial submit" }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        1 => Reply {
+            turns: vec![
+                Turn::ToolCall {
+                    id: "call_write_retry_file".to_string(),
+                    name: "write".to_string(),
+                    args: serde_json::json!({
+                        "path": "service/SUBMIT_RETRY.md",
+                        "content": "fixed after host submit failure\n"
+                    }),
+                },
+                Turn::ToolCall {
+                    id: "call_retry_submit".to_string(),
+                    name: "submit_for_pr".to_string(),
+                    args: serde_json::json!({ "summary": "retry submit" }),
+                },
+            ],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        _ => Reply::text(r#"{"summary":"Submit gate passed after retry."}"#),
+    })
 }
 
 #[path = "hermetic_real_stack/basic_delivery.rs"]

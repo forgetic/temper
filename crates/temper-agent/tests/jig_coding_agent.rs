@@ -5,9 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_agent::{
-    ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
-    run_coding_agent_native,
+    ProviderConfig, SubmitForPrHost, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
+    WorkspaceWorkItem, run_coding_agent_native, run_coding_agent_native_with_submit_for_pr,
 };
+use temper_protocol_agent::{SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse};
 
 #[path = "support/coding_agent_workspace.rs"]
 mod coding_agent_workspace;
@@ -59,6 +60,134 @@ fn jig_coding_agent_native_tool_loop_creates_product_diff() {
         observed_continuation.load(Ordering::SeqCst) >= 1,
         "fake provider did not observe a tool-result continuation"
     );
+}
+
+#[test]
+fn submit_for_pr_failure_returns_to_same_native_run_for_fix_and_retry() {
+    let checkout = TempCheckout::new("jig-submit-for-pr-retry");
+    checkout.init_git();
+
+    let submit_calls = Arc::new(std::sync::Mutex::new(Vec::<SubmitForPrRequest>::new()));
+    let submit_attempts = Arc::new(AtomicUsize::new(0));
+    let fake = submit_retry_fake();
+    let provider = ProviderConfig::new(
+        "jig-openai-compatible",
+        "jig-submit-for-pr-retry",
+        "https://example.invalid/unused-production-url",
+        "sk-jig-test",
+    )
+    .with_base_url_override(fake.base_url());
+
+    let submit_calls_for_host = Arc::clone(&submit_calls);
+    let submit_attempts_for_host = Arc::clone(&submit_attempts);
+    let host: SubmitForPrHost = Arc::new(move |request, _context, cwd| {
+        submit_calls_for_host
+            .lock()
+            .expect("submit calls lock")
+            .push(request.clone());
+        let attempt = submit_attempts_for_host.fetch_add(1, Ordering::SeqCst);
+        SubmitForPrResponse {
+            accepted: attempt > 0,
+            message: if attempt == 0 {
+                "fake host gate failed"
+            } else {
+                "fake host gate passed"
+            }
+            .to_string(),
+            gates: vec![SubmitForPrGate {
+                command_id: format!("fake-submit-{attempt}"),
+                argv: vec!["fake-gate".to_string(), attempt.to_string()],
+                cwd: cwd.display().to_string(),
+                exit_status: if attempt == 0 { "failed" } else { "passed" }.to_string(),
+                exit_code: Some(if attempt == 0 { 1 } else { 0 }),
+                stdout_tail: format!("stdout attempt {attempt}"),
+                stderr_tail: if attempt == 0 {
+                    "needs NOTES.md".to_string()
+                } else {
+                    String::new()
+                },
+                timed_out: false,
+                elapsed_ms: 25 + attempt as u64,
+            }],
+        }
+    });
+
+    let context = workspace_context();
+    let cwd = checkout.path().to_path_buf();
+    let result = temper_agent_io::block_on_with(move |_cx, handle| async move {
+        run_coding_agent_native_with_submit_for_pr(
+            handle,
+            &provider,
+            &context,
+            &cwd,
+            8,
+            None,
+            Some(host),
+        )
+        .await
+    })
+    .expect("native submit retry run succeeds");
+
+    assert_eq!(result.verdict, None);
+    assert!(
+        result
+            .summary
+            .as_deref()
+            .unwrap_or_default()
+            .contains("submit_for_pr passed")
+    );
+    assert_eq!(
+        fs::read_to_string(checkout.repo_path().join("NOTES.md")).expect("NOTES.md was written"),
+        "project notes after submit failure\n"
+    );
+    assert_eq!(submit_attempts.load(Ordering::SeqCst), 2);
+    let submit_calls = submit_calls.lock().expect("submit calls lock");
+    assert_eq!(submit_calls.len(), 2);
+    assert_eq!(submit_calls[0].summary.as_deref(), Some("ready for PR"));
+    assert_eq!(
+        submit_calls[1].summary.as_deref(),
+        Some("fixed and ready for PR")
+    );
+    assert_eq!(
+        fake.requests().len(),
+        3,
+        "failure, fix+retry, then terminal JSON should stay in one live run"
+    );
+}
+
+fn submit_retry_fake() -> FakeLlm {
+    FakeLlm::start(Script::rule(move |view| match view.prior_tool_results {
+        0 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_submit_initial".to_string(),
+                name: "submit_for_pr".to_string(),
+                args: serde_json::json!({ "summary": "ready for PR" }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        1 => Reply {
+            turns: vec![
+                Turn::ToolCall {
+                    id: "call_write_notes_after_failure".to_string(),
+                    name: "write".to_string(),
+                    args: serde_json::json!({
+                        "path": "demo/NOTES.md",
+                        "content": "project notes after submit failure\n"
+                    }),
+                },
+                Turn::ToolCall {
+                    id: "call_submit_retry".to_string(),
+                    name: "submit_for_pr".to_string(),
+                    args: serde_json::json!({ "summary": "fixed and ready for PR" }),
+                },
+            ],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        _ => Reply::text(r#"{"summary":"submit_for_pr passed after fixing NOTES.md."}"#),
+    }))
+    .expect("start fake LLM")
 }
 
 fn coding_agent_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {

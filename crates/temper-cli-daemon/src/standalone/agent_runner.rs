@@ -16,7 +16,8 @@ use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    CodingAgentError, ProviderConfig, RunTotals, run_coding_agent_native_with_totals,
+    CodingAgentError, ProviderConfig, RunTotals, SubmitForPrHost, default_submit_for_pr_host,
+    run_coding_agent_native_with_totals_and_submit_for_pr,
 };
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
@@ -30,6 +31,7 @@ pub struct InProcessAgentRunner {
     max_iterations: usize,
     config_dir: Option<PathBuf>,
     enable_subagents: bool,
+    submit_for_pr: SubmitForPrHost,
 }
 
 impl InProcessAgentRunner {
@@ -46,7 +48,16 @@ impl InProcessAgentRunner {
             max_iterations,
             config_dir,
             enable_subagents,
+            submit_for_pr: default_submit_for_pr_host(),
         }
+    }
+
+    /// Overrides the host-controlled `submit_for_pr` gate used by writable
+    /// engineer sessions.
+    #[must_use]
+    pub fn with_submit_for_pr_host(mut self, submit_for_pr: SubmitForPrHost) -> Self {
+        self.submit_for_pr = submit_for_pr;
+        self
     }
 }
 
@@ -79,11 +90,12 @@ impl AgentRunner for InProcessAgentRunner {
         let max_iterations = self.max_iterations;
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
+        let submit_for_pr = Some(self.submit_for_pr.clone());
         let context = context.clone();
         let cwd = cwd.to_path_buf();
 
         async move {
-            let outcome = run_coding_agent_native_with_totals(
+            let outcome = run_coding_agent_native_with_totals_and_submit_for_pr(
                 handle,
                 &provider,
                 &context,
@@ -91,6 +103,7 @@ impl AgentRunner for InProcessAgentRunner {
                 max_iterations,
                 config_dir.as_deref(),
                 enable_subagents,
+                submit_for_pr,
             )
             .await
             .map_err(classify_coding_agent_error);

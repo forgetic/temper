@@ -20,7 +20,8 @@
 //!
 //! Every non-secret input is a flag: `--provider <anthropic|chatgpt|deepseek>`,
 //! `--model <id>`, `--investigate-model <id>`, `--provider-url <url>`,
-//! `--max-iterations <n>`, `--subagents <on|off>`, `--capture-dir <dir>`, plus
+//! `--max-iterations <n>`, `--subagents <on|off>`, `--capture-dir <dir>`, the
+//! optional worker-owned `--submit-for-pr-address <addr>` side channel, plus
 //! the required `--context`/`--result` paths and the optional `--workspace`. The
 //! **one** secret, the provider credential, arrives via
 //! `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`.
@@ -41,6 +42,7 @@ mod config;
 mod entry;
 mod options;
 mod run;
+mod submit_client;
 
 use std::process::ExitCode;
 

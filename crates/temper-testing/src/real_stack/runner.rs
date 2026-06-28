@@ -6,7 +6,7 @@ use std::sync::Arc;
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
     CodingAgentError, ProviderConfig, WorkspaceContext, WorkspaceResult,
-    run_coding_agent_native_with_options,
+    run_coding_agent_native_with_options_and_submit_for_pr,
 };
 use temper_engine::Daemon;
 use temper_protocol_agent::PullRequestFreshness;
@@ -22,6 +22,7 @@ pub struct NativeJigAgentRunner {
     pub(crate) max_iterations: usize,
     pub(crate) config_dir: Option<PathBuf>,
     pub(crate) enable_subagents: bool,
+    pub(crate) submit_for_pr: temper_agent::SubmitForPrHost,
 }
 
 impl AgentRunner for NativeJigAgentRunner {
@@ -30,7 +31,7 @@ impl AgentRunner for NativeJigAgentRunner {
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<WorkspaceResult, AgentRunError> {
-        run_coding_agent_native_with_options(
+        run_coding_agent_native_with_options_and_submit_for_pr(
             self.handle.clone(),
             &self.provider,
             context,
@@ -38,6 +39,7 @@ impl AgentRunner for NativeJigAgentRunner {
             self.max_iterations,
             self.config_dir.as_deref(),
             self.enable_subagents,
+            Some(self.submit_for_pr.clone()),
         )
         .await
         .map_err(agent_error)

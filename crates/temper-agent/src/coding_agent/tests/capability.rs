@@ -131,3 +131,57 @@ fn tool_registry_writability_matches_capability() {
     assert!(Capability::CodingWorkspace.is_writable());
     assert!(!Capability::TriageWorkspace.is_writable());
 }
+
+#[test]
+fn submit_for_pr_tool_exposed_only_to_writable_engineer_sessions() {
+    let cwd = std::env::temp_dir();
+    let callback = || {
+        std::sync::Arc::new(|_| temper_protocol_agent::SubmitForPrResponse::accepted("ok"))
+            as SubmitForPrCallback
+    };
+
+    let engineer = super::common::parsed_fixture();
+    let engineer_tools = tool_registry_for_context(
+        Capability::CodingWorkspace,
+        &engineer,
+        &cwd,
+        Some(callback()),
+    );
+    assert!(tool_names(&engineer_tools).contains(&"submit_for_pr"));
+
+    let mut read_only_engineer = engineer.clone();
+    read_only_engineer.checkout = Some("read_only".to_string());
+    let read_only_tools = tool_registry_for_context(
+        Capability::CodingWorkspace,
+        &read_only_engineer,
+        &cwd,
+        Some(callback()),
+    );
+    assert!(!tool_names(&read_only_tools).contains(&"submit_for_pr"));
+
+    let mut architect = engineer.clone();
+    architect.work_item.role = "architect".to_string();
+    architect.checkout = Some("read_only".to_string());
+    let architect_tools = tool_registry_for_context(
+        Capability::TriageWorkspace,
+        &architect,
+        &cwd,
+        Some(callback()),
+    );
+    assert!(!tool_names(&architect_tools).contains(&"submit_for_pr"));
+
+    let mut reviewer = engineer;
+    reviewer.work_item.role = "reviewer".to_string();
+    reviewer.checkout = Some("pull_request_read_only".to_string());
+    let reviewer_tools = tool_registry_for_context(
+        Capability::ReviewWorkspace,
+        &reviewer,
+        &cwd,
+        Some(callback()),
+    );
+    assert!(!tool_names(&reviewer_tools).contains(&"submit_for_pr"));
+}
+
+fn tool_names(registry: &ToolRegistry) -> Vec<&str> {
+    registry.tools().iter().map(|tool| tool.name()).collect()
+}

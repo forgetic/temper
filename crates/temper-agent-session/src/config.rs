@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use temper_agent::ProviderConfig;
+use temper_agent::{ProviderConfig, SubmitForPrHost};
 
 /// Everything the coding-agent session is configured by, in one struct.
 ///
@@ -35,6 +35,10 @@ pub struct AgentConfig {
     /// Optional prompt-overlay / debug-capture directory, fully resolved in
     /// `entry` (`--capture-dir`, falling back to `XDG_CONFIG_HOME`/`HOME`).
     pub config_dir: Option<PathBuf>,
+    /// Optional host submit callback. In out-of-process mode this is a thin
+    /// client for the worker-owned local side channel; when absent the
+    /// `submit_for_pr` tool is not exposed by this agent process.
+    pub submit_for_pr: Option<SubmitForPrHost>,
 }
 
 impl AgentConfig {
@@ -50,7 +54,14 @@ impl AgentConfig {
             max_iterations,
             enable_subagents,
             config_dir,
+            submit_for_pr: None,
         }
+    }
+
+    /// Installs the host submit callback for this session.
+    pub fn with_submit_for_pr(mut self, submit_for_pr: SubmitForPrHost) -> Self {
+        self.submit_for_pr = Some(submit_for_pr);
+        self
     }
 }
 

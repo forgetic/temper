@@ -34,6 +34,11 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              changes.\n\
              - Do NOT run git commit, git push, or open a PR: the harness commits, \
              pushes, and opens the PR from your working-tree diff.\n\
+             - Before emitting the final WorkspaceResult JSON on the success path, \
+             call the `submit_for_pr` tool. If the host responds with failure \
+             gate data, keep your in-session context, fix the workspace, and \
+             call `submit_for_pr` again. Only after a host success response may \
+             you emit the terminal JSON.\n\
              - On success, emit NO verdict (the head path opens the PR). Only emit \
              a declared decline verdict: `needs_architect` when the item is \
              underspecified or unimplementable as written, or `needs_human` only \
