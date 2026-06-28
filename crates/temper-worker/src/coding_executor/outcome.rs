@@ -13,6 +13,7 @@ pub(super) struct WritableOutcomeRequest<'a> {
     pub(super) result: WorkspaceResult,
     pub(super) allowed_verdicts: &'a [String],
     pub(super) coordination_key: &'a str,
+    pub(super) action: &'a str,
     pub(super) artifact_item: &'a serde_json::Value,
     pub(super) pull_request_fix: bool,
     pub(super) pull_request_freshness: Option<&'a WorkerPullRequestFreshness>,
@@ -26,6 +27,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         result,
         allowed_verdicts,
         coordination_key,
+        action,
         artifact_item,
         pull_request_fix,
         pull_request_freshness,
@@ -57,6 +59,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
     let outcomes = match push_writable_repos(
         prepared,
         coordination_key,
+        action,
         artifact_item,
         pull_request_fix,
     )
@@ -179,6 +182,7 @@ async fn ensure_fresh_before_pr_push(
 async fn push_writable_repos(
     prepared: &[PreparedRepo],
     coordination_key: &str,
+    action: &str,
     artifact_item: &serde_json::Value,
     pull_request_fix: bool,
 ) -> Result<Vec<RepoOutcome>, JobOutcome> {
@@ -188,6 +192,7 @@ async fn push_writable_repos(
             prepared,
             index,
             coordination_key,
+            action,
             artifact_item,
             pull_request_fix,
         )
@@ -203,6 +208,7 @@ async fn push_writable_repo(
     prepared: &PreparedRepo,
     index: usize,
     coordination_key: &str,
+    action: &str,
     artifact_item: &serde_json::Value,
     pull_request_fix: bool,
 ) -> Result<Option<RepoOutcome>, JobOutcome> {
@@ -219,7 +225,7 @@ async fn push_writable_repo(
     }
     if has_tree_changes {
         let message = if pull_request_fix {
-            ci_fix_commit_message(coordination_key)
+            pr_fix_commit_message(coordination_key, action)
         } else {
             commit_message(coordination_key, artifact_item, index == 0)
         };
@@ -291,9 +297,12 @@ fn commit_message(
     }
 }
 
-/// Commit message for an in-place CI-failure fix pushed to an existing PR head.
+/// Commit message for an in-place PR-head repair pushed to an existing PR head.
 /// No `Closes #` trailer: the artifact number is the PR itself, not an issue,
 /// and the PR's own coordinating issue is retired when the PR merges.
-fn ci_fix_commit_message(coordination_key: &str) -> String {
-    format!("Fix CI for {coordination_key}")
+fn pr_fix_commit_message(coordination_key: &str, action: &str) -> String {
+    match action {
+        "resolve_merge_conflict" => format!("Resolve merge conflict for {coordination_key}"),
+        _ => format!("Fix CI for {coordination_key}"),
+    }
 }

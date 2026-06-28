@@ -73,6 +73,76 @@ impl Fixture {
         ]);
         self.pull_request_head_sha.clone()
     }
+
+    pub fn seed_conflicting_pr_head_branch(&self, branch: &str) -> (String, String) {
+        let seed = self.temp.path().join("conflict-seed");
+        git(["clone", path_str(&self.origin), path_str(&seed)]);
+        git(["-C", path_str(&seed), "checkout", "main"]);
+        fs::write(seed.join("conflict.txt"), "shared base\n").expect("write base conflict file");
+        git([
+            "-C",
+            path_str(&seed),
+            "-c",
+            "user.name=Seed User",
+            "-c",
+            "user.email=seed@example.test",
+            "add",
+            "conflict.txt",
+        ]);
+        git([
+            "-C",
+            path_str(&seed),
+            "-c",
+            "user.name=Seed User",
+            "-c",
+            "user.email=seed@example.test",
+            "commit",
+            "-m",
+            "add conflict base",
+        ]);
+        git(["-C", path_str(&seed), "push", "origin", "main"]);
+
+        git(["-C", path_str(&seed), "checkout", "-b", branch]);
+        fs::write(seed.join("conflict.txt"), "pull request side\n")
+            .expect("write PR side conflict file");
+        git([
+            "-C",
+            path_str(&seed),
+            "-c",
+            "user.name=Seed User",
+            "-c",
+            "user.email=seed@example.test",
+            "commit",
+            "-am",
+            "edit conflict file on PR head",
+        ]);
+        let pull_request_head = git_output(["-C", path_str(&seed), "rev-parse", "HEAD"]);
+        git([
+            "-C",
+            path_str(&seed),
+            "push",
+            "origin",
+            &format!("HEAD:refs/heads/{branch}"),
+        ]);
+
+        git(["-C", path_str(&seed), "checkout", "main"]);
+        fs::write(seed.join("conflict.txt"), "main side\n").expect("write main side conflict file");
+        git([
+            "-C",
+            path_str(&seed),
+            "-c",
+            "user.name=Seed User",
+            "-c",
+            "user.email=seed@example.test",
+            "commit",
+            "-am",
+            "edit conflict file on main",
+        ]);
+        let main_head = git_output(["-C", path_str(&seed), "rev-parse", "HEAD"]);
+        git(["-C", path_str(&seed), "push", "origin", "main"]);
+
+        (pull_request_head, main_head)
+    }
 }
 
 pub fn assign(branch_hint: &str, correlation_key: &str) -> Assign {
@@ -249,11 +319,44 @@ pub fn pr_fix_job_context(branch_hint: &str, correlation_key: &str) -> TestJobCo
     context
 }
 
+pub fn pr_merge_conflict_job_context(branch_hint: &str, correlation_key: &str) -> TestJobContext {
+    let mut context = pr_fix_job_context(branch_hint, correlation_key);
+    context.queue = "pr_merge_conflict".to_string();
+    context.action = Some("resolve_merge_conflict".to_string());
+    context.pull_request_freshness = Some(json!({
+        "repository_id": "repo-1",
+        "repo": "acme/service",
+        "role": "engineer",
+        "queue": "pr_merge_conflict",
+        "action": "resolve_merge_conflict",
+        "number": 7,
+        "pull_request_id": "pr-7",
+        "head_sha": "assigned-head",
+        "queue_labels": ["merge-conflict"]
+    }));
+    context
+}
+
 pub fn pr_fix_assign(branch_hint: &str, correlation_key: &str) -> Assign {
     let context = pr_fix_job_context(branch_hint, correlation_key);
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         job_id: "acme/service/pull_request-7/engineer/pr_ci_failed".to_string(),
+        role: "engineer".to_string(),
+        repo: "acme/service".to_string(),
+        artifact: Artifact {
+            item: json!(7),
+            kind: "pull_request".to_string(),
+        },
+        job_payload: context.to_payload(),
+    }
+}
+
+pub fn pr_merge_conflict_assign(branch_hint: &str, correlation_key: &str) -> Assign {
+    let context = pr_merge_conflict_job_context(branch_hint, correlation_key);
+    Assign {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        job_id: "acme/service/pull_request-7/engineer/pr_merge_conflict".to_string(),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {

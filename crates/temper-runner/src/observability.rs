@@ -77,9 +77,10 @@ pub fn labels_delta(effects: &[WorkflowEffect]) -> String {
 /// queue's required labels it now satisfies; §7 renders that as
 /// `-> queue '<queue>' | awaiting <role>`. We derive that destination from the
 /// labels the transition *added* (the `applied` effects): a queue is the
-/// destination when it declares at least one required label and every one of
-/// those labels is among the just-added set. The awaiting role is the queue's
-/// first subscriber (queues list subscribers in role-declaration order).
+/// destination when it declares at least one required label, every required
+/// label is among the just-added set, and none of its excluded labels were just
+/// added. The awaiting role is the queue's first subscriber (queues list
+/// subscribers in role-declaration order).
 ///
 /// This is a label-only heuristic — it does not re-read the artifact — so it
 /// resolves the common single-/multi-label gated queues of §7 exactly while
@@ -111,6 +112,10 @@ pub fn queue_after_transition<'a>(
                     .labels
                     .iter()
                     .all(|label| added.contains(label.as_str()))
+                && queue
+                    .excluded_labels
+                    .iter()
+                    .all(|label| !added.contains(label.as_str()))
         })
         .max_by_key(|queue| queue.labels.len())
         .map(|queue| (queue, queue.subscribers.first()))

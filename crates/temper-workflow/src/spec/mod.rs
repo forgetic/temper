@@ -221,6 +221,11 @@ pub struct RawQueue {
     /// entry references a label id.
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Labels that must be absent for an artifact to match. Each entry
+    /// references a label id. This lets a queue keep durable handoff labels
+    /// intact while a temporary blocker label routes the artifact elsewhere.
+    #[serde(default)]
+    pub excluded_labels: Vec<String>,
     /// Alternative label sets. When present, at least one set must match in
     /// addition to the common `labels` list.
     #[serde(default)]

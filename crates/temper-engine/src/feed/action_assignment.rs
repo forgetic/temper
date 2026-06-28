@@ -243,9 +243,17 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
         &pull_request,
         &action,
     ));
-    let guidance =
-        pull_request_writable_guidance(forge, repo, compiled, item, &query, &action, &head_branch)
-            .await;
+    let guidance = pull_request_writable_guidance(
+        forge,
+        repo,
+        compiled,
+        item,
+        &query,
+        &action,
+        &head_branch,
+        &base_branch,
+    )
+    .await;
     append_guidance(context, guidance);
     Ok(())
 }
@@ -305,9 +313,12 @@ async fn pull_request_writable_guidance<F: Forge + ?Sized>(
     query: &CiJobQuery,
     action: &str,
     head_branch: &str,
+    base_branch: &str,
 ) -> String {
     let reason = if is_ci_failed_pull_request_queue(item, compiled) {
         ci_failure_clause(forge, repo, query).await
+    } else if is_merge_conflict_pull_request_queue(item, compiled) {
+        merge_conflict_clause(base_branch)
     } else {
         queue_match_clause(compiled, item)
     };
@@ -331,6 +342,35 @@ fn is_ci_failed_pull_request_queue(item: &WorkItem, compiled: &CompiledWorkflow)
         .iter()
         .find(|queue| queue.id.as_str() == item.queue.as_str())
         .is_some_and(|queue| matches!(queue.condition, Some(GateCondition::CiFailed)))
+}
+
+/// Whether `item` is a pull-request member of the merge-conflict repair queue.
+fn is_merge_conflict_pull_request_queue(item: &WorkItem, compiled: &CompiledWorkflow) -> bool {
+    if !matches!(item.target, ArtifactSource::PullRequest { .. }) {
+        return false;
+    }
+    compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == item.queue.as_str())
+        .is_some_and(|queue| {
+            queue
+                .labels
+                .iter()
+                .any(|label| label.as_str() == "merge-conflict")
+        })
+}
+
+fn merge_conflict_clause(base_branch: &str) -> String {
+    let base_branch = base_branch.trim();
+    let base_branch = if base_branch.is_empty() {
+        "the target branch"
+    } else {
+        base_branch
+    };
+    format!(
+        "Mechanical landing found a merge conflict with {base_branch}. Rebase or merge {base_branch} into the PR head, resolve conflicts, keep the repair scoped to the conflict resolution, and push the updated head; CI will rerun before landing."
+    )
 }
 
 fn queue_match_clause(compiled: &CompiledWorkflow, item: &WorkItem) -> String {

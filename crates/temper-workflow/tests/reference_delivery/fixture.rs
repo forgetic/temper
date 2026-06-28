@@ -81,6 +81,11 @@ fn reference_fixture_validates_with_expected_shape() {
         .find(|queue| queue.id.as_str() == "landing")
         .expect("landing queue is declared");
     assert_eq!(landing.condition.as_ref(), Some(&GateCondition::CiPassed));
+    assert_eq!(landing.labels, vec![LabelId::new("landing")]);
+    assert_eq!(
+        landing.excluded_labels,
+        vec![LabelId::new("merge-conflict")]
+    );
     let automation = landing
         .automation
         .as_ref()
@@ -273,6 +278,17 @@ fn reference_fixture_compiles_every_role() {
         .expect("owner_alignment queue is compiled");
     assert_eq!(owner_alignment.min_depth, Some(5));
     assert_eq!(owner_alignment.max_age, Some(Duration::days(7)));
+
+    let landing = compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "landing")
+        .expect("landing queue is compiled");
+    assert_eq!(landing.labels, vec![LabelId::new("landing")]);
+    assert_eq!(
+        landing.excluded_labels,
+        vec![LabelId::new("merge-conflict")]
+    );
 
     assert!(
         compiled

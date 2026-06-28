@@ -25,7 +25,7 @@ issues in one pass. Ids are typed (`RoleId`, `QueueId`, `TransitionId`,
 | `role` | Actor authority, subscribed queues, concurrency hint, prompt guidance, and declared non-workflow external tools. |
 | `artifact_kind` | Logical item mapped to a Forge target (`issue` or `pull_request`) plus identifying labels and optional initial creation labels. |
 | `state_dimension` | Named state group projected as labels. Dimensions are exclusive by default; states may restrict legal artifact kinds. |
-| `queue` | Query over artifact kind(s), labels, optional disjunctive label branches, optional runtime/projected condition, activation policy, optional role-worker action assignments, and optional automation metadata. |
+| `queue` | Query over artifact kind(s), required labels, excluded labels, optional disjunctive label branches, optional runtime/projected condition, activation policy, optional role-worker action assignments, and optional automation metadata. |
 | `transition` | Guarded action authorized for roles. Effects may update labels/assignees, create comments, create PRs, request reviewers, submit reviews, or merge PRs. `remove_label` normally requires the label to be present; `"if_present": true` makes it a no-op cleanup when absent. |
 | `gate` | Condition that unlocks a transition from projected labels/state, sibling transition outcomes, or runtime signals such as dependencies, CI, and reviews. |
 | `relation` | Typed link between artifacts: `parent`, `dependency`, or `produced_pr`. |
@@ -72,6 +72,13 @@ undeclared bindings are rejected.
 The conventional `coding_workspace` provider prepares a checkout and branch for
 engineering work. It feeds `CreatePullRequest` runtime context, but workflow
 state and Forge mutation still happen through `RoleTools` and the executor.
+
+## Queue filters
+
+`labels` are conjunctive required labels; `excluded_labels` are labels that must
+be absent for a queue to match. Use `excluded_labels` for temporary blockers
+that should pause a durable handoff queue without removing the handoff label
+itself (for example, keep `landing` while `merge-conflict` routes repair work).
 
 ## Queue role-worker actions
 

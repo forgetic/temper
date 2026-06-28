@@ -172,7 +172,8 @@ pub struct WorkspaceContext {
     /// control/observability plane. This is the single deliberate bridge
     /// between the two planes.
     pub correlation_key: String,
-    /// Checkout mode token: `writable`, `read_only`, or `pull_request_read_only`.
+    /// Checkout mode token: `writable`, `read_only`, `pull_request_read_only`,
+    /// or `pull_request_writable`.
     #[serde(default)]
     pub checkout: Option<String>,
     /// The verdict vocabulary the assigned action declares. Empty means this

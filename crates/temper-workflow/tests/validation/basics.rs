@@ -172,6 +172,7 @@ fn close_parent_issues_effect_validates() {
         id: "landing".to_string(),
         artifacts: vec!["implementation_pr".to_string()],
         labels: Vec::new(),
+        excluded_labels: Vec::new(),
         any_of: Vec::new(),
         min_depth: None,
         max_age: None,

@@ -37,6 +37,38 @@ fn ci_gated_automated_queue_fetches_ci_and_matches() {
 }
 
 #[test]
+fn merge_conflict_label_pauses_landing_automation_without_clearing_landing() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_pr(
+        &forge,
+        &repo,
+        &["implementation", "landing", "merge-conflict"],
+    );
+    seed_ci(&forge, &repo, number, CiJobConclusion::Success);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let counting = CountingForge::new(forge.clone());
+
+    assert!(
+        block_on(scan_automated_queues(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+        ))
+        .expect("scan succeeds")
+        .is_empty()
+    );
+    assert_eq!(
+        counting.count(CountedForgeOp::ListCiJobs),
+        0,
+        "excluded merge-conflict label should make landing fail before CI reads"
+    );
+}
+
+#[test]
 fn merged_landing_pr_with_passing_ci_is_not_an_automated_work_item() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);

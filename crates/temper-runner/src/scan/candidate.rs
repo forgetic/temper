@@ -278,6 +278,9 @@ fn record_queue_labels(
         for label in &queue.labels {
             push_label_id(labels, label);
         }
+        for label in &queue.excluded_labels {
+            push_label_id(labels, label);
+        }
         for label_set in &queue.any_of {
             for label in &label_set.labels {
                 push_label_id(labels, label);

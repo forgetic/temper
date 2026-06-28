@@ -122,6 +122,7 @@ fn build_queue(queue: &crate::spec::RawQueue) -> ValidatedQueue {
         id: QueueId::new(&queue.id),
         artifacts: queue.artifacts.iter().map(ArtifactKindId::new).collect(),
         labels: queue.labels.iter().map(LabelId::new).collect(),
+        excluded_labels: queue.excluded_labels.iter().map(LabelId::new).collect(),
         any_of: queue
             .any_of
             .iter()

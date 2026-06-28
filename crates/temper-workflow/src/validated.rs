@@ -224,6 +224,7 @@ pub struct ValidatedQueue {
     pub id: QueueId,
     pub artifacts: Vec<ArtifactKindId>,
     pub labels: Vec<LabelId>,
+    pub excluded_labels: Vec<LabelId>,
     pub any_of: Vec<QueueLabelSet>,
     pub min_depth: Option<u32>,
     pub max_age: Option<Duration>,
