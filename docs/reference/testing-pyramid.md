@@ -26,8 +26,9 @@ For a numeric snapshot, see [Test inventory](testing-inventory.md).
    high-fidelity worker-loop coverage under `LabRuntime`.
 5. **UI model and DOM tests** protect web reducers, feed contracts, server/read
    model seams, and rendered interactions with fake feeds.
-6. **Live e2e tests** are ignored capstones. They prove real Forgejo, git,
-   webhooks, host-mode CI, binary wiring, and real provider credentials only
+6. **Live e2e tests** are ignored live suites. A narrow subset are default
+   capstones; the rest stay in the manual/all-e2e lane. They prove real Forgejo,
+   git, webhooks, host-mode CI, binary wiring, and real provider credentials only
    where no hermetic seam can prove the same thing.
 
 The goal is not maximum formal coverage. The goal is to put each assertion at

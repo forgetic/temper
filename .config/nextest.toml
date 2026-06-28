@@ -16,15 +16,16 @@ fail-fast = false
 # Everyday full runs use this narrower live lane after the non-ignored quick
 # suite. Keep the list exact and readable: adding/removing a default live
 # capstone should be a deliberate edit here, not a side effect of adding an
-# arbitrary new #[ignore] test.
+# arbitrary new #[ignore] test. The checkpointed standalone `temper run` story
+# remains in the manual/all-e2e lane; its checkpoint→PR handoff is covered by
+# the hermetic real-stack test in temper-testing.
 [profile.e2e-capstones]
 test-threads = 4
 fail-fast = false
 default-filter = '''
 package(temper) & (
     (binary(daemon_forgejo_e2e) & test(/^daemon_forgejo_ci_fails_then_passes_converges$/)) |
-    (binary(init_forgejo_e2e) & test(/^init_forgejo_drives_a_working_setup$/)) |
-    (binary(run_forgejo_e2e) & test(/^temper_run_opens_pr_from_checkpointed_product_diff_via_fake_llm$/))
+    (binary(init_forgejo_e2e) & test(/^init_forgejo_drives_a_working_setup$/))
 )
 '''
 
@@ -37,5 +38,5 @@ filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_
 test-group = 'root-forgejo-e2e'
 
 [[profile.e2e-capstones.overrides]]
-filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
+filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e))'
 test-group = 'root-forgejo-e2e'

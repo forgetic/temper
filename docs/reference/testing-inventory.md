@@ -85,35 +85,41 @@ Total: 1,984 test cases across 384 files; 19 are ignored live tests.
   daemon transport.
 - Web UI: Rust server/read-model tests plus Vitest reducer, feed-contract, and
   happy-dom component tests protect both event shapes and rendered behavior.
-- Default live capstones plus the manual live lane prove the residual real-world
-  risks: real Forgejo, real git, real webhooks, host-mode Actions CI, binary
-  wiring, and provider behavior.
+- The two default live capstones plus the manual live lane prove the residual
+  real-world risks: real Forgejo, real git, real webhooks, host-mode Actions CI,
+  binary wiring, and provider behavior.
 
 ## Ignored live suites
 
 Run the default live capstone lane with `cargo dev-test-e2e-capstones` (or the
 short `cargo dev-test-e2e` shorthand). Run every ignored/manual live test with
 `cargo dev-test-e2e-all`; that lane also executes provider smoke tests, which
-must self-skip unless their opt-in env is present.
+must self-skip unless their opt-in env is present. See
+[Test lane timings](test-lane-timings.md) for the latest warmed closeout
+snapshot.
 
 ### Lane inventory note
 
 - **Default live capstones** should assert only real-stack risks that still need
-  routine proof after the hermetic suite passes: daemon topology with webhook,
-  git auth, host-mode Actions red→green merge gating; `temper init --apply`
-  provisioning/config/daemon boot; and the temporary checkpointed `temper run`
-  fake-LLM PR handoff until a hermetic standalone harness replaces it.
+  routine proof after the hermetic suite passes. Current defaults are daemon
+  topology with webhook/git auth/host-mode Actions red→green merge gating and
+  `temper init --apply` provisioning/config/daemon boot. The checkpointed
+  standalone `temper run` PR handoff was removed from this list after
+  `crates/temper-testing/tests/hermetic_real_stack/checkpoint_pr.rs` covered the
+  checkpoint→PR path with a real worker/daemon/native-agent stack over in-process
+  transport.
 - **Manual/all-e2e live tests** hold the remaining ignored scenarios: extra root
   Forgejo stories, provider/OAuth probes, lower-level Forgejo fixture smokes,
   provisioning edge cases, CI web-UI checks, and diagnostic/preflight coverage.
   These scenarios are not deleted or deprecated by the slim full lane; they are
   explicit because they are slower, environment-sensitive, redundant with
   hermetic coverage, or useful mainly when debugging the live fixture stack.
-- **Future hermetic real-stack tests** should absorb assertions about workflow
+- **Default hermetic real-stack tests** should absorb assertions about workflow
   logic, retry/idempotency, role routing, CLI artifact validation, worker/daemon
-  protocol behavior, and provider request shaping whenever those assertions can
-  be proven with memory/filesystem forges, fake HTTP, local git, in-process
-  transports, jig fake LLMs, or simulation without live Forgejo/provider state.
+  protocol behavior, checkpoint→PR handoff, and provider request shaping whenever
+  those assertions can be proven with memory/filesystem forges, fake HTTP, local
+  git, in-process transports, jig fake LLMs, or simulation without live
+  Forgejo/provider state.
 
 ### Current ignored live files
 
@@ -126,10 +132,8 @@ must self-skip unless their opt-in env is present.
 - `tests/init_forgejo_e2e.rs` — `temper init --apply` local artifacts,
   live Forgejo state, idempotency, and daemon boot (default capstone lane).
 - `tests/run_forgejo_e2e.rs` — single-process `temper run` with fake LLM,
-  checkpointed PR handoff, and provider-failure retry. Only
-  `temper_run_opens_pr_from_checkpointed_product_diff_via_fake_llm` is in the
-  default capstone lane; `llm_server_error_requeues_claimed_issue` remains in
-  manual/all-e2e.
+  checkpointed PR handoff, and provider-failure retry (manual/all-e2e lane;
+  the checkpoint→PR assertion is covered by the hermetic real-stack test).
 - `crates/temper-testing/tests/forgejo_*.rs` — server, runner, provision,
   PR-prep, CI web-UI, and parallel-fixture preflights (manual/all-e2e lane).
 - `crates/temper-forge-forgejo/tests/live.rs` — provider smoke against a live

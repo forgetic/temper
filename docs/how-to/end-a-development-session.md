@@ -22,16 +22,16 @@ cargo dev-test-quick
 ```
 
 If you're touching areas covered by the default Forgejo capstones (daemon
-red→green live convergence, `temper init --apply`, or checkpointed standalone
-`temper run`), run:
+red→green live convergence or `temper init --apply`), run:
 
 ```sh
 cargo dev-test-full
 ```
 
-instead of `cargo dev-test-quick`. If you're touching an ignored live scenario
-outside that capstone set, run the targeted ignored test or the explicit
-manual/all-e2e lane:
+instead of `cargo dev-test-quick`. If you're touching the checkpointed
+standalone `temper run` story or another ignored live scenario outside that
+capstone set, run the targeted ignored test or the explicit manual/all-e2e
+lane:
 
 ```sh
 cargo dev-test-e2e-all

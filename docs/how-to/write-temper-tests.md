@@ -24,6 +24,26 @@ current inventory, see [Testing pyramid](../reference/testing-pyramid.md) and
    git auth, host-mode Actions CI, binary wiring, close-on-merge, or real
    provider credentials that no hermetic layer can prove.
 
+## Assertion ownership quick reference
+
+- **Default hermetic real-stack tests** own behavior that can be proven with a
+  memory/filesystem forge, local `file://` git, in-process daemon/worker
+  transport, deterministic fake agents, or a jig fake LLM. Put checkpoint→PR
+  handoff, retry/idempotency, role routing, worker protocol, and PR-body
+  assertions here before reaching for live Forgejo.
+- **Deterministic `temper-sim` tests** own time, scheduling, retries,
+  cancellation, long-poll interleavings, and race/chaos cases. If the proposed
+  assertion would otherwise need sleeps or wall-clock timing, make it a sim.
+- **Slim live Forgejo capstones** own only the residual routine proofs that the
+  hermetic stack cannot supply: real webhooks, real git auth, host-mode Actions
+  CI, close-on-merge, and installed binary/config wiring that should gate
+  `cargo dev-test-full`.
+- **Manual/all-e2e live tests** own exhaustive or diagnostic live coverage:
+  lower-level fixture smokes, provider/OAuth probes, provisioning edge cases,
+  redundant root Forgejo stories, and environment-sensitive scenarios. Add new
+  live tests here first; promote to the capstone list only with a distinct
+  routine-gating risk.
+
 ## Where to put the test
 
 - Workflow validation/planning/execution/recovery:

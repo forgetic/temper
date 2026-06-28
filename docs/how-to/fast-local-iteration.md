@@ -34,10 +34,12 @@ For the default live Forgejo capstones, use:
 cargo dev-test-e2e-capstones
 ```
 
-This runs only the three ignored capstone tests named in the
-`e2e-capstones` nextest profile: daemon CI red→green convergence,
-`temper init --apply`, and the checkpointed `temper run` fake-LLM PR handoff.
+This runs only the two ignored capstone tests named in the `e2e-capstones`
+nextest profile: daemon CI red→green convergence and `temper init --apply`.
 The shorter `cargo dev-test-e2e` shorthand points at this same capstone lane.
+The checkpointed standalone `temper run` PR-handoff story now stays in the
+manual/all-e2e lane because `temper-testing` has a hermetic real-stack test for
+that checkpoint→PR handoff.
 
 For every ignored/manual live test, including lower-level Forgejo fixture
 smokes, provisioning checks, provider/OAuth self-skipping probes, and the root
@@ -62,5 +64,5 @@ cargo dev-test-full
 `cargo dev-test-e2e-capstones`. It deliberately does **not** use
 `--run-ignored all`: excluded live scenarios are still present in
 `cargo dev-test-e2e-all` until their assertions are either promoted to the
-capstone list or covered by future hermetic real-stack tests (see
+capstone list or covered by hermetic real-stack tests (see
 [run-daemon-e2e.md](run-daemon-e2e.md)).
