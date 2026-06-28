@@ -161,11 +161,27 @@ fn failed_gates_route_back_to_engineer_queues() {
         ]
     );
 
-    let conflicted = classify_pr(&workflow, 23, &["implementation", "merge-conflict"]);
+    let conflicted = classify_pr(
+        &workflow,
+        23,
+        &["implementation", "landing", "merge-conflict"],
+    );
     assert!(
         planner
             .matching_queues(&conflicted)
             .contains(&QueueId::new("pr_merge_conflict"))
+    );
+    assert!(
+        !planner
+            .matching_queues_with(&conflicted, &GateSignals::new().with_ci(CiStatus::passed()))
+            .contains(&QueueId::new("landing")),
+        "merge-conflict should pause landing automation without removing landing"
+    );
+    assert!(
+        !planner
+            .matching_queues_with(&conflicted, &GateSignals::new().with_ci(CiStatus::failed()))
+            .contains(&QueueId::new("pr_ci_failed")),
+        "merge-conflict should keep the engineer focused on conflict repair instead of CI fixes"
     );
     let requeue = planner
         .plan_transition(
@@ -176,9 +192,6 @@ fn failed_gates_route_back_to_engineer_queues() {
         .expect("engineer can requeue a conflict resolution without review request");
     assert_eq!(
         requeue.effects,
-        vec![
-            WorkflowEffect::RemoveLabel(LabelId::new("merge-conflict")),
-            WorkflowEffect::AddLabel(LabelId::new("landing")),
-        ]
+        vec![WorkflowEffect::RemoveLabel(LabelId::new("merge-conflict")),]
     );
 }

@@ -18,6 +18,10 @@ pub trait QueueQuery {
     fn queue_artifacts(&self) -> &[ArtifactKindId];
     /// Labels that must all be present for an artifact to match every branch.
     fn queue_labels(&self) -> &[LabelId];
+    /// Labels that must be absent for an artifact to match.
+    fn queue_excluded_labels(&self) -> &[LabelId] {
+        &[]
+    }
     /// Alternative AND-label clauses; an empty list means no disjunction.
     fn queue_any_of(&self) -> &[QueueLabelSet];
     /// Optional depth threshold before the queue should be serviced.
@@ -41,6 +45,9 @@ impl QueueQuery for ValidatedQueue {
     fn queue_labels(&self) -> &[LabelId] {
         &self.labels
     }
+    fn queue_excluded_labels(&self) -> &[LabelId] {
+        &self.excluded_labels
+    }
     fn queue_any_of(&self) -> &[QueueLabelSet] {
         &self.any_of
     }
@@ -61,6 +68,9 @@ impl QueueQuery for QueueManifest {
     }
     fn queue_labels(&self) -> &[LabelId] {
         &self.labels
+    }
+    fn queue_excluded_labels(&self) -> &[LabelId] {
+        &self.excluded_labels
     }
     fn queue_any_of(&self) -> &[QueueLabelSet] {
         &self.any_of
@@ -97,9 +107,9 @@ impl<T: QueueMember + ?Sized> QueueMember for &T {
 /// Returns `true` when a classified artifact matches a queue query.
 ///
 /// An artifact matches when its kind is one of the queue's artifact kinds, every
-/// common label is present, and either no `any_of` clauses are declared or at
-/// least one clause's labels are all present. Queue activation policy is
-/// deliberately separate from matching.
+/// common label is present, every excluded label is absent, and either no
+/// `any_of` clauses are declared or at least one clause's labels are all
+/// present. Queue activation policy is deliberately separate from matching.
 pub fn matches_queue<Q: QueueQuery + ?Sized>(query: &Q, artifact: &ClassifiedArtifact) -> bool {
     matches_queue_with(query, artifact, &GateSignals::default())
 }
@@ -121,6 +131,10 @@ pub fn matches_queue_cheap<Q: QueueQuery + ?Sized>(
         .queue_labels()
         .iter()
         .all(|label| labels.contains(label.as_str()))
+        && query
+            .queue_excluded_labels()
+            .iter()
+            .all(|label| !labels.contains(label.as_str()))
         && (query.queue_any_of().is_empty()
             || query.queue_any_of().iter().any(|label_set| {
                 label_set

@@ -43,6 +43,7 @@ const AUTOMATED_CONFLICT_WORKFLOW: &str = r#"
       "id": "landing",
       "artifact": "implementation_pr",
       "labels": ["landing"],
+      "excluded_labels": ["merge-conflict"],
       "condition": { "kind": "ci_passed" },
       "automation": {
         "actor": "mechanical",
@@ -68,7 +69,6 @@ const AUTOMATED_CONFLICT_WORKFLOW: &str = r#"
       "artifact": "implementation_pr",
       "roles": ["mechanical"],
       "effects": [
-        { "kind": "remove_label", "label": "landing" },
         { "kind": "add_label", "label": "merge-conflict" }
       ]
     }
@@ -274,7 +274,7 @@ fn projected_head<F: Forge>(
 }
 
 #[test]
-fn mechanical_conflict_fallback_removes_landing_and_stops_retry_loop() {
+fn mechanical_conflict_fallback_preserves_landing_and_stops_retry_loop() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
     let conflicted = create_pull_request(&forge, &repo, &["implementation", "landing", "approved"]);
@@ -301,6 +301,7 @@ fn mechanical_conflict_fallback_removes_landing_and_stops_retry_loop() {
         vec![
             "approved".to_string(),
             "implementation".to_string(),
+            "landing".to_string(),
             "merge-conflict".to_string(),
         ]
     );
@@ -316,7 +317,7 @@ fn mechanical_conflict_fallback_removes_landing_and_stops_retry_loop() {
     assert_eq!(
         counted.count(CountedForgeOp::MergePullRequest),
         1,
-        "removing landing prevents an immediate retry loop"
+        "merge-conflict excludes the PR from landing automation without clearing landing"
     );
 }
 
@@ -349,6 +350,7 @@ fn unrelated_landing_pr_continues_after_another_pr_routes_to_conflict() {
         vec![
             "approved".to_string(),
             "implementation".to_string(),
+            "landing".to_string(),
             "merge-conflict".to_string(),
         ]
     );
@@ -386,7 +388,11 @@ fn reference_conflict_resolution_requires_fresh_ci_but_no_second_review() {
     assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
     assert_eq!(
         pull_request_labels(&forge, &repo, number),
-        vec!["implementation".to_string(), "merge-conflict".to_string(),]
+        vec![
+            "implementation".to_string(),
+            "landing".to_string(),
+            "merge-conflict".to_string(),
+        ]
     );
 
     counted.allow_merge_for(&pr_id);

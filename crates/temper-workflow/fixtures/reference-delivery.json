@@ -31,7 +31,7 @@
       "id": "engineer",
       "charter": "Claim ready code issues, implement them, open PRs, address failed review or CI gates, resolve merge conflicts, and escalate when a ready code issue cannot be implemented as specified or needs non-agent judgment.",
       "prompt": {
-        "guidance": "Use open_pr for ready code: the coding workspace must produce a real product diff and the engine opens a PR from the head it produces. When the issue is underspecified or cannot be implemented as written, the workspace returns a needs_architect verdict, which routes open_pr to request_code_architect_input so the issue is escalated rather than looping on an empty diff. Return needs_human only when implementation requires non-agent judgment; it routes open_pr to request_code_human_input and applies the needs-human attention label. Use address_review_changes for PRs with changes requested, address_ci_failure for PRs whose CI failed before landing approval, address_landing_ci_failure for PRs whose landing-approved head later fails CI, and resolve_merge_conflict after pushing a conflict-resolution PR head."
+        "guidance": "Use open_pr for ready code: the coding workspace must produce a real product diff and the engine opens a PR from the head it produces. When the issue is underspecified or cannot be implemented as written, the workspace returns a needs_architect verdict, which routes open_pr to request_code_architect_input so the issue is escalated rather than looping on an empty diff. Return needs_human only when implementation requires non-agent judgment; it routes open_pr to request_code_human_input and applies the needs-human attention label. Use address_review_changes for PRs with changes requested, address_ci_failure for PRs whose CI failed before landing approval, address_landing_ci_failure for PRs whose landing-approved head later fails CI, and resolve_merge_conflict after rebasing or merging main into the PR head, resolving conflicts, and pushing the scoped repair commit."
       },
       "external_tools": [
         {
@@ -396,6 +396,9 @@
     {
       "id": "pr_changes_requested",
       "artifact": "implementation_pr",
+      "excluded_labels": [
+        "merge-conflict"
+      ],
       "condition": {
         "kind": "review_changes_requested"
       },
@@ -410,6 +413,9 @@
     {
       "id": "pr_ci_failed",
       "artifact": "implementation_pr",
+      "excluded_labels": [
+        "merge-conflict"
+      ],
       "condition": {
         "kind": "ci_failed"
       },
@@ -470,6 +476,9 @@
       "artifact": "implementation_pr",
       "labels": [
         "landing"
+      ],
+      "excluded_labels": [
+        "merge-conflict"
       ],
       "condition": {
         "kind": "ci_passed"
@@ -1174,10 +1183,6 @@
         {
           "kind": "remove_label",
           "label": "merge-conflict"
-        },
-        {
-          "kind": "add_label",
-          "label": "landing"
         }
       ]
     },
@@ -1189,16 +1194,12 @@
       ],
       "effects": [
         {
-          "kind": "remove_label",
-          "label": "landing"
-        },
-        {
           "kind": "add_label",
           "label": "merge-conflict"
         },
         {
           "kind": "create_comment",
-          "body": "Mechanical landing found a merge conflict. Engineer: update the PR head to resolve it; after fresh CI passes, Temper will retry landing without another review request."
+          "body": "Mechanical landing found a merge conflict with main. Engineer: rebase or merge main into the PR head, resolve conflicts, keep the repair scoped, and push; after fresh CI passes, Temper will retry landing without another review request."
         }
       ]
     },

@@ -7,6 +7,7 @@ fn multi_artifact_disjunctive_queue_validates() {
         id: "mixed_return".to_string(),
         artifacts: vec!["epic".to_string(), "code".to_string()],
         labels: Vec::new(),
+        excluded_labels: Vec::new(),
         any_of: vec![
             RawQueueLabelSet {
                 labels: vec!["ready".to_string()],

@@ -38,7 +38,7 @@ is supplied explicitly, so the suite is reproducible.
 | The gate mechanism blocks a merge until native CI conclusions plus native review approval both pass | `the_merge_gate_mechanism_requires_ci_and_review_together`, `ci_gate_reads_native_ci_job_conclusions` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
 | Merge rejections are typed only after a re-read: open/unmerged PRs return `MergeConflict`, while a conflict response after a successful merge still projects post-merge labels | `merge_conflict.rs` |
-| Mechanical conflict routing removes `landing`, adds `merge-conflict`, does not retry until requeued, and does not block unrelated landable PRs | `mechanical_merge_conflict.rs` |
+| Mechanical conflict routing preserves `landing`, adds `merge-conflict`, pauses landing automation until PR-targeted repair clears the blocker, and does not block unrelated landable PRs | `mechanical_merge_conflict.rs` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
@@ -107,8 +107,9 @@ window, but a wider window can no longer produce a lost-update lease race.
   the `landed`/`alignment` projection. A merge `Conflict` response is also
   re-read before routing: already merged continues projection, missing/closed is
   stale, and only still-open unmerged is a typed merge conflict. Mechanical
-  conflict fallback removes `landing` before adding `merge-conflict`, so normal
-  ticks do not retry the same PR until the engineer requeues it. Those labels
+  conflict fallback preserves `landing` and adds `merge-conflict`; the landing
+  queue excludes that blocker label, so normal ticks do not retry the same PR
+  until the engineer's PR-targeted repair removes `merge-conflict`. Those labels
   are also the planner re-run guard, so the merge happens exactly once and the
   post-merge projection survives on the closed pull request.
 - **Applied reconciler actions.** `recover::Applier` applies a `ReconcileReport`

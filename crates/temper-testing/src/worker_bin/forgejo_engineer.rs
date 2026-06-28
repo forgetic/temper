@@ -13,7 +13,7 @@
 //!   commit status is keyed by SHA (findings-phase-0b), so a fail→pass needs a
 //!   **new head SHA** — the engineer's fix commit adds `ci-ok`, producing a
 //!   second, passing run. A merge-conflict resolution likewise pushes a small
-//!   docs update before the workflow requeues landing.
+//!   docs update before the workflow clears the conflict blocker.
 //!
 //! [`ForgejoEngineer`] supplies those side effects as [`EnginePrep`] hooks around
 //! the shared [`engineer_service`] state machine, so the engineer's behavior

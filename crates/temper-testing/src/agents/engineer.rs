@@ -69,10 +69,10 @@ pub(crate) trait EnginePrep<F: Forge + ?Sized>: Send + Sync {
         Ok(())
     }
 
-    /// Called on a `pr_merge_conflict` item before requeueing landing, so a real
-    /// backend can push a conflict-resolution PR head. The workflow transition
-    /// itself only changes routing labels; this hook represents the external
-    /// code/head update that must happen first.
+    /// Called on a `pr_merge_conflict` item before clearing the conflict
+    /// blocker, so a real backend can push a conflict-resolution PR head. The
+    /// workflow transition itself only changes routing labels; this hook
+    /// represents the external code/head update that must happen first.
     async fn before_resolve_merge_conflict(
         &self,
         _tools: &RoleTools<'_, F>,

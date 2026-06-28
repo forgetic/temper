@@ -166,8 +166,9 @@ pub async fn commit_ci_sentinel(
 ///
 /// This is intentionally **not** a `.temper-*` bookkeeping-only path: conflict
 /// resolution is a PR-head/code-edit side effect, while the workflow transition
-/// only requeues landing. The commit message includes the CI pass marker so the
-/// real Forgejo fixture's latest head can pass after the new run completes.
+/// only clears the merge-conflict blocker. The commit message includes the CI
+/// pass marker so the real Forgejo fixture's latest head can pass after the new
+/// run completes.
 pub async fn commit_conflict_resolution_update(
     cx: &temper_engine_io::Cx,
     base_url: &str,

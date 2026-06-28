@@ -51,7 +51,7 @@ pub enum LabelUsage {
         dimension: StateDimensionId,
         state: StateId,
     },
-    /// The label is part of a queue's filter.
+    /// The label is part of a queue's required or excluded filter.
     QueueFilter { queue: QueueId },
     /// A transition effect adds or removes the label.
     TransitionEffect { transition: TransitionId },
@@ -106,6 +106,14 @@ pub(super) fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
 
     for queue in workflow.queues() {
         for label in &queue.labels {
+            record(
+                label,
+                LabelUsage::QueueFilter {
+                    queue: queue.id.clone(),
+                },
+            );
+        }
+        for label in &queue.excluded_labels {
             record(
                 label,
                 LabelUsage::QueueFilter {

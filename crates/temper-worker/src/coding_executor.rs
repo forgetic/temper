@@ -287,6 +287,7 @@ async fn execute<R: AgentRunner>(
                 result,
                 allowed_verdicts: &allowed_verdicts,
                 coordination_key: &coordination_key,
+                action: &action,
                 artifact_item: &artifact_item,
                 pull_request_fix: mode == JobMode::PullRequestWritable,
                 pull_request_freshness: pull_request_freshness.as_ref(),

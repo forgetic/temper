@@ -196,6 +196,16 @@ fn reference_pr_head_fix_assignments_checkout_real_pr_head() {
             let guidance = context.guidance.expect("guidance present");
             assert!(guidance.contains(action), "guidance: {guidance}");
             assert!(guidance.contains(queue), "guidance: {guidance}");
+            if queue == "pr_merge_conflict" {
+                assert!(
+                    guidance.contains("merge conflict with main"),
+                    "guidance: {guidance}"
+                );
+                assert!(
+                    guidance.contains("Rebase or merge main"),
+                    "guidance: {guidance}"
+                );
+            }
         }
     })
 }

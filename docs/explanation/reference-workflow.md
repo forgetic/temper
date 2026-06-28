@@ -89,9 +89,10 @@ merging. A reviewer approval removes `needs-reviewer` and adds `landing`; the
 automated queue only services PRs whose native CI has passed. Failed review or
 CI routes back to the engineer. CI failure after landing approval clears
 `landing` before requesting review so it cannot bypass review. Merge conflict
-removes `landing`, adds `merge-conflict`, and returns to the engineer; the
-engineer can requeue landing after producing a new head, and fresh CI is still
-required.
+adds `merge-conflict` while preserving `landing`; the landing queue excludes the
+conflict label, so mechanical retries pause and a PR-targeted engineer repair
+workspace rebases or merges main, resolves the conflict, and pushes a new head.
+Fresh CI is still required before landing resumes.
 
 ## Relations and dependencies
 

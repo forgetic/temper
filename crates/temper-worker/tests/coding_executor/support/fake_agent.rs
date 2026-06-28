@@ -23,6 +23,9 @@ pub enum AgentBehavior {
     /// Engineer creates only an empty checkpoint commit; no product tree diff
     /// exists, so the final head path must be rejected.
     EmptyCheckpointCommit,
+    /// Engineer resolves a textual conflict by merging `origin/main` into the PR
+    /// head and staging a resolved file for the executor's repair commit.
+    ResolveMainConflict,
     /// Return a writable verdict the executor does not route (permanent).
     Verdict,
     /// Architect read-only `ready_code` verdict with a rewritten body.
@@ -176,6 +179,34 @@ impl AgentRunner for FakeAgentRunner {
                 ]);
                 Ok(WorkspaceResult {
                     summary: Some("pushed an empty checkpoint only".to_string()),
+                    ..WorkspaceResult::default()
+                })
+            }
+            AgentBehavior::ResolveMainConflict => {
+                let output = std::process::Command::new("git")
+                    .args(["-C", path_str(&repo_cwd), "merge", "origin/main"])
+                    .output()
+                    .expect("run git merge");
+                assert!(
+                    !output.status.success(),
+                    "merge should surface the seeded textual conflict\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let conflict_path = repo_cwd.join("conflict.txt");
+                let conflicted = fs::read_to_string(&conflict_path).expect("read conflicted file");
+                assert!(
+                    conflicted.contains("<<<<<<<") && conflicted.contains(">>>>>>>"),
+                    "expected conflict markers, got: {conflicted}"
+                );
+                fs::write(
+                    conflict_path,
+                    "resolved by combining main and pull request changes\n",
+                )
+                .expect("write conflict resolution");
+                git_output(["-C", path_str(&repo_cwd), "add", "conflict.txt"]);
+                Ok(WorkspaceResult {
+                    summary: Some("resolved merge conflict with main".to_string()),
                     ..WorkspaceResult::default()
                 })
             }

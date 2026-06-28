@@ -138,6 +138,12 @@ fn check_queue_references(
             );
         }
         check_queue_labels(queue.labels.iter(), &queue.id, declared, diagnostics);
+        check_queue_labels(
+            queue.excluded_labels.iter(),
+            &queue.id,
+            declared,
+            diagnostics,
+        );
         for label_set in &queue.any_of {
             check_queue_labels(label_set.labels.iter(), &queue.id, declared, diagnostics);
         }

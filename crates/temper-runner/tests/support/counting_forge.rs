@@ -164,7 +164,6 @@ impl<F: Forge> CountingForge<F> {
                 .remove_labels
                 .iter()
                 .any(|label| label == "merge-conflict")
-            || !input.add_labels.iter().any(|label| label == "landing")
         {
             return None;
         }
