@@ -12,6 +12,9 @@ use temper_testing::real_stack::{
     HermeticRepoSpec,
 };
 
+#[path = "hermetic_real_stack/checkpoint_pr.rs"]
+mod checkpoint_pr;
+
 #[test]
 fn hermetic_real_stack_smoke_runs_worker_daemon_native_agent_and_opens_pr() {
     temper_engine_io::block_on_with(|cx, handle| async move {

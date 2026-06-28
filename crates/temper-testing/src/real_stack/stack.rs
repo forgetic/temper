@@ -203,6 +203,26 @@ impl HermeticRealStack {
         git_output_raw(&["-C", path_str(origin)?, "show", &format!("{branch}:{path}")])
     }
 
+    /// Reads the most recent commit subjects from a branch in a seeded bare origin.
+    pub fn origin_log_subjects(
+        &self,
+        repo: &str,
+        branch: &str,
+        max_count: usize,
+    ) -> Result<Vec<String>, String> {
+        let origin = self.origin(repo)?;
+        let max_count = max_count.max(1).to_string();
+        let output = git_output_raw(&[
+            "-C",
+            path_str(origin)?,
+            "log",
+            branch,
+            &format!("--max-count={max_count}"),
+            "--format=%s",
+        ])?;
+        Ok(output.lines().map(str::to_string).collect())
+    }
+
     fn origin(&self, repo: &str) -> Result<&Path, String> {
         self.origins
             .get(repo)

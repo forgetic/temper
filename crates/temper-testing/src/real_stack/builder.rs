@@ -31,6 +31,7 @@ pub struct HermeticRealStackBuilder {
     workflow: Option<ValidatedWorkflow>,
     max_iterations: usize,
     enable_subagents: bool,
+    enable_checkpoints: bool,
     apply_grace: Option<Duration>,
 }
 
@@ -63,6 +64,7 @@ impl HermeticRealStackBuilder {
             workflow: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             enable_subagents: false,
+            enable_checkpoints: false,
             apply_grace: None,
         }
     }
@@ -133,6 +135,16 @@ impl HermeticRealStackBuilder {
     #[must_use]
     pub fn enable_subagents(mut self, enable_subagents: bool) -> Self {
         self.enable_subagents = enable_subagents;
+        self
+    }
+
+    /// Enables the native agent's model-facing checkpoint tool. Checkpoints are
+    /// committed and pushed by the fixture's host hook using the worker-prepared
+    /// git checkout, then relayed through the same daemon progress path as the
+    /// out-of-process agent session.
+    #[must_use]
+    pub fn enable_checkpoints(mut self, enable_checkpoints: bool) -> Self {
+        self.enable_checkpoints = enable_checkpoints;
         self
     }
 
@@ -238,6 +250,7 @@ impl HermeticRealStackBuilder {
             max_iterations: self.max_iterations,
             config_dir: None,
             enable_subagents: self.enable_subagents,
+            enable_checkpoints: self.enable_checkpoints,
         });
 
         let role_identities = role_identities(&self.worker_role);
