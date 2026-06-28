@@ -14,7 +14,8 @@ before the rows below were taken. Test counts here are nextest-discovered run
 counts; the source inventory is a separate static snapshot.
 
 - `cargo dev-test-quick`: passed in 11.32 s wall time.
-  - 1,990 tests run; 19 ignored tests skipped.
+  - 1,990 tests run; 17 ignored tests now remain skipped (19 in the original
+    pre-deletion snapshot).
   - Nextest summary: 10.111 s.
 - `cargo dev-test-full`: passed in 33.69 s wall time.
   - Quick lane plus 2 live capstones.
@@ -22,9 +23,10 @@ counts; the source inventory is a separate static snapshot.
 - `cargo dev-test-e2e-capstones`: passed in 22.50 s wall time.
   - 2 ignored capstones.
   - Nextest summary: 21.584 s.
-- `cargo dev-test-e2e-all`: passed in 141.82 s wall time.
-  - 19 ignored/manual live tests.
-  - Nextest summary: 140.925 s.
+- `cargo dev-test-e2e-all`: passed in 141.82 s wall time before the redundant
+  root `temper run` live scenarios were deleted.
+  - 17 ignored/manual live tests remain in the lane.
+  - The earlier nextest summary was 140.925 s with 19 live tests.
 
 `cargo dev-test-full` is below the #490 two-minute warmed target on this host.
 The all/manual e2e lane is intentionally outside that target.
@@ -36,11 +38,10 @@ The all/manual e2e lane is intentionally outside that target.
 - `temper::daemon_forgejo_e2e daemon_forgejo_ci_fails_then_passes_converges`
 - `temper::init_forgejo_e2e init_forgejo_drives_a_working_setup`
 
-`cargo nextest list --workspace --run-ignored only -P e2e` listed 19 ignored
-live tests, including both `tests/run_forgejo_e2e.rs` scenarios.
+`cargo nextest list --workspace --run-ignored only -P e2e` now lists 17 ignored
+live tests. The deleted entries are the former root `temper run` checkpoint→PR
+and provider server-error retry scenarios; their assertions live in hermetic
+real-stack coverage:
 
-The checkpointed standalone `temper run` PR-handoff scenario stays in the
-manual/all-e2e lane. It was safe to remove from the default capstone list
-because `crates/temper-testing/tests/hermetic_real_stack/checkpoint_pr.rs`
-proves the checkpoint→PR handoff with the real worker/daemon/native-agent stack
-over in-process transport.
+- `crates/temper-testing/tests/hermetic_real_stack/checkpoint_pr.rs::hermetic_real_stack_checkpointed_product_diff_finalizes_implementation_pr`
+- `crates/temper-testing/tests/hermetic_real_stack.rs::hermetic_real_stack_requeues_provider_server_error_and_later_succeeds`

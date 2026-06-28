@@ -54,15 +54,17 @@ use std::time::{Duration, Instant};
 use temper_cli_common::{LoadOptions, ScriptedPrompter};
 use temper_cli_init::{ForgejoProvisioner, InitOptions, run_init};
 use temper_engine_io::http::BlockingJsonClient;
+use temper_testing::forgejo_server::start_cached_bare_admin_server;
 
 use credentials::{read_admin_token, role_tokens};
 use daemon_boot::{assert_daemon_boots, free_port};
 use forge_state::{assert_forge_state, forge_object_counts};
 use local_artifacts::assert_local_artifacts;
 
-/// A non-reserved Forgejo admin login (`admin` itself is reserved). Created via
-/// the server CLI before the test drives `run_init`, then handed to init as the
-/// scripted Q4 answer so the real provisioner mints an admin REST token from it.
+/// A non-reserved Forgejo admin login (`admin` itself is reserved). The cached
+/// bare-admin fixture creates it while priming the Forgejo state, then the test
+/// hands it to init as the scripted Q4 answer so the real provisioner mints an
+/// admin REST token from it.
 const ADMIN_USER: &str = "initadmin";
 const ADMIN_PASSWORD: &str = "Init-Phase-e2e!";
 const ADMIN_EMAIL: &str = "initadmin@example.invalid";
@@ -85,15 +87,20 @@ fn init_forgejo_drives_a_working_setup() {
     let started = Instant::now();
 
     // --- A bare Forgejo with a site admin, but NOTHING else provisioned. ---
-    // We deliberately do not use the cached *provisioned* world: the whole point
-    // is to let `run_init`'s real ForgejoProvisioner create the org, repo, users,
-    // labels, webhook, and CI enablement itself, without seeding project files.
-    let server = temper_testing::forgejo_server::ForgejoServer::start()
-        .expect("bench Forgejo fixture starts");
-    create_site_admin(&server);
+    // Reuse the cached bare-admin fixture instead of paying the cold Forgejo
+    // first-start + CLI admin-create cost in this capstone. We deliberately do
+    // not use the cached *provisioned* world: the whole point is to let
+    // `run_init`'s real ForgejoProvisioner create the org, repo, users, labels,
+    // webhook, and CI enablement itself, without seeding project files.
+    let cached = start_cached_bare_admin_server(ADMIN_USER, ADMIN_PASSWORD, ADMIN_EMAIL)
+        .expect("cached bare-admin Forgejo fixture starts");
+    assert_eq!(cached.admin.username, ADMIN_USER);
+    assert_eq!(cached.admin.email, ADMIN_EMAIL);
+    let server = cached.server;
     let base_url = server.base_url().to_string();
     eprintln!(
-        "init_forgejo_e2e: Forgejo up at {base_url} (startup {:?})",
+        "init_forgejo_e2e: Forgejo up at {base_url} cache_hit={} (startup {:?})",
+        cached.cache_hit,
         started.elapsed()
     );
 
@@ -232,29 +239,4 @@ fn scripted(base_url: &str, webhook_addr: &str) -> ScriptedPrompter {
         ADMIN_PASSWORD.to_string(),     // Q4 admin password (secret)
         DUMMY_DEEPSEEK_KEY.to_string(), // Q5 DeepSeek API key (secret)
     ])
-}
-
-/// Creates the non-reserved site admin via the Forgejo CLI. Tolerates a
-/// pre-existing user so a flake-retried boot does not wedge.
-fn create_site_admin(server: &temper_testing::forgejo_server::ForgejoServer) {
-    let result = server.run_cli(&[
-        "admin",
-        "user",
-        "create",
-        "--username",
-        ADMIN_USER,
-        "--password",
-        ADMIN_PASSWORD,
-        "--email",
-        ADMIN_EMAIL,
-        "--admin",
-        "--must-change-password=false",
-    ]);
-    if let Err(error) = result {
-        let text = error.to_string().to_lowercase();
-        assert!(
-            text.contains("exist"),
-            "creating the site admin failed: {error}"
-        );
-    }
 }

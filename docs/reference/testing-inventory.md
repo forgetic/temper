@@ -18,11 +18,11 @@ where confidence comes from, not a coverage target.
 | UI model/feed | 44 | 0 | 3 | web UI reducers/contracts |
 | UI DOM/component | 33 | 0 | 3 | happy-dom component tests |
 | Crate integration | 172 | 0 | 39 | crate-local public API seams |
-| Live Forgejo e2e | 6 | 6 | 4 | root ignored scenarios |
+| Live Forgejo e2e | 4 | 4 | 3 | root ignored scenarios |
 | Live Forgejo preflight | 10 | 10 | 8 | fixture/provider smoke |
 | Live provider smoke | 3 | 3 | 3 | real OAuth/provider request checks |
 
-Total: 1,984 test cases across 384 files; 19 are ignored live tests.
+Total: 1,982 test cases across 383 files; 17 are ignored live tests.
 
 ## By package
 
@@ -50,7 +50,7 @@ Total: 1,984 test cases across 384 files; 19 are ignored live tests.
 | `temper-engine-io` | 26 | 0 | 6 |
 | `temper-sim` | 25 | 0 | 7 |
 | `temper-provision-forgejo-cli` | 20 | 3 | 5 |
-| root `temper` package | 19 | 6 | 9 |
+| root `temper` package | 17 | 4 | 8 |
 | `temper-agent-io` | 16 | 0 | 7 |
 | `temper-worker-io` | 16 | 0 | 7 |
 | `temper-protocol-worker` | 14 | 0 | 4 |
@@ -103,11 +103,12 @@ snapshot.
 - **Default live capstones** should assert only real-stack risks that still need
   routine proof after the hermetic suite passes. Current defaults are daemon
   topology with webhook/git auth/host-mode Actions red→green merge gating and
-  `temper init --apply` provisioning/config/daemon boot. The checkpointed
-  standalone `temper run` PR handoff was removed from this list after
-  `crates/temper-testing/tests/hermetic_real_stack/checkpoint_pr.rs` covered the
-  checkpoint→PR path with a real worker/daemon/native-agent stack over in-process
-  transport.
+  `temper init --apply` provisioning/config/daemon boot. The former live
+  single-process `temper run` scenarios were deleted after hermetic real-stack
+  tests covered their value: checkpoint→PR handoff in
+  `crates/temper-testing/tests/hermetic_real_stack/checkpoint_pr.rs` and
+  provider server-error retry/requeue in
+  `crates/temper-testing/tests/hermetic_real_stack.rs`.
 - **Manual/all-e2e live tests** hold the remaining ignored scenarios: extra root
   Forgejo stories, provider/OAuth probes, lower-level Forgejo fixture smokes,
   provisioning edge cases, CI web-UI checks, and diagnostic/preflight coverage.
@@ -131,9 +132,6 @@ snapshot.
   lane; the happy path remains in manual/all-e2e.
 - `tests/init_forgejo_e2e.rs` — `temper init --apply` local artifacts,
   live Forgejo state, idempotency, and daemon boot (default capstone lane).
-- `tests/run_forgejo_e2e.rs` — single-process `temper run` with fake LLM,
-  checkpointed PR handoff, and provider-failure retry (manual/all-e2e lane;
-  the checkpoint→PR assertion is covered by the hermetic real-stack test).
 - `crates/temper-testing/tests/forgejo_*.rs` — server, runner, provision,
   PR-prep, CI web-UI, and parallel-fixture preflights (manual/all-e2e lane).
 - `crates/temper-forge-forgejo/tests/live.rs` — provider smoke against a live

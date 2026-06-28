@@ -72,23 +72,24 @@ temper-cli = { path = "crates/temper-cli" }
 temper-config = { path = "crates/temper-config" }
 
 [dev-dependencies]
-# Daemon-topology e2e (`tests/daemon_forgejo_e2e.rs`): real Forgejo fixture,
-# webhook registration, and PR/CI assertions against the spawned daemon binary.
+# Root live e2es (`tests/daemon_forgejo_e2e.rs`,
+# `tests/basic_delivery_forgejo_e2e.rs`): real Forgejo fixture, webhook
+# registration, and PR/CI assertions against spawned daemon/standalone binaries.
 # The default (`unified`) feature set compiles the daemon stack these need.
 serde_json = { workspace = true }
 temper-testing = { path = "crates/temper-testing" }
-# `temper run` e2e (`tests/run_forgejo_e2e.rs`): real bench Forgejo fixture +
-# jig fake LLM, driving one in-process `temper run`. Needs the forge API for PR
-# assertions and jig for the canned engineer-agent replies.
+# Root Forgejo e2e assertions construct ForgejoForge directly for PR, CI, and
+# repository-state checks. Dev-dependencies are exempt from the depgraph backend
+# rule.
 temper-forge = { path = "crates/temper-forge" }
-# Concrete backend (test-only): the daemon-scenario e2e helpers construct a
-# ForgejoForge directly. Dev-dependency, so exempt from the depgraph backend rule.
 temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
 temper-workflow = { path = "crates/temper-workflow" }
 temper-engine = { path = "crates/temper-engine" }
 temper-engine-io = { path = "crates/temper-engine-io" }
 temper-daemon-transport = { path = "crates/temper-daemon-transport" }
 temper-worker = { path = "crates/temper-worker" }
+# Root basic-delivery e2e uses Jig's fake LLM to drive scripted architect and
+# engineer replies without real provider credentials.
 jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
 jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
 # `examples/checkpoint_progress_to_issue`: replays agent step-progress markers
