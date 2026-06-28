@@ -22,6 +22,9 @@
 # sequences the quick lane and the explicit e2e capstone lane. That keeps the
 # full lane from using `--run-ignored all`, so newly ignored/manual tests do not
 # enter the everyday full suite until they are deliberately added as capstones.
+# Scenarios demoted from the capstone list remain runnable through
+# `dev-test-e2e-all`; keep `.config/nextest.toml`, CI comments, and the docs in
+# sync when changing that boundary.
 
 [alias]
 dev-check = "check --workspace --all-targets"

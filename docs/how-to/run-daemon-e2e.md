@@ -139,7 +139,7 @@ rm -rf /tmp/temper-daemon-forgejo-e2e-* /tmp/temper-forgejo-*
 ## Running it in CI
 
 Keep the default hermetic job separate from the live lanes. `cargo dev-test-full`
-runs the hermetic quick suite plus the three default live capstones; a dedicated
+runs the hermetic quick suite plus the two default live capstones; a dedicated
 exhaustive Forgejo/e2e job should use the all-e2e lane:
 
 1. allow pinned-binary resolution or pre-stage binaries with

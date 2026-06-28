@@ -29,3 +29,4 @@ Current reference pages:
 - [Workflow runtime robustness guarantees](robustness-guarantees.md)
 - [Testing pyramid](testing-pyramid.md)
 - [Test inventory](testing-inventory.md)
+- [Test lane timings](test-lane-timings.md)
