@@ -241,6 +241,25 @@ impl GitFixture {
         git_output(["-C", path_str(&self.origin_of(repo)), "rev-parse", refname])
     }
 
+    pub fn origin_ref_exists(&self, refname: &str) -> bool {
+        self.ref_exists_of("acme/service", refname)
+    }
+
+    pub fn ref_exists_of(&self, repo: &str, refname: &str) -> bool {
+        Command::new("git")
+            .args([
+                "-C",
+                path_str(&self.origin_of(repo)),
+                "rev-parse",
+                "--verify",
+                refname,
+            ])
+            .output()
+            .expect("git")
+            .status
+            .success()
+    }
+
     pub fn origin_show(&self, spec: &str) -> String {
         self.show_of("acme/service", spec)
     }

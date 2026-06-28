@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    CodingAgentError, ProviderConfig, RunTotals, SubmitForPrHost, default_submit_for_pr_host,
+    CodingAgentError, ProviderConfig, RunTotals, SubmitForPrHost,
     run_coding_agent_native_with_totals_and_submit_for_pr,
 };
 use temper_log::WorkItemRef;
@@ -48,7 +48,9 @@ impl InProcessAgentRunner {
             max_iterations,
             config_dir,
             enable_subagents,
-            submit_for_pr: default_submit_for_pr_host(),
+            submit_for_pr: std::sync::Arc::new(|request, context, cwd| {
+                temper_worker::submit_for_pr_pre_push_response_blocking(request, context, cwd)
+            }),
         }
     }
 

@@ -33,17 +33,15 @@ use temper_protocol_agent::{
 };
 
 use crate::agent_runner::{AgentRunError, AgentRunner, WorkspaceResult};
+use crate::pre_push::submit_for_pr_pre_push_response_blocking;
 
 /// Host-side submit gate used by the out-of-process carrier.
 type SubmitForPrHandler =
     Arc<dyn Fn(SubmitForPrRequest, &WorkspaceContext, &Path) -> SubmitForPrResponse + Send + Sync>;
 
 fn default_submit_for_pr_handler() -> SubmitForPrHandler {
-    Arc::new(|request, _context, _cwd| {
-        SubmitForPrResponse::accepted(format!(
-            "host accepted submit_for_pr for {}; no submit gates are configured yet",
-            request.correlation_key
-        ))
+    Arc::new(|request, context, cwd| {
+        submit_for_pr_pre_push_response_blocking(request, context, cwd)
     })
 }
 

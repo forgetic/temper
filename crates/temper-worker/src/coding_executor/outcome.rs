@@ -1,16 +1,19 @@
-use temper_protocol_agent::WorkspaceResult;
+use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 use temper_protocol_worker::{
     Branch, FailureClass, PullRequestFreshness as WorkerPullRequestFreshness, RepoOutcome,
 };
 
 use crate::executor::JobOutcome;
 use crate::pr_freshness::{PrFreshnessFailure, PrFreshnessGuard};
+use crate::pre_push::final_pre_push_response;
 
 use super::{PreparedRepo, failure, workspace_failure};
 
 pub(super) struct WritableOutcomeRequest<'a> {
     pub(super) prepared: &'a [PreparedRepo],
     pub(super) result: WorkspaceResult,
+    pub(super) workspace_context: &'a WorkspaceContext,
+    pub(super) workspace_root: &'a std::path::Path,
     pub(super) allowed_verdicts: &'a [String],
     pub(super) coordination_key: &'a str,
     pub(super) action: &'a str,
@@ -25,6 +28,8 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
     let WritableOutcomeRequest {
         prepared,
         result,
+        workspace_context,
+        workspace_root,
         allowed_verdicts,
         coordination_key,
         action,
@@ -53,6 +58,9 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
     )
     .await
     {
+        return outcome;
+    }
+    if let Err(outcome) = ensure_pre_push_before_pr_push(workspace_context, workspace_root).await {
         return outcome;
     }
 
@@ -177,6 +185,49 @@ async fn ensure_fresh_before_pr_push(
             format!("could not revalidate pull request before push: {reason}"),
         )),
     }
+}
+
+async fn ensure_pre_push_before_pr_push(
+    context: &WorkspaceContext,
+    workspace_root: &std::path::Path,
+) -> Result<(), JobOutcome> {
+    let response = final_pre_push_response(context, workspace_root).await;
+    if response.accepted {
+        return Ok(());
+    }
+
+    Err(failure(
+        FailureClass::Permanent,
+        final_pre_push_failure_message(&response),
+    ))
+}
+
+fn final_pre_push_failure_message(response: &temper_protocol_agent::SubmitForPrResponse) -> String {
+    let mut message = format!(
+        "pre-push gate failed before final push: {}",
+        response.message
+    );
+    if !response.gates.is_empty() {
+        let gates = response
+            .gates
+            .iter()
+            .map(|gate| {
+                format!(
+                    "{} status={} code={} timeout={}",
+                    gate.command_id,
+                    gate.exit_status,
+                    gate.exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                    gate.timed_out
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        message.push_str("; gates: ");
+        message.push_str(&gates);
+    }
+    message
 }
 
 async fn push_writable_repos(
