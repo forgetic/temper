@@ -1,14 +1,7 @@
-# Keep the root Forgejo e2e tests out of nextest's general worker pool.
-# They still take the filesystem lock in tests/support/e2e_lock.rs so plain
-# `cargo test -- --ignored` and other non-nextest runners remain serialized.
-[test-groups]
-root-forgejo-e2e = { max-threads = 1 }
-
 # Calibrated profile for every ignored/manual Forgejo/provider live test. The
-# default nextest scheduler can start too many Forgejo servers, runners, daemons,
-# and lock waiters on shared developer/CI hosts. Four threads leaves one root
-# scenario room to make progress while still running the smaller Forgejo smoke
-# tests in parallel; three threads was measured to starve on lock waiters.
+# heavyweight root Forgejo scenarios self-serialize with the advisory lock in
+# tests/support/e2e_lock.rs, so the nextest scheduler can use the same four
+# threads for all ignored integration tests while lock holders run one at a time.
 [profile.e2e]
 test-threads = 4
 fail-fast = false
@@ -29,14 +22,3 @@ package(temper) & (
 )
 '''
 
-[[profile.default.overrides]]
-filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
-test-group = 'root-forgejo-e2e'
-
-[[profile.e2e.overrides]]
-filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e) | binary(run_forgejo_e2e))'
-test-group = 'root-forgejo-e2e'
-
-[[profile.e2e-capstones.overrides]]
-filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e))'
-test-group = 'root-forgejo-e2e'
