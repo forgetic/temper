@@ -144,7 +144,7 @@ fn ensure_webhook_is_idempotent_on_url() {
         events: WebhookEvents::All,
     };
     block_on(forge.ensure_webhook(&repo, spec.clone())).expect("first webhook");
-    // Same URL, different secret/events: idempotent on URL, no duplicate.
+    // Same URL, different secret/events: update in place, no duplicate.
     block_on(forge.ensure_webhook(
         &repo,
         WebhookSpec {
@@ -167,7 +167,8 @@ fn ensure_webhook_is_idempotent_on_url() {
     let hooks = forge.webhooks(&repo);
     assert_eq!(hooks.len(), 2, "duplicate URL is not registered twice");
     assert_eq!(hooks[0].url, "https://hooks.test/a");
-    assert_eq!(hooks[0].secret, "sh", "first write wins on duplicate URL");
+    assert_eq!(hooks[0].secret, "changed", "duplicate URL updates in place");
+    assert_eq!(hooks[0].events, WebhookEvents::Only(vec!["push".into()]));
     assert_eq!(hooks[1].url, "https://hooks.test/b");
 }
 

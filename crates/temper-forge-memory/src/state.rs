@@ -349,13 +349,14 @@ impl State {
             .unwrap_or_default()
     }
 
-    /// Idempotently registers a webhook on `repo_id`, deduplicating on URL.
+    /// Idempotently registers or updates a webhook on `repo_id`, deduplicating on URL.
     pub(crate) fn ensure_webhook(&mut self, repo_id: &RepositoryId, spec: WebhookSpec) {
         let hooks = self
             .webhooks
             .entry(repo_id.as_str().to_string())
             .or_default();
-        if hooks.iter().any(|hook| hook.url == spec.url) {
+        if let Some(hook) = hooks.iter_mut().find(|hook| hook.url == spec.url) {
+            *hook = spec;
             return;
         }
         hooks.push(spec);
