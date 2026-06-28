@@ -35,8 +35,9 @@ the manual/all-e2e lane below.
 ## Run every ignored live test
 
 Use the all-e2e profile when you want every ignored/manual live test: the root
-daemon/init/run e2es, Forgejo smoke/preflight tests, provisioning checks, and
-provider/OAuth probes that self-skip unless their opt-in env is present.
+daemon/init/basic-delivery e2es, Forgejo smoke/preflight tests, provisioning
+checks, and provider/OAuth probes that self-skip unless their opt-in env is
+present.
 
 ```sh
 cargo dev-test-e2e-all
@@ -45,11 +46,15 @@ cargo nextest run --workspace --run-ignored only -P e2e
 ```
 
 The `e2e` and `e2e-capstones` profiles cap nextest at 4 test threads. That
-keeps the live Forgejo servers, host-mode runners, daemon/worker processes,
-and root-e2e lock waiters within the capacity of typical shared developer/CI
-hosts. The root package e2es still use nextest's `root-forgejo-e2e` test group
-(`max-threads = 1`) and the profiles run with fail-fast disabled, so the
-profiles change scheduling without hiding test failures.
+keeps the live Forgejo servers, host-mode runners, and daemon/worker processes
+within the capacity of typical shared developer/CI hosts. The root package e2es
+use nextest's `root-forgejo-e2e` test group (`max-threads = 1`), so the
+scheduler queues those heavyweight scenarios instead of launching them in
+parallel and letting them block on the advisory lock. The advisory file lock in
+`tests/support/e2e_lock.rs` intentionally remains as belt-and-suspenders
+protection for direct `cargo test -- --ignored` runs and profile bypasses. Both
+profiles run with fail-fast disabled, so scheduling changes do not hide test
+failures.
 
 ## Run both daemon scenarios
 

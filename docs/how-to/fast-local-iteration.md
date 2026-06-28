@@ -37,9 +37,9 @@ cargo dev-test-e2e-capstones
 This runs only the two ignored capstone tests named in the `e2e-capstones`
 nextest profile: daemon CI red→green convergence and `temper init --apply`.
 The shorter `cargo dev-test-e2e` shorthand points at this same capstone lane.
-The checkpointed standalone `temper run` PR-handoff story now stays in the
-manual/all-e2e lane because `temper-testing` has a hermetic real-stack test for
-that checkpoint→PR handoff.
+The former root `temper run` live scenarios were deleted because `temper-testing`
+now covers the checkpoint→PR handoff and provider server-error retry/requeue
+paths with faster hermetic real-stack tests.
 
 For every ignored/manual live test, including lower-level Forgejo fixture
 smokes, provisioning checks, provider/OAuth self-skipping probes, and the root
@@ -51,8 +51,10 @@ cargo dev-test-e2e-all
 
 This expands to `cargo nextest run --workspace --run-ignored only -P e2e`
 with the usual non-interactive output flags. The `e2e` profile caps nextest at
-4 test threads so the fixture does not over-schedule Forgejo servers, runners,
-daemons, and root-e2e lock waiters on shared developer/CI hosts.
+4 test threads and assigns root Forgejo e2es to the `root-forgejo-e2e` test
+group (`max-threads = 1`) so the scheduler queues those heavyweight process
+trees instead of letting them start in parallel and block on their advisory
+lock.
 
 For the full self-contained local suite:
 

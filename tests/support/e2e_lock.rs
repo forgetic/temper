@@ -1,12 +1,14 @@
 //! Cross-process serialization for heavyweight root Forgejo e2e tests.
 //!
-//! `cargo dev-test-full` and `cargo dev-test-e2e-all` can run ignored live
-//! tests in parallel via nextest. The root Forgejo scenarios each spawn real
-//! Forgejo/runner/daemon/worker processes; running several of those topologies
-//! at once can starve the polling loops long enough to trip convergence
-//! timeouts even though each scenario is stable in isolation. Hold this advisory
-//! file lock for the lifetime of one scenario so the heavyweight root e2es run
-//! one at a time while the rest of the workspace test suite remains parallel.
+//! The nextest `e2e` and `e2e-capstones` profiles already assign root-package
+//! Forgejo scenarios to the `root-forgejo-e2e` test group (`max-threads = 1`),
+//! so normal `cargo dev-test-e2e*` runs queue these topologies before spawning
+//! them. This advisory file lock deliberately remains as belt-and-suspenders
+//! protection for direct `cargo test -- --ignored` invocations, older/manual
+//! runners that do not load `.config/nextest.toml`, or accidental profile
+//! bypasses. Holding it is cheap once nextest has serialized the tests, and it
+//! still prevents several Forgejo/runner/daemon process trees from contending on
+//! shared developer or CI hosts.
 
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;

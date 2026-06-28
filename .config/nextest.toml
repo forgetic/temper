@@ -1,17 +1,29 @@
-# Calibrated profile for every ignored/manual Forgejo/provider live test. The
-# heavyweight root Forgejo scenarios self-serialize with the advisory lock in
-# tests/support/e2e_lock.rs, so the nextest scheduler can use the same four
-# threads for all ignored integration tests while lock holders run one at a time.
+# Calibrated profiles for ignored/manual Forgejo/provider live tests.
+#
+# Root-package Forgejo e2es are assigned to the global `root-forgejo-e2e` test
+# group with `max-threads = 1`, so nextest queues those heavyweight scenarios at
+# the scheduler instead of starting several Forgejo / runner / daemon topologies
+# in parallel. The advisory file lock in tests/support/e2e_lock.rs intentionally
+# remains as belt-and-suspenders protection for direct `cargo test -- --ignored`
+# invocations and older/manual runners that do not honor this nextest config.
+[test-groups]
+root-forgejo-e2e = { max-threads = 1 }
+
 [profile.e2e]
 test-threads = 4
 fail-fast = false
 
+[[profile.e2e.overrides]]
+filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e))'
+test-group = 'root-forgejo-e2e'
+
 # Everyday full runs use this narrower live lane after the non-ignored quick
 # suite. Keep the list exact and readable: adding/removing a default live
 # capstone should be a deliberate edit here, not a side effect of adding an
-# arbitrary new #[ignore] test. The checkpointed standalone `temper run` story
-# remains in the manual/all-e2e lane; its checkpoint→PR handoff is covered by
-# the hermetic real-stack test in temper-testing.
+# arbitrary new #[ignore] test. The checkpoint→PR handoff and provider
+# server-error retry paths are covered by hermetic real-stack tests in
+# temper-testing, so the former `temper run` live e2es are no longer in any live
+# lane.
 [profile.e2e-capstones]
 test-threads = 4
 fail-fast = false
@@ -22,3 +34,6 @@ package(temper) & (
 )
 '''
 
+[[profile.e2e-capstones.overrides]]
+filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e))'
+test-group = 'root-forgejo-e2e'
