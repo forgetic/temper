@@ -12,8 +12,8 @@
 //!   [`WallClock`] seam.
 //! - [`feed`] — translating scanned work items into daemon jobs, enriching
 //!   their payloads, and the poll-backstop cadence.
-//! - [`daemon`] — the [`Daemon`] handle, its pure state machine, and HTTP
-//!   serving.
+//! - [`daemon`] — the [`Daemon`] handle, its pure state machine, HTTP serving,
+//!   and webhook/local-change-source wake wiring.
 //! - [`config`], [`mechanical`], [`webhook`] — run config, the mechanical
 //!   reconciliation backstop, and webhook intake.
 //! - [`engine_config`] — the per-subsystem [`EngineConfig`] bundle.

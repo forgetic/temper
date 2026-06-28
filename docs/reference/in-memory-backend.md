@@ -62,10 +62,13 @@ the backend to several helpers while keeping one logical store.
 ## In-process change hints
 
 `MemoryForge::subscribe_hints()` is an optional companion surface returning a
-`MemoryHintReceiver`, which implements `temper_forge::ChangeSource`. Successful
-mutations publish best-effort `ChangeHint`s to subscribers on the same shared
-store, including fixture CI changes from `seed_ci_jobs`. Failed operations,
-rejected optimistic-concurrency preconditions, and idempotent no-op dependency or
+`MemoryHintReceiver`, which implements `temper_forge::ChangeSource`. The
+`temper_forge::factory::new_memory_with_change_source()` facade constructor
+returns the same capability paired with an abstract `Arc<dyn Forge>` for tests
+that should not depend on memory-backend internals. Successful mutations publish
+best-effort `ChangeHint`s to subscribers on the same shared store, including
+fixture CI changes from `seed_ci_jobs`. Failed operations, rejected
+optimistic-concurrency preconditions, and idempotent no-op dependency or
 reviewer-request calls do not publish because no state changed.
 
 Hints are never authoritative state. Tests and runners use them only to wake the

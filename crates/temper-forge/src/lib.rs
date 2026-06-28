@@ -9,8 +9,10 @@
 //!
 //! 2. **Offers a backend factory** ([`factory`]) that constructs a concrete
 //!    backend (Forgejo, GitHub, in-memory, filesystem) and hands it back as an
-//!    `Arc<dyn Forge>`. Callers pick a backend by *which function they call*,
-//!    never by naming a concrete backend type.
+//!    `Arc<dyn Forge>`. For local backends it can also return a companion
+//!    [`ChangeSource`](crate::ChangeSource) alongside that abstract forge.
+//!    Callers pick a backend by *which function they call*, never by naming a
+//!    concrete backend type.
 //!
 //! ## The architectural rule this crate exists to enforce
 //!
@@ -60,13 +62,25 @@ pub mod config {
 
 /// Backend factory: construct a concrete forge, get back an `Arc<dyn Forge>`.
 ///
-/// Every function returns the abstract trait object, so callers select a backend
-/// by *which constructor they call* and never name a concrete backend type.
+/// The plain constructors return the abstract trait object, so callers select a
+/// backend by *which constructor they call* and never name a concrete backend
+/// type. Local backends also have `*_with_change_source` constructors for tests
+/// and composition code that need a lossy wake accelerator without depending on
+/// backend internals; the returned [`Forge`] remains the authoritative state.
 pub mod factory {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use temper_forge_model::{Forge, ProvisioningForge};
+    use temper_forge_model::{ChangeSource, Forge, ProvisioningForge};
+
+    /// Abstract forge plus an optional-backend companion change source.
+    ///
+    /// The source is a latency accelerator only: consumers must route its hints
+    /// into their normal scan path and re-read [`Forge`] state before acting.
+    pub struct ForgeWithChangeSource {
+        pub forge: Arc<dyn Forge>,
+        pub change_source: Box<dyn ChangeSource + Send>,
+    }
 
     use crate::config::{ForgejoConfig, GitHubConfig};
 
@@ -103,8 +117,28 @@ pub mod factory {
         Arc::new(temper_forge_memory::MemoryForge::new())
     }
 
+    /// Build an in-memory [`Forge`] plus a companion [`ChangeSource`].
+    pub fn new_memory_with_change_source() -> ForgeWithChangeSource {
+        let backend = temper_forge_memory::MemoryForge::new();
+        let change_source = Box::new(backend.subscribe_hints());
+        ForgeWithChangeSource {
+            forge: Arc::new(backend),
+            change_source,
+        }
+    }
+
     /// Build a filesystem-backed [`Forge`] rooted at `root`.
     pub fn new_filesystem(root: impl Into<PathBuf>) -> Arc<dyn Forge> {
         Arc::new(temper_forge_filesystem::FilesystemForge::new(root))
+    }
+
+    /// Build a filesystem-backed [`Forge`] plus a companion [`ChangeSource`].
+    pub fn new_filesystem_with_change_source(root: impl Into<PathBuf>) -> ForgeWithChangeSource {
+        let backend = temper_forge_filesystem::FilesystemForge::new(root);
+        let change_source = Box::new(backend.subscribe_hints());
+        ForgeWithChangeSource {
+            forge: Arc::new(backend),
+            change_source,
+        }
     }
 }

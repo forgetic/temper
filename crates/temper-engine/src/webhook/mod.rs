@@ -179,21 +179,30 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
         });
     }
 
-    Ok(run_wake_scan(daemon, forge, workflow, compiled, now, config, &hint).await)
+    Ok(run_wake_scan(
+        daemon,
+        forge,
+        workflow,
+        compiled,
+        now,
+        &config.targets,
+        &hint,
+    )
+    .await)
 }
 
-/// Runs the wake scans one verified webhook delivery triggers.
+/// Runs the role-work wake scans for one accepted change hint.
 ///
-/// This is the I/O half of webhook intake — the daemon machine verifies and
-/// parses the delivery purely, then issues this scan as a single engine
-/// request. Returns the number of enqueued jobs.
+/// Live webhook deliveries and local backend change sources share this path:
+/// resolve the hinted repository, scan configured wake targets, and enqueue any
+/// work found from fresh Forge state.
 pub async fn run_wake_scan<F: Forge + ?Sized>(
     daemon: &Daemon,
     forge: &F,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
     now: DateTime<Utc>,
-    config: &WebhookConfig,
+    targets: &[RoleFeedTarget],
     hint: &ChangeHint,
 ) -> usize {
     let repository = match forge.get_repository_by_path(&hint.repo).await {
@@ -205,7 +214,7 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
                 repo_owner = %hint.repo.owner,
                 repo_name = %hint.repo.name,
                 %error,
-                "webhook repository lookup failed"
+                "wake repository lookup failed"
             );
             return 0;
         }
@@ -213,7 +222,7 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
 
     let mut total = 0;
     let mut matched_target = false;
-    for target in &config.targets {
+    for target in targets {
         if target.repo != repository.id {
             continue;
         }
@@ -237,7 +246,7 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
                 repo = %target.repo,
                 role = %target.role.as_str(),
                 %error,
-                "webhook wake scan failed"
+                "wake scan failed"
             ),
         }
     }
