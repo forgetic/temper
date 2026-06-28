@@ -31,6 +31,7 @@ pub struct HermeticRealStackBuilder {
     workflow: Option<ValidatedWorkflow>,
     max_iterations: usize,
     enable_subagents: bool,
+    apply_grace: Option<Duration>,
 }
 
 impl Default for HermeticRealStackBuilder {
@@ -62,6 +63,7 @@ impl HermeticRealStackBuilder {
             workflow: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             enable_subagents: false,
+            apply_grace: None,
         }
     }
 
@@ -134,6 +136,15 @@ impl HermeticRealStackBuilder {
         self
     }
 
+    /// Overrides the daemon's post-apply re-enqueue grace window. The default
+    /// preserves the production daemon setting; hermetic retry tests can set
+    /// this to zero when they explicitly drive the follow-up scan.
+    #[must_use]
+    pub fn apply_grace(mut self, apply_grace: Duration) -> Self {
+        self.apply_grace = Some(apply_grace);
+        self
+    }
+
     /// Builds the hermetic world on the provided skein runtime handle.
     pub async fn build(self, handle: &RuntimeHandle) -> Result<HermeticRealStack, String> {
         let primary = self
@@ -194,7 +205,12 @@ impl HermeticRealStackBuilder {
             Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
             system_clock(),
         ));
-        let daemon = Arc::new(Daemon::with_applier(Arc::new(handle.clone()), applier));
+        let daemon_handle = Daemon::with_applier(Arc::new(handle.clone()), applier);
+        let daemon_handle = match self.apply_grace {
+            Some(apply_grace) => daemon_handle.with_apply_grace(apply_grace),
+            None => daemon_handle,
+        };
+        let daemon = Arc::new(daemon_handle);
         let (result_tx, result_rx) = temper_engine_io::channel();
 
         let script = match self.fake_model {

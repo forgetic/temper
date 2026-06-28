@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 description = "Sans-IO LLM agent loop for the temper agent: a pure AgentMachine driven by a skein shell that reuses tongs providers and tools. (Formerly anvil-agent.)"
 
+[features]
+default = []
+test-support = []
+
 [dependencies]
 async-trait.workspace = true
 skein.workspace = true

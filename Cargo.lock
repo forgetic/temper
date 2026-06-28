@@ -1958,6 +1958,7 @@ dependencies = [
  "sha2",
  "skein",
  "temper-agent",
+ "temper-agent-core",
  "temper-daemon-transport",
  "temper-engine",
  "temper-engine-io",

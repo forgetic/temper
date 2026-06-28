@@ -37,6 +37,83 @@ const STREAM_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_mill
 /// for minutes on the later attempts.
 const STREAM_RETRY_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Retry budget/timing for transient provider failures in one model turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamRetryConfig {
+    /// Additional attempts after the first failed attempt.
+    pub max_retries: usize,
+    /// Backoff before the first retry; doubled on later retries.
+    pub base_backoff: std::time::Duration,
+    /// Per-retry cap applied after exponential growth.
+    pub max_backoff: std::time::Duration,
+}
+
+impl Default for StreamRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: MAX_STREAM_RETRIES,
+            base_backoff: STREAM_RETRY_BACKOFF,
+            max_backoff: STREAM_RETRY_BACKOFF_MAX,
+        }
+    }
+}
+
+impl StreamRetryConfig {
+    fn backoff(self, attempt: usize) -> std::time::Duration {
+        (self.base_backoff * (1u32 << attempt.min(5))).min(self.max_backoff)
+    }
+}
+
+#[cfg(feature = "test-support")]
+static STREAM_RETRY_CONFIG_OVERRIDE: std::sync::Mutex<Option<StreamRetryConfig>> =
+    std::sync::Mutex::new(None);
+
+/// Process-local guard for a temporary stream retry override.
+///
+/// This is test-support API for hermetic integration tests that need to exhaust
+/// the retry budget without waiting for production-scale backoff delays.
+#[cfg(feature = "test-support")]
+#[must_use = "the stream retry override is reset when the guard is dropped"]
+pub struct StreamRetryConfigOverrideGuard {
+    previous: Option<StreamRetryConfig>,
+}
+
+#[cfg(feature = "test-support")]
+impl Drop for StreamRetryConfigOverrideGuard {
+    fn drop(&mut self) {
+        let mut guard = STREAM_RETRY_CONFIG_OVERRIDE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = self.previous;
+    }
+}
+
+/// Overrides the process-local stream retry policy until the returned guard is
+/// dropped.
+#[cfg(feature = "test-support")]
+pub fn install_stream_retry_config_override(
+    config: StreamRetryConfig,
+) -> StreamRetryConfigOverrideGuard {
+    let mut guard = STREAM_RETRY_CONFIG_OVERRIDE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = guard.replace(config);
+    StreamRetryConfigOverrideGuard { previous }
+}
+
+fn stream_retry_config() -> StreamRetryConfig {
+    #[cfg(feature = "test-support")]
+    {
+        if let Some(config) = *STREAM_RETRY_CONFIG_OVERRIDE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
+            return config;
+        }
+    }
+    StreamRetryConfig::default()
+}
+
 /// Streams one model response and collapses it into a completion. The terminal
 /// `Done` / `Error` stream event carries the final assistant message; a
 /// transport-layer failure (the provider call itself erroring, or the stream
@@ -63,21 +140,20 @@ pub(super) async fn stream_to_completion(
     // turn never double-emits. A terminal provider error message (the model
     // chose to stop with an error) is NOT a transport fault and is surfaced as-is.
     let mut attempt = 0usize;
+    let retry_config = stream_retry_config();
     loop {
         match stream_one_attempt(provider, &context, stream_options, events).await {
             StreamAttempt::Responded(message) => {
                 return AgentCompletion::LlmResponded(message);
             }
             StreamAttempt::Failed { reason, retryable } => {
-                let will_retry = retryable && attempt < MAX_STREAM_RETRIES;
+                let will_retry = retryable && attempt < retry_config.max_retries;
                 events.emit(AgentEvent::ModelCallFailed {
                     reason: reason.clone(),
                     will_retry,
                 });
                 if will_retry {
-                    let backoff = (STREAM_RETRY_BACKOFF * (1u32 << attempt.min(5)))
-                        .min(STREAM_RETRY_BACKOFF_MAX);
-                    temper_agent_io::sleep_for(backoff).await;
+                    temper_agent_io::sleep_for(retry_config.backoff(attempt)).await;
                     attempt += 1;
                     continue;
                 }

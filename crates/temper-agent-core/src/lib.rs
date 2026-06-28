@@ -29,4 +29,8 @@ pub use run::{
     run_sub_agent_with_events, run_sub_agent_with_hook,
 };
 pub use shell::{AgentOutcome, AgentShell, EventSink, NullEventSink, TurnHook};
+#[cfg(feature = "test-support")]
+pub use shell::{
+    StreamRetryConfig, StreamRetryConfigOverrideGuard, install_stream_retry_config_override,
+};
 pub use subagent_tool::{SubAgentFactory, SubAgentTool};
