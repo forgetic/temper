@@ -76,3 +76,13 @@ pub trait ChangeSource {
     /// Attempts to receive one already-available hint without blocking.
     fn try_recv(&mut self) -> ChangeSourceEvent;
 }
+
+impl<T: ChangeSource + ?Sized> ChangeSource for Box<T> {
+    fn recv_timeout(&mut self, timeout: Duration) -> ChangeSourceEvent {
+        (**self).recv_timeout(timeout)
+    }
+
+    fn try_recv(&mut self) -> ChangeSourceEvent {
+        (**self).try_recv()
+    }
+}

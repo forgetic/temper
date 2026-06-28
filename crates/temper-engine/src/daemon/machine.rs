@@ -58,8 +58,10 @@ pub(super) enum DaemonCompletion {
         correlation_key: String,
         reply: temper_engine_io::OneshotSender<bool>,
     },
-    /// A webhook wake scan completed; release the held `202` response.
+    /// A webhook or companion change-source wake scan completed.
     WakeScanFinished { token: u64 },
+    /// Daemon API: submit one lossy backend change hint to the wake-scan path.
+    ChangeHint { hint: temper_runner::ChangeHint },
     /// Adjust the post-apply re-enqueue grace window.
     SetApplyGrace { apply_grace: Duration },
     /// Enable webhook intake with the given verification config.
@@ -227,6 +229,10 @@ impl Machine for DaemonMachine {
                     }],
                     None => Vec::new(),
                 }
+            }
+            DaemonCompletion::ChangeHint { hint } => {
+                let token = self.next_token();
+                vec![DaemonRequest::RunWakeScan { token, hint }]
             }
             DaemonCompletion::SetApplyGrace { apply_grace } => {
                 self.apply_grace = apply_grace;

@@ -69,6 +69,7 @@ impl Daemon {
         Self {
             cq: cq_tx,
             scanner_slot,
+            change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -187,6 +188,15 @@ impl Daemon {
             return true;
         }
         rx.recv().await.unwrap_or(true)
+    }
+
+    /// Submit one backend change hint to the daemon wake-scan path.
+    ///
+    /// The hint is lossy acceleration only: the installed wake scanner resolves
+    /// the repository and re-runs the normal Forge-backed role scan before any
+    /// work is enqueued.
+    pub fn submit_change_hint(&self, hint: temper_forge::ChangeHint) {
+        let _ = self.cq.send(DaemonCompletion::ChangeHint { hint });
     }
 
     /// Map a scanned `WorkItem` to a job and enqueue it.

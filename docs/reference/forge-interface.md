@@ -43,7 +43,11 @@ workflow logic should depend only on this interface and the portable model types
 `ChangeHint`, `ChangeKind`, `ChangeSource`, and `ChangeSourceEvent` are portable
 companion types in `temper-forge`, but they are deliberately **not** methods on
 the `Forge` trait. A hint source is an optional latency accelerator for runners:
-it may be lossy, duplicate, stale, broad, reordered, or closed.
+it may be lossy, duplicate, stale, broad, reordered, or closed. The facade
+factory exposes `new_memory_with_change_source` and
+`new_filesystem_with_change_source` for hermetic composition tests that need an
+abstract `Arc<dyn Forge>` plus this companion source without naming concrete
+backend types.
 
 Consumers must use hints only to wake the normal poll path, then re-read Forge
 state through the trait before planning or mutating. Backends that cannot emit

@@ -9,6 +9,7 @@
 //! timers, result application, wake scans) is performed by
 //! [`executor::DaemonExecutor`] on the engine runtime.
 
+mod change_source_wiring;
 mod executor;
 mod handle;
 mod handlers;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 
 use temper_engine_io::CqSender;
 
+use change_source_wiring::ChangeSourceListener;
 use machine::DaemonCompletion;
 
 pub use handle::{h1_handler, serve};
@@ -32,9 +34,10 @@ pub use state_dto::{ArtifactDto, DaemonStateSnapshot, JobDto, RoleSaturationDto,
 pub struct Daemon {
     cq: CqSender<DaemonCompletion>,
     scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
+    change_source_listeners: Arc<std::sync::Mutex<Vec<ChangeSourceListener>>>,
 }
 
-/// Type-erased webhook wake scanner installed by [`Daemon::with_webhook`].
+/// Type-erased wake scanner installed by webhook or change-source wiring.
 pub(crate) trait WakeScanner: Send + Sync {
     fn scan(
         &self,
