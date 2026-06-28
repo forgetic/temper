@@ -358,30 +358,40 @@ impl<C: HttpClient> ForgeAdmin for ForgejoForge<C> {
         let hooks: Value = serde_json::from_str(&existing.body).map_err(|err| {
             ForgeError::Backend(format!("list repo hooks: failed to decode response: {err}"))
         })?;
-        let already_registered = hooks.as_array().is_some_and(|hooks| {
+        let events = webhook_events(&input.events);
+        if let Some(hook) = hooks.as_array().and_then(|hooks| {
             hooks
                 .iter()
-                .any(|hook| hook_config_url(hook) == Some(input.url.as_str()))
-        });
-        if already_registered {
-            return Ok(());
+                .find(|hook| hook_config_url(hook) == Some(input.url.as_str()))
+        }) {
+            let hook_id = hook["id"].as_u64().ok_or_else(|| {
+                ForgeError::Backend(format!(
+                    "repo webhook for {} exists but list response omitted its id",
+                    input.url
+                ))
+            })?;
+            let response = self
+                .provision_send(
+                    HttpMethod::Patch,
+                    format!("{hooks_path}/{hook_id}"),
+                    Some(webhook_update_body(&input, events)),
+                )
+                .await?;
+            return if response.is_success() {
+                Ok(())
+            } else {
+                Err(crate::error::map_status_error(
+                    "update repo webhook",
+                    &response,
+                ))
+            };
         }
 
-        let events = webhook_events(&input.events);
         let response = self
             .provision_send(
                 HttpMethod::Post,
                 &hooks_path,
-                Some(json!({
-                    "type": "gitea",
-                    "active": true,
-                    "events": events,
-                    "config": {
-                        "url": input.url,
-                        "content_type": "json",
-                        "secret": input.secret,
-                    },
-                })),
+                Some(webhook_create_body(&input, events)),
             )
             .await?;
         if response.is_success() {
@@ -436,6 +446,24 @@ impl<C: HttpClient> ForgejoForge<C> {
                 ForgeError::Backend("owners team: no Owners team in org teams response".to_string())
             })
     }
+}
+
+fn webhook_create_body(input: &WebhookSpec, events: Vec<String>) -> Value {
+    let mut body = webhook_update_body(input, events);
+    body["type"] = Value::String("gitea".to_string());
+    body
+}
+
+fn webhook_update_body(input: &WebhookSpec, events: Vec<String>) -> Value {
+    json!({
+        "active": true,
+        "events": events,
+        "config": {
+            "url": input.url,
+            "content_type": "json",
+            "secret": input.secret,
+        },
+    })
 }
 
 /// Extracts a webhook's configured delivery URL, tolerating both the nested

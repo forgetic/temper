@@ -352,9 +352,13 @@ fn grant_access_repo_collaborator_tolerates_existing() {
 }
 
 #[test]
-fn ensure_webhook_skips_when_url_already_registered() {
+fn ensure_webhook_updates_when_url_already_registered() {
     let client = MockHttpClient::new();
-    client.push_response(200, r#"[{"config":{"url":"https://hook.example/x"}}]"#);
+    client.push_response(
+        200,
+        r#"[{"id":17,"config":{"url":"https://hook.example/x"},"events":{"push":true}}]"#,
+    );
+    client.push_response(200, "{}");
     let forge = forge(client.clone());
 
     block_on(forge.ensure_webhook(
@@ -367,8 +371,26 @@ fn ensure_webhook_skips_when_url_already_registered() {
     ))
     .unwrap();
 
-    // Only the list call; no create.
-    assert_eq!(client.call_count(), 1);
+    let requests = client.recorded();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].method, HttpMethod::Patch);
+    assert_eq!(
+        requests[1].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/hooks/17")
+    );
+    let body = body_json(&requests[1]);
+    assert_eq!(body["active"], true);
+    assert_eq!(body["type"], serde_json::Value::Null);
+    assert_eq!(body["config"]["url"], "https://hook.example/x");
+    assert_eq!(body["config"]["content_type"], "json");
+    assert_eq!(body["config"]["secret"], "shh");
+    assert!(
+        body["events"]
+            .as_array()
+            .expect("events array")
+            .iter()
+            .any(|event| event == "action_run_success")
+    );
 }
 
 #[test]

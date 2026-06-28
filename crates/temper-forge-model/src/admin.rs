@@ -136,8 +136,8 @@ pub trait ForgeAdmin: Send + Sync {
     /// Ensures a webhook is registered on `repo`.
     ///
     /// Idempotent: if a webhook with the same delivery URL is already registered
-    /// it is left unchanged and no duplicate is created. `input.secret` is
-    /// **secret** and must never be logged.
+    /// it is updated to the desired secret/events and no duplicate is created.
+    /// `input.secret` is **secret** and must never be logged.
     async fn ensure_webhook(&self, repo: &RepositoryId, input: WebhookSpec) -> ForgeResult<()>;
 
     /// Enables CI (Actions) on `repo`.
