@@ -26,7 +26,9 @@
 //! Hermetic and fast; runs by default.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use temper_protocol_agent::{SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse};
 use temper_protocol_worker::ResultStatus;
 use temper_worker::{CodingExecutor, CodingExecutorConfig, OutOfProcessRunner};
 
@@ -85,6 +87,79 @@ fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
         fixture.origin_log_format("refs/heads/agent/pr-for-code-7", "%b"),
         "Closes #7"
     );
+}
+
+#[test]
+fn out_of_process_agent_can_submit_fail_fix_and_resubmit_before_result() {
+    let fixture = GitFixture::new();
+    let calls = Arc::new(std::sync::Mutex::new(Vec::<SubmitForPrRequest>::new()));
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let calls_for_handler = Arc::clone(&calls);
+    let attempts_for_handler = Arc::clone(&attempts);
+    let runner = Arc::new(
+        OutOfProcessRunner::new(vec![
+            fake_agent_bin(),
+            "--submit-before-result".to_string(),
+            "--submit-retry-after-failure".to_string(),
+        ])
+        .with_submit_for_pr_handler(move |request, context, cwd| {
+            assert_eq!(context.work_item.role, "engineer");
+            assert!(
+                cwd.exists(),
+                "host handler receives the prepared workspace cwd"
+            );
+            calls_for_handler
+                .lock()
+                .expect("submit calls lock")
+                .push(request.clone());
+            let attempt = attempts_for_handler.fetch_add(1, Ordering::SeqCst);
+            let gate = SubmitForPrGate {
+                command_id: format!("fake-gate-{attempt}"),
+                argv: vec!["fake-pre-push".to_string(), attempt.to_string()],
+                cwd: cwd.display().to_string(),
+                exit_status: if attempt == 0 { "failed" } else { "passed" }.to_string(),
+                exit_code: Some(if attempt == 0 { 1 } else { 0 }),
+                stdout_tail: format!("stdout attempt {attempt}"),
+                stderr_tail: if attempt == 0 {
+                    "fix required".to_string()
+                } else {
+                    String::new()
+                },
+                timed_out: false,
+                elapsed_ms: 10 + attempt as u64,
+            };
+            SubmitForPrResponse {
+                accepted: attempt > 0,
+                message: if attempt == 0 {
+                    "fake gate failed"
+                } else {
+                    "fake gate passed"
+                }
+                .to_string(),
+                gates: vec![gate],
+            }
+        }),
+    );
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
+
+    assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    let calls = calls.lock().expect("submit calls lock");
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].correlation_key, "pr-for-code-7");
+    assert_eq!(calls[0].summary.as_deref(), Some("fake agent submit"));
+    assert_eq!(calls[1].summary.as_deref(), Some("fake agent retry submit"));
+
+    let after_fix = fixture.origin_show("refs/heads/agent/pr-for-code-7:AFTER_SUBMIT_FAILURE.md");
+    assert_eq!(after_fix, "fixed after submit");
 }
 
 /// The headline ADR 0023 demonstration: one engineer assignment assembles a

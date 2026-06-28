@@ -9,8 +9,11 @@ use crate::usage::RunTotals;
 use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 
 use super::result::{collect_text, parse_result, validate_contract, validate_verdict_vocabulary};
-use super::tools::{SUBAGENT_GUIDANCE, add_subagents, tool_registry};
-use super::{Capability, CodingAgentError, system_prompt, user_context};
+use super::tools::{SUBAGENT_GUIDANCE, add_subagents, tool_registry_for_context};
+use super::{
+    Capability, CodingAgentError, SubmitForPrCallback, SubmitForPrHost, bind_submit_for_pr_host,
+    default_submit_for_pr_host, system_prompt, user_context,
+};
 
 /// Runs one capability/role-aware coding-workspace turn on anvil's native
 /// sans-IO agent loop ([`temper_agent_core::run_sub_agent`]).
@@ -50,6 +53,31 @@ pub async fn run_coding_agent_native(
     .await
 }
 
+/// [`run_coding_agent_native`] with an explicit host submit callback.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_coding_agent_native_with_submit_for_pr(
+    handle: skein::runtime::RuntimeHandle,
+    provider_config: &ProviderConfig,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    max_iterations: usize,
+    config_dir: Option<&Path>,
+    submit_for_pr: Option<SubmitForPrHost>,
+) -> Result<WorkspaceResult, CodingAgentError> {
+    let (result, _totals) = run_coding_agent_native_with_totals_and_submit_for_pr(
+        handle,
+        provider_config,
+        context,
+        cwd,
+        max_iterations,
+        config_dir,
+        false,
+        submit_for_pr,
+    )
+    .await?;
+    Ok(result)
+}
+
 /// [`run_coding_agent_native`] with optional features. When `enable_subagents`
 /// is set, the role agent is given an `investigate` tool that delegates a
 /// read-only investigation to a nested sub-agent scoped to the same checkout
@@ -78,6 +106,33 @@ pub async fn run_coding_agent_native_with_options(
     Ok(result)
 }
 
+/// [`run_coding_agent_native_with_options`] with an explicit host submit
+/// callback.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_coding_agent_native_with_options_and_submit_for_pr(
+    handle: skein::runtime::RuntimeHandle,
+    provider_config: &ProviderConfig,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    max_iterations: usize,
+    config_dir: Option<&Path>,
+    enable_subagents: bool,
+    submit_for_pr: Option<SubmitForPrHost>,
+) -> Result<WorkspaceResult, CodingAgentError> {
+    let (result, _totals) = run_coding_agent_native_with_totals_and_submit_for_pr(
+        handle,
+        provider_config,
+        context,
+        cwd,
+        max_iterations,
+        config_dir,
+        enable_subagents,
+        submit_for_pr,
+    )
+    .await?;
+    Ok(result)
+}
+
 /// [`run_coding_agent_native_with_options`] while also returning the run's
 /// [`RunTotals`] (input/output tokens + tool-call count, summed across the main
 /// run and every nested sub-agent). The standalone runner folds these into the
@@ -92,6 +147,34 @@ pub async fn run_coding_agent_native_with_totals(
     max_iterations: usize,
     config_dir: Option<&Path>,
     enable_subagents: bool,
+) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
+    run_coding_agent_native_with_totals_and_submit_for_pr(
+        handle,
+        provider_config,
+        context,
+        cwd,
+        max_iterations,
+        config_dir,
+        enable_subagents,
+        Some(default_submit_for_pr_host()),
+    )
+    .await
+}
+
+/// [`run_coding_agent_native_with_totals`] with an explicit host submit
+/// callback. Passing `None` disables `submit_for_pr` for this run; callers use
+/// this for an out-of-process agent session that did not receive a worker-owned
+/// side channel.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_coding_agent_native_with_totals_and_submit_for_pr(
+    handle: skein::runtime::RuntimeHandle,
+    provider_config: &ProviderConfig,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    max_iterations: usize,
+    config_dir: Option<&Path>,
+    enable_subagents: bool,
+    submit_for_pr: Option<SubmitForPrHost>,
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let provider = provider_config.build_provider()?;
@@ -125,7 +208,10 @@ pub async fn run_coding_agent_native_with_totals(
         crate::usage::UsageLogger::new(crate::usage::MAIN_SCOPE, std::sync::Arc::clone(&totals)),
     );
 
-    let mut tools = tool_registry(capability, cwd);
+    let submit_for_pr: Option<SubmitForPrCallback> = submit_for_pr
+        .filter(|_| super::submit_for_pr_available(context))
+        .map(|host| bind_submit_for_pr_host(host, context, cwd));
+    let mut tools = tool_registry_for_context(capability, context, cwd, submit_for_pr);
     if enable_subagents {
         tools = add_subagents(
             handle.clone(),

@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use temper_agent::{CodingAgentError, run_coding_agent_native_with_options};
+use temper_agent::{CodingAgentError, run_coding_agent_native_with_options_and_submit_for_pr};
 use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 
 use crate::config::AgentConfig;
@@ -50,8 +50,9 @@ fn drive_coding_loop(
     let max_iterations = config.max_iterations;
     let config_dir = config.config_dir.clone();
     let enable_subagents = config.enable_subagents;
+    let submit_for_pr = config.submit_for_pr.clone();
     temper_agent_io::block_on_with(move |_cx, handle| async move {
-        run_coding_agent_native_with_options(
+        run_coding_agent_native_with_options_and_submit_for_pr(
             handle,
             &provider,
             &run_context,
@@ -59,6 +60,7 @@ fn drive_coding_loop(
             max_iterations,
             config_dir.as_deref(),
             enable_subagents,
+            submit_for_pr,
         )
         .await
     })

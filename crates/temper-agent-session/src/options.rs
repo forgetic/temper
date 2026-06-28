@@ -10,6 +10,8 @@
 //! --context <FILE>            (required) worker-written JSON job context
 //! --result <FILE>             (required) JSON result file the agent must write
 //! --workspace <DIR>           checkout/workspace; defaults to cwd
+//! --submit-for-pr-address <ADDR>
+//!                             worker-owned local submit_for_pr side channel
 //! --provider <anthropic|chatgpt|deepseek>
 //! --model <ID>                main model id
 //! --investigate-model <ID>    cheaper read-only subagent model id
@@ -22,6 +24,7 @@
 use std::path::PathBuf;
 
 use temper_agent::{AuthChoice, DEFAULT_MAX_ITERATIONS};
+use temper_protocol_agent::SUBMIT_FOR_PR_ADDRESS_FLAG;
 
 /// The fully-parsed agent command line. Every field originates from a flag; the
 /// provider credential (the one secret) is read separately from the environment
@@ -41,6 +44,8 @@ pub(crate) struct Options {
     pub(crate) result: PathBuf,
     /// Checkout/workspace dir (`--workspace`); `None` defaults to cwd.
     pub(crate) workspace: Option<PathBuf>,
+    /// Optional worker-owned local `submit_for_pr` side-channel address.
+    pub(crate) submit_for_pr_address: Option<String>,
     /// Optional debug capture / prompt-overlay dir (`--capture-dir`).
     pub(crate) capture_dir: Option<PathBuf>,
     /// Maximum model/tool iterations (`--max-iterations`).
@@ -58,6 +63,7 @@ impl Options {
         let mut context = None;
         let mut result = None;
         let mut workspace = None;
+        let mut submit_for_pr_address = None;
         let mut capture_dir = None;
         let mut max_iterations = DEFAULT_MAX_ITERATIONS;
         let mut subagents = false;
@@ -74,6 +80,9 @@ impl Options {
                 "--context" => context = Some(PathBuf::from(value(&mut iter, "--context")?)),
                 "--result" => result = Some(PathBuf::from(value(&mut iter, "--result")?)),
                 "--workspace" => workspace = Some(PathBuf::from(value(&mut iter, "--workspace")?)),
+                flag if flag == SUBMIT_FOR_PR_ADDRESS_FLAG => {
+                    submit_for_pr_address = Some(value(&mut iter, SUBMIT_FOR_PR_ADDRESS_FLAG)?)
+                }
                 "--capture-dir" => {
                     capture_dir = Some(PathBuf::from(value(&mut iter, "--capture-dir")?))
                 }
@@ -103,6 +112,7 @@ impl Options {
             context,
             result,
             workspace,
+            submit_for_pr_address,
             capture_dir,
             max_iterations,
             subagents,
@@ -111,7 +121,7 @@ impl Options {
 }
 
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
-[--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
+[--submit-for-pr-address <ADDR>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
 --workspace (default cwd), writes the result to --result";
@@ -172,6 +182,7 @@ mod tests {
         assert_eq!(options.context, PathBuf::from("/c.json"));
         assert_eq!(options.result, PathBuf::from("/r.json"));
         assert!(options.workspace.is_none());
+        assert!(options.submit_for_pr_address.is_none());
         assert_eq!(options.provider, AuthChoice::ChatGptOAuth);
         assert!(!options.subagents);
     }
@@ -191,6 +202,8 @@ mod tests {
             "/r.json",
             "--workspace",
             "/ws",
+            "--submit-for-pr-address",
+            "127.0.0.1:12345",
             "--provider",
             "anthropic",
             "--model",
@@ -215,6 +228,10 @@ mod tests {
         );
         assert_eq!(options.provider_url.as_deref(), Some("http://fake-llm"));
         assert_eq!(options.workspace, Some(PathBuf::from("/ws")));
+        assert_eq!(
+            options.submit_for_pr_address.as_deref(),
+            Some("127.0.0.1:12345")
+        );
         assert_eq!(options.capture_dir, Some(PathBuf::from("/cap")));
         assert_eq!(options.max_iterations, 250);
         assert!(options.subagents);

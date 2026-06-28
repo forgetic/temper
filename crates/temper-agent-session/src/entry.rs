@@ -99,6 +99,10 @@ fn build_config(
         options.subagents,
         config_dir,
     );
+    let config = match options.submit_for_pr_address {
+        Some(address) => config.with_submit_for_pr(crate::submit_client::host_for_address(address)),
+        None => config,
+    };
     Ok((config, auth_dir))
 }
 

@@ -12,18 +12,28 @@
 //! - writes a [`WorkspaceResult`] to the `--result` path. If
 //!   `$SMITH_FAKE_AGENT_VERDICT` is set, the result carries that verdict (the
 //!   read-only / triage path); otherwise it is a head-path result with a summary.
+//! - if `--submit-before-result` is passed, calls the worker-owned
+//!   `submit_for_pr` side channel before writing the result (and, with
+//!   `--submit-retry-after-failure`, calls it again after a fake fix when the
+//!   first response is rejected).
 //! - if the `--crash-before-result` argument is passed, the process exits
 //!   non-zero before writing the result. (An argument, not an env var, so
 //!   concurrent test threads cannot race on a process-global knob.)
 
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpStream};
 use std::path::PathBuf;
 
-use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
+use temper_protocol_agent::{
+    PROTOCOL_VERSION, SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest, SubmitForPrResponse,
+    WorkspaceContext, WorkspaceResult,
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let context_path = flag_value(&args, "--context").expect("--context flag set");
     let result_path = flag_value(&args, "--result").expect("--result flag set");
+    let submit_address = flag_value(&args, SUBMIT_FOR_PR_ADDRESS_FLAG);
     let workspace = flag_value(&args, "--workspace")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
@@ -51,6 +61,28 @@ fn main() {
         std::process::exit(7);
     }
 
+    if args.iter().any(|arg| arg == "--submit-before-result") {
+        let address = submit_address
+            .as_deref()
+            .expect("--submit-for-pr-address flag set by runner");
+        let first = submit_for_pr(address, &context, Some("fake agent submit"));
+        if args.iter().any(|arg| arg == "--submit-retry-after-failure") && !first.accepted {
+            for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
+                let repo_dir = workspace.join(&repo.dir);
+                std::fs::write(
+                    repo_dir.join("AFTER_SUBMIT_FAILURE.md"),
+                    b"fixed after submit\n",
+                )
+                .expect("write retry product file");
+            }
+            let second = submit_for_pr(address, &context, Some("fake agent retry submit"));
+            assert!(
+                second.accepted,
+                "retry submit should be accepted: {second:?}"
+            );
+        }
+    }
+
     let result = if let Some(verdict) = verdict {
         WorkspaceResult {
             verdict: Some(verdict),
@@ -67,6 +99,33 @@ fn main() {
 
     let bytes = serde_json::to_vec_pretty(&result).expect("serialize result");
     std::fs::write(&result_path, bytes).expect("write result");
+}
+
+fn submit_for_pr(
+    address: &str,
+    context: &WorkspaceContext,
+    summary: Option<&str>,
+) -> SubmitForPrResponse {
+    let request = SubmitForPrRequest {
+        protocol_version: PROTOCOL_VERSION,
+        correlation_key: context.correlation_key.clone(),
+        role: context.work_item.role.clone(),
+        action: context.action.clone(),
+        summary: summary.map(str::to_string),
+    };
+    let mut stream = TcpStream::connect(address).expect("connect submit_for_pr side channel");
+    let bytes = serde_json::to_vec(&request).expect("serialize submit_for_pr request");
+    stream
+        .write_all(&bytes)
+        .expect("write submit_for_pr request");
+    stream
+        .shutdown(Shutdown::Write)
+        .expect("half-close submit_for_pr request");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .expect("read submit_for_pr response");
+    serde_json::from_slice(&response).expect("parse submit_for_pr response")
 }
 
 /// The value following `flag` in `args`, or `None` when the flag is absent.

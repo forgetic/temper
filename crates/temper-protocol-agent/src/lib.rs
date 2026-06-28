@@ -17,10 +17,19 @@
 //!   *only* bridge to the out-of-band control/observability plane. The worker
 //!   writes it to a file and passes its path as the agent's `--context` flag,
 //!   running the agent in the prepared checkout (`--workspace`, also cwd).
+//! - **Live side channel (agent ↔ worker):** writable engineer agents may call
+//!   `submit_for_pr` during the run. The worker services a local request/response
+//!   channel and returns a [`SubmitForPrResponse`] to the same live agent session
+//!   so failed gates can be fixed and retried before the terminal result.
 //! - **Outbound result (agent → worker), terminal:** a [`WorkspaceResult`]
 //!   written to the file named by the agent's `--result` flag.
 
 use serde::{Deserialize, Serialize};
+
+mod submit;
+pub use submit::{
+    SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse,
+};
 
 /// Wire-format version. Bumped on any breaking change to the context, result,
 /// or provider-credential shapes. The context embeds it so a mismatch is a clean
@@ -313,6 +322,39 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn submit_for_pr_response_carries_structured_gate_data() {
+        let response = SubmitForPrResponse {
+            accepted: false,
+            message: "cargo test failed".to_string(),
+            gates: vec![SubmitForPrGate {
+                command_id: "pre-push:cargo-test".to_string(),
+                argv: vec!["cargo".to_string(), "test".to_string()],
+                cwd: "/workspace/temper".to_string(),
+                exit_status: "failed".to_string(),
+                exit_code: Some(101),
+                stdout_tail: "running 1 test".to_string(),
+                stderr_tail: "test failed".to_string(),
+                timed_out: false,
+                elapsed_ms: 1_234,
+            }],
+        };
+
+        let json = serde_json::to_value(&response).expect("serialize submit response");
+        assert_eq!(json["accepted"], false);
+        assert_eq!(json["gates"][0]["command_id"], "pre-push:cargo-test");
+        assert_eq!(json["gates"][0]["argv"][1], "test");
+        assert_eq!(json["gates"][0]["cwd"], "/workspace/temper");
+        assert_eq!(json["gates"][0]["exit_status"], "failed");
+        assert_eq!(json["gates"][0]["exit_code"], 101);
+        assert_eq!(json["gates"][0]["stdout_tail"], "running 1 test");
+        assert_eq!(json["gates"][0]["stderr_tail"], "test failed");
+        assert_eq!(json["gates"][0]["timed_out"], false);
+        assert_eq!(json["gates"][0]["elapsed_ms"], 1_234);
+        let round_trip: SubmitForPrResponse = serde_json::from_value(json).expect("round trip");
+        assert_eq!(round_trip, response);
     }
 
     #[test]

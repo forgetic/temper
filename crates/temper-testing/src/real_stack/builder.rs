@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use jig_server::FakeLlm;
 use skein::runtime::RuntimeHandle;
-use temper_agent::ProviderConfig;
+use temper_agent::{ProviderConfig, SubmitForPrHost, default_submit_for_pr_host};
 use temper_engine::{Daemon, ForgeApplier, LeaseApplier, system_clock};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{CreateIssue, CreateRepository, Forge, UserId};
@@ -31,6 +31,7 @@ pub struct HermeticRealStackBuilder {
     workflow: Option<ValidatedWorkflow>,
     max_iterations: usize,
     enable_subagents: bool,
+    submit_for_pr: SubmitForPrHost,
     apply_grace: Option<Duration>,
 }
 
@@ -56,6 +57,7 @@ impl HermeticRealStackBuilder {
             workflow: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             enable_subagents: false,
+            submit_for_pr: default_submit_for_pr_host(),
             apply_grace: None,
         }
     }
@@ -135,6 +137,14 @@ impl HermeticRealStackBuilder {
     #[must_use]
     pub fn enable_subagents(mut self, enable_subagents: bool) -> Self {
         self.enable_subagents = enable_subagents;
+        self
+    }
+
+    /// Overrides the host-controlled `submit_for_pr` gate used by writable
+    /// engineer sessions.
+    #[must_use]
+    pub fn submit_for_pr_host(mut self, submit_for_pr: SubmitForPrHost) -> Self {
+        self.submit_for_pr = submit_for_pr;
         self
     }
 
@@ -245,6 +255,7 @@ impl HermeticRealStackBuilder {
             max_iterations: self.max_iterations,
             config_dir: None,
             enable_subagents: self.enable_subagents,
+            submit_for_pr: self.submit_for_pr,
         });
 
         let role_identities = role_identities(&self.worker_roles);
