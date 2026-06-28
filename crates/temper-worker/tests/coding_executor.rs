@@ -11,6 +11,8 @@
 mod context;
 #[path = "coding_executor/failures.rs"]
 mod failures;
+#[path = "coding_executor/pr_repair.rs"]
+mod pr_repair;
 #[path = "coding_executor/read_only.rs"]
 mod read_only;
 #[path = "coding_executor/review.rs"]
