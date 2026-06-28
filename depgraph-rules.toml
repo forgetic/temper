@@ -203,12 +203,14 @@ temper-sim = ["temper-daemon-transport", "temper-engine", "temper-engine-io", "t
 # JSON contract the chat UI consumes rather than re-declaring drift-prone parallel
 # types. temper-web stays a leaf — nothing in any tier depends on it.
 temper-web = ["temper-log", "temper-workflow", "temper-interaction"]
-# Shared non-production test machinery (engine-side). THE SOLE EXCEPTION to the
+# Shared non-production test machinery. It spans tiers by design for reusable
+# e2e/sim fixtures, including hermetic real-stack daemon+worker+agent builders.
+# THE SOLE EXCEPTION to the
 # forge-backend invariant: it depends directly on the concrete backends for
 # test-only affordances absent from the production Forge trait (see the invariant
 # note at the top of this file). It also links temper-forge-model directly for
 # those concrete types alongside the temper-forge facade.
-temper-testing = ["temper-forge", "temper-forge-model", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-protocol-worker", "temper-workflow"]
+temper-testing = ["temper-forge", "temper-forge-model", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-engine", "temper-engine-io", "temper-daemon-transport", "temper-worker", "temper-agent", "temper-protocol-agent", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-protocol-worker", "temper-workflow"]
 
 [options]
 # Every workspace member must be listed above (a new, unlisted crate fails CI).
