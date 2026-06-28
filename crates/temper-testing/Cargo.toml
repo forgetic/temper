@@ -25,6 +25,18 @@ temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 bench-forgejo = { git = "http://127.0.0.1:3000/ai/bench.git", rev = "7aae3a0604e208f275b94c0279b95f60ccc1d217" }
 temper-forge-memory = { path = "../temper-forge-memory" }
+# Hermetic real-stack fixture builders compose the real daemon, in-process
+# daemon transport, worker loop, CodingExecutor, and native agent behind a Jig
+# fake LLM. Keeping this cross-tier wiring in temper-testing avoids making core
+# worker crates depend on engine/agent implementations.
+temper-engine = { path = "../temper-engine" }
+temper-daemon-transport = { path = "../temper-daemon-transport" }
+temper-worker = { path = "../temper-worker" }
+temper-agent = { path = "../temper-agent" }
+temper-protocol-agent = { path = "../temper-protocol-agent" }
+jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
+jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
+tempfile.workspace = true
 # Reuse the generalized workflow loader (`load_workflow`/`resolve_workflow`) and
 # the workflow-derived runner config (`runner_config_for`) behind the worker's
 # runtime `--workflow` flag, rather than duplicating them here.
@@ -52,9 +64,6 @@ skein.workspace = true
 temper-engine-io = { path = "../temper-engine-io" }
 
 [dev-dependencies]
-# The hermetic daemon-worker contract test boots an in-process daemon transport
-# and serves it on an ephemeral local port.
-temper-engine = { path = "../temper-engine" }
 # The observability smoke test captures the runner's `temper-log` emit sites with
 # a custom in-process layer and asserts on the structured fields + human message.
 temper-log = { path = "../temper-log" }

@@ -20,6 +20,7 @@ pub mod daemon_worker;
 pub mod forgejo_runtime;
 pub mod forgejo_server;
 pub mod provision_bin;
+pub mod real_stack;
 pub mod scenarios;
 pub mod worker_bin;
 pub mod world;
