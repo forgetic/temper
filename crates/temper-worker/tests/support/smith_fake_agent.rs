@@ -12,10 +12,17 @@
 //! - writes a [`WorkspaceResult`] to the `--result` path. If
 //!   `$SMITH_FAKE_AGENT_VERDICT` is set, the result carries that verdict (the
 //!   read-only / triage path); otherwise it is a head-path result with a summary.
+//! - if `--pre-push-config <mode>` is passed, writes a worker-owned
+//!   `.temper/pre-push.toml` into each writable repo before submit/result. Modes
+//!   are `pass`, `retry-file`, `timeout-until-retry-file`, and `always-fail`.
+//!   This lets worker tests prove the host reads config changed in the live
+//!   checkout.
 //! - if `--submit-before-result` is passed, calls the worker-owned
 //!   `submit_for_pr` side channel before writing the result (and, with
 //!   `--submit-retry-after-failure`, calls it again after a fake fix when the
-//!   first response is rejected).
+//!   first response is rejected). `--require-first-submit-rejected` and
+//!   `--require-first-submit-timeout` assert that the live response carried the
+//!   expected structured gate data.
 //! - if the `--crash-before-result` argument is passed, the process exits
 //!   non-zero before writing the result. (An argument, not an env var, so
 //!   concurrent test threads cannot race on a process-global knob.)
@@ -56,6 +63,13 @@ fn main() {
         }
     }
 
+    if let Some(mode) = flag_value(&args, "--pre-push-config") {
+        for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
+            let repo_dir = workspace.join(&repo.dir);
+            write_pre_push_config(&repo_dir, &mode);
+        }
+    }
+
     if std::env::args().any(|arg| arg == "--crash-before-result") {
         eprintln!("smith-fake-agent: simulated crash before result");
         std::process::exit(7);
@@ -66,6 +80,28 @@ fn main() {
             .as_deref()
             .expect("--submit-for-pr-address flag set by runner");
         let first = submit_for_pr(address, &context, Some("fake agent submit"));
+        if args
+            .iter()
+            .any(|arg| arg == "--require-first-submit-rejected")
+        {
+            assert!(
+                !first.accepted,
+                "first submit should be rejected: {first:?}"
+            );
+            assert!(
+                !first.gates.is_empty(),
+                "first rejected submit should carry structured gates: {first:?}"
+            );
+        }
+        if args
+            .iter()
+            .any(|arg| arg == "--require-first-submit-timeout")
+        {
+            assert!(
+                first.gates.iter().any(|gate| gate.timed_out),
+                "first submit should carry a timed_out gate: {first:?}"
+            );
+        }
         if args.iter().any(|arg| arg == "--submit-retry-after-failure") && !first.accepted {
             for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
                 let repo_dir = workspace.join(&repo.dir);
@@ -126,6 +162,40 @@ fn submit_for_pr(
         .read_to_end(&mut response)
         .expect("read submit_for_pr response");
     serde_json::from_slice(&response).expect("parse submit_for_pr response")
+}
+
+fn write_pre_push_config(repo_dir: &std::path::Path, mode: &str) {
+    let (id, script, timeout_secs) = match mode {
+        "pass" => ("fake-pass", "test -f GREETING.md", 5),
+        "retry-file" => (
+            "retry-file",
+            "if test -f AFTER_SUBMIT_FAILURE.md; then printf fixed; else printf missing-retry-file >&2; exit 7; fi",
+            5,
+        ),
+        "timeout-until-retry-file" => (
+            "timeout-retry",
+            "if test -f AFTER_SUBMIT_FAILURE.md; then printf fixed; else printf before; sleep 5; fi",
+            1,
+        ),
+        "always-fail" => ("always-fail", "printf always-fail >&2; exit 42", 5),
+        other => panic!("unknown --pre-push-config mode {other}"),
+    };
+    let config = format!(
+        r#"version = 1
+
+[pre_push]
+required = true
+cwd = "repo"
+
+[[pre_push.commands]]
+id = "{id}"
+argv = ["sh", "-c", {script:?}]
+timeout_secs = {timeout_secs}
+"#
+    );
+    let temper_dir = repo_dir.join(".temper");
+    std::fs::create_dir_all(&temper_dir).expect("create .temper dir");
+    std::fs::write(temper_dir.join("pre-push.toml"), config).expect("write pre-push config");
 }
 
 /// The value following `flag` in `args`, or `None` when the flag is absent.

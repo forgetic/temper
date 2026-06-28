@@ -46,7 +46,8 @@ pub use pr_freshness::{
     map_response as map_pr_freshness_response,
 };
 pub use pre_push::{
-    PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, run_pre_push_checks,
+    PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, final_pre_push_response,
+    run_pre_push_checks, submit_for_pr_pre_push_response, submit_for_pr_pre_push_response_blocking,
 };
 pub use run::{run_worker, run_worker_with_transport};
 pub use transport::{HttpTransport, Transport};

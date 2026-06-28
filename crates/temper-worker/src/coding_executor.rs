@@ -218,6 +218,8 @@ async fn execute<R: AgentRunner>(
             writable_outcome(WritableOutcomeRequest {
                 prepared: &prepared,
                 result,
+                workspace_context: &workspace_context,
+                workspace_root: &workspace_root,
                 allowed_verdicts: &allowed_verdicts,
                 coordination_key: &coordination_key,
                 action: &action,

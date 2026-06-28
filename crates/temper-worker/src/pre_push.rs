@@ -3,6 +3,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use temper_protocol_agent::{
+    PROTOCOL_VERSION, SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse, WorkspaceContext,
+};
 
 mod process;
 
@@ -70,6 +73,147 @@ impl PrePushReport {
             self.status,
             PrePushStatus::NotConfigured | PrePushStatus::Passed
         )
+    }
+}
+
+/// Runs the worker-owned pre-push checks for a live `submit_for_pr` attempt.
+///
+/// The workspace root is the agent cwd containing one sibling directory per
+/// repository from [`WorkspaceContext::repos`]. Each writable repo is checked in
+/// its own current checkout, so a newly edited `.temper/pre-push.toml` is the
+/// config that is evaluated. Missing configs are accepted as a no-op.
+pub async fn submit_for_pr_pre_push_response(
+    request: &SubmitForPrRequest,
+    context: &WorkspaceContext,
+    workspace_root: impl AsRef<Path>,
+) -> SubmitForPrResponse {
+    let reports = match run_workspace_pre_push_checks(context, workspace_root.as_ref()).await {
+        Ok(reports) => reports,
+        Err(error) => {
+            return SubmitForPrResponse::rejected(format!(
+                "pre-push checks could not run for {}: {error}",
+                request.correlation_key
+            ));
+        }
+    };
+
+    response_from_reports(&request.correlation_key, reports)
+}
+
+/// Synchronous wrapper for the out-of-process `submit_for_pr` side-channel
+/// thread. It runs the async checker on a short-lived worker runtime so the
+/// child agent receives a normal structured tool response on the same request.
+pub fn submit_for_pr_pre_push_response_blocking(
+    request: SubmitForPrRequest,
+    context: &WorkspaceContext,
+    workspace_root: &Path,
+) -> SubmitForPrResponse {
+    let context = context.clone();
+    let workspace_root = workspace_root.to_path_buf();
+    temper_worker_io::block_on(async move {
+        submit_for_pr_pre_push_response(&request, &context, &workspace_root).await
+    })
+}
+
+/// Runs the same checks defensively on the terminal success path, preventing an
+/// agent from bypassing configured gates by skipping `submit_for_pr` and ending
+/// with final JSON.
+pub async fn final_pre_push_response(
+    context: &WorkspaceContext,
+    workspace_root: impl AsRef<Path>,
+) -> SubmitForPrResponse {
+    let request = SubmitForPrRequest {
+        protocol_version: PROTOCOL_VERSION,
+        correlation_key: context.correlation_key.clone(),
+        role: context.work_item.role.clone(),
+        action: context.action.clone(),
+        summary: None,
+    };
+    submit_for_pr_pre_push_response(&request, context, workspace_root).await
+}
+
+struct RepoPrePushReport {
+    report: PrePushReport,
+}
+
+async fn run_workspace_pre_push_checks(
+    context: &WorkspaceContext,
+    workspace_root: &Path,
+) -> Result<Vec<RepoPrePushReport>, PrePushError> {
+    let mut reports = Vec::new();
+    for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
+        let report = run_pre_push_checks(workspace_root.join(&repo.dir)).await?;
+        reports.push(RepoPrePushReport { report });
+    }
+    Ok(reports)
+}
+
+fn response_from_reports(
+    correlation_key: &str,
+    reports: Vec<RepoPrePushReport>,
+) -> SubmitForPrResponse {
+    let configured = reports
+        .iter()
+        .filter(|repo| repo.report.status != PrePushStatus::NotConfigured)
+        .count();
+    let accepted = reports.iter().all(|repo| repo.report.passed());
+    let gates = reports
+        .iter()
+        .flat_map(|repo| repo.report.commands.iter().map(gate))
+        .collect::<Vec<_>>();
+
+    if configured == 0 {
+        return SubmitForPrResponse {
+            accepted: true,
+            message: format!(
+                "host accepted submit_for_pr for {correlation_key}; no pre-push gates configured"
+            ),
+            gates,
+        };
+    }
+
+    if accepted {
+        SubmitForPrResponse {
+            accepted: true,
+            message: format!(
+                "pre-push gates passed for {configured} writable repo(s) in {correlation_key}"
+            ),
+            gates,
+        }
+    } else {
+        SubmitForPrResponse {
+            accepted: false,
+            message: format!(
+                "pre-push gates failed for {correlation_key}; fix the reported command output and submit_for_pr again"
+            ),
+            gates,
+        }
+    }
+}
+
+fn gate(command: &PrePushCommandResult) -> SubmitForPrGate {
+    SubmitForPrGate {
+        command_id: format!("pre-push:{}", command.id),
+        argv: command.argv.clone(),
+        cwd: command.cwd.display().to_string(),
+        exit_status: command_status(command),
+        exit_code: command.exit_code,
+        stdout_tail: command.stdout_tail.clone(),
+        stderr_tail: command.stderr_tail.clone(),
+        timed_out: command.timed_out,
+        elapsed_ms: command.elapsed_ms,
+    }
+}
+
+fn command_status(command: &PrePushCommandResult) -> String {
+    if command.timed_out {
+        "timeout".to_string()
+    } else if command.succeeded() {
+        "passed".to_string()
+    } else if command.error.is_some() {
+        "error".to_string()
+    } else {
+        "failed".to_string()
     }
 }
 

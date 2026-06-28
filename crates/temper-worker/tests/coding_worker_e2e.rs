@@ -162,6 +162,128 @@ fn out_of_process_agent_can_submit_fail_fix_and_resubmit_before_result() {
     assert_eq!(after_fix, "fixed after submit");
 }
 
+#[test]
+fn submit_for_pr_runs_configured_pre_push_gate_and_allows_push() {
+    let fixture = GitFixture::new();
+
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--pre-push-config".to_string(),
+        "pass".to_string(),
+        "--submit-before-result".to_string(),
+    ]));
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
+
+    assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
+    assert_eq!(result.repos.len(), 1);
+    let config = fixture.origin_show("refs/heads/agent/pr-for-code-7:.temper/pre-push.toml");
+    assert!(
+        config.contains("fake-pass"),
+        "config was committed: {config}"
+    );
+    let greeting = fixture.origin_show("refs/heads/agent/pr-for-code-7:GREETING.md");
+    assert_eq!(greeting, "hello from the fake agent");
+}
+
+#[test]
+fn submit_for_pr_failure_returns_structured_gate_to_live_agent_then_retry_pushes() {
+    let fixture = GitFixture::new();
+
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--pre-push-config".to_string(),
+        "retry-file".to_string(),
+        "--submit-before-result".to_string(),
+        "--submit-retry-after-failure".to_string(),
+        "--require-first-submit-rejected".to_string(),
+    ]));
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
+
+    assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
+    let after_fix = fixture.origin_show("refs/heads/agent/pr-for-code-7:AFTER_SUBMIT_FAILURE.md");
+    assert_eq!(after_fix, "fixed after submit");
+}
+
+#[test]
+fn submit_for_pr_timeout_returns_timed_out_gate_then_retry_pushes() {
+    let fixture = GitFixture::new();
+
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--pre-push-config".to_string(),
+        "timeout-until-retry-file".to_string(),
+        "--submit-before-result".to_string(),
+        "--submit-retry-after-failure".to_string(),
+        "--require-first-submit-rejected".to_string(),
+        "--require-first-submit-timeout".to_string(),
+    ]));
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
+
+    assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
+    let after_fix = fixture.origin_show("refs/heads/agent/pr-for-code-7:AFTER_SUBMIT_FAILURE.md");
+    assert_eq!(after_fix, "fixed after submit");
+}
+
+#[test]
+fn final_result_cannot_bypass_configured_failing_pre_push_gate() {
+    let fixture = GitFixture::new();
+
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--pre-push-config".to_string(),
+        "always-fail".to_string(),
+    ]));
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
+
+    assert_eq!(result.status, ResultStatus::Failure, "result: {result:?}");
+    assert!(result.repos.is_empty());
+    let failure = result.failure.expect("failure details");
+    assert!(
+        failure
+            .message
+            .contains("pre-push gate failed before final push"),
+        "failure message: {}",
+        failure.message
+    );
+    assert!(
+        failure.message.contains("pre-push:always-fail"),
+        "failure message: {}",
+        failure.message
+    );
+    assert!(
+        !fixture.origin_ref_exists("refs/heads/agent/pr-for-code-7"),
+        "failing final pre-push gate must not push the branch"
+    );
+}
+
 /// The headline ADR 0023 demonstration: one engineer assignment assembles a
 /// two-repo workspace, the agent edits both, and the worker pushes a branch to
 /// *each* repo — reporting one `RepoOutcome` per repo for the daemon to turn
