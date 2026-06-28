@@ -5,10 +5,9 @@
 
 use temper_engine_io::http::HttpResponseData;
 use temper_protocol_worker::{
-    Assign, ErrorCode, FailureClass, JobProgress, JobResult, ResultStatus, WorkerProtocolMessage,
+    Assign, ErrorCode, FailureClass, JobResult, ResultStatus, WorkerProtocolMessage,
 };
 
-use crate::InFlightJob;
 
 pub(super) fn is_poll_timeout(message: &WorkerProtocolMessage) -> bool {
     matches!(
@@ -112,24 +111,6 @@ pub(super) fn result_disposition(result: &JobResult) -> ResultDisposition {
             }
         },
     }
-}
-
-/// One structured log line per accepted progress checkpoint.
-pub(super) fn progress_log_line(job: &InFlightJob, progress: &JobProgress) -> String {
-    format!(
-        "engine: progress job_id={} correlation_key={} step={} state={} sha={}{} :: {}",
-        job.job_id,
-        progress.correlation_key,
-        progress.step,
-        progress.state,
-        progress.pushed_sha.as_deref().unwrap_or("-"),
-        progress
-            .note
-            .as_deref()
-            .map(|note| format!(" note={note:?}"))
-            .unwrap_or_default(),
-        progress.status,
-    )
 }
 
 /// Renders a worker-protocol core response as an HTTP response: `200` with a

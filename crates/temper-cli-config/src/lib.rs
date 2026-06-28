@@ -606,11 +606,6 @@ fn render(resolved: &Resolved) -> String {
     );
     let _ = writeln!(out, "  max_iters    = {}", resolved.agent.max_iterations);
     let _ = writeln!(out, "  subagents    = {}", resolved.agent.enable_subagents);
-    let _ = writeln!(
-        out,
-        "  checkpoints  = {}",
-        resolved.agent.enable_checkpoints
-    );
     let _ = writeln!(out, "  profiles     = {}", resolved.agent.profiles.len());
     for (name, profile) in &resolved.agent.profiles {
         let command = if profile.command.is_empty() {

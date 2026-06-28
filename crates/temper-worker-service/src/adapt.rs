@@ -55,8 +55,8 @@ pub fn git_base_url(resolved: &Resolved) -> Result<String, String> {
 
 /// Role → git identity for the coding executor. The executor configures each
 /// writable checkout's local `.git/config` (author identity + push credential)
-/// before spawning the agent, so any opt-in checkpoint commits/pushes use the
-/// right identity without the push token ever crossing the agent boundary.
+/// before spawning the agent; the worker owns the final branch push, so no push
+/// token crosses the agent boundary.
 pub fn role_identities(resolved: &Resolved) -> BTreeMap<String, RoleGitIdentity> {
     resolved
         .forge
@@ -104,10 +104,6 @@ pub fn agent_invocation(
     command.push(agent.max_iterations.to_string());
     command.push("--subagents".to_string());
     command.push(if agent.enable_subagents { "on" } else { "off" }.to_string());
-    if agent.enable_checkpoints {
-        command.push("--checkpoints".to_string());
-        command.push("on".to_string());
-    }
     if let Some(capture_dir) = &agent.config_dir {
         command.push("--capture-dir".to_string());
         command.push(capture_dir.display().to_string());

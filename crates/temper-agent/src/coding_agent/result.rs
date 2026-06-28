@@ -115,8 +115,8 @@ pub(crate) fn validate_contract(
             // The cwd is the workspace root; a writable repo's product lives in
             // its own sibling dir. The run produced a product if ANY writable
             // repo has working-tree changes or a committed tree diff from its
-            // base branch. An empty checkpoint commit can put HEAD ahead with
-            // an identical tree, so commits-ahead alone is not product.
+            // base branch. Commits-ahead alone are not product unless the tree
+            // differs.
             let produced = context
                 .repos
                 .iter()
@@ -145,8 +145,8 @@ pub(crate) fn validate_contract(
 }
 
 /// Returns true when `HEAD`'s tree differs from `origin/<base_branch>` in
-/// `cwd` (checkpoint commits a phase-6b run pushed mid-run). Falls back to
-/// `false` when git cannot answer, leaving the working-tree check decisive.
+/// `cwd`. Falls back to `false` when git cannot answer, leaving the
+/// working-tree check decisive.
 fn tree_differs_from_base(cwd: &Path, base_branch: &str) -> bool {
     let base_branch = base_branch.trim();
     if base_branch.is_empty() {

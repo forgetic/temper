@@ -226,7 +226,7 @@ main[aria-label="board"] > section > h2 > .sat {
   font: 500 11px/1.3 var(--mono); color: var(--fg-dim);
   min-height: 15px;
 }
-/* step progress bar (from StepProgress) */
+/* step progress bar */
 .card .steps { display: flex; align-items: center; gap: 8px; }
 .card .steps .bar { flex: 1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
 .card .steps .bar > i { display: block; height: 100%; background: var(--info); transition: width var(--t); }

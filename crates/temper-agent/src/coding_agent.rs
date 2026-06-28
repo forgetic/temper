@@ -58,10 +58,10 @@ pub use capability::Capability;
 pub use error::CodingAgentError;
 pub use prompt::{system_prompt, user_context};
 pub use run::{
-    run_coding_agent_native, run_coding_agent_native_with_hooks,
-    run_coding_agent_native_with_options,
+    run_coding_agent_native, run_coding_agent_native_with_options,
+    run_coding_agent_native_with_totals,
 };
-pub use tools::{CheckpointHook, tool_registry};
+pub use tools::tool_registry;
 
 // Internal items the unit tests reach through `super::*`.
 #[cfg(test)]
@@ -69,7 +69,7 @@ pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabu
 #[cfg(test)]
 pub(crate) use run::classify_run_error;
 #[cfg(test)]
-pub(crate) use tools::{CHECKPOINT_GUIDANCE, SubAgentTier, add_subagents, subagent_specs};
+pub(crate) use tools::{SubAgentTier, add_subagents, subagent_specs};
 
 // The provider/tool types the unit tests construct through `super::*`.
 #[cfg(test)]

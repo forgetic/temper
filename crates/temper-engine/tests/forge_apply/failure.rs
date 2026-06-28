@@ -2,7 +2,6 @@
 
 use crate::assertions::*;
 use crate::support::*;
-use temper_protocol_worker::JobProgress;
 
 #[test]
 fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
@@ -189,92 +188,6 @@ fn transient_failure_does_not_create_pull_request_or_mark_issue() {
 }
 
 #[test]
-fn transient_failure_after_started_releases_claimed_source_issue() {
-    temper_engine_io::block_on_with(move |_cx, _handle| async move {
-        let root = MemoryForge::new();
-        let repo = new_repo(&root, "stable").await;
-        let issue_number = create_ready_issue(&root, &repo).await;
-        let forge = Arc::new(root.as_user(role_user("engineer")));
-        let applier = ForgeApplier::new(forge, Arc::new(workflow()));
-        let job = open_pr_in_flight_job("acme/service", issue_number);
-        let correlation = local_correlation_key(issue_number);
-
-        applier
-            .apply_progress(
-                job.clone(),
-                transient_progress(&correlation, 1, "started", "start engineer run"),
-            )
-            .await;
-
-        let claimed = root
-            .get_issue_by_number(&repo, issue_number)
-            .await
-            .expect("issue lookup succeeds")
-            .expect("issue exists after started progress");
-        assert_eq!(
-            claimed.labels,
-            vec!["code".to_string(), "in-progress".to_string()]
-        );
-        assert_eq!(claimed.assignees, vec![UserId::new("engineer")]);
-        assert_one_run_ledger(&claimed.body, &correlation);
-        assert!(claimed.body.contains("Current status: editing"));
-        assert!(claimed.body.contains("Worker: `worker-a`"));
-
-        let result = failure_result(
-            "worker-a",
-            &job.job_id,
-            Some(FailureClass::Transient),
-            "OpenAI API error: server_error: upstream overloaded",
-        );
-        applier.apply(job.clone(), result.clone()).await;
-
-        let released = root
-            .get_issue_by_number(&repo, issue_number)
-            .await
-            .expect("issue lookup succeeds")
-            .expect("issue exists after transient failure");
-        assert_eq!(
-            released.labels,
-            vec!["code".to_string(), "ready".to_string()],
-            "transient failure must make the source issue queue-visible again"
-        );
-        assert!(
-            released.assignees.is_empty(),
-            "engineer claim assignee should be removed on retry release"
-        );
-        assert_one_run_ledger(&released.body, &correlation);
-        assert!(released.body.contains("Current status: queued for retry"));
-        assert!(
-            released
-                .body
-                .contains("Retry: released back to the ready queue after a transient failure")
-        );
-        assert!(released.body.contains("Latest progress: step 1"));
-        assert!(released.body.contains("Worker: `worker-a`"));
-        assert_no_pull_requests(&root, &repo).await;
-        assert_no_attention_mark(&root, &repo, issue_number).await;
-
-        let body_after_first_apply = released.body.clone();
-        let labels_after_first_apply = released.labels.clone();
-        applier.apply(job, result).await;
-
-        let replayed = root
-            .get_issue_by_number(&repo, issue_number)
-            .await
-            .expect("issue lookup succeeds")
-            .expect("issue exists after replay");
-        assert_eq!(replayed.labels, labels_after_first_apply);
-        assert!(replayed.assignees.is_empty());
-        assert_eq!(
-            replayed.body, body_after_first_apply,
-            "replaying the transient result should not duplicate retry ledger state"
-        );
-        assert_no_pull_requests(&root, &repo).await;
-        assert_no_attention_mark(&root, &repo, issue_number).await;
-    })
-}
-
-#[test]
 fn canceled_failure_does_not_create_pull_request_or_mark_issue() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
@@ -365,38 +278,3 @@ fn permanent_failure_replay_dedupes_by_comment_marker_when_label_is_missing() {
         )));
     })
 }
-
-fn local_correlation_key(number: ItemNumber) -> String {
-    format!("pr-for-code-{}", number.get())
-}
-
-fn transient_progress(correlation_key: &str, step: u32, state: &str, status: &str) -> JobProgress {
-    JobProgress {
-        protocol_version: WORKER_PROTOCOL_VERSION,
-        worker_id: "worker-a".to_string(),
-        correlation_key: correlation_key.to_string(),
-        step,
-        status: status.to_string(),
-        state: state.to_string(),
-        pushed_sha: None,
-        note: None,
-    }
-}
-
-fn assert_one_run_ledger(body: &str, correlation: &str) {
-    let marker = format!("<!-- temper-run-ledger correlation_key={correlation} -->");
-    assert_eq!(
-        body.matches(&marker).count(),
-        1,
-        "expected exactly one run ledger marker in body: {body}"
-    );
-    assert_eq!(
-        body.matches("<!-- /temper-run-ledger -->").count(),
-        1,
-        "expected exactly one run ledger end marker in body: {body}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Step-progress checkpoints (worker → daemon → forge relay, phase 6a).
-// ---------------------------------------------------------------------------

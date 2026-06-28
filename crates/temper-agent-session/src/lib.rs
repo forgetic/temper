@@ -9,52 +9,42 @@
 //! 1. read the [`WorkspaceContext`] JSON from the file named by `--context`;
 //! 2. run the native sans-IO coding loop in `--workspace` (default cwd — the
 //!    prepared checkout the worker handed us);
-//! 3. emit ordinary [`StepProgress`] start/finish records as line-delimited JSON
-//!    on **stdout**. Mid-run checkpoint progress is opt-in: when `--checkpoints
-//!    on` is set for a writable job, the agent also wires the model-facing
-//!    `checkpoint` tool and the deadline/interval backstop that commit + push
-//!    checkpoint diffs and emit markers carrying the pushed sha. A re-dispatched
-//!    opt-in agent can find those commits on the prepared branch, resume its
-//!    step numbering from them, and tell the model what already landed;
-//! 4. write the [`WorkspaceResult`] JSON to the file named by `--result`.
+//! 3. write the [`WorkspaceResult`] JSON to the file named by `--result`.
 //!
 //! The agent has git credentials only via the prepared checkout (the worker
 //! configures `user.name`/`user.email` and a push `http.extraheader` in each
 //! writable repo's local `.git/config` before spawning), and never talks to the
-//! forge API — the worker owns that. Anything real-time (token deltas, steering)
-//! belongs to the out-of-band control plane, not this binary's stdout.
+//! forge API. The worker owns the final branch push and all Forge mutations.
+//! Anything real-time (token deltas, steering) belongs to the out-of-band
+//! control plane, not this binary's stdout.
 //!
 //! Every non-secret input is a flag: `--provider <anthropic|chatgpt|deepseek>`,
 //! `--model <id>`, `--investigate-model <id>`, `--provider-url <url>`,
-//! `--max-iterations <n>`, `--subagents <on|off>`, `--deadline-unix-seconds <n>`,
-//! `--checkpoints <on|off>`, `--checkpoint-interval <dur>`, `--capture-dir
-//! <dir>`, plus the required `--context`/`--result` paths and the optional
-//! `--workspace`. The **one** secret, the provider credential, arrives via
+//! `--max-iterations <n>`, `--subagents <on|off>`, `--capture-dir <dir>`, plus
+//! the required `--context`/`--result` paths and the optional `--workspace`. The
+//! **one** secret, the provider credential, arrives via
 //! `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`.
 //!
 //! ## Config objects
 //!
 //! The agent session is configured by one struct, [`AgentConfig`], which the
 //! coding-loop factory accepts. It bundles the provider wiring plus every
-//! loop/session knob (iterations, sub-agents, capture dir, deadline, checkpoint
-//! opt-in/cadence) so the factory takes a single struct rather than a growing parameter
-//! list. It is constructible in memory for tests. Per the per-subsystem
-//! config-object rule, big factories take a config object; small ones stay as-is.
+//! loop/session knob (iterations, sub-agents, capture dir) so the factory takes a
+//! single struct rather than a growing parameter list. It is constructible in
+//! memory for tests. Per the per-subsystem config-object rule, big factories take
+//! a config object; small ones stay as-is.
 //!
 //! [`WorkspaceContext`]: temper_protocol_agent::WorkspaceContext
-//! [`StepProgress`]: temper_protocol_agent::StepProgress
 //! [`WorkspaceResult`]: temper_protocol_agent::WorkspaceResult
 
-mod checkpoint;
 mod config;
 mod entry;
 mod options;
-mod progress;
 mod run;
 
 use std::process::ExitCode;
 
-pub use config::{AgentConfig, DEFAULT_CHECKPOINT_INTERVAL};
+pub use config::AgentConfig;
 
 /// The agent binary's entry point: the **single place** this crate (and the
 /// `temper-agent` core it drives) reads `std::env`. It reads the one secret env
@@ -68,8 +58,8 @@ where
     match entry::run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            // stderr carries diagnostics; stdout is reserved for the framed
-            // step-progress stream so the worker can parse it cleanly.
+            // stderr carries diagnostics; stdout is reserved for the result
+            // protocol carrier's parent process.
             eprintln!("temper-agent: {error}");
             ExitCode::from(2)
         }

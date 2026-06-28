@@ -21,7 +21,7 @@ use temper_forge_memory::MemoryForge;
 use temper_protocol_agent::{AgentSessionState, WorkspaceContext, WorkspaceResult};
 use temper_worker::{
     AgentRunError, AgentRunner, CapabilitySpec, ExecutorSelection, PrFreshnessFailure,
-    PrFreshnessGuard, ProgressSink, RoleGitIdentity, ScopedWorkspaceCleanupOutcome, WorkerConfig,
+    PrFreshnessGuard, RoleGitIdentity, ScopedWorkspaceCleanupOutcome, WorkerConfig,
 };
 use temper_workflow::RawWorkflowSpec;
 
@@ -54,7 +54,6 @@ impl AgentRunner for RecordingAgent {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        _progress: Arc<dyn ProgressSink>,
     ) -> Result<WorkspaceResult, AgentRunError> {
         let primary = context.primary().expect("primary repo in context");
         let repo_cwd = cwd.join(&primary.dir);

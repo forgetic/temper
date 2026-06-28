@@ -4,27 +4,25 @@
 //!
 //! [`InProcessAgentRunner`] implements the orchestrator's
 //! [`AgentRunner`](temper_worker::AgentRunner) by calling the agent core
-//! ([`run_coding_agent_native_with_hooks`]) directly on the host event loop — no
-//! subprocess, no temp files. `WorkspaceContext` flows in as a value and
-//! `WorkspaceResult` comes back as the return value; step-progress is reported
-//! through the injected [`ProgressSink`] in memory.
+//! ([`run_coding_agent_native_with_totals`]) directly on the host event loop —
+//! no subprocess, no temp files. `WorkspaceContext` flows in as a value and
+//! `WorkspaceResult` comes back as the return value.
 //!
 //! This is the worker→agent carrier the standalone daemon uses; the distributed
 //! deployment keeps the subprocess `OutOfProcessRunner`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    CodingAgentError, ProviderConfig, RunTotals, run_coding_agent_native_with_hooks,
+    CodingAgentError, ProviderConfig, RunTotals, run_coding_agent_native_with_totals,
 };
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
-use temper_protocol_agent::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
-use temper_worker::{AgentRunError, AgentRunner, PrFreshnessGuard, ProgressSink, WorkspaceResult};
+use temper_protocol_agent::WorkspaceContext;
+use temper_worker::{AgentRunError, AgentRunner, WorkspaceResult};
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {
@@ -33,8 +31,6 @@ pub struct InProcessAgentRunner {
     max_iterations: usize,
     config_dir: Option<PathBuf>,
     enable_subagents: bool,
-    enable_checkpoints: bool,
-    pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
 }
 
 impl InProcessAgentRunner {
@@ -51,20 +47,9 @@ impl InProcessAgentRunner {
             max_iterations,
             config_dir,
             enable_subagents,
-            enable_checkpoints: false,
-            pr_freshness_guard: None,
         }
     }
 
-    pub fn with_pr_freshness_guard(mut self, guard: Arc<dyn PrFreshnessGuard>) -> Self {
-        self.pr_freshness_guard = Some(guard);
-        self
-    }
-
-    pub fn with_checkpoints_enabled(mut self, enabled: bool) -> Self {
-        self.enable_checkpoints = enabled;
-        self
-    }
 }
 
 impl AgentRunner for InProcessAgentRunner {
@@ -72,29 +57,13 @@ impl AgentRunner for InProcessAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        progress: Arc<dyn ProgressSink>,
     ) -> impl std::future::Future<Output = Result<WorkspaceResult, AgentRunError>> + Send {
-        // Emit the same outer start/finish boundary markers as the subprocess
-        // wrapper; checkpoint-enabled in-process runs also get live checkpoint
-        // hooks wired below.
-        let step = Arc::new(AtomicU32::new(1));
-        let role = context.work_item.role.clone();
-        let correlation = context.correlation_key.clone();
-
-        progress.report(StepProgress {
-            correlation_key: correlation.clone(),
-            step: step.fetch_add(1, Ordering::SeqCst),
-            status: format!("start {role} run"),
-            state: StepState::Started,
-            pushed_sha: None,
-            note: Some(format!("protocol v{PROTOCOL_VERSION} (in-process)")),
-        });
-
         // §7 agent boundary events. The `item` ref is the work-item subject tag
         // (`[repo#n]` / `[repo PR#n]`); `kind` is the role's activity verb
         // (architect→triage, engineer→coding). We emit `agent.started` here,
         // up-front and synchronously — *before* the async block / model call —
         // so the start line appears even if the run later stalls on the model.
+        let role = context.work_item.role.clone();
         let item = work_item_ref(context);
         let kind = run_kind(&role);
         let started = Instant::now();
@@ -112,21 +81,11 @@ impl AgentRunner for InProcessAgentRunner {
         let max_iterations = self.max_iterations;
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
-        let enable_checkpoints = self.enable_checkpoints;
-        let pr_freshness_guard = self.pr_freshness_guard.clone();
-        let hook_set = super::hooks::hooks_for_context(
-            context,
-            cwd,
-            Arc::clone(&progress),
-            pr_freshness_guard,
-            Arc::clone(&step),
-            enable_checkpoints,
-        );
         let context = context.clone();
         let cwd = cwd.to_path_buf();
 
         async move {
-            let outcome = run_coding_agent_native_with_hooks(
+            let outcome = run_coding_agent_native_with_totals(
                 handle,
                 &provider,
                 &context,
@@ -134,9 +93,6 @@ impl AgentRunner for InProcessAgentRunner {
                 max_iterations,
                 config_dir.as_deref(),
                 enable_subagents,
-                None,
-                hook_set.turn_hook,
-                hook_set.checkpoint_hook,
             )
             .await
             .map_err(classify_coding_agent_error);
@@ -167,15 +123,6 @@ impl AgentRunner for InProcessAgentRunner {
             }
 
             let (result, _totals) = outcome?;
-
-            progress.report(StepProgress {
-                correlation_key: correlation,
-                step: step.fetch_add(1, Ordering::SeqCst),
-                status: format!("finish {role} run"),
-                state: StepState::Done,
-                pushed_sha: None,
-                note: result.summary.clone(),
-            });
 
             Ok(result)
         }

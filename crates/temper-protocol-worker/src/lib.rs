@@ -32,7 +32,7 @@ pub use job::{
     PullRequestFreshnessStatus,
 };
 pub use lifecycle::{
-    ErrorCode, Heartbeat, HeartbeatState, JobHeartbeat, JobProgress, LeaseAck, LeaseAckDisposition,
+    ErrorCode, Heartbeat, HeartbeatState, JobHeartbeat, LeaseAck, LeaseAckDisposition,
     ProtocolError, Release, ReleaseDisposition,
 };
 pub use message::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};

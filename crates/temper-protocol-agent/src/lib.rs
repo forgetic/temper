@@ -17,20 +17,8 @@
 //!   *only* bridge to the out-of-band control/observability plane. The worker
 //!   writes it to a file and passes its path as the agent's `--context` flag,
 //!   running the agent in the prepared checkout (`--workspace`, also cwd).
-//! - **Outbound step-progress (agent → worker), stream:** zero or more
-//!   [`StepProgress`] records, one per coherent step boundary, emitted on the
-//!   agent's **stdout** as line-delimited JSON. These are crash-recovery
-//!   checkpoint markers — *what was done and what was pushed* — emitted
-//!   **after** the corresponding commit is pushed.
 //! - **Outbound result (agent → worker), terminal:** a [`WorkspaceResult`]
 //!   written to the file named by the agent's `--result` flag.
-//!
-//! # Recovery, not transactions
-//!
-//! Step-progress gives **resumability**, not exactly-once semantics: a crash
-//! between the push and the marker leaves a small inconsistency window, which
-//! the next agent reconciles by reading the branch diff. Push at coherent step
-//! boundaries; let the marker reflect only what was pushed.
 
 use serde::{Deserialize, Serialize};
 
@@ -167,10 +155,8 @@ pub struct WorkspaceContext {
     /// Workflow action/transition this workspace turn is assigned to perform.
     pub action: String,
     /// Per-job correlation id (the coordination key). Minted in the
-    /// orchestration world, carried here, and stamped by the agent onto every
-    /// [`StepProgress`] and onto everything it emits to the out-of-band
-    /// control/observability plane. This is the single deliberate bridge
-    /// between the two planes.
+    /// orchestration world and carried here so logs and terminal results can be
+    /// joined to the assigned work without parsing prose.
     pub correlation_key: String,
     /// Checkout mode token: `writable`, `read_only`, `pull_request_read_only`,
     /// or `pull_request_writable`.
@@ -182,8 +168,8 @@ pub struct WorkspaceContext {
     pub allowed_verdicts: Vec<String>,
     #[serde(default)]
     pub guidance: WorkspaceGuidance,
-    /// Freshness guard facts for PR-head writable jobs. Agents and host hooks
-    /// revalidate these before pushing checkpoints; absent for ordinary jobs.
+    /// Freshness guard facts for PR-head writable jobs. The worker revalidates
+    /// these before the final push; absent for ordinary jobs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request_freshness: Option<PullRequestFreshness>,
     /// Persisted agent-session state for this workstream, when the worker has a
@@ -280,90 +266,9 @@ pub struct WorkspaceResultChild {
     pub target_repo: Option<String>,
 }
 
-/// One durable human-facing progress marker emitted by the agent/host at a
-/// coherent boundary.
-///
-/// Markers are crash-recovery checkpoints emitted *after* the corresponding
-/// commit is pushed. The worker relays each record to the forge/orchestrator as
-/// durable progress. Everything high-frequency (token deltas, tool calls)
-/// belongs on the control plane, not here.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct StepProgress {
-    /// Echoes [`WorkspaceContext::correlation_key`] so the worker (and the
-    /// control plane) can join this marker to its job without parsing prose.
-    pub correlation_key: String,
-    /// Monotonic step index within the turn, starting at 1.
-    pub step: u32,
-    /// Short imperative label of the step, e.g. "write failing test".
-    pub status: String,
-    /// Step lifecycle phase.
-    #[serde(default)]
-    pub state: StepState,
-    /// Commit sha this step pushed, when it pushed one. `None` for read-only or
-    /// not-yet-pushed steps.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pushed_sha: Option<String>,
-    /// Optional one-line human note.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-}
-
-/// Lifecycle phase of a [`StepProgress`] record.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepState {
-    /// The step has begun (no checkpoint yet).
-    Started,
-    /// The step finished and its work (if any) is pushed — a safe resume point.
-    #[default]
-    Done,
-}
-
-impl StepProgress {
-    /// Serializes to a single JSON line (no embedded newline) for the
-    /// line-delimited stdout stream.
-    pub fn to_line(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
-    }
-
-    /// Parses one line of the stdout stream into a [`StepProgress`]. Returns
-    /// `Ok(None)` for a blank line so the worker can skip framing whitespace.
-    pub fn from_line(line: &str) -> Result<Option<Self>, serde_json::Error> {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        serde_json::from_str(trimmed).map(Some)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn step_progress_round_trips_one_line() {
-        let progress = StepProgress {
-            correlation_key: "pr-for-code-7".to_string(),
-            step: 2,
-            status: "write failing test".to_string(),
-            state: StepState::Done,
-            pushed_sha: Some("abc123".to_string()),
-            note: None,
-        };
-        let line = progress.to_line().expect("serialize");
-        assert!(!line.contains('\n'));
-        let parsed = StepProgress::from_line(&line)
-            .expect("parse")
-            .expect("non-empty");
-        assert_eq!(parsed, progress);
-    }
-
-    #[test]
-    fn blank_lines_are_skipped() {
-        assert_eq!(StepProgress::from_line("   ").expect("ok"), None);
-        assert_eq!(StepProgress::from_line("").expect("ok"), None);
-    }
 
     #[test]
     fn api_key_credential_round_trips() {
@@ -408,15 +313,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn step_state_defaults_to_done_when_absent() {
-        let parsed: StepProgress =
-            serde_json::from_str(r#"{"correlation_key":"k","step":1,"status":"did a thing"}"#)
-                .expect("parse without state");
-        assert_eq!(parsed.state, StepState::Done);
-        assert_eq!(parsed.pushed_sha, None);
     }
 
     #[test]

@@ -1,7 +1,5 @@
 use std::sync::{Arc, Mutex};
 
-use temper_protocol_agent::{StepProgress, StepState};
-
 use super::*;
 
 /// What the fake agent does for one turn. Each variant mirrors a behavior the
@@ -17,12 +15,12 @@ pub enum AgentBehavior {
     TransientError,
     /// Return a summary-only result and write no diff (engineer => "no diff").
     NoDiff,
-    /// Engineer that checkpoint-commits and pushes its whole product itself
-    /// (phase 6b), leaving a clean working tree for the executor.
-    CheckpointCommits,
-    /// Engineer creates only an empty checkpoint commit; no product tree diff
-    /// exists, so the final head path must be rejected.
-    EmptyCheckpointCommit,
+    /// Engineer commits its product locally, leaving a clean working tree for
+    /// the executor to validate and push.
+    LocalCommit,
+    /// Engineer creates only an empty local commit; no product tree diff exists,
+    /// so the final head path must be rejected.
+    EmptyCommit,
     /// Engineer resolves a textual conflict by merging `origin/main` into the PR
     /// head and staging a resolved file for the executor's repair commit.
     ResolveMainConflict,
@@ -96,7 +94,6 @@ impl AgentRunner for FakeAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        progress: Arc<dyn ProgressSink>,
     ) -> Result<WorkspaceResult, AgentRunError> {
         *self.captured.lock().expect("capture lock") = Some(context.clone());
         // The agent's cwd is the coordination-scoped workspace root; it edits
@@ -125,46 +122,27 @@ impl AgentRunner for FakeAgentRunner {
                 summary: Some("nothing changed".to_string()),
                 ..WorkspaceResult::default()
             }),
-            AgentBehavior::CheckpointCommits => {
-                Self::write_diff(&repo_cwd);
-                let work_branch = context
-                    .primary()
-                    .and_then(|repo| repo.branch_hint.clone())
-                    .expect("primary repo carries a branch hint");
+            AgentBehavior::LocalCommit => {
+                fs::write(repo_cwd.join("agent-output.txt"), "agent local diff\n")
+                    .expect("write fake agent local diff");
                 git_output(["-C", path_str(&repo_cwd), "add", "-A"]);
                 git_output([
                     "-C",
                     path_str(&repo_cwd),
                     "-c",
-                    "user.name=Agent Checkpoint",
+                    "user.name=Agent Local",
                     "-c",
                     "user.email=agent@example.test",
                     "commit",
                     "-m",
-                    "checkpoint(step 2): push checkpoint",
+                    "agent local product commit",
                 ]);
-                git_output([
-                    "-C",
-                    path_str(&repo_cwd),
-                    "push",
-                    "origin",
-                    &format!("HEAD:refs/heads/{work_branch}"),
-                ]);
-                let pushed_sha = git_output(["-C", path_str(&repo_cwd), "rev-parse", "HEAD"]);
-                progress.report(StepProgress {
-                    correlation_key: context.correlation_key.clone(),
-                    step: 2,
-                    status: "push checkpoint".to_string(),
-                    state: StepState::Done,
-                    pushed_sha: Some(pushed_sha),
-                    note: None,
-                });
                 Ok(WorkspaceResult {
-                    summary: Some("checkpointed the work".to_string()),
+                    summary: Some("committed the work locally".to_string()),
                     ..WorkspaceResult::default()
                 })
             }
-            AgentBehavior::EmptyCheckpointCommit => {
+            AgentBehavior::EmptyCommit => {
                 git_output([
                     "-C",
                     path_str(&repo_cwd),
@@ -175,10 +153,10 @@ impl AgentRunner for FakeAgentRunner {
                     "commit",
                     "--allow-empty",
                     "-m",
-                    "empty checkpoint for pr-for-code-7",
+                    "empty local commit",
                 ]);
                 Ok(WorkspaceResult {
-                    summary: Some("pushed an empty checkpoint only".to_string()),
+                    summary: Some("made an empty local commit only".to_string()),
                     ..WorkspaceResult::default()
                 })
             }

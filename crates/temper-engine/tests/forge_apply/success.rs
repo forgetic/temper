@@ -312,7 +312,7 @@ fn success_result_finalizes_existing_branch_pr_even_when_correlation_lookup_miss
                 &repo,
                 CreatePullRequest {
                     title: format!("Implement #{}: ready code issue", issue.get()),
-                    body: "Opened from a checkpoint.\n\nSummary: checkpoint pending".to_string(),
+                    body: "Existing implementation PR.\n\nSummary: pending".to_string(),
                     source: BranchRef {
                         repository_id: repo.clone(),
                         branch: branch_name.clone(),
@@ -326,7 +326,7 @@ fn success_result_finalizes_existing_branch_pr_even_when_correlation_lookup_miss
                 },
             )
             .await
-            .expect("checkpoint PR exists before final success");
+            .expect("existing branch PR exists before final success");
 
         let summary = "final implementation summary";
         applier

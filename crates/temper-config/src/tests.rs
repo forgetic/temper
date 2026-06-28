@@ -129,7 +129,6 @@ fn resolves_full_deployment() {
 
     // agent provider
     assert_eq!(resolved.agent.provider.kind, ProviderKind::Anthropic);
-    assert!(!resolved.agent.enable_checkpoints);
     assert_eq!(
         resolved.agent.provider.main_model.as_deref(),
         Some("claude-opus-4-8")
@@ -157,25 +156,6 @@ fn resolves_full_deployment() {
         }
         other => panic!("expected inline oauth, got {other:?}"),
     }
-}
-
-#[test]
-fn agent_checkpoints_default_off_and_can_be_enabled() {
-    let config = parse_config(
-        r#"
-schema_version = 1
-[agent]
-enable_checkpoints = true
-"#,
-    );
-    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
-
-    assert!(resolved.agent.enable_checkpoints);
-
-    let default_config = parse_config("schema_version = 1\n");
-    let default_resolved =
-        resolve(&default_config, &Credentials::default(), &NoEnv).expect("resolves");
-    assert!(!default_resolved.agent.enable_checkpoints);
 }
 
 #[test]

@@ -112,7 +112,7 @@ pub async fn run_sub_agent(
 }
 
 /// Runs a sub-agent to completion with a [`TurnHook`] awaited before each
-/// model call (e.g. the phase-6b workspace checkpointer) and no event sink.
+/// model call and no event sink.
 pub async fn run_sub_agent_with_hook(
     handle: RuntimeHandle,
     sub_agent: SubAgent,

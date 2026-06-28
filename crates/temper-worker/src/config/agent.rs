@@ -10,10 +10,9 @@ pub const TEMPER_AGENT_PROGRAM: &str = "temper-agent";
 impl AnvilNativeAgentSurface {
     /// Renders the spawn command `OutOfProcessRunner` runs: the agent program
     /// followed by the flags the agent parses (`--provider`, `--model`,
-    /// `--capture-dir`, `--max-iterations`, `--subagents`, and optional
-    /// `--checkpoints`). The per-job `--context`/`--result`/`--workspace` flags
-    /// are appended by the runner; the provider credential is injected as the
-    /// one secret env var.
+    /// `--capture-dir`, `--max-iterations`, and `--subagents`). The per-job
+    /// `--context`/`--result`/`--workspace` flags are appended by the runner;
+    /// the provider credential is injected as the one secret env var.
     pub fn into_command(self) -> Vec<String> {
         let mut command = vec![self.agent_program];
         command.push("--provider".to_string());
@@ -39,10 +38,6 @@ impl AnvilNativeAgentSurface {
         }
         command.push("--subagents".to_string());
         command.push(if self.enable_subagents { "on" } else { "off" }.to_string());
-        if self.enable_checkpoints {
-            command.push("--checkpoints".to_string());
-            command.push("on".to_string());
-        }
         command
     }
 }
@@ -72,7 +67,6 @@ fn parse_anvil_native_agent_surface(args: Vec<String>) -> Result<AnvilNativeAgen
     let mut capture_dir = None;
     let mut max_iterations = None;
     let mut enable_subagents = false;
-    let mut enable_checkpoints = false;
 
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -124,23 +118,9 @@ fn parse_anvil_native_agent_surface(args: Vec<String>) -> Result<AnvilNativeAgen
                     }
                 };
             }
-            "--checkpoints" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| "--checkpoints requires a value".to_string())?;
-                enable_checkpoints = match value.as_str() {
-                    "on" => true,
-                    "off" => false,
-                    other => {
-                        return Err(format!(
-                            "--checkpoints expects `on` or `off`, got `{other}`"
-                        ));
-                    }
-                };
-            }
             other => {
                 return Err(format!(
-                    "unknown anvil-native agent arg `{other}`; expected --agent-program, --provider, --model, --capture-dir, --max-iterations, --subagents, or --checkpoints"
+                    "unknown anvil-native agent arg `{other}`; expected --agent-program, --provider, --model, --capture-dir, --max-iterations, or --subagents"
                 ));
             }
         }
@@ -153,7 +133,6 @@ fn parse_anvil_native_agent_surface(args: Vec<String>) -> Result<AnvilNativeAgen
         capture_dir,
         max_iterations,
         enable_subagents,
-        enable_checkpoints,
     })
 }
 

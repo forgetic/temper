@@ -17,7 +17,6 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::Assign(msg) => msg.protocol_version,
         WorkerProtocolMessage::Heartbeat(msg) => msg.protocol_version,
         WorkerProtocolMessage::Result(msg) => msg.protocol_version,
-        WorkerProtocolMessage::Progress(msg) => msg.protocol_version,
         WorkerProtocolMessage::Release(msg) => msg.protocol_version,
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,
@@ -68,7 +67,6 @@ fn fixtures_round_trip_and_match_variants() {
             | ("result", WorkerProtocolMessage::Result(_))
             | ("result-verdict", WorkerProtocolMessage::Result(_))
             | ("result-verdict-children", WorkerProtocolMessage::Result(_))
-            | ("progress", WorkerProtocolMessage::Progress(_))
             | ("release", WorkerProtocolMessage::Release(_))
             | ("lease-ack", WorkerProtocolMessage::LeaseAck(_))
             | ("error", WorkerProtocolMessage::Error(_)) => {}
@@ -87,24 +85,3 @@ fn unknown_fields_are_ignored() {
     assert!(matches!(msg, WorkerProtocolMessage::Poll(_)));
 }
 
-#[test]
-fn progress_accepts_legacy_json_with_extra_plan_publication() {
-    let msg: WorkerProtocolMessage = serde_json::from_str(
-        r#"{
-            "type":"progress",
-            "protocol_version":1,
-            "worker_id":"w1",
-            "correlation_key":"pr-for-code-7",
-            "step":1,
-            "status":"write failing test",
-            "state":"done",
-            "plan_publication":{"summary":"ignored","phases":["old"]}
-        }"#,
-    )
-    .expect("legacy progress parses");
-
-    let WorkerProtocolMessage::Progress(progress) = msg else {
-        panic!("expected progress message");
-    };
-    assert_eq!(progress.status, "write failing test");
-}

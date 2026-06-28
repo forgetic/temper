@@ -13,7 +13,7 @@ use std::{
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
 use temper_protocol_worker::{
-    Artifact, JobProgress, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
+    Artifact, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
 };
 use temper_worker_registry::DaemonCore;
 #[cfg(test)]
@@ -36,8 +36,6 @@ pub(super) enum DaemonCompletion {
     PollDeadline { id: u64 },
     /// A result applier finished off-loop.
     ApplyFinished { job_id: String },
-    /// A progress-checkpoint application finished off-loop (no state).
-    ProgressApplyFinished,
     /// Daemon API: enqueue one job (scans, backstops, tests).
     Enqueue {
         job_id: String,
@@ -85,10 +83,6 @@ pub(super) enum DaemonRequest {
     RunApply {
         job: InFlightJob,
         result: JobResult,
-    },
-    RunProgressApply {
-        job: InFlightJob,
-        progress: JobProgress,
     },
     RunPullRequestFreshnessCheck {
         check: PullRequestFreshness,
@@ -197,10 +191,6 @@ impl Machine for DaemonMachine {
                     .insert(job_id, self.now + self.apply_grace);
                 Vec::new()
             }
-            // Progress application carries no machine state; the completion
-            // exists only so the executor's async work feeds back per engine
-            // discipline.
-            DaemonCompletion::ProgressApplyFinished => Vec::new(),
             DaemonCompletion::Enqueue {
                 job_id,
                 role,

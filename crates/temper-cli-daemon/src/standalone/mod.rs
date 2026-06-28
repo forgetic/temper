@@ -13,7 +13,6 @@
 
 mod agent_runner;
 mod banner;
-mod hooks;
 mod transport;
 mod workstream_cleanup;
 
@@ -235,9 +234,7 @@ async fn run_async(
             resolved.agent.max_iterations,
             resolved.agent.config_dir.clone(),
             resolved.agent.enable_subagents,
-        )
-        .with_checkpoints_enabled(resolved.agent.enable_checkpoints)
-        .with_pr_freshness_guard(pr_freshness_guard.clone()),
+        ),
     );
     let executor = Arc::new(
         CodingExecutor::new(
@@ -250,12 +247,7 @@ async fn run_async(
             },
             runner,
         )
-        .with_pr_freshness_guard(pr_freshness_guard)
-        .with_progress_sink(Arc::new(InProcessProgressSink::new(
-            handle.clone(),
-            daemon.clone(),
-            resolved.worker.worker_id.clone(),
-        ))),
+        .with_pr_freshness_guard(pr_freshness_guard),
     );
     let transport = Arc::new(InProcessTransport::new(daemon.clone()));
 
@@ -385,35 +377,6 @@ async fn forge_banner_line(forge: &dyn temper_forge::Forge, url: &str) -> String
     match forge.current_user().await {
         Ok(user) => banner::forge_reachable(url, &user.handle),
         Err(error) => format!("forge: forgejo @ {url} (unreachable or auth failed: {error})"),
-    }
-}
-
-/// Relay agent step-progress to the co-resident daemon in-process (no HTTP).
-/// Fire-and-forget per the sink contract: a slow/failed apply never stalls or
-/// fails the agent turn.
-struct InProcessProgressSink {
-    handle: RuntimeHandle,
-    daemon: Daemon,
-    worker_id: String,
-}
-
-impl InProcessProgressSink {
-    fn new(handle: RuntimeHandle, daemon: Daemon, worker_id: String) -> Self {
-        Self {
-            handle,
-            daemon,
-            worker_id,
-        }
-    }
-}
-
-impl temper_worker::ProgressSink for InProcessProgressSink {
-    fn report(&self, progress: temper_protocol_agent::StepProgress) {
-        let message = temper_worker::progress_message(&self.worker_id, &progress);
-        let daemon = self.daemon.clone();
-        self.handle.spawn_with_cx(move |_cx| async move {
-            let _ = daemon.deliver_protocol_message(message).await;
-        });
     }
 }
 

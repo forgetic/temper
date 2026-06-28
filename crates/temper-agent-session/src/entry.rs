@@ -21,7 +21,6 @@
 //! worker-written file to the credential JSON.
 
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use temper_agent::{
     AuthChoice, ProviderConfig, ProviderEnv, XDG_CONFIG_HOME_ENV, resolve_config_dir_from,
@@ -79,8 +78,7 @@ fn read_context(options: &Options) -> Result<WorkspaceContext, String> {
 /// Provider/model/url wiring comes from the flags; the credential comes from
 /// [`PROVIDER_CREDENTIALS_ENV`]. For OAuth credentials the tokens are
 /// materialized into a pi-format `auth.json` whose [`tempfile::TempDir`] is
-/// returned so it outlives the run. The deadline/checkpoint-cadence are read
-/// from flags and layered onto the config; nothing deeper reads env.
+/// returned so it outlives the run. Nothing deeper reads env.
 fn build_config(
     options: Options,
     _context: &WorkspaceContext,
@@ -100,15 +98,7 @@ fn build_config(
         options.max_iterations,
         options.subagents,
         config_dir,
-    )
-    .with_deadline(deadline_from(options.deadline_unix_seconds))
-    .with_checkpoint_interval(
-        options
-            .checkpoint_interval
-            .unwrap_or(crate::DEFAULT_CHECKPOINT_INTERVAL),
-    )
-    .with_checkpointing_enabled(options.checkpoints)
-    .with_freshness_url(options.freshness_url);
+    );
     Ok((config, auth_dir))
 }
 
@@ -233,11 +223,6 @@ fn oauth_provider_key(provider: AuthChoice) -> &'static str {
         // DeepSeek never uses OAuth; the key is unused for it.
         AuthChoice::AnthropicOAuth | AuthChoice::DeepSeek => "anthropic",
     }
-}
-
-/// The job deadline (lease expiry) from `--deadline-unix-seconds`, if supplied.
-fn deadline_from(unix_seconds: Option<u64>) -> Option<SystemTime> {
-    unix_seconds.map(|secs| UNIX_EPOCH + Duration::from_secs(secs))
 }
 
 /// Renders a provider error for stderr. The provider stack already redacts

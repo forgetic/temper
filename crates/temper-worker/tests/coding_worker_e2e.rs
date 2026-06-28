@@ -12,29 +12,23 @@
 //!   (a full `WireJobContext` payload), then accepts the result;
 //! - a **real `smith-worker`** runs on its own skein runtime thread with an
 //!   [`OutOfProcessRunner`] pointed at the `smith-fake-agent` binary;
-//! - a **recording [`ProgressSink`]** captures every step-progress marker the
-//!   worker relayed from the agent's stdout;
 //! - git remotes are local `file://` bare repos seeded with an initial commit.
 //!
 //! This drives the entire production path: worker register → poll → assign →
 //! `CodingExecutor` prepares the checkout → spawns `smith-fake-agent` over the
-//! protocol → the agent writes the product file + emits step-progress → the
-//! worker relays progress, commits and pushes the branch to the `file://` origin
-//! → reports Success. Assertions verify the branch landed with the agent's file,
-//! the worker reported Success, and the step-progress checkpoints were relayed.
+//! protocol → the agent writes the product file → the worker commits and pushes
+//! the branch to the `file://` origin → reports Success. Assertions verify the
+//! branch landed with the agent's file and the worker reported Success.
 //!
-//! A second test injects an agent crash *after* it emits progress but *before* it
-//! writes the result — the crash-recovery scenario: the worker reports a
-//! transient failure (re-dispatchable) and the already-emitted progress markers
-//! were still relayed.
+//! A second test injects an agent crash before it writes the result; the worker
+//! reports a transient failure (re-dispatchable).
 //!
 //! Hermetic and fast; runs by default.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use temper_protocol_agent::{StepProgress, StepState};
 use temper_protocol_worker::ResultStatus;
-use temper_worker::{CodingExecutor, CodingExecutorConfig, OutOfProcessRunner, ProgressSink};
+use temper_worker::{CodingExecutor, CodingExecutorConfig, OutOfProcessRunner};
 
 #[path = "support/real_daemon.rs"]
 mod real_daemon;
@@ -44,41 +38,19 @@ use real_daemon::DaemonHarness;
 mod support;
 use support::*;
 
-/// Records every step-progress marker the worker relays, so the test can assert
-/// the agent→worker→sink path fired.
-#[derive(Clone, Default)]
-struct RecordingProgressSink {
-    markers: Arc<Mutex<Vec<StepProgress>>>,
-}
-
-impl ProgressSink for RecordingProgressSink {
-    fn report(&self, progress: StepProgress) {
-        self.markers.lock().expect("markers lock").push(progress);
-    }
-}
-
-impl RecordingProgressSink {
-    fn snapshot(&self) -> Vec<StepProgress> {
-        self.markers.lock().expect("markers lock").clone()
-    }
-}
-
 #[test]
 fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
     let fixture = GitFixture::new();
 
     // The out-of-process runner spawns the deterministic fake agent binary,
-    // which writes GREETING.md and emits two step-progress markers.
+    // which writes GREETING.md.
     let runner = Arc::new(OutOfProcessRunner::new(vec![fake_agent_bin()]));
     let executor_config = CodingExecutorConfig {
         workspace_root: fixture.workspace_root.clone(),
         git_base_url: fixture.git_base_url(),
         role_identities: role_identities(),
     };
-    let sink = RecordingProgressSink::default();
-    let executor = Arc::new(
-        CodingExecutor::new(executor_config, runner).with_progress_sink(Arc::new(sink.clone())),
-    );
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
 
     let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
 
@@ -113,19 +85,6 @@ fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
         fixture.origin_log_format("refs/heads/agent/pr-for-code-7", "%b"),
         "Closes #7"
     );
-
-    // The worker relayed the agent's step-progress checkpoints (the crash-recovery
-    // channel): a Started marker and a Done marker, both stamped with the job's
-    // correlation key.
-    let markers = sink.snapshot();
-    assert_eq!(
-        markers.len(),
-        2,
-        "expected two step-progress markers: {markers:?}"
-    );
-    assert!(markers.iter().all(|m| m.correlation_key == "pr-for-code-7"));
-    assert_eq!(markers[0].state, StepState::Started);
-    assert_eq!(markers[1].state, StepState::Done);
 }
 
 /// The headline ADR 0023 demonstration: one engineer assignment assembles a
@@ -142,10 +101,7 @@ fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo() {
         git_base_url: fixture.git_base_url(),
         role_identities: role_identities(),
     };
-    let sink = RecordingProgressSink::default();
-    let executor = Arc::new(
-        CodingExecutor::new(executor_config, runner).with_progress_sink(Arc::new(sink.clone())),
-    );
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
 
     let result = run_until_result(
         coordinated_assign(&fixture),
@@ -220,28 +176,22 @@ fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo() {
 }
 
 #[test]
-fn worker_reports_transient_failure_when_agent_crashes_after_progress() {
+fn worker_reports_transient_failure_when_agent_crashes_before_result() {
     let fixture = GitFixture::new();
 
-    // The fake agent emits progress, then exits non-zero before writing a result
-    // — a crash mid-task. (A future slice has the agent push its partial work
-    // first so the next agent resumes; here we assert the worker's handling: the
-    // emitted markers were relayed, and the job is a re-dispatchable transient.)
-    // The crash knob is a command arg, not an env var, so concurrent test
-    // threads cannot race on it.
+    // The fake agent exits non-zero before writing a result. The crash knob is
+    // a command arg, not an env var, so concurrent test threads cannot race on
+    // it.
     let runner = Arc::new(OutOfProcessRunner::new(vec![
         fake_agent_bin(),
-        "--crash-after-progress".to_string(),
+        "--crash-before-result".to_string(),
     ]));
     let executor_config = CodingExecutorConfig {
         workspace_root: fixture.workspace_root.clone(),
         git_base_url: fixture.git_base_url(),
         role_identities: role_identities(),
     };
-    let sink = RecordingProgressSink::default();
-    let executor = Arc::new(
-        CodingExecutor::new(executor_config, runner).with_progress_sink(Arc::new(sink.clone())),
-    );
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
 
     let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
 
@@ -253,13 +203,6 @@ fn worker_reports_transient_failure_when_agent_crashes_after_progress() {
         temper_protocol_worker::FailureClass::Transient
     );
 
-    // The progress the agent emitted *before* crashing was still relayed — the
-    // recovery channel survives the crash.
-    let markers = sink.snapshot();
-    assert!(
-        markers.iter().any(|m| m.state == StepState::Started),
-        "the pre-crash Started marker must have been relayed: {markers:?}"
-    );
 }
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ use temper_workflow::{LeasePolicy, ValidatedWorkflow};
 
 use super::DEFAULT_MAX_ITERATIONS;
 use super::git::{path_str, seed_origin};
-use super::runner::{DaemonPrFreshnessGuard, DaemonProgressSink, NativeJigAgentRunner};
+use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
 use super::stack::HermeticRealStack;
 use super::types::{
     FakeModelResponse, FakeModelSetup, HermeticIssueSpec, HermeticRepoSpec, WorkerRoleSpec,
@@ -31,7 +31,6 @@ pub struct HermeticRealStackBuilder {
     workflow: Option<ValidatedWorkflow>,
     max_iterations: usize,
     enable_subagents: bool,
-    enable_checkpoints: bool,
     apply_grace: Option<Duration>,
 }
 
@@ -57,7 +56,6 @@ impl HermeticRealStackBuilder {
             workflow: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             enable_subagents: false,
-            enable_checkpoints: false,
             apply_grace: None,
         }
     }
@@ -110,8 +108,8 @@ impl HermeticRealStackBuilder {
         self
     }
 
-    /// Uses an arbitrary Jig script for tests that need custom model turns,
-    /// verdicts, or checkpoint-tool calls.
+    /// Uses an arbitrary Jig script for tests that need custom model turns or
+    /// verdicts.
     #[must_use]
     pub fn fake_model_script(mut self, script: jig_core::Script) -> Self {
         self.fake_model = Some(FakeModelSetup::Script(script));
@@ -137,16 +135,6 @@ impl HermeticRealStackBuilder {
     #[must_use]
     pub fn enable_subagents(mut self, enable_subagents: bool) -> Self {
         self.enable_subagents = enable_subagents;
-        self
-    }
-
-    /// Enables the native agent's model-facing checkpoint tool. Checkpoints are
-    /// committed and pushed by the fixture's host hook using the worker-prepared
-    /// git checkout, then relayed through the same daemon progress path as the
-    /// out-of-process agent session.
-    #[must_use]
-    pub fn enable_checkpoints(mut self, enable_checkpoints: bool) -> Self {
-        self.enable_checkpoints = enable_checkpoints;
         self
     }
 
@@ -257,7 +245,6 @@ impl HermeticRealStackBuilder {
             max_iterations: self.max_iterations,
             config_dir: None,
             enable_subagents: self.enable_subagents,
-            enable_checkpoints: self.enable_checkpoints,
         });
 
         let role_identities = role_identities(&self.worker_roles);
@@ -294,11 +281,6 @@ impl HermeticRealStackBuilder {
                 },
                 runner,
             )
-            .with_progress_sink(Arc::new(DaemonProgressSink::new(
-                handle.clone(),
-                daemon.clone(),
-                worker_config.worker_id.clone(),
-            )))
             .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(daemon.clone()))),
         );
 

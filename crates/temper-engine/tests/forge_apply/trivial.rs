@@ -2,7 +2,6 @@
 
 use crate::assertions::*;
 use crate::support::*;
-use temper_protocol_worker::JobProgress;
 use temper_workflow::{WorkflowMetadata, render_metadata_block};
 
 #[test]
@@ -65,32 +64,6 @@ fn trivial_engineer_flow_stays_quiet_and_requests_review() {
             .and_then(|repo| repo.branch_hint.clone())
             .expect("primary writable repo has a branch hint");
 
-        for progress in [
-            flow_progress(&correlation, 1, "started", "start engineer run", None, None),
-            flow_progress(
-                &correlation,
-                2,
-                "started",
-                "resume engineer run from pushed checkpoints",
-                Some("fedcba98765432100123456789abcdef01234567"),
-                None,
-            ),
-            flow_progress(
-                &correlation,
-                3,
-                "done",
-                "Apply obvious edit",
-                Some("abc123456789"),
-                Some("Single-phase checkpoint should stay off the issue thread."),
-            ),
-        ] {
-            assert_eq!(
-                post(&client, &url, &WorkerProtocolMessage::Progress(progress))
-                    .await
-                    .status,
-                204
-            );
-        }
         assert_issue_comments_stay_empty(&cx, &forge, &repo, issue).await;
 
         let posted_result = success_result(
@@ -226,22 +199,3 @@ async fn wait_for_trivial_handoff(
     }
 }
 
-fn flow_progress(
-    correlation_key: &str,
-    step: u32,
-    state: &str,
-    status: &str,
-    pushed_sha: Option<&str>,
-    note: Option<&str>,
-) -> JobProgress {
-    JobProgress {
-        protocol_version: WORKER_PROTOCOL_VERSION,
-        worker_id: "worker-a".to_string(),
-        correlation_key: correlation_key.to_string(),
-        step,
-        status: status.to_string(),
-        state: state.to_string(),
-        pushed_sha: pushed_sha.map(str::to_string),
-        note: note.map(str::to_string),
-    }
-}

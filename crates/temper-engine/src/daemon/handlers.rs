@@ -10,14 +10,14 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_protocol_worker::{
-    Artifact, JobProgress, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
+    Artifact, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
 };
 
 use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
 
 use super::machine::{DaemonMachine, DaemonRequest, PollWaiter};
 use super::protocol::{
-    ResultDisposition, assignment_log_line, is_poll_timeout, progress_log_line, protocol_response,
+    ResultDisposition, assignment_log_line, is_poll_timeout, protocol_response,
     result_disposition, result_disposition_log_value, result_received_log_line,
 };
 use super::state_dto::{DaemonStateSnapshot, JobDto};
@@ -103,7 +103,6 @@ impl DaemonMachine {
         match msg {
             WorkerProtocolMessage::Poll(poll) => self.handle_poll(poll, responder),
             WorkerProtocolMessage::Result(result) => self.handle_result(result, responder),
-            WorkerProtocolMessage::Progress(progress) => self.handle_progress(progress, responder),
             other => {
                 let response = self.core.handle(other);
                 vec![DaemonRequest::Respond {
@@ -186,38 +185,6 @@ impl DaemonMachine {
         requests.push(DaemonRequest::Respond {
             responder,
             response: protocol_response(response),
-        });
-        requests
-    }
-
-    fn handle_progress(
-        &mut self,
-        progress: JobProgress,
-        responder: HttpResponder,
-    ) -> Vec<DaemonRequest> {
-        // Fire-and-forget bookkeeping: ack with 204 either way, route to the
-        // applier only when the correlation key names a job that is still in
-        // flight (idempotent application makes late or duplicate delivery
-        // harmless).
-        let mut requests = Vec::new();
-        match self
-            .core
-            .in_flight_job_by_correlation_key(&progress.correlation_key)
-        {
-            Some(job) => {
-                requests.push(DaemonRequest::Log(progress_log_line(&job, &progress)));
-                requests.push(DaemonRequest::RunProgressApply { job, progress });
-            }
-            None => {
-                requests.push(DaemonRequest::Log(format!(
-                    "engine: dropped progress for unknown correlation_key={} step={}",
-                    progress.correlation_key, progress.step
-                )));
-            }
-        }
-        requests.push(DaemonRequest::Respond {
-            responder,
-            response: protocol_response(None),
         });
         requests
     }

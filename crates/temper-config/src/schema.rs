@@ -298,10 +298,6 @@ pub struct AgentConfig {
     /// Enable the in-workspace `investigate` sub-agent tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_subagents: Option<bool>,
-    /// Enable mid-run checkpoint commit/push hooks and the model-facing
-    /// `checkpoint` tool. Defaults off.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enable_checkpoints: Option<bool>,
     /// Optional agent config directory (prompt overlays).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
@@ -321,7 +317,6 @@ impl AgentConfig {
         self.provider.is_none()
             && self.max_iterations.is_none()
             && self.enable_subagents.is_none()
-            && self.enable_checkpoints.is_none()
             && self.config_dir.is_none()
             && self.providers.is_empty()
             && self.profiles.is_empty()

@@ -5,9 +5,7 @@
 use std::sync::Arc;
 
 use temper_config::Resolved;
-use temper_worker::{
-    CodingExecutor, CodingExecutorConfig, DaemonRelayProgressSink, OutOfProcessRunner, run_worker,
-};
+use temper_worker::{CodingExecutor, CodingExecutorConfig, OutOfProcessRunner, run_worker};
 
 use crate::adapt;
 
@@ -43,17 +41,7 @@ async fn run_async(
         role_identities: worker_config.role_identities.clone(),
     };
 
-    // Relay agent step-progress checkpoints to the daemon (which applies them to
-    // the forge idempotently); transport trouble is logged and dropped, never
-    // failing the turn. Built inside the engine task so it holds the runtime
-    // handle explicitly.
-    let progress_sink = Arc::new(DaemonRelayProgressSink::new(
-        handle.clone(),
-        &worker_config.daemon_url,
-        worker_config.worker_id.clone(),
-    ));
-    let executor =
-        Arc::new(CodingExecutor::new(executor_config, runner).with_progress_sink(progress_sink));
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
 
     run_worker(handle, worker_config, executor)
         .await
