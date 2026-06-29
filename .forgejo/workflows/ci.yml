@@ -56,6 +56,15 @@ jobs:
         run: cargo dev-test-build
       - name: Test (quick)
         run: cargo dev-test-quick
+      - name: Repair Forgejo fixture cache permissions
+        # The host runner keeps BENCH_FORGEJO_CACHE_DIR across checkouts. If a
+        # prior run left the downloaded Forgejo assets without executable bits,
+        # every live e2e fails immediately with os error 13 at process spawn.
+        run: |
+          if [ -d "$BENCH_FORGEJO_CACHE_DIR" ]; then
+            find "$BENCH_FORGEJO_CACHE_DIR" -maxdepth 1 -type f -name 'forgejo*-linux-amd64' -exec chmod 755 {} +
+            find "$BENCH_FORGEJO_CACHE_DIR" -maxdepth 1 -type d -name '*.lock' -exec rm -rf {} +
+          fi
       - name: Test (all e2e)
         # The live e2e lane boots real Forgejo + CI runners and waits for
         # convergence. On a cold CI machine the fixture provisioning alone can
