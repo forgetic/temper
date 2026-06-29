@@ -185,8 +185,8 @@ fn run_world(seed: u64, storm: usize) -> (Vec<u16>, usize, u64) {
 #[test]
 fn webhook_storm_is_fully_answered_and_enqueues_once() {
     let (statuses, assignments, _fingerprint) = run_world(42, 6);
-    // Every delivery answered with 202 (none leaked behind the held wake
-    // scan), and the replayed event produced exactly one dispatchable job.
+    // Every delivery answered with 202, and the replayed event produced exactly
+    // one dispatchable job.
     assert_eq!(statuses, vec![202; 6], "every delivery is answered 202");
     assert_eq!(
         assignments, 1,

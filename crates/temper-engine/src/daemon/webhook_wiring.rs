@@ -18,9 +18,9 @@ use super::{Daemon, HintedMechanical, WakeScanner};
 
 impl Daemon {
     /// Enables `POST /forgejo/webhook` intake on this daemon's HTTP surface:
-    /// deliveries are verified and parsed by the daemon machine, then executed
-    /// as wake scans against the given forge/workflow before the held `202`
-    /// response is released.
+    /// deliveries are verified and parsed by the daemon machine, acknowledged
+    /// with `202`, then executed as background wake scans against the given
+    /// forge/workflow.
     pub fn with_webhook<F: Forge + Send + Sync + ?Sized + 'static>(
         self,
         forge: Arc<F>,

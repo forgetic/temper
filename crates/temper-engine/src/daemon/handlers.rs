@@ -204,9 +204,12 @@ impl DaemonMachine {
         match parse_verified_webhook(&headers, &request.body, &config.secret) {
             Ok(hint) => {
                 let token = self.next_token();
-                self.webhook_waiters.insert(token, responder);
                 vec![
                     DaemonRequest::Log(webhook_accepted_log_line(&hint)),
+                    DaemonRequest::Respond {
+                        responder,
+                        response: HttpResponseData::status_only(202),
+                    },
                     DaemonRequest::RunWakeScan { token, hint },
                 ]
             }
@@ -360,4 +363,58 @@ fn artifact_ref_string(repo: &str, artifact: &Artifact) -> Option<String> {
         _ => return None,
     };
     Some(item.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::webhook::webhook_signature;
+    use crate::{RoleFeedMode, RoleFeedTarget, WebhookConfig};
+    use temper_forge::RepositoryId;
+    use temper_workflow::RoleId;
+
+    #[test]
+    fn verified_webhook_acks_before_wake_scan_finishes() {
+        let secret = "secret";
+        let body = br#"{"repository":{"full_name":"ai/temper"}}"#.to_vec();
+        let signature = webhook_signature(secret, &body);
+        let mut machine = DaemonMachine::new(Duration::from_secs(10), 30_000);
+        machine.webhook = Some(WebhookConfig {
+            secret: secret.to_string(),
+            targets: vec![RoleFeedTarget {
+                repo: RepositoryId::new("forgejo:ai/temper"),
+                role: RoleId::new("engineer"),
+                mode: RoleFeedMode::Wake,
+            }],
+        });
+        let (reply, _response) = temper_engine_io::oneshot();
+
+        let requests = machine.handle_http(
+            HttpRequestData {
+                method: "POST".to_string(),
+                uri: "/forgejo/webhook".to_string(),
+                headers: vec![
+                    ("x-forgejo-event".to_string(), "push".to_string()),
+                    ("x-forgejo-signature".to_string(), signature),
+                ],
+                body,
+            },
+            HttpResponder::from_oneshot(reply),
+        );
+
+        assert_eq!(requests.len(), 3);
+        assert!(
+            matches!(&requests[0], DaemonRequest::Log(line) if line.contains("webhook accepted"))
+        );
+        assert!(matches!(
+            &requests[1],
+            DaemonRequest::Respond { response, .. }
+                if response.status == 202 && response.body.is_empty()
+        ));
+        assert!(matches!(&requests[2], DaemonRequest::RunWakeScan { .. }));
+        assert!(
+            machine.webhook_waiters.is_empty(),
+            "webhook response must not be held behind wake-scan completion"
+        );
+    }
 }
