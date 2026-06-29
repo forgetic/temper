@@ -344,6 +344,17 @@ fn server_error_then_success_script(
                 usage: Default::default(),
                 stop: StopReason::ToolCalls,
             },
+            1 => Reply {
+                turns: vec![Turn::ToolCall {
+                    id: "call_submit_after_retry".to_string(),
+                    name: "submit_for_pr".to_string(),
+                    args: serde_json::json!({
+                        "summary": "Created DELIVERY.md after provider retry."
+                    }),
+                }],
+                usage: Default::default(),
+                stop: StopReason::ToolCalls,
+            },
             _ => {
                 observed_success_continuation.fetch_add(1, Ordering::SeqCst);
                 Reply::text(r#"{"summary":"Created DELIVERY.md after provider retry."}"#)

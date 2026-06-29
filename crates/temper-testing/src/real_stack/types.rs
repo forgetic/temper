@@ -206,7 +206,9 @@ impl FakeModelResponse {
 
     pub(crate) fn into_script(self) -> Script {
         let writes = self.writes;
-        let result_json = json!({ "summary": self.summary }).to_string();
+        let summary = self.summary;
+        let write_count = writes.len();
+        let result_json = json!({ "summary": summary.clone() }).to_string();
         Script::rule(move |view| {
             if view.prior_tool_results == 0 && !writes.is_empty() {
                 Reply {
@@ -222,6 +224,16 @@ impl FakeModelResponse {
                             }),
                         })
                         .collect(),
+                    usage: Default::default(),
+                    stop: StopReason::ToolCalls,
+                }
+            } else if view.prior_tool_results == write_count {
+                Reply {
+                    turns: vec![Turn::ToolCall {
+                        id: "call_submit_for_pr".to_string(),
+                        name: "submit_for_pr".to_string(),
+                        args: json!({ "summary": summary.clone() }),
+                    }],
                     usage: Default::default(),
                     stop: StopReason::ToolCalls,
                 }

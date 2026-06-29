@@ -22,7 +22,7 @@ use temper_agent::{
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
 use temper_protocol_agent::WorkspaceContext;
-use temper_worker::{AgentRunError, AgentRunner, WorkspaceResult};
+use temper_worker::{AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner};
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {
@@ -68,7 +68,7 @@ impl AgentRunner for InProcessAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-    ) -> impl std::future::Future<Output = Result<WorkspaceResult, AgentRunError>> + Send {
+    ) -> impl std::future::Future<Output = Result<AgentRunOutput, AgentRunError>> + Send {
         // §7 agent boundary events. The `item` ref is the work-item subject tag
         // (`[repo#n]` / `[repo PR#n]`); `kind` is the role's activity verb
         // (architect→triage, engineer→coding). We emit `agent.started` here,
@@ -92,7 +92,19 @@ impl AgentRunner for InProcessAgentRunner {
         let max_iterations = self.max_iterations;
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
-        let submit_for_pr = Some(self.submit_for_pr.clone());
+        let submit_for_pr = self.submit_for_pr.clone();
+        let accepted_submit = AcceptedSubmitProofStore::new();
+        let accepted_submit_for_host = accepted_submit.clone();
+        let submit_for_pr: SubmitForPrHost = std::sync::Arc::new(move |request, context, cwd| {
+            temper_worker::handle_submit_for_pr_with_proof(
+                &accepted_submit_for_host,
+                |request, context, cwd| submit_for_pr(request, context, cwd),
+                request,
+                context,
+                cwd,
+            )
+        });
+        let submit_for_pr = Some(submit_for_pr);
         let context = context.clone();
         let cwd = cwd.to_path_buf();
 
@@ -137,7 +149,10 @@ impl AgentRunner for InProcessAgentRunner {
 
             let (result, _totals) = outcome?;
 
-            Ok(result)
+            Ok(AgentRunOutput {
+                result,
+                accepted_submit: accepted_submit.latest(),
+            })
         }
     }
 }

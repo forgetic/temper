@@ -30,7 +30,10 @@ pub mod worker_machine;
 pub mod worker_shell;
 pub mod workspace;
 
-pub use agent_runner::{AgentRunError, AgentRunner, WorkspaceResult};
+pub use agent_runner::{
+    AcceptedSubmitProof, AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner,
+    WorkspaceResult, handle_submit_for_pr_with_proof,
+};
 pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
 pub use config::{
@@ -46,8 +49,10 @@ pub use pr_freshness::{
     map_response as map_pr_freshness_response,
 };
 pub use pre_push::{
-    PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, final_pre_push_response,
-    run_pre_push_checks, submit_for_pr_pre_push_response, submit_for_pr_pre_push_response_blocking,
+    PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, WorkspaceFingerprint,
+    WorkspaceFingerprintError, final_pre_push_response, fingerprint_writable_repos,
+    fingerprint_writable_repos_blocking, run_pre_push_checks, submit_for_pr_pre_push_response,
+    submit_for_pr_pre_push_response_blocking,
 };
 pub use run::{run_worker, run_worker_with_transport};
 pub use transport::{HttpTransport, Transport};

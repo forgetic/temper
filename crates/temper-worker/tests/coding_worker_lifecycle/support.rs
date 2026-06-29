@@ -20,8 +20,9 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_protocol_agent::{AgentSessionState, WorkspaceContext, WorkspaceResult};
 use temper_worker::{
-    AgentRunError, AgentRunner, CapabilitySpec, ExecutorSelection, PrFreshnessFailure,
-    PrFreshnessGuard, RoleGitIdentity, ScopedWorkspaceCleanupOutcome, WorkerConfig,
+    AgentRunError, AgentRunOutput, AgentRunner, CapabilitySpec, ExecutorSelection,
+    PrFreshnessFailure, PrFreshnessGuard, RoleGitIdentity, ScopedWorkspaceCleanupOutcome,
+    WorkerConfig,
 };
 use temper_workflow::RawWorkflowSpec;
 
@@ -54,7 +55,7 @@ impl AgentRunner for RecordingAgent {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-    ) -> Result<WorkspaceResult, AgentRunError> {
+    ) -> Result<AgentRunOutput, AgentRunError> {
         let primary = context.primary().expect("primary repo in context");
         let repo_cwd = cwd.join(&primary.dir);
         let observed_head_sha = git_output(&["-C", path_str(&repo_cwd), "rev-parse", "HEAD"]);
@@ -85,10 +86,22 @@ impl AgentRunner for RecordingAgent {
             )
         };
         fs::write(repo_cwd.join(file), contents).expect("fake agent writes product diff");
-        Ok(WorkspaceResult {
+        let result = WorkspaceResult {
             summary: Some(summary.to_string()),
             ..WorkspaceResult::default()
-        })
+        };
+        let fingerprint = temper_worker::fingerprint_writable_repos(context, cwd)
+            .await
+            .map_err(|error| AgentRunError::transient(format!("fingerprint submit: {error}")))?;
+        Ok(AgentRunOutput::with_accepted_submit(
+            result,
+            temper_worker::AcceptedSubmitProof {
+                response: temper_protocol_agent::SubmitForPrResponse::accepted(
+                    "recording agent submitted",
+                ),
+                fingerprint,
+            },
+        ))
     }
 }
 

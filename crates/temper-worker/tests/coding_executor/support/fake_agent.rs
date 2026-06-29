@@ -10,6 +10,10 @@ use super::*;
 pub enum AgentBehavior {
     /// Engineer head path: write a product diff, return a summary-only result.
     Success,
+    /// Engineer head path without the required accepted `submit_for_pr` proof.
+    SuccessWithoutSubmit,
+    /// Engineer submits successfully, then mutates the workspace before final JSON.
+    MutateAfterSubmit,
     /// A transient provider error (the in-process analog of the old non-zero
     /// subprocess exit).
     TransientError,
@@ -94,7 +98,7 @@ impl AgentRunner for FakeAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-    ) -> Result<WorkspaceResult, AgentRunError> {
+    ) -> Result<AgentRunOutput, AgentRunError> {
         *self.captured.lock().expect("capture lock") = Some(context.clone());
         // The agent's cwd is the coordination-scoped workspace root; it edits
         // inside each repo's sibling dir. This fake operates on the primary repo
@@ -110,18 +114,52 @@ impl AgentRunner for FakeAgentRunner {
         match self.behavior {
             AgentBehavior::Success => {
                 Self::write_diff(&repo_cwd);
-                Ok(WorkspaceResult {
-                    summary: Some("did the work".to_string()),
+                accepted_output(
+                    WorkspaceResult {
+                        summary: Some("did the work".to_string()),
+                        ..WorkspaceResult::default()
+                    },
+                    context,
+                    cwd,
+                )
+                .await
+            }
+            AgentBehavior::SuccessWithoutSubmit => {
+                Self::write_diff(&repo_cwd);
+                Ok(AgentRunOutput::new(WorkspaceResult {
+                    summary: Some("did the work without submit".to_string()),
                     ..WorkspaceResult::default()
-                })
+                }))
+            }
+            AgentBehavior::MutateAfterSubmit => {
+                Self::write_diff(&repo_cwd);
+                let output = accepted_output(
+                    WorkspaceResult {
+                        summary: Some("mutated after submit".to_string()),
+                        ..WorkspaceResult::default()
+                    },
+                    context,
+                    cwd,
+                )
+                .await?;
+                fs::write(repo_cwd.join("after-submit.txt"), "late mutation\n")
+                    .expect("write post-submit mutation");
+                Ok(output)
             }
             AgentBehavior::TransientError => Err(AgentRunError::transient(
                 "LLM run failed: provider transport reset",
             )),
-            AgentBehavior::NoDiff => Ok(WorkspaceResult {
-                summary: Some("nothing changed".to_string()),
-                ..WorkspaceResult::default()
-            }),
+            AgentBehavior::NoDiff => {
+                accepted_output(
+                    WorkspaceResult {
+                        summary: Some("nothing changed".to_string()),
+                        ..WorkspaceResult::default()
+                    },
+                    context,
+                    cwd,
+                )
+                .await
+            }
             AgentBehavior::LocalCommit => {
                 fs::write(repo_cwd.join("agent-output.txt"), "agent local diff\n")
                     .expect("write fake agent local diff");
@@ -137,10 +175,15 @@ impl AgentRunner for FakeAgentRunner {
                     "-m",
                     "agent local product commit",
                 ]);
-                Ok(WorkspaceResult {
-                    summary: Some("committed the work locally".to_string()),
-                    ..WorkspaceResult::default()
-                })
+                accepted_output(
+                    WorkspaceResult {
+                        summary: Some("committed the work locally".to_string()),
+                        ..WorkspaceResult::default()
+                    },
+                    context,
+                    cwd,
+                )
+                .await
             }
             AgentBehavior::EmptyCommit => {
                 git_output([
@@ -155,10 +198,15 @@ impl AgentRunner for FakeAgentRunner {
                     "-m",
                     "empty local commit",
                 ]);
-                Ok(WorkspaceResult {
-                    summary: Some("made an empty local commit only".to_string()),
-                    ..WorkspaceResult::default()
-                })
+                accepted_output(
+                    WorkspaceResult {
+                        summary: Some("made an empty local commit only".to_string()),
+                        ..WorkspaceResult::default()
+                    },
+                    context,
+                    cwd,
+                )
+                .await
             }
             AgentBehavior::ResolveMainConflict => {
                 let output = std::process::Command::new("git")
@@ -183,32 +231,37 @@ impl AgentRunner for FakeAgentRunner {
                 )
                 .expect("write conflict resolution");
                 git_output(["-C", path_str(&repo_cwd), "add", "conflict.txt"]);
-                Ok(WorkspaceResult {
-                    summary: Some("resolved merge conflict with main".to_string()),
-                    ..WorkspaceResult::default()
-                })
+                accepted_output(
+                    WorkspaceResult {
+                        summary: Some("resolved merge conflict with main".to_string()),
+                        ..WorkspaceResult::default()
+                    },
+                    context,
+                    cwd,
+                )
+                .await
             }
-            AgentBehavior::Verdict => Ok(WorkspaceResult {
+            AgentBehavior::Verdict => Ok(AgentRunOutput::new(WorkspaceResult {
                 verdict: Some("needs_design".to_string()),
                 summary: Some("cannot proceed".to_string()),
                 ..WorkspaceResult::default()
-            }),
-            AgentBehavior::ReadOnlyVerdict => Ok(WorkspaceResult {
+            })),
+            AgentBehavior::ReadOnlyVerdict => Ok(AgentRunOutput::new(WorkspaceResult {
                 verdict: Some("ready_code".to_string()),
                 body: Some("rewritten".to_string()),
                 summary: Some("did triage".to_string()),
                 ..WorkspaceResult::default()
-            }),
+            })),
             AgentBehavior::ReadOnlyVerdictWithDiff => {
                 Self::write_diff(&repo_cwd);
-                Ok(WorkspaceResult {
+                Ok(AgentRunOutput::new(WorkspaceResult {
                     verdict: Some("ready_code".to_string()),
                     body: Some("rewritten".to_string()),
                     summary: Some("did triage".to_string()),
                     ..WorkspaceResult::default()
-                })
+                }))
             }
-            AgentBehavior::ReadOnlyBreakdownVerdict => Ok(WorkspaceResult {
+            AgentBehavior::ReadOnlyBreakdownVerdict => Ok(AgentRunOutput::new(WorkspaceResult {
                 verdict: Some("needs_breakdown".to_string()),
                 summary: Some("planned breakdown".to_string()),
                 children: vec![
@@ -230,43 +283,62 @@ impl AgentRunner for FakeAgentRunner {
                     },
                 ],
                 ..WorkspaceResult::default()
-            }),
-            AgentBehavior::UndeclaredVerdict => Ok(WorkspaceResult {
+            })),
+            AgentBehavior::UndeclaredVerdict => Ok(AgentRunOutput::new(WorkspaceResult {
                 verdict: Some("needs_breakdown".to_string()),
                 summary: Some("needs splitting".to_string()),
                 ..WorkspaceResult::default()
-            }),
+            })),
             AgentBehavior::WritableVerdict => {
                 Self::write_diff(cwd);
-                Ok(WorkspaceResult {
+                Ok(AgentRunOutput::new(WorkspaceResult {
                     verdict: Some("needs_architect".to_string()),
                     body: Some("blocked".to_string()),
                     summary: Some("cannot proceed".to_string()),
                     ..WorkspaceResult::default()
-                })
+                }))
             }
-            AgentBehavior::ReviewApprove => Ok(WorkspaceResult {
+            AgentBehavior::ReviewApprove => Ok(AgentRunOutput::new(WorkspaceResult {
                 verdict: Some("approve".to_string()),
                 summary: Some("looks good".to_string()),
                 ..WorkspaceResult::default()
-            }),
+            })),
             AgentBehavior::ReviewChanges => {
                 Self::write_diff(cwd);
-                Ok(WorkspaceResult {
+                Ok(AgentRunOutput::new(WorkspaceResult {
                     verdict: Some("changes".to_string()),
                     review_body: Some("please add error handling".to_string()),
                     summary: Some("needs error handling".to_string()),
                     ..WorkspaceResult::default()
-                })
+                }))
             }
-            AgentBehavior::ReviewMissingVerdict => Ok(WorkspaceResult {
+            AgentBehavior::ReviewMissingVerdict => Ok(AgentRunOutput::new(WorkspaceResult {
                 summary: Some("no opinion".to_string()),
                 ..WorkspaceResult::default()
-            }),
-            AgentBehavior::ReviewUndeclaredVerdict => Ok(WorkspaceResult {
+            })),
+            AgentBehavior::ReviewUndeclaredVerdict => Ok(AgentRunOutput::new(WorkspaceResult {
                 verdict: Some("merge_now".to_string()),
                 ..WorkspaceResult::default()
-            }),
+            })),
         }
     }
+}
+
+async fn accepted_output(
+    result: WorkspaceResult,
+    context: &WorkspaceContext,
+    cwd: &Path,
+) -> Result<AgentRunOutput, AgentRunError> {
+    let fingerprint = temper_worker::fingerprint_writable_repos(context, cwd)
+        .await
+        .map_err(|error| AgentRunError::transient(format!("fingerprint fake submit: {error}")))?;
+    Ok(AgentRunOutput::with_accepted_submit(
+        result,
+        temper_worker::AcceptedSubmitProof {
+            response: temper_protocol_agent::SubmitForPrResponse::accepted(
+                "fake accepted submit_for_pr",
+            ),
+            fingerprint,
+        },
+    ))
 }

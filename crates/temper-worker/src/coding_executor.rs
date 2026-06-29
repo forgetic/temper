@@ -7,7 +7,7 @@ use temper_protocol_worker::{
     Assign, FailureClass, JobChild, JobContext, WorkspaceManifest, WorkspaceRepo,
 };
 
-use crate::agent_runner::{AgentRunError, AgentRunner};
+use crate::agent_runner::{AgentRunError, AgentRunOutput, AgentRunner};
 use crate::executor::{JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{
@@ -204,8 +204,11 @@ async fn execute<R: AgentRunner>(
     // Run one agent turn with the cwd set to the workspace root (not a single
     // repo), so the agent can read and build every sibling. The runner owns the
     // agent mechanism; the executor owns the workspace lifecycle around it.
-    let result = match runner.run(&workspace_context, &workspace_root).await {
-        Ok(result) => result,
+    let AgentRunOutput {
+        result,
+        accepted_submit,
+    } = match runner.run(&workspace_context, &workspace_root).await {
+        Ok(output) => output,
         Err(AgentRunError { class, message }) => {
             return failure(class, message);
         }
@@ -228,6 +231,7 @@ async fn execute<R: AgentRunner>(
                 pull_request_freshness: pull_request_freshness.as_ref(),
                 freshness_guard: pr_freshness_guard.as_deref(),
                 latest_self_pushed_sha,
+                accepted_submit: accepted_submit.as_ref(),
             })
             .await
         }

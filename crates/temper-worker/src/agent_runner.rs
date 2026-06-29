@@ -19,11 +19,107 @@
 //! calls the forge API. The executor owns the final branch push.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
-use temper_protocol_agent::WorkspaceContext;
+use temper_protocol_agent::{SubmitForPrRequest, SubmitForPrResponse, WorkspaceContext};
 use temper_protocol_worker::FailureClass;
 
+use crate::pre_push::{WorkspaceFingerprint, fingerprint_writable_repos_blocking};
 pub use temper_protocol_agent::WorkspaceResult;
+
+/// What a completed agent turn produced at the worker boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentRunOutput {
+    pub result: WorkspaceResult,
+    pub accepted_submit: Option<AcceptedSubmitProof>,
+}
+
+impl AgentRunOutput {
+    pub fn new(result: WorkspaceResult) -> Self {
+        Self {
+            result,
+            accepted_submit: None,
+        }
+    }
+
+    pub fn with_accepted_submit(
+        result: WorkspaceResult,
+        accepted_submit: AcceptedSubmitProof,
+    ) -> Self {
+        Self {
+            result,
+            accepted_submit: Some(accepted_submit),
+        }
+    }
+}
+
+/// Host-owned evidence captured when a live `submit_for_pr` call was accepted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptedSubmitProof {
+    pub response: SubmitForPrResponse,
+    pub fingerprint: WorkspaceFingerprint,
+}
+
+#[derive(Clone, Default)]
+pub struct AcceptedSubmitProofStore {
+    inner: Arc<Mutex<Option<AcceptedSubmitProof>>>,
+}
+
+impl AcceptedSubmitProofStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn latest(&self) -> Option<AcceptedSubmitProof> {
+        self.inner
+            .lock()
+            .expect("accepted submit proof lock")
+            .clone()
+    }
+
+    /// Records an accepted host response with a fresh worker-owned fingerprint.
+    ///
+    /// If fingerprinting fails, the response is converted to a rejection so the
+    /// live agent is not told it may finish with proof the worker cannot later
+    /// verify.
+    pub fn record_response(
+        &self,
+        response: SubmitForPrResponse,
+        context: &WorkspaceContext,
+        cwd: &Path,
+    ) -> SubmitForPrResponse {
+        if !response.accepted {
+            return response;
+        }
+        let fingerprint = match fingerprint_writable_repos_blocking(context, cwd) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                return SubmitForPrResponse::rejected(format!(
+                    "submit_for_pr accepted but workspace proof could not be recorded: {error}"
+                ));
+            }
+        };
+        *self.inner.lock().expect("accepted submit proof lock") = Some(AcceptedSubmitProof {
+            response: response.clone(),
+            fingerprint,
+        });
+        response
+    }
+}
+
+pub fn handle_submit_for_pr_with_proof<F>(
+    store: &AcceptedSubmitProofStore,
+    handler: F,
+    request: SubmitForPrRequest,
+    context: &WorkspaceContext,
+    cwd: &Path,
+) -> SubmitForPrResponse
+where
+    F: FnOnce(SubmitForPrRequest, &WorkspaceContext, &Path) -> SubmitForPrResponse,
+{
+    let response = handler(request, context, cwd);
+    store.record_response(response, context, cwd)
+}
 
 /// Why an agent turn could not produce a [`WorkspaceResult`].
 ///
@@ -78,5 +174,5 @@ pub trait AgentRunner: Send + Sync {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-    ) -> impl std::future::Future<Output = Result<WorkspaceResult, AgentRunError>> + Send;
+    ) -> impl std::future::Future<Output = Result<AgentRunOutput, AgentRunError>> + Send;
 }

@@ -5,12 +5,15 @@ use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    CodingAgentError, ProviderConfig, WorkspaceContext, WorkspaceResult,
+    CodingAgentError, ProviderConfig, WorkspaceContext,
     run_coding_agent_native_with_options_and_submit_for_pr,
 };
 use temper_engine::Daemon;
 use temper_protocol_agent::PullRequestFreshness;
-use temper_worker::{AgentRunError, AgentRunner, PrFreshnessFailure, PrFreshnessGuard};
+use temper_worker::{
+    AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner, PrFreshnessFailure,
+    PrFreshnessGuard,
+};
 
 /// In-process native coding-agent runner used by the hermetic real-stack
 /// builder. It keeps the worker's real [`temper_worker::CodingExecutor`] in
@@ -30,8 +33,21 @@ impl AgentRunner for NativeJigAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-    ) -> Result<WorkspaceResult, AgentRunError> {
-        run_coding_agent_native_with_options_and_submit_for_pr(
+    ) -> Result<AgentRunOutput, AgentRunError> {
+        let accepted_submit = AcceptedSubmitProofStore::new();
+        let submit_for_pr = self.submit_for_pr.clone();
+        let accepted_submit_for_host = accepted_submit.clone();
+        let submit_for_pr: temper_agent::SubmitForPrHost =
+            std::sync::Arc::new(move |request, context, cwd| {
+                temper_worker::handle_submit_for_pr_with_proof(
+                    &accepted_submit_for_host,
+                    |request, context, cwd| submit_for_pr(request, context, cwd),
+                    request,
+                    context,
+                    cwd,
+                )
+            });
+        let result = run_coding_agent_native_with_options_and_submit_for_pr(
             self.handle.clone(),
             &self.provider,
             context,
@@ -39,10 +55,14 @@ impl AgentRunner for NativeJigAgentRunner {
             self.max_iterations,
             self.config_dir.as_deref(),
             self.enable_subagents,
-            Some(self.submit_for_pr.clone()),
+            Some(submit_for_pr),
         )
         .await
-        .map_err(agent_error)
+        .map_err(agent_error)?;
+        Ok(AgentRunOutput {
+            result,
+            accepted_submit: accepted_submit.latest(),
+        })
     }
 }
 

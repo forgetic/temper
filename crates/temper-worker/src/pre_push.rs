@@ -7,8 +7,13 @@ use temper_protocol_agent::{
     PROTOCOL_VERSION, SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse, WorkspaceContext,
 };
 
+mod fingerprint;
 mod process;
 
+pub use fingerprint::{
+    WorkspaceFingerprint, WorkspaceFingerprintError, fingerprint_writable_repos,
+    fingerprint_writable_repos_blocking,
+};
 pub use process::PrePushCommandResult;
 use process::run_command;
 
@@ -115,9 +120,11 @@ pub fn submit_for_pr_pre_push_response_blocking(
     })
 }
 
-/// Runs the same checks defensively on the terminal success path, preventing an
-/// agent from bypassing configured gates by skipping `submit_for_pr` and ending
-/// with final JSON.
+/// Builds a terminal pre-push response for callers that deliberately rerun the
+/// repository gates at the end of a turn.
+///
+/// The writable success path normally uses the accepted `submit_for_pr` proof
+/// captured during the live run instead of calling this a second time.
 pub async fn final_pre_push_response(
     context: &WorkspaceContext,
     workspace_root: impl AsRef<Path>,

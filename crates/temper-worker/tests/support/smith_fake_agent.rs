@@ -14,7 +14,8 @@
 //!   read-only / triage path); otherwise it is a head-path result with a summary.
 //! - if `--pre-push-config <mode>` is passed, writes a worker-owned
 //!   `.temper/pre-push.toml` into each writable repo before submit/result. Modes
-//!   are `pass`, `retry-file`, `timeout-until-retry-file`, and `always-fail`.
+//!   are `pass`, `retry-file`, `timeout-until-retry-file`, `always-fail`, and
+//!   `fail-if-rerun`.
 //!   This lets worker tests prove the host reads config changed in the live
 //!   checkout.
 //! - if `--submit-before-result` is passed, calls the worker-owned
@@ -119,6 +120,17 @@ fn main() {
         }
     }
 
+    if args.iter().any(|arg| arg == "--mutate-after-submit") {
+        for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
+            let repo_dir = workspace.join(&repo.dir);
+            std::fs::write(
+                repo_dir.join("AFTER_ACCEPTED_SUBMIT.md"),
+                b"late mutation\n",
+            )
+            .expect("write post-submit mutation");
+        }
+    }
+
     let result = if let Some(verdict) = verdict {
         WorkspaceResult {
             verdict: Some(verdict),
@@ -178,6 +190,11 @@ fn write_pre_push_config(repo_dir: &std::path::Path, mode: &str) {
             1,
         ),
         "always-fail" => ("always-fail", "printf always-fail >&2; exit 42", 5),
+        "fail-if-rerun" => (
+            "fail-if-rerun",
+            "if test -f .temper/pre-push-ran; then printf rerun >&2; exit 9; else touch .temper/pre-push-ran; fi",
+            5,
+        ),
         other => panic!("unknown --pre-push-config mode {other}"),
     };
     let config = format!(

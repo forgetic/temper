@@ -9,8 +9,8 @@ pub use temper_protocol_worker::{
     Artifact, Assign, FailureClass, JobChild, WORKER_PROTOCOL_VERSION,
 };
 pub use temper_worker::{
-    AgentRunError, AgentRunner, CodingExecutor, CodingExecutorConfig, JobExecutor, JobOutcome,
-    RoleGitIdentity, WorkspaceResult,
+    AgentRunError, AgentRunOutput, AgentRunner, CodingExecutor, CodingExecutorConfig, JobExecutor,
+    JobOutcome, RoleGitIdentity, WorkspaceResult,
 };
 pub use tempfile::TempDir;
 
