@@ -52,16 +52,6 @@ jobs:
         run: cargo dev-test-build
       - name: Test (quick)
         run: cargo dev-test-quick
-      - name: Repair Forgejo fixture cache permissions
-        # Keep the pinned Forgejo fixture binaries outside the workspace so the
-        # per-run clean checkout does not throw them away. Resolve this in the
-        # shell: workflow expressions do not expose the runner's HOME, and an
-        # empty expression becomes `/.cache/...`, which fails with os error 13.
-        run: |
-          export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
-          mkdir -p "$BENCH_FORGEJO_CACHE_DIR"
-          find "$BENCH_FORGEJO_CACHE_DIR" -maxdepth 1 -type f -name 'forgejo*-linux-amd64' -exec chmod 755 {} +
-          find "$BENCH_FORGEJO_CACHE_DIR" -maxdepth 1 -type d -name '*.lock' -exec rm -rf {} +
       - name: Test (all e2e)
         # The live e2e lane boots real Forgejo + CI runners and waits for
         # convergence. On a cold CI machine the fixture provisioning alone can
