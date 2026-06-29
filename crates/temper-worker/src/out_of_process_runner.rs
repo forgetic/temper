@@ -32,7 +32,10 @@ use temper_protocol_agent::{
     WorkspaceContext,
 };
 
-use crate::agent_runner::{AgentRunError, AgentRunner, WorkspaceResult};
+use crate::agent_runner::{
+    AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner, WorkspaceResult,
+    handle_submit_for_pr_with_proof,
+};
 use crate::pre_push::submit_for_pr_pre_push_response_blocking;
 
 /// Host-side submit gate used by the out-of-process carrier.
@@ -113,7 +116,7 @@ impl AgentRunner for OutOfProcessRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-    ) -> Result<WorkspaceResult, AgentRunError> {
+    ) -> Result<AgentRunOutput, AgentRunError> {
         let Some((program, args)) = self.command.split_first() else {
             return Err(AgentRunError::permanent("agent command is empty"));
         };
@@ -144,6 +147,7 @@ impl AgentRunner for OutOfProcessRunner {
             None
         };
 
+        let accepted_submit = AcceptedSubmitProofStore::new();
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
         let env_owned: Vec<(String, String)> = self.env.clone();
@@ -152,21 +156,23 @@ impl AgentRunner for OutOfProcessRunner {
         let submit_for_pr = self.submit_for_pr.clone();
         let context_path_owned = context_path.clone();
         let result_path_owned = result_path.clone();
+        let accepted_submit_for_child = accepted_submit.clone();
         // `skein::runtime::spawn_blocking` returns the closure's value
         // directly (no JoinError wrapper), so the closure's own
         // `Result<ChildOutcome, AgentRunError>` is what comes back.
         let outcome = skein::runtime::spawn_blocking(move || {
-            run_child(
-                &program_owned,
-                &args_owned,
-                &env_owned,
-                &cwd_owned,
-                &context_owned,
-                &context_path_owned,
-                &result_path_owned,
+            run_child(ChildRunRequest {
+                program: &program_owned,
+                args: &args_owned,
+                env: &env_owned,
+                cwd: &cwd_owned,
+                context: &context_owned,
+                context_path: &context_path_owned,
+                result_path: &result_path_owned,
                 submit_listener,
                 submit_for_pr,
-            )
+                accepted_submit: accepted_submit_for_child,
+            })
         })
         .await;
 
@@ -189,8 +195,12 @@ impl AgentRunner for OutOfProcessRunner {
         let result_bytes = std::fs::read(&result_path).map_err(|error| {
             AgentRunError::permanent(format!("agent did not write a valid result file: {error}"))
         })?;
-        serde_json::from_slice::<WorkspaceResult>(&result_bytes).map_err(|error| {
+        let result = serde_json::from_slice::<WorkspaceResult>(&result_bytes).map_err(|error| {
             AgentRunError::permanent(format!("agent result file is not valid JSON: {error}"))
+        })?;
+        Ok(AgentRunOutput {
+            result,
+            accepted_submit: accepted_submit.latest(),
         })
     }
 }
@@ -203,21 +213,36 @@ struct ChildOutcome {
     stderr_tail: String,
 }
 
+struct ChildRunRequest<'a> {
+    program: &'a str,
+    args: &'a [String],
+    env: &'a [(String, String)],
+    cwd: &'a Path,
+    context: &'a WorkspaceContext,
+    context_path: &'a Path,
+    result_path: &'a Path,
+    submit_listener: Option<(TcpListener, String)>,
+    submit_for_pr: SubmitForPrHandler,
+    accepted_submit: AcceptedSubmitProofStore,
+}
+
 /// Runs the child to completion on the blocking pool: spawn with stdout
 /// discarded, collect stderr, and return the exit outcome. Returns a
 /// [`transient`](AgentRunError::transient) error only for spawn/IO failures that
 /// a re-dispatch might survive.
-fn run_child(
-    program: &str,
-    args: &[String],
-    env: &[(String, String)],
-    cwd: &Path,
-    context: &WorkspaceContext,
-    context_path: &Path,
-    result_path: &Path,
-    submit_listener: Option<(TcpListener, String)>,
-    submit_for_pr: SubmitForPrHandler,
-) -> Result<ChildOutcome, AgentRunError> {
+fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError> {
+    let ChildRunRequest {
+        program,
+        args,
+        env,
+        cwd,
+        context,
+        context_path,
+        result_path,
+        submit_listener,
+        submit_for_pr,
+        accepted_submit,
+    } = request;
     let mut command = Command::new(program);
     command
         .args(args)
@@ -237,6 +262,7 @@ fn run_child(
             listener,
             address,
             submit_for_pr,
+            accepted_submit,
             context.clone(),
             cwd.to_path_buf(),
         )
@@ -292,6 +318,7 @@ fn start_submit_server(
     listener: TcpListener,
     address: String,
     handler: SubmitForPrHandler,
+    accepted_submit: AcceptedSubmitProofStore,
     context: WorkspaceContext,
     cwd: PathBuf,
 ) -> SubmitServer {
@@ -303,7 +330,9 @@ fn start_submit_server(
         }
         while !stop_for_thread.load(Ordering::SeqCst) {
             match listener.accept() {
-                Ok((stream, _addr)) => handle_submit_stream(stream, &handler, &context, &cwd),
+                Ok((stream, _addr)) => {
+                    handle_submit_stream(stream, &handler, &accepted_submit, &context, &cwd);
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -321,6 +350,7 @@ fn start_submit_server(
 fn handle_submit_stream(
     mut stream: TcpStream,
     handler: &SubmitForPrHandler,
+    accepted_submit: &AcceptedSubmitProofStore,
     context: &WorkspaceContext,
     cwd: &Path,
 ) {
@@ -328,7 +358,13 @@ fn handle_submit_stream(
     let response = match stream.read_to_end(&mut request_bytes) {
         Ok(_) => match serde_json::from_slice::<SubmitForPrRequest>(&request_bytes) {
             Ok(request) if request.protocol_version == PROTOCOL_VERSION => {
-                handler(request, context, cwd)
+                handle_submit_for_pr_with_proof(
+                    accepted_submit,
+                    |request, context, cwd| handler(request, context, cwd),
+                    request,
+                    context,
+                    cwd,
+                )
             }
             Ok(request) => SubmitForPrResponse::rejected(format!(
                 "submit_for_pr protocol version mismatch: got {}, expected {}",

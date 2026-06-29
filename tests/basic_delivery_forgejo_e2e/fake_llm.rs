@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use jig_core::{
-    ActionSpec, PhaseSpec, Reply, ReplySpec, RequestView, Script, ScriptFile, StopSpec, TurnSpec,
-    fixtures_root,
+    ActionSpec, PhaseSpec, Reply, ReplySpec, RequestView, Script, ScriptFile, StopReason, StopSpec,
+    Turn, TurnSpec, fixtures_root,
 };
 use jig_server::FakeLlm;
 use serde_json::Value;
@@ -14,6 +14,7 @@ const ARCHITECT_PHASE: &str = "architect-triage";
 const ENGINEER_PHASE: &str = "engineer-implementation";
 const ARCHITECT_ROLE_PROMPT: &str = "ROLE: architect";
 const ENGINEER_ROLE_PROMPT: &str = "ROLE: engineer";
+const PR_CI_FAILED_QUEUE: &str = "Queue: pr_ci_failed";
 
 struct FixtureExpectations {
     architect_body: String,
@@ -55,8 +56,17 @@ impl BasicDeliveryFake {
             if is_engineer {
                 engineer_seen.fetch_add(1, Ordering::SeqCst);
             }
-            if is_architect || is_engineer {
+            let is_pr_ci_repair = is_engineer && messages_contain(view, PR_CI_FAILED_QUEUE);
+            if is_architect {
                 script.next_reply(view)
+            } else if is_pr_ci_repair {
+                pr_ci_repair_reply(view.prior_tool_results)
+            } else if is_engineer {
+                if view.prior_tool_results == 1 {
+                    submit_for_pr_reply()
+                } else {
+                    script.next_reply(view)
+                }
             } else {
                 Reply::text(format!(
                     "unexpected basic-delivery fake-LLM request; canonical fixture is {BASIC_DELIVERY_FIXTURE}"
@@ -108,6 +118,50 @@ impl BasicDeliveryFake {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+fn submit_for_pr_reply() -> Reply {
+    Reply {
+        turns: vec![Turn::ToolCall {
+            id: "call_submit_for_pr".to_string(),
+            name: "submit_for_pr".to_string(),
+            args: serde_json::json!({ "summary": engineer_summary() }),
+        }],
+        usage: Default::default(),
+        stop: StopReason::ToolCalls,
+    }
+}
+
+fn pr_ci_repair_reply(prior_tool_results: usize) -> Reply {
+    match prior_tool_results {
+        0 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_write_ci_repair_note".to_string(),
+                name: "write".to_string(),
+                args: serde_json::json!({
+                    "path": "service/CI_REPAIR_NOTE.md",
+                    "content": "rerun CI after submit_for_pr proof\n"
+                }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        1 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_submit_ci_repair".to_string(),
+                name: "submit_for_pr".to_string(),
+                args: serde_json::json!({ "summary": "Rerun CI after a no-op repair note." }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        _ => Reply::text(
+            serde_json::json!({
+                "summary": "Rerun CI after a no-op repair note."
+            })
+            .to_string(),
+        ),
     }
 }
 

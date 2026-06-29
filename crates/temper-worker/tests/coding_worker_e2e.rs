@@ -45,8 +45,11 @@ fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
     let fixture = GitFixture::new();
 
     // The out-of-process runner spawns the deterministic fake agent binary,
-    // which writes GREETING.md.
-    let runner = Arc::new(OutOfProcessRunner::new(vec![fake_agent_bin()]));
+    // which writes GREETING.md and calls submit_for_pr before final JSON.
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--submit-before-result".to_string(),
+    ]));
     let executor_config = CodingExecutorConfig {
         workspace_root: fixture.workspace_root.clone(),
         git_base_url: fixture.git_base_url(),
@@ -193,6 +196,69 @@ fn submit_for_pr_runs_configured_pre_push_gate_and_allows_push() {
 }
 
 #[test]
+fn accepted_submit_unchanged_workspace_runs_configured_gate_once() {
+    let fixture = GitFixture::new();
+
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--pre-push-config".to_string(),
+        "fail-if-rerun".to_string(),
+        "--submit-before-result".to_string(),
+    ]));
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
+
+    assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
+    let marker = fixture.origin_show("refs/heads/agent/pr-for-code-7:.temper/pre-push-ran");
+    assert_eq!(marker, "");
+}
+
+#[test]
+fn mutation_after_accepted_submit_is_rejected_before_push() {
+    let fixture = GitFixture::new();
+
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--submit-before-result".to_string(),
+        "--mutate-after-submit".to_string(),
+    ]));
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
+
+    assert_eq!(result.status, ResultStatus::Failure, "result: {result:?}");
+    assert!(result.repos.is_empty());
+    let failure = result.failure.expect("failure details");
+    assert!(
+        failure
+            .message
+            .contains("workspace changed after the accepted submit_for_pr proof"),
+        "failure message: {}",
+        failure.message
+    );
+    assert!(
+        failure.message.contains("call submit_for_pr again"),
+        "failure message: {}",
+        failure.message
+    );
+    assert!(
+        !fixture.origin_ref_exists("refs/heads/agent/pr-for-code-7"),
+        "stale submit_for_pr proof must not push the branch"
+    );
+}
+
+#[test]
 fn submit_for_pr_failure_returns_structured_gate_to_live_agent_then_retry_pushes() {
     let fixture = GitFixture::new();
 
@@ -246,14 +312,10 @@ fn submit_for_pr_timeout_returns_timed_out_gate_then_retry_pushes() {
 }
 
 #[test]
-fn final_result_cannot_bypass_configured_failing_pre_push_gate() {
+fn final_result_without_accepted_submit_fails_even_without_pre_push_config() {
     let fixture = GitFixture::new();
 
-    let runner = Arc::new(OutOfProcessRunner::new(vec![
-        fake_agent_bin(),
-        "--pre-push-config".to_string(),
-        "always-fail".to_string(),
-    ]));
+    let runner = Arc::new(OutOfProcessRunner::new(vec![fake_agent_bin()]));
     let executor_config = CodingExecutorConfig {
         workspace_root: fixture.workspace_root.clone(),
         git_base_url: fixture.git_base_url(),
@@ -269,18 +331,13 @@ fn final_result_cannot_bypass_configured_failing_pre_push_gate() {
     assert!(
         failure
             .message
-            .contains("pre-push gate failed before final push"),
-        "failure message: {}",
-        failure.message
-    );
-    assert!(
-        failure.message.contains("pre-push:always-fail"),
+            .contains("requires an accepted submit_for_pr"),
         "failure message: {}",
         failure.message
     );
     assert!(
         !fixture.origin_ref_exists("refs/heads/agent/pr-for-code-7"),
-        "failing final pre-push gate must not push the branch"
+        "missing submit_for_pr proof must not push the branch"
     );
 }
 
@@ -292,7 +349,10 @@ fn final_result_cannot_bypass_configured_failing_pre_push_gate() {
 fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo() {
     let fixture = GitFixture::new();
 
-    let runner = Arc::new(OutOfProcessRunner::new(vec![fake_agent_bin()]));
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--submit-before-result".to_string(),
+    ]));
     let executor_config = CodingExecutorConfig {
         workspace_root: fixture.workspace_root.clone(),
         git_base_url: fixture.git_base_url(),

@@ -197,6 +197,18 @@ fn basic_delivery_architect_then_engineer_script(
                     .to_string(),
                 ),
             }
+        } else if view.prior_tool_results == 1 {
+            Reply {
+                turns: vec![Turn::ToolCall {
+                    id: "call_submit_for_pr".to_string(),
+                    name: "submit_for_pr".to_string(),
+                    args: serde_json::json!({
+                        "summary": "Implemented deterministic environment banner."
+                    }),
+                }],
+                usage: Default::default(),
+                stop: StopReason::ToolCalls,
+            }
         } else {
             observed_engineer_continuation.fetch_add(1, Ordering::SeqCst);
             Reply::text(r#"{"summary":"Implemented deterministic environment banner."}"#)

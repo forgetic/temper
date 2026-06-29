@@ -126,6 +126,48 @@ fn success_path_commits_pushes_and_reports_branch() {
 }
 
 #[test]
+fn success_without_accepted_submit_fails_and_does_not_push() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::SuccessWithoutSubmit.runner(), true);
+
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+            .await;
+
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("requires an accepted submit_for_pr"),
+            "unexpected message: {message}"
+        );
+        assert_no_origin_branch(&fixture, "agent/pr-for-code-7");
+    });
+}
+
+#[test]
+fn mutation_after_accepted_submit_is_rejected() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::MutateAfterSubmit.runner(), true);
+
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+            .await;
+
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("workspace changed after the accepted submit_for_pr proof"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            message.contains("call submit_for_pr again"),
+            "unexpected message: {message}"
+        );
+        assert_no_origin_branch(&fixture, "agent/pr-for-code-7");
+    });
+}
+
+#[test]
 fn stale_pr_fix_cancels_before_final_push() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

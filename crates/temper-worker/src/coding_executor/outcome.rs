@@ -3,9 +3,10 @@ use temper_protocol_worker::{
     Branch, FailureClass, PullRequestFreshness as WorkerPullRequestFreshness, RepoOutcome,
 };
 
+use crate::agent_runner::AcceptedSubmitProof;
 use crate::executor::JobOutcome;
 use crate::pr_freshness::{PrFreshnessFailure, PrFreshnessGuard};
-use crate::pre_push::final_pre_push_response;
+use crate::pre_push::fingerprint_writable_repos;
 
 use super::{PreparedRepo, failure, workspace_failure};
 
@@ -22,6 +23,7 @@ pub(super) struct WritableOutcomeRequest<'a> {
     pub(super) pull_request_freshness: Option<&'a WorkerPullRequestFreshness>,
     pub(super) freshness_guard: Option<&'a dyn PrFreshnessGuard>,
     pub(super) latest_self_pushed_sha: Option<&'a str>,
+    pub(super) accepted_submit: Option<&'a AcceptedSubmitProof>,
 }
 
 pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> JobOutcome {
@@ -38,6 +40,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         pull_request_freshness,
         freshness_guard,
         latest_self_pushed_sha,
+        accepted_submit,
     } = request;
     if let Some(verdict) = result.verdict.clone() {
         return writable_verdict_outcome(
@@ -60,7 +63,10 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
     {
         return outcome;
     }
-    if let Err(outcome) = ensure_pre_push_before_pr_push(workspace_context, workspace_root).await {
+    if let Err(outcome) =
+        ensure_accepted_submit_before_pr_push(accepted_submit, workspace_context, workspace_root)
+            .await
+    {
         return outcome;
     }
 
@@ -187,47 +193,40 @@ async fn ensure_fresh_before_pr_push(
     }
 }
 
-async fn ensure_pre_push_before_pr_push(
+async fn ensure_accepted_submit_before_pr_push(
+    accepted_submit: Option<&AcceptedSubmitProof>,
     context: &WorkspaceContext,
     workspace_root: &std::path::Path,
 ) -> Result<(), JobOutcome> {
-    let response = final_pre_push_response(context, workspace_root).await;
-    if response.accepted {
+    let Some(proof) = accepted_submit else {
+        return Err(failure(
+            FailureClass::Permanent,
+            "writable success requires an accepted submit_for_pr call before final push; call submit_for_pr after the final workspace changes and retry",
+        ));
+    };
+    if !proof.response.accepted {
+        return Err(failure(
+            FailureClass::Permanent,
+            "writable success carried a rejected submit_for_pr proof; call submit_for_pr again after fixing the workspace",
+        ));
+    }
+
+    let current = fingerprint_writable_repos(context, workspace_root)
+        .await
+        .map_err(|error| {
+            failure(
+                FailureClass::Transient,
+                format!("inspect workspace fingerprint before final push: {error}"),
+            )
+        })?;
+    if current == proof.fingerprint {
         return Ok(());
     }
 
     Err(failure(
         FailureClass::Permanent,
-        final_pre_push_failure_message(&response),
+        "workspace changed after the accepted submit_for_pr proof; call submit_for_pr again before emitting the final WorkspaceResult JSON",
     ))
-}
-
-fn final_pre_push_failure_message(response: &temper_protocol_agent::SubmitForPrResponse) -> String {
-    let mut message = format!(
-        "pre-push gate failed before final push: {}",
-        response.message
-    );
-    if !response.gates.is_empty() {
-        let gates = response
-            .gates
-            .iter()
-            .map(|gate| {
-                format!(
-                    "{} status={} code={} timeout={}",
-                    gate.command_id,
-                    gate.exit_status,
-                    gate.exit_code
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "none".to_string()),
-                    gate.timed_out
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        message.push_str("; gates: ");
-        message.push_str(&gates);
-    }
-    message
 }
 
 async fn push_writable_repos(
