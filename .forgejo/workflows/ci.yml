@@ -1,5 +1,12 @@
 name: ci
 
+env:
+  KACHE_CONFIG: "/etc/kache/config.toml"
+  # Keep the pinned Forgejo fixture binary (bench-forgejo downloads it for
+  # the ignored e2e tests) outside the workspace so the per-run clean
+  # checkout does not throw it away.
+  BENCH_FORGEJO_CACHE_DIR: ${{ env.HOME }}/.cache/bench-forgejo
+
 on:
   pull_request:
     branches:
@@ -26,11 +33,6 @@ on:
 jobs:
   validate:
     runs-on: host
-    env:
-      # Keep the pinned Forgejo fixture binary (bench-forgejo downloads it for
-      # the ignored e2e tests) outside the workspace so the per-run clean
-      # checkout does not throw it away.
-      BENCH_FORGEJO_CACHE_DIR: ${{ env.HOME }}/.cache/bench-forgejo
     steps:
       - name: Checkout
         uses: actions/checkout@v4
