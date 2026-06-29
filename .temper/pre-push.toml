@@ -1,0 +1,10 @@
+version = 1
+
+[pre_push]
+required = true
+cwd = "repo"
+
+[[pre_push.commands]]
+id = "pre-pr"
+argv = [".temper/pre-pr"]
+timeout_secs = 7200

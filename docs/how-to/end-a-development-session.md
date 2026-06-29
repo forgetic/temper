@@ -14,29 +14,23 @@ generated files, secrets, or unrelated changes.
 
 ## 2. Run validation
 
-```sh
-cargo fmt --all
-cargo dev-clippy
-cargo dev-check
-cargo dev-test-quick
-```
-
-If you're touching areas covered by the default Forgejo capstones (daemon
-red→green live convergence or `temper init --apply`), run:
+Before pushing or opening an implementation PR, run the repo-local pre-PR script
+from the repository root:
 
 ```sh
-cargo dev-test-full
+./.temper/pre-pr
 ```
 
-instead of `cargo dev-test-quick`. If you're touching another ignored live
-scenario outside that capstone set, run the targeted ignored test or the
-explicit manual/all-e2e lane:
+The script runs these commands in order and stops on the first failure:
 
-```sh
-cargo dev-test-e2e-all
-```
+1. `cargo dev-fmt`
+2. `cargo-clippy`
+3. `cargo dev-test-quick`
+4. `cargo dev-test-e2e-all`
 
-Keep Clippy output clean.
+Use narrower commands only for intermediate local iteration; the full pre-PR
+script is the required handoff check for implementation PRs. Keep Clippy output
+clean.
 
 Keep the whole quick suite fast; as a soft target for agent changes, it should
 complete in under about 10 seconds on a warmed local checkout. If a change makes

@@ -16,9 +16,21 @@ All LOC figures below are to be intended with blank lines excluded.
 - Keep lib.rs, main.rs, and mod.rs as thin facades: declarations, wiring, and re-exports only.
 - Keep functions/methods below 75 LOC where practical.
 
-## Formatting
+## Pre-PR validation
 
-Always run `cargo dev-fmt` before committing changes.
+Before pushing or opening an implementation PR, agents must run the repo-local
+pre-PR script from the repository root:
+
+```sh
+./.temper/pre-pr
+```
+
+The script runs these commands in order and stops on the first failure:
+
+1. `cargo dev-fmt`
+2. `cargo-clippy`
+3. `cargo dev-test-quick`
+4. `cargo dev-test-e2e-all`
 
 ## Useful docs
 
