@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(dirname "$0")
+repo_root=$(cd "$script_dir/.." && pwd)
+cd "$repo_root"
+
+if [ -z "${TMPDIR:-}" ]; then
+    TMPDIR="/tmp/tp$(id -u)"
+fi
+mkdir -p "$TMPDIR"
+export TMPDIR
+
+run() {
+    printf '\n==> %s\n' "$*"
+    "$@"
+}
+
+run cargo dev-fmt
+run cargo-clippy
+run cargo dev-test-quick
+run cargo dev-test-e2e-all
