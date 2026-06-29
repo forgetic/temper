@@ -76,10 +76,10 @@ impl<R: BufRead, W: Write> Prompter for TerminalPrompter<R, W> {
         }
         self.writer.flush()?;
         let answer = self.read_line()?;
-        if answer.is_empty()
-            && let Some(default) = default
-        {
-            return Ok(default.to_string());
+        if answer.is_empty() {
+            if let Some(default) = default {
+                return Ok(default.to_string());
+            }
         }
         Ok(answer)
     }
@@ -145,10 +145,10 @@ impl ScriptedPrompter {
             )
         })?;
         let answer = raw.trim().to_string();
-        if answer.is_empty()
-            && let Some(default) = default
-        {
-            return Ok(default.to_string());
+        if answer.is_empty() {
+            if let Some(default) = default {
+                return Ok(default.to_string());
+            }
         }
         Ok(answer)
     }

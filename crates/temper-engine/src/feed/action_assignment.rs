@@ -215,14 +215,14 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
         )));
     }
 
-    if let Some(workspace) = context.workspace.as_mut()
-        && let Some(primary) = workspace.repos.first_mut()
-    {
-        primary.access = RepoAccess::Writable;
-        primary.branch_hint = Some(head_branch.clone());
-        if !base_branch.trim().is_empty() {
-            primary.base_branch = base_branch.clone();
-            primary.default_branch = base_branch.clone();
+    if let Some(workspace) = context.workspace.as_mut() {
+        if let Some(primary) = workspace.repos.first_mut() {
+            primary.access = RepoAccess::Writable;
+            primary.branch_hint = Some(head_branch.clone());
+            if !base_branch.trim().is_empty() {
+                primary.base_branch = base_branch.clone();
+                primary.default_branch = base_branch.clone();
+            }
         }
     }
 

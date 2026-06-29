@@ -97,8 +97,9 @@ pub mod factory {
     ///
     /// Provisioning needs all three capability traits at once (e.g.
     /// `temper_provision::provision` takes `&dyn Forge`, `&dyn ForgeContent`,
-    /// and `&dyn ForgeAdmin`). The returned trait object upcasts to each of those
-    /// at the call site, so provisioning crates never name a concrete backend.
+    /// and `&dyn ForgeAdmin`). The returned trait object exposes stable adapter
+    /// methods for each capability, so provisioning crates never name a concrete
+    /// backend.
     pub fn new_forgejo_provisioning(config: ForgejoConfig) -> Arc<dyn ProvisioningForge> {
         Arc::new(temper_forge_forgejo::ForgejoForge::new(config))
     }

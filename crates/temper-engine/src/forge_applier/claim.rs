@@ -135,10 +135,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         };
         let mut mutation = SourceMutation::default();
         for effect in effects {
-            if let Effect::AddLabel(label) = effect
-                && self.is_working_label(&label)
-            {
-                push_unique(&mut mutation.remove_labels, label.as_str().to_string());
+            if let Effect::AddLabel(label) = effect {
+                if self.is_working_label(&label) {
+                    push_unique(&mut mutation.remove_labels, label.as_str().to_string());
+                }
             }
         }
         self.apply_source_mutation(job, mutation, "complete source action")

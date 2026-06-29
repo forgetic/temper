@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
+use std::time::{Duration, Instant};
 use temper_forge::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, Forge, IssueState, ItemNumber, PullRequestState, RepositoryId,
@@ -52,20 +53,36 @@ impl Default for TestRoot {
     }
 }
 
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
+struct ThreadWake {
+    thread: std::thread::Thread,
 }
 
-/// Drives a Forge future to completion; the in-memory backend never parks.
+impl Wake for ThreadWake {
+    fn wake(self: Arc<Self>) {
+        self.thread.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.thread.unpark();
+    }
+}
+
+/// Drives a Forge future to completion without pulling in an async runtime.
 pub fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoopWake));
+    let waker = Waker::from(Arc::new(ThreadWake {
+        thread: std::thread::current(),
+    }));
     let mut context = Context::from_waker(&waker);
     let mut future = Box::pin(future);
-    match Future::poll(future.as_mut(), &mut context) {
-        Poll::Ready(value) => value,
-        Poll::Pending => panic!("in-memory forge futures should not park in tests"),
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending if Instant::now() >= deadline => {
+                panic!("in-memory forge future did not complete in tests")
+            }
+            Poll::Pending => std::thread::park_timeout(Duration::from_millis(10)),
+        }
     }
 }
 

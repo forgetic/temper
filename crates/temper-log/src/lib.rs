@@ -231,15 +231,15 @@ pub fn init_logging() {
     // it is absent, stale, or the socket cannot be opened. The journal adds its
     // own timestamps, so this path stays minimal (no fmt timer).
     #[cfg(target_os = "linux")]
-    if stderr_is_journal_stream()
-        && let Ok(journald) = tracing_journald::layer()
-    {
-        let _ = tracing_subscriber::registry()
-            .with(env_filter())
-            .with(maybe_otel_layer())
-            .with(journald)
-            .try_init();
-        return;
+    if stderr_is_journal_stream() {
+        if let Ok(journald) = tracing_journald::layer() {
+            let _ = tracing_subscriber::registry()
+                .with(env_filter())
+                .with(maybe_otel_layer())
+                .with(journald)
+                .try_init();
+            return;
+        }
     }
 
     // Colors only on a real TTY, and never when NO_COLOR is set (no-color.org).

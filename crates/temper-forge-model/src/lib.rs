@@ -33,6 +33,22 @@ pub use model::*;
 /// A blanket impl covers every type that implements all three, so this trait
 /// never needs to be implemented by hand; depend on it where the full
 /// provisioning surface is required.
-pub trait ProvisioningForge: Forge + ForgeContent + ForgeAdmin {}
+pub trait ProvisioningForge: Forge + ForgeContent + ForgeAdmin {
+    fn as_forge(&self) -> &dyn Forge;
+    fn as_content(&self) -> &dyn ForgeContent;
+    fn as_admin(&self) -> &dyn ForgeAdmin;
+}
 
-impl<T: Forge + ForgeContent + ForgeAdmin> ProvisioningForge for T {}
+impl<T: Forge + ForgeContent + ForgeAdmin> ProvisioningForge for T {
+    fn as_forge(&self) -> &dyn Forge {
+        self
+    }
+
+    fn as_content(&self) -> &dyn ForgeContent {
+        self
+    }
+
+    fn as_admin(&self) -> &dyn ForgeAdmin {
+        self
+    }
+}

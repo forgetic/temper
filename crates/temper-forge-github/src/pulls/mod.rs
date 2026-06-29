@@ -199,13 +199,14 @@ impl<C: HttpClient> GitHubForge<C> {
         // author, or one already requested on older Enterprise versions) with
         // `422`. Treat the call as idempotent when the desired reviewers are
         // already present.
-        if let Some(pull) = self.fetch_pull_request(&repo, number).await?
-            && input
+        if let Some(pull) = self.fetch_pull_request(&repo, number).await? {
+            if input
                 .reviewers
                 .iter()
                 .all(|reviewer| pull.requested_reviewers.contains(reviewer))
-        {
-            return Ok(pull);
+            {
+                return Ok(pull);
+            }
         }
         Err(crate::error::map_status_error(
             "request reviewers",

@@ -222,11 +222,11 @@ impl AgentMachine {
         })];
 
         // Record the result into the in-flight (front) batch.
-        if let Some(batch) = self.pending_batches.front_mut()
-            && let Some(pending) = batch.iter_mut().find(|p| p.call.id == id)
-        {
-            let tool_name = pending.call.name.clone();
-            pending.result = Some(tool_result_message(&id, &tool_name, output));
+        if let Some(batch) = self.pending_batches.front_mut() {
+            if let Some(pending) = batch.iter_mut().find(|p| p.call.id == id) {
+                let tool_name = pending.call.name.clone();
+                pending.result = Some(tool_result_message(&id, &tool_name, output));
+            }
         }
 
         // Is the front batch fully resolved?

@@ -75,37 +75,38 @@ pub(super) fn parse_trigger_facts(
 
     if matches!(event, "issues" | "issue")
         && value.pointer("/action").and_then(Value::as_str) == Some("opened")
-        && let Some(number) = value.pointer("/issue/number").and_then(Value::as_u64)
     {
-        let author = value
-            .pointer("/issue/user/login")
-            .or_else(|| value.pointer("/issue/user/username"))
-            .or_else(|| value.pointer("/sender/login"))
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string();
-        let title = value
-            .pointer("/issue/title")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        facts.issue_opened = Some(IssueOpenedFacts {
-            number,
-            author,
-            title,
-        });
+        if let Some(number) = value.pointer("/issue/number").and_then(Value::as_u64) {
+            let author = value
+                .pointer("/issue/user/login")
+                .or_else(|| value.pointer("/issue/user/username"))
+                .or_else(|| value.pointer("/sender/login"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            let title = value
+                .pointer("/issue/title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            facts.issue_opened = Some(IssueOpenedFacts {
+                number,
+                author,
+                title,
+            });
+        }
     }
 
-    if hint.kind == ChangeKind::Ci
-        && let Some(pr_number) = ci_pr_number(&value)
-    {
-        let conclusion = ci_conclusion(&value).unwrap_or("unknown").to_string();
-        let duration_ms = ci_duration_ms(&value).unwrap_or(0);
-        facts.ci_completed = Some(CiCompletedFacts {
-            pr_number,
-            conclusion,
-            duration_ms,
-        });
+    if hint.kind == ChangeKind::Ci {
+        if let Some(pr_number) = ci_pr_number(&value) {
+            let conclusion = ci_conclusion(&value).unwrap_or("unknown").to_string();
+            let duration_ms = ci_duration_ms(&value).unwrap_or(0);
+            facts.ci_completed = Some(CiCompletedFacts {
+                pr_number,
+                conclusion,
+                duration_ms,
+            });
+        }
     }
 
     facts

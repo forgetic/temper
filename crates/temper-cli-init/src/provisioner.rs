@@ -155,10 +155,9 @@ impl Provisioner for ForgejoProvisioner {
                     .with_default_repo(&request.owner, &request.name);
             let forge = temper_forge::factory::new_forgejo_provisioning(forge_config);
 
-            let provisioned =
-                temper_provision::provision(&plan, forge.as_ref(), forge.as_ref(), forge.as_ref())
-                    .await
-                    .map_err(|error| error.to_string())?;
+            let provisioned = temper_provision::provision_with(&plan, forge.as_ref())
+                .await
+                .map_err(|error| error.to_string())?;
             Ok(ProvisionOutcome {
                 provisioned,
                 admin_token,

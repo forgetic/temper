@@ -161,21 +161,22 @@ where
                     .await?;
                 if let Some(pull_request) = pull_request {
                     targeted_snapshots.push(ArtifactSnapshot::from_pull_request(&pull_request));
-                    if matches!(kind, ChangeKind::PullRequest)
-                        && let Some(metadata) = parse_metadata_block(&pull_request.body)
+                    if matches!(kind, ChangeKind::PullRequest) {
+                        if let Some(metadata) = parse_metadata_block(&pull_request.body)
                             .map_err(|error| ForgeError::Backend(error.to_string()))?
-                    {
-                        for parent in metadata
-                            .parents
-                            .iter()
-                            .filter(|parent| parent.is_in_repository(self.repo))
                         {
-                            if let Some(issue) = self
-                                .forge
-                                .get_issue_by_number(self.repo, parent.number)
-                                .await?
+                            for parent in metadata
+                                .parents
+                                .iter()
+                                .filter(|parent| parent.is_in_repository(self.repo))
                             {
-                                targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                                if let Some(issue) = self
+                                    .forge
+                                    .get_issue_by_number(self.repo, parent.number)
+                                    .await?
+                                {
+                                    targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                                }
                             }
                         }
                     }

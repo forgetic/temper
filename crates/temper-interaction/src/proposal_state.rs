@@ -60,10 +60,10 @@ pub fn latest_proposals_from_turns(
 ) -> Result<Vec<Proposal>, InteractionError> {
     let mut latest = Vec::new();
     for turn in turns {
-        if turn.participant.kind == ParticipantKind::Agent
-            && let Some(proposals) = parse_proposal_snapshot_marker(marker_namespace, &turn.body)?
-        {
-            latest = proposals;
+        if turn.participant.kind == ParticipantKind::Agent {
+            if let Some(proposals) = parse_proposal_snapshot_marker(marker_namespace, &turn.body)? {
+                latest = proposals;
+            }
         }
     }
     Ok(latest)
@@ -120,7 +120,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, InteractionError> {
-    if !value.len().is_multiple_of(2) {
+    if value.len() % 2 != 0 {
         return Err(InteractionError::InvalidConfig {
             field: "proposal_snapshot",
             message: "hex payload has odd length".into(),

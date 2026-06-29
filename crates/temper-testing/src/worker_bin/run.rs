@@ -454,15 +454,15 @@ impl StopSignal {
     }
 
     pub(super) fn should_stop(&self) -> bool {
-        if let Some(path) = &self.stop_file
-            && sentinel_exists(path)
-        {
-            return true;
+        if let Some(path) = &self.stop_file {
+            if sentinel_exists(path) {
+                return true;
+            }
         }
-        if let Some(deadline) = self.deadline
-            && Instant::now() >= deadline
-        {
-            return true;
+        if let Some(deadline) = self.deadline {
+            if Instant::now() >= deadline {
+                return true;
+            }
         }
         false
     }

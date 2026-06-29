@@ -168,14 +168,14 @@ fn no_info_level_json_in_message_on_agent_target() {
 
     // Core guard: nothing on the agent target at info may be a raw-JSON message.
     for event in captured.iter().filter(|e| e.is_agent_target()) {
-        if event.level == Level::INFO
-            && let Some(message) = &event.message
-        {
-            assert!(
-                !message.trim_start().starts_with('{'),
-                "info-level JSON-in-message leaked on {}: {message:?}",
-                event.target,
-            );
+        if event.level == Level::INFO {
+            if let Some(message) = &event.message {
+                assert!(
+                    !message.trim_start().starts_with('{'),
+                    "info-level JSON-in-message leaked on {}: {message:?}",
+                    event.target,
+                );
+            }
         }
     }
 }

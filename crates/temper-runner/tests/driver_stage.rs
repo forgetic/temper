@@ -161,11 +161,11 @@ impl Worker for CountingWorker {
         _now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Progress, temper_runner::WorkerError> {
         let previous = self.ticks.fetch_add(1, Ordering::SeqCst);
-        if previous == 0
-            && let Some(sender) = &self.send_on_first_tick
-        {
-            for _ in 0..3 {
-                sender.send(test_hint()).expect("hint receiver is alive");
+        if previous == 0 {
+            if let Some(sender) = &self.send_on_first_tick {
+                for _ in 0..3 {
+                    sender.send(test_hint()).expect("hint receiver is alive");
+                }
             }
         }
         Ok(Progress::unchanged())

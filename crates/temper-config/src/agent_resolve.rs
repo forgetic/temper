@@ -34,10 +34,10 @@ pub(crate) fn resolve_provider_credential(
         return ProviderCredential::OAuthFile(expand_tilde(&path, env));
     }
     let kind = trimmed(cred.kind.as_deref()).unwrap_or_default();
-    if (kind == "api-key" || kind == "api_key")
-        && let Some(key) = trimmed(cred.key.as_deref())
-    {
-        return ProviderCredential::ApiKey(SecretString::from(key));
+    if kind == "api-key" || kind == "api_key" {
+        if let Some(key) = trimmed(cred.key.as_deref()) {
+            return ProviderCredential::ApiKey(SecretString::from(key));
+        }
     }
     if let Some(access) = trimmed(cred.access.as_deref()) {
         return ProviderCredential::OAuthInline {
@@ -60,14 +60,14 @@ fn trimmed(value: Option<&str>) -> Option<String> {
 }
 
 fn expand_tilde(value: &str, env: &impl EnvLookup) -> PathBuf {
-    if (value == "~" || value.starts_with("~/"))
-        && let Some(home) = env.non_empty("HOME")
-    {
-        let rest = value.strip_prefix("~/").or_else(|| value.strip_prefix('~'));
-        return match rest {
-            Some(rest) if !rest.is_empty() => PathBuf::from(home).join(rest),
-            _ => PathBuf::from(home),
-        };
+    if value == "~" || value.starts_with("~/") {
+        if let Some(home) = env.non_empty("HOME") {
+            let rest = value.strip_prefix("~/").or_else(|| value.strip_prefix('~'));
+            return match rest {
+                Some(rest) if !rest.is_empty() => PathBuf::from(home).join(rest),
+                _ => PathBuf::from(home),
+            };
+        }
     }
     PathBuf::from(value)
 }

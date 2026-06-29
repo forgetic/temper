@@ -39,13 +39,12 @@ pub(crate) fn resolve_worker_pools(
         }
 
         let agent_profile = trimmed(pool.agent_profile.as_deref());
-        if let Some(profile) = &agent_profile
-            && !agent_profiles.is_empty()
-            && !agent_profiles.contains_key(profile)
-        {
-            return Err(ConfigError::invalid(format!(
-                "{field}.agent_profile references unknown agent.profiles `{profile}`"
-            )));
+        if let Some(profile) = &agent_profile {
+            if !agent_profiles.is_empty() && !agent_profiles.contains_key(profile) {
+                return Err(ConfigError::invalid(format!(
+                    "{field}.agent_profile references unknown agent.profiles `{profile}`"
+                )));
+            }
         }
 
         let worker_token = resolve_secret_reference(
