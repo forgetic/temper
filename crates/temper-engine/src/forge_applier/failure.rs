@@ -18,6 +18,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             result.failure.as_ref().map(|failure| failure.class),
             Some(FailureClass::Transient)
         ) {
+            self.release_source_action_claim_for_retry(&job).await;
             return;
         }
 
