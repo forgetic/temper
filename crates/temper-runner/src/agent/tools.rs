@@ -84,10 +84,10 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
 
     async fn context_with_current_role_assignee(&self) -> ExecutionContext {
         let mut context = self.context.clone();
-        if context.resolve_assignee(&self.role).is_none()
-            && let Ok(user) = self.forge.current_user().await
-        {
-            context.set_assignee(self.role.clone(), user.id);
+        if context.resolve_assignee(&self.role).is_none() {
+            if let Ok(user) = self.forge.current_user().await {
+                context.set_assignee(self.role.clone(), user.id);
+            }
         }
         context
     }

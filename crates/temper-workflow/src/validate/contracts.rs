@@ -79,16 +79,16 @@ pub(super) fn check_queue_automation_contract(
                     transition: outcome.id.clone(),
                 });
             }
-            if let Some(primary) = primary
-                && outcome.artifact != primary.artifact
-            {
-                diagnostics.push(Diagnostic::QueueAutomationOutcomeArtifactMismatch {
-                    queue: queue.id.clone(),
-                    verdict: verdict.clone(),
-                    transition: outcome.id.clone(),
-                    expected: primary.artifact.clone(),
-                    actual: outcome.artifact.clone(),
-                });
+            if let Some(primary) = primary {
+                if outcome.artifact != primary.artifact {
+                    diagnostics.push(Diagnostic::QueueAutomationOutcomeArtifactMismatch {
+                        queue: queue.id.clone(),
+                        verdict: verdict.clone(),
+                        transition: outcome.id.clone(),
+                        expected: primary.artifact.clone(),
+                        actual: outcome.artifact.clone(),
+                    });
+                }
             }
         }
     }
@@ -176,16 +176,16 @@ fn check_queue_action_artifact(
             queue_artifacts: queue_artifacts.to_vec(),
         });
     }
-    if let Some(artifact) = &action.artifact
-        && artifact != &transition.artifact
-    {
-        diagnostics.push(Diagnostic::QueueActionFilterArtifactMismatch {
-            queue: queue.to_string(),
-            role: action.role.clone(),
-            action: transition.id.clone(),
-            declared_artifact: artifact.clone(),
-            action_artifact: transition.artifact.clone(),
-        });
+    if let Some(artifact) = &action.artifact {
+        if artifact != &transition.artifact {
+            diagnostics.push(Diagnostic::QueueActionFilterArtifactMismatch {
+                queue: queue.to_string(),
+                role: action.role.clone(),
+                action: transition.id.clone(),
+                declared_artifact: artifact.clone(),
+                action_artifact: transition.artifact.clone(),
+            });
+        }
     }
 }
 

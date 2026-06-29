@@ -43,8 +43,10 @@ impl FileLogSource {
             reader: None,
             offset: 0,
         };
-        if from_end && let Ok(meta) = std::fs::metadata(&source.path) {
-            source.offset = meta.len();
+        if from_end {
+            if let Ok(meta) = std::fs::metadata(&source.path) {
+                source.offset = meta.len();
+            }
         }
         source.reopen()?;
         Ok(source)

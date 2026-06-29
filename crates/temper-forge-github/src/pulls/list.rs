@@ -51,10 +51,10 @@ fn pull_request_state_param(state: Option<PullRequestState>) -> &'static str {
 }
 
 fn pull_matches_query(pull: &PullRequest, query: &PullRequestQuery) -> bool {
-    if let Some(state) = query.state
-        && pull.state != state
-    {
-        return false;
+    if let Some(state) = query.state {
+        if pull.state != state {
+            return false;
+        }
     }
     if !query
         .labels
@@ -63,21 +63,20 @@ fn pull_matches_query(pull: &PullRequest, query: &PullRequestQuery) -> bool {
     {
         return false;
     }
-    if let Some(needle) = &query.body_contains
-        && !needle.is_empty()
-        && !pull.body.contains(needle)
-    {
-        return false;
+    if let Some(needle) = &query.body_contains {
+        if !needle.is_empty() && !pull.body.contains(needle) {
+            return false;
+        }
     }
-    if let Some(author) = &query.author_id
-        && &pull.author_id != author
-    {
-        return false;
+    if let Some(author) = &query.author_id {
+        if &pull.author_id != author {
+            return false;
+        }
     }
-    if let Some(assignee) = &query.assignee_id
-        && !pull.assignees.iter().any(|candidate| candidate == assignee)
-    {
-        return false;
+    if let Some(assignee) = &query.assignee_id {
+        if !pull.assignees.iter().any(|candidate| candidate == assignee) {
+            return false;
+        }
     }
     true
 }

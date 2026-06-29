@@ -53,10 +53,10 @@ impl<C: HttpClient> ForgejoForge<C> {
                 target.pr_head_ref = head.1;
             }
         }
-        if let Some(commit) = query.commit_sha.as_deref()
-            && !commit.is_empty()
-        {
-            target.commit_sha = Some(commit.to_string());
+        if let Some(commit) = query.commit_sha.as_deref() {
+            if !commit.is_empty() {
+                target.commit_sha = Some(commit.to_string());
+            }
         }
 
         // Prefer the REST Actions endpoint (richer, used by newer servers). On a
@@ -143,15 +143,15 @@ impl<C: HttpClient> ForgejoForge<C> {
         // falls through to the live read below. The raw (pre status-filter) jobs
         // are what is cached, so the query's status filter/sort still applies.
         let cache_key = crate::ci_cache::CiReadKey::from_target(repo_id, target);
-        if let Some(key) = cache_key.as_ref()
-            && let Some(cached) = self.ci_read_cache().get_terminal(key)
-        {
-            let mut jobs = cached;
-            if let Some(status) = query.status {
-                jobs.retain(|job| job.status == status);
+        if let Some(key) = cache_key.as_ref() {
+            if let Some(cached) = self.ci_read_cache().get_terminal(key) {
+                let mut jobs = cached;
+                if let Some(status) = query.status {
+                    jobs.retain(|job| job.status == status);
+                }
+                sort_jobs(&mut jobs, query);
+                return Ok(jobs);
             }
-            sort_jobs(&mut jobs, query);
-            return Ok(jobs);
         }
 
         log_web_ui_ci_read(
@@ -224,17 +224,17 @@ impl<C: HttpClient> ForgejoForge<C> {
 
         // Prefer an exact index + task-id match; fall back to the task id alone
         // in case the attempt enumeration shifted between calls.
-        if let Some(task) = latest.get(coord.job_index as usize)
-            && task.id == coord.task_id
-        {
-            return Ok(Some(task_to_job(
-                &coord.repo,
-                &repo_id,
-                &run,
-                task,
-                coord.job_index,
-                &target,
-            )));
+        if let Some(task) = latest.get(coord.job_index as usize) {
+            if task.id == coord.task_id {
+                return Ok(Some(task_to_job(
+                    &coord.repo,
+                    &repo_id,
+                    &run,
+                    task,
+                    coord.job_index,
+                    &target,
+                )));
+            }
         }
         for (index, task) in latest.iter().enumerate() {
             if task.id == coord.task_id {

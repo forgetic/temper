@@ -165,11 +165,17 @@ async fn seed_intake(
 ///
 /// Convenience over [`provision`] for the common case where one backend value
 /// provides [`Forge`], [`ForgeContent`], and [`ForgeAdmin`].
-pub async fn provision_with<B: ProvisioningForge>(
+pub async fn provision_with<B: ProvisioningForge + ?Sized>(
     plan: &ProvisionPlan,
     backend: &B,
 ) -> Result<Provisioned> {
-    provision(plan, backend, backend, backend).await
+    provision(
+        plan,
+        backend.as_forge(),
+        backend.as_content(),
+        backend.as_admin(),
+    )
+    .await
 }
 
 /// Ensures a user exists and mints a token for it, returning its identity.

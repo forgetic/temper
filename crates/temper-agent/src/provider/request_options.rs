@@ -52,14 +52,15 @@ impl ProviderConfig {
         session: Option<&AgentSessionState>,
     ) -> HashMap<String, String> {
         let mut headers = self.request_headers();
-        if matches!(self.auth(), AuthMode::AnthropicOAuth { .. })
-            && let Some(session) = session
-            && !session.session_id.trim().is_empty()
-        {
-            headers.insert(
-                "X-Claude-Code-Session-Id".to_string(),
-                session.session_id.clone(),
-            );
+        if matches!(self.auth(), AuthMode::AnthropicOAuth { .. }) {
+            if let Some(session) = session {
+                if !session.session_id.trim().is_empty() {
+                    headers.insert(
+                        "X-Claude-Code-Session-Id".to_string(),
+                        session.session_id.clone(),
+                    );
+                }
+            }
         }
         headers
     }

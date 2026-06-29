@@ -459,9 +459,10 @@ pub fn bootstrap_admin(server: &ForgejoServer) -> Result<String> {
         ADMIN_EMAIL,
         "--admin",
         "--must-change-password=false",
-    ]) && !already_exists(&err)
-    {
-        return Err(ProvisionError::Cli(err));
+    ]) {
+        if !already_exists(&err) {
+            return Err(ProvisionError::Cli(err));
+        }
     }
     let token = server
         .run_cli(&[

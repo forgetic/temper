@@ -64,16 +64,17 @@ impl ForgeSessionConfig {
     ) -> Result<Self, InteractionError> {
         for action in &profile.acceptance_actions {
             for effect in &action.effects {
-                if let AcceptanceEffect::CreateIssue(effect) = effect
-                    && effect
+                if let AcceptanceEffect::CreateIssue(effect) = effect {
+                    if effect
                         .labels()
                         .iter()
                         .any(|label| transcript.transcript_labels.contains(label))
-                {
-                    return Err(InteractionError::InvalidConfig {
-                        field: "create_issue.labels",
-                        message: "must differ from transcript labels".into(),
-                    });
+                    {
+                        return Err(InteractionError::InvalidConfig {
+                            field: "create_issue.labels",
+                            message: "must differ from transcript labels".into(),
+                        });
+                    }
                 }
             }
         }

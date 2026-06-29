@@ -180,10 +180,10 @@ pub fn expand_tilde(value: &str, home: Option<&Path>) -> PathBuf {
         if let Some(home) = home {
             return home.to_path_buf();
         }
-    } else if let Some(rest) = value.strip_prefix("~/")
-        && let Some(home) = home
-    {
-        return home.join(rest);
+    } else if let Some(rest) = value.strip_prefix("~/") {
+        if let Some(home) = home {
+            return home.join(rest);
+        }
     }
     PathBuf::from(value)
 }

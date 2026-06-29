@@ -90,8 +90,8 @@ temper-daemon-transport = { path = "crates/temper-daemon-transport" }
 temper-worker = { path = "crates/temper-worker" }
 # Root basic-delivery e2e uses Jig's fake LLM to drive scripted architect and
 # engineer replies without real provider credentials.
-jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
-jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "2b069df2e69ff137528813472ea56f07ede7a1fe" }
+jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 # Root transport/config tests use in-memory Forge state and worker protocol DTOs
 # to assert daemon/worker behavior without a live Forge.
 temper-forge-memory = { path = "crates/temper-forge-memory" }
@@ -121,9 +121,9 @@ workspace = true
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-# skein (the vendored async runtime) uses edition-2024 and let-chains; nothing
-# in temper itself needs more than 1.88.
-rust-version = "1.88"
+# The workspace targets rustc 1.85.0, the first stable compiler with edition
+# 2024 support.
+rust-version = "1.85"
 
 [workspace.dependencies]
 # skein: our maintained, MIT, cancel-correct async runtime (a clean-room fork of
@@ -145,7 +145,7 @@ rust-version = "1.88"
 # different keys every CI run, defeating the build cache. Enabling it
 # unconditionally costs only a small static root bundle and keeps skein's
 # resolved feature set identical across every build, so the cache is shared.
-skein = { git = "http://127.0.0.1:3000/ai/skein.git", rev = "5cd8c4d88a41720afa8f509279bde53b16bf38d0", features = [
+skein = { git = "https://git.ekanayaka.io/ai/skein.git", rev = "50c7719", features = [
     "tls",
     "tls-native-roots",
     "tls-webpki-roots",
@@ -164,7 +164,7 @@ serde_yaml = "0.9"
 toml = "0.8"
 thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
-tongs = { git = "http://127.0.0.1:3000/ai/tongs.git", rev = "3ac95df9bd77d8420873b8f46203489bb847c3de" }
+tongs = { git = "https://git.ekanayaka.io/ai/tongs.git", rev = "9dcda27" }
 # Structured logging stack (see crates/temper-log). `tracing` is the facade;
 # `tracing-subscriber` provides the registry + EnvFilter (RUST_LOG) + fmt layer
 # + the `json` fmt layer behind the `TEMPER_LOG_FORMAT=json` toggle;

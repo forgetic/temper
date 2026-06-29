@@ -165,11 +165,12 @@ pub async fn run_worker(
                 let result = result_message(&profile, &assign.job_id);
                 let submissions = if profile.duplicate_results { 2 } else { 1 };
                 for _ in 0..submissions {
-                    if let Ok(reply) = client.try_send(&result).await
-                        && let Some(WorkerProtocolMessage::Release(release)) = reply
-                        && release.job_id == assign.job_id
-                    {
-                        model.record_release(&assign.job_id);
+                    if let Ok(reply) = client.try_send(&result).await {
+                        if let Some(WorkerProtocolMessage::Release(release)) = reply {
+                            if release.job_id == assign.job_id {
+                                model.record_release(&assign.job_id);
+                            }
+                        }
                     }
                 }
             }

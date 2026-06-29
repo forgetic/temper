@@ -587,14 +587,14 @@ fn is_tilde_prefixed(value: &str) -> bool {
 /// `~user` and a `~` anywhere but the start are left verbatim, and when `$HOME`
 /// is unset the original value is returned unchanged.
 fn expand_tilde(value: &str, env: &impl EnvLookup) -> PathBuf {
-    if (value == "~" || value.starts_with("~/"))
-        && let Some(home) = env.non_empty("HOME")
-    {
-        let rest = value.strip_prefix("~/").or_else(|| value.strip_prefix('~'));
-        return match rest {
-            Some(rest) if !rest.is_empty() => PathBuf::from(home).join(rest),
-            _ => PathBuf::from(home),
-        };
+    if value == "~" || value.starts_with("~/") {
+        if let Some(home) = env.non_empty("HOME") {
+            let rest = value.strip_prefix("~/").or_else(|| value.strip_prefix('~'));
+            return match rest {
+                Some(rest) if !rest.is_empty() => PathBuf::from(home).join(rest),
+                _ => PathBuf::from(home),
+            };
+        }
     }
     PathBuf::from(value)
 }

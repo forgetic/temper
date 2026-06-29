@@ -142,12 +142,12 @@ fn agent_freshness(
         queue_condition: freshness.queue_condition.clone(),
         queue_labels: freshness.queue_labels.clone(),
     };
-    if let Some(sha) = latest_self_pushed_sha.and_then(non_empty)
-        && Some(sha) != freshness.head_sha.as_deref().and_then(non_empty)
-    {
-        check.head_sha = Some(sha.to_string());
-        check.queue_condition = None;
-        check.queue_labels.clear();
+    if let Some(sha) = latest_self_pushed_sha.and_then(non_empty) {
+        if Some(sha) != freshness.head_sha.as_deref().and_then(non_empty) {
+            check.head_sha = Some(sha.to_string());
+            check.queue_condition = None;
+            check.queue_labels.clear();
+        }
     }
     check
 }

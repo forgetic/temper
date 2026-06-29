@@ -74,10 +74,10 @@ pub struct WakeListener {
 #[cfg(unix)]
 impl WakeListener {
     pub fn bind(config: WakeConfig) -> Result<Self, WakeError> {
-        if let Some(parent) = config.socket.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)?;
+        if let Some(parent) = config.socket.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
         }
         let _ = std::fs::remove_file(&config.socket);
         let socket = skein::net::unix::UnixDatagram::bind(&config.socket)?;

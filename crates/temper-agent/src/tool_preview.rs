@@ -84,10 +84,10 @@ fn non_empty(value: &str) -> Option<String> {
 /// Renders an absolute path under `cwd` (or a `./`-prefixed path) as
 /// repo-relative; paths outside the workspace are kept as-is.
 fn repo_relative(path: &str, cwd: &Path) -> String {
-    if let Some(cwd) = cwd.to_str()
-        && let Some(rest) = path.strip_prefix(cwd)
-    {
-        return rest.trim_start_matches('/').to_string();
+    if let Some(cwd) = cwd.to_str() {
+        if let Some(rest) = path.strip_prefix(cwd) {
+            return rest.trim_start_matches('/').to_string();
+        }
     }
     if let Some(rest) = path.strip_prefix("./") {
         return rest.to_string();

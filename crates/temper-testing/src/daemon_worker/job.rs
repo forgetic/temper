@@ -163,10 +163,10 @@ async fn run_job(
         // Native provider close-on-merge only works within the coordinating
         // issue's own repo, so the `Closes #n` trailer goes on the primary
         // repo's commit only (the first manifest entry).
-        if index == 0
-            && let Some(number) = issue_number
-        {
-            message.push_str(&format!("\n\nCloses #{number}"));
+        if index == 0 {
+            if let Some(number) = issue_number {
+                message.push_str(&format!("\n\nCloses #{number}"));
+            }
         }
 
         workspace.commit_all(&message).await?;
@@ -279,9 +279,11 @@ impl Workspace<'_> {
             .arg(format!("user.name={}", self.identity.user))
             .arg("-c")
             .arg(format!("user.email={}", self.identity.email));
-        if include_remote_auth && let Some(token) = self.identity.token.as_deref() {
-            git.arg("-c")
-                .arg(format!("http.extraheader=AUTHORIZATION: token {token}"));
+        if include_remote_auth {
+            if let Some(token) = self.identity.token.as_deref() {
+                git.arg("-c")
+                    .arg(format!("http.extraheader=AUTHORIZATION: token {token}"));
+            }
         }
         if let Some(current_dir) = current_dir {
             git.arg("-C").arg(current_dir);

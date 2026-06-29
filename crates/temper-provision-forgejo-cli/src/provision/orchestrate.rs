@@ -76,8 +76,7 @@ pub async fn provision_and_seed(
     }
 
     let forge = admin_forge(base_url, admin_token, owner, name);
-    let provisioned =
-        temper_provision::provision(&plan, forge.as_ref(), forge.as_ref(), forge.as_ref()).await?;
+    let provisioned = temper_provision::provision_with(&plan, forge.as_ref()).await?;
 
     // Seed the entry intake issue with the workflow-resolved author token (the
     // site admin, or a provisioned role's token), which may differ from the
@@ -88,7 +87,7 @@ pub async fn provision_and_seed(
         let author_forge = admin_forge(base_url, seed_token, owner, name);
         Some(
             seed_intake_issue(
-                author_forge.as_ref(),
+                author_forge.as_forge(),
                 &provisioned.repository,
                 seed,
                 workflow,
@@ -115,14 +114,13 @@ pub async fn provision_world(
 ) -> Result<Provisioned> {
     let forge = admin_forge(base_url, admin_token, owner, name);
     let plan = build_plan(workflow, owner, name, default_branch, roles, options)?;
-    let provisioned =
-        temper_provision::provision(&plan, forge.as_ref(), forge.as_ref(), forge.as_ref()).await?;
+    let provisioned = temper_provision::provision_with(&plan, forge.as_ref()).await?;
     Ok(provisioned)
 }
 
 /// Builds a provisioning-capable forge authenticated with the admin token for
-/// `owner/name`. Returned as `Arc<dyn ProvisioningForge>` so it upcasts to the
-/// `&dyn Forge` / `&dyn ForgeContent` / `&dyn ForgeAdmin` the orchestration needs.
+/// `owner/name`. Returned as `Arc<dyn ProvisioningForge>` so callers can use
+/// the stable adapter methods for the individual provisioning capabilities.
 fn admin_forge(
     base_url: &str,
     admin_token: &str,

@@ -65,10 +65,10 @@ pub fn read_request<R: Read>(reader: &mut BufReader<R>) -> Option<Request> {
         if header == "\r\n" || header == "\n" {
             break;
         }
-        if let Some((name, value)) = header.split_once(':')
-            && name.trim().eq_ignore_ascii_case("content-length")
-        {
-            content_length = value.trim().parse().unwrap_or(0);
+        if let Some((name, value)) = header.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or(0);
+            }
         }
     }
 

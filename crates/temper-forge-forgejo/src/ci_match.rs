@@ -41,15 +41,15 @@ impl Target {
     /// Candidate SHAs to match a run against, query commit first.
     fn candidate_shas(&self) -> Vec<&str> {
         let mut shas = Vec::new();
-        if let Some(sha) = self.commit_sha.as_deref()
-            && !sha.is_empty()
-        {
-            shas.push(sha);
+        if let Some(sha) = self.commit_sha.as_deref() {
+            if !sha.is_empty() {
+                shas.push(sha);
+            }
         }
-        if let Some(sha) = self.pr_head_sha.as_deref()
-            && !sha.is_empty()
-        {
-            shas.push(sha);
+        if let Some(sha) = self.pr_head_sha.as_deref() {
+            if !sha.is_empty() {
+                shas.push(sha);
+            }
         }
         shas
     }
@@ -84,24 +84,23 @@ pub(crate) fn match_run(run: &ActionRunDto, target: &Target) -> Option<MatchReas
             return Some(MatchReason::HeadSha);
         }
     }
-    if let Some(number) = target.pr_number
-        && payload_pr_number(run) == Some(number)
-    {
-        return Some(MatchReason::EventPayloadNumber);
-    }
-    for sha in target.candidate_shas() {
-        if let Some(payload_sha) = payload_pr_head_sha(run)
-            && sha_match(&payload_sha, sha)
-        {
-            return Some(MatchReason::EventPayloadHeadSha);
+    if let Some(number) = target.pr_number {
+        if payload_pr_number(run) == Some(number) {
+            return Some(MatchReason::EventPayloadNumber);
         }
     }
-    if let Some(head_ref) = target.pr_head_ref.as_deref()
-        && !head_ref.is_empty()
-        && is_pull_request_event(&run.event)
-        && run.head_branch == head_ref
-    {
-        return Some(MatchReason::HeadBranch);
+    for sha in target.candidate_shas() {
+        if let Some(payload_sha) = payload_pr_head_sha(run) {
+            if sha_match(&payload_sha, sha) {
+                return Some(MatchReason::EventPayloadHeadSha);
+            }
+        }
+    }
+    if let Some(head_ref) = target.pr_head_ref.as_deref() {
+        if !head_ref.is_empty() && is_pull_request_event(&run.event) && run.head_branch == head_ref
+        {
+            return Some(MatchReason::HeadBranch);
+        }
     }
     None
 }

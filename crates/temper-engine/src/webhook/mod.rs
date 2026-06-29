@@ -284,9 +284,10 @@ fn parse_repo(value: &Value) -> Result<RepositoryPath, WebhookError> {
     if let Some(full) = value
         .pointer("/repository/full_name")
         .and_then(Value::as_str)
-        && let Some((owner, name)) = full.split_once('/')
     {
-        return Ok(RepositoryPath::new(owner, name));
+        if let Some((owner, name)) = full.split_once('/') {
+            return Ok(RepositoryPath::new(owner, name));
+        }
     }
 
     let owner = value
@@ -319,7 +320,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(raw: &str) -> Option<Vec<u8>> {
-    if !raw.len().is_multiple_of(2) {
+    if raw.len() % 2 != 0 {
         return None;
     }
     raw.as_bytes()
