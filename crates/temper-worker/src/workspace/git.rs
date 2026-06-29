@@ -68,24 +68,8 @@ impl Workspace {
         // invocation can run on the blocking pool. The worker runs on the
         // skein runtime (single-threaded, no tokio reactor), so git -- a
         // blocking subprocess -- must go through `spawn_blocking`.
-        let mut full_args: Vec<OsString> = vec![
-            OsString::from("-c"),
-            OsString::from(format!("user.name={}", self.identity.user)),
-            OsString::from("-c"),
-            OsString::from(format!("user.email={}", self.identity.email)),
-        ];
-        if include_remote_header {
-            full_args.push(OsString::from("-c"));
-            full_args.push(OsString::from(format!(
-                "http.extraheader=AUTHORIZATION: token {}",
-                self.identity.token
-            )));
-        }
-        if let Some(current_dir) = current_dir {
-            full_args.push(OsString::from("-C"));
-            full_args.push(current_dir.as_os_str().to_os_string());
-        }
-        full_args.extend(args);
+        let full_args =
+            git_invocation_args(&self.identity, current_dir, include_remote_header, args);
 
         let output = skein::runtime::spawn_blocking(move || {
             Command::new("git")
@@ -110,8 +94,99 @@ impl Workspace {
     }
 }
 
+fn git_invocation_args(
+    identity: &super::RoleGitIdentity,
+    current_dir: Option<&Path>,
+    include_remote_header: bool,
+    args: Vec<OsString>,
+) -> Vec<OsString> {
+    let mut full_args: Vec<OsString> = vec![
+        OsString::from("-c"),
+        OsString::from(format!("user.name={}", identity.user)),
+        OsString::from("-c"),
+        OsString::from(format!("user.email={}", identity.email)),
+    ];
+    if include_remote_header {
+        // A prepared writable checkout persists `http.extraheader` locally so
+        // the live agent can use git. Git accumulates extra headers across
+        // config scopes, so reset inherited/local values before adding the
+        // worker-owned header for this remote operation. Otherwise Forgejo sees
+        // duplicate Authorization headers and rejects the request.
+        full_args.push(OsString::from("-c"));
+        full_args.push(OsString::from("http.extraheader="));
+        full_args.push(OsString::from("-c"));
+        full_args.push(OsString::from(format!(
+            "http.extraheader=AUTHORIZATION: token {}",
+            identity.token
+        )));
+    }
+    if let Some(current_dir) = current_dir {
+        full_args.push(OsString::from("-C"));
+        full_args.push(current_dir.as_os_str().to_os_string());
+    }
+    full_args.extend(args);
+    full_args
+}
+
 fn status_string(status: ExitStatus) -> String {
     status
         .code()
         .map_or_else(|| status.to_string(), |code| code.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn remote_git_args_reset_persisted_extra_headers_before_auth() {
+        let args = git_invocation_args(
+            &identity(),
+            Some(Path::new("/workspace/repo")),
+            true,
+            vec![OsString::from("fetch")],
+        );
+        let args = strings(args);
+
+        let reset = find_pair(&args, "-c", "http.extraheader=")
+            .expect("empty extraheader reset is present");
+        let auth = find_pair(&args, "-c", "http.extraheader=AUTHORIZATION: token token-1")
+            .expect("auth extraheader is present");
+
+        assert!(reset < auth, "reset must precede auth header: {args:?}");
+    }
+
+    #[test]
+    fn local_git_args_do_not_add_remote_auth_header() {
+        let args = git_invocation_args(
+            &identity(),
+            Some(Path::new("/workspace/repo")),
+            false,
+            vec![OsString::from("status")],
+        );
+        let args = strings(args);
+
+        assert!(!args.iter().any(|arg| arg.contains("http.extraheader")));
+    }
+
+    fn identity() -> super::super::RoleGitIdentity {
+        super::super::RoleGitIdentity {
+            user: "engineer".to_string(),
+            email: "engineer@example.invalid".to_string(),
+            token: "token-1".to_string(),
+        }
+    }
+
+    fn strings(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn find_pair(args: &[String], key: &str, value: &str) -> Option<usize> {
+        args.windows(2)
+            .position(|window| window[0] == key && window[1] == value)
+    }
 }
