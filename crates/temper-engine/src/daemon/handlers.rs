@@ -370,7 +370,7 @@ mod tests {
     use super::*;
     use crate::webhook::webhook_signature;
     use crate::{RoleFeedMode, RoleFeedTarget, WebhookConfig};
-    use temper_forge::RepositoryId;
+    use temper_forge::{ChangeKind, ItemNumber, RepositoryId, RepositoryPath};
     use temper_workflow::RoleId;
 
     #[test]
@@ -416,5 +416,69 @@ mod tests {
             machine.webhook_waiters.is_empty(),
             "webhook response must not be held behind wake-scan completion"
         );
+    }
+
+    #[test]
+    fn forgejo_action_run_success_webhook_is_accepted() {
+        let secret = "secret";
+        let event_payload = serde_json::json!({
+            "pull_request": { "number": 23 }
+        })
+        .to_string();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "action": "success",
+            "run": {
+                "id": 706,
+                "status": "success",
+                "started": "2026-06-29T16:48:49+01:00",
+                "stopped": "2026-06-29T16:51:00+01:00",
+                "repository": { "full_name": "ai/temper" },
+                "event_payload": event_payload
+            },
+            "prior_status": "running"
+        }))
+        .expect("body serializes");
+        let signature = webhook_signature(secret, &body);
+        let mut machine = DaemonMachine::new(Duration::from_secs(10), 30_000);
+        machine.webhook = Some(WebhookConfig {
+            secret: secret.to_string(),
+            targets: vec![RoleFeedTarget {
+                repo: RepositoryId::new("forgejo:ai/temper"),
+                role: RoleId::new("engineer"),
+                mode: RoleFeedMode::Wake,
+            }],
+        });
+        let (reply, _response) = temper_engine_io::oneshot();
+
+        let requests = machine.handle_http(
+            HttpRequestData {
+                method: "POST".to_string(),
+                uri: "/forgejo/webhook".to_string(),
+                headers: vec![
+                    (
+                        "x-forgejo-event".to_string(),
+                        "action_run_success".to_string(),
+                    ),
+                    ("x-forgejo-signature".to_string(), signature),
+                ],
+                body,
+            },
+            HttpResponder::from_oneshot(reply),
+        );
+
+        assert_eq!(requests.len(), 3);
+        assert!(matches!(
+            &requests[1],
+            DaemonRequest::Respond { response, .. }
+                if response.status == 202 && response.body.is_empty()
+        ));
+        match &requests[2] {
+            DaemonRequest::RunWakeScan { hint, .. } => {
+                assert_eq!(hint.repo, RepositoryPath::new("ai", "temper"));
+                assert_eq!(hint.item, Some(ItemNumber::new(23)));
+                assert_eq!(hint.kind, ChangeKind::Ci);
+            }
+            _ => panic!("expected wake scan"),
+        }
     }
 }
