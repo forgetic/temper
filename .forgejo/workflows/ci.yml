@@ -2,10 +2,6 @@ name: ci
 
 env:
   KACHE_CONFIG: "/etc/kache/config.toml"
-  # Keep the pinned Forgejo fixture binary (bench-forgejo downloads it for
-  # the ignored e2e tests) outside the workspace so the per-run clean
-  # checkout does not throw it away.
-  BENCH_FORGEJO_CACHE_DIR: ${{ env.HOME }}/.cache/bench-forgejo
 
 on:
   pull_request:
@@ -57,14 +53,15 @@ jobs:
       - name: Test (quick)
         run: cargo dev-test-quick
       - name: Repair Forgejo fixture cache permissions
-        # The host runner keeps BENCH_FORGEJO_CACHE_DIR across checkouts. If a
-        # prior run left the downloaded Forgejo assets without executable bits,
-        # every live e2e fails immediately with os error 13 at process spawn.
+        # Keep the pinned Forgejo fixture binaries outside the workspace so the
+        # per-run clean checkout does not throw them away. Resolve this in the
+        # shell: workflow expressions do not expose the runner's HOME, and an
+        # empty expression becomes `/.cache/...`, which fails with os error 13.
         run: |
-          if [ -d "$BENCH_FORGEJO_CACHE_DIR" ]; then
-            find "$BENCH_FORGEJO_CACHE_DIR" -maxdepth 1 -type f -name 'forgejo*-linux-amd64' -exec chmod 755 {} +
-            find "$BENCH_FORGEJO_CACHE_DIR" -maxdepth 1 -type d -name '*.lock' -exec rm -rf {} +
-          fi
+          export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
+          mkdir -p "$BENCH_FORGEJO_CACHE_DIR"
+          find "$BENCH_FORGEJO_CACHE_DIR" -maxdepth 1 -type f -name 'forgejo*-linux-amd64' -exec chmod 755 {} +
+          find "$BENCH_FORGEJO_CACHE_DIR" -maxdepth 1 -type d -name '*.lock' -exec rm -rf {} +
       - name: Test (all e2e)
         # The live e2e lane boots real Forgejo + CI runners and waits for
         # convergence. On a cold CI machine the fixture provisioning alone can
@@ -75,7 +72,9 @@ jobs:
         # promptly.
         env:
           TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "300"
-        run: cargo dev-test-e2e-all
+        run: |
+          export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
+          cargo dev-test-e2e-all
       - name: Free linked test binaries
         # Keep kache-warmed libraries, but drop the linked executables that
         # clippy does not consume; this keeps the checkout target dir below the
