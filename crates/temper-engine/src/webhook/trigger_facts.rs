@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use temper_forge::ChangeKind;
 
-use super::ChangeHint;
+use super::{ChangeHint, payload::action_run_payload_pr_number, payload::json_u64};
 
 /// The §7 `trigger:` info events a single verified webhook delivery yields.
 ///
@@ -45,10 +45,11 @@ pub(super) struct IssueOpenedFacts {
 /// The fields the §7 `ci.completed` trigger line carries.
 ///
 /// `duration_ms` is best-effort: computed from the payload's start/finish
-/// timestamps when both are present, else `0` (the numeric field stays numeric,
-/// and the human renderer shows `0s`). The webhook body does not reliably carry a
-/// CI duration across all of Forgejo's CI event shapes; a precise figure would
-/// require a follow-up forge read, which the trigger plane deliberately avoids.
+/// timestamps when both are present, then from a provider duration field when
+/// available, else `0` (the numeric field stays numeric, and the human renderer
+/// shows `0s`). The webhook body does not reliably carry a CI duration across
+/// all of Forgejo's CI event shapes; a precise figure would require a follow-up
+/// forge read, which the trigger plane deliberately avoids.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CiCompletedFacts {
     pub(super) pr_number: u64,
@@ -120,17 +121,18 @@ pub(super) fn parse_trigger_facts(
 fn ci_pr_number(value: &Value) -> Option<u64> {
     value
         .pointer("/pull_request/number")
-        .and_then(Value::as_u64)
+        .and_then(json_u64)
         .or_else(|| {
             value
                 .pointer("/workflow_run/pull_requests/0/number")
-                .and_then(Value::as_u64)
+                .and_then(json_u64)
         })
         .or_else(|| {
             value
                 .pointer("/check_run/pull_requests/0/number")
-                .and_then(Value::as_u64)
+                .and_then(json_u64)
         })
+        .or_else(|| action_run_payload_pr_number(value))
 }
 
 /// Extracts the CI conclusion token from a status payload (`success`, `failure`,
@@ -141,6 +143,8 @@ fn ci_conclusion(value: &Value) -> Option<&str> {
         .and_then(Value::as_str)
         .or_else(|| value.pointer("/status").and_then(Value::as_str))
         .or_else(|| value.pointer("/state").and_then(Value::as_str))
+        .or_else(|| value.pointer("/run/status").and_then(Value::as_str))
+        .or_else(|| value.pointer("/action").and_then(Value::as_str))
         .or_else(|| {
             value
                 .pointer("/workflow_run/conclusion")
@@ -153,20 +157,35 @@ fn ci_conclusion(value: &Value) -> Option<&str> {
         })
 }
 
-/// Computes the CI run duration in milliseconds from payload timestamps, when
-/// both ends are present and parse as RFC 3339.
+/// Computes the CI run duration in milliseconds from payload timestamps, or from
+/// an explicit duration field when Forgejo provides one.
 fn ci_duration_ms(value: &Value) -> Option<u64> {
+    ci_duration_from_timestamps(value).or_else(|| {
+        value
+            .pointer("/run/duration_ms")
+            .and_then(json_u64)
+            .or_else(|| value.pointer("/run/duration").and_then(json_u64))
+    })
+}
+
+fn ci_duration_from_timestamps(value: &Value) -> Option<u64> {
     let start = ci_timestamp(
         value,
         &[
             "/started_at",
             "/run_started_at",
             "/workflow_run/run_started_at",
+            "/run/started",
         ],
     )?;
     let finish = ci_timestamp(
         value,
-        &["/completed_at", "/updated_at", "/workflow_run/updated_at"],
+        &[
+            "/completed_at",
+            "/updated_at",
+            "/workflow_run/updated_at",
+            "/run/stopped",
+        ],
     )?;
     let delta = finish.signed_duration_since(start).num_milliseconds();
     u64::try_from(delta).ok()
@@ -300,6 +319,40 @@ mod tests {
                 conclusion: "success".to_string(),
                 // 4m40s == 280_000 ms.
                 duration_ms: 280_000,
+            })
+        );
+        assert_eq!(facts.issue_opened, None);
+    }
+
+    #[test]
+    fn parses_forgejo_action_run_success_ci_completed() {
+        let event_payload = serde_json::json!({
+            "pull_request": { "number": 23 }
+        })
+        .to_string();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "action": "success",
+            "run": {
+                "status": "success",
+                "started": "2026-06-29T16:48:49+01:00",
+                "stopped": "2026-06-29T16:51:00+01:00",
+                "event_payload": event_payload
+            }
+        }))
+        .expect("body serializes");
+
+        let hint = ChangeHint::item(
+            RepositoryPath::new("ai", "temper"),
+            ItemNumber::new(23),
+            ChangeKind::Ci,
+        );
+        let facts = parse_trigger_facts(&body, "action_run_success", &hint);
+        assert_eq!(
+            facts.ci_completed,
+            Some(CiCompletedFacts {
+                pr_number: 23,
+                conclusion: "success".to_string(),
+                duration_ms: 131_000,
             })
         );
         assert_eq!(facts.issue_opened, None);

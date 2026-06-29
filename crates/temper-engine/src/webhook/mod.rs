@@ -2,6 +2,7 @@
 
 //! Library-only Forgejo/Gitea webhook intake helpers for daemon wake scans.
 
+mod payload;
 mod trigger_facts;
 
 use std::{collections::BTreeMap, fmt};
@@ -10,10 +11,11 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
-use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
+use temper_forge::{ChangeHint, ChangeKind, Forge, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, ValidatedWorkflow};
 
 use crate::{Daemon, RoleFeedMode, RoleFeedTarget};
+use payload::{parse_item, parse_repo};
 use trigger_facts::{parse_trigger_facts, wake_artifact_kind, wake_queue};
 
 /// Errors returned while verifying or parsing a webhook delivery.
@@ -82,11 +84,6 @@ pub fn parse_change_hint(body: &[u8], event: &str) -> Result<ChangeHint, Webhook
     let value: Value = serde_json::from_slice(body)
         .map_err(|error| WebhookError::BadPayload(format!("invalid JSON payload: {error}")))?;
     let repo = parse_repo(&value)?;
-    let item = value
-        .pointer("/pull_request/number")
-        .and_then(Value::as_u64)
-        .or_else(|| value.pointer("/issue/number").and_then(Value::as_u64))
-        .map(ItemNumber::new);
     let kind = match event {
         "issues" | "issue" => ChangeKind::Issue,
         "pull_request" | "pull_request_sync" => ChangeKind::PullRequest,
@@ -103,6 +100,7 @@ pub fn parse_change_hint(body: &[u8], event: &str) -> Result<ChangeHint, Webhook
         | "action_run_recover" | "action_run_success" => ChangeKind::Ci,
         _ => ChangeKind::Unknown,
     };
+    let item = parse_item(&value, event);
     Ok(ChangeHint { repo, item, kind })
 }
 
@@ -280,29 +278,6 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
     total
 }
 
-fn parse_repo(value: &Value) -> Result<RepositoryPath, WebhookError> {
-    if let Some(full) = value
-        .pointer("/repository/full_name")
-        .and_then(Value::as_str)
-    {
-        if let Some((owner, name)) = full.split_once('/') {
-            return Ok(RepositoryPath::new(owner, name));
-        }
-    }
-
-    let owner = value
-        .pointer("/repository/owner/login")
-        .or_else(|| value.pointer("/repository/owner/username"))
-        .and_then(Value::as_str);
-    let name = value.pointer("/repository/name").and_then(Value::as_str);
-    match (owner, name) {
-        (Some(owner), Some(name)) => Ok(RepositoryPath::new(owner, name)),
-        _ => Err(WebhookError::BadPayload(
-            "payload has no repository owner/name".into(),
-        )),
-    }
-}
-
 fn hmac_sha256(secret: &[u8], body: &[u8]) -> Vec<u8> {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts any key length");
     mac.update(body);
@@ -351,6 +326,8 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use temper_forge::ItemNumber;
+
     use super::*;
 
     #[test]
