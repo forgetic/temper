@@ -68,6 +68,7 @@ fn success_result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
             },
         }],
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,

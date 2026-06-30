@@ -186,6 +186,7 @@ fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &st
             },
         }],
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,

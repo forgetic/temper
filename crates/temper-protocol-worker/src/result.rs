@@ -74,8 +74,13 @@ pub struct JobResult {
     /// `allowed_verdicts`). A success result may carry a verdict and no repos.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
-    /// Authored body accompanying a verdict (e.g. the rewritten issue spec or
-    /// the review body).
+    /// Agent-authored implementation PR title for a no-verdict success. Ignored
+    /// for verdict results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Authored body. With a verdict, this is the verdict payload (e.g. the
+    /// rewritten issue spec or the review body). Without a verdict, this is the
+    /// implementation PR report body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     /// Child issues authored by a breakdown verdict (e.g. `needs_breakdown`).

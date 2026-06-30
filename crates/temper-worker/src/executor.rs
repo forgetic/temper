@@ -11,6 +11,12 @@ pub enum JobOutcome {
         /// The daemon opens one pull request per entry. A coding job that wrote
         /// to a single repo produces exactly one outcome.
         repos: Vec<RepoOutcome>,
+        /// Optional agent-authored implementation PR title for no-verdict
+        /// success results.
+        title: Option<String>,
+        /// Optional agent-authored implementation PR report body for no-verdict
+        /// success results.
+        body: Option<String>,
         summary: Option<String>,
         /// Optional structured metadata for daemon-side application.
         details: Option<Value>,
@@ -75,6 +81,8 @@ impl JobExecutor for StubExecutor {
                             head_sha: "0000000000000000000000000000000000000000".to_string(),
                         },
                     }],
+                    title: None,
+                    body: None,
                     summary: Some("stub executor completed without doing IO".to_string()),
                     details: None,
                 },
@@ -92,6 +100,7 @@ pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResu
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,
@@ -101,11 +110,15 @@ pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResu
     match outcome {
         JobOutcome::Success {
             repos,
+            title,
+            body,
             summary,
             details,
         } => JobResult {
             status: ResultStatus::Success,
             repos,
+            title,
+            body,
             summary,
             details,
             ..base
@@ -118,6 +131,7 @@ pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResu
         } => JobResult {
             status: ResultStatus::Success,
             verdict: Some(verdict),
+            title: None,
             body,
             children,
             summary,
@@ -189,6 +203,8 @@ mod tests {
             "job-123",
             JobOutcome::Success {
                 repos: Vec::new(),
+                title: None,
+                body: None,
                 summary: Some("implemented".to_string()),
                 details: Some(details.clone()),
             },
@@ -197,6 +213,32 @@ mod tests {
         assert_eq!(result.status, ResultStatus::Success);
         assert_eq!(result.summary.as_deref(), Some("implemented"));
         assert_eq!(result.details, Some(details));
+    }
+
+    #[test]
+    fn success_outcome_maps_handoff_title_and_body_to_result() {
+        let result = job_result(
+            "worker-1",
+            "job-123",
+            JobOutcome::Success {
+                repos: Vec::new(),
+                title: Some("Implement agent-authored handoff".to_string()),
+                body: Some("# Implementation report\n\nDone.".to_string()),
+                summary: Some("implemented".to_string()),
+                details: None,
+            },
+        );
+
+        assert_eq!(result.status, ResultStatus::Success);
+        assert_eq!(
+            result.title.as_deref(),
+            Some("Implement agent-authored handoff")
+        );
+        assert_eq!(
+            result.body.as_deref(),
+            Some("# Implementation report\n\nDone.")
+        );
+        assert_eq!(result.verdict, None);
     }
 
     #[test]

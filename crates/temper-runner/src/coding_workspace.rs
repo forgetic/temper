@@ -122,8 +122,12 @@ pub struct CodingWorkspaceOutput {
     pub branch: String,
     /// Target/base branch the workspace prepared against.
     pub base_branch: String,
-    /// Short implementation summary for the PR body and logs.
+    /// Short implementation summary for logs. The implementation PR body is
+    /// authored separately when `body` is present on a no-verdict head result.
     pub summary: String,
+    /// Optional agent-authored title for the implementation PR on the
+    /// no-verdict head path.
+    pub title: Option<String>,
     /// Files changed by the committed branch, for safety checks and diagnostics.
     pub changed_files: Vec<String>,
     /// Labels the created PR should carry in addition to workflow metadata.
@@ -164,6 +168,7 @@ impl CodingWorkspaceOutput {
             branch: branch.into(),
             base_branch: base_branch.into(),
             summary: summary.into(),
+            title: None,
             changed_files,
             labels,
             verdict: None,
@@ -171,6 +176,13 @@ impl CodingWorkspaceOutput {
             review_body: None,
             children: Vec::new(),
         }
+    }
+
+    /// Returns this output carrying an agent-authored implementation PR title
+    /// for the no-verdict head path.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
     }
 
     /// Returns this output carrying a typed verdict that selects the outcome

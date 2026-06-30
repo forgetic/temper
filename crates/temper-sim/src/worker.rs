@@ -109,6 +109,7 @@ fn result_message(profile: &WorkerProfile, job_id: &str) -> WorkerProtocolMessag
             },
         }],
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Optimistic body updates for implementation PR finalization.
+//! Optimistic title/body updates for implementation PR finalization.
 
 use temper_forge::{Forge, ForgeError, PullRequest, UpdatePullRequest};
 
@@ -9,17 +9,18 @@ use crate::forge_applier::ForgeApplier;
 use crate::forge_applier::body_merge::merge_implementation_pr_body;
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
-    pub(super) async fn update_implementation_pr_body(
+    pub(super) async fn update_implementation_pr_handoff(
         &self,
         job: &InFlightJob,
         mut pull_request: PullRequest,
+        desired_title: &str,
         desired_body: &str,
         operation: &'static str,
     ) -> PullRequest {
         for _ in 0..3 {
+            let title = (pull_request.title != desired_title).then(|| desired_title.to_string());
             let body = match merge_implementation_pr_body(&pull_request.body, desired_body) {
-                Ok(Some(body)) => body,
-                Ok(None) => return pull_request,
+                Ok(body) => body,
                 Err(error) => {
                     tracing::warn!(
                         target: "temper_daemon",
@@ -32,12 +33,17 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 }
             };
 
+            if title.is_none() && body.is_none() {
+                return pull_request;
+            }
+
             match self
                 .forge
                 .update_pull_request(
                     &pull_request.id,
                     UpdatePullRequest {
-                        body: Some(body),
+                        title,
+                        body,
                         expected_version: Some(pull_request.version),
                         ..UpdatePullRequest::default()
                     },
@@ -56,7 +62,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                                 target: "temper_daemon",
                                 job_id = %job.job_id,
                                 pull_request = %pull_request.number,
-                                "forge applier could not reload PR after body conflict for {operation}"
+                                "forge applier could not reload PR after handoff conflict for {operation}"
                             );
                             return pull_request;
                         }
@@ -66,7 +72,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                                 job_id = %job.job_id,
                                 pull_request = %pull_request.number,
                                 %error,
-                                "forge applier could not reload PR after body conflict for {operation}"
+                                "forge applier could not reload PR after handoff conflict for {operation}"
                             );
                             return pull_request;
                         }
@@ -78,7 +84,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         job_id = %job.job_id,
                         pull_request = %pull_request.number,
                         %error,
-                        "forge applier could not update implementation PR body for {operation}"
+                        "forge applier could not update implementation PR handoff for {operation}"
                     );
                     return pull_request;
                 }
@@ -89,7 +95,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             target: "temper_daemon",
             job_id = %job.job_id,
             pull_request = %pull_request.number,
-            "forge applier gave up updating implementation PR body after conflicts for {operation}"
+            "forge applier gave up updating implementation PR handoff after conflicts for {operation}"
         );
         pull_request
     }

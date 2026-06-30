@@ -96,6 +96,8 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
 
     JobOutcome::Success {
         repos: outcomes,
+        title: result.title,
+        body: result.body,
         summary: result
             .summary
             .or_else(|| Some(format!("implemented {coordination_key}"))),

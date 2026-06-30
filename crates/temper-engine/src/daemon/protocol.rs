@@ -141,6 +141,7 @@ mod tests {
             status,
             repos: Vec::new(),
             verdict: None,
+            title: None,
             body: None,
             children: Vec::new(),
             failure: failure_class.map(|class| Failure {

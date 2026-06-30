@@ -87,6 +87,8 @@ impl JobExecutor for BlockingExecutor {
                         head_sha: "0000000000000000000000000000000000000000".to_string(),
                     },
                 }],
+                title: None,
+                body: None,
                 summary: Some("blocking executor released".to_string()),
                 details: None,
             }

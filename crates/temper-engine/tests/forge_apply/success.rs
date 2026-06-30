@@ -430,6 +430,7 @@ fn coordinated_result_opens_one_pull_request_per_writable_repo() {
                 },
             ],
             verdict: None,
+            title: None,
             body: None,
             children: Vec::new(),
             failure: None,

@@ -21,7 +21,8 @@ pub(crate) use temper_protocol_worker::{
 pub(crate) use temper_worker_registry::InFlightJob;
 pub(crate) use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSource, LeaseManager, LeasePolicy, RawWorkflowSpec,
-    RoleId, ValidatedWorkflow, global_child_correlation_key, parse_metadata_block,
+    RoleId, ValidatedWorkflow, WorkflowMetadata, global_child_correlation_key,
+    parse_metadata_block, render_metadata_block,
 };
 
 const REFERENCE_FIXTURE: &str =
@@ -202,6 +203,7 @@ pub(crate) fn success_result(
             },
         }],
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,
@@ -223,6 +225,7 @@ pub(crate) fn failure_result(
         status: ResultStatus::Failure,
         repos: Vec::new(),
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: failure_class.map(|class| Failure {
@@ -251,6 +254,7 @@ pub(crate) fn success_without_branch(worker_id: &str, job_id: &str) -> JobResult
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,
@@ -272,6 +276,7 @@ pub(crate) fn verdict_result(
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: Some(verdict.to_string()),
+        title: None,
         body: body.map(str::to_string),
         children: Vec::new(),
         failure: None,

@@ -26,7 +26,8 @@ fn coordinated_job_result_round_trips_with_multiple_repos() {
             },
         ],
         verdict: None,
-        body: None,
+        title: Some("Implement coordinated workspace changes".to_string()),
+        body: Some("# Implementation report\n\nUpdated both repositories.".to_string()),
         children: Vec::new(),
         failure: None,
         summary: Some("implemented coord-for-code-42 across 2 repos".to_string()),
@@ -40,6 +41,11 @@ fn coordinated_job_result_round_trips_with_multiple_repos() {
         "agent/coord-for-code-42"
     );
     assert_eq!(value.get("verdict"), None);
+    assert_eq!(value["title"], "Implement coordinated workspace changes");
+    assert_eq!(
+        value["body"],
+        "# Implementation report\n\nUpdated both repositories."
+    );
     let decoded: JobResult = serde_json::from_value(value).expect("serialized result parses");
     assert_eq!(decoded, result);
 }
@@ -53,6 +59,7 @@ fn verdict_job_result_round_trips_without_repos() {
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: Some("ready_code".to_string()),
+        title: None,
         body: Some("Rewritten implementation-ready issue body.".to_string()),
         children: Vec::new(),
         failure: None,
@@ -77,6 +84,7 @@ fn verdict_job_result_round_trips_with_children() {
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: Some("needs_breakdown".to_string()),
+        title: None,
         body: None,
         children: vec![
             JobChild {

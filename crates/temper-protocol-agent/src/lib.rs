@@ -251,6 +251,12 @@ pub struct WorkspaceResult {
     pub verdict: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// No-verdict engineer success: implementation PR title. Verdict results
+    /// ignore this field and continue to use `body` for routed content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// No-verdict engineer success: implementation PR report body. Verdict
+    /// results preserve the legacy meaning: routed issue/review body.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -367,6 +373,21 @@ mod tests {
         assert_eq!(value["summary"], "did the thing");
         assert!(value.get("verdict").is_none());
         assert!(value.get("children").is_none());
+    }
+
+    #[test]
+    fn workspace_result_carries_engineer_pr_title_and_body() {
+        let result = WorkspaceResult {
+            title: Some("Implement durable handoff".to_string()),
+            body: Some("# Implementation report\n\nDone.".to_string()),
+            summary: Some("implemented handoff".to_string()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&result).expect("serialize");
+        assert_eq!(value["title"], "Implement durable handoff");
+        assert_eq!(value["body"], "# Implementation report\n\nDone.");
+        assert_eq!(value["summary"], "implemented handoff");
+        assert!(value.get("verdict").is_none());
     }
 
     #[test]

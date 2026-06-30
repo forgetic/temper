@@ -162,6 +162,7 @@ pub(crate) fn job_result(worker_id: &str, job_id: &str, repos: Vec<RepoOutcome>)
         status: ResultStatus::Success,
         repos,
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,
@@ -204,6 +205,7 @@ pub(crate) fn failure_result(
         status: ResultStatus::Failure,
         repos: Vec::new(),
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: Some(Failure {
