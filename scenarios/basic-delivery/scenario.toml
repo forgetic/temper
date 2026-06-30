@@ -1,0 +1,101 @@
+schema = "temper.scenario.v1"
+name = "basic-delivery"
+status = "active"
+intent = "Exercise the minimal no-human-in-the-loop path from thin intake issue to CI-gated mechanical merge."
+introduced_by = "#36"
+owner_area = "delivery-validation"
+stability = "provisional"
+timeout = "10m"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "basic-delivery"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/service"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "intake"
+repo = "service"
+kind = "intake"
+title = "Service banner should identify the environment"
+body = "config/intake-issue.md"
+author = "site_admin"
+labels = []
+created_after = "standalone_ready"
+
+[[agents]]
+role = "architect"
+kind = "llm"
+mode = "scripted-fake"
+tool = "triage_workspace"
+queues = ["triage"]
+expected_verdict = "ready_code"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready", "pr_ci_failed"]
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["raw_intake", "landing"]
+
+[expect]
+outcome = "The intake issue is triaged to ready code, implemented by one PR, passes CI, and lands automatically."
+merged_pull_requests = 1
+closed_parent_issues = 1
+
+[[expect.checks]]
+id = "intake-triaged-and-finalized"
+artifact = "issue:intake"
+state = "closed"
+labels = ["code"]
+
+[[expect.checks]]
+id = "implementation-pr-landed"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+id = "default-branch-updated"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "optional"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify README text without changing seeded behavior.",
+  "Update copied fixtures when the basic-delivery workflow changes incompatibly and the scenario remains the promoted regression.",
+  "Add expectation details that narrow the documented happy path without requiring a new runner.",
+]
+requires_new_scenario_or_major_update = [
+  "Adding a human review or owner gate.",
+  "Changing the topology away from one Forgejo repo served by standalone Temper.",
+  "Replacing the scripted fake agents with a live-provider validation requirement.",
+]

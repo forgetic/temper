@@ -90,6 +90,7 @@ support.
 | `tests/` | Root integration and e2e tests for the unified CLI, config paths/schema/show, Forgejo daemon/init flows, and in-process transport. |
 | `examples/basic-delivery/` | Operator-facing basic-delivery demo config, workflow, CI file, observability notes, and launch script. |
 | `examples/reference-delivery/` | Operator-facing reference-delivery demo config, workflow, CI file, observability notes, and launch script. |
+| `scenarios/` | Checked-in declarative validation corpus: scenario manifests, fixture inputs, minimal repo seeds, and authoring guidance for promoted post-merge validation cases. |
 | `.cargo/config.toml` | Developer Cargo aliases (`dev-check`, `dev-test-quick`, `dev-test-full`, `dev-doc`) and local sibling-repo patch guidance. |
 | `.forgejo/workflows/ci.yml` | Forgejo CI workflow for Rust validation and the web UI lane. |
 | `docs/adr/` | Architecture decision records. Start here for historical rationale behind backend boundaries, workflow semantics, triggering, native Forge state, and multi-repo work. |
