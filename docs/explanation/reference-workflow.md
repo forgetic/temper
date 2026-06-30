@@ -148,7 +148,7 @@ architect sets `needs-owner`; the owner either clears it or switches to
 
 ## Post-merge handling
 
-Mechanical landing creates two independent consumers:
+Current mechanical landing creates two independent consumers:
 
 - The architect drains `landed` eagerly and per item to update epics, file
   follow-ups, and in demo variants close the produced code issue. Low latency
@@ -156,6 +156,13 @@ Mechanical landing creates two independent consumers:
 - The owner drains `alignment` in cohorts. `owner_alignment` activates when the
   pending count reaches `min_depth` or the oldest item exceeds `max_age`, giving
   batching without losing liveness.
+
+A planned workflow-native validator role is a third, separate post-merge
+handoff, not a replacement for those queues. Its context and result schemas are
+defined in
+[post-merge-validator-handoff.md](../reference/post-merge-validator-handoff.md);
+the current `temper-scenario validate-pr` command is only a temporary/manual
+bridge for producing validation reports.
 
 ## Properties preserved
 

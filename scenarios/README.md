@@ -114,9 +114,14 @@ on paths in `examples/` so validation can run from the checked-in corpus alone.
 
 ## Relationship to post-merge validation
 
-Post-merge validation should cite a scenario by `name` and repository commit when
-it uses this corpus. The validation report remains the required artifact; the
+Post-merge validation should cite a scenario by `name` and repo commit when
+it uses this corpus. The [post-merge validator handoff][validator-handoff]
+specifies the workflow-native architecture: it treats
+`temper-scenario validate-pr` as a temporary/manual bridge, not the final
+validator workflow. The validation report remains the required artifact; the
 scenario is the reusable input that made the run reproducible. When an ad-hoc
 post-merge run uncovers a useful regression shape, promote it by adding or
 editing a scenario in a normal PR, with the validation report linked from the PR
 or issue that justifies the promotion.
+
+[validator-handoff]: ../docs/reference/post-merge-validator-handoff.md

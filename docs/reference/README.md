@@ -20,6 +20,7 @@ Current reference pages:
   - [Workflow classification and planning](workflow-classification-planning.md)
   - [Workflow runtime execution](workflow-runtime.md)
   - [Workflow recovery](workflow-recovery.md)
+- [Post-merge validator handoff](post-merge-validator-handoff.md)
 - [Production worker runtime](production-worker.md)
 - [Cross-repository workflow contracts](cross-repo-workflows.md)
 - [Interactive conversation interface](interactive-conversation-interface.md)
