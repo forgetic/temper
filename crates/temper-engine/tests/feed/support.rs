@@ -191,6 +191,7 @@ pub(crate) fn job_result(worker_id: &str, job_id: &str) -> JobResult {
             },
         }],
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,

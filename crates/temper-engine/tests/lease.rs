@@ -102,6 +102,7 @@ fn job_result(job_id: &str) -> JobResult {
             },
         }],
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,

@@ -103,6 +103,7 @@ fn in_process_transport_registers_polls_and_assigns() {
                         },
                     }],
                     verdict: None,
+                    title: None,
                     body: None,
                     children: Vec::new(),
                     failure: None,

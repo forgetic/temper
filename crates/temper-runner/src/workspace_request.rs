@@ -79,15 +79,44 @@ pub fn implementation_pr_pull_request_input(
     summary: &str,
     labels: Vec<String>,
 ) -> CreatePullRequest {
+    implementation_pr_pull_request_input_with_handoff(
+        repo,
+        code_number,
+        issue_title,
+        head_branch,
+        base_branch,
+        summary,
+        labels,
+        None,
+        None,
+    )
+}
+
+/// Projects implementation-PR fields with an optional agent-authored title and
+/// report body. The metadata block remains Temper-owned and is appended to the
+/// report body so classification/correlation stays parseable.
+#[allow(clippy::too_many_arguments)]
+pub fn implementation_pr_pull_request_input_with_handoff(
+    repo: RepositoryId,
+    code_number: ItemNumber,
+    issue_title: &str,
+    head_branch: String,
+    base_branch: String,
+    summary: &str,
+    labels: Vec<String>,
+    title: Option<&str>,
+    report_body: Option<&str>,
+) -> CreatePullRequest {
     let metadata = WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
         parents: vec![ArtifactRef::same_repo(code_number)],
         ..WorkflowMetadata::default()
     };
     let intro = format!("Workspace-produced implementation for issue #{code_number}.");
-    let body = implementation_pr_body(&intro, summary, &metadata);
+    let body =
+        implementation_pr_body_from_report_or_summary(report_body, &intro, summary, &metadata);
     CreatePullRequest {
-        title: format!("Implement #{code_number}: {issue_title}"),
+        title: implementation_pr_title(title, code_number, issue_title),
         body,
         source: BranchRef {
             repository_id: repo.clone(),
@@ -102,7 +131,8 @@ pub fn implementation_pr_pull_request_input(
     }
 }
 
-/// Renders the shared implementation PR body.
+/// Renders the shared fallback implementation PR body for older agents that
+/// only provide a summary.
 pub fn implementation_pr_body(intro: &str, summary: &str, metadata: &WorkflowMetadata) -> String {
     let summary = summary.trim();
     format!(
@@ -117,6 +147,45 @@ pub fn implementation_pr_body(intro: &str, summary: &str, metadata: &WorkflowMet
     )
 }
 
+/// Renders an agent-authored implementation PR report body plus the Temper
+/// workflow metadata block.
+pub fn implementation_pr_report_body(report: &str, metadata: &WorkflowMetadata) -> String {
+    let report = report.trim();
+    if report.is_empty() {
+        render_metadata_block(metadata)
+    } else {
+        format!("{}\n\n{}", report, render_metadata_block(metadata))
+    }
+}
+
+pub fn implementation_pr_body_from_report_or_summary(
+    report_body: Option<&str>,
+    fallback_intro: &str,
+    fallback_summary: &str,
+    metadata: &WorkflowMetadata,
+) -> String {
+    match report_body.and_then(non_blank) {
+        Some(report) => implementation_pr_report_body(report, metadata),
+        None => implementation_pr_body(fallback_intro, fallback_summary, metadata),
+    }
+}
+
+pub fn implementation_pr_title(
+    title: Option<&str>,
+    code_number: ItemNumber,
+    issue_title: &str,
+) -> String {
+    title
+        .and_then(non_blank)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Implement #{code_number}: {issue_title}"))
+}
+
+fn non_blank(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 /// Projects a workspace head into the pull-request creation input for an
 /// implementation PR parented to the originating code issue.
 pub(crate) fn workspace_pull_request_input(
@@ -126,19 +195,30 @@ pub(crate) fn workspace_pull_request_input(
     output: CodingWorkspaceOutput,
     default_base_branch: String,
 ) -> CreatePullRequest {
-    let base_branch = if output.base_branch.trim().is_empty() {
+    let CodingWorkspaceOutput {
+        branch,
+        base_branch: output_base_branch,
+        summary,
+        labels,
+        title,
+        body,
+        ..
+    } = output;
+    let base_branch = if output_base_branch.trim().is_empty() {
         default_base_branch
     } else {
-        output.base_branch
+        output_base_branch
     };
-    implementation_pr_pull_request_input(
+    implementation_pr_pull_request_input_with_handoff(
         repo,
         code_number,
         issue_title,
-        output.branch,
+        branch,
         base_branch,
-        &output.summary,
-        output.labels,
+        &summary,
+        labels,
+        title.as_deref(),
+        body.as_deref(),
     )
 }
 
@@ -194,6 +274,27 @@ mod tests {
     #[test]
     fn workspace_pull_request_input_delegates_with_explicit_base_branch() {
         assert_parity("release/1.2", "release/1.2");
+    }
+
+    #[test]
+    fn implementation_pr_input_uses_agent_authored_title_and_report_body() {
+        let input = implementation_pr_pull_request_input_with_handoff(
+            RepositoryId::new("repo-1"),
+            ItemNumber::new(120),
+            "daemon worker apply",
+            "agent/pr-for-code-120".to_string(),
+            "main".to_string(),
+            "short log summary",
+            vec!["implementation".to_string()],
+            Some("Implement agent-authored handoff"),
+            Some("# Implementation report\n\nChanged the handoff path."),
+        );
+
+        assert_eq!(input.title, "Implement agent-authored handoff");
+        assert!(input.body.starts_with("# Implementation report"));
+        assert!(input.body.contains("Changed the handoff path."));
+        assert!(!input.body.contains("Summary: short log summary"));
+        assert!(input.body.contains("<!-- temper:workflow"));
     }
 
     #[test]

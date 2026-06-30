@@ -44,7 +44,8 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              underspecified or unimplementable as written, or `needs_human` only \
              when implementation requires non-agent judgment. Explain the reason \
              in `summary`.\n\
-             - Report validation in `summary` when relevant.\n",
+             - Report validation in `summary` when relevant. Keep `summary` short; \
+             the durable PR handoff is the success-path `title` and `body`.\n",
         ),
         Capability::TriageWorkspace => prompt.push_str(
             "ROLE: architect (triage_workspace capability).\n\
@@ -129,12 +130,15 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
          When you have finished using tools, your very last message must be a \
          single JSON object and nothing else — no prose before or after it, no \
          code fences, no explanation. The JSON object describes the result, with \
-         these optional fields: `verdict` (string), `summary` (string), `body` \
-         (string), `review_body` (string), `labels` (array of strings), and \
-         `children` (array of {slug, title, body, labels, depends_on, \
-         target_repo?}). Omit fields you are not using.\n\
-         For the engineer success path, emit `{\"summary\": \"...\"}` with no \
-         `verdict`.\n\
+         these optional fields: `verdict` (string), `title` (string), `summary` \
+         (string), `body` (string), `review_body` (string), `labels` (array of \
+         strings), and `children` (array of {slug, title, body, labels, depends_on, \
+         target_repo?}). Omit fields you are not using. For a no-verdict engineer \
+         success, emit a compact current implementation report as `body` and a PR \
+         title as `title`, for example \
+         `{\"title\":\"Implement durable PR handoff\",\"body\":\"# Implementation report\\\\n...\",\"summary\":\"Implemented PR handoff; tests pass\"}`. \
+         The body should be current and compact, not append-only; do not add a \
+         hidden implementation-report block.\n\
          Do NOT wrap the JSON in prose or code fences. Do NOT narrate what you \
          are about to do — just emit the JSON result as your final message.",
     );

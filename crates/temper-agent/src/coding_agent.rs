@@ -12,7 +12,7 @@
 //! temper writes a context JSON file and passes its path as the agent's
 //! `--context` flag, runs the agent in the prepared checkout (`--workspace`,
 //! also cwd), and reads a result JSON file back from the `--result` path. The
-//! result shape is temper's `WorkspaceResult` (`{ verdict?, summary?, body?,
+//! result shape is temper's `WorkspaceResult` (`{ verdict?, title?, summary?, body?,
 //! review_body?, labels?, children? }`); see [`WorkspaceResult`].
 //! Reading the context and writing the result is the binary's job
 //! ([`crate::coding_agent`]

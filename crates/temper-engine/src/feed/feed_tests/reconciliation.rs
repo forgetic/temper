@@ -132,6 +132,7 @@ fn success_result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,

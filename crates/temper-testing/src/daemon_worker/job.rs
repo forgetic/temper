@@ -47,6 +47,7 @@ pub(super) async fn execute_job(
             status: ResultStatus::Success,
             repos,
             verdict: None,
+            title: None,
             body: None,
             children: Vec::new(),
             failure: None,
@@ -60,6 +61,7 @@ pub(super) async fn execute_job(
             status: ResultStatus::Failure,
             repos: Vec::new(),
             verdict: None,
+            title: None,
             body: None,
             children: Vec::new(),
             failure: Some(Failure {

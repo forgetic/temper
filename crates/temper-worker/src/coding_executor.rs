@@ -392,6 +392,7 @@ async fn verdict_only_outcome(
     let WorkspaceResult {
         verdict,
         summary,
+        title: _title,
         body,
         review_body,
         children,

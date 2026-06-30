@@ -51,6 +51,7 @@ fn success_result(job_id: &str) -> JobResult {
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
+        title: None,
         body: None,
         children: Vec::new(),
         failure: None,

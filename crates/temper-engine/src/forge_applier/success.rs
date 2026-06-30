@@ -11,9 +11,13 @@ use temper_forge::{
 };
 use temper_log::emit::{PrOpened, emit_pr_opened};
 use temper_protocol_worker::{JobContext, JobResult, RepoOutcome};
-use temper_workflow::{ArtifactKindId, ArtifactSource, Effect, Executor};
+use temper_workflow::{
+    ArtifactKindId, ArtifactSource, Effect, Executor, WorkflowMetadata, parse_metadata_block,
+};
 
-use temper_runner::{artifact_ref, pr_correlation_key};
+use temper_runner::{
+    artifact_ref, implementation_pr_body_from_report_or_summary, pr_correlation_key,
+};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
@@ -46,10 +50,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
 
         // A pull-request job (e.g. a CI-failure fix) pushes its diff straight to
         // the existing PR head branch; that push itself re-triggers CI and the
-        // landing queue takes over once CI is green. There is no new PR to open,
-        // so the success-path PR-opening below (which keys on a coordinating
-        // *issue*) does not apply.
+        // landing queue takes over once CI is green. Refresh the same PR's
+        // engineer handoff, but do not open a second PR.
         if job.artifact.kind == "pull_request" {
+            self.update_pull_request_repair_handoff(&job, &result).await;
             // §5: a between-cause detail (the push that re-triggers CI), not a
             // §7 catalog state change — belongs at debug.
             tracing::debug!(
@@ -62,7 +66,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     .first()
                     .map(|repo| repo.branch.name.as_str())
                     .unwrap_or("-"),
-                "forge applier pushed pull-request fix to head; awaiting fresh CI"
+                "forge applier pushed pull-request fix to head and refreshed PR handoff; awaiting fresh CI"
             );
             return;
         }
@@ -102,6 +106,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         let lookup_labels = implementation_pr_labels(self.workflow.as_ref());
         let create_labels = implementation_pr_create_labels(self.workflow.as_ref());
         let summary = result.summary.unwrap_or_default();
+        let authored_title = result.title.as_deref();
+        let authored_body = result.body.as_deref();
 
         // Open one PR per writable repo that produced a diff, in coordinated
         // landing order: a repo's PR is created after the PRs it depends on, so
@@ -118,6 +124,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             issue_title: &issue.title,
             number,
             summary: &summary,
+            title: authored_title,
+            body: authored_body,
             coordination_key: &coordination_key,
             lookup_labels: &lookup_labels,
             create_labels: &create_labels,
@@ -169,10 +177,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             outcome.branch.name.clone(),
             base_branch,
             set.summary,
+            set.title,
+            set.body,
             set.create_labels.to_vec(),
             set.coordination_key,
             dependencies,
         );
+        let desired_title = input.title.clone();
         let desired_body = input.body.clone();
 
         if let Some(pull_request) = self
@@ -190,6 +201,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 opened,
                 &target_repository.id,
                 pull_request,
+                &desired_title,
                 &desired_body,
                 "source branch reuse",
             )
@@ -225,6 +237,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         opened,
                         &target_repository.id,
                         pull_request,
+                        &desired_title,
                         &desired_body,
                         "final success",
                     )
@@ -257,6 +270,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         opened,
                         &target_repository.id,
                         pull_request,
+                        &desired_title,
                         &desired_body,
                         "ensure fallback",
                     )
@@ -302,11 +316,18 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         opened: &mut BTreeMap<String, (RepositoryId, ItemNumber)>,
         target_repo_id: &RepositoryId,
         pull_request: PullRequest,
+        desired_title: &str,
         desired_body: &str,
         operation: &'static str,
     ) {
         let pull_request = self
-            .update_implementation_pr_body(set.job, pull_request, desired_body, operation)
+            .update_implementation_pr_handoff(
+                set.job,
+                pull_request,
+                desired_title,
+                desired_body,
+                operation,
+            )
             .await;
         self.apply_implementation_pr_handoff_if_needed(set.job, &pull_request, false)
             .await;
@@ -395,6 +416,40 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 None
             }
         }
+    }
+
+    async fn update_pull_request_repair_handoff(&self, job: &InFlightJob, result: &JobResult) {
+        let Some((_, pull_request)) = self.resolve_pull_request(job).await else {
+            return;
+        };
+        let desired_title = result
+            .title
+            .as_deref()
+            .and_then(non_blank)
+            .map(str::to_string)
+            .unwrap_or_else(|| pull_request.title.clone());
+        let metadata = parse_metadata_block(&pull_request.body)
+            .ok()
+            .flatten()
+            .unwrap_or_else(default_implementation_pr_metadata);
+        let fallback_intro = format!(
+            "Workspace-produced update for pull request #{}.",
+            pull_request.number
+        );
+        let desired_body = implementation_pr_body_from_report_or_summary(
+            result.body.as_deref(),
+            &fallback_intro,
+            result.summary.as_deref().unwrap_or_default(),
+            &metadata,
+        );
+        self.update_implementation_pr_handoff(
+            job,
+            pull_request,
+            &desired_title,
+            &desired_body,
+            "pull request repair",
+        )
+        .await;
     }
 
     async fn apply_implementation_pr_handoff_if_needed(
@@ -529,5 +584,17 @@ impl ReviewHandoff {
 fn push_unique(values: &mut Vec<String>, value: &str) {
     if !values.iter().any(|candidate| candidate == value) {
         values.push(value.to_string());
+    }
+}
+
+fn non_blank(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn default_implementation_pr_metadata() -> WorkflowMetadata {
+    WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("implementation_pr")),
+        ..WorkflowMetadata::default()
     }
 }
