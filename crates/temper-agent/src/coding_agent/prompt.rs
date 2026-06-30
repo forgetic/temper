@@ -45,7 +45,11 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              when implementation requires non-agent judgment. Explain the reason \
              in `summary`.\n\
              - Report validation in `summary` when relevant. Keep `summary` short; \
-             the durable PR handoff is the success-path `title` and `body`.\n",
+             the durable PR handoff is the success-path `title` and `body`.\n\
+             - For PR repair runs (`pull_request_writable` checkout), preserve and \
+             update the current implementation PR handoff from the context: on \
+             success emit an updated PR `title`, a compact implementation-report \
+             `body`, and a short `summary`.\n",
         ),
         Capability::TriageWorkspace => prompt.push_str(
             "ROLE: architect (triage_workspace capability).\n\

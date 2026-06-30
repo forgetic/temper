@@ -415,6 +415,9 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
             )
             .await
             .expect("pull request is created");
+        let pull_request = forge
+            .set_pull_request_head(&pull_request.id, Some("abc123".to_string()))
+            .expect("pull request head sha is set");
 
         // Seed a FAILED CI job on the PR so the feed reads it into guidance.
         let head_sha = pull_request.head_sha.clone().unwrap_or_default();
@@ -428,7 +431,7 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
                 name: "validate".to_string(),
                 status: temper_forge::CiJobStatus::Completed,
                 conclusion: Some(temper_forge::CiJobConclusion::Failure),
-                url: None,
+                url: Some("https://ci.example.test/jobs/validate".to_string()),
                 created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
                 started_at: None,
                 completed_at: None,
@@ -485,10 +488,58 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
             Some("agent/pr-for-code-226")
         );
         assert_eq!(primary.base_branch, "main");
-        // Guidance names the failing CI job and directs a fix, not a re-implement.
+        // Guidance surfaces the durable PR handoff plus fresh structured CI gate details.
         let guidance = context.guidance.expect("ci-failure guidance present");
-        assert!(guidance.contains("validate"), "guidance: {guidance}");
-        assert!(guidance.contains("CI"), "guidance: {guidance}");
+        assert!(
+            guidance.contains("Current implementation PR handoff from Forge"),
+            "guidance: {guidance}"
+        );
+        assert!(guidance.contains("Implement #226"), "guidance: {guidance}");
+        assert!(
+            guidance.contains("Applied the change."),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("head_branch: agent/pr-for-code-226"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("base_branch: main"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("head_sha: abc123"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("reason: ci_failed"),
+            "guidance: {guidance}"
+        );
+        assert!(guidance.contains("name: validate"), "guidance: {guidance}");
+        assert!(
+            guidance.contains("status: completed"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("conclusion: failure"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("commit_sha: abc123"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("url: https://ci.example.test/jobs/validate"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("updated current PR `title`"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("implementation-report `body`"),
+            "guidance: {guidance}"
+        );
     })
 }
 
