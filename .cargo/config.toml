@@ -4,15 +4,16 @@
 # cores. Agents should not add a fixed job count unless a task explicitly needs
 # reproducible resource limits.
 
-# Note on caching (kache): dev-* aliases that build product crates use
-# `--all-targets` deliberately. Cargo unifies features across the build graph,
-# and `--all-targets` pulls in dev-dependencies (e.g. temper-testing) that
+# Note on caching (kache): dev-* aliases on the workspace build/lint/test cache
+# path use `--all-targets` deliberately. Cargo unifies features across the build
+# graph, and `--all-targets` pulls in dev-dependencies (e.g. temper-testing) that
 # enable extra features on shared deps — notably skein's `tls-webpki-roots`.
-# Narrowing an alias to `--lib --bins` resolves a DIFFERENT unified feature set,
-# so skein and its entire downstream tree (tokio, hyper-util, …) compile under a
-# feature combo no other build shares and miss the cache wholesale. Keep those
-# aliases on `--all-targets` so the test build and the lint pass key-match and
-# share cached lib artifacts.
+# Narrowing one of those aliases to `--lib --bins` resolves a DIFFERENT unified
+# feature set, so skein and its entire downstream tree (tokio, hyper-util, …)
+# compile under a feature combo no other build shares and miss the cache
+# wholesale. Keep those aliases on `--all-targets` so the test build and the
+# lint pass key-match and share cached lib artifacts. `dev-scenario-check` is a
+# small manifest-validation CLI run outside that cache lane.
 #
 # (clippy/check still produce zero-byte leaf `.rmeta` that kache cannot cache,
 # so the leaf check-only targets always recompile; that cost is small and
@@ -28,6 +29,7 @@
 
 [alias]
 dev-check = "check --workspace --all-targets"
+dev-scenario-check = "run -p temper-scenario-cli -- check scenarios"
 dev-fmt = "fmt --all"
 dev-clippy = "clippy --workspace --all-targets"
 dev-test-build = "test --workspace --all-targets --no-run"

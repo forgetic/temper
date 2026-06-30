@@ -24,9 +24,10 @@ from the repository root:
 The script runs these commands in order and stops on the first failure:
 
 1. `cargo dev-fmt`
-2. `cargo-clippy`
-3. `cargo dev-test-quick`
-4. `cargo dev-test-e2e-all`
+2. `cargo dev-scenario-check`
+3. `cargo-clippy`
+4. `cargo dev-test-quick`
+5. `cargo dev-test-e2e-all`
 
 Use narrower commands only for intermediate local iteration; the full pre-PR
 script is the required handoff check for implementation PRs. Keep Clippy output

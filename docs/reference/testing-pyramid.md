@@ -96,6 +96,7 @@ Use the aliases in `.cargo/config.toml`:
 
 ```sh
 cargo dev-check          # fast workspace type check
+cargo dev-scenario-check # validate checked-in scenario manifests and local refs
 cargo dev-test-quick     # default non-ignored suite via nextest
 cargo dev-test-build     # prebuild all test binaries
 cargo dev-test-e2e-capstones  # ignored live capstones used by dev-test-full
@@ -110,8 +111,8 @@ The web UI is separate from Cargo:
 (cd crates/temper-web/ui && npm test && npm run build)
 ```
 
-CI runs format, depgraph, file-size, ambient-env, clippy, build, Rust tests, and
-then a separate web job for Vitest/build.
+CI runs format, depgraph, file-size, ambient-env, build, scenario manifest
+checks, Rust tests, clippy, and then a separate web job for Vitest/build.
 
 ## Current effectiveness assessment
 
