@@ -36,6 +36,8 @@ members = [
     "crates/temper-provision-forgejo-cli",
     "crates/temper-reference-delivery-validator",
     "crates/temper-sim",
+    "crates/temper-scenario-core",
+    "crates/temper-scenario-cli",
     # Tiny repo-local driver for developer aliases that need to sequence cargo
     # commands.
     "crates/temper-dev",

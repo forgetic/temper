@@ -1,0 +1,21 @@
+[package]
+name = "temper-scenario-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Command-line facade for listing and checking Temper scenario manifests."
+
+[dependencies]
+temper-scenario-core = { path = "../temper-scenario-core" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "temper-scenario"
+path = "src/bin/temper-scenario.rs"
+
+[lints]
+workspace = true

@@ -1691,6 +1691,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-scenario-cli"
+version = "0.1.0"
+dependencies = [
+ "temper-scenario-core",
+ "tempfile",
+]
+
+[[package]]
+name = "temper-scenario-core"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "temper-sim"
 version = "0.1.0"
 dependencies = [
