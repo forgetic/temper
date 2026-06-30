@@ -213,6 +213,83 @@ fn run_fails_clearly_for_unsupported_valid_scenario() {
 }
 
 #[test]
+fn validate_pr_writes_report_and_prints_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scenarios = dir.path().join("scenarios");
+    write_valid_scenario(
+        &scenarios,
+        "alpha",
+        "ready",
+        "experimental",
+        "Exercise delivery.",
+    );
+    let output_dir = dir.path().join("reports");
+
+    let output = temper_scenario(&[
+        "validate-pr",
+        "--pr",
+        "123",
+        "--sha",
+        "deadbeef",
+        "--scenario",
+        &scenarios.join("alpha").to_string_lossy(),
+        "--output-dir",
+        &output_dir.to_string_lossy(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let report_path = PathBuf::from(stdout.trim());
+    assert_eq!(
+        report_path,
+        output_dir.join("validation-pr-123-deadbeef.md")
+    );
+    let markdown = std::fs::read_to_string(&report_path).expect("read report");
+    for section in [
+        "## Verdict",
+        "## Validated claims",
+        "## Acceptance criteria",
+        "## Evidence",
+        "## Limitations",
+        "## Follow-up intent",
+    ] {
+        assert!(markdown.contains(section), "missing {section}:\n{markdown}");
+    }
+    assert!(markdown.contains("Verdict: inconclusive"), "{markdown}");
+    assert!(markdown.contains("**scenario check**"), "{markdown}");
+    assert!(markdown.contains("No scenario run occurred"), "{markdown}");
+}
+
+#[test]
+fn validate_pr_fails_for_invalid_scenario_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = temper_scenario(&[
+        "validate-pr",
+        "--pr",
+        "123",
+        "--sha",
+        "deadbeef",
+        "--scenario",
+        &dir.path().join("missing").to_string_lossy(),
+        "--output-dir",
+        &dir.path().join("reports").to_string_lossy(),
+    ]);
+
+    assert!(!output.status.success(), "invalid scenario should fail");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("scenario check failed"), "{stderr}");
+    assert!(stderr.contains("scenario path does not exist"), "{stderr}");
+}
+
+#[test]
 fn check_fails_with_human_readable_diagnostics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scenario = dir.path().join("broken");
