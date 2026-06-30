@@ -124,6 +124,9 @@ temper-agent = ["temper-agent-core", "temper-protocol-agent", "temper-protocol-i
 # Tier-agnostic config: schema + resolution, no internal deps. A shared leaf
 # (like the protocol crates) every binary can read config without linking a tier.
 temper-config = []
+# Scenario manifest parser/checker. Leaf library used by the standalone
+# temper-scenario facade; it deliberately stays out of the engine/worker/agent tiers.
+temper-scenario-core = []
 
 # Process-wide logging init (tracing-subscriber setup). A shared leaf with no
 # internal deps that every binary calls once at startup; like temper-config it
@@ -176,6 +179,10 @@ temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "te
 # operator/responder tools. Re-exports the in-process transport from
 # temper-cli-daemon. Much slimmer than the old monolith.
 temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-protocol-interaction", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log"]
+
+# Standalone scenario listing/checking facade. Real manifest logic lives in
+# temper-scenario-core.
+temper-scenario-cli = ["temper-scenario-core"]
 
 # The unified `temper` binary's composition root (`src/bin/temper.rs`'s `boot()`)
 # snapshots the real environment into a CliEnv via temper-config's env shims, so
