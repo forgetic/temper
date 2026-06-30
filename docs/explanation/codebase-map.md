@@ -25,7 +25,7 @@ support.
 | `crates/temper-web/` | Web dashboard: Rust HTTP/SSE server, read model, feed adapters, and bundled TypeScript UI under `ui/`. |
 | `crates/temper-interaction-service/` | Deployable REPL/HTTP interaction service, args, bindings, DTOs, and transport glue for interactive profiles. |
 | `crates/temper-trigger-forgejo/` | Forgejo webhook receiver that verifies payloads and emits authenticated wake hints. |
-| `crates/temper-scenario-cli/` | Standalone `temper-scenario` facade for listing and checking executable scenario manifests. |
+| `crates/temper-scenario-cli/` | Standalone `temper-scenario` facade for listing, checking, running, validation-report bridging, and promotion-draft scaffolding for executable scenario manifests. |
 
 ## Configuration, provisioning, and reference delivery
 

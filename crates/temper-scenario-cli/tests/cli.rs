@@ -293,6 +293,140 @@ fn validate_pr_fails_for_invalid_scenario_path() {
 }
 
 #[test]
+fn promote_help_documents_scaffold_and_limitations() {
+    let output = temper_scenario(&["promote", "--help"]);
+
+    assert!(output.status.success(), "status: {:?}", output.status);
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(
+        stdout.contains("Usage: temper-scenario promote <VALIDATION_ARTIFACT>"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("does not create\nForgejo issues or PRs"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Promotion is\noptional follow-up work"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn promote_fails_clearly_for_missing_validation_artifact() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("missing-report.md");
+
+    let output = temper_scenario(&["promote", &missing.to_string_lossy()]);
+
+    assert!(!output.status.success(), "missing artifact should fail");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("validation artifact path is missing or unusable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("missing-report.md"), "{stderr}");
+}
+
+#[test]
+fn promote_writes_draft_for_validation_report_and_prints_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let report_path = dir.path().join("validation-pr-123-deadbeef.md");
+    std::fs::write(
+        &report_path,
+        "# Post-merge validation report\n\n## Evidence\n\n1. **scenario check** — passed\n   - scenario: `alpha-flow`\n",
+    )
+    .expect("write report");
+    let output_dir = dir.path().join("drafts");
+
+    let output = temper_scenario(&[
+        "promote",
+        &report_path.to_string_lossy(),
+        "--output-dir",
+        &output_dir.to_string_lossy(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let draft_path = PathBuf::from(stdout.trim());
+    assert_eq!(
+        draft_path,
+        output_dir.join("scenario-candidate-alpha-flow.md")
+    );
+    let markdown = std::fs::read_to_string(&draft_path).expect("read draft");
+    assert!(
+        markdown.contains(&format!(
+            "- Source validation artifact: `{}`",
+            report_path.display()
+        )),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains(
+            "- Intended scenario name/slug: `alpha-flow` (inferred from validation report content)"
+        ),
+        "{markdown}"
+    );
+    assert!(markdown.contains("## Promotion rationale"), "{markdown}");
+    assert!(markdown.contains("stable intended behavior"), "{markdown}");
+    assert!(
+        markdown.contains("does not create Forgejo issues or PRs"),
+        "{markdown}"
+    );
+}
+
+#[test]
+fn promote_accepts_artifact_directory_with_supplied_slug() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let artifact_dir = dir.path().join("validation-artifacts");
+    std::fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+    let output_dir = dir.path().join("drafts");
+
+    let output = temper_scenario(&[
+        "promote",
+        &artifact_dir.to_string_lossy(),
+        "--name",
+        "Stable Delivery Proof",
+        "--output-dir",
+        &output_dir.to_string_lossy(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let draft_path = PathBuf::from(stdout.trim());
+    assert_eq!(
+        draft_path,
+        output_dir.join("scenario-candidate-stable-delivery-proof.md")
+    );
+    let markdown = std::fs::read_to_string(&draft_path).expect("read draft");
+    assert!(
+        markdown.contains("- Source artifact kind: validation artifact directory"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains(
+            "- Intended scenario name/slug: `stable-delivery-proof` (supplied from `Stable Delivery Proof`)"
+        ),
+        "{markdown}"
+    );
+}
+
+#[test]
 fn check_fails_with_human_readable_diagnostics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scenario = dir.path().join("broken");

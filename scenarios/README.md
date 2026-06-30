@@ -23,7 +23,10 @@ Changing `scenarios/` is optional. A checked-in scenario change is a promotion
 artifact: it captures a case that should become a reusable regression input after
 it has proven useful. Not every validation report should add or update a
 scenario, and a scenario should not be edited merely to make one validation
-report pass.
+report pass. Operators can use `temper-scenario promote` to draft a promotion
+candidate from a validation report or artifact directory, but that command is
+only a prompt scaffold: it does not create Forgejo issues or PRs, and it does
+not replace the required validation report.
 
 ## Authoring model
 
@@ -121,8 +124,12 @@ specifies the workflow-native architecture: it treats
 `temper-scenario validate-pr` as a temporary/manual bridge, not the final
 validator workflow. The validation report remains the required artifact; the
 scenario is the reusable input that made the run reproducible. When an ad-hoc
-post-merge run uncovers a useful regression shape, promote it by adding or
-editing a scenario in a normal PR, with the validation report linked from the PR
-or issue that justifies the promotion.
+post-merge run uncovers a useful regression shape, promotion remains a separate
+follow-up from validation: start from the report, preserve only stable intended
+behavior, and add or edit a scenario in a normal PR with the validation report
+linked from the PR or issue that justifies the promotion. The temporary
+`temper-scenario promote` command can create a deterministic Markdown draft for
+that review, but it deliberately stops before generating a scenario or opening
+Forgejo work.
 
 [validator-handoff]: ../docs/reference/post-merge-validator-handoff.md
