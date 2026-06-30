@@ -19,6 +19,7 @@ mod parse;
 mod path_refs;
 mod repo_refs;
 mod toml_helpers;
+mod validation_report;
 
 pub use assertion_templates::{
     ASSERTION_TEMPLATE_CATALOG, ASSERTION_TEMPLATE_NAMES, AssertionTemplate,
@@ -32,6 +33,10 @@ pub use manifest::{
     ScenarioStatus,
 };
 pub use parse::{load_manifest, parse_manifest_str};
+pub use validation_report::{
+    AcceptanceCriterion, EvidenceEntry, EvidenceKind, FollowUpIssueIntent, ValidatedClaim,
+    ValidationReport, ValidationStatus, ValidationTarget, ValidationVerdict,
+};
 
 /// Default directory scanned by the CLI when no scenario root is supplied.
 pub const DEFAULT_SCENARIOS_DIR: &str = "scenarios";

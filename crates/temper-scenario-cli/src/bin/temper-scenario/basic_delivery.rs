@@ -54,6 +54,14 @@ pub(super) fn run_and_print(scenario_path: &Path, manifest_path: &Path) -> Resul
     Ok(())
 }
 
+pub(super) fn run_evidence_lines(
+    scenario_path: &Path,
+    manifest_path: &Path,
+) -> Result<Vec<String>, String> {
+    let outcome = temper_testing::block_on(run_basic_delivery(scenario_path, manifest_path))?;
+    Ok(outcome_evidence_lines(&outcome))
+}
+
 async fn run_basic_delivery(
     scenario_path: &Path,
     manifest_path: &Path,
@@ -325,28 +333,36 @@ fn print_outcome(outcome: &RunOutcome) {
     println!("scenario: {}", outcome.scenario_name);
     println!("verdict: passed");
     println!("evidence:");
-    println!(
-        "  seeded issue: #{} \"{}\" {} as code",
-        outcome.evidence.issue_number,
-        outcome.evidence.issue_title,
-        issue_state_word(outcome.evidence.issue_state)
-    );
-    println!(
-        "  implementation PR: #{} {} with passing CI ({} completed job(s))",
-        outcome.evidence.pr_number,
-        pr_state_evidence(outcome.evidence.pr_state),
-        outcome.evidence.completed_ci_jobs
-    );
-    println!(
-        "  closed parent issues: {}",
-        outcome.evidence.closed_parent_issues
-    );
-    println!("  actions: {}", action_counts(&outcome.report));
-    println!(
-        "  report: ticks={} workers={}",
-        outcome.report.ticks,
-        outcome.report.workers.len()
-    );
+    for line in outcome_evidence_lines(outcome) {
+        println!("  {line}");
+    }
+}
+
+fn outcome_evidence_lines(outcome: &RunOutcome) -> Vec<String> {
+    vec![
+        format!(
+            "seeded issue: #{} \"{}\" {} as code",
+            outcome.evidence.issue_number,
+            outcome.evidence.issue_title,
+            issue_state_word(outcome.evidence.issue_state)
+        ),
+        format!(
+            "implementation PR: #{} {} with passing CI ({} completed job(s))",
+            outcome.evidence.pr_number,
+            pr_state_evidence(outcome.evidence.pr_state),
+            outcome.evidence.completed_ci_jobs
+        ),
+        format!(
+            "closed parent issues: {}",
+            outcome.evidence.closed_parent_issues
+        ),
+        format!("actions: {}", action_counts(&outcome.report)),
+        format!(
+            "report: ticks={} workers={}",
+            outcome.report.ticks,
+            outcome.report.workers.len()
+        ),
+    ]
 }
 
 fn pr_state_evidence(state: PullRequestState) -> &'static str {

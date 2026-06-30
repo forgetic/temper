@@ -2,6 +2,8 @@
 
 #[path = "temper-scenario/basic_delivery.rs"]
 mod basic_delivery;
+#[path = "temper-scenario/validate_pr.rs"]
+mod validate_pr;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -15,14 +17,15 @@ use temper_scenario_core::{
 const EX_USAGE: u8 = 64;
 
 const USAGE: &str = "\
-temper-scenario: list, check, and run Temper executable scenario manifests
+temper-scenario: list, check, run, and validate Temper executable scenario manifests
 
 Usage: temper-scenario <COMMAND> [OPTIONS]
 
 Commands:
-  list   List scenario directories and stable manifest metadata
-  check  Validate one scenario path or all scenarios under a scenarios directory
-  run    Run a supported scenario deterministically in process
+  list         List scenario directories and stable manifest metadata
+  check        Validate one scenario path or all scenarios under a scenarios directory
+  run          Run a supported scenario deterministically in process
+  validate-pr  Write a temporary post-merge PR validation Markdown report
 
 Options:
   -h, --help  Print help
@@ -81,6 +84,7 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
         "list" => list_command(rest),
         "check" => check_command(rest),
         "run" => run_command(rest),
+        "validate-pr" => validate_pr::command(rest),
         other => {
             eprintln!("temper-scenario: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(EX_USAGE)

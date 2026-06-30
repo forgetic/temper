@@ -4,8 +4,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::{
-    ASSERTION_TEMPLATE_CATALOG, ASSERTION_TEMPLATE_NAMES, Diagnostic, ScenarioStability,
-    ScenarioStatus, check_scenario, discover_scenarios, load_manifest, parse_manifest_str,
+    ASSERTION_TEMPLATE_CATALOG, ASSERTION_TEMPLATE_NAMES, AcceptanceCriterion, Diagnostic,
+    EvidenceEntry, EvidenceKind, FollowUpIssueIntent, ScenarioStability, ScenarioStatus,
+    ValidatedClaim, ValidationReport, ValidationStatus, ValidationVerdict, check_scenario,
+    discover_scenarios, load_manifest, parse_manifest_str,
 };
 
 fn valid_manifest() -> &'static str {
@@ -36,6 +38,67 @@ fn assertion_template_catalog_names_are_stable() {
         .collect::<Vec<_>>();
 
     assert_eq!(catalog_names.as_slice(), ASSERTION_TEMPLATE_NAMES);
+}
+
+#[test]
+fn renders_validation_report_markdown_sections() {
+    let mut report = ValidationReport::new(123, "deadbeef", ValidationVerdict::Inconclusive);
+    report.validated_claims.push(
+        ValidatedClaim::new(
+            "Scenario manifest validates for the supplied path.",
+            ValidationStatus::Observed,
+        )
+        .with_evidence("scenario check evidence"),
+    );
+    report.acceptance_criteria.push(
+        AcceptanceCriterion::new(
+            "The report records observable acceptance criteria.",
+            ValidationStatus::Satisfied,
+        )
+        .with_evidence("criterion evidence"),
+    );
+    report.evidence.push(
+        EvidenceEntry::new(EvidenceKind::ScenarioCheck, "Scenario check completed.")
+            .with_detail("checked scenarios/basic-delivery"),
+    );
+    report
+        .limitations
+        .push("Temporary harness does not query live Forgejo state.".to_string());
+    report.follow_up = Some(
+        FollowUpIssueIntent::new(
+            "Implement workflow-native validation",
+            "Replace the manual validate-pr bridge.",
+        )
+        .with_label("validation"),
+    );
+
+    let markdown = report.render_markdown();
+
+    for section in [
+        "## Verdict",
+        "## Validated claims",
+        "## Acceptance criteria",
+        "## Evidence",
+        "## Limitations",
+        "## Follow-up intent",
+    ] {
+        assert!(markdown.contains(section), "missing {section}:\n{markdown}");
+    }
+    assert!(markdown.contains("PR: #123"), "{markdown}");
+    assert!(
+        markdown.contains("Merged/main SHA: `deadbeef`"),
+        "{markdown}"
+    );
+    assert!(markdown.contains("Verdict: inconclusive"), "{markdown}");
+    assert!(markdown.contains("**scenario check**"), "{markdown}");
+    assert!(
+        markdown.contains("Temporary harness does not query live Forgejo state."),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("Implement workflow-native validation"),
+        "{markdown}"
+    );
 }
 
 #[test]
