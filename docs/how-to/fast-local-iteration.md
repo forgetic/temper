@@ -17,6 +17,13 @@ the same cheap check that runs in fast CI:
 cargo dev-scenario-check
 ```
 
+Exercise the deterministic in-process `basic-delivery` runner without live
+Forgejo or external services:
+
+```sh
+cargo dev-scenario-run
+```
+
 ## Tests
 
 When behavior changes, run relevant tests. For the quick workspace suite:
