@@ -27,6 +27,8 @@ Related reference pages:
   safety properties and tests that prove retry/recovery behavior.
 - [Cross-repository workflow contracts](cross-repo-workflows.md) defines
   repo-qualified artifact references and global child correlation keys.
+- [Post-merge validator handoff](post-merge-validator-handoff.md)
+  defines the planned validator role/action context and result schemas.
 
 ## Contract at a glance
 
