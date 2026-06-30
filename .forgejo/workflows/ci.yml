@@ -18,11 +18,13 @@ on:
 #      Linked test binaries are then discarded before linting; otherwise the
 #      full no-run test set plus clippy metadata can exceed the host runner's
 #      local checkout budget even though kache has the reusable artifacts.
-#   2. Every cargo invocation uses the SAME `--all-targets` scope so feature
-#      unification matches and the cached lib artifacts key-match across steps
-#      (see the comment in .cargo/config.toml). clippy/check still recompile
-#      their own zero-byte `.rmeta` leaves, which kache cannot cache, but that
-#      leaf cost is small.
+#   2. Every cargo invocation on the build/test/lint cache path uses the SAME
+#      `--all-targets` scope so feature unification matches and the cached lib
+#      artifacts key-match across steps (see the comment in .cargo/config.toml).
+#      clippy/check still recompile their own zero-byte `.rmeta` leaves, which
+#      kache cannot cache, but that leaf cost is small. The scenario manifest
+#      check below is a tiny checked-in CLI run after the build step, so it does
+#      not change that cache choreography.
 jobs:
   validate:
     runs-on: host
@@ -47,6 +49,10 @@ jobs:
         run: scripts/check-no-ambient-env.sh
       - name: Build
         run: cargo dev-test-build
+      - name: Scenario manifest check
+        # Validate checked-in manifests and local fixture references without
+        # running the live Forgejo/e2e scenario lane.
+        run: cargo run -p temper-scenario-cli -- check scenarios
       - name: Test (quick)
         run: cargo dev-test-quick
       - name: Free linked test binaries

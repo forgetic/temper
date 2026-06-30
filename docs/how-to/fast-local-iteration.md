@@ -10,6 +10,13 @@ Use the workspace alias:
 cargo dev-check
 ```
 
+Validate checked-in scenario manifests and their local fixture references with
+the same cheap check that runs in fast CI:
+
+```sh
+cargo dev-scenario-check
+```
+
 ## Tests
 
 When behavior changes, run relevant tests. For the quick workspace suite:
