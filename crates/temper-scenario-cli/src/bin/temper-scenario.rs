@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#[path = "temper-scenario/basic_delivery.rs"]
+mod basic_delivery;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -12,13 +15,14 @@ use temper_scenario_core::{
 const EX_USAGE: u8 = 64;
 
 const USAGE: &str = "\
-temper-scenario: list and check Temper executable scenario manifests
+temper-scenario: list, check, and run Temper executable scenario manifests
 
 Usage: temper-scenario <COMMAND> [OPTIONS]
 
 Commands:
   list   List scenario directories and stable manifest metadata
   check  Validate one scenario path or all scenarios under a scenarios directory
+  run    Run a supported scenario deterministically in process
 
 Options:
   -h, --help  Print help
@@ -47,6 +51,17 @@ A directory with its own manifest is checked as one scenario. Other directories
 are scanned for immediate child scenario directories. Diagnostics are printed in
 a concise `path: error: field: message` form suitable for CI logs.";
 
+const RUN_USAGE: &str = "\
+Run a supported Temper scenario deterministically in process.
+
+Usage: temper-scenario run <SCENARIO_PATH>
+
+Arguments:
+  SCENARIO_PATH  Scenario directory or manifest file to run
+
+This first runner supports only the checked-in scenarios/basic-delivery shape.
+Unsupported scenario manifests fail clearly instead of being treated as passed.";
+
 fn main() -> ExitCode {
     run(env::args().skip(1))
 }
@@ -65,6 +80,7 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
         }
         "list" => list_command(rest),
         "check" => check_command(rest),
+        "run" => run_command(rest),
         other => {
             eprintln!("temper-scenario: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(EX_USAGE)
@@ -181,6 +197,54 @@ fn check_command(args: &[String]) -> ExitCode {
     }
 }
 
+fn run_command(args: &[String]) -> ExitCode {
+    let path = match parse_required_path(args, RUN_USAGE, "temper-scenario run") {
+        Ok(CommandPath::Help) => {
+            println!("{RUN_USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Ok(CommandPath::Path { path, .. }) => path,
+        Err(()) => return ExitCode::from(EX_USAGE),
+    };
+
+    let report = check_scenario(&path);
+    if !report.is_valid() {
+        print_report_diagnostics(&report);
+        return ExitCode::FAILURE;
+    }
+
+    let Some(manifest) = report.manifest.as_ref() else {
+        eprintln!(
+            "temper-scenario run: no runnable scenario manifest found at {}",
+            display_path(&path)
+        );
+        return ExitCode::FAILURE;
+    };
+    if manifest.name != basic_delivery::SCENARIO_NAME {
+        eprintln!(
+            "temper-scenario run: unsupported scenario `{}` at {}; this first runner supports only scenarios/basic-delivery",
+            manifest.name,
+            display_path(&report.scenario_path)
+        );
+        return ExitCode::FAILURE;
+    }
+    let Some(manifest_path) = report.manifest_path.as_deref() else {
+        eprintln!(
+            "temper-scenario run: no scenario manifest found at {}",
+            display_path(&report.scenario_path)
+        );
+        return ExitCode::FAILURE;
+    };
+
+    match basic_delivery::run_and_print(&report.scenario_path, manifest_path) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("temper-scenario run: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 enum CommandPath {
     Help,
     Path { path: PathBuf, explicit: bool },
@@ -196,6 +260,28 @@ fn parse_optional_path(
             path: PathBuf::from(DEFAULT_SCENARIOS_DIR),
             explicit: false,
         }),
+        [arg] if matches!(arg.as_str(), "-h" | "--help" | "help") => Ok(CommandPath::Help),
+        [path] => Ok(CommandPath::Path {
+            path: PathBuf::from(path),
+            explicit: true,
+        }),
+        [arg, ..] => {
+            eprintln!("{command_name}: unexpected argument `{arg}`\n\n{usage}");
+            Err(())
+        }
+    }
+}
+
+fn parse_required_path(
+    args: &[String],
+    usage: &str,
+    command_name: &str,
+) -> Result<CommandPath, ()> {
+    match args {
+        [] => {
+            eprintln!("{command_name}: missing SCENARIO_PATH\n\n{usage}");
+            Err(())
+        }
         [arg] if matches!(arg.as_str(), "-h" | "--help" | "help") => Ok(CommandPath::Help),
         [path] => Ok(CommandPath::Path {
             path: PathBuf::from(path),
@@ -250,6 +336,11 @@ mod tests {
 
     #[test]
     fn unknown_command_is_usage_error() {
+        assert_eq!(run(["wat".to_string()]), ExitCode::from(64));
+    }
+
+    #[test]
+    fn run_without_path_is_usage_error() {
         assert_eq!(run(["run".to_string()]), ExitCode::from(64));
     }
 }

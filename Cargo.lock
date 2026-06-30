@@ -1694,8 +1694,13 @@ dependencies = [
 name = "temper-scenario-cli"
 version = "0.1.0"
 dependencies = [
+ "temper-forge-memory",
+ "temper-forge-model",
+ "temper-runner",
  "temper-scenario-core",
+ "temper-testing",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
