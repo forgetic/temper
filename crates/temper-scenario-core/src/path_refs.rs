@@ -181,6 +181,7 @@ fn is_path_leaf_key(key: &str) -> bool {
             | "file"
             | "dir"
             | "directory"
+            | "body"
             | "workflow"
             | "config"
             | "credentials"
@@ -188,6 +189,7 @@ fn is_path_leaf_key(key: &str) -> bool {
             | "fixture"
             | "manifest"
             | "intent_path"
+            | "ci_source"
     ) || key.ends_with("_path")
         || key.ends_with("_file")
         || key.ends_with("_dir")

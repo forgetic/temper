@@ -71,6 +71,7 @@ impl fmt::Display for ScenarioStatus {
 /// Stability tier for a scenario manifest.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ScenarioStability {
+    Provisional,
     Experimental,
     Unstable,
     Stable,
@@ -82,6 +83,7 @@ impl ScenarioStability {
     /// Parses a lowercase manifest stability value.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
+            "provisional" => Some(Self::Provisional),
             "experimental" => Some(Self::Experimental),
             "unstable" => Some(Self::Unstable),
             "stable" => Some(Self::Stable),
@@ -93,12 +95,20 @@ impl ScenarioStability {
 
     /// Allowed manifest values, in stable help/diagnostic order.
     pub fn allowed_values() -> &'static [&'static str] {
-        &["experimental", "unstable", "stable", "flaky", "deprecated"]
+        &[
+            "provisional",
+            "experimental",
+            "unstable",
+            "stable",
+            "flaky",
+            "deprecated",
+        ]
     }
 
     /// Stable manifest spelling.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Provisional => "provisional",
             Self::Experimental => "experimental",
             Self::Unstable => "unstable",
             Self::Stable => "stable",

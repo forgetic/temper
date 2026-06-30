@@ -129,6 +129,20 @@ pub(crate) fn parse_manifest_value(
 }
 
 fn validate_schema_version(table: &toml::Table, diagnostics: &mut Vec<Diagnostic>) {
+    if let Some(value) = table.get("schema") {
+        match value.as_str() {
+            Some("temper.scenario.v1") => {}
+            Some(other) => diagnostics.push(Diagnostic::error(
+                "schema",
+                format!("unsupported schema `{other}` (expected `temper.scenario.v1`)"),
+            )),
+            None => diagnostics.push(Diagnostic::error(
+                "schema",
+                "must be the string `temper.scenario.v1`",
+            )),
+        }
+    }
+
     let Some((field, value)) = table
         .get("schema_version")
         .map(|value| ("schema_version", value))
