@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::fs;
+use std::path::PathBuf;
 
 use crate::{
     Diagnostic, ScenarioStability, ScenarioStatus, check_scenario, discover_scenarios,
@@ -164,6 +165,37 @@ fn load_manifest_checks_filesystem_references() {
 }
 
 #[test]
+fn load_manifest_accepts_checked_in_basic_delivery_shape() {
+    let manifest_path = workspace_root().join("scenarios/basic-delivery/scenario.toml");
+    let manifest = load_manifest(&manifest_path).expect("checked-in scenario manifest is valid");
+
+    assert_eq!(manifest.name, "basic-delivery");
+    assert_eq!(manifest.status, ScenarioStatus::Active);
+    assert_eq!(manifest.stability, ScenarioStability::Provisional);
+    assert_eq!(manifest.repositories.len(), 1);
+    assert_eq!(manifest.repositories[0].id.as_deref(), Some("service"));
+    assert_eq!(manifest.repositories[0].repo, "acme/service");
+
+    let path_fields = manifest
+        .path_references
+        .iter()
+        .map(|reference| reference.field.as_str())
+        .collect::<Vec<_>>();
+    for field in [
+        "workflow.path",
+        "repos[0].seed_path",
+        "repos[0].ci_source",
+        "repos[0].ci_seed_path",
+        "issues[0].body",
+    ] {
+        assert!(
+            path_fields.contains(&field),
+            "expected local path reference {field:?} in {path_fields:#?}"
+        );
+    }
+}
+
+#[test]
 fn check_scenario_reports_missing_manifest() {
     let dir = tempfile::tempdir().expect("tempdir");
     let report = check_scenario(dir.path());
@@ -195,6 +227,15 @@ fn discovers_scenario_directories_in_stable_order() {
         .collect::<Vec<_>>();
 
     assert_eq!(names, vec!["alpha", "zeta"]);
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crate directory has workspace crates parent")
+        .parent()
+        .expect("crates directory has workspace root parent")
+        .to_path_buf()
 }
 
 fn assert_has_message(diagnostics: &[Diagnostic], needle: &str) {

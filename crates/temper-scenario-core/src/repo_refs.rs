@@ -28,7 +28,9 @@ fn collect_repositories_at(
                 let normalized = key.replace('-', "_").to_ascii_lowercase();
                 let child_path = join_field(field_path, key);
                 if matches!(normalized.as_str(), "repos" | "repositories") {
-                    parse_repository_collection(child, &child_path, diagnostics, repositories);
+                    if looks_like_repository_declaration_collection(child) {
+                        parse_repository_collection(child, &child_path, diagnostics, repositories);
+                    }
                 } else {
                     collect_repositories_at(child, &child_path, diagnostics, repositories);
                 }
@@ -124,17 +126,22 @@ fn parse_repository_table(
 ) {
     let id = table
         .get("id")
-        .or_else(|| table.get("slug"))
         .and_then(|value| string_value(join_field(field_path, "id"), value, diagnostics))
         .or_else(|| alias.map(ToOwned::to_owned));
     if let Some(id) = &id {
-        validate_alias(id, &join_field(field_path, "id"), diagnostics);
+        let id_field = if table.contains_key("id") {
+            join_field(field_path, "id")
+        } else {
+            field_path.to_string()
+        };
+        validate_alias(id, &id_field, diagnostics);
     }
 
     let repo_field = table
         .get("repo")
         .map(|value| ("repo", value))
         .or_else(|| table.get("repository").map(|value| ("repository", value)))
+        .or_else(|| table.get("slug").map(|value| ("slug", value)))
         .or_else(|| table.get("remote").map(|value| ("remote", value)))
         .or_else(|| {
             table.get("name").and_then(|value| {
@@ -172,6 +179,23 @@ fn looks_like_single_repository_table(table: &toml::Table) -> bool {
         .any(|key| table.contains_key(*key))
 }
 
+fn looks_like_repository_declaration_collection(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(looks_like_repository_declaration_item),
+        Value::Table(table) if looks_like_single_repository_table(table) => true,
+        Value::Table(table) => table.values().any(looks_like_repository_declaration_item),
+        _ => false,
+    }
+}
+
+fn looks_like_repository_declaration_item(value: &Value) -> bool {
+    match value {
+        Value::String(repo) => repo.trim().contains('/'),
+        Value::Table(table) => looks_like_single_repository_table(table),
+        _ => false,
+    }
+}
+
 pub(crate) fn repository_aliases(repositories: &[RepositoryReference]) -> BTreeSet<String> {
     let mut aliases = BTreeSet::new();
     for repository in repositories {
@@ -195,6 +219,14 @@ pub(crate) fn validate_repository_fields(
                 let normalized = key.replace('-', "_").to_ascii_lowercase();
                 let child_path = join_field(field_path, key);
                 if matches!(normalized.as_str(), "repos" | "repositories") {
+                    if !looks_like_repository_declaration_collection(child) {
+                        validate_repository_reference_value(
+                            child,
+                            &child_path,
+                            aliases,
+                            diagnostics,
+                        );
+                    }
                     continue;
                 }
                 if is_repository_field_key(&normalized) {

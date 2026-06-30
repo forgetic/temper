@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn temper_scenario(args: &[&str]) -> Output {
@@ -96,6 +96,43 @@ fn check_succeeds_for_all_valid_scenarios() {
 }
 
 #[test]
+fn check_succeeds_for_checked_in_basic_delivery_manifest() {
+    let scenario = workspace_root().join("scenarios/basic-delivery");
+
+    let output = temper_scenario(&["check", &scenario.to_string_lossy()]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout utf8"),
+        "OK - checked 1 scenario(s).\n"
+    );
+}
+
+#[test]
+fn list_succeeds_for_checked_in_scenarios_directory() {
+    let scenarios = workspace_root().join("scenarios");
+
+    let output = temper_scenario(&["list", &scenarios.to_string_lossy()]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(
+        stdout.contains("basic-delivery\tactive\tprovisional\tExercise the minimal"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn check_fails_with_human_readable_diagnostics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scenario = dir.path().join("broken");
@@ -152,4 +189,13 @@ fn default_missing_scenarios_directory_is_empty_success() {
         String::from_utf8(output.stdout).unwrap(),
         "OK - checked 0 scenario(s).\n"
     );
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crate directory has workspace crates parent")
+        .parent()
+        .expect("crates directory has workspace root parent")
+        .to_path_buf()
 }

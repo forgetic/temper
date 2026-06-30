@@ -156,22 +156,23 @@ fn parse_issue_table(
     diagnostics: &mut Vec<Diagnostic>,
     issues: &mut Vec<IssueReference>,
 ) {
-    let repo = table
-        .get("repo")
-        .or_else(|| table.get("repository"))
-        .and_then(|value| string_value(join_field(field_path, "repo"), value, diagnostics))
-        .or_else(|| inherited_repo.map(ToOwned::to_owned));
-    let number_value = table
-        .get("number")
-        .or_else(|| table.get("issue"))
-        .or_else(|| table.get("id"));
+    let number_value = table.get("number").or_else(|| table.get("issue"));
     let Some(number_value) = number_value else {
+        if looks_like_seed_issue_definition(field_path, table) {
+            return;
+        }
         diagnostics.push(Diagnostic::error(
             join_field(field_path, "number"),
             "issue number is required",
         ));
         return;
     };
+
+    let repo = table
+        .get("repo")
+        .or_else(|| table.get("repository"))
+        .and_then(|value| string_value(join_field(field_path, "repo"), value, diagnostics))
+        .or_else(|| inherited_repo.map(ToOwned::to_owned));
 
     match number_value {
         Value::Integer(number) => push_numeric_issue(
@@ -368,8 +369,19 @@ fn validate_issue_repo(
     validate_repository_name(repo, field_path, diagnostics)
 }
 
+fn looks_like_seed_issue_definition(field_path: &str, table: &toml::Table) -> bool {
+    let under_issues_collection = field_path
+        .split('.')
+        .any(|segment| segment == "issues" || segment.starts_with("issues["));
+    under_issues_collection
+        && ["title", "body", "author", "labels", "kind", "created_after"]
+            .iter()
+            .any(|key| table.contains_key(*key))
+}
+
 fn is_issue_field_key(key: &str) -> bool {
     matches!(key, "issue" | "issues" | "issue_ref" | "issue_refs")
         || key.ends_with("_issue")
-        || key.ends_with("_issues")
+        || key.ends_with("_issue_ref")
+        || key.ends_with("_issue_refs")
 }
