@@ -141,37 +141,26 @@ async fn read_evidence(
         .list_pull_requests(repo, PullRequestQuery::default())
         .await?;
     let pull_request = only_implementation_pr(&pull_requests)?;
-    match pull_request.state {
-        PullRequestState::Merged => {
-            if issue.state != IssueState::Closed {
-                return Err(boxed_error(format!(
-                    "seeded code issue #{} was not closed after merge",
-                    issue.number
-                )));
-            }
-            if has_label(&pull_request.labels, "landing") {
-                return Err(boxed_error(format!(
-                    "implementation PR #{} still has `landing` label",
-                    pull_request.number
-                )));
-            }
-        }
-        PullRequestState::Open => {
-            if issue.state != IssueState::Open || !has_label(&issue.labels, "in-progress") {
-                return Err(boxed_error(format!(
-                    "seeded code issue #{} did not remain in the deterministic open-PR state",
-                    issue.number
-                )));
-            }
-        }
-        PullRequestState::Closed => {
-            return Err(boxed_error(format!(
-                "implementation PR #{} was closed without merging",
-                pull_request.number
-            )));
-        }
+    if pull_request.state != PullRequestState::Merged {
+        return Err(boxed_error(format!(
+            "implementation PR #{} was not merged (state: {})",
+            pull_request.number,
+            pr_state_evidence(pull_request.state)
+        )));
     }
-    for stale_label in ["ready", "untriaged"] {
+    if issue.state != IssueState::Closed {
+        return Err(boxed_error(format!(
+            "seeded code issue #{} was not closed after merge",
+            issue.number
+        )));
+    }
+    if has_label(&pull_request.labels, "landing") {
+        return Err(boxed_error(format!(
+            "implementation PR #{} still has `landing` label",
+            pull_request.number
+        )));
+    }
+    for stale_label in ["ready", "untriaged", "in-progress"] {
         if has_label(&issue.labels, stale_label) {
             return Err(boxed_error(format!(
                 "seeded code issue #{} still has `{stale_label}` label",
@@ -214,6 +203,11 @@ async fn read_evidence(
         .filter(|candidate| candidate.state == IssueState::Closed)
         .filter(|candidate| candidate.number == issue.number)
         .count();
+    if closed_parent_issues != 1 {
+        return Err(boxed_error(format!(
+            "expected exactly 1 closed parent issue, found {closed_parent_issues}"
+        )));
+    }
 
     Ok(RunEvidence {
         issue_number: issue.number,
@@ -367,7 +361,7 @@ fn outcome_evidence_lines(outcome: &RunOutcome) -> Vec<String> {
 
 fn pr_state_evidence(state: PullRequestState) -> &'static str {
     match state {
-        PullRequestState::Open => "open as deterministic PR equivalent",
+        PullRequestState::Open => "open (not merged)",
         PullRequestState::Closed => "closed",
         PullRequestState::Merged => "merged",
     }
@@ -395,4 +389,125 @@ fn boxed_error(message: impl Into<String>) -> BoxError {
 
 fn has_label(labels: &[String], expected: &str) -> bool {
     labels.iter().any(|label| label == expected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IntakeSeed, read_evidence};
+    use temper_forge_memory::MemoryForge;
+    use temper_forge_model::{
+        BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest,
+        Forge, MergeMethod, MergePullRequest, PullRequest, RepositoryId,
+    };
+
+    #[test]
+    fn evidence_rejects_open_pr_even_with_passing_ci() {
+        let error = temper_testing::block_on(async {
+            let (forge, repo, seed) = fixture_state(false).await;
+            read_evidence(&forge, &repo, &seed)
+                .await
+                .expect_err("open PR must not satisfy the scenario contract")
+                .to_string()
+        });
+
+        assert!(
+            error.contains("implementation PR #1 was not merged"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn evidence_rejects_merged_pr_when_parent_issue_is_still_open() {
+        let error = temper_testing::block_on(async {
+            let (forge, repo, seed) = fixture_state(true).await;
+            read_evidence(&forge, &repo, &seed)
+                .await
+                .expect_err("open parent issue must not satisfy the scenario contract")
+                .to_string()
+        });
+
+        assert!(
+            error.contains("seeded code issue #1 was not closed after merge"),
+            "{error}"
+        );
+    }
+
+    async fn fixture_state(merge_pr: bool) -> (MemoryForge, RepositoryId, IntakeSeed) {
+        let forge = MemoryForge::new();
+        let repo = forge
+            .create_repository(temper_testing::repo_input())
+            .await
+            .expect("repository created")
+            .id;
+        let seed = IntakeSeed {
+            title: "Seeded contract work".to_string(),
+            body: "Implement the contract.".to_string(),
+            labels: Vec::new(),
+        };
+        let issue = forge
+            .create_issue(
+                &repo,
+                CreateIssue {
+                    title: seed.title.clone(),
+                    body: seed.body.clone(),
+                    labels: vec!["code".to_string(), "in-progress".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("issue created");
+        let pull_request = forge
+            .create_pull_request(
+                &repo,
+                CreatePullRequest {
+                    title: format!("Implement #{}", issue.number),
+                    body: format!("Implementation for parent #{}.", issue.number),
+                    source: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "fake/pr-for-code-1".to_string(),
+                    },
+                    target: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "main".to_string(),
+                    },
+                    labels: vec!["implementation".to_string(), "landing".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("pull request created");
+        forge.seed_ci_jobs(&repo, vec![ci_job(&repo, &pull_request)]);
+        if merge_pr {
+            forge
+                .merge_pull_request(
+                    &pull_request.id,
+                    MergePullRequest {
+                        method: MergeMethod::MergeCommit,
+                        commit_title: None,
+                        commit_body: None,
+                    },
+                )
+                .await
+                .expect("pull request merged");
+        }
+        (forge, repo, seed)
+    }
+
+    fn ci_job(repo: &RepositoryId, pull_request: &PullRequest) -> CiJob {
+        let now = temper_testing::ts("2026-05-29T00:00:00Z");
+        CiJob {
+            id: CiJobId::new("ci-basic-delivery-contract"),
+            repo_id: repo.clone(),
+            pull_request_id: Some(pull_request.id.clone()),
+            commit_sha: pull_request.head_sha.clone().unwrap_or_default(),
+            name: "ci".to_string(),
+            status: CiJobStatus::Completed,
+            conclusion: Some(CiJobConclusion::Success),
+            url: None,
+            created_at: now,
+            started_at: Some(now),
+            completed_at: Some(now),
+            updated_at: now,
+        }
+    }
 }

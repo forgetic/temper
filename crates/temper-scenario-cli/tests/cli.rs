@@ -187,8 +187,11 @@ fn run_succeeds_for_checked_in_basic_delivery_scenario() {
     assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
     assert!(stdout.contains("verdict: passed"), "{stdout}");
     assert!(stdout.contains("seeded issue: #"), "{stdout}");
+    assert!(stdout.contains("closed as code"), "{stdout}");
     assert!(stdout.contains("implementation PR: #"), "{stdout}");
-    assert!(stdout.contains("with passing CI"), "{stdout}");
+    assert!(stdout.contains("merged with passing CI"), "{stdout}");
+    assert!(stdout.contains("closed parent issues: 1"), "{stdout}");
+    assert!(!stdout.contains("open (not merged)"), "{stdout}");
     assert!(stdout.contains("actions:"), "{stdout}");
 }
 

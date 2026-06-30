@@ -3,9 +3,10 @@
 //! basic-delivery is the minimal, no-human-in-the-loop shape: the architect
 //! rewrites an `untriaged` intake issue into a `code` + `ready` issue with a
 //! crisp body (a single `triage_intake_to_code` outcome — no design/breakdown
-//! branch, no fan-out), and the engineer turns that ready code issue into an
-//! open `implementation` PR through a single `open_pr` transition (no explicit
-//! `claim_code`/`request_review` sequence). No reviewer/owner/human participate.
+//! branch, no fan-out), and the engineer turns that ready code issue into a
+//! landing-labelled `implementation` PR through a single `open_pr` transition
+//! (no explicit `claim_code`/`request_review` sequence). No reviewer/owner/human
+//! participate.
 //!
 //! These mirror `temper-runner/tests/fake_agents.rs` at basic-delivery scope and
 //! run against the in-memory backend, so they assert the fakes' Forge effects
@@ -157,7 +158,7 @@ fn basic_engineer_opens_implementation_pr_via_open_pr() {
     assert_eq!(pull_requests.len(), 1);
     let pr = &pull_requests[0];
     assert_eq!(pr.state, PullRequestState::Open);
-    assert_eq!(labels(pr.labels.clone()), vec!["implementation"]);
+    assert_eq!(labels(pr.labels.clone()), vec!["implementation", "landing"]);
     // The PR records its parent code issue in workflow metadata.
     let metadata = parse_metadata_block(&pr.body)
         .expect("PR metadata parses")
