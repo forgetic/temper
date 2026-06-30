@@ -10,6 +10,7 @@
 //! problems that matter to CI: unknown enum values, broken local references, and
 //! malformed Forge references.
 
+mod assertion_templates;
 mod diagnostics;
 mod discovery;
 mod issue_refs;
@@ -19,6 +20,10 @@ mod path_refs;
 mod repo_refs;
 mod toml_helpers;
 
+pub use assertion_templates::{
+    ASSERTION_TEMPLATE_CATALOG, ASSERTION_TEMPLATE_NAMES, AssertionTemplate,
+    is_known_assertion_template,
+};
 pub use diagnostics::{Diagnostic, Severity};
 pub use discovery::{check_scenario, check_scenarios, discover_scenarios, resolve_manifest_path};
 pub use manifest::{

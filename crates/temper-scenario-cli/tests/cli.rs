@@ -114,6 +114,44 @@ fn check_succeeds_for_checked_in_basic_delivery_manifest() {
 }
 
 #[test]
+fn check_fails_for_unknown_assertion_template() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scenarios = dir.path().join("scenarios");
+    write_valid_scenario(&scenarios, "alpha", "ready", "experimental", "one");
+    let scenario = scenarios.join("alpha");
+    std::fs::write(
+        scenario.join("scenario.toml"),
+        "schema_version = 1\n\
+         name = \"alpha\"\n\
+         status = \"ready\"\n\
+         stability = \"experimental\"\n\
+         intent = \"one\"\n\
+         files = [\"README.md\"]\n\
+         [[repositories]]\n\
+         id = \"primary\"\n\
+         repo = \"ai/temper\"\n\
+         path = \"repo\"\n\
+         [[issues]]\n\
+         repo = \"primary\"\n\
+         number = 37\n\
+         [expect]\n\
+         template = \"surprise-contract\"\n",
+    )
+    .expect("write manifest");
+
+    let output = temper_scenario(&["check", &scenario.to_string_lossy()]);
+
+    assert!(!output.status.success(), "unknown template should fail");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains(
+            "scenario.toml: error: expect.template: unknown assertion template `surprise-contract`"
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn list_succeeds_for_checked_in_scenarios_directory() {
     let scenarios = workspace_root().join("scenarios");
 

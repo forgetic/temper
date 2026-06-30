@@ -183,6 +183,7 @@ pub struct ScenarioManifest {
     pub status: ScenarioStatus,
     pub stability: ScenarioStability,
     pub intent: ScenarioIntent,
+    pub assertion_templates: Vec<String>,
     pub repositories: Vec<RepositoryReference>,
     pub issues: Vec<IssueReference>,
     pub path_references: Vec<PathReference>,

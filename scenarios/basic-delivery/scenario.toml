@@ -61,6 +61,7 @@ mode = "automation"
 queues = ["raw_intake", "landing"]
 
 [expect]
+template = "single-pr-merged-source-closed"
 outcome = "The intake issue is triaged to ready code, implemented by one PR, passes CI, and lands automatically."
 merged_pull_requests = 1
 closed_parent_issues = 1
