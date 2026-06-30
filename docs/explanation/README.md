@@ -14,4 +14,5 @@ Current explanation pages:
 - [Forgejo multi-process e2e topology and real CI](forgejo-e2e-topology.md)
 - [Reference delivery workflow](reference-workflow.md)
 - [Reference workflow roadmap](reference-workflow-roadmap.md)
+- [Post-merge validation tooling verification](post-merge-validation-verification.md)
 - [Native Forge state roadmap](native-forge-state-roadmap.md)
