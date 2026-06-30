@@ -20,6 +20,11 @@ mod path_refs;
 mod repo_refs;
 mod toml_helpers;
 mod validation_report;
+mod validator_common;
+mod validator_context;
+mod validator_context_sections;
+mod validator_result;
+mod validator_result_render;
 
 pub use assertion_templates::{
     ASSERTION_TEMPLATE_CATALOG, ASSERTION_TEMPLATE_NAMES, AssertionTemplate,
@@ -37,6 +42,19 @@ pub use validation_report::{
     AcceptanceCriterion, EvidenceEntry, EvidenceKind, FollowUpIssueIntent, ValidatedClaim,
     ValidationReport, ValidationStatus, ValidationTarget, ValidationVerdict,
 };
+pub use validator_common::{ArtifactLink, ArtifactReference, TargetRepository, WorkflowFact};
+pub use validator_context::{
+    AggregateContext, IssueContext, PullRequestContext, VALIDATOR_CONTEXT_SCHEMA,
+    ValidationBindingSummary, ValidatorContext, ValidatorTarget,
+};
+pub use validator_context_sections::{
+    ChangedFileContext, CiRunContext, CommentContext, DiffContext, ReviewContext,
+    ReviewThreadContext, ScenarioMetadataContext, SuggestedScenario, WorkflowContext, WorkflowGate,
+};
+pub use validator_result::{
+    RelatedPullRequest, ScenarioPromotionIntent, StructuredEvidenceEntry, VALIDATOR_RESULT_SCHEMA,
+    ValidationAssertion, ValidatorResult, ValidatorResultTarget,
+};
 
 /// Default directory scanned by the CLI when no scenario root is supplied.
 pub const DEFAULT_SCENARIOS_DIR: &str = "scenarios";
@@ -47,3 +65,5 @@ pub const MANIFEST_FILE_NAMES: &[&str] =
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod validator_tests;

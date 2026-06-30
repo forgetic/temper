@@ -1,0 +1,73 @@
+{
+  "schema": "temper.validator.result.v1",
+  "target": {
+    "kind": "epic",
+    "repo": "ai/temper",
+    "ref": { "issue_number": 35 },
+    "trigger_reason": "validation-ready after all child issues completed",
+    "state_fingerprint": "aggregate:abc123-def456",
+    "title": "Workflow-native validation schema foundation",
+    "labels": ["epic", "validation-ready"]
+  },
+  "related_prs": [
+    {
+      "pr_number": 65,
+      "source_issue": 60,
+      "merged_main_sha": "abc123"
+    },
+    {
+      "pr_number": 67,
+      "source_issue": 62,
+      "merged_main_sha": "def456"
+    }
+  ],
+  "verdict": "passed",
+  "validated_claims": [
+    {
+      "description": "The aggregate target includes all completed child issues and merged PRs.",
+      "status": "satisfied",
+      "evidence_refs": ["aggregate-rollup"]
+    },
+    {
+      "description": "Scenario metadata remains available to validators.",
+      "status": "observed",
+      "evidence_refs": ["scenario-check"]
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "description": "Aggregate targets preserve PR-level merge and source issue details.",
+      "status": "satisfied",
+      "evidence_refs": ["aggregate-rollup"]
+    },
+    {
+      "description": "No follow-up issue is required for a passed validation.",
+      "status": "not applicable",
+      "evidence_refs": ["aggregate-rollup"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "scenario-check",
+      "kind": "scenario_check",
+      "summary": "basic-delivery scenario metadata was present and valid.",
+      "uri": "artifact://scenario/basic-delivery.json"
+    },
+    {
+      "id": "aggregate-rollup",
+      "kind": "observation",
+      "summary": "2 child issues complete and 2 produced PRs merged.",
+      "details": "PR #65 -> abc123\nPR #67 -> def456"
+    }
+  ],
+  "limitations": [],
+  "follow_up_issue": null,
+  "scenario_promotion": {
+    "scenario_name": "aggregate-validation-rollup",
+    "intent": "Exercise aggregate validator handoff bundles with multiple related PRs.",
+    "source_evidence": ["aggregate-rollup"],
+    "fixture_notes": "Use a two-child epic fixture with both produced PRs merged.",
+    "propose_issue": true,
+    "propose_pr": false
+  }
+}

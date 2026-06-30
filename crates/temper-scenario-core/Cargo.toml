@@ -8,10 +8,12 @@ publish = false
 description = "Scenario manifest parsing, discovery, and validation for executable Temper scenarios."
 
 [dependencies]
+serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
