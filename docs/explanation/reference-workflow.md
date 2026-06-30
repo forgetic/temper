@@ -158,8 +158,10 @@ Current mechanical landing creates two independent consumers:
   batching without losing liveness.
 
 A planned workflow-native validator role is a third, separate post-merge
-handoff, not a replacement for those queues. Its context and result schemas are
-defined in
+handoff, not a replacement for those queues. The workflow spec decides whether
+that handoff validates each merged implementation PR or an aggregate target such
+as an epic after child completion or an explicit validation-ready signal. Its
+binding model plus context and result schemas are defined in
 [post-merge-validator-handoff.md](../reference/post-merge-validator-handoff.md);
 the current `temper-scenario validate-pr` command is only a temporary/manual
 bridge for producing validation reports.
