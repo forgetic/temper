@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::{
-    Diagnostic, ScenarioStability, ScenarioStatus, check_scenario, discover_scenarios,
-    load_manifest, parse_manifest_str,
+    ASSERTION_TEMPLATE_CATALOG, ASSERTION_TEMPLATE_NAMES, Diagnostic, ScenarioStability,
+    ScenarioStatus, check_scenario, discover_scenarios, load_manifest, parse_manifest_str,
 };
 
 fn valid_manifest() -> &'static str {
@@ -29,6 +29,16 @@ number = 37
 }
 
 #[test]
+fn assertion_template_catalog_names_are_stable() {
+    let catalog_names = ASSERTION_TEMPLATE_CATALOG
+        .iter()
+        .map(|template| template.name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(catalog_names.as_slice(), ASSERTION_TEMPLATE_NAMES);
+}
+
+#[test]
 fn parses_valid_manifest_and_references() {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(dir.path().join("README.md"), "intent").expect("write readme");
@@ -39,11 +49,66 @@ fn parses_valid_manifest_and_references() {
     assert_eq!(manifest.name, "basic-delivery");
     assert_eq!(manifest.status, ScenarioStatus::Ready);
     assert_eq!(manifest.stability, ScenarioStability::Experimental);
+    assert!(manifest.assertion_templates.is_empty());
     assert_eq!(manifest.repositories.len(), 1);
     assert_eq!(manifest.repositories[0].repo, "ai/temper");
     assert_eq!(manifest.issues.len(), 1);
     assert_eq!(manifest.issues[0].number, 37);
     assert_eq!(manifest.path_references.len(), 2);
+}
+
+#[test]
+fn parses_known_assertion_templates_as_manifest_metadata() {
+    let manifest = parse_manifest_str(
+        r##"
+name = "templated"
+status = "ready"
+stability = "experimental"
+intent = "Template metadata should validate independently from explicit checks."
+
+[expect]
+template = "single-pr-merged-source-closed"
+templates = ["no-duplicate-prs", "quiescent-after-merge"]
+
+[[expect.checks]]
+id = "explicit-check-remains-supported"
+state = "merged"
+"##,
+        ".",
+    )
+    .expect("known templates are valid");
+
+    assert_eq!(
+        manifest.assertion_templates,
+        vec![
+            "single-pr-merged-source-closed".to_string(),
+            "no-duplicate-prs".to_string(),
+            "quiescent-after-merge".to_string()
+        ]
+    );
+}
+
+#[test]
+fn rejects_unknown_assertion_templates() {
+    let diagnostics = parse_manifest_str(
+        r##"
+name = "templated"
+status = "ready"
+stability = "experimental"
+intent = "Unknown templates should fail manifest validation."
+
+[expect]
+templates = ["single-pr-merged-source-closed", "surprise-contract"]
+"##,
+        ".",
+    )
+    .expect_err("unknown template is invalid");
+
+    assert_has_message(
+        &diagnostics,
+        "unknown assertion template `surprise-contract`",
+    );
+    assert_has_field(&diagnostics, "expect.templates[1]");
 }
 
 #[test]
@@ -175,6 +240,10 @@ fn load_manifest_accepts_checked_in_basic_delivery_shape() {
     assert_eq!(manifest.repositories.len(), 1);
     assert_eq!(manifest.repositories[0].id.as_deref(), Some("service"));
     assert_eq!(manifest.repositories[0].repo, "acme/service");
+    assert_eq!(
+        manifest.assertion_templates,
+        vec!["single-pr-merged-source-closed".to_string()]
+    );
 
     let path_fields = manifest
         .path_references
@@ -244,5 +313,14 @@ fn assert_has_message(diagnostics: &[Diagnostic], needle: &str) {
             .iter()
             .any(|diagnostic| diagnostic.message.contains(needle)),
         "diagnostics did not contain {needle:?}: {diagnostics:#?}"
+    );
+}
+
+fn assert_has_field(diagnostics: &[Diagnostic], field: &str) {
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.field.as_deref() == Some(field)),
+        "diagnostics did not contain field {field:?}: {diagnostics:#?}"
     );
 }

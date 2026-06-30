@@ -12,8 +12,8 @@ use crate::repo_refs::{
 };
 use crate::toml_helpers::string_value;
 use crate::{
-    Diagnostic, ManifestLoadError, PathReference, ScenarioIntent, ScenarioManifest,
-    ScenarioStability, ScenarioStatus, Severity,
+    ASSERTION_TEMPLATE_NAMES, Diagnostic, ManifestLoadError, PathReference, ScenarioIntent,
+    ScenarioManifest, ScenarioStability, ScenarioStatus, Severity, is_known_assertion_template,
 };
 
 /// Loads, parses, and validates a single manifest file.
@@ -97,6 +97,7 @@ pub(crate) fn parse_manifest_value(
     let status = parse_status(table, scenario, &mut diagnostics);
     let stability = parse_stability(table, scenario, &mut diagnostics);
     let intent = parse_intent(table, scenario, &mut diagnostics);
+    let assertion_templates = parse_assertion_templates(table, &mut diagnostics);
 
     let mut path_references = Vec::<PathReference>::new();
     collect_path_references(value, "", base_dir, &mut path_references, &mut diagnostics);
@@ -119,6 +120,7 @@ pub(crate) fn parse_manifest_value(
             status,
             stability,
             intent,
+            assertion_templates,
             repositories,
             issues,
             path_references,
@@ -266,6 +268,64 @@ fn parse_intent(
     }
 
     Some(ScenarioIntent { summary, path })
+}
+
+fn parse_assertion_templates(
+    table: &toml::Table,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<String> {
+    let Some(expect) = table.get("expect").and_then(Value::as_table) else {
+        return Vec::new();
+    };
+
+    let mut templates = Vec::new();
+    if let Some(value) = expect.get("template") {
+        parse_assertion_template_value(value, "expect.template", diagnostics, &mut templates);
+    }
+    if let Some(value) = expect.get("templates") {
+        parse_assertion_templates_value(value, "expect.templates", diagnostics, &mut templates);
+    }
+    templates
+}
+
+fn parse_assertion_templates_value(
+    value: &Value,
+    field: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+    templates: &mut Vec<String>,
+) {
+    let Some(items) = value.as_array() else {
+        diagnostics.push(Diagnostic::error(
+            field,
+            "must be an array of template strings",
+        ));
+        return;
+    };
+    for (index, value) in items.iter().enumerate() {
+        parse_assertion_template_value(value, &format!("{field}[{index}]"), diagnostics, templates);
+    }
+}
+
+fn parse_assertion_template_value(
+    value: &Value,
+    field: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+    templates: &mut Vec<String>,
+) {
+    let Some(template) = string_value(field, value, diagnostics) else {
+        return;
+    };
+    if is_known_assertion_template(&template) {
+        templates.push(template);
+    } else {
+        diagnostics.push(Diagnostic::error(
+            field,
+            format!(
+                "unknown assertion template `{template}` (expected one of: {})",
+                ASSERTION_TEMPLATE_NAMES.join(", ")
+            ),
+        ));
+    }
 }
 
 fn metadata_value<'a>(

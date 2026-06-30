@@ -71,6 +71,26 @@ Required sections:
 Scenarios may add explanatory keys inside those sections, but new keys should be
 documented in the scenario README when they affect validation semantics.
 
+## Assertion templates
+
+`[expect]` may name stable assertion templates before every template has a full
+runner implementation. Use `template = "<name>"` for one contract or
+`templates = ["<name>", ...]` for several; `[[expect.checks]]` entries can remain
+beside templates for explanatory or future machine checks.
+
+The initial catalog accepted by `temper-scenario check` is:
+
+- `single-pr-merged-source-closed` — one implementation PR merges and closes its source issue.
+- `review-requested-then-approved` — a review request is made before approval unblocks landing.
+- `ci-fails-then-passes` — a failing CI signal is followed by a passing replacement signal.
+- `cross-repo-fanout-converges` — coordinated work fans out across repositories and converges.
+- `no-duplicate-prs` — repeated progress signals do not create duplicate implementation PRs.
+- `quiescent-after-merge` — no further workflow actions remain after successful merge convergence.
+- `webhook-progress-before-poll-backstop` — webhook progress is observed before any polling backstop is needed.
+
+Unknown template names are manifest validation errors so checked-in scenarios
+refer only to cataloged behavior contracts.
+
 ## Expected layout
 
 ```text
