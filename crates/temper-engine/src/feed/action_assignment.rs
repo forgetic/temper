@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use temper_forge::{CiJobConclusion, CiJobQuery, Forge, ForgeError, PullRequest, RepositoryId};
+mod guidance;
+
+use self::guidance::pull_request_writable_guidance;
+use temper_forge::{CiJobQuery, Forge, ForgeError, PullRequest, RepositoryId};
 use temper_protocol_worker::{JobContext, PullRequestFreshness, RepoAccess};
 use temper_runner::{ScanError, WorkItem};
 use temper_workflow::{
@@ -250,6 +253,7 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
         item,
         &query,
         &action,
+        &pull_request,
         &head_branch,
         &base_branch,
     )
@@ -303,130 +307,6 @@ fn condition_token(condition: &GateCondition) -> Option<String> {
         | GateCondition::StateEquals { .. } => return None,
     };
     Some(token.to_string())
-}
-
-async fn pull_request_writable_guidance<F: Forge + ?Sized>(
-    forge: &F,
-    repo: &RepositoryId,
-    compiled: &CompiledWorkflow,
-    item: &WorkItem,
-    query: &CiJobQuery,
-    action: &str,
-    head_branch: &str,
-    base_branch: &str,
-) -> String {
-    let reason = if is_ci_failed_pull_request_queue(item, compiled) {
-        ci_failure_clause(forge, repo, query).await
-    } else if is_merge_conflict_pull_request_queue(item, compiled) {
-        merge_conflict_clause(base_branch)
-    } else {
-        queue_match_clause(compiled, item)
-    };
-
-    format!(
-        "Assigned workflow action `{action}` for queue `{}` requires updating this existing pull request head. \
-         {reason} You are checked out on the PR head branch `{head_branch}` in WRITABLE mode: make the smallest fix, commit it, \
-         and Temper will push it back to that branch so workflow gates can re-evaluate. Do NOT report success without changing files. \
-         Emit `{{\"summary\": \"...\"}}` describing the fix you applied.",
-        item.queue.as_str()
-    )
-}
-
-/// Whether `item` is a pull-request member of a queue gated on `ci_failed`.
-fn is_ci_failed_pull_request_queue(item: &WorkItem, compiled: &CompiledWorkflow) -> bool {
-    if !matches!(item.target, ArtifactSource::PullRequest { .. }) {
-        return false;
-    }
-    compiled
-        .queues()
-        .iter()
-        .find(|queue| queue.id.as_str() == item.queue.as_str())
-        .is_some_and(|queue| matches!(queue.condition, Some(GateCondition::CiFailed)))
-}
-
-/// Whether `item` is a pull-request member of the merge-conflict repair queue.
-fn is_merge_conflict_pull_request_queue(item: &WorkItem, compiled: &CompiledWorkflow) -> bool {
-    if !matches!(item.target, ArtifactSource::PullRequest { .. }) {
-        return false;
-    }
-    compiled
-        .queues()
-        .iter()
-        .find(|queue| queue.id.as_str() == item.queue.as_str())
-        .is_some_and(|queue| {
-            queue
-                .labels
-                .iter()
-                .any(|label| label.as_str() == "merge-conflict")
-        })
-}
-
-fn merge_conflict_clause(base_branch: &str) -> String {
-    let base_branch = base_branch.trim();
-    let base_branch = if base_branch.is_empty() {
-        "the target branch"
-    } else {
-        base_branch
-    };
-    format!(
-        "Mechanical landing found a merge conflict with {base_branch}. Rebase or merge {base_branch} into the PR head, resolve conflicts, keep the repair scoped to the conflict resolution, and push the updated head; CI will rerun before landing."
-    )
-}
-
-fn queue_match_clause(compiled: &CompiledWorkflow, item: &WorkItem) -> String {
-    let Some(queue) = compiled
-        .queues()
-        .iter()
-        .find(|queue| queue.id.as_str() == item.queue.as_str())
-    else {
-        return "The queue matched workflow state requiring a PR-head update.".to_string();
-    };
-    if matches!(queue.condition, Some(GateCondition::ReviewChangesRequested)) {
-        return "A native pull request review has requested changes.".to_string();
-    }
-    if !queue.labels.is_empty() {
-        let labels = queue
-            .labels
-            .iter()
-            .map(|label| label.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        return format!("The queue matched workflow label(s): {labels}.");
-    }
-    "The queue matched workflow state requiring a PR-head update.".to_string()
-}
-
-async fn ci_failure_clause<F: Forge + ?Sized>(
-    forge: &F,
-    repo: &RepositoryId,
-    query: &CiJobQuery,
-) -> String {
-    let failing = match forge.list_ci_jobs(repo, query.clone()).await {
-        Ok(jobs) => jobs
-            .into_iter()
-            .filter(|job| {
-                !matches!(
-                    job.conclusion,
-                    None | Some(CiJobConclusion::Success)
-                        | Some(CiJobConclusion::Skipped)
-                        | Some(CiJobConclusion::Neutral)
-                )
-            })
-            .map(|job| job.name)
-            .filter(|name| !name.trim().is_empty())
-            .collect::<Vec<_>>(),
-        Err(_) => Vec::new(),
-    };
-
-    if failing.is_empty() {
-        "CI is currently RED on this pull request; inspect the failing job and make CI pass."
-            .to_string()
-    } else {
-        format!(
-            "CI is RED on this pull request. Failing CI job(s): {}. Inspect them and make CI pass.",
-            failing.join(", ")
-        )
-    }
 }
 
 fn append_guidance(context: &mut JobContext, generated: String) {

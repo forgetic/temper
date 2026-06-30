@@ -14,6 +14,9 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("host responds with failure"));
     assert!(engineer.contains("needs_architect"));
     assert!(engineer.contains("needs_human"));
+    assert!(engineer.contains("PR repair runs"));
+    assert!(engineer.contains("updated PR `title`"));
+    assert!(engineer.contains("implementation-report"));
     assert!(!engineer.contains("checkpoint(label)"));
     assert!(!engineer.contains("CHECKPOINTS:"));
 

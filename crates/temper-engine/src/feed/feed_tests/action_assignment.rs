@@ -1,4 +1,5 @@
 use super::*;
+use temper_forge::{CreatePullRequestReview, RequestReviewers, ReviewDecision, User, UserId};
 
 fn reference_workflow() -> (ValidatedWorkflow, CompiledWorkflow) {
     let workflow: RawWorkflowSpec = serde_json::from_str(REFERENCE_DELIVERY_FIXTURE)
@@ -198,6 +199,10 @@ fn reference_pr_head_fix_assignments_checkout_real_pr_head() {
             assert!(guidance.contains(queue), "guidance: {guidance}");
             if queue == "pr_merge_conflict" {
                 assert!(
+                    guidance.contains("matched_labels: merge-conflict"),
+                    "guidance: {guidance}"
+                );
+                assert!(
                     guidance.contains("merge conflict with main"),
                     "guidance: {guidance}"
                 );
@@ -207,6 +212,135 @@ fn reference_pr_head_fix_assignments_checkout_real_pr_head() {
                 );
             }
         }
+    })
+}
+
+#[test]
+fn reference_review_changes_requested_assignment_includes_review_feedback() {
+    temper_engine_io::block_on(async move {
+        let forge = MemoryForge::new();
+        let repo = new_repo(&forge).await;
+        let (workflow, compiled) = reference_workflow();
+        let pull_request = forge
+            .create_pull_request(
+                &repo,
+                CreatePullRequest {
+                    title: "Implement reviewed feature".to_string(),
+                    body: "Current implementation report.".to_string(),
+                    source: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "agent/pr-for-code-227".to_string(),
+                    },
+                    target: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "main".to_string(),
+                    },
+                    labels: vec!["implementation".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("pull request is created");
+        let pull_request = forge
+            .set_pull_request_head(&pull_request.id, Some("review-head-sha".to_string()))
+            .expect("pull request head sha is set");
+        let reviewer = User {
+            id: UserId::new("reviewer-1"),
+            handle: "reviewer-one".to_string(),
+            display_name: None,
+            email: None,
+        };
+        forge
+            .request_pull_request_reviewers(
+                &pull_request.id,
+                RequestReviewers {
+                    reviewers: vec![reviewer.id.clone()],
+                },
+            )
+            .await
+            .expect("reviewer is requested");
+        let review = forge
+            .as_user(reviewer)
+            .submit_pull_request_review(
+                &pull_request.id,
+                CreatePullRequestReview {
+                    decision: ReviewDecision::ChangesRequested,
+                    body: Some("Please cover the edge case.\nAdd a regression test.".to_string()),
+                },
+            )
+            .await
+            .expect("changes-requested review is submitted");
+
+        let item = WorkItem {
+            queue: QueueId::new("pr_changes_requested"),
+            role: RoleId::new("engineer"),
+            target: ArtifactSource::PullRequest {
+                number: pull_request.number,
+            },
+            kind: ArtifactKindId::new("implementation_pr"),
+        };
+        let mut job = job_from_work_item("ai/temper", &item);
+
+        assert_eq!(
+            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                .await
+                .expect("enrichment succeeds for review feedback pull request"),
+            EnrichOutcome::Enriched
+        );
+
+        let context: JobContext =
+            serde_json::from_value(job.job_payload).expect("enriched JobContext parses");
+        assert_eq!(context.action.as_deref(), Some("address_review_changes"));
+        assert_eq!(
+            context.checkout_capability.as_deref(),
+            Some("pull_request_writable")
+        );
+        let artifact = context.artifact.as_ref().expect("PR snapshot is present");
+        assert_eq!(artifact.title, "Implement reviewed feature");
+        assert_eq!(artifact.body, "Current implementation report.");
+        let freshness = context
+            .pull_request_freshness
+            .as_ref()
+            .expect("PR-head freshness guard is present");
+        assert_eq!(
+            freshness.queue_condition.as_deref(),
+            Some("review_changes_requested")
+        );
+
+        let guidance = context.guidance.expect("review guidance present");
+        assert!(
+            guidance.contains("Current implementation PR handoff from Forge"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("Implement reviewed feature"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("Current implementation report."),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("reason: review_changes_requested"),
+            "guidance: {guidance}"
+        );
+        assert!(guidance.contains("reviewer-1"), "guidance: {guidance}");
+        assert!(
+            guidance.contains(&review.submitted_at.to_rfc3339()),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("Please cover the edge case."),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("Add a regression test."),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("updated current PR `title`"),
+            "guidance: {guidance}"
+        );
     })
 }
 
