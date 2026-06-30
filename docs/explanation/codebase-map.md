@@ -1,27 +1,98 @@
 # Codebase map
 
-Rows are ordered by the mental model agents usually need: Forge contract and backends, workflow runtime, runner/test support, then process-responder and deployable wiring.
+Temper is a Rust workspace split by process plane and by reusable contract. Use
+this page as a navigation map; `Cargo.toml` remains the exact source of truth for
+workspace membership.
+
+Rows are ordered by the mental model agents usually need: entrypoints and
+operator surfaces, Forge contracts and backends, workflow/control runtime,
+worker/agent boundaries, interaction surfaces, then testing and repository
+support.
+
+## Entry points and operator surfaces
 
 | Path | Look here for |
 | --- | --- |
-| `crates/temper-forge/` | Portable Forge model and `Forge` trait; start here for provider-neutral issue, PR, review, dependency, CI, and change-hint API changes. |
-| `crates/temper-protocol-interaction/` | Serialization-only JSON DTOs and validation helpers for external interactive (conversation/proposal) responder processes. |
-| `crates/temper-protocol-decision/` | Serialization-only JSON DTOs and validation helpers for external workflow-role decision responder processes. |
-| `crates/temper-interaction/` | Provider-neutral interactive conversation domain types, inert proposals, and responder trait; keep transport, workflow, Forge mutation, and LLM-provider wiring out. |
+| `src/bin/temper.rs` | The unified `temper` binary composition root. It snapshots argv/env/paths/cwd once and delegates to `temper-cli`. |
+| `crates/temper-cli/` | Thin dispatcher for `temper init`, `config`, `daemon`/`serve`, the `agent` entrypoint, and hidden operator/responder tools. |
+| `crates/temper-cli-common/` | Shared CLI plumbing: prompt abstraction, argv helpers, exit-code wrappers, file target resolution, and terminal-safe file writes. |
+| `crates/temper-cli-config/` | `temper config` subcommands: validate/check, show, paths, schema, and starter template output over `temper-config`. |
+| `crates/temper-cli-init/` | Interactive `temper init`: collect operator answers, write config/workflow/credential artifacts, and optionally provision when `--apply` is explicit. |
+| `crates/temper-cli-daemon/` | `temper daemon` / `temper serve` wiring for standalone all-in-one mode or individual engine/worker services. This is where the unified CLI pulls in the heavy engine/worker/agent stack. |
+| `crates/temper-engine-service/` | Slim `temper-engine` service binary and adapters from resolved config into a running engine daemon. |
+| `crates/temper-worker-service/` | Slim `temper-worker` service binary and adapters from resolved config into a long-polling worker that spawns out-of-process agents. |
+| `crates/temper-agent-session/` | Slim `temper-agent` process boundary: read `WorkspaceContext`, run one native coding-agent session in the prepared workspace, write `WorkspaceResult`. |
+| `crates/temper-web/` | Web dashboard: Rust HTTP/SSE server, read model, feed adapters, and bundled TypeScript UI under `ui/`. |
+| `crates/temper-interaction-service/` | Deployable REPL/HTTP interaction service, args, bindings, DTOs, and transport glue for interactive profiles. |
+| `crates/temper-trigger-forgejo/` | Forgejo webhook receiver that verifies payloads and emits authenticated wake hints. |
+
+## Configuration, provisioning, and reference delivery
+
+| Path | Look here for |
+| --- | --- |
+| `crates/temper-config/` | Schema-based `config.toml`/`credentials.toml` loading, secret-source handling, environment/path abstraction, JSON Schema, and resolved runtime settings. |
+| `crates/temper-reference-delivery/` | Lightweight reference-delivery defaults: bundled workflow fixture, repository inputs, role actor mapping, and runner defaults shared by deployable tools. |
+| `crates/temper-provision/` | Backend-agnostic provisioning orchestration over the Forge capability traits: owners/users/tokens/access, repositories, labels, seed content, CI, webhooks, and optional intake issue. |
+| `crates/temper-provision-forgejo-cli/` | Demo/operator `temper provision-forgejo` implementation: builds a Forgejo backend, runs `temper-provision`, seeds the reference intake issue, and writes demo secrets. |
+| `crates/temper-reference-delivery-validator/` | Operator-facing validator for reference-delivery Forge state. |
+
+## Forge contract and backends
+
+| Path | Look here for |
+| --- | --- |
+| `crates/temper-forge-model/` | Backend-agnostic Forge domain model, `Forge` trait, IDs, change hints, and provisioning capability traits (`ForgeContent`, `ForgeAdmin`). |
+| `crates/temper-forge/` | Top-level Forge facade: re-exports the model and owns backend factory helpers. This is the only non-test crate that should depend directly on concrete backends. |
 | `crates/temper-forge-memory/` | Fast in-memory reference backend for deterministic workflow tests and local scenarios. |
-| `crates/temper-forge-filesystem/` | Persistent local reference backend for fixtures, local stores, and multi-process/process-split tests. |
-| `crates/temper-forge-forgejo/` | Forgejo HTTP backend, provider-specific mapping, optional live smoke tests, and offline mock-contract tests. |
-| `crates/temper-forge-github/` | GitHub HTTP backend, provider-specific mapping, and offline mock-contract tests (first pass: hermetic tests only, no native dependency links). |
-| `crates/temper-workflow/` | Workflow definitions and runtime logic: validation, classification, compilation, planning/execution, leases, reconciliation, and recovery. |
-| `crates/temper-engine-io/` | io_uring-style completion engine on the asupersync runtime: the `Machine` functional-core contract, the `drive` loop, completion queues, and HTTP/timer/process/cadence executors; see `docs/explanation/io-engine-architecture.md`. |
-| `crates/temper-runner/` | Backend-agnostic worker runtime: queue scans, `RoleTools`, role/mechanical workers, polling/wake hints, multi-repo scans, runner config, and external-tool seams such as `coding_workspace`. |
-| `crates/temper-testing/` | Non-production fakes, fixtures, scenario drivers, CI sinks, worker logic, and gated e2e rehearsals. |
-| `src/bin/` | Workspace root `temper` package binary wiring for deployable tools; thin entrypoints delegate into focused runtime crates. |
-| `crates/temper-reference-delivery/` | Lightweight reference-delivery workflow, repository, actor, and runner defaults shared by deployable tools. |
+| `crates/temper-forge-filesystem/` | Persistent local reference backend for fixtures, local stores, concurrency tests, and multi-process/process-split rehearsals. |
+| `crates/temper-forge-forgejo/` | Forgejo HTTP backend, provider-specific DTO/mapping code, CI/web-UI scraping support, provisioning helpers, offline mock-contract tests, and optional live tests. |
+| `crates/temper-forge-github/` | GitHub HTTP backend, provider-specific DTO/mapping code, and hermetic mock-contract tests. |
+
+## Workflow, engine, and control-plane runtime
+
+| Path | Look here for |
+| --- | --- |
+| `crates/temper-workflow/` | Workflow specifications, validation, classification, compilation, planning/execution, gates, leases, reconciliation, recovery, and workflow metadata handling. |
+| `crates/temper-runner/` | Backend-agnostic runner primitives: queue scans, `RoleTools`, role/mechanical workers, polling/wake hints, multi-repo scans, runner config, and the `coding_workspace` external-tool seam. |
+| `crates/temper-engine/` | Orchestrator daemon: worker/daemon protocol handling, job feed, result appliers, Forge-backed result application, lease-gated mutation, mechanical backstop, webhook/local wake wiring, and PR freshness checks. |
+| `crates/temper-worker-registry/` | In-memory worker scheduling registry used by the daemon as a soft hint for worker capabilities, health, and in-flight capacity. |
+| `crates/temper-daemon-transport/` | Tiny in-process worker-to-daemon transport glue for co-resident daemon/worker stacks, simulations, and hermetic tests. |
+| `crates/temper-engine-io/` | Completion-engine shell for daemon/control services: pure `Machine` contract, drive loop, completion queues, and HTTP/timer/process/cadence executors; see `io-engine-architecture.md`. |
 | `crates/temper-wake/` | Host-local authenticated wake socket bus shared by worker, trigger, and tests. |
-| `crates/temper-trigger-forgejo/` | Forgejo webhook receiver that verifies payloads and emits wake hints. |
-| `crates/temper-provision-forgejo-cli/` | Reference-delivery demo / operator CLI for `temper provision-forgejo`: builds a ForgejoForge and runs the backend-agnostic `temper-provision` orchestration, seeds the demo intake issue, writes `credentials.toml`. |
-| `crates/temper-forgejo-ops/` | Low-level Forgejo REST helpers outside the portable `Forge` trait. |
-| `crates/temper-interaction-service/` | Deployable REPL/HTTP interaction service, deployment bindings, args, DTOs, and transport glue. |
-| `crates/temper-reference-delivery-validator/` | Operator-facing reference-delivery validator. |
-| `examples/reference-delivery/` | Operator-facing reference-delivery demo and launch scripts. |
+| `crates/temper-log/` | Process-wide logging initialization and the structured event model used by engine, worker, agent, and trigger emit sites. |
+| `crates/temper-sim/` | Deterministic simulation harness that runs production daemon/worker code under skein's lab runtime with virtual time and reproducible schedules. |
+
+## Worker, agent, and process protocols
+
+| Path | Look here for |
+| --- | --- |
+| `crates/temper-protocol-worker/` | Serde-only Worker/Daemon wire protocol DTOs: registration, polling, job assignment, workspace manifests, lifecycle, and job results. |
+| `crates/temper-worker/` | Orchestration worker library: long-poll daemon client, job execution, coding workspace preparation, git/pre-push checks, out-of-process agent runner, and worker state machine/shell. |
+| `crates/temper-worker-io/` | Worker-local completion engine for the worker state machine and shell. It is intentionally separate from `temper-engine-io`. |
+| `crates/temper-protocol-agent/` | Serde-only Worker/Agent process protocol: `WorkspaceContext` in, optional live `submit_for_pr` side channel, `WorkspaceResult` out. |
+| `crates/temper-agent/` | Temper-specific agent/provider core: coding-agent execution, provider/auth selection, prompt overlays, product-manager replies, structured decision parsing, and usage accounting. |
+| `crates/temper-agent-core/` | Sans-IO LLM agent loop: pure `AgentMachine`, streaming/tool request protocol, sub-agent support, and shell integration. |
+| `crates/temper-agent-io/` | Agent-local completion engine and HTTP-client/timer runtime helpers. It is intentionally separate from the engine and worker IO crates. |
+
+## Interactive conversation plane
+
+| Path | Look here for |
+| --- | --- |
+| `crates/temper-protocol-interaction/` | Serde-only JSON conversation/proposal protocol and validation helpers for external interactive responder processes. |
+| `crates/temper-interaction/` | Provider-neutral interaction domain: profile validation/compilation, Forge-backed transcripts, proposal state, manifest-driven acceptance, responder traits, and process responder adapter. |
+| `docs/explanation/interactive-agent-interfaces.md` | Conceptual boundary between workflow role agents and interactive human-facing profiles. |
+
+## Testing, demos, and repository support
+
+| Path | Look here for |
+| --- | --- |
+| `crates/temper-testing/` | Non-production fakes, fixtures, fake agents/CI, Forgejo runtime/server helpers, real-stack harnesses, worker binaries, and shared scenario drivers. |
+| `crates/temper-dev/` | Tiny repo-local developer driver used by Cargo aliases that need to sequence multiple commands, such as `cargo dev-test-full`. |
+| `tests/` | Root integration and e2e tests for the unified CLI, config paths/schema/show, Forgejo daemon/init flows, and in-process transport. |
+| `examples/basic-delivery/` | Operator-facing basic-delivery demo config, workflow, CI file, observability notes, and launch script. |
+| `examples/reference-delivery/` | Operator-facing reference-delivery demo config, workflow, CI file, observability notes, and launch script. |
+| `.cargo/config.toml` | Developer Cargo aliases (`dev-check`, `dev-test-quick`, `dev-test-full`, `dev-doc`) and local sibling-repo patch guidance. |
+| `.forgejo/workflows/ci.yml` | Forgejo CI workflow for Rust validation and the web UI lane. |
+| `docs/adr/` | Architecture decision records. Start here for historical rationale behind backend boundaries, workflow semantics, triggering, native Forge state, and multi-repo work. |
+| `docs/explanation/` | Conceptual explanations like this map, the domain model, agentic workflows, process split, Forgejo topology, logging/observability, and IO engine architecture. |
+| `docs/reference/` | Contract/reference material: Forge interface, workflow layer/runtime/spec, worker-daemon protocol, interactive protocol, backends, testing inventory, and environment variables. |
+| `docs/how-to/` | Task-oriented contributor/operator guides for running demos, daemon e2es, coding workspaces, fast local iteration, OAuth, and test-writing. |
