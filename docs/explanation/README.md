@@ -15,4 +15,5 @@ Current explanation pages:
 - [Reference delivery workflow](reference-workflow.md)
 - [Reference workflow roadmap](reference-workflow-roadmap.md)
 - [Post-merge validation tooling verification](post-merge-validation-verification.md)
+- [Implementation PR handoff scenario verification](implementation-pr-handoff-scenario-verification.md)
 - [Native Forge state roadmap](native-forge-state-roadmap.md)
