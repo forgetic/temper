@@ -16,8 +16,8 @@ pub struct FakeEngineer;
 /// basic-delivery fulfils the PR with a single `open_pr` transition that carries
 /// a `create_pull_request` effect, rather than the reference workflow's explicit
 /// `claim_code` -> `open_pull_request` -> `request_review` sequence. The
-/// resulting PR is labelled `implementation`, which drops it straight into the
-/// `landing` queue (no review gate). On `pr_ci_failed` it runs
+/// resulting PR is labelled `implementation` + `landing`, which drops it
+/// straight into the `landing` queue (no review gate). On `pr_ci_failed` it runs
 /// `address_ci_failure`.
 #[derive(Clone, Debug, Default)]
 pub struct BasicEngineer;
@@ -168,8 +168,10 @@ where
     }
 
     // Reuse the reference implementation-PR shape: the `implementation` label
-    // drops the opened PR straight into the `landing` queue (no review gate).
-    let input = implementation_pr_input(tools, number, &issue.title);
+    // identifies the artifact, while `landing` drops the opened PR straight into
+    // the CI-gated landing queue (no review gate).
+    let mut input = implementation_pr_input(tools, number, &issue.title);
+    input.labels.push("landing".to_string());
     // Backend-specific prep (e.g. create the head branch + a differing commit on
     // real Forgejo) must run before the PR-creating transition; a no-op on the
     // filesystem/memory backends.
