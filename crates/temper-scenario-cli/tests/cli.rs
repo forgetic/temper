@@ -133,6 +133,48 @@ fn list_succeeds_for_checked_in_scenarios_directory() {
 }
 
 #[test]
+fn run_succeeds_for_checked_in_basic_delivery_scenario() {
+    let scenario = workspace_root().join("scenarios/basic-delivery");
+
+    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
+    assert!(stdout.contains("verdict: passed"), "{stdout}");
+    assert!(stdout.contains("seeded issue: #"), "{stdout}");
+    assert!(stdout.contains("implementation PR: #"), "{stdout}");
+    assert!(stdout.contains("with passing CI"), "{stdout}");
+    assert!(stdout.contains("actions:"), "{stdout}");
+}
+
+#[test]
+fn run_fails_clearly_for_unsupported_valid_scenario() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scenarios = dir.path().join("scenarios");
+    write_valid_scenario(
+        &scenarios,
+        "alpha",
+        "ready",
+        "experimental",
+        "Exercise delivery.",
+    );
+
+    let output = temper_scenario(&["run", &scenarios.join("alpha").to_string_lossy()]);
+
+    assert!(!output.status.success(), "unsupported scenario should fail");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("unsupported scenario `alpha`"), "{stderr}");
+    assert!(stderr.contains("scenarios/basic-delivery"), "{stderr}");
+}
+
+#[test]
 fn check_fails_with_human_readable_diagnostics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scenario = dir.path().join("broken");

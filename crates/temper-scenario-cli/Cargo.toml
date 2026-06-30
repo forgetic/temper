@@ -8,7 +8,12 @@ publish = false
 description = "Command-line facade for listing and checking Temper scenario manifests."
 
 [dependencies]
+temper-forge-memory = { path = "../temper-forge-memory" }
+temper-forge-model = { path = "../temper-forge-model" }
+temper-runner = { path = "../temper-runner" }
 temper-scenario-core = { path = "../temper-scenario-core" }
+temper-testing = { path = "../temper-testing" }
+toml = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
