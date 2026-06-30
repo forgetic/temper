@@ -13,10 +13,11 @@ not migrate, deduplicate, or replace an example.
 
 ## Validation reports vs. promotion artifacts
 
-Every post-merge validation run must produce a validation report: what commit was
-validated, which scenario or ad-hoc case was run, which topology was used, what
-commands or tooling ran, where logs/artifacts live, and the final pass/fail
-result. That report is the required deliverable for validation work.
+Every post-merge validation run must produce a validation report: what target
+(PR, issue, epic, or aggregate) and commit/PR set was validated, which scenario
+or ad-hoc case was run, which topology was used, what commands or tooling ran,
+where logs/artifacts live, and the final pass/fail result. That report is the
+required deliverable for validation work.
 
 Changing `scenarios/` is optional. A checked-in scenario change is a promotion
 artifact: it captures a case that should become a reusable regression input after
