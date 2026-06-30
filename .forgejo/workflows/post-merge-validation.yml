@@ -1,0 +1,99 @@
+name: post-merge-validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+jobs:
+  basic-delivery-report:
+    name: basic-delivery validation report
+    runs-on: host
+    if: ${{ github.event.pull_request.merged == true }}
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      MERGED_MAIN_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      VALIDATION_ARTIFACT_DIR: validation-artifacts/post-merge-pr-${{ github.event.pull_request.number }}
+    steps:
+      - name: Checkout merged main commit
+        # For a merged pull_request.closed event, the PR payload carries the
+        # merge_commit_sha that advanced main. Validate that exact checked-out
+        # state rather than the PR branch.
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - name: Record validation target
+        run: |
+          set -eu
+          checked_out_sha=$(git rev-parse HEAD)
+          if [ -z "$MERGED_MAIN_SHA" ]; then
+            echo "merge_commit_sha was empty in the pull_request payload" >&2
+            exit 1
+          fi
+          if [ "$checked_out_sha" != "$MERGED_MAIN_SHA" ]; then
+            echo "::warning::Checked-out SHA ${checked_out_sha} differs from event ${MERGED_MAIN_SHA}"
+          fi
+          echo "MERGED_MAIN_SHA=$checked_out_sha" >> "$GITHUB_ENV"
+          echo "Validating merged PR #${PR_NUMBER} at ${checked_out_sha}"
+          echo "Validation artifact directory: ${VALIDATION_ARTIFACT_DIR}"
+
+      - name: Scenario manifest check
+        run: cargo run -p temper-scenario-cli -- check scenarios
+
+      - name: Deterministic basic-delivery scenario run
+        run: cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
+
+      - name: Write validation report
+        run: |
+          set -eu
+          mkdir -p "$VALIDATION_ARTIFACT_DIR"
+          report_path_file="$VALIDATION_ARTIFACT_DIR/report-path.txt"
+          report_path=$(cargo run -p temper-scenario-cli -- validate-pr \
+            --pr "$PR_NUMBER" \
+            --sha "$MERGED_MAIN_SHA" \
+            --scenario scenarios/basic-delivery \
+            --output-dir "$VALIDATION_ARTIFACT_DIR")
+          printf '%s\n' "$report_path" > "$report_path_file"
+          printf '%s\n' "$report_path"
+          test -f "$report_path"
+          echo "VALIDATION_REPORT_PATH=$report_path" >> "$GITHUB_ENV"
+          echo "Markdown validation report: $report_path"
+          echo "::group::Post-merge validation report"
+          cat "$report_path"
+          echo "::endgroup::"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "# Post-merge validation report"
+              echo
+              echo "PR: #${PR_NUMBER}"
+              echo "SHA: ${MERGED_MAIN_SHA}"
+              echo "Report path: \`${report_path}\`"
+              echo
+              cat "$report_path"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload validation report artifact
+        id: upload_report
+        uses: actions/upload-artifact@v3
+        continue-on-error: true
+        with:
+          name: post-merge-validation-pr-${{ github.event.pull_request.number }}
+          path: ${{ env.VALIDATION_ARTIFACT_DIR }}/
+          if-no-files-found: error
+
+      - name: Artifact upload fallback notice
+        if: ${{ always() && steps.upload_report.outcome == 'failure' }}
+        run: |
+          set -eu
+          echo "actions/upload-artifact did not complete on this runner."
+          echo "The Markdown report was printed above in the job log."
+          echo "Report path for the retained job workspace: ${VALIDATION_REPORT_PATH:-unset}"
+          if [ -n "${VALIDATION_REPORT_PATH:-}" ] && [ -f "$VALIDATION_REPORT_PATH" ]; then
+            echo "::group::Fallback validation report contents"
+            cat "$VALIDATION_REPORT_PATH"
+            echo "::endgroup::"
+          fi
