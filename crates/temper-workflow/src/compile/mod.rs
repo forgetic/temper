@@ -20,13 +20,14 @@
 mod labels;
 
 use crate::ids::{
-    ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, TransitionId, VerdictId,
+    ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, TransitionId,
+    ValidationBindingId, VerdictId,
 };
 use crate::plan::SignalNeeds;
 use crate::prompt::build_prompt;
 use crate::validated::{
     Effect, GateCondition, QueueAction, QueueAutomation, QueueLabelSet, RolePromptExtension,
-    ValidatedRole, ValidatedTransition, ValidatedWorkflow,
+    ValidatedRole, ValidatedTransition, ValidatedWorkflow, ValidationBindingDetail,
 };
 use chrono::Duration;
 use labels::compile_labels;
@@ -42,6 +43,7 @@ pub struct CompiledWorkflow {
     roles: Vec<RoleManifest>,
     queues: Vec<QueueManifest>,
     transitions: Vec<TransitionManifest>,
+    validation_bindings: Vec<ValidationBindingManifest>,
     labels: LabelManifest,
 }
 
@@ -69,6 +71,11 @@ impl CompiledWorkflow {
     /// Returns the runtime transition table.
     pub fn transitions(&self) -> &[TransitionManifest] {
         &self.transitions
+    }
+
+    /// Returns validation binding policies for future scanner/planner/runtime use.
+    pub fn validation_bindings(&self) -> &[ValidationBindingManifest] {
+        &self.validation_bindings
     }
 
     /// Returns the label manifest used to set up Forge labels.
@@ -187,12 +194,31 @@ pub struct TransitionManifest {
     pub outcomes: BTreeMap<VerdictId, TransitionId>,
 }
 
+/// A compiled validation binding policy.
+///
+/// Runtime trigger evaluation is intentionally not implemented here; the
+/// manifest preserves the validated names and opaque policy details that a
+/// future scanner/planner/runtime can interpret.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ValidationBindingManifest {
+    pub id: ValidationBindingId,
+    pub role: RoleId,
+    pub action: TransitionId,
+    pub target_artifact: ArtifactKindId,
+    pub trigger: ValidationBindingDetail,
+    pub readiness: ValidationBindingDetail,
+    pub target_selection: ValidationBindingDetail,
+    pub aggregation: ValidationBindingDetail,
+    pub idempotency_key: String,
+}
+
 /// Compiles a validated workflow into manifests for agents and runtime setup.
 ///
 /// Compilation cannot fail: a [`ValidatedWorkflow`] is already internally
 /// consistent, and every output is derived from it.
 pub fn compile(workflow: &ValidatedWorkflow) -> CompiledWorkflow {
     let transitions = compile_transitions(workflow);
+    let validation_bindings = compile_validation_bindings(workflow);
     let queues = compile_queues(workflow);
     let labels = compile_labels(workflow);
     let roles = workflow
@@ -206,6 +232,7 @@ pub fn compile(workflow: &ValidatedWorkflow) -> CompiledWorkflow {
         roles,
         queues,
         transitions,
+        validation_bindings,
         labels,
     }
 }
@@ -230,6 +257,24 @@ fn compile_transitions(workflow: &ValidatedWorkflow) -> Vec<TransitionManifest> 
             requires_gates: transition.requires_gates.clone(),
             effects: transition.effects.clone(),
             outcomes: transition.outcomes.clone(),
+        })
+        .collect()
+}
+
+fn compile_validation_bindings(workflow: &ValidatedWorkflow) -> Vec<ValidationBindingManifest> {
+    workflow
+        .validation_bindings()
+        .iter()
+        .map(|binding| ValidationBindingManifest {
+            id: binding.id.clone(),
+            role: binding.role.clone(),
+            action: binding.action.clone(),
+            target_artifact: binding.target_artifact.clone(),
+            trigger: binding.trigger.clone(),
+            readiness: binding.readiness.clone(),
+            target_selection: binding.target_selection.clone(),
+            aggregation: binding.aggregation.clone(),
+            idempotency_key: binding.idempotency_key.clone(),
         })
         .collect()
 }

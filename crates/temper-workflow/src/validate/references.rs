@@ -78,6 +78,7 @@ pub(super) fn check_references(
 
     check_queue_references(spec, declared, diagnostics);
     check_transition_references(spec, declared, diagnostics);
+    check_validation_binding_references(spec, declared, diagnostics);
 
     for gate in &spec.gates {
         for transition in &gate.satisfied_by {
@@ -223,6 +224,42 @@ fn check_queue_references(
                 diagnostics,
             );
         }
+    }
+}
+
+fn check_validation_binding_references(
+    spec: &RawWorkflowSpec,
+    declared: &Declared<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for binding in &spec.validation_bindings {
+        check_reference(
+            declared.roles,
+            &binding.role,
+            SymbolKind::Role,
+            ReferenceSite::ValidationBindingRole {
+                binding: binding.id.clone(),
+            },
+            diagnostics,
+        );
+        check_reference(
+            declared.transitions,
+            &binding.action,
+            SymbolKind::Transition,
+            ReferenceSite::ValidationBindingAction {
+                binding: binding.id.clone(),
+            },
+            diagnostics,
+        );
+        check_reference(
+            declared.artifacts,
+            &binding.target_artifact,
+            SymbolKind::ArtifactKind,
+            ReferenceSite::ValidationBindingTargetArtifact {
+                binding: binding.id.clone(),
+            },
+            diagnostics,
+        );
     }
 }
 
