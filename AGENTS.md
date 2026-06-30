@@ -29,9 +29,10 @@ The script runs these commands in order and stops on the first failure:
 
 1. `cargo dev-fmt`
 2. `cargo dev-scenario-check`
-3. `cargo-clippy`
-4. `cargo dev-test-quick`
-5. `cargo dev-test-e2e-all`
+3. `cargo dev-scenario-run`
+4. `cargo-clippy`
+5. `cargo dev-test-quick`
+6. `cargo dev-test-e2e-all`
 
 ## Useful docs
 

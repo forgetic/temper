@@ -23,8 +23,8 @@ on:
 #      artifacts key-match across steps (see the comment in .cargo/config.toml).
 #      clippy/check still recompile their own zero-byte `.rmeta` leaves, which
 #      kache cannot cache, but that leaf cost is small. The scenario manifest
-#      check below is a tiny checked-in CLI run after the build step, so it does
-#      not change that cache choreography.
+#      check and deterministic scenario run below are tiny checked-in CLI runs
+#      after the build step, so they do not change that cache choreography.
 jobs:
   validate:
     runs-on: host
@@ -53,6 +53,10 @@ jobs:
         # Validate checked-in manifests and local fixture references without
         # running the live Forgejo/e2e scenario lane.
         run: cargo run -p temper-scenario-cli -- check scenarios
+      - name: Deterministic scenario run
+        # Exercise the hermetic in-process basic-delivery runner without live
+        # Forgejo or external services.
+        run: cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
       - name: Test (quick)
         run: cargo dev-test-quick
       - name: Free linked test binaries

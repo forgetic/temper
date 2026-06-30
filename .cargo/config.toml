@@ -12,8 +12,9 @@
 # feature set, so skein and its entire downstream tree (tokio, hyper-util, …)
 # compile under a feature combo no other build shares and miss the cache
 # wholesale. Keep those aliases on `--all-targets` so the test build and the
-# lint pass key-match and share cached lib artifacts. `dev-scenario-check` is a
-# small manifest-validation CLI run outside that cache lane.
+# lint pass key-match and share cached lib artifacts. `dev-scenario-check` and
+# `dev-scenario-run` are small deterministic scenario CLI runs outside that
+# cache lane.
 #
 # (clippy/check still produce zero-byte leaf `.rmeta` that kache cannot cache,
 # so the leaf check-only targets always recompile; that cost is small and
@@ -30,6 +31,7 @@
 [alias]
 dev-check = "check --workspace --all-targets"
 dev-scenario-check = "run -p temper-scenario-cli -- check scenarios"
+dev-scenario-run = "run -p temper-scenario-cli -- run scenarios/basic-delivery"
 dev-fmt = "fmt --all"
 dev-clippy = "clippy --workspace --all-targets"
 dev-test-build = "test --workspace --all-targets --no-run"
