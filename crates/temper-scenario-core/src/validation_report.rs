@@ -3,8 +3,10 @@
 use std::fmt;
 use std::fmt::Write as _;
 
+use serde::{Deserialize, Serialize};
+
 /// Pull request and merged/main commit under post-merge validation.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ValidationTarget {
     pub pr_number: u64,
     pub merged_main_sha: String,
@@ -20,7 +22,8 @@ impl ValidationTarget {
 }
 
 /// Overall validation result for a post-merge report.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ValidationVerdict {
     Passed,
     Failed,
@@ -44,12 +47,17 @@ impl fmt::Display for ValidationVerdict {
 }
 
 /// Per-claim or per-criterion validation status.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ValidationStatus {
+    #[serde(rename = "satisfied")]
     Satisfied,
+    #[serde(rename = "observed")]
     Observed,
+    #[serde(rename = "failed")]
     Failed,
+    #[serde(rename = "unproven")]
     Unproven,
+    #[serde(rename = "not applicable")]
     NotApplicable,
 }
 
@@ -72,7 +80,7 @@ impl fmt::Display for ValidationStatus {
 }
 
 /// A claim the validation attempted to prove or observe.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ValidatedClaim {
     pub description: String,
     pub status: ValidationStatus,
@@ -95,7 +103,7 @@ impl ValidatedClaim {
 }
 
 /// An observable acceptance criterion and the evidence associated with it.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AcceptanceCriterion {
     pub description: String,
     pub status: ValidationStatus,
@@ -118,7 +126,8 @@ impl AcceptanceCriterion {
 }
 
 /// Durable categories for evidence captured by the temporary validator.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EvidenceKind {
     ScenarioCheck,
     ScenarioRun,
@@ -146,7 +155,7 @@ impl fmt::Display for EvidenceKind {
 }
 
 /// One observed validation fact, command result, or artifact pointer.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceEntry {
     pub kind: EvidenceKind,
     pub summary: String,
@@ -178,11 +187,14 @@ impl EvidenceEntry {
 }
 
 /// Intent for a follow-up issue that should be opened after validation.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FollowUpIssueIntent {
     pub title: String,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relation_hints: Vec<String>,
 }
 
 impl FollowUpIssueIntent {
@@ -191,6 +203,7 @@ impl FollowUpIssueIntent {
             title: title.into(),
             body: body.into(),
             labels: Vec::new(),
+            relation_hints: Vec::new(),
         }
     }
 
@@ -198,10 +211,15 @@ impl FollowUpIssueIntent {
         self.labels.push(label.into());
         self
     }
+
+    pub fn with_relation_hint(mut self, relation_hint: impl Into<String>) -> Self {
+        self.relation_hints.push(relation_hint.into());
+        self
+    }
 }
 
 /// Durable post-merge validation report rendered as Markdown artifacts.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ValidationReport {
     pub target: ValidationTarget,
     pub verdict: ValidationVerdict,
@@ -319,6 +337,13 @@ impl ValidationReport {
                     let _ = writeln!(output, "- Labels: none");
                 } else {
                     let _ = writeln!(output, "- Labels: {}", intent.labels.join(", "));
+                }
+                if !intent.relation_hints.is_empty() {
+                    let _ = writeln!(
+                        output,
+                        "- Relation hints: {}",
+                        intent.relation_hints.join(", ")
+                    );
                 }
                 let _ = writeln!(output, "- Body:");
                 write_blockquote(&mut output, &intent.body);

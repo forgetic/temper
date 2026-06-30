@@ -1,0 +1,185 @@
+{
+  "schema": "temper.validator.context.v1",
+  "target_repo": {
+    "repo": "ai/temper",
+    "default_branch": "main",
+    "url": "https://git.example.invalid/ai/temper"
+  },
+  "target": {
+    "kind": "implementation_pr",
+    "ref": {
+      "pr_number": 70,
+      "merged_main_sha": "abc123",
+      "observed_main_sha": "abc123"
+    },
+    "title": "Add structured validator context/result JSON models",
+    "body_summary": "Adds durable Rust data models for validator handoff JSON.",
+    "url": "https://git.example.invalid/ai/temper/pulls/70",
+    "state": "merged",
+    "labels": ["code", "ready"],
+    "trigger_reason": "native merge to main",
+    "readiness_facts": [
+      { "name": "merged_to_default_branch", "value": "true" },
+      { "name": "ci_passed_at_merge", "value": "true" }
+    ],
+    "state_fingerprint": "pr:70:main:abc123"
+  },
+  "validation_binding": {
+    "id": "validate_each_merged_implementation_pr",
+    "role_id": "validator",
+    "action_id": "validate_merged_pr",
+    "queue_id": "validation",
+    "target_artifact": "implementation_pr",
+    "trigger_summary": "native merge to main",
+    "readiness_summary": "merged with passing CI",
+    "aggregation_rules": ["source_issue", "produced_pr_relation"],
+    "idempotency_key": "validator:validate_each_merged_implementation_pr:pr:70:main:abc123"
+  },
+  "pull_requests": [
+    {
+      "pr_number": 70,
+      "title": "Add structured validator context/result JSON models",
+      "body_summary": "Implementation PR for issue #35 validation schema foundation.",
+      "author": "anvil",
+      "url": "https://git.example.invalid/ai/temper/pulls/70",
+      "state": "merged",
+      "merged_at": "2026-06-30T12:00:00Z",
+      "merged_main_sha": "abc123",
+      "observed_main_sha": "abc123",
+      "source_issue": 35,
+      "produced_pr_relation": "implements",
+      "labels": ["code"]
+    }
+  ],
+  "issues": [
+    {
+      "issue_number": 35,
+      "kind": "issue",
+      "title": "Add structured validator context/result JSON models",
+      "body_summary": "Schema foundation for workflow-native validation work.",
+      "url": "https://git.example.invalid/ai/temper/issues/35",
+      "state": "open",
+      "labels": ["code", "ready"],
+      "links": [
+        {
+          "relation": "produced_by",
+          "kind": "implementation_pr",
+          "ref": { "pr_number": 70 }
+        }
+      ],
+      "produced_prs": [70],
+      "closing_keywords": ["Closes #35"],
+      "acceptance_criteria": [
+        "The new models round-trip per-PR and aggregate examples.",
+        "Existing scenario CLI tests continue to pass."
+      ]
+    }
+  ],
+  "comments": [
+    {
+      "artifact": {
+        "relation": "comment_on",
+        "kind": "implementation_pr",
+        "ref": { "pr_number": 70 }
+      },
+      "author": "reviewer",
+      "timestamp": "2026-06-30T11:50:00Z",
+      "body": "Ready for post-merge validation once merged.",
+      "url": "https://git.example.invalid/ai/temper/pulls/70#comment-1"
+    }
+  ],
+  "reviews": [
+    {
+      "pr_number": 70,
+      "reviewer": "reviewer",
+      "requested_reviewers": [],
+      "decision": "approved",
+      "body": "Schema shape matches the reference page.",
+      "threads": [
+        {
+          "id": "thread-1",
+          "state": "resolved",
+          "summary": "Naming question resolved before merge.",
+          "url": "https://git.example.invalid/ai/temper/pulls/70#thread-1"
+        }
+      ],
+      "url": "https://git.example.invalid/ai/temper/pulls/70#review-1"
+    }
+  ],
+  "diffs": [
+    {
+      "scope": {
+        "relation": "diff_for",
+        "kind": "implementation_pr",
+        "ref": { "pr_number": 70 }
+      },
+      "changed_files": [
+        {
+          "path": "crates/temper-scenario-core/src/validator_result.rs",
+          "status": "added",
+          "additions": 120,
+          "deletions": 0
+        }
+      ],
+      "diffstat": "+120 -0",
+      "notable_paths": ["crates/temper-scenario-core/src"],
+      "raw_diff_uri": "artifact://diffs/pr-70.patch",
+      "summary": "Adds structured validator result models."
+    }
+  ],
+  "ci": [
+    {
+      "scope": {
+        "relation": "ci_for",
+        "kind": "implementation_pr",
+        "ref": { "pr_number": 70 }
+      },
+      "job_name": "cargo test -p temper-scenario-core",
+      "conclusion": "success",
+      "head_sha": "abc123",
+      "run_url": "https://ci.example.invalid/runs/70",
+      "log_uri": "artifact://ci/pr-70.log",
+      "artifact_uris": ["artifact://ci/pr-70.junit.json"]
+    }
+  ],
+  "scenario_metadata": [
+    {
+      "name": "basic-delivery",
+      "path": "scenarios/basic-delivery",
+      "status": "active",
+      "stability": "provisional",
+      "templates": ["single-pr-merged-source-closed"],
+      "commit": "abc123"
+    }
+  ],
+  "suggested_scenarios": [
+    {
+      "name": "validator-schema-round-trip",
+      "rationale": "Exercises the JSON schema with a representative merged PR.",
+      "expected_signals": ["serde round trip", "deterministic Markdown render"]
+    }
+  ],
+  "workflow": {
+    "role_id": "validator",
+    "action_id": "validate_merged_pr",
+    "queue_id": "validation",
+    "artifact_ids": ["pr:70", "issue:35"],
+    "labels": ["validation-ready"],
+    "relationships": [
+      {
+        "relation": "source_issue",
+        "kind": "issue",
+        "ref": { "issue_number": 35 }
+      }
+    ],
+    "gates": [
+      {
+        "id": "ci_passed_at_merge",
+        "state": "passed",
+        "summary": "All required checks were green at merge."
+      }
+    ],
+    "trigger_reason": "native merge to main",
+    "acceptance_criteria": ["A merged PR can be represented as structured validation context."]
+  }
+}

@@ -1,0 +1,202 @@
+{
+  "schema": "temper.validator.context.v1",
+  "target_repo": {
+    "repo": "ai/temper",
+    "default_branch": "main"
+  },
+  "target": {
+    "kind": "epic",
+    "ref": { "issue_number": 35 },
+    "title": "Workflow-native validation schema foundation",
+    "body_summary": "Parent epic for validator context/result schema work.",
+    "url": "https://git.example.invalid/ai/temper/issues/35",
+    "state": "validation-ready",
+    "labels": ["validation-ready", "epic"],
+    "trigger_reason": "validation-ready after child completion",
+    "readiness_facts": [
+      { "name": "all_children_complete", "value": "true" },
+      { "name": "produced_prs_merged", "value": "2/2" }
+    ],
+    "state_fingerprint": "aggregate:abc123-def456"
+  },
+  "validation_binding": {
+    "id": "validate_epic_when_ready",
+    "role_id": "validator",
+    "action_id": "validate_epic",
+    "queue_id": "validation",
+    "target_artifact": "epic",
+    "trigger_summary": "validation-ready label applied",
+    "readiness_summary": "all child issues are complete and produced PRs are merged",
+    "aggregation_rules": ["child_issues", "produced_prs", "diffs", "ci", "scenario_evidence"],
+    "idempotency_key": "validator:validate_epic_when_ready:epic:35:state:aggregate:abc123-def456"
+  },
+  "pull_requests": [
+    {
+      "pr_number": 65,
+      "title": "Prepare validator handoff reference",
+      "state": "merged",
+      "merged_at": "2026-06-28T10:00:00Z",
+      "merged_main_sha": "abc123",
+      "source_issue": 60,
+      "produced_pr_relation": "implements",
+      "labels": ["docs"]
+    },
+    {
+      "pr_number": 67,
+      "title": "Preserve validation report vocabulary",
+      "state": "merged",
+      "merged_at": "2026-06-29T10:00:00Z",
+      "merged_main_sha": "def456",
+      "source_issue": 62,
+      "produced_pr_relation": "implements",
+      "labels": ["code"]
+    }
+  ],
+  "issues": [
+    {
+      "issue_number": 35,
+      "kind": "epic",
+      "title": "Workflow-native validation schema foundation",
+      "state": "validation-ready",
+      "labels": ["epic", "validation-ready"],
+      "child_issues": [60, 62],
+      "produced_prs": [65, 67],
+      "acceptance_criteria": ["Aggregate targets preserve related PR facts."],
+      "child_completion": "2/2 children complete"
+    },
+    {
+      "issue_number": 60,
+      "kind": "issue",
+      "title": "Document validator handoff",
+      "state": "closed",
+      "links": [
+        {
+          "relation": "parent",
+          "kind": "epic",
+          "ref": { "issue_number": 35 }
+        }
+      ],
+      "produced_prs": [65]
+    },
+    {
+      "issue_number": 62,
+      "kind": "issue",
+      "title": "Preserve validation report vocabulary",
+      "state": "closed",
+      "links": [
+        {
+          "relation": "parent",
+          "kind": "epic",
+          "ref": { "issue_number": 35 }
+        }
+      ],
+      "dependencies": [60],
+      "produced_prs": [67]
+    }
+  ],
+  "aggregate": {
+    "target_kind": "epic",
+    "child_issues": [60, 62],
+    "pull_requests": [65, 67],
+    "completion_rollup": "2 child issues complete, 2 produced PRs merged",
+    "remaining_blockers": [],
+    "merged_shas": ["abc123", "def456"],
+    "ready_rule": "validation-ready label or all children complete",
+    "fingerprint": "aggregate:abc123-def456"
+  },
+  "comments": [
+    {
+      "artifact": {
+        "relation": "comment_on",
+        "kind": "epic",
+        "ref": { "issue_number": 35 }
+      },
+      "author": "owner",
+      "timestamp": "2026-06-30T09:00:00Z",
+      "body": "The aggregate is coherent and ready to validate.",
+      "url": "https://git.example.invalid/ai/temper/issues/35#comment-2"
+    }
+  ],
+  "reviews": [
+    {
+      "pr_number": 67,
+      "reviewer": "reviewer",
+      "decision": "approved",
+      "body": "Vocabulary remains compatible with #55.",
+      "threads": []
+    }
+  ],
+  "diffs": [
+    {
+      "scope": {
+        "relation": "aggregate_diff_for",
+        "kind": "epic",
+        "ref": { "issue_number": 35 }
+      },
+      "changed_files": [
+        { "path": "docs/reference/post-merge-validator-handoff.md", "status": "modified" },
+        { "path": "crates/temper-scenario-core/src/validation_report.rs", "status": "modified" }
+      ],
+      "diffstat": "+220 -15",
+      "notable_paths": ["docs/reference", "crates/temper-scenario-core/src"],
+      "raw_diff_uri": "artifact://diffs/epic-35.patch",
+      "summary": "Aggregate diff for validator schema design and vocabulary preservation."
+    }
+  ],
+  "ci": [
+    {
+      "scope": {
+        "relation": "ci_for",
+        "kind": "epic",
+        "ref": { "issue_number": 35 }
+      },
+      "job_name": "workspace tests",
+      "conclusion": "success",
+      "head_sha": "def456",
+      "run_url": "https://ci.example.invalid/runs/epic-35",
+      "artifact_uris": ["artifact://ci/epic-35-summary.json"]
+    }
+  ],
+  "scenario_metadata": [
+    {
+      "name": "basic-delivery",
+      "path": "scenarios/basic-delivery",
+      "status": "active",
+      "stability": "provisional",
+      "templates": ["single-pr-merged-source-closed"],
+      "commit": "def456"
+    }
+  ],
+  "suggested_scenarios": [
+    {
+      "name": "aggregate-validation-rollup",
+      "rationale": "Checks aggregate child issue and PR inventory.",
+      "expected_signals": ["all child issues complete", "all produced PRs merged"]
+    }
+  ],
+  "workflow": {
+    "role_id": "validator",
+    "action_id": "validate_epic",
+    "queue_id": "validation",
+    "artifact_ids": ["issue:35", "issue:60", "issue:62", "pr:65", "pr:67"],
+    "labels": ["validation-ready", "epic"],
+    "relationships": [
+      {
+        "relation": "child",
+        "kind": "issue",
+        "ref": { "issue_number": 60 }
+      },
+      {
+        "relation": "child",
+        "kind": "issue",
+        "ref": { "issue_number": 62 }
+      }
+    ],
+    "gates": [
+      { "id": "child_completion", "state": "passed", "summary": "2/2 children complete" },
+      { "id": "aggregate_ci", "state": "passed", "summary": "Aggregate CI passed" }
+    ],
+    "trigger_reason": "validation-ready after child completion",
+    "acceptance_criteria": ["The aggregate result can cite all related PRs."]
+  }
+}

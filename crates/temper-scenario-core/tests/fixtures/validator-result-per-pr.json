@@ -1,0 +1,68 @@
+{
+  "schema": "temper.validator.result.v1",
+  "target": {
+    "kind": "implementation_pr",
+    "repo": "ai/temper",
+    "ref": {
+      "pr_number": 70,
+      "merged_main_sha": "abc123",
+      "observed_main_sha": "abc123"
+    },
+    "trigger_reason": "native merge to main",
+    "state_fingerprint": "pr:70:main:abc123",
+    "title": "Add structured validator context/result JSON models",
+    "labels": ["code"]
+  },
+  "related_prs": [
+    {
+      "pr_number": 70,
+      "source_issue": 35,
+      "merged_main_sha": "abc123",
+      "observed_main_sha": "abc123",
+      "title": "Add structured validator context/result JSON models",
+      "url": "https://git.example.invalid/ai/temper/pulls/70"
+    }
+  ],
+  "verdict": "inconclusive",
+  "validated_claims": [
+    {
+      "description": "PR #70 is the merged change at abc123.",
+      "status": "unproven",
+      "evidence_refs": ["cmd-validate-pr"]
+    },
+    {
+      "description": "The structured result preserves temporary Markdown report fields.",
+      "status": "observed",
+      "evidence_refs": ["artifact-report"]
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "description": "A per-PR validation result records verdict, evidence, limitations, and follow-up intent.",
+      "status": "satisfied",
+      "evidence_refs": ["artifact-report"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "cmd-validate-pr",
+      "kind": "command",
+      "summary": "validate-pr invoked with operator supplied values.",
+      "details": "pr: #70\nsha: abc123"
+    },
+    {
+      "id": "artifact-report",
+      "kind": "artifact",
+      "summary": "Markdown report artifact path recorded.",
+      "artifact_path": "reports/validation-pr-70-abc123.md"
+    }
+  ],
+  "limitations": ["No live Forgejo lookup was performed by the temporary bridge."],
+  "follow_up_issue": {
+    "title": "Wire workflow-native validator execution",
+    "body": "Replace the temporary validate-pr bridge with workflow-owned validation work.",
+    "labels": ["validation"],
+    "relation_hints": ["blocks issue #35"]
+  },
+  "scenario_promotion": null
+}
