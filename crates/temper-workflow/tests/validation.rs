@@ -4,7 +4,8 @@ use temper_workflow::{
     ArtifactTarget, Diagnostic, IntakeAuthor, RawArtifactKind, RawEffect, RawGate,
     RawGateCondition, RawIntakeAuthor, RawLabel, RawQueue, RawQueueAction, RawQueueLabelSet,
     RawRelation, RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
-    ReferenceSite, RelationKind, Severity, SymbolKind, ValidatedWorkflow,
+    ReferenceSite, RelationKind, Severity, SymbolKind, ValidatedWorkflow, ValidationBindingDetail,
+    compile,
 };
 
 #[path = "validation/basics.rs"]
@@ -17,6 +18,8 @@ mod intake_author;
 mod queues;
 #[path = "validation/references.rs"]
 mod references;
+#[path = "validation/validation_bindings.rs"]
+mod validation_bindings;
 
 /// Builds a small but complete workflow that exercises every reference kind:
 /// role -> queue, queue -> artifact, queue -> label, artifact -> label,
@@ -163,6 +166,7 @@ fn valid_spec() -> RawWorkflowSpec {
             satisfied_by: vec!["approve_review".to_string()],
             condition: None,
         }],
+        validation_bindings: Vec::new(),
         intake_author: None,
     }
 }

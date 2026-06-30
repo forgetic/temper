@@ -2,17 +2,17 @@
 
 use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
-    TransitionId, VerdictId,
+    TransitionId, ValidationBindingId, VerdictId,
 };
 use crate::spec::{
     RawEffect, RawGateCondition, RawIntakeAuthor, RawQueueAction, RawQueueAutomation,
-    RawWorkflowSpec,
+    RawValidationBinding, RawValidationBindingDetail, RawWorkflowSpec,
 };
 use crate::validated::{
     Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAction, QueueAutomation,
     QueueLabelSet, RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
     ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
-    ValidatedWorkflow,
+    ValidatedValidationBinding, ValidatedWorkflow, ValidationBindingDetail,
 };
 use chrono::Duration;
 use std::collections::BTreeMap;
@@ -77,6 +77,11 @@ pub(crate) fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
             target: ArtifactKindId::new(&relation.target),
         })
         .collect();
+    let validation_bindings = spec
+        .validation_bindings
+        .iter()
+        .map(build_validation_binding)
+        .collect();
 
     let intake_author = spec.intake_author.as_ref().map(build_intake_author);
 
@@ -90,8 +95,34 @@ pub(crate) fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         transitions,
         gates,
         relations,
+        validation_bindings,
         intake_author,
     )
+}
+
+fn build_validation_binding(binding: &RawValidationBinding) -> ValidatedValidationBinding {
+    ValidatedValidationBinding {
+        id: ValidationBindingId::new(&binding.id),
+        role: RoleId::new(&binding.role),
+        action: TransitionId::new(&binding.action),
+        target_artifact: ArtifactKindId::new(&binding.target_artifact),
+        trigger: build_validation_binding_detail(&binding.trigger),
+        readiness: build_validation_binding_detail(&binding.readiness),
+        target_selection: build_validation_binding_detail(&binding.target_selection),
+        aggregation: build_validation_binding_detail(&binding.aggregation),
+        idempotency_key: binding.idempotency_key.clone(),
+    }
+}
+
+fn build_validation_binding_detail(detail: &RawValidationBindingDetail) -> ValidationBindingDetail {
+    match detail {
+        RawValidationBindingDetail::Description(description) => {
+            ValidationBindingDetail::Description(description.clone())
+        }
+        RawValidationBindingDetail::Structured(value) => {
+            ValidationBindingDetail::Structured(value.clone())
+        }
+    }
 }
 
 fn build_intake_author(author: &RawIntakeAuthor) -> IntakeAuthor {

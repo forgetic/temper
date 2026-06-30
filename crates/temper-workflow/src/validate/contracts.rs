@@ -210,6 +210,44 @@ fn check_queue_action_checkout(
     }
 }
 
+/// Checks semantic consistency of validation bindings once simple
+/// undeclared-reference diagnostics have been collected.
+pub(super) fn check_validation_binding_contract(
+    spec: &RawWorkflowSpec,
+    roles: &HashSet<String>,
+    artifacts: &HashSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let transitions: HashMap<&str, &RawTransition> = spec
+        .transitions
+        .iter()
+        .map(|transition| (transition.id.as_str(), transition))
+        .collect();
+
+    for binding in &spec.validation_bindings {
+        let Some(action) = transitions.get(binding.action.as_str()).copied() else {
+            continue;
+        };
+        if roles.contains(&binding.role) && !action.roles.contains(&binding.role) {
+            diagnostics.push(Diagnostic::ValidationBindingActionUnauthorized {
+                binding: binding.id.clone(),
+                role: binding.role.clone(),
+                action: action.id.clone(),
+            });
+        }
+        if artifacts.contains(&binding.target_artifact)
+            && action.artifact != binding.target_artifact
+        {
+            diagnostics.push(Diagnostic::ValidationBindingActionArtifactMismatch {
+                binding: binding.id.clone(),
+                action: action.id.clone(),
+                target_artifact: binding.target_artifact.clone(),
+                action_artifact: action.artifact.clone(),
+            });
+        }
+    }
+}
+
 /// Checks that each Forge target declares at most one default (catch-all)
 /// artifact kind — one with no identifying labels. The default kind admits any
 /// artifact of its target that no labeled kind claims (raw human intake), so two

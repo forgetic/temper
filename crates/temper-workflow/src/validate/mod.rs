@@ -65,6 +65,11 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
         SymbolKind::Gate,
         &mut diagnostics,
     );
+    let _validation_bindings = collect_declared(
+        spec.validation_bindings.iter().map(|binding| &binding.id),
+        SymbolKind::ValidationBinding,
+        &mut diagnostics,
+    );
 
     references::check_references(
         spec,
@@ -85,6 +90,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
     contracts::check_default_artifact_kinds(spec, &mut diagnostics);
     contracts::check_queue_automation_contract(spec, &roles, &mut diagnostics);
     contracts::check_queue_action_contract(spec, &roles, &mut diagnostics);
+    contracts::check_validation_binding_contract(spec, &roles, &artifacts, &mut diagnostics);
     contracts::check_transition_outcome_contract(spec, &mut diagnostics);
 
     if diagnostics.is_empty() {

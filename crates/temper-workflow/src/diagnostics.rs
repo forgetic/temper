@@ -31,6 +31,7 @@ pub enum SymbolKind {
     Queue,
     Transition,
     Gate,
+    ValidationBinding,
 }
 
 impl fmt::Display for SymbolKind {
@@ -44,6 +45,7 @@ impl fmt::Display for SymbolKind {
             SymbolKind::Queue => "queue",
             SymbolKind::Transition => "transition",
             SymbolKind::Gate => "gate",
+            SymbolKind::ValidationBinding => "validation binding",
         };
         formatter.write_str(text)
     }
@@ -101,6 +103,12 @@ pub enum ReferenceSite {
     RelationTarget { relation: String },
     /// A gate's external condition referenced a label or state.
     GateCondition { gate: String },
+    /// A validation binding referenced its validator role.
+    ValidationBindingRole { binding: String },
+    /// A validation binding referenced its assigned action/transition.
+    ValidationBindingAction { binding: String },
+    /// A validation binding referenced its target artifact kind.
+    ValidationBindingTargetArtifact { binding: String },
     /// The workflow's `intake_author` referenced a role.
     IntakeAuthor,
 }
@@ -169,6 +177,11 @@ impl fmt::Display for ReferenceSite {
             }
             ReferenceSite::GateTransition { gate } | ReferenceSite::GateCondition { gate } => {
                 write!(formatter, "gate `{gate}`")
+            }
+            ReferenceSite::ValidationBindingRole { binding }
+            | ReferenceSite::ValidationBindingAction { binding }
+            | ReferenceSite::ValidationBindingTargetArtifact { binding } => {
+                write!(formatter, "validation binding `{binding}`")
             }
             ReferenceSite::IntakeAuthor => write!(formatter, "intake author"),
         }
@@ -255,6 +268,19 @@ pub enum Diagnostic {
         action: String,
         checkout: String,
     },
+    /// A validation binding uses an action that does not authorize its validator role.
+    ValidationBindingActionUnauthorized {
+        binding: String,
+        role: String,
+        action: String,
+    },
+    /// A validation binding's action operates on a different artifact kind than the target.
+    ValidationBindingActionArtifactMismatch {
+        binding: String,
+        action: String,
+        target_artifact: String,
+        action_artifact: String,
+    },
     /// A transition outcome routes to a transition that does not authorize the
     /// primary transition's roles.
     TransitionOutcomeUnauthorized {
@@ -295,6 +321,8 @@ impl Diagnostic {
             | Diagnostic::QueueActionArtifactMismatch { .. }
             | Diagnostic::QueueActionFilterArtifactMismatch { .. }
             | Diagnostic::QueueActionInvalidCheckout { .. }
+            | Diagnostic::ValidationBindingActionUnauthorized { .. }
+            | Diagnostic::ValidationBindingActionArtifactMismatch { .. }
             | Diagnostic::TransitionOutcomeUnauthorized { .. }
             | Diagnostic::TransitionOutcomeArtifactMismatch { .. }
             | Diagnostic::MultipleDefaultArtifactKinds { .. } => Severity::Error,
@@ -403,6 +431,23 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 formatter,
                 "action assignment for role `{role}` on queue `{queue}` uses action `{action}` with unsupported checkout capability `{checkout}`"
+            ),
+            Diagnostic::ValidationBindingActionUnauthorized {
+                binding,
+                role,
+                action,
+            } => write!(
+                formatter,
+                "validation binding `{binding}` uses role `{role}`, but action `{action}` does not authorize that role"
+            ),
+            Diagnostic::ValidationBindingActionArtifactMismatch {
+                binding,
+                action,
+                target_artifact,
+                action_artifact,
+            } => write!(
+                formatter,
+                "validation binding `{binding}` targets artifact `{target_artifact}`, but action `{action}` operates on `{action_artifact}`"
             ),
             Diagnostic::TransitionOutcomeUnauthorized {
                 transition,

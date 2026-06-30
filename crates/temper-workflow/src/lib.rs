@@ -110,7 +110,8 @@ pub use classify::{
 };
 pub use compile::{
     CompiledWorkflow, ExternalToolManifest, LabelManifest, LabelSpec, LabelUsage, PromptManifest,
-    PromptSection, QueueManifest, RoleManifest, ToolManifest, TransitionManifest, compile,
+    PromptSection, QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
+    ValidationBindingManifest, compile,
 };
 pub use context::{CreateIssuesChild, ExecutionContext};
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
@@ -120,7 +121,7 @@ pub use execute::{
 };
 pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
-    TransitionId, VerdictId,
+    TransitionId, ValidationBindingId, VerdictId,
 };
 pub use journal::{
     CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,
@@ -149,12 +150,13 @@ pub use relation::RelationKind;
 pub use spec::{
     RawArtifactKind, RawEffect, RawExternalTool, RawGate, RawGateCondition, RawIntakeAuthor,
     RawLabel, RawQueue, RawQueueAction, RawQueueAutomation, RawQueueLabelSet, RawRelation, RawRole,
-    RawRolePrompt, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
+    RawRolePrompt, RawState, RawStateDimension, RawTransition, RawValidationBinding,
+    RawValidationBindingDetail, RawWorkflowSpec,
 };
 pub use validate::validate;
 pub use validated::{
     Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAction, QueueAutomation,
     QueueLabelSet, RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
     ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
-    ValidatedWorkflow,
+    ValidatedValidationBinding, ValidatedWorkflow, ValidationBindingDetail,
 };

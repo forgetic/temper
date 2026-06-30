@@ -9,7 +9,7 @@
 use crate::artifact::ArtifactTarget;
 use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
-    TransitionId, VerdictId,
+    TransitionId, ValidationBindingId, VerdictId,
 };
 use crate::relation::RelationKind;
 use chrono::Duration;
@@ -32,6 +32,7 @@ pub struct ValidatedWorkflow {
     transitions: Vec<ValidatedTransition>,
     gates: Vec<ValidatedGate>,
     relations: Vec<ValidatedRelation>,
+    validation_bindings: Vec<ValidatedValidationBinding>,
     intake_author: Option<IntakeAuthor>,
 }
 
@@ -49,6 +50,7 @@ impl ValidatedWorkflow {
         transitions: Vec<ValidatedTransition>,
         gates: Vec<ValidatedGate>,
         relations: Vec<ValidatedRelation>,
+        validation_bindings: Vec<ValidatedValidationBinding>,
         intake_author: Option<IntakeAuthor>,
     ) -> Self {
         Self {
@@ -61,6 +63,7 @@ impl ValidatedWorkflow {
             transitions,
             gates,
             relations,
+            validation_bindings,
             intake_author,
         }
     }
@@ -115,6 +118,11 @@ impl ValidatedWorkflow {
         &self.relations
     }
 
+    /// Returns workflow-declared validation binding policies.
+    pub fn validation_bindings(&self) -> &[ValidatedValidationBinding] {
+        &self.validation_bindings
+    }
+
     /// Returns who is expected to file intake, if the workflow declares it.
     ///
     /// `None` means the workflow did not set the knob; provisioning then keeps
@@ -134,6 +142,30 @@ pub enum IntakeAuthor {
     Role(RoleId),
     /// The provisioning admin identity authors the intake issue.
     SiteAdmin,
+}
+
+/// A validated workflow-owned validation handoff policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedValidationBinding {
+    pub id: ValidationBindingId,
+    pub role: RoleId,
+    pub action: TransitionId,
+    pub target_artifact: ArtifactKindId,
+    pub trigger: ValidationBindingDetail,
+    pub readiness: ValidationBindingDetail,
+    pub target_selection: ValidationBindingDetail,
+    pub aggregation: ValidationBindingDetail,
+    pub idempotency_key: String,
+}
+
+/// Forward-compatible validation-binding policy detail preserved from the raw spec.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+pub enum ValidationBindingDetail {
+    /// Human-authored prose description of the policy detail.
+    Description(String),
+    /// Structured placeholder retained exactly as supplied by the workflow.
+    Structured(serde_json::Value),
 }
 
 /// A validated role with typed queue references.

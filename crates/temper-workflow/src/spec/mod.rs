@@ -42,6 +42,10 @@ pub struct RawWorkflowSpec {
     pub gates: Vec<RawGate>,
     #[serde(default)]
     pub relations: Vec<RawRelation>,
+    /// Workflow-declared validator handoffs. These are parsed and validated as
+    /// stable policy data, but not evaluated or enqueued by this crate yet.
+    #[serde(default)]
+    pub validation_bindings: Vec<RawValidationBinding>,
     /// Who is expected to file intake (the "external filer"). When seeding an
     /// intake issue, provisioning authors it as this identity. `None` keeps the
     /// legacy behavior of authoring as the `human` role.
@@ -57,6 +61,49 @@ impl RawWorkflowSpec {
     pub fn validate(&self) -> Result<ValidatedWorkflow, ValidationErrors> {
         validate(self)
     }
+}
+
+/// Declares a workflow-owned validation handoff policy.
+///
+/// A binding names the validator role/action to run, the artifact kind being
+/// judged, opaque trigger/readiness/selection/aggregation policy data for later
+/// runtime work, and the idempotency key template that future enqueuing will use
+/// to avoid duplicate validation jobs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawValidationBinding {
+    /// Stable workflow-local validation binding id.
+    pub id: String,
+    /// Role id assigned to perform validation.
+    pub role: String,
+    /// Workflow action/transition id assigned to the validator role.
+    pub action: String,
+    /// Artifact kind selected as the validation target.
+    pub target_artifact: String,
+    /// Opaque trigger criteria, preserved for future runtime evaluation.
+    pub trigger: RawValidationBindingDetail,
+    /// Opaque readiness criteria, preserved for future runtime evaluation.
+    pub readiness: RawValidationBindingDetail,
+    /// Opaque target-selection policy, preserved for future runtime evaluation.
+    pub target_selection: RawValidationBindingDetail,
+    /// Opaque aggregation policy, preserved for future runtime evaluation.
+    pub aggregation: RawValidationBindingDetail,
+    /// Template for deduplicating validation work for a target state.
+    pub idempotency_key: String,
+}
+
+/// Forward-compatible validation-binding policy detail.
+///
+/// Authoring can use prose while semantics are still being designed, or a JSON
+/// value that later runtime scanner/planner code can interpret without changing
+/// the top-level binding field names.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum RawValidationBindingDetail {
+    /// Human-authored prose description of the policy detail.
+    Description(String),
+    /// Structured placeholder retained exactly as supplied by the workflow.
+    Structured(serde_json::Value),
 }
 
 /// Declares who is expected to file intake into the workflow.
