@@ -1,5 +1,11 @@
 # Post-merge validation tooling verification report
 
+> Historical note: this report records the first-pass hermetic bridge that
+> existed before the validation-grade live `basic-delivery` lane was wired into
+> `temper-scenario`. Current post-merge validation uses `--tier live` with a
+> standalone `temper` binary and records real Forgejo/CI/convergence/log
+> evidence; see [Find a post-merge validation report](../how-to/post-merge-validation-report.md).
+
 This report verifies the first-pass post-merge validation path for #35 using
 current `main` as the merged state and PR #73 as the representative recently
 merged implementation PR. The verification was run from a clean workspace before

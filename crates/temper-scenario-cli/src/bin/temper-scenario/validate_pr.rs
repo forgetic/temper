@@ -12,24 +12,30 @@ use temper_scenario_core::{
 use super::run_context::{ScenarioRunFacts, ScenarioTier};
 use super::{basic_delivery, implementation_pr_handoff};
 
+#[path = "validate_pr/live.rs"]
+mod live;
+
 const EX_USAGE: u8 = 64;
 
 const USAGE: &str = "\
 Write a temporary/manual post-merge validation Markdown report.
 
-Usage: temper-scenario validate-pr --pr <N> --sha <SHA> [--scenario <PATH>] [--output-dir <DIR>]
+Usage: temper-scenario validate-pr --pr <N> --sha <SHA> [--scenario <PATH>] [--tier <hermetic|live>] [--temper-bin <PATH>] [--output-dir <DIR>]
 
 Options:
-  --pr <N>          Pull request number under validation
-  --sha <SHA>       Merged/main commit SHA under validation
-  --scenario <PATH> Scenario directory or manifest file to check, and run when supported
-  --output-dir <DIR> Directory for the Markdown report (default: current directory)
-  -h, --help        Print help
+  --pr <N>             Pull request number under validation
+  --sha <SHA>          Merged/main commit SHA under validation
+  --scenario <PATH>     Scenario directory or manifest file to check, and run when supported
+  --tier <hermetic|live>  Scenario confidence tier to run when --scenario is supported (default: hermetic)
+  --temper-bin <PATH>   Standalone `temper` binary for --tier live basic-delivery
+  --output-dir <DIR>    Directory for the Markdown report (default: current directory)
+  -h, --help           Print help
 
 The bridge records local scenario evidence when available, including scenario
-source, the current hermetic confidence tier, and manifest topology. It does not
-fetch live Forgejo PR context or prove that the supplied SHA is the current main
-commit.";
+source, the selected confidence tier, and manifest topology. The live tier for
+`basic-delivery` records Forgejo/CI/convergence/log evidence via the shared live
+harness. It does not fetch live Forgejo PR context or prove that the supplied
+SHA is the current main commit.";
 
 pub(super) fn command(args: &[String]) -> ExitCode {
     let args = match parse_args(args) {
@@ -60,7 +66,11 @@ pub(super) fn command(args: &[String]) -> ExitCode {
     }
 
     println!("{}", output_path.display());
-    ExitCode::SUCCESS
+    if report.verdict == ValidationVerdict::Failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 #[derive(Debug)]
@@ -68,6 +78,8 @@ struct Args {
     pr_number: u64,
     sha: String,
     scenario: Option<PathBuf>,
+    tier: ScenarioTier,
+    temper_bin: Option<PathBuf>,
     output_dir: PathBuf,
 }
 
@@ -93,6 +105,8 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
     let mut pr_number = None;
     let mut sha = None;
     let mut scenario = None;
+    let mut tier = None;
+    let mut temper_bin = None;
     let mut output_dir = None;
     let mut index = 0;
     while index < args.len() {
@@ -134,6 +148,16 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
                 }
                 index += 2;
             }
+            "--tier" => {
+                let value = flag_value(args, index, "--tier")?;
+                set_tier(&mut tier, value)?;
+                index += 2;
+            }
+            "--temper-bin" => {
+                let value = flag_value(args, index, "--temper-bin")?;
+                set_temper_bin(&mut temper_bin, value)?;
+                index += 2;
+            }
             "--output-dir" => {
                 let value = flag_value(args, index, "--output-dir")?;
                 if output_dir.replace(PathBuf::from(value)).is_some() {
@@ -164,6 +188,8 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         pr_number,
         sha,
         scenario,
+        tier: tier.unwrap_or(ScenarioTier::Hermetic),
+        temper_bin,
         output_dir: output_dir.unwrap_or_else(|| PathBuf::from(".")),
     }))
 }
@@ -180,6 +206,28 @@ fn flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a st
     Ok(value)
 }
 
+fn set_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
+    let Some(parsed) = ScenarioTier::parse(value) else {
+        eprintln!(
+            "temper-scenario validate-pr: unknown --tier `{value}` (expected hermetic or live)\n\n{USAGE}"
+        );
+        return Err(());
+    };
+    if tier.replace(parsed).is_some() {
+        eprintln!("temper-scenario validate-pr: duplicate --tier option\n\n{USAGE}");
+        return Err(());
+    }
+    Ok(())
+}
+
+fn set_temper_bin(temper_bin: &mut Option<PathBuf>, value: &str) -> Result<(), ()> {
+    if temper_bin.replace(PathBuf::from(value)).is_some() {
+        eprintln!("temper-scenario validate-pr: duplicate --temper-bin option\n\n{USAGE}");
+        return Err(());
+    }
+    Ok(())
+}
+
 fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Error> {
     let mut report = ValidationReport::new(
         args.pr_number,
@@ -193,7 +241,8 @@ fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Err
             "validate-pr invoked with operator-supplied PR and SHA inputs.",
         )
         .with_detail(format!("pr: #{}", args.pr_number))
-        .with_detail(format!("sha: `{}`", args.sha)),
+        .with_detail(format!("sha: `{}`", args.sha))
+        .with_detail(format!("requested scenario tier: {}", args.tier.as_str())),
     );
     report.evidence.push(EvidenceEntry::new(
         EvidenceKind::Artifact,
@@ -222,7 +271,13 @@ fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Err
     ));
 
     match args.scenario.as_deref() {
-        Some(path) => add_scenario_validation(&mut report, path)?,
+        Some(path) => add_scenario_validation(
+            &mut report,
+            path,
+            args.tier,
+            args.temper_bin.as_deref(),
+            &args.output_dir,
+        )?,
         None => {
             report.validated_claims.push(
                 ValidatedClaim::new(
@@ -235,7 +290,7 @@ fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Err
             );
             report.acceptance_criteria.push(
                 AcceptanceCriterion::new(
-                    "A supplied scenario path is checked and, when supported, run deterministically.",
+                    "A supplied scenario path is checked and, when supported, run at the requested tier.",
                     ValidationStatus::Unproven,
                 )
                 .with_evidence("No --scenario argument was provided."),
@@ -254,7 +309,13 @@ fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Err
     Ok(report)
 }
 
-fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result<(), Error> {
+fn add_scenario_validation(
+    report: &mut ValidationReport,
+    path: &Path,
+    tier: ScenarioTier,
+    temper_bin: Option<&Path>,
+    artifact_dir: &Path,
+) -> Result<(), Error> {
     let check_report = check_scenario(path);
     if !check_report.is_valid() {
         return Err(Error::InvalidScenario(Box::new(check_report)));
@@ -265,7 +326,8 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
         .as_ref()
         .map(|manifest| manifest.name.as_str())
         .unwrap_or("unknown");
-    let facts = ScenarioRunFacts::from_check_report(&check_report, ScenarioTier::Hermetic);
+    let facts = ScenarioRunFacts::from_check_report(&check_report, tier);
+
     report.validated_claims.push(
         ValidatedClaim::new(
             format!(
@@ -303,8 +365,8 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
     check_evidence = check_evidence.with_details(facts.evidence_details());
     report.evidence.push(check_evidence);
 
-    match scenario_name {
-        basic_delivery::SCENARIO_NAME => add_supported_run(
+    match (scenario_name, tier) {
+        (basic_delivery::SCENARIO_NAME, ScenarioTier::Hermetic) => add_supported_run(
             report,
             &check_report,
             &facts,
@@ -312,7 +374,10 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
             "basic-delivery",
             basic_delivery::run_evidence_lines,
         ),
-        implementation_pr_handoff::SCENARIO_NAME => add_supported_run(
+        (basic_delivery::SCENARIO_NAME, ScenarioTier::Live) => {
+            live::add_basic_delivery_run(report, &check_report, &facts, temper_bin, artifact_dir)
+        }
+        (implementation_pr_handoff::SCENARIO_NAME, ScenarioTier::Hermetic) => add_supported_run(
             report,
             &check_report,
             &facts,
@@ -320,7 +385,11 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
             "implementation-pr-handoff",
             implementation_pr_handoff::run_evidence_lines,
         ),
-        _ => {
+        (implementation_pr_handoff::SCENARIO_NAME, ScenarioTier::Live) => {
+            live::add_unsupported_run(report, &facts, scenario_name)
+        }
+        (_, ScenarioTier::Live) => live::add_unsupported_run(report, &facts, scenario_name),
+        (_, ScenarioTier::Hermetic) => {
             report.acceptance_criteria.push(
                 AcceptanceCriterion::new(
                     "A supported deterministic scenario run completes successfully.",

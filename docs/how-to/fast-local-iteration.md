@@ -17,13 +17,22 @@ the same cheap check that runs in fast CI:
 cargo dev-scenario-check
 ```
 
-Exercise the deterministic in-process `basic-delivery` runner without live
-Forgejo or external services. The output labels the checked-in scenario source,
-the `hermetic` confidence tier, and manifest topology; it is a fast
-lower-confidence proof, not live Forgejo validation:
+Exercise the validation-grade live `basic-delivery` lane. This builds a
+standalone `temper` binary, then runs real Forgejo + host `forgejo-runner` +
+standalone Temper + Jig fake LLM agents through `temper-scenario run --tier
+live`:
 
 ```sh
 cargo dev-scenario-run
+```
+
+For a fast lower-confidence smoke check without live Forgejo or external
+processes, use the explicit hermetic alias. Its output labels the checked-in
+scenario source, the `hermetic` confidence tier, and manifest topology, and must
+not be cited as live validation:
+
+```sh
+cargo dev-scenario-run-hermetic
 ```
 
 ## Tests

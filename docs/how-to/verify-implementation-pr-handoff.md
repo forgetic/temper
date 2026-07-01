@@ -16,8 +16,9 @@ cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/implementation
 ```
 
 The run prints `source: checked-in scenario`, `confidence tier: hermetic`, and
-the manifest topology before the verdict. Asking for `--tier live` currently
-fails rather than converting this MemoryForge proof into a live claim.
+the manifest topology before the verdict. Asking for `--tier live` fails for
+this MemoryForge-specific scenario rather than converting the hermetic proof
+into a live claim.
 
 No provider environment variables, Forgejo binaries, host-mode Actions runner,
 or model credentials are required.

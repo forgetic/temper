@@ -14,6 +14,9 @@ use temper_runner::{
 };
 use toml::Value;
 
+#[path = "basic_delivery/live.rs"]
+mod live;
+
 pub(super) const SCENARIO_NAME: &str = "basic-delivery";
 const BUDGET: u64 = 64;
 
@@ -64,6 +67,22 @@ pub(super) fn run_evidence_lines(
 ) -> Result<Vec<String>, String> {
     let outcome = temper_testing::block_on(run_basic_delivery(scenario_path, manifest_path))?;
     Ok(outcome_evidence_lines(&outcome))
+}
+
+pub(super) fn run_live_and_print(
+    scenario_path: &Path,
+    facts: &super::run_context::ScenarioRunFacts,
+    temper_bin: Option<&Path>,
+) -> Result<(), String> {
+    live::run_and_print(scenario_path, facts, temper_bin)
+}
+
+pub(super) fn run_live_evidence_lines_for_report(
+    scenario_path: &Path,
+    temper_bin: Option<&Path>,
+    artifact_dir: &Path,
+) -> Result<Vec<String>, String> {
+    live::evidence_lines(scenario_path, temper_bin, Some(artifact_dir))
 }
 
 async fn run_basic_delivery(

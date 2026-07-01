@@ -6,10 +6,11 @@ removing that example: a thin site-admin intake issue is triaged into ready code
 an engineer produces one implementation PR, Forgejo Actions CI passes, and the
 mechanical worker lands the PR.
 
-A hermetic executable runner exists for fast validation, but it is not the live
-Forgejo topology described by the manifest. `temper-scenario run` labels the
-source, `hermetic` confidence tier, and manifest topology so its memory/in-process
-evidence is not mistaken for a live proof.
+A validation-grade live runner now exercises the topology described by the
+manifest: real Forgejo, host-mode `forgejo-runner`, standalone `temper`, and Jig
+fake LLM agents. The fast hermetic runner remains available for local smoke
+checks, but its memory/in-process evidence is lower confidence and is labeled as
+such.
 
 ## Files
 
@@ -50,15 +51,36 @@ scenarios/basic-delivery/
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/basic-delivery
+cargo dev-scenario-run                      # live validation-grade lane
+cargo dev-scenario-run-hermetic             # fast lower-confidence smoke lane
+```
+
+Direct live invocation is also supported when the standalone binary is already
+built or supplied by automation:
+
+```sh
+cargo build --bin temper
+cargo run -p temper-scenario-cli -- run \
+  --tier live \
+  --temper-bin target/debug/temper \
+  scenarios/basic-delivery
+```
+
+The live run output labels this bundle as `checked-in scenario`, reports the
+`live` confidence tier, prints the manifest topology, and then shows the Forgejo
+URL, issue/PR numbers, CI job evidence, convergence timing, fake LLM request
+counts, and log/artifact paths. A copied bundle outside `scenarios/` runs with
+the live tier too and is labeled `ephemeral validation bundle`.
+
+For the lower-confidence in-process runner:
+
+```sh
 cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/basic-delivery
 ```
 
-The run output labels this bundle as `checked-in scenario`, reports the
-`hermetic` lower-confidence tier, prints the manifest topology, and then shows
-the in-memory evidence for the seeded issue, implementation PR, CI signal, and
-closed parent issue. A copied bundle outside `scenarios/` runs the same way but
-is labeled `ephemeral validation bundle`. `--tier live` is reserved for the
-future live runner and currently fails with `unsupported-live-topology`.
+That hermetic output records the same source/topology labels plus memory-backed
+evidence for the seeded issue, implementation PR, CI signal, and closed parent
+issue; it must not be cited as live Forgejo validation.
 
 ## Provenance
 

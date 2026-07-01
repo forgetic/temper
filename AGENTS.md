@@ -32,11 +32,13 @@ The script runs these commands in order and stops on the first failure:
 3. `scripts/check-rust-file-size.sh`
 4. `scripts/check-no-ambient-env.sh`
 5. `cargo dev-test-build`
-6. `cargo dev-scenario-check`
-7. `cargo dev-scenario-run`
-8. `cargo dev-test-quick`
-9. Drop linked test binaries from `target/debug` before linting
-10. `cargo dev-clippy`
+6. `cargo dev-test-quick`
+7. Drop linked test binaries from `target/debug` before linting
+8. `cargo dev-clippy`
+
+Run `cargo dev-scenario-check`, `cargo dev-scenario-run-hermetic`, or the live
+`cargo dev-scenario-run` separately when your change touches scenario manifests,
+scenario execution, Forgejo/CI convergence, or post-merge validation evidence.
 
 The full `cargo dev-test-e2e-all` lane is intentionally left to CI (or an
 explicit manual local run) so the default pre-PR check stays cheap.

@@ -32,7 +32,7 @@ Usage: temper-scenario <COMMAND> [OPTIONS]
 Commands:
   list         List scenario directories and stable manifest metadata
   check        Validate one scenario path or all scenarios under a scenarios directory
-  run          Run a supported scenario deterministically in process
+  run          Run a supported scenario at an explicit confidence tier
   validate-pr  Write a temporary post-merge PR validation Markdown report
   promote      Draft an optional scenario-promotion candidate from validation artifacts
 
@@ -64,20 +64,26 @@ are scanned for immediate child scenario directories. Diagnostics are printed in
 a concise `path: error: field: message` form suitable for CI logs.";
 
 const RUN_USAGE: &str = "\
-Run a supported Temper scenario deterministically in process.
+Run a supported Temper scenario at an explicit confidence tier.
 
-Usage: temper-scenario run [--tier <hermetic|live>] <SCENARIO_PATH>
+Usage: temper-scenario run [--tier <hermetic|live>] [--temper-bin <PATH>] <SCENARIO_PATH>
 
 Arguments:
   SCENARIO_PATH  Scenario directory or manifest file to run
 
 Options:
   --tier <hermetic|live>  Confidence tier to request (default: hermetic)
-  -h, --help              Print help
+  --temper-bin <PATH>    Standalone `temper` binary for --tier live
+  -h, --help             Print help
 
-The current runnable tier is hermetic: a fast in-process/memory runner that is
-lower confidence than a live Forgejo proof. Requesting --tier live fails clearly
-until the live runner exists.
+The hermetic tier is a fast in-process/memory runner and is lower confidence
+than a live Forgejo proof. The live tier for `basic-delivery` boots the shared
+Forgejo + host forgejo-runner + standalone temper + Jig fake LLM topology and
+fails instead of substituting the hermetic runner when that topology cannot run.
+
+For live `basic-delivery`, pass --temper-bin <PATH>, set
+TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling target-dir `temper` binary.
+`cargo dev-scenario-run` builds and delegates to the live lane.
 
 Supported checked-in runners are scenarios/basic-delivery and
 scenarios/implementation-pr-handoff. Unsupported scenario manifests fail clearly
@@ -252,22 +258,27 @@ fn run_command(args: &[String]) -> ExitCode {
     };
 
     let facts = ScenarioRunFacts::from_check_report(&report, args.tier);
-    if args.tier == ScenarioTier::Live {
-        eprintln!(
-            "temper-scenario run: {}",
-            facts.unsupported_live_message(&manifest.name)
-        );
-        return ExitCode::FAILURE;
-    }
 
-    let result = match manifest.name.as_str() {
-        basic_delivery::SCENARIO_NAME => {
+    let result = match (manifest.name.as_str(), args.tier) {
+        (basic_delivery::SCENARIO_NAME, ScenarioTier::Hermetic) => {
             basic_delivery::run_and_print(&report.scenario_path, manifest_path, &facts)
         }
-        implementation_pr_handoff::SCENARIO_NAME => {
+        (basic_delivery::SCENARIO_NAME, ScenarioTier::Live) => basic_delivery::run_live_and_print(
+            &report.scenario_path,
+            &facts,
+            args.temper_bin.as_deref(),
+        ),
+        (implementation_pr_handoff::SCENARIO_NAME, ScenarioTier::Hermetic) => {
             implementation_pr_handoff::run_and_print(&report.scenario_path, manifest_path, &facts)
         }
-        other => {
+        (implementation_pr_handoff::SCENARIO_NAME, ScenarioTier::Live) => {
+            eprintln!(
+                "temper-scenario run: {}",
+                facts.unsupported_live_message(&manifest.name)
+            );
+            return ExitCode::FAILURE;
+        }
+        (other, _) => {
             eprintln!(
                 "temper-scenario run: unsupported scenario `{other}` at {}; supported checked-in runners: scenarios/basic-delivery, scenarios/implementation-pr-handoff",
                 display_path(&report.scenario_path)
@@ -316,6 +327,7 @@ fn parse_optional_path(
 struct RunArgs {
     path: PathBuf,
     tier: ScenarioTier,
+    temper_bin: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -334,6 +346,7 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
 
     let mut path = None;
     let mut tier = None;
+    let mut temper_bin = None;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -349,6 +362,21 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
                 return Err(());
             }
             set_run_tier(&mut tier, value)?;
+            index += 1;
+            continue;
+        }
+        if arg == "--temper-bin" {
+            let value = run_flag_value(args, index, "--temper-bin")?;
+            set_temper_bin(&mut temper_bin, value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--temper-bin=") {
+            if value.is_empty() {
+                eprintln!("temper-scenario run: --temper-bin requires a value\n\n{RUN_USAGE}");
+                return Err(());
+            }
+            set_temper_bin(&mut temper_bin, value)?;
             index += 1;
             continue;
         }
@@ -371,6 +399,7 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
     Ok(RunParseResult::Args(RunArgs {
         path,
         tier: tier.unwrap_or(ScenarioTier::Hermetic),
+        temper_bin,
     }))
 }
 
@@ -395,6 +424,14 @@ fn set_run_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> 
     };
     if tier.replace(parsed).is_some() {
         eprintln!("temper-scenario run: duplicate --tier option\n\n{RUN_USAGE}");
+        return Err(());
+    }
+    Ok(())
+}
+
+fn set_temper_bin(temper_bin: &mut Option<PathBuf>, value: &str) -> Result<(), ()> {
+    if temper_bin.replace(PathBuf::from(value)).is_some() {
+        eprintln!("temper-scenario run: duplicate --temper-bin option\n\n{RUN_USAGE}");
         return Err(());
     }
     Ok(())
