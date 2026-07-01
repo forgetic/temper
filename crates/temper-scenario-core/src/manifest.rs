@@ -144,6 +144,13 @@ impl ScenarioIntent {
     }
 }
 
+/// Reusable runner selector declared by a scenario manifest.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct ScenarioRunnerSelection {
+    /// Stable runner id to dispatch to, typically from `[runner] uses = "..."`.
+    pub uses: Option<String>,
+}
+
 /// Runtime topology declared by a scenario manifest.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct ScenarioTopology {
@@ -223,6 +230,7 @@ pub struct ScenarioManifest {
     pub status: ScenarioStatus,
     pub stability: ScenarioStability,
     pub intent: ScenarioIntent,
+    pub runner: ScenarioRunnerSelection,
     pub topology: ScenarioTopology,
     pub assertion_templates: Vec<String>,
     pub repositories: Vec<RepositoryReference>,

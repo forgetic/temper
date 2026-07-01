@@ -10,10 +10,11 @@ use temper_scenario_core::{
 };
 
 use super::run_context::{ScenarioRunFacts, ScenarioTier};
-use super::{basic_delivery, implementation_pr_handoff};
 
 #[path = "validate_pr/live.rs"]
 mod live;
+#[path = "validate_pr/runner.rs"]
+mod runner;
 
 const EX_USAGE: u8 = 64;
 
@@ -365,119 +366,17 @@ fn add_scenario_validation(
     check_evidence = check_evidence.with_details(facts.evidence_details());
     report.evidence.push(check_evidence);
 
-    match (scenario_name, tier) {
-        (basic_delivery::SCENARIO_NAME, ScenarioTier::Hermetic) => add_supported_run(
-            report,
-            &check_report,
-            &facts,
-            scenario_name,
-            "basic-delivery",
-            basic_delivery::run_evidence_lines,
-        ),
-        (basic_delivery::SCENARIO_NAME, ScenarioTier::Live) => {
-            live::add_basic_delivery_run(report, &check_report, &facts, temper_bin, artifact_dir)
-        }
-        (implementation_pr_handoff::SCENARIO_NAME, ScenarioTier::Hermetic) => add_supported_run(
-            report,
-            &check_report,
-            &facts,
-            scenario_name,
-            "implementation-pr-handoff",
-            implementation_pr_handoff::run_evidence_lines,
-        ),
-        (implementation_pr_handoff::SCENARIO_NAME, ScenarioTier::Live) => {
-            live::add_unsupported_run(report, &facts, scenario_name)
-        }
-        (_, ScenarioTier::Live) => live::add_unsupported_run(report, &facts, scenario_name),
-        (_, ScenarioTier::Hermetic) => {
-            report.acceptance_criteria.push(
-                AcceptanceCriterion::new(
-                    "A supported deterministic scenario run completes successfully.",
-                    ValidationStatus::NotApplicable,
-                )
-                .with_evidence(format!(
-                    "scenario `{scenario_name}` is not supported by this temporary runner"
-                )),
-            );
-            report.limitations.push(format!(
-                "No scenario run occurred for `{scenario_name}`; supported checked-in runners: scenarios/basic-delivery, scenarios/implementation-pr-handoff."
-            ));
-        }
-    }
+    runner::add_scenario_run(
+        report,
+        &check_report,
+        &facts,
+        scenario_name,
+        tier,
+        temper_bin,
+        artifact_dir,
+    );
 
     Ok(())
-}
-
-fn add_supported_run(
-    report: &mut ValidationReport,
-    check_report: &temper_scenario_core::CheckReport,
-    facts: &ScenarioRunFacts,
-    scenario_name: &str,
-    label: &str,
-    run_evidence_lines: fn(&Path, &Path) -> Result<Vec<String>, String>,
-) {
-    let Some(manifest_path) = check_report.manifest_path.as_deref() else {
-        report.limitations.push(format!(
-            "Scenario `{scenario_name}` had no resolved manifest path, so no scenario run occurred."
-        ));
-        report.acceptance_criteria.push(
-            AcceptanceCriterion::new(
-                "The supported deterministic scenario completes successfully.",
-                ValidationStatus::Unproven,
-            )
-            .with_evidence("No manifest path was available for the scenario runner."),
-        );
-        return;
-    };
-
-    match run_evidence_lines(&check_report.scenario_path, manifest_path) {
-        Ok(lines) => {
-            let mut details = facts.evidence_details();
-            details.extend(lines);
-            report.validated_claims.push(
-                ValidatedClaim::new(
-                    format!("Supported deterministic {label} scenario completes successfully."),
-                    ValidationStatus::Observed,
-                )
-                .with_evidence("scenario run passed"),
-            );
-            report.acceptance_criteria.push(
-                AcceptanceCriterion::new(
-                    "A supported deterministic scenario run completes successfully.",
-                    ValidationStatus::Satisfied,
-                )
-                .with_evidence(format!("{label} run completed in process")),
-            );
-            report.evidence.push(
-                EvidenceEntry::new(
-                    EvidenceKind::ScenarioRun,
-                    format!("Deterministic {label} scenario run completed successfully."),
-                )
-                .with_details(details),
-            );
-        }
-        Err(error) => {
-            report.verdict = ValidationVerdict::Failed;
-            report.validated_claims.push(
-                ValidatedClaim::new(
-                    format!("Supported deterministic {label} scenario completes successfully."),
-                    ValidationStatus::Failed,
-                )
-                .with_evidence(error.clone()),
-            );
-            report.acceptance_criteria.push(
-                AcceptanceCriterion::new(
-                    "A supported deterministic scenario run completes successfully.",
-                    ValidationStatus::Failed,
-                )
-                .with_evidence(error.clone()),
-            );
-            report.evidence.push(
-                EvidenceEntry::new(EvidenceKind::ScenarioRun, "Scenario run failed.")
-                    .with_detail(error),
-            );
-        }
-    }
 }
 
 fn validation_report_path(output_dir: &Path, pr_number: u64, sha: &str) -> PathBuf {

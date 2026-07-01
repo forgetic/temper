@@ -7,44 +7,46 @@ use temper_scenario_core::{
     ValidationStatus, ValidationVerdict,
 };
 
-use crate::basic_delivery;
 use crate::run_context::ScenarioRunFacts;
+use crate::runner_registry::SelectedRunner;
 
-pub(super) fn add_basic_delivery_run(
+pub(super) fn add_supported_run(
     report: &mut ValidationReport,
     check_report: &temper_scenario_core::CheckReport,
     facts: &ScenarioRunFacts,
+    selected_runner: &SelectedRunner,
     temper_bin: Option<&Path>,
     artifact_dir: &Path,
 ) {
-    match basic_delivery::run_live_evidence_lines_for_report(
-        &check_report.scenario_path,
-        temper_bin,
-        artifact_dir,
-    ) {
+    let label = selected_runner.id();
+    match selected_runner.live_evidence_lines(&check_report.scenario_path, temper_bin, artifact_dir)
+    {
         Ok(lines) => {
             let mut details = facts.evidence_details();
+            details.push(selected_runner.selection_detail());
             details.extend(lines);
             report.validated_claims.push(
                 ValidatedClaim::new(
-                    "Live basic-delivery scenario completes successfully.",
+                    format!("Live {label} scenario completes successfully."),
                     ValidationStatus::Observed,
                 )
                 .with_evidence("live scenario run passed"),
             );
             report.acceptance_criteria.push(
                 AcceptanceCriterion::new(
-                    "A validation-grade live basic-delivery scenario run completes successfully.",
+                    format!(
+                        "A validation-grade live {label} scenario run completes successfully."
+                    ),
                     ValidationStatus::Satisfied,
                 )
                 .with_evidence(
-                    "live basic-delivery run completed with real Forgejo, host forgejo-runner, standalone temper, and Jig fake LLM agents",
+                    "live scenario run completed with real Forgejo, host forgejo-runner, standalone temper, and Jig fake LLM agents",
                 ),
             );
             report.evidence.push(
                 EvidenceEntry::new(
                     EvidenceKind::ScenarioRun,
-                    "Live basic-delivery scenario run completed successfully.",
+                    format!("Live {label} scenario run completed successfully."),
                 )
                 .with_details(details),
             );
@@ -53,14 +55,14 @@ pub(super) fn add_basic_delivery_run(
             report.verdict = ValidationVerdict::Failed;
             report.validated_claims.push(
                 ValidatedClaim::new(
-                    "Live basic-delivery scenario completes successfully.",
+                    format!("Live {label} scenario completes successfully."),
                     ValidationStatus::Failed,
                 )
                 .with_evidence(error.clone()),
             );
             report.acceptance_criteria.push(
                 AcceptanceCriterion::new(
-                    "A validation-grade live basic-delivery scenario run completes successfully.",
+                    format!("A validation-grade live {label} scenario run completes successfully."),
                     ValidationStatus::Failed,
                 )
                 .with_evidence(error.clone()),
@@ -71,34 +73,4 @@ pub(super) fn add_basic_delivery_run(
             );
         }
     }
-}
-
-pub(super) fn add_unsupported_run(
-    report: &mut ValidationReport,
-    facts: &ScenarioRunFacts,
-    scenario_name: &str,
-) {
-    let message = facts.unsupported_live_message(scenario_name);
-    report.verdict = ValidationVerdict::Failed;
-    report.validated_claims.push(
-        ValidatedClaim::new(
-            format!("Scenario `{scenario_name}` supports the requested live tier."),
-            ValidationStatus::Failed,
-        )
-        .with_evidence(message.clone()),
-    );
-    report.acceptance_criteria.push(
-        AcceptanceCriterion::new(
-            "A requested live scenario run uses a supported live topology.",
-            ValidationStatus::Failed,
-        )
-        .with_evidence(message.clone()),
-    );
-    report.evidence.push(
-        EvidenceEntry::new(
-            EvidenceKind::ScenarioRun,
-            "Live scenario run is unsupported.",
-        )
-        .with_detail(message),
-    );
 }

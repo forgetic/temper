@@ -112,6 +112,7 @@ fn parses_valid_manifest_and_references() {
     assert_eq!(manifest.name, "basic-delivery");
     assert_eq!(manifest.status, ScenarioStatus::Ready);
     assert_eq!(manifest.stability, ScenarioStability::Experimental);
+    assert!(manifest.runner.uses.is_none());
     assert!(manifest.topology.is_empty());
     assert!(manifest.assertion_templates.is_empty());
     assert_eq!(manifest.repositories.len(), 1);
@@ -119,6 +120,46 @@ fn parses_valid_manifest_and_references() {
     assert_eq!(manifest.issues.len(), 1);
     assert_eq!(manifest.issues[0].number, 37);
     assert_eq!(manifest.path_references.len(), 2);
+}
+
+#[test]
+fn parses_manifest_runner_selector() {
+    let manifest = parse_manifest_str(
+        r##"
+name = "renamed-delivery"
+status = "ready"
+stability = "experimental"
+intent = "Runner metadata should select a reusable runner independently from name."
+
+[runner]
+uses = "basic-delivery"
+"##,
+        ".",
+    )
+    .expect("runner selector manifest is valid");
+
+    assert_eq!(manifest.name, "renamed-delivery");
+    assert_eq!(manifest.runner.uses.as_deref(), Some("basic-delivery"));
+}
+
+#[test]
+fn rejects_malformed_runner_selector() {
+    let diagnostics = parse_manifest_str(
+        r##"
+name = "broken-runner"
+status = "ready"
+stability = "experimental"
+intent = "Bad runner metadata should fail."
+
+[runner]
+uses = 7
+"##,
+        ".",
+    )
+    .expect_err("non-string runner selector is invalid");
+
+    assert_has_field(&diagnostics, "runner.uses");
+    assert_has_message(&diagnostics, "must be a string");
 }
 
 #[test]
