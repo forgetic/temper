@@ -187,6 +187,7 @@ fn ensure_finds_closed_issue_and_merged_pr_by_correlation_key() {
             method: MergeMethod::MergeCommit,
             commit_title: None,
             commit_body: None,
+            delete_source_branch: false,
         },
     ))
     .expect("pull request merged");

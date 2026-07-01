@@ -47,6 +47,8 @@
 //! re-reads the pull request before deciding: already merged continues to
 //! post-merge projection, missing or closed is stale, and still-open/unmerged is
 //! returned as [`ExecutionError::MergeConflict`] for declared workflow routing.
+//! Direct mechanical automation merges additionally request source-branch
+//! cleanup from backends that support merge-time branch deletion.
 //! The transition's post-merge labels (`landed`, `alignment`) are modeled as
 //! ordinary `add_label` effects, so they are projected by the same atomic update
 //! and survive on the now-closed pull request — there is no executor-special-

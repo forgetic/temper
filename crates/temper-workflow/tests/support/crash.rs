@@ -125,6 +125,7 @@ pub struct CrashForge<F: Forge> {
     issue_queries: Mutex<Vec<IssueQuery>>,
     issue_updates: Mutex<Vec<UpdateIssue>>,
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
+    merge_inputs: Mutex<Vec<MergePullRequest>>,
 }
 
 impl<F: Forge> CrashForge<F> {
@@ -137,6 +138,7 @@ impl<F: Forge> CrashForge<F> {
             issue_queries: Mutex::new(Vec::new()),
             issue_updates: Mutex::new(Vec::new()),
             pull_request_queries: Mutex::new(Vec::new()),
+            merge_inputs: Mutex::new(Vec::new()),
         }
     }
 
@@ -176,6 +178,14 @@ impl<F: Forge> CrashForge<F> {
         self.pull_request_queries
             .lock()
             .expect("pull request queries mutex")
+            .clone()
+    }
+
+    /// Returns the pull-request merge inputs this wrapper observed.
+    pub fn merge_inputs(&self) -> Vec<MergePullRequest> {
+        self.merge_inputs
+            .lock()
+            .expect("merge inputs mutex")
             .clone()
     }
 
@@ -441,6 +451,10 @@ impl<F: Forge> Forge for CrashForge<F> {
     ) -> ForgeResult<MergeRecord> {
         let n = self.tick(ForgeOp::MergePullRequest);
         self.guard(ForgeOp::MergePullRequest, n, FaultPoint::Before)?;
+        self.merge_inputs
+            .lock()
+            .expect("merge inputs mutex")
+            .push(input.clone());
         let result = self.inner.merge_pull_request(id, input).await?;
         self.guard(ForgeOp::MergePullRequest, n, FaultPoint::After)?;
         Ok(result)

@@ -257,6 +257,7 @@ async fn create_merged_pr(forge: &MemoryForge, repo: &RepositoryId, child: ItemN
                 method: MergeMethod::Squash,
                 commit_title: None,
                 commit_body: None,
+                delete_source_branch: false,
             },
         )
         .await

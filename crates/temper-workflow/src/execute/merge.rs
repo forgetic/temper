@@ -31,6 +31,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         repo_id: &RepositoryId,
         loaded: &Loaded,
         merge: bool,
+        delete_source_branch: bool,
     ) -> Result<(), ExecutionError> {
         if !merge {
             return Ok(());
@@ -48,6 +49,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             method: MergeMethod::MergeCommit,
             commit_title: None,
             commit_body: None,
+            delete_source_branch,
         };
         match self.forge.merge_pull_request(id, input).await {
             Ok(_) => Ok(()),

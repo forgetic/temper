@@ -198,6 +198,12 @@ impl<C: HttpClient> ForgejoForge<C> {
         if let Some(message) = &input.commit_body {
             body.insert("MergeMessageField".to_string(), serde_json::json!(message));
         }
+        if input.delete_source_branch {
+            body.insert(
+                "delete_branch_after_merge".to_string(),
+                serde_json::json!(true),
+            );
+        }
         let path = format!(
             "/repos/{}/pulls/{}/merge",
             repo.path_segment(),

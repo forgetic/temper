@@ -203,6 +203,7 @@ fn role_tools_correlation_helpers_use_targeted_summary_queries() {
             method: MergeMethod::MergeCommit,
             commit_title: None,
             commit_body: None,
+            delete_source_branch: false,
         },
     ))
     .expect("pull request merged");

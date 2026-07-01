@@ -242,4 +242,12 @@ pub struct MergePullRequest {
     pub method: MergeMethod,
     pub commit_title: Option<String>,
     pub commit_body: Option<String>,
+    /// Requests deletion of the pull request's source branch after a successful
+    /// merge when the backing forge supports merge-time source branch cleanup.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub delete_source_branch: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

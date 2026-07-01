@@ -4,6 +4,8 @@
 //! create a repository and artifacts, then execute transitions and assert the
 //! backend state, idempotency, and the typed failure classes.
 
+mod support;
+
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -822,7 +824,8 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
     );
 
     let context = ExecutionContext::new();
-    let executor = workflow.executor_with_context(&forge, context);
+    let crash = support::crash::CrashForge::new(forge.clone(), Vec::new());
+    let executor = workflow.executor_with_context(&crash, context);
 
     // Pre-plan: check that land_pr plans with merge, landing-label cleanup, and close parents.
     let plan = block_on(executor.plan(
@@ -856,6 +859,15 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
             WorkflowEffect::RemoveLabel(LabelId::new("landing")),
             WorkflowEffect::CloseParentIssues
         ]
+    );
+
+    assert_eq!(
+        crash
+            .merge_inputs()
+            .first()
+            .map(|input| input.delete_source_branch),
+        Some(true),
+        "direct mechanical landings request PR head branch cleanup"
     );
 
     // The PR should now be merged.
