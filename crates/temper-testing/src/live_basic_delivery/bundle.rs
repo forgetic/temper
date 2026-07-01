@@ -44,6 +44,17 @@ impl ScenarioBundle {
             (scenario_path, manifest_path)
         };
         let manifest = load_manifest_toml(&manifest_path)?;
+        Self::from_manifest(scenario_path, manifest_path, manifest)
+    }
+
+    /// Builds a live basic-delivery bundle from an already-resolved manifest.
+    /// Callers that support fixture inheritance can pass a manifest whose local
+    /// path strings have already been rewritten to the files that declared them.
+    pub fn from_manifest(
+        scenario_path: PathBuf,
+        manifest_path: PathBuf,
+        manifest: TomlValue,
+    ) -> Result<Self, String> {
         let (workflow_name, workflow_path, workflow_text) =
             workflow_fixture(&scenario_path, &manifest)?;
         let repo = repo_fixture(&scenario_path, &manifest)?;

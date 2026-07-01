@@ -50,8 +50,8 @@ not replace the required validation report.
 
 Author scenarios as data, not as runners:
 
-- Keep the manifest in `scenario.toml` and keep all paths relative to the
-  scenario directory.
+- Keep the manifest in `scenario.toml` and keep new paths relative to the
+  manifest that declares them.
 - Store fixture inputs as ordinary files that can be copied into a throwaway
   environment by a future Rust checker or runner.
 - Do not commit credentials, generated logs, runtime state, caches, or secrets.
@@ -59,6 +59,38 @@ Author scenarios as data, not as runners:
   files required to exercise the workflow.
 - If a scenario is promoted from an example, copy only the stable fixture inputs
   needed by validation. Leave the source example unchanged.
+
+## Fixture inheritance
+
+Ephemeral validation bundles may reuse fixture material from a checked-in
+scenario instead of copying `config/`, `repo/`, issue body files, or workflow
+JSON. Declare the relationship explicitly in the child manifest:
+
+```toml
+[fixtures]
+extends = "scenarios/basic-delivery"
+```
+
+`extends` is a local relative filesystem path to another scenario directory or
+manifest. It is resolved first relative to the child manifest and then relative
+to the repository workspace root so throwaway bundles can point at
+`scenarios/basic-delivery`. Absolute paths, URLs, missing bases, inheritance
+cycles, and `..` components are rejected with `fixtures.extends` diagnostics.
+
+Overlay semantics are intentionally simple: the inherited manifest supplies
+defaults, and the child manifest recursively overrides tables while replacing
+arrays and scalar values wholesale. This lets a validation bundle set a distinct
+`name`, `[runner] uses = "basic-delivery"`, or local `[expect]` metadata while
+reusing workflow, repo seed, CI, and issue-body fixtures. Local file references
+are resolved relative to the manifest that declared them, so inherited
+`config/workflow.json`, `repo`, and issue body paths continue to point at the
+base scenario.
+
+Promotion remains optional and reviewable. Checked-in scenarios should either be
+self-contained or explicitly declare `[fixtures] extends = ...`; do not rely on
+implicit fixture lookup. Promoting an inherited ephemeral bundle into the corpus
+should preserve the explicit inheritance only when reviewers want that ongoing
+coupling, otherwise copy the stable fixture inputs as part of the promotion PR.
 
 ## Manifest fields
 
@@ -89,6 +121,12 @@ Required sections:
 | `[[agents]]` | Roles expected to service the scenario and the tool or automation mode they use. |
 | `[expect]` | High-level convergence result plus machine-checkable expectation entries. |
 | `[change_policy]` | Compatibility notes for future edits and whether a validation report is required. |
+
+Optional sections:
+
+| Section | Purpose |
+| --- | --- |
+| `[fixtures]` | Explicit local fixture inheritance for bundles that reuse another scenario's manifest/fixture defaults. |
 
 Scenarios may add explanatory keys inside those sections, but new keys should be
 documented in the scenario README when they affect validation semantics.
@@ -130,9 +168,12 @@ scenarios/
         └── .forgejo/workflows/ci.yml
 ```
 
-Local path references in `scenario.toml` must point at files or directories in
-the same scenario bundle. Prefer duplicating small fixture files over depending
-on paths in `examples/` so validation can run from the checked-in corpus alone.
+Local path references in `scenario.toml` must point at files or directories
+relative to the manifest that declares them. Self-contained checked-in scenarios
+keep those files in the same bundle; inherited references continue to point at
+the explicitly extended base. Prefer duplicating small fixture files over
+depending on paths in `examples/` so validation can run from the checked-in
+corpus alone.
 
 ## Relationship to post-merge validation
 

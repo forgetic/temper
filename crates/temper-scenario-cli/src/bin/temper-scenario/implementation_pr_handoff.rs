@@ -14,6 +14,7 @@ use temper_forge_model::{
 use temper_protocol_worker::{
     Artifact, Branch, JobResult, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
 };
+use temper_scenario_core::load_resolved_manifest_toml;
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, WorkflowMetadata, parse_metadata_block, render_metadata_block,
 };
@@ -435,11 +436,7 @@ fn load_fixture(scenario_path: &Path, manifest_path: &Path) -> Result<Fixture, S
 }
 
 fn load_manifest_toml(manifest_path: &Path) -> Result<Value, String> {
-    let source = fs::read_to_string(manifest_path)
-        .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
-    source
-        .parse::<Value>()
-        .map_err(|error| format!("parse {}: {error}", manifest_path.display()))
+    load_resolved_manifest_toml(manifest_path).map_err(|error| error.to_string())
 }
 
 fn workflow_path(scenario_path: &Path, manifest: &Value) -> Result<PathBuf, String> {

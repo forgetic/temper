@@ -4,6 +4,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use temper_scenario_core::load_resolved_manifest_toml;
 use temper_testing::live_basic_delivery::{
     LiveBasicDeliveryEvidence, ScenarioBundle, TemperCommand, run_live_basic_delivery,
 };
@@ -15,10 +16,11 @@ const COMPAT_TEMPER_BIN_ENV: &str = "TEMPER_BIN";
 
 pub(super) fn run_and_print(
     scenario_path: &Path,
+    manifest_path: &Path,
     facts: &ScenarioRunFacts,
     temper_bin: Option<&Path>,
 ) -> Result<(), String> {
-    let evidence = run_live(scenario_path, temper_bin)?;
+    let evidence = run_live(scenario_path, manifest_path, temper_bin)?;
     let lines = live_evidence_lines(&evidence, None);
     retain_artifact_workspace(evidence);
     print_outcome(&lines, facts);
@@ -27,10 +29,11 @@ pub(super) fn run_and_print(
 
 pub(super) fn evidence_lines(
     scenario_path: &Path,
+    manifest_path: &Path,
     temper_bin: Option<&Path>,
     artifact_dir: Option<&Path>,
 ) -> Result<Vec<String>, String> {
-    let evidence = run_live(scenario_path, temper_bin)?;
+    let evidence = run_live(scenario_path, manifest_path, temper_bin)?;
     if let Some(artifact_dir) = artifact_dir {
         let retained_logs = copy_report_artifacts(&evidence, artifact_dir)?;
         Ok(live_evidence_lines(&evidence, Some(&retained_logs)))
@@ -43,9 +46,15 @@ pub(super) fn evidence_lines(
 
 fn run_live(
     scenario_path: &Path,
+    manifest_path: &Path,
     temper_bin: Option<&Path>,
 ) -> Result<LiveBasicDeliveryEvidence, String> {
-    let scenario = ScenarioBundle::load(scenario_path)?;
+    let manifest = load_resolved_manifest_toml(manifest_path).map_err(|error| error.to_string())?;
+    let scenario = ScenarioBundle::from_manifest(
+        scenario_path.to_path_buf(),
+        manifest_path.to_path_buf(),
+        manifest,
+    )?;
     let temper = resolve_temper_command(temper_bin)?;
     run_live_basic_delivery(scenario, temper)
 }

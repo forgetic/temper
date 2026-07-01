@@ -4,18 +4,18 @@ use std::path::{Component, Path};
 
 use toml::Value;
 
+use crate::sourced::{SourcedValue, SourcedValueKind};
 use crate::toml_helpers::join_field;
 use crate::{Diagnostic, PathReference};
 
 pub(crate) fn collect_path_references(
-    value: &Value,
+    value: &SourcedValue,
     field_path: &str,
-    base_dir: &Path,
     references: &mut Vec<PathReference>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    match value {
-        Value::Table(table) => {
+    match &value.kind {
+        SourcedValueKind::Table(table) => {
             for (key, child) in table {
                 let child_path = join_field(field_path, key);
                 let normalized = key.replace('-', "_").to_ascii_lowercase();
@@ -24,30 +24,21 @@ pub(crate) fn collect_path_references(
                         child,
                         &child_path,
                         is_path_map_key(&normalized),
-                        base_dir,
                         references,
                         diagnostics,
                     );
                 } else if is_path_leaf_key(&normalized) {
-                    collect_path_value(
-                        child,
-                        &child_path,
-                        false,
-                        base_dir,
-                        references,
-                        diagnostics,
-                    );
+                    collect_path_value(child, &child_path, false, references, diagnostics);
                 } else {
-                    collect_path_references(child, &child_path, base_dir, references, diagnostics);
+                    collect_path_references(child, &child_path, references, diagnostics);
                 }
             }
         }
-        Value::Array(items) => {
+        SourcedValueKind::Array(items) => {
             for (index, child) in items.iter().enumerate() {
                 collect_path_references(
                     child,
                     &format!("{field_path}[{index}]"),
-                    base_dir,
                     references,
                     diagnostics,
                 );
@@ -57,47 +48,135 @@ pub(crate) fn collect_path_references(
     }
 }
 
+pub(crate) fn absolutize_path_references(value: &SourcedValue) -> Value {
+    absolutize_node(value, "")
+}
+
 fn collect_path_value(
-    value: &Value,
+    value: &SourcedValue,
     field_path: &str,
     all_strings_are_paths: bool,
-    base_dir: &Path,
     references: &mut Vec<PathReference>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    match value {
-        Value::String(raw) => {
-            validate_path_reference(field_path, raw, base_dir, references, diagnostics);
+    match &value.kind {
+        SourcedValueKind::String(raw) => {
+            validate_path_reference(field_path, raw, value.origin_dir(), references, diagnostics);
         }
-        Value::Array(items) => {
+        SourcedValueKind::Array(items) => {
             for (index, child) in items.iter().enumerate() {
                 collect_path_value(
                     child,
                     &format!("{field_path}[{index}]"),
                     all_strings_are_paths,
-                    base_dir,
                     references,
                     diagnostics,
                 );
             }
         }
-        Value::Table(table) if all_strings_are_paths => {
+        SourcedValueKind::Table(table) if all_strings_are_paths => {
             for (key, child) in table {
                 collect_path_value(
                     child,
                     &join_field(field_path, key),
                     true,
-                    base_dir,
                     references,
                     diagnostics,
                 );
             }
         }
-        Value::Table(_) => {
-            collect_path_references(value, field_path, base_dir, references, diagnostics);
+        SourcedValueKind::Table(_) => {
+            collect_path_references(value, field_path, references, diagnostics);
         }
         _ => diagnostics.push(Diagnostic::error(field_path, "must be a local path string")),
     }
+}
+
+fn absolutize_node(value: &SourcedValue, field_path: &str) -> Value {
+    match &value.kind {
+        SourcedValueKind::Table(table) => Value::Table(
+            table
+                .iter()
+                .map(|(key, child)| {
+                    let child_path = join_field(field_path, key);
+                    let normalized = key.replace('-', "_").to_ascii_lowercase();
+                    let child_value = if is_path_container_key(&normalized) {
+                        absolutize_path_value(child, &child_path, is_path_map_key(&normalized))
+                    } else if is_path_leaf_key(&normalized) {
+                        absolutize_path_value(child, &child_path, false)
+                    } else {
+                        absolutize_node(child, &child_path)
+                    };
+                    (key.clone(), child_value)
+                })
+                .collect(),
+        ),
+        SourcedValueKind::Array(items) => Value::Array(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, child)| absolutize_node(child, &format!("{field_path}[{index}]")))
+                .collect(),
+        ),
+        _ => value.to_value(),
+    }
+}
+
+fn absolutize_path_value(
+    value: &SourcedValue,
+    field_path: &str,
+    all_strings_are_paths: bool,
+) -> Value {
+    match &value.kind {
+        SourcedValueKind::String(raw) => absolutize_path_string(raw, value.origin_dir())
+            .map(Value::String)
+            .unwrap_or_else(|| value.to_value()),
+        SourcedValueKind::Array(items) => Value::Array(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, child)| {
+                    absolutize_path_value(
+                        child,
+                        &format!("{field_path}[{index}]"),
+                        all_strings_are_paths,
+                    )
+                })
+                .collect(),
+        ),
+        SourcedValueKind::Table(table) if all_strings_are_paths => Value::Table(
+            table
+                .iter()
+                .map(|(key, child)| {
+                    (
+                        key.clone(),
+                        absolutize_path_value(child, &join_field(field_path, key), true),
+                    )
+                })
+                .collect(),
+        ),
+        SourcedValueKind::Table(_) => absolutize_node(value, field_path),
+        _ => value.to_value(),
+    }
+}
+
+fn absolutize_path_string(raw: &str, base_dir: &Path) -> Option<String> {
+    let value = raw.trim();
+    if value.is_empty() || value.contains("://") {
+        return None;
+    }
+    let relative = Path::new(value);
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return None;
+    }
+    Some(base_dir.join(relative).display().to_string())
 }
 
 fn validate_path_reference(

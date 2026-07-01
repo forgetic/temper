@@ -13,11 +13,13 @@
 mod assertion_templates;
 mod diagnostics;
 mod discovery;
+mod inheritance;
 mod issue_refs;
 mod manifest;
 mod parse;
 mod path_refs;
 mod repo_refs;
+mod sourced;
 mod toml_helpers;
 mod validation_report;
 mod validator_common;
@@ -37,7 +39,7 @@ pub use manifest::{
     RepositoryReference, ScenarioEntry, ScenarioIntent, ScenarioManifest, ScenarioRunnerSelection,
     ScenarioStability, ScenarioStatus, ScenarioTopology,
 };
-pub use parse::{load_manifest, parse_manifest_str};
+pub use parse::{load_manifest, load_resolved_manifest_toml, parse_manifest_str};
 pub use validation_report::{
     AcceptanceCriterion, EvidenceEntry, EvidenceKind, FollowUpIssueIntent, ValidatedClaim,
     ValidationReport, ValidationStatus, ValidationTarget, ValidationVerdict,

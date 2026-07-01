@@ -5,8 +5,9 @@ use std::path::Path;
 
 use toml::Value;
 
+use crate::inheritance::{resolve_manifest_file, resolve_manifest_value};
 use crate::issue_refs::collect_issue_references;
-use crate::path_refs::collect_path_references;
+use crate::path_refs::{absolutize_path_references, collect_path_references};
 use crate::repo_refs::{
     collect_repository_references, repository_aliases, validate_repository_fields,
 };
@@ -31,7 +32,7 @@ pub fn load_manifest(path: impl AsRef<Path>) -> Result<ScenarioManifest, Manifes
             source,
         })?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let (manifest, diagnostics) = parse_manifest_value(&value, base_dir);
+    let (manifest, diagnostics) = parse_manifest_value(&value, base_dir, Some(path));
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == Severity::Error)
@@ -49,6 +50,36 @@ pub fn load_manifest(path: impl AsRef<Path>) -> Result<ScenarioManifest, Manifes
     })
 }
 
+/// Loads a manifest after fixture inheritance and rewrites local fixture path
+/// references to the absolute paths that declared them.
+pub fn load_resolved_manifest_toml(path: impl AsRef<Path>) -> Result<Value, ManifestLoadError> {
+    let path = path.as_ref();
+    let sourced =
+        resolve_manifest_file(path).map_err(|diagnostics| ManifestLoadError::Invalid {
+            path: path.to_path_buf(),
+            diagnostics,
+        })?;
+    let (manifest, diagnostics) = parse_sourced_manifest_value(&sourced);
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        return Err(ManifestLoadError::Invalid {
+            path: path.to_path_buf(),
+            diagnostics,
+        });
+    }
+    if manifest.is_none() {
+        return Err(ManifestLoadError::Invalid {
+            path: path.to_path_buf(),
+            diagnostics: vec![Diagnostic::document_error(
+                "manifest did not produce required scenario metadata",
+            )],
+        });
+    }
+    Ok(absolutize_path_references(&sourced))
+}
+
 /// Parses and validates a manifest document string relative to `base_dir`.
 pub fn parse_manifest_str(
     source: &str,
@@ -62,7 +93,7 @@ pub fn parse_manifest_str(
             ))]);
         }
     };
-    let (manifest, diagnostics) = parse_manifest_value(&value, base_dir.as_ref());
+    let (manifest, diagnostics) = parse_manifest_value(&value, base_dir.as_ref(), None);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == Severity::Error)
@@ -80,7 +111,19 @@ pub fn parse_manifest_str(
 pub(crate) fn parse_manifest_value(
     value: &Value,
     base_dir: &Path,
+    manifest_path: Option<&Path>,
 ) -> (Option<ScenarioManifest>, Vec<Diagnostic>) {
+    let sourced = match resolve_manifest_value(value.clone(), base_dir, manifest_path) {
+        Ok(sourced) => sourced,
+        Err(diagnostics) => return (None, diagnostics),
+    };
+    parse_sourced_manifest_value(&sourced)
+}
+
+fn parse_sourced_manifest_value(
+    sourced: &crate::sourced::SourcedValue,
+) -> (Option<ScenarioManifest>, Vec<Diagnostic>) {
+    let value = sourced.to_value();
     let Some(table) = value.as_table() else {
         return (
             None,
@@ -103,12 +146,12 @@ pub(crate) fn parse_manifest_value(
     let assertion_templates = parse_assertion_templates(table, &mut diagnostics);
 
     let mut path_references = Vec::<PathReference>::new();
-    collect_path_references(value, "", base_dir, &mut path_references, &mut diagnostics);
+    collect_path_references(sourced, "", &mut path_references, &mut diagnostics);
 
-    let repositories = collect_repository_references(value, &mut diagnostics);
+    let repositories = collect_repository_references(&value, &mut diagnostics);
     let aliases = repository_aliases(&repositories);
-    validate_repository_fields(value, "", &aliases, &mut diagnostics);
-    let issues = collect_issue_references(value, &aliases, repositories.len(), &mut diagnostics);
+    validate_repository_fields(&value, "", &aliases, &mut diagnostics);
+    let issues = collect_issue_references(&value, &aliases, repositories.len(), &mut diagnostics);
 
     if diagnostics
         .iter()

@@ -40,6 +40,22 @@ fn select_runner_for_bundle(bundle: &Path, name: &str, runner: &str) {
     std::fs::write(&manifest_path, manifest).expect("write manifest");
 }
 
+fn write_inherited_basic_delivery_bundle(bundle: &Path, name: &str) {
+    std::fs::create_dir_all(bundle).expect("create inherited bundle");
+    std::fs::write(
+        bundle.join("scenario.toml"),
+        format!(
+            "name = \"{name}\"\n\
+             intent = \"Ephemeral validation bundle reusing checked-in basic-delivery fixtures.\"\n\
+             [fixtures]\n\
+             extends = \"scenarios/basic-delivery\"\n\
+             [runner]\n\
+             uses = \"basic-delivery\"\n"
+        ),
+    )
+    .expect("write inherited manifest");
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -162,6 +178,47 @@ fn run_uses_runner_selector_for_different_manifest_name() {
 }
 
 #[test]
+fn run_succeeds_for_ephemeral_inherited_basic_delivery_bundle() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("renamed-inherited-delivery");
+    write_inherited_basic_delivery_bundle(&bundle, "renamed-inherited-delivery");
+
+    assert!(!bundle.join("config").exists(), "fixture config was copied");
+    assert!(!bundle.join("repo").exists(), "fixture repo was copied");
+
+    let check = temper_scenario(&["check", &bundle.to_string_lossy()]);
+    assert!(
+        check.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        check.status,
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let output = temper_scenario(&["run", "--tier", "hermetic", &bundle.to_string_lossy()]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
+    assert!(
+        stdout.contains("source: ephemeral validation bundle"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("confidence tier: hermetic"), "{stdout}");
+    assert!(
+        stdout.contains("kind: single-repo-forgejo-standalone"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("verdict: passed"), "{stdout}");
+}
+
+#[test]
 fn validate_pr_uses_runner_selector_for_different_manifest_name() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bundle = dir.path().join("renamed-delivery");
@@ -196,6 +253,52 @@ fn validate_pr_uses_runner_selector_for_different_manifest_name() {
     );
     assert!(
         markdown.contains("runner: `basic-delivery` selected by runner.uses"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("Deterministic basic-delivery scenario run completed successfully"),
+        "{markdown}"
+    );
+}
+
+#[test]
+fn validate_pr_uses_ephemeral_inherited_basic_delivery_bundle() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("renamed-inherited-delivery");
+    write_inherited_basic_delivery_bundle(&bundle, "renamed-inherited-delivery");
+    let output_dir = dir.path().join("reports");
+
+    let output = temper_scenario(&[
+        "validate-pr",
+        "--pr",
+        "123",
+        "--sha",
+        "deadbeef",
+        "--scenario",
+        &bundle.to_string_lossy(),
+        "--output-dir",
+        &output_dir.to_string_lossy(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
+    assert!(
+        markdown.contains("scenario: `renamed-inherited-delivery`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("runner: `basic-delivery` selected by runner.uses"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("source: ephemeral validation bundle"),
         "{markdown}"
     );
     assert!(
