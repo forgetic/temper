@@ -23,16 +23,20 @@ from the repository root:
 
 The script runs these commands in order and stops on the first failure:
 
-1. `cargo dev-fmt`
-2. `cargo dev-scenario-check`
-3. `cargo dev-scenario-run`
-4. `cargo-clippy`
-5. `cargo dev-test-quick`
-6. `cargo dev-test-e2e-all`
+1. `cargo fmt --all -- --check`
+2. `cargo depgraph-check check`
+3. `scripts/check-rust-file-size.sh`
+4. `scripts/check-no-ambient-env.sh`
+5. `cargo dev-test-build`
+6. `cargo dev-scenario-check`
+7. `cargo dev-scenario-run`
+8. `cargo dev-test-quick`
+9. Drop linked test binaries from `target/debug` before linting
+10. `cargo dev-clippy`
 
-Use narrower commands only for intermediate local iteration; the full pre-PR
-script is the required handoff check for implementation PRs. Keep Clippy output
-clean.
+Use narrower commands only for intermediate local iteration; the cheap pre-PR
+script is the required local handoff check for implementation PRs. Keep Clippy
+output clean.
 
 Keep the whole quick suite fast; as a soft target for agent changes, it should
 complete in under about 10 seconds on a warmed local checkout. If a change makes
@@ -41,7 +45,8 @@ document how to run it before handoff.
 
 Keep the whole full capstone suite fast too; as a soft target for agent
 changes, it should complete in under about 2 minutes on a warmed local checkout.
-The exhaustive `cargo dev-test-e2e-all` lane is manual and may take longer.
+The exhaustive `cargo dev-test-e2e-all` lane is owned by CI and may also be run
+manually when a change touches live e2e behavior.
 
 ## 3. Review documentation from the top
 

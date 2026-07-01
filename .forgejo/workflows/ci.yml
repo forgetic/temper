@@ -59,6 +59,10 @@ jobs:
         run: cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
       - name: Test (quick)
         run: cargo dev-test-quick
+      - name: Test (full e2e)
+        # CI owns the expensive ignored/manual e2e lane. Run it before deleting
+        # linked test binaries so nextest can reuse the warmed test artifacts.
+        run: cargo dev-test-e2e-all
       - name: Free linked test binaries
         # Keep kache-warmed libraries, but drop the linked executables that
         # clippy does not consume; this keeps the checkout target dir below the

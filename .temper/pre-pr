@@ -16,9 +16,28 @@ run() {
     "$@"
 }
 
+free_linked_test_binaries() {
+    target_debug_dir="${CARGO_TARGET_DIR:-target}/debug"
+    target_deps_dir="$target_debug_dir/deps"
+
+    if [ ! -d "$target_debug_dir" ]; then
+        return 0
+    fi
+
+    if [ -d "$target_deps_dir" ]; then
+        run find "$target_debug_dir" "$target_deps_dir" -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
+    else
+        run find "$target_debug_dir" -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
+    fi
+}
+
 run cargo fmt --all -- --check
+run cargo depgraph-check check
+run scripts/check-rust-file-size.sh
+run scripts/check-no-ambient-env.sh
+run cargo dev-test-build
 run cargo dev-scenario-check
 run cargo dev-scenario-run
-run cargo-clippy
 run cargo dev-test-quick
-run cargo dev-test-e2e-all
+free_linked_test_binaries
+run cargo dev-clippy
