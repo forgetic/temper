@@ -3,6 +3,7 @@
 //! extraction.
 
 use crate::ids::RepoCoord;
+use crate::map::pr_branch_name;
 use crate::types::PullRequestDto;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use serde::de::DeserializeOwned;
@@ -37,10 +38,8 @@ impl<C: HttpClient> ForgejoForge<C> {
         };
         let dto: PullRequestDto = Self::decode("get pull request for CI", &response)?;
         let head = dto.head.unwrap_or_default();
-        Ok(Some((
-            head.sha.filter(|sha| !sha.is_empty()),
-            head.branch.filter(|branch| !branch.is_empty()),
-        )))
+        let branch = pr_branch_name(&head);
+        Ok(Some((head.sha.filter(|sha| !sha.is_empty()), branch)))
     }
 
     /// Fetches an Actions list endpoint and decodes its `workflow_runs` array.

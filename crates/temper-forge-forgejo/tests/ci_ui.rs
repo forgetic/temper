@@ -42,16 +42,28 @@ fn login_success() -> HttpResponse {
     }
 }
 
-/// The repository Actions HTML page listing one run link.
-fn actions_page(run: u64) -> HttpResponse {
-    HttpResponse::new(
-        200,
-        format!(r#"<a href="/acme/widgets/actions/runs/{run}">run {run}</a>"#),
-    )
+/// The repository Actions HTML page listing run links.
+fn actions_page_many(runs: &[u64]) -> HttpResponse {
+    let links = runs
+        .iter()
+        .map(|run| format!(r#"<a href="/acme/widgets/actions/runs/{run}">run {run}</a>"#))
+        .collect::<Vec<_>>()
+        .join("\n");
+    HttpResponse::new(200, links)
 }
 
-/// Live-view JSON for a run with the given job statuses and commit short SHA.
-fn live_view(status: &str, jobs: &[(&str, &str)], short_sha: &str) -> HttpResponse {
+/// The repository Actions HTML page listing one run link.
+fn actions_page(run: u64) -> HttpResponse {
+    actions_page_many(&[run])
+}
+
+/// Live-view JSON for a run with the given job statuses, commit short SHA, and branch.
+fn live_view_on_branch(
+    status: &str,
+    jobs: &[(&str, &str)],
+    short_sha: &str,
+    branch: &str,
+) -> HttpResponse {
     let jobs: Vec<_> = jobs
         .iter()
         .enumerate()
@@ -64,7 +76,7 @@ fn live_view(status: &str, jobs: &[(&str, &str)], short_sha: &str) -> HttpRespon
                 "run": {
                     "status": status,
                     "jobs": jobs,
-                    "commit": { "shortSHA": short_sha, "branch": { "name": "main" } }
+                    "commit": { "shortSHA": short_sha, "branch": { "name": branch } }
                 }
             },
             "logs": {}
@@ -73,15 +85,25 @@ fn live_view(status: &str, jobs: &[(&str, &str)], short_sha: &str) -> HttpRespon
     )
 }
 
-/// A PR-detail REST response (for head ref/sha resolution).
+/// Live-view JSON for a run with the given job statuses and commit short SHA.
+fn live_view(status: &str, jobs: &[(&str, &str)], short_sha: &str) -> HttpResponse {
+    live_view_on_branch(status, jobs, short_sha, "main")
+}
+
+/// A PR-detail REST response whose source branch still exists.
 fn pr_detail(sha: &str) -> HttpResponse {
+    pr_detail_with_head(sha, "feature", "author:feature")
+}
+
+/// A PR-detail REST response with explicit head ref/label.
+fn pr_detail_with_head(sha: &str, head_ref: &str, head_label: &str) -> HttpResponse {
     HttpResponse::new(
         200,
         json!({
             "number": 7,
             "state": "open",
             "user": { "login": "author" },
-            "head": { "ref": "feature", "sha": sha },
+            "head": { "ref": head_ref, "label": head_label, "sha": sha },
             "base": { "ref": "main" },
             "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-01-01T00:00:00Z"
@@ -160,6 +182,56 @@ fn falls_back_to_web_ui_when_rest_returns_404() {
             .headers
             .iter()
             .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+    );
+}
+
+#[test]
+fn web_ui_uses_pr_label_when_deleted_branch_ref_is_synthetic() {
+    let client = MockHttpClient::new();
+    // Forgejo rewrites a merged PR's head ref after source-branch deletion, but
+    // keeps the original source branch in head.label. The UI matcher must use
+    // that label so the previous red head remains visible alongside the green
+    // replacement head.
+    client.push_result(Ok(pr_detail_with_head(
+        "c456eec18b00",
+        "refs/pull/7/head",
+        "author:feature",
+    )));
+    client.push_response(404, json!({ "message": "Not Found" }).to_string());
+    client.push_result(Ok(login_page()));
+    client.push_result(Ok(login_success()));
+    client.push_result(Ok(actions_page_many(&[2, 1])));
+    client.push_result(Ok(live_view_on_branch(
+        "success",
+        &[("build", "success")],
+        "c456eec18b",
+        "feature",
+    )));
+    client.push_result(Ok(live_view_on_branch(
+        "failure",
+        &[("build", "failure")],
+        "oldhead1",
+        "feature",
+    )));
+
+    let forge = forge_with_web_ui(client);
+    let jobs = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            status: Some(CiJobStatus::Completed),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    let conclusions: Vec<_> = jobs.iter().map(|job| job.conclusion).collect();
+    assert_eq!(
+        conclusions,
+        vec![
+            Some(CiJobConclusion::Failure),
+            Some(CiJobConclusion::Success)
+        ]
     );
 }
 

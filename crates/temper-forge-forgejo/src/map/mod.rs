@@ -21,7 +21,7 @@ mod reviews;
 use temper_forge_model::UserId;
 
 pub(crate) use items::{map_comment, map_issue, map_label, map_repository, map_user};
-pub(crate) use pulls::map_pull_request;
+pub(crate) use pulls::{map_pull_request, pr_branch_name};
 pub(crate) use reviews::{map_review, merge_method_token, review_event_token};
 
 /// Returns `None` for a missing or empty string, else the value unchanged.
