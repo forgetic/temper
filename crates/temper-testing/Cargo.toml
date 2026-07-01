@@ -24,7 +24,7 @@ toml.workspace = true
 temper-forge-model = { path = "../temper-forge-model" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
-bench-forgejo = { git = "https://git.ekanayaka.io/ai/bench.git", rev = "17c8820" }
+bench-forgejo = { git = "https://git.ekanayaka.io/ai/bench.git", rev = "1ca9f7a" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 # Hermetic real-stack fixture builders compose the real daemon, in-process
 # daemon transport, worker loop, CodingExecutor, and native agent behind a Jig

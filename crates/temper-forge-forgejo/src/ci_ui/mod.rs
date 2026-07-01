@@ -75,11 +75,12 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
         let Some(live) = client.run_live_view(repo, run, 0).await? else {
             continue;
         };
-        // Keep a run when its commit matches the target head SHA **or** its commit
-        // sits on the target's head branch. The branch match is essential for the
+        // Keep a run when its commit matches the target head SHA **or** the run
+        // is attached to the target PR. The PR/branch match is essential for the
         // fail→pass case: the first (failing) run and the fixed (passing) run live
-        // on **different** SHAs of the same head branch, so a SHA-only filter would
-        // drop the failing verdict and the engine would never see "fail then pass".
+        // on **different** SHAs of the same pull-request head, so a SHA-only
+        // filter would drop the failing verdict and the engine would never see
+        // "fail then pass".
         let sha_ok = crate::ci_ui_parse::commit_matches(&live.commit.short_sha, target);
         let branch_ok = branch_matches(&live.commit.branch.name, target);
         if !(sha_ok || branch_ok) {
@@ -102,12 +103,21 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
     Ok(jobs)
 }
 
-/// Whether a run's commit branch matches the target's head ref. A run with no
-/// branch, or a target with no head ref, does not match on this axis (the SHA
-/// axis still applies).
+/// Whether a run's commit branch identifies the target pull request. Forgejo's
+/// live view has used both the source branch (`agent/pr-for-code-1`) and the PR
+/// pseudo-ref (`#2`) for pull-request runs, so accept either form. A run with no
+/// branch still falls back to the SHA axis.
 fn branch_matches(branch: &str, target: &Target) -> bool {
+    if branch.is_empty() {
+        return false;
+    }
+    if let Some(number) = target.pr_number {
+        if branch == format!("#{number}") {
+            return true;
+        }
+    }
     match target.pr_head_ref.as_deref() {
-        Some(head_ref) if !head_ref.is_empty() && !branch.is_empty() => branch == head_ref,
+        Some(head_ref) if !head_ref.is_empty() => branch == head_ref,
         _ => false,
     }
 }

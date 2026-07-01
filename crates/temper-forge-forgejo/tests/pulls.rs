@@ -34,6 +34,29 @@ fn pr_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
     )
 }
 
+/// Renders a merged pull-request DTO JSON body with overridable fields.
+fn merged_pr_json(number: u64, extra: &str) -> String {
+    format!(
+        r#"{{
+            "number": {number},
+            "title": "PR {number}",
+            "body": "body {number}",
+            "state": "closed",
+            "merged": true,
+            "merged_at": "2024-04-01T00:00:00Z",
+            "merge_commit_sha": "mergesha{number}",
+            "user": {{"login": "author"}},
+            "head": {{"ref": "feature-{number}", "sha": "head{number}"}},
+            "base": {{"ref": "main", "sha": "base{number}"}},
+            "labels": [],
+            "created_at": "2024-03-01T00:00:00Z",
+            "updated_at": "2024-04-01T00:00:00Z",
+            "closed_at": "2024-04-01T00:00:00Z"
+            {extra}
+        }}"#
+    )
+}
+
 #[test]
 fn unlabelled_open_pull_request_query_does_not_fetch_closed_history() {
     let client = MockHttpClient::new();
@@ -66,6 +89,42 @@ fn unlabelled_open_pull_request_query_does_not_fetch_closed_history() {
             .recorded()
             .iter()
             .any(|request| request.path.contains("/user/login"))
+    );
+}
+
+#[test]
+fn unlabelled_merged_pull_list_fetches_detail_when_merger_is_omitted() {
+    let client = MockHttpClient::new();
+    client.push_response(200, format!("[{}]", merged_pr_json(3, "")));
+    client.push_response(
+        200,
+        merged_pr_json(3, r#", "merged_by": {"login": "maintainer"}"#),
+    );
+    let forge = forge(client.clone());
+
+    let pulls = block_on(forge.list_pull_requests(
+        &repo_id(),
+        PullRequestQuery {
+            state: Some(PullRequestState::Merged),
+            details: ItemListDetails::summary(),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(pulls.len(), 1);
+    let merge = pulls[0].merge.as_ref().expect("merged PR has a record");
+    assert_eq!(merge.merged_by, UserId::new("maintainer"));
+
+    let requests = client.recorded();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls")
+    );
+    assert_eq!(
+        requests[1].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/3")
     );
 }
 
