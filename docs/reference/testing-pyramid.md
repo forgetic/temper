@@ -97,7 +97,9 @@ Use the aliases in `.cargo/config.toml`:
 ```sh
 cargo dev-check          # fast workspace type check
 cargo dev-scenario-check # validate checked-in scenario manifests and local refs
-cargo dev-scenario-run   # run the checked-in basic-delivery scenario at the hermetic tier
+cargo dev-scenario-run   # build temper and run live validation-grade basic-delivery
+cargo dev-scenario-run-live      # explicit name for the same live lane
+cargo dev-scenario-run-hermetic  # fast lower-confidence memory/in-process basic-delivery smoke
 cargo dev-test-quick     # default non-ignored suite via nextest
 cargo dev-test-build     # prebuild all test binaries
 cargo dev-test-e2e-capstones  # ignored live capstones used by dev-test-full
@@ -113,10 +115,12 @@ The web UI is separate from Cargo:
 ```
 
 CI runs format, depgraph, file-size, ambient-env, build, scenario manifest
-checks, the deterministic hermetic basic-delivery scenario runner (labeled as
-checked-in source, hermetic tier, and manifest topology), quick Rust tests, the
-full ignored/manual e2e lane, clippy, and then a separate web job for
-Vitest/build.
+checks, an explicit hermetic basic-delivery smoke run (labeled as checked-in
+source, hermetic/lower-confidence tier, and manifest topology), quick Rust
+tests, the full ignored/manual e2e lane, clippy, and then a separate web job for
+Vitest/build. The validation-grade scenario command is `cargo dev-scenario-run`;
+it is used by post-merge validation and is available locally when you need the
+real Forgejo + host runner + standalone Temper proof.
 
 ## Current effectiveness assessment
 

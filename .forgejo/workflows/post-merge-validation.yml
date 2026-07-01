@@ -16,6 +16,7 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       MERGED_MAIN_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
       VALIDATION_ARTIFACT_DIR: validation-artifacts/post-merge-pr-${{ github.event.pull_request.number }}
+      TEMPER_SCENARIO_TEMPER_BIN: target/debug/temper
     steps:
       - name: Checkout merged main commit
         # For a merged pull_request.closed event, the PR payload carries the
@@ -41,24 +42,40 @@ jobs:
           echo "Validation artifact directory: ${VALIDATION_ARTIFACT_DIR}"
 
       - name: Scenario manifest check
-        run: cargo run -p temper-scenario-cli -- check scenarios
+        run: cargo dev-scenario-check
 
-      - name: Hermetic basic-delivery scenario run
-        # This is the fast in-process/memory tier. The CLI output and the
-        # generated report label it as checked-in source + hermetic tier, not a
-        # live Forgejo proof.
-        run: cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
+      - name: Build standalone temper binary for live scenario validation
+        run: cargo build --bin temper
+
+      - name: Live basic-delivery scenario run
+        # Validation-grade lane: real Forgejo, host forgejo-runner, standalone
+        # temper, and Jig fake LLM agents. This step fails instead of falling
+        # back to the hermetic memory runner if the live topology cannot run.
+        run: cargo run -p temper-scenario-cli -- run --tier live --temper-bin "$TEMPER_SCENARIO_TEMPER_BIN" scenarios/basic-delivery
 
       - name: Write validation report
         run: |
           set -eu
           mkdir -p "$VALIDATION_ARTIFACT_DIR"
           report_path_file="$VALIDATION_ARTIFACT_DIR/report-path.txt"
+          validate_stderr="$VALIDATION_ARTIFACT_DIR/validate-pr.stderr"
+          set +e
           report_path=$(cargo run -p temper-scenario-cli -- validate-pr \
             --pr "$PR_NUMBER" \
             --sha "$MERGED_MAIN_SHA" \
             --scenario scenarios/basic-delivery \
-            --output-dir "$VALIDATION_ARTIFACT_DIR")
+            --tier live \
+            --temper-bin "$TEMPER_SCENARIO_TEMPER_BIN" \
+            --output-dir "$VALIDATION_ARTIFACT_DIR" 2>"$validate_stderr")
+          validate_status=$?
+          set -e
+          if [ -s "$validate_stderr" ]; then
+            cat "$validate_stderr" >&2
+          fi
+          if [ -z "$report_path" ]; then
+            echo "temper-scenario validate-pr did not print a report path" >&2
+            exit "$validate_status"
+          fi
           printf '%s\n' "$report_path" > "$report_path_file"
           printf '%s\n' "$report_path"
           test -f "$report_path"
@@ -78,9 +95,14 @@ jobs:
               cat "$report_path"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+          if [ "$validate_status" -ne 0 ]; then
+            echo "temper-scenario validate-pr exited with status ${validate_status}" >&2
+            exit "$validate_status"
+          fi
 
       - name: Upload validation report artifact
         id: upload_report
+        if: ${{ always() }}
         uses: actions/upload-artifact@v3
         continue-on-error: true
         with:

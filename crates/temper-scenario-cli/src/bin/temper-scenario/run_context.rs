@@ -34,7 +34,9 @@ impl ScenarioTier {
             Self::Hermetic => {
                 "fast in-process/memory runner; lower confidence than live; not a live Forgejo proof"
             }
-            Self::Live => "live Forgejo/topology proof",
+            Self::Live => {
+                "validation-grade live Forgejo + host forgejo-runner + standalone temper + Jig fake LLM proof"
+            }
         }
     }
 }
@@ -142,7 +144,7 @@ impl ScenarioRunFacts {
                 .join(", ")
         };
         format!(
-            "unsupported-live-topology: live tier is not implemented yet for scenario `{scenario_name}` ({topology}); refusing to substitute the hermetic memory runner, use --tier hermetic instead"
+            "unsupported-live-topology: live tier is not supported for scenario `{scenario_name}` ({topology}); refusing to substitute the hermetic memory runner, use --tier hermetic instead"
         )
     }
 }

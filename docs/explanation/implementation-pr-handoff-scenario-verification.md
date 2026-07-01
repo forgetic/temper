@@ -62,8 +62,8 @@ OK - checked 1 scenario(s).
 ```
 
 Run the proof through the scenario framework. The command defaults to the
-hermetic tier; `--tier live` is reserved for a future live runner and currently
-fails rather than substituting memory evidence:
+hermetic tier; `--tier live` is only implemented for `basic-delivery` and fails
+for this MemoryForge-specific scenario rather than substituting memory evidence:
 
 ```sh
 cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/implementation-pr-handoff

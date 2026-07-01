@@ -112,21 +112,34 @@ fn run_succeeds_for_ephemeral_basic_delivery_bundle() {
 }
 
 #[test]
-fn run_live_tier_fails_before_substituting_hermetic_runner() {
+fn run_live_tier_with_missing_temper_binary_fails_before_substituting_hermetic_runner() {
     let scenario = workspace_root().join("scenarios/basic-delivery");
+    let missing_temper = tempfile::tempdir()
+        .expect("tempdir")
+        .path()
+        .join("missing-temper");
 
-    let output = temper_scenario(&["run", "--tier", "live", &scenario.to_string_lossy()]);
+    let output = temper_scenario(&[
+        "run",
+        "--tier",
+        "live",
+        "--temper-bin",
+        &missing_temper.to_string_lossy(),
+        &scenario.to_string_lossy(),
+    ]);
 
-    assert!(!output.status.success(), "live tier is not implemented");
+    assert!(
+        !output.status.success(),
+        "missing live temper binary should fail"
+    );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("unsupported-live-topology"), "{stderr}");
     assert!(
-        stderr.contains("live tier is not implemented yet"),
+        stderr.contains("--temper-bin path does not exist"),
         "{stderr}"
     );
-    assert!(stderr.contains("refusing to substitute"), "{stderr}");
-    assert!(stderr.contains("--tier hermetic"), "{stderr}");
+    assert!(stderr.contains("missing-temper"), "{stderr}");
+    assert!(!stderr.contains("seeded issue:"), "{stderr}");
 }
 
 #[test]
@@ -136,13 +149,14 @@ fn run_help_documents_tier_selector() {
     assert!(output.status.success(), "status: {:?}", output.status);
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(
-        stdout.contains("Usage: temper-scenario run [--tier <hermetic|live>] <SCENARIO_PATH>"),
+        stdout.contains("Usage: temper-scenario run [--tier <hermetic|live>] [--temper-bin <PATH>] <SCENARIO_PATH>"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("Requesting --tier live fails clearly"),
+        stdout.contains("The live tier for `basic-delivery` boots the shared"),
         "{stdout}"
     );
+    assert!(stdout.contains("TEMPER_SCENARIO_TEMPER_BIN"), "{stdout}");
 }
 
 #[test]

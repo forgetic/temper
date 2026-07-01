@@ -13,19 +13,20 @@ not migrate, deduplicate, or replace an example.
 
 ## Runnable scenarios
 
-`temper-scenario run` currently has focused hermetic runners for:
+`temper-scenario run` currently has focused runners for:
 
-- `basic-delivery` — fast deterministic happy-path convergence over the memory/in-process harness.
-- `implementation-pr-handoff` — focused ForgeApplier proof that authored implementation PR title/body and source metadata survive create and refresh.
+- `basic-delivery` — `--tier live` is the validation-grade path: it boots real Forgejo, a host-mode `forgejo-runner`, standalone `temper`, and Jig fake LLM agents through the shared live harness. `--tier hermetic` remains the fast deterministic memory/in-process smoke runner and is lower confidence.
+- `implementation-pr-handoff` — focused hermetic ForgeApplier proof that authored implementation PR title/body and source metadata survive create and refresh.
 
 Run output always prints the scenario source classification, confidence tier, and
 manifest topology before the verdict. Bundles under this repository's
 `scenarios/` directory are labeled `checked-in scenario`; valid copied bundles
-outside that corpus are labeled `ephemeral validation bundle`. The default
-`hermetic` tier is intentionally lower-confidence than a live Forgejo proof and
-must not be cited as live validation. `--tier live` is reserved for the future
-live runner and currently fails with `unsupported-live-topology` instead of
-falling back to the hermetic runner.
+outside that corpus are labeled `ephemeral validation bundle`. Live
+`basic-delivery` output also includes the Forgejo URL, issue/PR numbers, CI job
+evidence, convergence timing, fake LLM request counts, and log/artifact paths.
+Use `cargo dev-scenario-run` for the live lane (it builds and passes the
+standalone `temper` binary) and `cargo dev-scenario-run-hermetic` for the fast
+lower-confidence memory runner.
 
 ## Validation reports vs. promotion artifacts
 
