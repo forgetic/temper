@@ -55,9 +55,12 @@ scenarios/implementation-pr-handoff/
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/implementation-pr-handoff
-cargo run -p temper-scenario-cli -- run scenarios/implementation-pr-handoff
+cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/implementation-pr-handoff
 ```
 
-The `run` command prints concise evidence lines for the authored create handoff,
-the authored refresh handoff, and the preserved workflow metadata/source issue
-relation.
+The `run` command prints the source classification (`checked-in scenario` for
+this corpus bundle), the `hermetic` confidence tier, manifest topology, and then
+concise evidence lines for the authored create handoff, the authored refresh
+handoff, and the preserved workflow metadata/source issue relation. `--tier
+live` is not implemented yet and fails instead of silently reusing this memory
+runner.

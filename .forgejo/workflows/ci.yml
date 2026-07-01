@@ -53,9 +53,10 @@ jobs:
         # Validate checked-in manifests and local fixture references without
         # running the live Forgejo/e2e scenario lane.
         run: cargo run -p temper-scenario-cli -- check scenarios
-      - name: Deterministic scenario run
-        # Exercise the hermetic in-process basic-delivery runner without live
-        # Forgejo or external services.
+      - name: Hermetic scenario run
+        # Exercise the fast in-process basic-delivery runner. Its output labels
+        # the checked-in source, hermetic/lower-confidence tier, and manifest
+        # topology so this lane cannot be mistaken for live Forgejo validation.
         run: cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
       - name: Test (quick)
         run: cargo dev-test-quick

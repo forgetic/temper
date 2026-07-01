@@ -6,9 +6,10 @@ removing that example: a thin site-admin intake issue is triaged into ready code
 an engineer produces one implementation PR, Forgejo Actions CI passes, and the
 mechanical worker lands the PR.
 
-No executable runner is defined here. The files are stable inputs for a future
-checker/runner and for post-merge validation reports to cite by scenario name and
-commit.
+A hermetic executable runner exists for fast validation, but it is not the live
+Forgejo topology described by the manifest. `temper-scenario run` labels the
+source, `hermetic` confidence tier, and manifest topology so its memory/in-process
+evidence is not mistaken for a live proof.
 
 ## Files
 
@@ -44,6 +45,20 @@ scenarios/basic-delivery/
 5. Expect the architect to return `ready_code`, the engineer to open one
    implementation PR, CI to pass, and mechanical automation to merge the PR and
    close the parent issue.
+
+## Running
+
+```sh
+cargo run -p temper-scenario-cli -- check scenarios/basic-delivery
+cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/basic-delivery
+```
+
+The run output labels this bundle as `checked-in scenario`, reports the
+`hermetic` lower-confidence tier, prints the manifest topology, and then shows
+the in-memory evidence for the seeded issue, implementation PR, CI signal, and
+closed parent issue. A copied bundle outside `scenarios/` runs the same way but
+is labeled `ephemeral validation bundle`. `--tier live` is reserved for the
+future live runner and currently fails with `unsupported-live-topology`.
 
 ## Provenance
 

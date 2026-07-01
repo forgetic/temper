@@ -75,9 +75,13 @@ struct CaseEvidence {
     correlation_key: String,
 }
 
-pub(super) fn run_and_print(scenario_path: &Path, manifest_path: &Path) -> Result<(), String> {
+pub(super) fn run_and_print(
+    scenario_path: &Path,
+    manifest_path: &Path,
+    facts: &super::run_context::ScenarioRunFacts,
+) -> Result<(), String> {
     let outcome = temper_testing::block_on(run_handoff(scenario_path, manifest_path))?;
-    print_outcome(&outcome);
+    print_outcome(&outcome, facts);
     Ok(())
 }
 
@@ -565,8 +569,9 @@ fn labels_field(table: &toml::Table, context: &str) -> Result<Vec<String>, Strin
         .map(|labels| labels.unwrap_or_default())
 }
 
-fn print_outcome(outcome: &RunOutcome) {
+fn print_outcome(outcome: &RunOutcome, facts: &super::run_context::ScenarioRunFacts) {
     println!("scenario: {SCENARIO_NAME}");
+    facts.print_stdout();
     println!("verdict: passed");
     println!("evidence:");
     for line in outcome_evidence_lines(outcome) {

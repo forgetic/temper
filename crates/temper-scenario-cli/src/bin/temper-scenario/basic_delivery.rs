@@ -48,9 +48,13 @@ struct RunEvidence {
     closed_parent_issues: usize,
 }
 
-pub(super) fn run_and_print(scenario_path: &Path, manifest_path: &Path) -> Result<(), String> {
+pub(super) fn run_and_print(
+    scenario_path: &Path,
+    manifest_path: &Path,
+    facts: &super::run_context::ScenarioRunFacts,
+) -> Result<(), String> {
     let outcome = temper_testing::block_on(run_basic_delivery(scenario_path, manifest_path))?;
-    print_outcome(&outcome);
+    print_outcome(&outcome, facts);
     Ok(())
 }
 
@@ -323,8 +327,9 @@ fn intake_seed(scenario_path: &Path, manifest: &Value) -> Result<IntakeSeed, Str
     })
 }
 
-fn print_outcome(outcome: &RunOutcome) {
+fn print_outcome(outcome: &RunOutcome, facts: &super::run_context::ScenarioRunFacts) {
     println!("scenario: {}", outcome.scenario_name);
+    facts.print_stdout();
     println!("verdict: passed");
     println!("evidence:");
     for line in outcome_evidence_lines(outcome) {

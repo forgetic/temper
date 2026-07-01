@@ -14,7 +14,8 @@
 # wholesale. Keep those aliases on `--all-targets` so the test build and the
 # lint pass key-match and share cached lib artifacts. `dev-scenario-check` and
 # `dev-scenario-run` are small deterministic scenario CLI runs outside that
-# cache lane.
+# cache lane. `dev-scenario-run` intentionally remains on the hermetic,
+# lower-confidence basic-delivery tier until a live scenario runner lands.
 #
 # (clippy/check still produce zero-byte leaf `.rmeta` that kache cannot cache,
 # so the leaf check-only targets always recompile; that cost is small and

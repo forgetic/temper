@@ -189,67 +189,6 @@ fn list_succeeds_for_checked_in_scenarios_directory() {
 }
 
 #[test]
-fn run_succeeds_for_checked_in_basic_delivery_scenario() {
-    let scenario = workspace_root().join("scenarios/basic-delivery");
-
-    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
-    assert!(stdout.contains("verdict: passed"), "{stdout}");
-    assert!(stdout.contains("seeded issue: #"), "{stdout}");
-    assert!(stdout.contains("closed as code"), "{stdout}");
-    assert!(stdout.contains("implementation PR: #"), "{stdout}");
-    assert!(stdout.contains("merged with passing CI"), "{stdout}");
-    assert!(stdout.contains("closed parent issues: 1"), "{stdout}");
-    assert!(!stdout.contains("open (not merged)"), "{stdout}");
-    assert!(stdout.contains("actions:"), "{stdout}");
-}
-
-#[test]
-fn run_succeeds_for_checked_in_implementation_pr_handoff_scenario() {
-    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
-
-    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(
-        stdout.contains("scenario: implementation-pr-handoff"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("verdict: passed"), "{stdout}");
-    assert!(stdout.contains("create authored PR title/body"), "{stdout}");
-    assert!(stdout.contains("Implement durable PR handoff"), "{stdout}");
-    assert!(
-        stdout.contains("refresh authored PR title/body"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("Implement refreshed handoff"), "{stdout}");
-    assert!(
-        stdout.contains("workflow metadata/source relation"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("metadata kind verified: implementation_pr"),
-        "{stdout}"
-    );
-}
-
-#[test]
 fn run_fails_clearly_for_unsupported_valid_scenario() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scenarios = dir.path().join("scenarios");

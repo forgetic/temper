@@ -6,6 +6,8 @@ mod basic_delivery;
 mod implementation_pr_handoff;
 #[path = "temper-scenario/promote.rs"]
 mod promote;
+#[path = "temper-scenario/run_context.rs"]
+mod run_context;
 #[path = "temper-scenario/validate_pr.rs"]
 mod validate_pr;
 
@@ -17,6 +19,8 @@ use temper_scenario_core::{
     DEFAULT_SCENARIOS_DIR, Diagnostic, Severity, check_scenario, check_scenarios,
     discover_scenarios,
 };
+
+use run_context::{ScenarioRunFacts, ScenarioTier};
 
 const EX_USAGE: u8 = 64;
 
@@ -62,10 +66,18 @@ a concise `path: error: field: message` form suitable for CI logs.";
 const RUN_USAGE: &str = "\
 Run a supported Temper scenario deterministically in process.
 
-Usage: temper-scenario run <SCENARIO_PATH>
+Usage: temper-scenario run [--tier <hermetic|live>] <SCENARIO_PATH>
 
 Arguments:
   SCENARIO_PATH  Scenario directory or manifest file to run
+
+Options:
+  --tier <hermetic|live>  Confidence tier to request (default: hermetic)
+  -h, --help              Print help
+
+The current runnable tier is hermetic: a fast in-process/memory runner that is
+lower confidence than a live Forgejo proof. Requesting --tier live fails clearly
+until the live runner exists.
 
 Supported checked-in runners are scenarios/basic-delivery and
 scenarios/implementation-pr-handoff. Unsupported scenario manifests fail clearly
@@ -209,16 +221,16 @@ fn check_command(args: &[String]) -> ExitCode {
 }
 
 fn run_command(args: &[String]) -> ExitCode {
-    let path = match parse_required_path(args, RUN_USAGE, "temper-scenario run") {
-        Ok(CommandPath::Help) => {
+    let args = match parse_run_args(args) {
+        Ok(RunParseResult::Help) => {
             println!("{RUN_USAGE}");
             return ExitCode::SUCCESS;
         }
-        Ok(CommandPath::Path { path, .. }) => path,
+        Ok(RunParseResult::Args(args)) => args,
         Err(()) => return ExitCode::from(EX_USAGE),
     };
 
-    let report = check_scenario(&path);
+    let report = check_scenario(&args.path);
     if !report.is_valid() {
         print_report_diagnostics(&report);
         return ExitCode::FAILURE;
@@ -227,7 +239,7 @@ fn run_command(args: &[String]) -> ExitCode {
     let Some(manifest) = report.manifest.as_ref() else {
         eprintln!(
             "temper-scenario run: no runnable scenario manifest found at {}",
-            display_path(&path)
+            display_path(&args.path)
         );
         return ExitCode::FAILURE;
     };
@@ -239,12 +251,21 @@ fn run_command(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
+    let facts = ScenarioRunFacts::from_check_report(&report, args.tier);
+    if args.tier == ScenarioTier::Live {
+        eprintln!(
+            "temper-scenario run: {}",
+            facts.unsupported_live_message(&manifest.name)
+        );
+        return ExitCode::FAILURE;
+    }
+
     let result = match manifest.name.as_str() {
         basic_delivery::SCENARIO_NAME => {
-            basic_delivery::run_and_print(&report.scenario_path, manifest_path)
+            basic_delivery::run_and_print(&report.scenario_path, manifest_path, &facts)
         }
         implementation_pr_handoff::SCENARIO_NAME => {
-            implementation_pr_handoff::run_and_print(&report.scenario_path, manifest_path)
+            implementation_pr_handoff::run_and_print(&report.scenario_path, manifest_path, &facts)
         }
         other => {
             eprintln!(
@@ -291,26 +312,92 @@ fn parse_optional_path(
     }
 }
 
-fn parse_required_path(
-    args: &[String],
-    usage: &str,
-    command_name: &str,
-) -> Result<CommandPath, ()> {
-    match args {
-        [] => {
-            eprintln!("{command_name}: missing SCENARIO_PATH\n\n{usage}");
-            Err(())
-        }
-        [arg] if matches!(arg.as_str(), "-h" | "--help" | "help") => Ok(CommandPath::Help),
-        [path] => Ok(CommandPath::Path {
-            path: PathBuf::from(path),
-            explicit: true,
-        }),
-        [arg, ..] => {
-            eprintln!("{command_name}: unexpected argument `{arg}`\n\n{usage}");
-            Err(())
-        }
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct RunArgs {
+    path: PathBuf,
+    tier: ScenarioTier,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum RunParseResult {
+    Help,
+    Args(RunArgs),
+}
+
+fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help" | "help"))
+    {
+        return Ok(RunParseResult::Help);
     }
+
+    let mut path = None;
+    let mut tier = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--tier" {
+            let value = run_flag_value(args, index, "--tier")?;
+            set_run_tier(&mut tier, value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--tier=") {
+            if value.is_empty() {
+                eprintln!("temper-scenario run: --tier requires a value\n\n{RUN_USAGE}");
+                return Err(());
+            }
+            set_run_tier(&mut tier, value)?;
+            index += 1;
+            continue;
+        }
+        if arg.starts_with("--") {
+            eprintln!("temper-scenario run: unexpected option `{arg}`\n\n{RUN_USAGE}");
+            return Err(());
+        }
+        if path.replace(PathBuf::from(arg)).is_some() {
+            eprintln!("temper-scenario run: unexpected argument `{arg}`\n\n{RUN_USAGE}");
+            return Err(());
+        }
+        index += 1;
+    }
+
+    let Some(path) = path else {
+        eprintln!("temper-scenario run: missing SCENARIO_PATH\n\n{RUN_USAGE}");
+        return Err(());
+    };
+
+    Ok(RunParseResult::Args(RunArgs {
+        path,
+        tier: tier.unwrap_or(ScenarioTier::Hermetic),
+    }))
+}
+
+fn run_flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, ()> {
+    let Some(value) = args.get(index + 1) else {
+        eprintln!("temper-scenario run: {flag} requires a value\n\n{RUN_USAGE}");
+        return Err(());
+    };
+    if value.starts_with("--") {
+        eprintln!("temper-scenario run: {flag} requires a value\n\n{RUN_USAGE}");
+        return Err(());
+    }
+    Ok(value)
+}
+
+fn set_run_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
+    let Some(parsed) = ScenarioTier::parse(value) else {
+        eprintln!(
+            "temper-scenario run: unknown --tier `{value}` (expected hermetic or live)\n\n{RUN_USAGE}"
+        );
+        return Err(());
+    };
+    if tier.replace(parsed).is_some() {
+        eprintln!("temper-scenario run: duplicate --tier option\n\n{RUN_USAGE}");
+        return Err(());
+    }
+    Ok(())
 }
 
 fn print_report_diagnostics(report: &temper_scenario_core::CheckReport) {

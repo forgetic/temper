@@ -13,7 +13,8 @@ use crate::repo_refs::{
 use crate::toml_helpers::string_value;
 use crate::{
     ASSERTION_TEMPLATE_NAMES, Diagnostic, ManifestLoadError, PathReference, ScenarioIntent,
-    ScenarioManifest, ScenarioStability, ScenarioStatus, Severity, is_known_assertion_template,
+    ScenarioManifest, ScenarioStability, ScenarioStatus, ScenarioTopology, Severity,
+    is_known_assertion_template,
 };
 
 /// Loads, parses, and validates a single manifest file.
@@ -97,6 +98,7 @@ pub(crate) fn parse_manifest_value(
     let status = parse_status(table, scenario, &mut diagnostics);
     let stability = parse_stability(table, scenario, &mut diagnostics);
     let intent = parse_intent(table, scenario, &mut diagnostics);
+    let topology = parse_topology(table, &mut diagnostics);
     let assertion_templates = parse_assertion_templates(table, &mut diagnostics);
 
     let mut path_references = Vec::<PathReference>::new();
@@ -120,6 +122,7 @@ pub(crate) fn parse_manifest_value(
             status,
             stability,
             intent,
+            topology,
             assertion_templates,
             repositories,
             issues,
@@ -268,6 +271,34 @@ fn parse_intent(
     }
 
     Some(ScenarioIntent { summary, path })
+}
+
+fn parse_topology(table: &toml::Table, diagnostics: &mut Vec<Diagnostic>) -> ScenarioTopology {
+    let Some(value) = table.get("topology") else {
+        return ScenarioTopology::default();
+    };
+    let Some(topology) = value.as_table() else {
+        diagnostics.push(Diagnostic::error("topology", "must be a table"));
+        return ScenarioTopology::default();
+    };
+
+    ScenarioTopology {
+        kind: optional_topology_string(topology, "kind", diagnostics),
+        forge: optional_topology_string(topology, "forge", diagnostics),
+        runner: optional_topology_string(topology, "runner", diagnostics),
+        temper: optional_topology_string(topology, "temper", diagnostics),
+        agent_model: optional_topology_string(topology, "agent_model", diagnostics),
+    }
+}
+
+fn optional_topology_string(
+    topology: &toml::Table,
+    key: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    topology
+        .get(key)
+        .and_then(|value| string_value(format!("topology.{key}"), value, diagnostics))
 }
 
 fn parse_assertion_templates(

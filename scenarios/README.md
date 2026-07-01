@@ -13,18 +13,28 @@ not migrate, deduplicate, or replace an example.
 
 ## Runnable scenarios
 
-`temper-scenario run` currently has focused in-process runners for:
+`temper-scenario run` currently has focused hermetic runners for:
 
-- `basic-delivery` — full deterministic happy-path convergence over the memory backend.
+- `basic-delivery` — fast deterministic happy-path convergence over the memory/in-process harness.
 - `implementation-pr-handoff` — focused ForgeApplier proof that authored implementation PR title/body and source metadata survive create and refresh.
+
+Run output always prints the scenario source classification, confidence tier, and
+manifest topology before the verdict. Bundles under this repository's
+`scenarios/` directory are labeled `checked-in scenario`; valid copied bundles
+outside that corpus are labeled `ephemeral validation bundle`. The default
+`hermetic` tier is intentionally lower-confidence than a live Forgejo proof and
+must not be cited as live validation. `--tier live` is reserved for the future
+live runner and currently fails with `unsupported-live-topology` instead of
+falling back to the hermetic runner.
 
 ## Validation reports vs. promotion artifacts
 
 Every post-merge validation run must produce a validation report: what target
 (PR, issue, epic, or aggregate) and commit/PR set was validated, which scenario
-or ad-hoc case was run, which topology was used, what commands or tooling ran,
-where logs/artifacts live, and the final pass/fail result. That report is the
-required deliverable for validation work.
+or ad-hoc case was run, whether it came from the checked-in corpus or an
+ephemeral bundle, which confidence tier and manifest topology were used, what
+commands or tooling ran, where logs/artifacts live, and the final pass/fail
+result. That report is the required deliverable for validation work.
 
 Changing `scenarios/` is optional. A checked-in scenario change is a promotion
 artifact: it captures a case that should become a reusable regression input after
