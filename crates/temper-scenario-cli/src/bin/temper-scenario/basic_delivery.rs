@@ -12,6 +12,7 @@ use temper_forge_model::{
 use temper_runner::{
     BoxError, InProcessStage, RunReport, Scenario, Stage, run_scenario_with_budget,
 };
+use temper_scenario_core::load_resolved_manifest_toml;
 use toml::Value;
 
 #[path = "basic_delivery/live.rs"]
@@ -71,18 +72,20 @@ pub(super) fn run_evidence_lines(
 
 pub(super) fn run_live_and_print(
     scenario_path: &Path,
+    manifest_path: &Path,
     facts: &super::run_context::ScenarioRunFacts,
     temper_bin: Option<&Path>,
 ) -> Result<(), String> {
-    live::run_and_print(scenario_path, facts, temper_bin)
+    live::run_and_print(scenario_path, manifest_path, facts, temper_bin)
 }
 
 pub(super) fn run_live_evidence_lines_for_report(
     scenario_path: &Path,
+    manifest_path: &Path,
     temper_bin: Option<&Path>,
     artifact_dir: &Path,
 ) -> Result<Vec<String>, String> {
-    live::evidence_lines(scenario_path, temper_bin, Some(artifact_dir))
+    live::evidence_lines(scenario_path, manifest_path, temper_bin, Some(artifact_dir))
 }
 
 async fn run_basic_delivery(
@@ -284,11 +287,7 @@ fn load_fixture(scenario_path: &Path, manifest_path: &Path) -> Result<Fixture, S
 }
 
 fn load_manifest_toml(manifest_path: &Path) -> Result<Value, String> {
-    let source = fs::read_to_string(manifest_path)
-        .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
-    source
-        .parse::<Value>()
-        .map_err(|error| format!("parse {}: {error}", manifest_path.display()))
+    load_resolved_manifest_toml(manifest_path).map_err(|error| error.to_string())
 }
 
 fn workflow_path(scenario_path: &Path, manifest: &Value) -> Result<PathBuf, String> {

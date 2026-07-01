@@ -9,8 +9,8 @@ use super::{basic_delivery, implementation_pr_handoff};
 
 type HermeticRunAndPrint = fn(&Path, &Path, &ScenarioRunFacts) -> Result<(), String>;
 type HermeticEvidenceLines = fn(&Path, &Path) -> Result<Vec<String>, String>;
-type LiveRunAndPrint = fn(&Path, &ScenarioRunFacts, Option<&Path>) -> Result<(), String>;
-type LiveEvidenceLines = fn(&Path, Option<&Path>, &Path) -> Result<Vec<String>, String>;
+type LiveRunAndPrint = fn(&Path, &Path, &ScenarioRunFacts, Option<&Path>) -> Result<(), String>;
+type LiveEvidenceLines = fn(&Path, &Path, Option<&Path>, &Path) -> Result<Vec<String>, String>;
 
 #[derive(Clone, Copy)]
 struct HermeticRunner {
@@ -177,7 +177,7 @@ impl SelectedRunner {
             }
             ScenarioTier::Live => {
                 let runner = self.runner.live.ok_or_else(|| self.invariant_error(tier))?;
-                (runner.run_and_print)(scenario_path, facts, temper_bin)
+                (runner.run_and_print)(scenario_path, manifest_path, facts, temper_bin)
             }
         }
     }
@@ -197,6 +197,7 @@ impl SelectedRunner {
     pub(super) fn live_evidence_lines(
         &self,
         scenario_path: &Path,
+        manifest_path: &Path,
         temper_bin: Option<&Path>,
         artifact_dir: &Path,
     ) -> Result<Vec<String>, String> {
@@ -204,7 +205,7 @@ impl SelectedRunner {
             .runner
             .live
             .ok_or_else(|| self.invariant_error(ScenarioTier::Live))?;
-        (runner.evidence_lines)(scenario_path, temper_bin, artifact_dir)
+        (runner.evidence_lines)(scenario_path, manifest_path, temper_bin, artifact_dir)
     }
 
     fn invariant_error(&self, tier: ScenarioTier) -> String {

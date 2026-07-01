@@ -7,7 +7,7 @@ use crate::{
     ASSERTION_TEMPLATE_CATALOG, ASSERTION_TEMPLATE_NAMES, AcceptanceCriterion, Diagnostic,
     EvidenceEntry, EvidenceKind, FollowUpIssueIntent, ScenarioStability, ScenarioStatus,
     ValidatedClaim, ValidationReport, ValidationStatus, ValidationVerdict, check_scenario,
-    discover_scenarios, load_manifest, parse_manifest_str,
+    discover_scenarios, load_manifest, load_resolved_manifest_toml, parse_manifest_str,
 };
 
 fn valid_manifest() -> &'static str {
@@ -419,6 +419,138 @@ fn load_manifest_accepts_checked_in_basic_delivery_shape() {
             "expected local path reference {field:?} in {path_fields:#?}"
         );
     }
+}
+
+#[test]
+fn fixture_inheritance_supplies_defaults_and_keeps_path_origins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("renamed-delivery");
+    fs::create_dir(&bundle).expect("bundle dir");
+    fs::write(
+        bundle.join("scenario.toml"),
+        r##"
+name = "renamed-delivery"
+intent = "Reuse the checked-in basic-delivery fixture material without copying it."
+
+[fixtures]
+extends = "scenarios/basic-delivery"
+
+[runner]
+uses = "basic-delivery"
+"##,
+    )
+    .expect("write manifest");
+
+    let report = check_scenario(&bundle);
+
+    assert!(report.is_valid(), "diagnostics: {:#?}", report.diagnostics);
+    let manifest = report.manifest.expect("resolved manifest");
+    assert_eq!(manifest.name, "renamed-delivery");
+    assert_eq!(manifest.runner.uses.as_deref(), Some("basic-delivery"));
+    assert_eq!(manifest.status, ScenarioStatus::Active);
+    assert_eq!(manifest.stability, ScenarioStability::Provisional);
+    assert_eq!(
+        manifest.topology.kind.as_deref(),
+        Some("single-repo-forgejo-standalone")
+    );
+
+    let workflow = manifest
+        .path_references
+        .iter()
+        .find(|reference| reference.field == "workflow.path")
+        .expect("inherited workflow path reference");
+    assert_eq!(workflow.value, "config/workflow.json");
+    assert_eq!(
+        workflow.resolved_path,
+        workspace_root().join("scenarios/basic-delivery/config/workflow.json")
+    );
+
+    let resolved_toml =
+        load_resolved_manifest_toml(bundle.join("scenario.toml")).expect("resolved manifest TOML");
+    let workflow_path = resolved_toml
+        .get("workflow")
+        .and_then(toml::Value::as_table)
+        .and_then(|workflow| workflow.get("path"))
+        .and_then(toml::Value::as_str)
+        .expect("resolved workflow path");
+    assert_eq!(
+        PathBuf::from(workflow_path),
+        workspace_root().join("scenarios/basic-delivery/config/workflow.json")
+    );
+    assert!(
+        !bundle.join("config/workflow.json").exists(),
+        "the child bundle should not need to copy fixture files"
+    );
+}
+
+#[test]
+fn rejects_missing_fixture_inheritance_base() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("scenario.toml"),
+        r##"
+name = "missing-base"
+status = "ready"
+stability = "experimental"
+intent = "Missing base should be diagnosed."
+
+[fixtures]
+extends = "scenarios/does-not-exist"
+"##,
+    )
+    .expect("write manifest");
+
+    let report = check_scenario(dir.path());
+
+    assert!(!report.is_valid());
+    assert_has_field(&report.diagnostics, "fixtures.extends");
+    assert_has_message(
+        &report.diagnostics,
+        "fixture inheritance base does not exist",
+    );
+}
+
+#[test]
+fn rejects_cyclic_and_unsafe_fixture_inheritance() {
+    let cycle = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        cycle.path().join("scenario.toml"),
+        r##"
+name = "self-cycle"
+status = "ready"
+stability = "experimental"
+intent = "Self inheritance should be diagnosed."
+
+[fixtures]
+extends = "."
+"##,
+    )
+    .expect("write cycle manifest");
+
+    let report = check_scenario(cycle.path());
+    assert!(!report.is_valid());
+    assert_has_field(&report.diagnostics, "fixtures.extends");
+    assert_has_message(&report.diagnostics, "fixture inheritance cycle");
+
+    let unsafe_bundle = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        unsafe_bundle.path().join("scenario.toml"),
+        r##"
+name = "unsafe-base"
+status = "ready"
+stability = "experimental"
+intent = "Parent-directory escapes should be diagnosed."
+
+[fixtures]
+extends = "../outside"
+"##,
+    )
+    .expect("write unsafe manifest");
+
+    let report = check_scenario(unsafe_bundle.path());
+    assert!(!report.is_valid());
+    assert_has_field(&report.diagnostics, "fixtures.extends");
+    assert_has_message(&report.diagnostics, "without `..` components");
 }
 
 #[test]

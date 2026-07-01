@@ -50,7 +50,7 @@ pub fn check_scenario(path: impl AsRef<Path>) -> CheckReport {
     };
 
     let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let (manifest, diagnostics) = parse_manifest_value(&value, base_dir);
+    let (manifest, diagnostics) = parse_manifest_value(&value, base_dir, Some(&manifest_path));
     CheckReport {
         scenario_path,
         manifest_path: Some(manifest_path),

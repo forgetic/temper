@@ -19,8 +19,26 @@ pub(super) fn add_supported_run(
     artifact_dir: &Path,
 ) {
     let label = selected_runner.id();
-    match selected_runner.live_evidence_lines(&check_report.scenario_path, temper_bin, artifact_dir)
-    {
+    let Some(manifest_path) = check_report.manifest_path.as_deref() else {
+        report.limitations.push(format!(
+            "Scenario `{label}` had no resolved manifest path, so no live scenario run occurred."
+        ));
+        report.acceptance_criteria.push(
+            AcceptanceCriterion::new(
+                format!("A validation-grade live {label} scenario run completes successfully."),
+                ValidationStatus::Unproven,
+            )
+            .with_evidence("No manifest path was available for the live scenario runner."),
+        );
+        return;
+    };
+
+    match selected_runner.live_evidence_lines(
+        &check_report.scenario_path,
+        manifest_path,
+        temper_bin,
+        artifact_dir,
+    ) {
         Ok(lines) => {
             let mut details = facts.evidence_details();
             details.push(selected_runner.selection_detail());
