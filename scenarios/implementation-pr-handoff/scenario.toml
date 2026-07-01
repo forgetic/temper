@@ -1,0 +1,101 @@
+schema = "temper.scenario.v1"
+name = "implementation-pr-handoff"
+status = "active"
+intent = "Prove engineer-authored implementation PR handoff title/body survive create and refresh while workflow metadata keeps the source issue relation."
+introduced_by = "#78"
+owner_area = "delivery-validation"
+stability = "provisional"
+timeout = "2m"
+
+[topology]
+kind = "single-repo-in-memory-forge"
+forge = "memory"
+runner = "temper-scenario-forge-applier"
+temper = "in-process"
+agent_model = "scripted-coding-workspace-result"
+repos = ["service"]
+
+[workflow]
+name = "implementation-pr-handoff"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/service"
+default_branch = "main"
+seed_path = "repo"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Verify implementation PR handoff"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[handoff]
+summary = "scripted coding workspace summary"
+create_title = "Implement durable PR handoff"
+create_body_path = "config/create-handoff.md"
+refresh_title = "Implement refreshed handoff"
+refresh_body_path = "config/refresh-handoff.md"
+stale_title = "Old generated title"
+stale_body = "Old report that must be replaced."
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready"]
+expected_output = "authored_title_and_body"
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = []
+
+[expect]
+outcome = "Temper creates an implementation PR and refreshes an existing implementation PR using the authored title/body, while preserving implementation_pr metadata, source parent, and correlation key."
+created_pull_requests = 1
+refreshed_pull_requests = 1
+closed_parent_issues = 0
+
+[[expect.checks]]
+id = "create-uses-authored-handoff"
+artifact = "pull_request"
+source_artifact = "source"
+title = "Implement durable PR handoff"
+body_prefix_file = "config/create-handoff.md"
+metadata_kind = "implementation_pr"
+metadata_parent = "source"
+
+[[expect.checks]]
+id = "refresh-keeps-existing-pr-and-metadata"
+artifact = "pull_request"
+source_artifact = "source"
+title = "Implement refreshed handoff"
+body_prefix_file = "config/refresh-handoff.md"
+metadata_kind = "implementation_pr"
+metadata_parent = "source"
+stale_body_absent = "Old report that must be replaced."
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify scenario docs without changing the scripted handoff strings.",
+  "Update the copied workflow fixture when the implementation PR create action changes compatibly.",
+  "Add evidence lines that further narrow the same handoff contract.",
+]
+requires_new_scenario_or_major_update = [
+  "Replacing the in-memory ForgeApplier proof with live Forgejo.",
+  "Changing the source artifact away from a ready code issue.",
+  "Removing either the create or refresh half of the handoff contract.",
+]

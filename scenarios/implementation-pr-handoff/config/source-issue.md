@@ -1,0 +1,1 @@
+Implement the daemon worker handoff proof with a deterministic scripted workspace result. The scenario runner supplies the authored implementation PR title and report body, then verifies the PR metadata still points back to this code issue.

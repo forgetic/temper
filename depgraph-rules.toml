@@ -181,9 +181,10 @@ temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "te
 temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-protocol-interaction", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log"]
 
 # Standalone scenario facade. Listing/checking stays in the manifest core; the
-# first deterministic `run` path composes runner/test-harness primitives over the
-# memory backend so it can exercise basic-delivery without live services.
-temper-scenario-cli = ["temper-scenario-core", "temper-runner", "temper-testing", "temper-forge-model", "temper-forge-memory"]
+# deterministic `run` paths compose runner/test-harness primitives over the
+# memory backend. Feature-focused runners may also reuse the daemon ForgeApplier
+# path when the scenario contract is specifically about worker-result materialization.
+temper-scenario-cli = ["temper-scenario-core", "temper-runner", "temper-testing", "temper-forge-model", "temper-forge-memory", "temper-engine", "temper-protocol-worker", "temper-workflow"]
 
 # The unified `temper` binary's composition root (`src/bin/temper.rs`'s `boot()`)
 # snapshots the real environment into a CliEnv via temper-config's env shims, so
