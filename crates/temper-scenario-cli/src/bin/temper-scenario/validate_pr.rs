@@ -9,7 +9,7 @@ use temper_scenario_core::{
     ValidationStatus, ValidationVerdict, check_scenario,
 };
 
-use super::basic_delivery;
+use super::{basic_delivery, implementation_pr_handoff};
 
 const EX_USAGE: u8 = 64;
 
@@ -298,30 +298,46 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
     }
     report.evidence.push(check_evidence);
 
-    if scenario_name == basic_delivery::SCENARIO_NAME {
-        add_basic_delivery_run(report, &check_report, scenario_name);
-    } else {
-        report.acceptance_criteria.push(
-            AcceptanceCriterion::new(
-                "A supported deterministic scenario run completes successfully.",
-                ValidationStatus::NotApplicable,
-            )
-            .with_evidence(format!(
-                "scenario `{scenario_name}` is not supported by this temporary runner"
-            )),
-        );
-        report.limitations.push(format!(
-            "No scenario run occurred for `{scenario_name}`; this temporary runner supports only scenarios/basic-delivery."
-        ));
+    match scenario_name {
+        basic_delivery::SCENARIO_NAME => add_supported_run(
+            report,
+            &check_report,
+            scenario_name,
+            "basic-delivery",
+            basic_delivery::run_evidence_lines,
+        ),
+        implementation_pr_handoff::SCENARIO_NAME => add_supported_run(
+            report,
+            &check_report,
+            scenario_name,
+            "implementation-pr-handoff",
+            implementation_pr_handoff::run_evidence_lines,
+        ),
+        _ => {
+            report.acceptance_criteria.push(
+                AcceptanceCriterion::new(
+                    "A supported deterministic scenario run completes successfully.",
+                    ValidationStatus::NotApplicable,
+                )
+                .with_evidence(format!(
+                    "scenario `{scenario_name}` is not supported by this temporary runner"
+                )),
+            );
+            report.limitations.push(format!(
+                "No scenario run occurred for `{scenario_name}`; supported checked-in runners: scenarios/basic-delivery, scenarios/implementation-pr-handoff."
+            ));
+        }
     }
 
     Ok(())
 }
 
-fn add_basic_delivery_run(
+fn add_supported_run(
     report: &mut ValidationReport,
     check_report: &temper_scenario_core::CheckReport,
     scenario_name: &str,
+    label: &str,
+    run_evidence_lines: fn(&Path, &Path) -> Result<Vec<String>, String>,
 ) {
     let Some(manifest_path) = check_report.manifest_path.as_deref() else {
         report.limitations.push(format!(
@@ -337,11 +353,11 @@ fn add_basic_delivery_run(
         return;
     };
 
-    match basic_delivery::run_evidence_lines(&check_report.scenario_path, manifest_path) {
+    match run_evidence_lines(&check_report.scenario_path, manifest_path) {
         Ok(lines) => {
             report.validated_claims.push(
                 ValidatedClaim::new(
-                    "Supported deterministic basic-delivery scenario completes successfully.",
+                    format!("Supported deterministic {label} scenario completes successfully."),
                     ValidationStatus::Observed,
                 )
                 .with_evidence("scenario run passed"),
@@ -351,12 +367,12 @@ fn add_basic_delivery_run(
                     "A supported deterministic scenario run completes successfully.",
                     ValidationStatus::Satisfied,
                 )
-                .with_evidence("basic-delivery run completed in process"),
+                .with_evidence(format!("{label} run completed in process")),
             );
             report.evidence.push(
                 EvidenceEntry::new(
                     EvidenceKind::ScenarioRun,
-                    "Deterministic basic-delivery scenario run completed successfully.",
+                    format!("Deterministic {label} scenario run completed successfully."),
                 )
                 .with_details(lines),
             );
@@ -365,7 +381,7 @@ fn add_basic_delivery_run(
             report.verdict = ValidationVerdict::Failed;
             report.validated_claims.push(
                 ValidatedClaim::new(
-                    "Supported deterministic basic-delivery scenario completes successfully.",
+                    format!("Supported deterministic {label} scenario completes successfully."),
                     ValidationStatus::Failed,
                 )
                 .with_evidence(error.clone()),

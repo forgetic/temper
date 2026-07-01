@@ -114,6 +114,24 @@ fn check_succeeds_for_checked_in_basic_delivery_manifest() {
 }
 
 #[test]
+fn check_succeeds_for_checked_in_implementation_pr_handoff_manifest() {
+    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
+
+    let output = temper_scenario(&["check", &scenario.to_string_lossy()]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout utf8"),
+        "OK - checked 1 scenario(s).\n"
+    );
+}
+
+#[test]
 fn check_fails_for_unknown_assertion_template() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scenarios = dir.path().join("scenarios");
@@ -193,6 +211,42 @@ fn run_succeeds_for_checked_in_basic_delivery_scenario() {
     assert!(stdout.contains("closed parent issues: 1"), "{stdout}");
     assert!(!stdout.contains("open (not merged)"), "{stdout}");
     assert!(stdout.contains("actions:"), "{stdout}");
+}
+
+#[test]
+fn run_succeeds_for_checked_in_implementation_pr_handoff_scenario() {
+    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
+
+    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(
+        stdout.contains("scenario: implementation-pr-handoff"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("verdict: passed"), "{stdout}");
+    assert!(stdout.contains("create authored PR title/body"), "{stdout}");
+    assert!(stdout.contains("Implement durable PR handoff"), "{stdout}");
+    assert!(
+        stdout.contains("refresh authored PR title/body"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Implement refreshed handoff"), "{stdout}");
+    assert!(
+        stdout.contains("workflow metadata/source relation"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("metadata kind verified: implementation_pr"),
+        "{stdout}"
+    );
 }
 
 #[test]

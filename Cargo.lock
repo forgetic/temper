@@ -1694,11 +1694,15 @@ dependencies = [
 name = "temper-scenario-cli"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "temper-engine",
  "temper-forge-memory",
  "temper-forge-model",
+ "temper-protocol-worker",
  "temper-runner",
  "temper-scenario-core",
  "temper-testing",
+ "temper-workflow",
  "tempfile",
  "toml",
 ]

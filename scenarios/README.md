@@ -11,6 +11,13 @@ operator-facing demos with launch scripts and runtime instructions. Scenarios ar
 portable inputs for validation and post-merge regression; adding a scenario does
 not migrate, deduplicate, or replace an example.
 
+## Runnable scenarios
+
+`temper-scenario run` currently has focused in-process runners for:
+
+- `basic-delivery` — full deterministic happy-path convergence over the memory backend.
+- `implementation-pr-handoff` — focused ForgeApplier proof that authored implementation PR title/body and source metadata survive create and refresh.
+
 ## Validation reports vs. promotion artifacts
 
 Every post-merge validation run must produce a validation report: what target

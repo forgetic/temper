@@ -1,32 +1,34 @@
 # Verify implementation PR handoff end to end
 
 Use this recipe to verify the implementation-PR handoff with no live Forgejo or
-real LLM credentials. The hermetic real-stack test covers the product-diff path
-through a real daemon, worker, native agent, local git remotes, and a Jig fake
-LLM over in-process transport.
+real LLM credentials. The checked-in scenario drives a scripted
+engineer/coding-workspace success through Temper's ForgeApplier path over
+`MemoryForge` and verifies both newly-created and refreshed implementation PR
+handoffs.
 
 ## Run the focused verification
 
 From a fresh checkout of the revision you want to verify:
 
 ```sh
-cargo test -p temper-testing --test hermetic_real_stack \
-  hermetic_real_stack_basic_delivery_architect_triages_then_engineer_opens_pr -- --nocapture
+cargo run -p temper-scenario-cli -- check scenarios/implementation-pr-handoff
+cargo run -p temper-scenario-cli -- run scenarios/implementation-pr-handoff
 ```
 
-No provider environment variables, Forgejo binaries, or host-mode Actions runner
-are required.
+No provider environment variables, Forgejo binaries, host-mode Actions runner,
+or model credentials are required.
 
-## What the test proves
+## What the scenario proves
 
-The scripted fake architect triages an intake item into a ready code spec. The
-scripted fake engineer writes a product file, returns a final success summary,
-and the worker pushes the branch outcome for the daemon to open an implementation
-PR.
+The scripted workspace result supplies authored implementation PR titles and
+report bodies. The assertions verify that Temper opens a new implementation PR
+with the authored create handoff, refreshes an existing implementation PR with
+the authored update handoff without duplicating it, clears stale body text, and
+preserves workflow metadata linking each PR back to its source issue.
 
-The assertions verify that the PR points at the pushed branch, contains workflow
-metadata and the final summary, links back to the source issue through metadata,
-and contains no model-authored implementation-plan checklist.
+The hermetic real-stack basic-delivery test remains useful when you need the
+broader daemon/worker/native-agent/local-git path, but the scenario command is
+the focused handoff proof.
 
 For live Forgejo fixture internals and the remaining ignored e2e lanes, see
 [Run the daemon end-to-end fixture](run-daemon-e2e.md) and
