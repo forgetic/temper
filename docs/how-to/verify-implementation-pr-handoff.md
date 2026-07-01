@@ -12,8 +12,12 @@ From a fresh checkout of the revision you want to verify:
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/implementation-pr-handoff
-cargo run -p temper-scenario-cli -- run scenarios/implementation-pr-handoff
+cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/implementation-pr-handoff
 ```
+
+The run prints `source: checked-in scenario`, `confidence tier: hermetic`, and
+the manifest topology before the verdict. Asking for `--tier live` currently
+fails rather than converting this MemoryForge proof into a live claim.
 
 No provider environment variables, Forgejo binaries, host-mode Actions runner,
 or model credentials are required.

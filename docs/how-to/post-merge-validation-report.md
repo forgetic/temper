@@ -7,12 +7,14 @@ merged. Opening, synchronizing, or reopening a pull request still uses the
 separate PR CI workflow in `.forgejo/workflows/ci.yml`.
 
 The post-merge job checks out the merged `main` commit for the close event,
-runs the deterministic `basic-delivery` validation lane, and writes a Markdown
-report with the temporary bridge:
+runs the deterministic hermetic `basic-delivery` validation lane, and writes a
+Markdown report with the temporary bridge. Both the direct run and the report
+record that this is the checked-in scenario corpus, the `hermetic` confidence
+tier, and the manifest topology; they do not claim live Forgejo proof.
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios
-cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
+cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/basic-delivery
 cargo run -p temper-scenario-cli -- validate-pr \
   --pr <merged-pr-number> \
   --sha <merged-main-sha> \
@@ -53,7 +55,7 @@ Check out the commit that was validated, then run:
 ```sh
 mkdir -p /tmp/temper-validation/pr-<merged-pr-number>
 cargo run -p temper-scenario-cli -- check scenarios
-cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
+cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/basic-delivery
 cargo run -p temper-scenario-cli -- validate-pr \
   --pr <merged-pr-number> \
   --sha "$(git rev-parse HEAD)" \

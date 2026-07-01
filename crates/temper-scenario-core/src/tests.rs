@@ -112,12 +112,65 @@ fn parses_valid_manifest_and_references() {
     assert_eq!(manifest.name, "basic-delivery");
     assert_eq!(manifest.status, ScenarioStatus::Ready);
     assert_eq!(manifest.stability, ScenarioStability::Experimental);
+    assert!(manifest.topology.is_empty());
     assert!(manifest.assertion_templates.is_empty());
     assert_eq!(manifest.repositories.len(), 1);
     assert_eq!(manifest.repositories[0].repo, "ai/temper");
     assert_eq!(manifest.issues.len(), 1);
     assert_eq!(manifest.issues[0].number, 37);
     assert_eq!(manifest.path_references.len(), 2);
+}
+
+#[test]
+fn parses_manifest_topology_facts() {
+    let manifest = parse_manifest_str(
+        r##"
+name = "topology-case"
+status = "ready"
+stability = "experimental"
+intent = "Topology metadata should be exposed to runners and reports."
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+"##,
+        ".",
+    )
+    .expect("topology manifest is valid");
+
+    assert_eq!(
+        manifest.topology.field_values(),
+        vec![
+            ("kind", "single-repo-forgejo-standalone"),
+            ("forge", "forgejo"),
+            ("runner", "forgejo-actions-host"),
+            ("temper", "standalone"),
+            ("agent_model", "scripted-fake-llm"),
+        ]
+    );
+}
+
+#[test]
+fn rejects_malformed_topology_facts() {
+    let diagnostics = parse_manifest_str(
+        r##"
+name = "broken-topology"
+status = "ready"
+stability = "experimental"
+intent = "Bad topology metadata should fail."
+
+[topology]
+kind = 7
+"##,
+        ".",
+    )
+    .expect_err("non-string topology facts are invalid");
+
+    assert_has_field(&diagnostics, "topology.kind");
+    assert_has_message(&diagnostics, "must be a string");
 }
 
 #[test]

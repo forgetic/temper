@@ -61,16 +61,26 @@ Expected output:
 OK - checked 1 scenario(s).
 ```
 
-Run the proof through the scenario framework:
+Run the proof through the scenario framework. The command defaults to the
+hermetic tier; `--tier live` is reserved for a future live runner and currently
+fails rather than substituting memory evidence:
 
 ```sh
-cargo run -p temper-scenario-cli -- run scenarios/implementation-pr-handoff
+cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/implementation-pr-handoff
 ```
 
 Expected evidence shape:
 
 ```text
 scenario: implementation-pr-handoff
+source: checked-in scenario
+confidence tier: hermetic (fast in-process/memory runner; lower confidence than live; not a live Forgejo proof)
+manifest topology:
+  kind: single-repo-in-memory-forge
+  forge: memory
+  runner: temper-scenario-forge-applier
+  temper: in-process
+  agent_model: scripted-coding-workspace-result
 verdict: passed
 evidence:
   create authored PR title/body: PR #... for issue #... has title "Implement durable PR handoff" and body prefix "# Implementation report"
@@ -85,7 +95,7 @@ evidence:
 
 Improved:
 
-- A feature-specific proof can now be launched with `temper-scenario run`, so the report cites the same operator-facing scenario command for manifest validation and execution.
+- A feature-specific proof can now be launched with `temper-scenario run`, so the report cites the same operator-facing scenario command for manifest validation and execution while labeling the source, hermetic tier, and manifest topology.
 - The evidence lines are concise and name the observed title/body and metadata/source relation rather than pointing readers at raw unit-test names.
 - `temper-scenario check scenarios` now validates both checked-in runnable scenario bundles.
 

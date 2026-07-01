@@ -43,7 +43,10 @@ jobs:
       - name: Scenario manifest check
         run: cargo run -p temper-scenario-cli -- check scenarios
 
-      - name: Deterministic basic-delivery scenario run
+      - name: Hermetic basic-delivery scenario run
+        # This is the fast in-process/memory tier. The CLI output and the
+        # generated report label it as checked-in source + hermetic tier, not a
+        # live Forgejo proof.
         run: cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
 
       - name: Write validation report

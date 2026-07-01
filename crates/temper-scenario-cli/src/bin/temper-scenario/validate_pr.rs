@@ -9,6 +9,7 @@ use temper_scenario_core::{
     ValidationStatus, ValidationVerdict, check_scenario,
 };
 
+use super::run_context::{ScenarioRunFacts, ScenarioTier};
 use super::{basic_delivery, implementation_pr_handoff};
 
 const EX_USAGE: u8 = 64;
@@ -25,8 +26,10 @@ Options:
   --output-dir <DIR> Directory for the Markdown report (default: current directory)
   -h, --help        Print help
 
-The bridge records local scenario evidence when available. It does not fetch live
-Forgejo PR context or prove that the supplied SHA is the current main commit.";
+The bridge records local scenario evidence when available, including scenario
+source, the current hermetic confidence tier, and manifest topology. It does not
+fetch live Forgejo PR context or prove that the supplied SHA is the current main
+commit.";
 
 pub(super) fn command(args: &[String]) -> ExitCode {
     let args = match parse_args(args) {
@@ -262,6 +265,7 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
         .as_ref()
         .map(|manifest| manifest.name.as_str())
         .unwrap_or("unknown");
+    let facts = ScenarioRunFacts::from_check_report(&check_report, ScenarioTier::Hermetic);
     report.validated_claims.push(
         ValidatedClaim::new(
             format!(
@@ -296,12 +300,14 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
             super::display_path(manifest_path)
         ));
     }
+    check_evidence = check_evidence.with_details(facts.evidence_details());
     report.evidence.push(check_evidence);
 
     match scenario_name {
         basic_delivery::SCENARIO_NAME => add_supported_run(
             report,
             &check_report,
+            &facts,
             scenario_name,
             "basic-delivery",
             basic_delivery::run_evidence_lines,
@@ -309,6 +315,7 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
         implementation_pr_handoff::SCENARIO_NAME => add_supported_run(
             report,
             &check_report,
+            &facts,
             scenario_name,
             "implementation-pr-handoff",
             implementation_pr_handoff::run_evidence_lines,
@@ -335,6 +342,7 @@ fn add_scenario_validation(report: &mut ValidationReport, path: &Path) -> Result
 fn add_supported_run(
     report: &mut ValidationReport,
     check_report: &temper_scenario_core::CheckReport,
+    facts: &ScenarioRunFacts,
     scenario_name: &str,
     label: &str,
     run_evidence_lines: fn(&Path, &Path) -> Result<Vec<String>, String>,
@@ -355,6 +363,8 @@ fn add_supported_run(
 
     match run_evidence_lines(&check_report.scenario_path, manifest_path) {
         Ok(lines) => {
+            let mut details = facts.evidence_details();
+            details.extend(lines);
             report.validated_claims.push(
                 ValidatedClaim::new(
                     format!("Supported deterministic {label} scenario completes successfully."),
@@ -374,7 +384,7 @@ fn add_supported_run(
                     EvidenceKind::ScenarioRun,
                     format!("Deterministic {label} scenario run completed successfully."),
                 )
-                .with_details(lines),
+                .with_details(details),
             );
         }
         Err(error) => {

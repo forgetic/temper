@@ -12,7 +12,7 @@ Commands run:
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios
-cargo run -p temper-scenario-cli -- run scenarios/basic-delivery
+cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/basic-delivery
 mkdir -p /tmp/temper-post-merge-validation/pr-73
 cargo run -p temper-scenario-cli -- validate-pr \
   --pr 73 \
@@ -62,7 +62,21 @@ It also records the concrete scenario evidence:
 3. **scenario check** — Scenario check passed for `scenarios/basic-delivery`.
    - scenario: `basic-delivery`
    - manifest: `scenarios/basic-delivery/scenario.toml`
+   - source: checked-in scenario
+   - confidence tier: hermetic (fast in-process/memory runner; lower confidence than live; not a live Forgejo proof)
+   - manifest topology.kind: `single-repo-forgejo-standalone`
+   - manifest topology.forge: `forgejo`
+   - manifest topology.runner: `forgejo-actions-host`
+   - manifest topology.temper: `standalone`
+   - manifest topology.agent_model: `scripted-fake-llm`
 4. **scenario run** — Deterministic basic-delivery scenario run completed successfully.
+   - source: checked-in scenario
+   - confidence tier: hermetic (fast in-process/memory runner; lower confidence than live; not a live Forgejo proof)
+   - manifest topology.kind: `single-repo-forgejo-standalone`
+   - manifest topology.forge: `forgejo`
+   - manifest topology.runner: `forgejo-actions-host`
+   - manifest topology.temper: `standalone`
+   - manifest topology.agent_model: `scripted-fake-llm`
    - seeded issue: #1 "Service banner should identify the environment" closed as code
    - implementation PR: #1 merged with passing CI (1 completed job(s))
    - closed parent issues: 1
@@ -70,10 +84,18 @@ It also records the concrete scenario evidence:
    - report: ticks=15 workers=5
 ```
 
-The direct `run scenarios/basic-delivery` command also reported:
+The direct `run --tier hermetic scenarios/basic-delivery` command also reported:
 
 ```text
 scenario: basic-delivery
+source: checked-in scenario
+confidence tier: hermetic (fast in-process/memory runner; lower confidence than live; not a live Forgejo proof)
+manifest topology:
+  kind: single-repo-forgejo-standalone
+  forge: forgejo
+  runner: forgejo-actions-host
+  temper: standalone
+  agent_model: scripted-fake-llm
 verdict: passed
 ```
 
@@ -114,7 +136,7 @@ merged-only lane:
   compares `git rev-parse HEAD` with `MERGED_MAIN_SHA`, records the checked-out
   SHA in `$GITHUB_ENV`, and logs the PR number plus artifact directory.
 - Local mirror: the workflow runs the same cheap commands checked here:
-  scenario manifest check, deterministic `basic-delivery` run, and
+  scenario manifest check, deterministic hermetic `basic-delivery` run, and
   `validate-pr` into `validation-artifacts/post-merge-pr-<pr-number>`.
 - Report retention and visibility: the workflow writes `report-path.txt`, tests
   that the Markdown report exists, prints the path, prints the full report in a

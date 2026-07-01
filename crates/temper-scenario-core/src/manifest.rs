@@ -144,6 +144,46 @@ impl ScenarioIntent {
     }
 }
 
+/// Runtime topology declared by a scenario manifest.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct ScenarioTopology {
+    /// Topology shape or boundary the scenario intends to validate.
+    pub kind: Option<String>,
+    /// Forge backend/provider named by the manifest.
+    pub forge: Option<String>,
+    /// Runner or CI harness named by the manifest.
+    pub runner: Option<String>,
+    /// Temper process/deployment shape named by the manifest.
+    pub temper: Option<String>,
+    /// Agent/model shape named by the manifest.
+    pub agent_model: Option<String>,
+}
+
+impl ScenarioTopology {
+    /// Returns true when the manifest did not declare any known topology facts.
+    pub fn is_empty(&self) -> bool {
+        self.kind.is_none()
+            && self.forge.is_none()
+            && self.runner.is_none()
+            && self.temper.is_none()
+            && self.agent_model.is_none()
+    }
+
+    /// Known topology facts in stable display order.
+    pub fn field_values(&self) -> Vec<(&'static str, &str)> {
+        [
+            ("kind", self.kind.as_deref()),
+            ("forge", self.forge.as_deref()),
+            ("runner", self.runner.as_deref()),
+            ("temper", self.temper.as_deref()),
+            ("agent_model", self.agent_model.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| value.map(|value| (name, value)))
+        .collect()
+    }
+}
+
 /// A local path reference discovered in a manifest.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PathReference {
@@ -183,6 +223,7 @@ pub struct ScenarioManifest {
     pub status: ScenarioStatus,
     pub stability: ScenarioStability,
     pub intent: ScenarioIntent,
+    pub topology: ScenarioTopology,
     pub assertion_templates: Vec<String>,
     pub repositories: Vec<RepositoryReference>,
     pub issues: Vec<IssueReference>,

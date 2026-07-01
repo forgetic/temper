@@ -18,7 +18,9 @@ cargo dev-scenario-check
 ```
 
 Exercise the deterministic in-process `basic-delivery` runner without live
-Forgejo or external services:
+Forgejo or external services. The output labels the checked-in scenario source,
+the `hermetic` confidence tier, and manifest topology; it is a fast
+lower-confidence proof, not live Forgejo validation:
 
 ```sh
 cargo dev-scenario-run
