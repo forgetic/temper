@@ -20,6 +20,7 @@ chrono.workspace = true
 tracing = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 temper-forge-model = { path = "../temper-forge-model" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }

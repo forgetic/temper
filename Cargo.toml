@@ -90,10 +90,6 @@ temper-engine = { path = "crates/temper-engine" }
 temper-engine-io = { path = "crates/temper-engine-io" }
 temper-daemon-transport = { path = "crates/temper-daemon-transport" }
 temper-worker = { path = "crates/temper-worker" }
-# Root basic-delivery e2e uses Jig's fake LLM to drive scripted architect and
-# engineer replies without real provider credentials.
-jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
-jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 # Root transport/config tests use in-memory Forge state and worker protocol DTOs
 # to assert daemon/worker behavior without a live Forge.
 temper-forge-memory = { path = "crates/temper-forge-memory" }

@@ -1,46 +1,53 @@
 use std::time::{Duration, Instant};
 
-use temper_forge::{
-    CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, IssueState, ItemNumber,
+use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, ROLE_PASSWORD as FORGEJO_ROLE_PASSWORD};
+use temper_forge_model::{
+    CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, Issue, IssueState, ItemNumber,
     PullRequest, PullRequestQuery, PullRequestState, RepositoryId, RepositoryPath, UserId,
 };
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_workflow::{CiStatus, parse_metadata_block};
 
 use super::fake_llm::{architect_body, engineer_summary};
-use super::process::ChildGuard;
-use super::{ADMIN_USER, ENGINEER, INTAKE_BODY, INTAKE_TITLE, NAME, OWNER, block_on};
+use super::process::{ChildGuard, engine_block_on};
+use super::{
+    CiJobEvidence, ENGINEER, FinalStateEvidence, IntakeFixture, IssueEvidence, PullRequestEvidence,
+    RepoFixture,
+};
 
 const ASSERT_POLL: Duration = Duration::from_secs(1);
 
-pub(super) fn admin_forge(base_url: &str, admin_token: &str) -> ForgejoForge {
+pub(super) fn admin_forge(base_url: &str, admin_token: &str, repo: &RepoFixture) -> ForgejoForge {
     ForgejoForge::new(
         ForgejoConfig::new(base_url, admin_token)
-            .with_default_repo(OWNER, NAME)
-            .with_web_ui_credentials(ENGINEER, temper_forge::config::FORGEJO_ROLE_PASSWORD),
+            .with_default_repo(&repo.owner, &repo.name)
+            .with_web_ui_credentials(ENGINEER, FORGEJO_ROLE_PASSWORD),
     )
 }
 
-pub(super) async fn repository(forge: &ForgejoForge) -> Result<RepositoryId, String> {
+pub(super) async fn repository(
+    forge: &ForgejoForge,
+    repo: &RepoFixture,
+) -> Result<RepositoryId, String> {
     forge
-        .get_repository_by_path(&RepositoryPath::new(OWNER, NAME))
+        .get_repository_by_path(&RepositoryPath::new(&repo.owner, &repo.name))
         .await
         .map_err(|error| format!("repository lookup failed: {error}"))?
         .map(|repo| repo.id)
-        .ok_or_else(|| format!("repository {OWNER}/{NAME} not found"))
+        .ok_or_else(|| format!("repository {} not found", repo.slug))
 }
 
 pub(super) async fn seed_intake(
     forge: &ForgejoForge,
     repository: &RepositoryId,
+    intake: &IntakeFixture,
 ) -> Result<ItemNumber, String> {
     let issue = forge
         .create_issue(
             repository,
             CreateIssue {
-                title: INTAKE_TITLE.to_string(),
-                body: INTAKE_BODY.to_string(),
-                labels: Vec::new(),
+                title: intake.title.clone(),
+                body: intake.body.clone(),
+                labels: intake.labels.clone(),
                 assignees: Vec::new(),
             },
         )
@@ -53,13 +60,14 @@ pub(super) fn drive_full_basic_delivery(
     forge: &ForgejoForge,
     repository: &RepositoryId,
     issue: ItemNumber,
+    admin_user: &str,
     standalone: &mut ChildGuard,
     timeout: Duration,
-) -> Result<(), String> {
+) -> Result<FinalStateEvidence, String> {
     let deadline = Instant::now() + timeout;
 
     poll_until(deadline, standalone, || {
-        block_on(assert_issue_has_label(
+        engine_block_on(assert_issue_has_label(
             forge,
             repository,
             issue,
@@ -67,13 +75,13 @@ pub(super) fn drive_full_basic_delivery(
         ))
     })?;
     poll_until(deadline, standalone, || {
-        block_on(assert_issue_triaged_ready(forge, repository, issue))
+        engine_block_on(assert_issue_triaged_ready(forge, repository, issue))
     })?;
     poll_until(deadline, standalone, || {
-        block_on(assert_pr_open_with_landing(forge, repository, issue))
+        engine_block_on(assert_pr_open_with_landing(forge, repository, issue))
     })?;
     poll_until(deadline, standalone, || {
-        block_on(assert_converged(forge, repository, issue))
+        engine_block_on(assert_converged(forge, repository, issue, admin_user))
     })
 }
 
@@ -158,7 +166,8 @@ async fn assert_converged(
     forge: &ForgejoForge,
     repository: &RepositoryId,
     issue: ItemNumber,
-) -> Result<(), String> {
+    admin_user: &str,
+) -> Result<FinalStateEvidence, String> {
     let pr = implementation_pr(forge, repository, issue).await?;
     verify_engineer_pr(&pr, issue)?;
     if pr.state != PullRequestState::Merged {
@@ -171,10 +180,7 @@ async fn assert_converged(
     if merge.merged_by == UserId::new(ENGINEER) {
         return Err("PR was merged by the engineer, not mechanical automation".to_string());
     }
-    let expected_automation = [
-        UserId::new(ADMIN_USER),
-        UserId::new(temper_provision::BOT_USER),
-    ];
+    let expected_automation = [UserId::new(admin_user), UserId::new("bot")];
     if !expected_automation
         .iter()
         .any(|user| user == &merge.merged_by)
@@ -222,7 +228,12 @@ async fn assert_converged(
             issue.body
         ));
     }
-    Ok(())
+
+    Ok(FinalStateEvidence {
+        issue: issue_evidence(&issue),
+        pull_request: pr_evidence(&pr),
+        ci_jobs: jobs.iter().map(ci_job_evidence).collect(),
+    })
 }
 
 async fn implementation_pr(
@@ -308,7 +319,7 @@ async fn completed_ci_jobs(
 }
 
 pub(super) fn ci_diagnostics(forge: &ForgejoForge, repository: &RepositoryId) -> String {
-    block_on(async {
+    engine_block_on(async {
         let mut out = String::new();
         match forge
             .list_pull_requests(repository, PullRequestQuery::default())
@@ -348,6 +359,37 @@ pub(super) fn ci_diagnostics(forge: &ForgejoForge, repository: &RepositoryId) ->
     })
 }
 
+fn issue_evidence(issue: &Issue) -> IssueEvidence {
+    IssueEvidence {
+        number: issue.number.get(),
+        title: issue.title.clone(),
+        state: issue_state_evidence(issue.state).to_string(),
+        labels: issue.labels.clone(),
+    }
+}
+
+fn pr_evidence(pr: &PullRequest) -> PullRequestEvidence {
+    PullRequestEvidence {
+        number: pr.number.get(),
+        title: pr.title.clone(),
+        state: pr_state_evidence(pr.state).to_string(),
+        labels: pr.labels.clone(),
+        author: pr.author_id.to_string(),
+        merged_by: pr.merge.as_ref().map(|merge| merge.merged_by.to_string()),
+        head_branch: pr.source.branch.clone(),
+        head_sha: pr.head_sha.clone(),
+    }
+}
+
+fn ci_job_evidence(job: &CiJob) -> CiJobEvidence {
+    CiJobEvidence {
+        name: job.name.clone(),
+        status: format!("{:?}", job.status),
+        conclusion: job.conclusion.map(|conclusion| format!("{conclusion:?}")),
+        url: job.url.clone(),
+    }
+}
+
 fn require_labels(labels: &[String], required: &[&str]) -> Result<(), String> {
     for required in required {
         if !labels.iter().any(|label| label == required) {
@@ -372,7 +414,7 @@ fn poll_until<T>(
     mut assert: impl FnMut() -> Result<T, String>,
 ) -> Result<T, String> {
     loop {
-        if let Some(status) = standalone.try_wait() {
+        if let Some(status) = standalone.try_wait()? {
             return Err(format!("{} exited early with {status:?}", standalone.label));
         }
         match assert() {
@@ -383,5 +425,20 @@ fn poll_until<T>(
             }
             Err(error) => return Err(error),
         }
+    }
+}
+
+fn pr_state_evidence(state: PullRequestState) -> &'static str {
+    match state {
+        PullRequestState::Open => "open",
+        PullRequestState::Closed => "closed",
+        PullRequestState::Merged => "merged",
+    }
+}
+
+fn issue_state_evidence(state: IssueState) -> &'static str {
+    match state {
+        IssueState::Open => "open",
+        IssueState::Closed => "closed",
     }
 }

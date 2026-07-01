@@ -1231,8 +1231,6 @@ name = "temper"
 version = "0.1.0"
 dependencies = [
  "fs2",
- "jig-core",
- "jig-server",
  "serde_json",
  "temper-cli",
  "temper-cli-common",
@@ -1771,6 +1769,7 @@ dependencies = [
  "temper-worker",
  "temper-workflow",
  "tempfile",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]
