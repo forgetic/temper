@@ -34,8 +34,8 @@ pub use diagnostics::{Diagnostic, Severity};
 pub use discovery::{check_scenario, check_scenarios, discover_scenarios, resolve_manifest_path};
 pub use manifest::{
     CheckReport, DiscoverError, IssueReference, ManifestLoadError, PathReference,
-    RepositoryReference, ScenarioEntry, ScenarioIntent, ScenarioManifest, ScenarioStability,
-    ScenarioStatus, ScenarioTopology,
+    RepositoryReference, ScenarioEntry, ScenarioIntent, ScenarioManifest, ScenarioRunnerSelection,
+    ScenarioStability, ScenarioStatus, ScenarioTopology,
 };
 pub use parse::{load_manifest, parse_manifest_str};
 pub use validation_report::{

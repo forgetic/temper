@@ -8,6 +8,8 @@ mod implementation_pr_handoff;
 mod promote;
 #[path = "temper-scenario/run_context.rs"]
 mod run_context;
+#[path = "temper-scenario/runner_registry.rs"]
+mod runner_registry;
 #[path = "temper-scenario/validate_pr.rs"]
 mod validate_pr;
 
@@ -85,9 +87,10 @@ For live `basic-delivery`, pass --temper-bin <PATH>, set
 TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling target-dir `temper` binary.
 `cargo dev-scenario-run` builds and delegates to the live lane.
 
-Supported checked-in runners are scenarios/basic-delivery and
-scenarios/implementation-pr-handoff. Unsupported scenario manifests fail clearly
-instead of being treated as passed.";
+Supported runner ids are `basic-delivery` and `implementation-pr-handoff`.
+Manifests may select a reusable runner with `[runner] uses = \"...\"`; when
+that selector is absent, `run` falls back to the legacy manifest `name`.
+Unsupported scenario manifests fail clearly instead of being treated as passed.";
 
 fn main() -> ExitCode {
     run(env::args().skip(1))
@@ -259,33 +262,24 @@ fn run_command(args: &[String]) -> ExitCode {
 
     let facts = ScenarioRunFacts::from_check_report(&report, args.tier);
 
-    let result = match (manifest.name.as_str(), args.tier) {
-        (basic_delivery::SCENARIO_NAME, ScenarioTier::Hermetic) => {
-            basic_delivery::run_and_print(&report.scenario_path, manifest_path, &facts)
-        }
-        (basic_delivery::SCENARIO_NAME, ScenarioTier::Live) => basic_delivery::run_live_and_print(
-            &report.scenario_path,
-            &facts,
-            args.temper_bin.as_deref(),
-        ),
-        (implementation_pr_handoff::SCENARIO_NAME, ScenarioTier::Hermetic) => {
-            implementation_pr_handoff::run_and_print(&report.scenario_path, manifest_path, &facts)
-        }
-        (implementation_pr_handoff::SCENARIO_NAME, ScenarioTier::Live) => {
+    let selected_runner = match runner_registry::select_runner(manifest, args.tier) {
+        Ok(runner) => runner,
+        Err(error) => {
             eprintln!(
                 "temper-scenario run: {}",
-                facts.unsupported_live_message(&manifest.name)
-            );
-            return ExitCode::FAILURE;
-        }
-        (other, _) => {
-            eprintln!(
-                "temper-scenario run: unsupported scenario `{other}` at {}; supported checked-in runners: scenarios/basic-delivery, scenarios/implementation-pr-handoff",
-                display_path(&report.scenario_path)
+                error.message(&report.scenario_path)
             );
             return ExitCode::FAILURE;
         }
     };
+
+    let result = selected_runner.run_and_print(
+        &report.scenario_path,
+        manifest_path,
+        &facts,
+        args.tier,
+        args.temper_bin.as_deref(),
+    );
 
     match result {
         Ok(()) => ExitCode::SUCCESS,

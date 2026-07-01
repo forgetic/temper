@@ -24,6 +24,22 @@ fn copy_dir_all(source: &Path, target: &Path) {
     }
 }
 
+fn select_runner_for_bundle(bundle: &Path, name: &str, runner: &str) {
+    let manifest_path = bundle.join("scenario.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest = manifest.replacen(
+        "name = \"basic-delivery\"",
+        &format!("name = \"{name}\""),
+        1,
+    );
+    let manifest = manifest.replacen(
+        "[topology]\n",
+        &format!("[runner]\nuses = \"{runner}\"\n\n[topology]\n"),
+        1,
+    );
+    std::fs::write(&manifest_path, manifest).expect("write manifest");
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -112,6 +128,83 @@ fn run_succeeds_for_ephemeral_basic_delivery_bundle() {
 }
 
 #[test]
+fn run_uses_runner_selector_for_different_manifest_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("renamed-delivery");
+    copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
+    select_runner_for_bundle(&bundle, "renamed-delivery", "basic-delivery");
+
+    let check = temper_scenario(&["check", &bundle.to_string_lossy()]);
+    assert!(
+        check.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        check.status,
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let output = temper_scenario(&["run", "--tier", "hermetic", &bundle.to_string_lossy()]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
+    assert!(
+        stdout.contains("source: ephemeral validation bundle"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("verdict: passed"), "{stdout}");
+}
+
+#[test]
+fn validate_pr_uses_runner_selector_for_different_manifest_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("renamed-delivery");
+    copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
+    select_runner_for_bundle(&bundle, "renamed-delivery", "basic-delivery");
+    let output_dir = dir.path().join("reports");
+
+    let output = temper_scenario(&[
+        "validate-pr",
+        "--pr",
+        "123",
+        "--sha",
+        "deadbeef",
+        "--scenario",
+        &bundle.to_string_lossy(),
+        "--output-dir",
+        &output_dir.to_string_lossy(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
+    assert!(
+        markdown.contains("scenario: `renamed-delivery`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("runner: `basic-delivery` selected by runner.uses"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("Deterministic basic-delivery scenario run completed successfully"),
+        "{markdown}"
+    );
+}
+
+#[test]
 fn run_live_tier_with_missing_temper_binary_fails_before_substituting_hermetic_runner() {
     let scenario = workspace_root().join("scenarios/basic-delivery");
     let missing_temper = tempfile::tempdir()
@@ -169,6 +262,27 @@ fn run_rejects_unknown_tier() {
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(stderr.contains("unknown --tier `medium`"), "{stderr}");
     assert!(stderr.contains("expected hermetic or live"), "{stderr}");
+}
+
+#[test]
+fn run_rejects_unsupported_tier_from_registry() {
+    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
+
+    let output = temper_scenario(&["run", "--tier", "live", &scenario.to_string_lossy()]);
+
+    assert!(!output.status.success(), "unsupported tier should fail");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("unsupported tier `live` for runner `implementation-pr-handoff`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("supported tiers: hermetic"), "{stderr}");
+    assert!(stderr.contains("supported runner ids:"), "{stderr}");
+    assert!(
+        stderr.contains("basic-delivery (tiers: hermetic, live)"),
+        "{stderr}"
+    );
 }
 
 #[test]

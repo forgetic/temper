@@ -13,8 +13,8 @@ use crate::repo_refs::{
 use crate::toml_helpers::string_value;
 use crate::{
     ASSERTION_TEMPLATE_NAMES, Diagnostic, ManifestLoadError, PathReference, ScenarioIntent,
-    ScenarioManifest, ScenarioStability, ScenarioStatus, ScenarioTopology, Severity,
-    is_known_assertion_template,
+    ScenarioManifest, ScenarioRunnerSelection, ScenarioStability, ScenarioStatus, ScenarioTopology,
+    Severity, is_known_assertion_template,
 };
 
 /// Loads, parses, and validates a single manifest file.
@@ -98,6 +98,7 @@ pub(crate) fn parse_manifest_value(
     let status = parse_status(table, scenario, &mut diagnostics);
     let stability = parse_stability(table, scenario, &mut diagnostics);
     let intent = parse_intent(table, scenario, &mut diagnostics);
+    let runner = parse_runner(table, &mut diagnostics);
     let topology = parse_topology(table, &mut diagnostics);
     let assertion_templates = parse_assertion_templates(table, &mut diagnostics);
 
@@ -122,6 +123,7 @@ pub(crate) fn parse_manifest_value(
             status,
             stability,
             intent,
+            runner,
             topology,
             assertion_templates,
             repositories,
@@ -271,6 +273,22 @@ fn parse_intent(
     }
 
     Some(ScenarioIntent { summary, path })
+}
+
+fn parse_runner(table: &toml::Table, diagnostics: &mut Vec<Diagnostic>) -> ScenarioRunnerSelection {
+    let Some(value) = table.get("runner") else {
+        return ScenarioRunnerSelection::default();
+    };
+    let Some(runner) = value.as_table() else {
+        diagnostics.push(Diagnostic::error("runner", "must be a table"));
+        return ScenarioRunnerSelection::default();
+    };
+
+    ScenarioRunnerSelection {
+        uses: runner
+            .get("uses")
+            .and_then(|value| string_value("runner.uses", value, diagnostics)),
+    }
 }
 
 fn parse_topology(table: &toml::Table, diagnostics: &mut Vec<Diagnostic>) -> ScenarioTopology {

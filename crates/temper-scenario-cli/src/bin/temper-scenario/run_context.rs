@@ -131,22 +131,6 @@ impl ScenarioRunFacts {
         }
         details
     }
-
-    pub(super) fn unsupported_live_message(&self, scenario_name: &str) -> String {
-        let topology = if self.topology.is_empty() {
-            "manifest topology: not declared".to_string()
-        } else {
-            self.topology
-                .field_values()
-                .into_iter()
-                .map(|(field, value)| format!("{field}={value}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        format!(
-            "unsupported-live-topology: live tier is not supported for scenario `{scenario_name}` ({topology}); refusing to substitute the hermetic memory runner, use --tier hermetic instead"
-        )
-    }
 }
 
 fn candidate_repo_roots(scenario_path: &Path) -> Vec<PathBuf> {

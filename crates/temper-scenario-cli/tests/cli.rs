@@ -204,8 +204,46 @@ fn run_fails_clearly_for_unsupported_valid_scenario() {
 
     assert!(!output.status.success(), "unsupported scenario should fail");
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("unsupported scenario `alpha`"), "{stderr}");
-    assert!(stderr.contains("scenarios/basic-delivery"), "{stderr}");
+    assert!(
+        stderr.contains("unsupported scenario `alpha`: unsupported runner `alpha`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("supported runner ids:"), "{stderr}");
+    assert!(
+        stderr.contains("basic-delivery (tiers: hermetic, live)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn run_fails_clearly_for_unknown_runner_selector() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scenarios = dir.path().join("scenarios");
+    write_valid_scenario(
+        &scenarios,
+        "alpha",
+        "ready",
+        "experimental",
+        "Exercise delivery.",
+    );
+    let scenario = scenarios.join("alpha");
+    let manifest_path = scenario.join("scenario.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+    std::fs::write(
+        &manifest_path,
+        format!("{manifest}\n[runner]\nuses = \"missing-runner\"\n"),
+    )
+    .expect("write manifest");
+
+    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
+
+    assert!(!output.status.success(), "unsupported runner should fail");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("unsupported runner `missing-runner` selected by runner.uses"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("supported runner ids:"), "{stderr}");
 }
 
 #[test]
@@ -261,6 +299,11 @@ fn validate_pr_writes_report_and_prints_path() {
     assert!(markdown.contains("Verdict: inconclusive"), "{markdown}");
     assert!(markdown.contains("**scenario check**"), "{markdown}");
     assert!(markdown.contains("No scenario run occurred"), "{markdown}");
+    assert!(
+        markdown.contains("unsupported runner `alpha`"),
+        "{markdown}"
+    );
+    assert!(markdown.contains("supported runner ids:"), "{markdown}");
 }
 
 #[test]
