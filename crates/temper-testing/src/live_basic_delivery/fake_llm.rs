@@ -190,7 +190,7 @@ fn load_script_file(path: &Path) -> ScriptFile {
 fn expect_fixture_expectations(script_file: &ScriptFile, path: &Path) -> FixtureExpectations {
     expectations_from_script_file(script_file).unwrap_or_else(|error| {
         panic!(
-            "canonical jig fixture {} no longer matches the basic_delivery_forgejo_e2e contract: {error}",
+            "canonical jig fixture {} no longer matches the live basic-delivery harness contract: {error}",
             path.display()
         )
     })
@@ -404,7 +404,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_fixture_matches_basic_delivery_e2e_contract() {
+    fn canonical_jig_fixture_matches_live_basic_delivery_harness_contract() {
         let path = basic_delivery_fixture_path();
         let script_file = load_script_file(&path);
         let expectations = expect_fixture_expectations(&script_file, &path);

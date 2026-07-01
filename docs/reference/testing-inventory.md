@@ -123,8 +123,10 @@ snapshot.
 
 ### Current ignored live files
 
-- `tests/basic_delivery_forgejo_e2e.rs` — full `temper init` + standalone run,
-  fake LLM, real Forgejo, real Actions, and merge (manual/all-e2e lane).
+- `tests/basic_delivery_forgejo_e2e.rs` — thin root wrapper over
+  `temper_testing::live_basic_delivery`, covering full `temper init` +
+  standalone run, fake LLM, real Forgejo, real Actions, and merge
+  (manual/all-e2e lane).
 - `tests/daemon_forgejo_e2e.rs` — daemon binary + deterministic wire worker,
   happy path and CI red-then-green. Only
   `daemon_forgejo_ci_fails_then_passes_converges` is in the default capstone
