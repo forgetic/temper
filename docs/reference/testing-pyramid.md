@@ -113,8 +113,9 @@ The web UI is separate from Cargo:
 ```
 
 CI runs format, depgraph, file-size, ambient-env, build, scenario manifest
-checks, the deterministic basic-delivery scenario runner, Rust tests, clippy,
-and then a separate web job for Vitest/build.
+checks, the deterministic basic-delivery scenario runner, quick Rust tests, the
+full ignored/manual e2e lane, clippy, and then a separate web job for
+Vitest/build.
 
 ## Current effectiveness assessment
 

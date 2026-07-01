@@ -27,12 +27,19 @@ pre-PR script from the repository root:
 
 The script runs these commands in order and stops on the first failure:
 
-1. `cargo dev-fmt`
-2. `cargo dev-scenario-check`
-3. `cargo dev-scenario-run`
-4. `cargo-clippy`
-5. `cargo dev-test-quick`
-6. `cargo dev-test-e2e-all`
+1. `cargo fmt --all -- --check`
+2. `cargo depgraph-check check`
+3. `scripts/check-rust-file-size.sh`
+4. `scripts/check-no-ambient-env.sh`
+5. `cargo dev-test-build`
+6. `cargo dev-scenario-check`
+7. `cargo dev-scenario-run`
+8. `cargo dev-test-quick`
+9. Drop linked test binaries from `target/debug` before linting
+10. `cargo dev-clippy`
+
+The full `cargo dev-test-e2e-all` lane is intentionally left to CI (or an
+explicit manual local run) so the default pre-PR check stays cheap.
 
 ## Useful docs
 
