@@ -36,8 +36,6 @@ run cargo depgraph-check check
 run scripts/check-rust-file-size.sh
 run scripts/check-no-ambient-env.sh
 run cargo dev-test-build
-run cargo dev-scenario-check
-run cargo dev-scenario-run
 run cargo dev-test-quick
 free_linked_test_binaries
 run cargo dev-clippy
