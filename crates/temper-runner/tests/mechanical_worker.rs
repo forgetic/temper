@@ -144,6 +144,7 @@ fn merge_pull_request(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumb
             method: MergeMethod::Squash,
             commit_title: None,
             commit_body: None,
+            delete_source_branch: false,
         },
     ))
     .expect("pull request merges");

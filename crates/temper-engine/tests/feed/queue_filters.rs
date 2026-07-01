@@ -163,6 +163,7 @@ fn scanned_writable_issue_skips_while_merged_pr_has_correlation_key() {
                     method: MergeMethod::Squash,
                     commit_title: None,
                     commit_body: None,
+                    delete_source_branch: false,
                 },
             )
             .await

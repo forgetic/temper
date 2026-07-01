@@ -368,6 +368,7 @@ fn conditional_update_rejects_a_stale_version() {
             method: MergeMethod::Squash,
             commit_title: None,
             commit_body: None,
+            delete_source_branch: false,
         },
     ));
     assert!(merged.is_ok());
@@ -405,6 +406,7 @@ fn pull_requests_create_update_and_merge() {
             method: MergeMethod::Squash,
             commit_title: None,
             commit_body: None,
+            delete_source_branch: false,
         },
     ))
     .unwrap();
@@ -423,6 +425,7 @@ fn pull_requests_create_update_and_merge() {
                 method: MergeMethod::MergeCommit,
                 commit_title: None,
                 commit_body: None,
+                delete_source_branch: false,
             },
         )),
         Err(ForgeError::Conflict(_))

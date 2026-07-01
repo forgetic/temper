@@ -256,7 +256,7 @@ fn portable_review_aggregate_uses_mapped_reviews() {
 }
 
 #[test]
-fn merge_posts_method_payload_and_maps_record() {
+fn merge_posts_method_payload_delete_branch_flag_and_maps_record() {
     let client = MockHttpClient::new();
     client.push_response(200, ""); // POST merge (no body)
     client.push_response(
@@ -285,6 +285,7 @@ fn merge_posts_method_payload_and_maps_record() {
             method: MergeMethod::Squash,
             commit_title: Some("Squash title".to_string()),
             commit_body: Some("Squash message".to_string()),
+            delete_source_branch: true,
         },
     ))
     .unwrap();
@@ -303,6 +304,10 @@ fn merge_posts_method_payload_and_maps_record() {
     assert_eq!(body["Do"], "squash");
     assert_eq!(body["MergeTitleField"], "Squash title");
     assert_eq!(body["MergeMessageField"], "Squash message");
+    // Offline payload coverage is sufficient here: the issue's live Forgejo
+    // reproduction established this API field deletes the source branch, and
+    // Temper's regression was omitting that field from the merge request.
+    assert_eq!(body["delete_branch_after_merge"], true);
     assert_eq!(requests[1].method, HttpMethod::Get);
 }
 
@@ -318,6 +323,7 @@ fn merge_conflict_status_maps_to_conflict() {
                 method: MergeMethod::MergeCommit,
                 commit_title: None,
                 commit_body: None,
+                delete_source_branch: false,
             },
         ));
         assert!(

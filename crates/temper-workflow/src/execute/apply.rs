@@ -54,7 +54,13 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .await?;
         self.apply_attach_reviews(loaded, &prepared.attach_reviews)
             .await?;
-        self.apply_merge(repo_id, loaded, prepared.merge).await?;
+        self.apply_merge(
+            repo_id,
+            loaded,
+            prepared.merge,
+            prepared.delete_source_branch_on_merge,
+        )
+        .await?;
         self.apply_close_parent_issues(repo_id, loaded, prepared.close_parent_issues)
             .await?;
         let committed = self
@@ -230,6 +236,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
             WorkflowEffect::MergePullRequest => {
                 prepared.merge = true;
+                prepared.delete_source_branch_on_merge = self.is_direct_automation_transition(plan);
             }
             WorkflowEffect::CloseParentIssues => {
                 prepared.close_parent_issues = true;
@@ -241,6 +248,20 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
         }
         Ok(())
+    }
+
+    /// Returns whether the plan is the workflow-declared direct mechanical
+    /// automation transition. Direct automation merges clean up Temper-owned
+    /// source branches after the merge; workspace-backed automation leaves the
+    /// workspace's explicit merge request in control.
+    fn is_direct_automation_transition(&self, plan: &TransitionPlan) -> bool {
+        self.workflow.queues().iter().any(|queue| {
+            queue.automation.as_ref().is_some_and(|automation| {
+                automation.executor.is_none()
+                    && automation.actor == plan.role
+                    && automation.transition == plan.transition
+            })
+        })
     }
 
     /// Resolves an assignee role to a Forge user through the execution context.
@@ -455,6 +476,9 @@ pub(super) struct PreparedEffects {
     body: Option<String>,
     /// Whether the plan requests merging the target pull request.
     merge: bool,
+    /// Whether a merge request should delete the PR source branch after a
+    /// successful backend merge.
+    delete_source_branch_on_merge: bool,
     /// Whether the plan requests closing parent issues of the target PR.
     close_parent_issues: bool,
 }

@@ -122,6 +122,7 @@ fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
                     method: temper_forge::MergeMethod::Squash,
                     commit_title: None,
                     commit_body: None,
+                    delete_source_branch: false,
                 },
             )
             .await

@@ -509,6 +509,7 @@ mod tests {
                         method: MergeMethod::MergeCommit,
                         commit_title: None,
                         commit_body: None,
+                        delete_source_branch: false,
                     },
                 )
                 .await

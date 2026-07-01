@@ -43,6 +43,7 @@ fn merge_pr<F: Forge + ?Sized>(forge: &F, repo: &RepositoryId, number: ItemNumbe
             method: MergeMethod::Squash,
             commit_title: None,
             commit_body: None,
+            delete_source_branch: false,
         },
     ))
     .expect("pull request merges");

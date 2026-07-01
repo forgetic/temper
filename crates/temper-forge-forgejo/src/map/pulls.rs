@@ -81,16 +81,12 @@ pub(crate) fn map_pull_request(repo: &RepoCoord, dto: PullRequestDto) -> PullReq
 /// Builds a branch reference plus its commit SHA from a head/base DTO side.
 fn branch_side(pr_repo: &RepoCoord, branch: Option<PrBranchDto>) -> (BranchRef, Option<String>) {
     let dto = branch.unwrap_or_default();
+    let branch_name = pr_branch_name(&dto).unwrap_or_default();
     let sha = dto.sha.filter(|sha| !sha.is_empty());
     let repo_coord = dto
         .repo
         .and_then(repo_coord_from_dto)
         .unwrap_or_else(|| pr_repo.clone());
-    let branch_name = dto
-        .branch
-        .filter(|branch| !branch.is_empty())
-        .or_else(|| dto.label.map(|label| strip_owner_prefix(&label)))
-        .unwrap_or_default();
     (
         BranchRef {
             repository_id: format_repository_id(&repo_coord),
@@ -112,6 +108,33 @@ fn repo_coord_from_dto(dto: PrRepoDto) -> Option<RepoCoord> {
     let owner = dto.owner.map(|user| user.login).filter(|o| !o.is_empty())?;
     let name = dto.name.filter(|name| !name.is_empty())?;
     Some(RepoCoord::new(owner, name))
+}
+
+/// Returns the best branch name from a Forgejo pull-request side.
+///
+/// Forgejo rewrites the `head.ref` of a merged pull request to the synthetic
+/// `refs/pull/<n>/head` ref after the source branch is deleted. Its `head.label`
+/// still carries the user-visible source branch, so prefer that label whenever
+/// the provider ref is synthetic; otherwise keep the exact provider ref and use
+/// the label only as a fallback.
+pub(crate) fn pr_branch_name(dto: &PrBranchDto) -> Option<String> {
+    let provider_ref = dto.branch.as_deref().filter(|branch| !branch.is_empty());
+    let label_ref = dto
+        .label
+        .as_deref()
+        .map(strip_owner_prefix)
+        .filter(|branch| !branch.is_empty());
+
+    match (provider_ref, label_ref) {
+        (Some(branch), Some(label)) if is_synthetic_pull_ref(branch) => Some(label),
+        (Some(branch), _) => Some(branch.to_string()),
+        (None, label) => label,
+    }
+}
+
+/// Whether a Forgejo branch string names the provider's synthetic PR head ref.
+fn is_synthetic_pull_ref(branch: &str) -> bool {
+    branch.starts_with("refs/pull/") && branch.ends_with("/head")
 }
 
 /// Strips a `owner:` prefix from a branch label, leaving the branch name.
@@ -226,5 +249,28 @@ mod tests {
             format_repository_id(&RepoCoord::new("forker", "widgets"))
         );
         assert_eq!(pr.target.repository_id, format_repository_id(&repo()));
+    }
+
+    #[test]
+    fn synthetic_pr_ref_uses_label_branch() {
+        let pr = map_pull_request(
+            &repo(),
+            pull_request_dto(
+                r#"{
+                    "number": 9,
+                    "state": "closed",
+                    "merged": true,
+                    "merge_commit_sha": "mergesha",
+                    "user": {"login": "author"},
+                    "head": {"label": "author:feature", "ref": "refs/pull/9/head", "sha": "headsha"},
+                    "base": {"ref": "main"},
+                    "created_at": "2024-03-01T00:00:00Z",
+                    "updated_at": "2024-03-02T00:00:00Z"
+                }"#,
+            ),
+        );
+
+        assert_eq!(pr.source.branch, "feature");
+        assert_eq!(pr.head_sha.as_deref(), Some("headsha"));
     }
 }

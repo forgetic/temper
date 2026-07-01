@@ -117,6 +117,7 @@ fn merge_puts_merge_method_and_rereads_for_the_record() {
             method: MergeMethod::Squash,
             commit_title: Some("Squash title".to_string()),
             commit_body: Some("Squash body".to_string()),
+            delete_source_branch: false,
         },
     ))
     .unwrap();
@@ -147,6 +148,7 @@ fn merge_maps_not_mergeable_statuses_to_conflict() {
                 method: MergeMethod::MergeCommit,
                 commit_title: None,
                 commit_body: None,
+                delete_source_branch: false,
             },
         ))
         .unwrap_err();
@@ -169,6 +171,7 @@ fn merge_maps_missing_pull_request_to_not_found() {
             method: MergeMethod::MergeCommit,
             commit_title: None,
             commit_body: None,
+            delete_source_branch: false,
         },
     ))
     .unwrap_err();

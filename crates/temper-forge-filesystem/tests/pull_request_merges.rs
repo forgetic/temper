@@ -11,6 +11,7 @@ fn merge_input(method: MergeMethod) -> MergePullRequest {
         method,
         commit_title: None,
         commit_body: None,
+        delete_source_branch: false,
     }
 }
 
@@ -31,6 +32,7 @@ fn pull_request_can_be_merged_with_deterministic_record_and_state() {
             method: MergeMethod::Squash,
             commit_title: Some("Squash title".into()),
             commit_body: Some("Squash body".into()),
+            delete_source_branch: false,
         },
     ))
     .unwrap();

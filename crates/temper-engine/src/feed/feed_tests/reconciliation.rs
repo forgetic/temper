@@ -356,6 +356,7 @@ fn enqueue_scanned_role_work_prunes_pending_pr_after_merge_before_assignment() {
                     method: MergeMethod::Squash,
                     commit_title: None,
                     commit_body: None,
+                    delete_source_branch: false,
                 },
             )
             .await

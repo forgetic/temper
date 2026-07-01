@@ -329,7 +329,8 @@ pub trait Forge: Send + Sync {
         input: CreateComment,
     ) -> ForgeResult<Comment>;
 
-    /// Merges a pull request.
+    /// Merges a pull request. Backends that support merge-time source branch
+    /// cleanup honor [`MergePullRequest::delete_source_branch`].
     async fn merge_pull_request(
         &self,
         id: &PullRequestId,
