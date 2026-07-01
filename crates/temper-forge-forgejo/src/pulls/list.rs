@@ -56,11 +56,24 @@ impl<C: HttpClient> ForgejoForge<C> {
         let dtos: Vec<PullRequestDto> = self
             .list_all("list pull requests", &path, base_query)
             .await?;
-        let mut pulls: Vec<PullRequest> = dtos
-            .into_iter()
-            .map(|dto| self.materialize_pull_request(repo, dto, None))
-            .collect();
-        pulls.retain(|pull| pull_matches_query(pull, query));
+        let mut pulls = Vec::new();
+        for dto in dtos {
+            let pull = if dto.merged && dto.merged_by.is_none() {
+                // Forgejo 15 omits `merged_by` from `/pulls` list rows even
+                // though `/pulls/{number}` includes it. Re-fetch only those
+                // merged summaries so automation/audit callers do not mistake
+                // the PR author for the merger via the DTO mapper's last-ditch
+                // fallback.
+                self.fetch_pull_request(repo, ItemNumber::new(dto.number))
+                    .await?
+                    .unwrap_or_else(|| self.materialize_pull_request(repo, dto, None))
+            } else {
+                self.materialize_pull_request(repo, dto, None)
+            };
+            if pull_matches_query(&pull, query) {
+                pulls.push(pull);
+            }
+        }
         Ok(pulls)
     }
 
