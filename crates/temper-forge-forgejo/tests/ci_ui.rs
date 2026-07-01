@@ -236,6 +236,55 @@ fn web_ui_uses_pr_label_when_deleted_branch_ref_is_synthetic() {
 }
 
 #[test]
+fn web_ui_matches_pr_pseudo_ref_for_fail_then_pass_history() {
+    let client = MockHttpClient::new();
+    // Forgejo 15's live-view commit branch for pull_request runs is the PR
+    // pseudo-ref (`#7`), not the source branch. Keep both runs so the
+    // red→green gate can still see the failed predecessor after the fix SHA.
+    client.push_result(Ok(pr_detail_with_head(
+        "c456eec18b00",
+        "refs/pull/7/head",
+        "author:feature",
+    )));
+    client.push_response(404, json!({ "message": "Not Found" }).to_string());
+    client.push_result(Ok(login_page()));
+    client.push_result(Ok(login_success()));
+    client.push_result(Ok(actions_page_many(&[2, 1])));
+    client.push_result(Ok(live_view_on_branch(
+        "success",
+        &[("build", "success")],
+        "c456eec18b",
+        "#7",
+    )));
+    client.push_result(Ok(live_view_on_branch(
+        "failure",
+        &[("build", "failure")],
+        "oldhead1",
+        "#7",
+    )));
+
+    let forge = forge_with_web_ui(client);
+    let jobs = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            status: Some(CiJobStatus::Completed),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    let conclusions: Vec<_> = jobs.iter().map(|job| job.conclusion).collect();
+    assert_eq!(
+        conclusions,
+        vec![
+            Some(CiJobConclusion::Failure),
+            Some(CiJobConclusion::Success)
+        ]
+    );
+}
+
+#[test]
 fn re_logs_in_on_login_bounce() {
     let client = MockHttpClient::new();
     client.push_result(Ok(pr_detail("aaaaaaaaaaaa")));

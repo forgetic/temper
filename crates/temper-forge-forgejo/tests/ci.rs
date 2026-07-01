@@ -13,12 +13,22 @@ use temper_forge_model::{
 
 /// Builds a task JSON object with the fields the adapter consumes.
 fn task(id: u64, run_number: u64, name: &str, status: &str) -> serde_json::Value {
+    task_with_head(id, run_number, name, status, "abcdef1234567")
+}
+
+fn task_with_head(
+    id: u64,
+    run_number: u64,
+    name: &str,
+    status: &str,
+    head_sha: &str,
+) -> serde_json::Value {
     json!({
         "id": id,
         "run_number": run_number,
         "name": name,
         "status": status,
-        "head_sha": "abcdef1234567",
+        "head_sha": head_sha,
         "html_url": "https://forge.example.com/acme/widgets/actions/runs/10/jobs/0",
         "created_at": "2024-01-02T03:04:05Z",
     })
@@ -107,6 +117,84 @@ fn list_by_pull_request_matches_ref_and_returns_latest_attempt() {
     assert_eq!(jobs[0].pull_request_id, Some(pull_id(7)));
     assert_eq!(jobs[0].repo_id, repo_id());
     assert_eq!(jobs[0].commit_sha, "abcdef1234567");
+}
+
+#[test]
+fn list_by_pull_request_keeps_prior_push_run_on_same_head_branch() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        json!({
+            "number": 7,
+            "state": "open",
+            "user": { "login": "author" },
+            "head": { "ref": "feature", "sha": "newhead1234567" },
+            "base": { "ref": "main" },
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z"
+        })
+        .to_string(),
+    );
+    client.push_response(
+        200,
+        json!({
+            "workflow_runs": [
+                {
+                    "index_in_repo": 2,
+                    "run_number": 2,
+                    "status": "success",
+                    "event": "push",
+                    "prettyref": "feature",
+                    "head_branch": "",
+                    "head_sha": "newhead1234567",
+                    "created_at": "2024-01-03T00:00:00Z"
+                },
+                {
+                    "index_in_repo": 1,
+                    "run_number": 1,
+                    "status": "failure",
+                    "event": "push",
+                    "prettyref": "feature",
+                    "head_branch": "",
+                    "head_sha": "oldhead1234567",
+                    "created_at": "2024-01-02T00:00:00Z"
+                }
+            ]
+        })
+        .to_string(),
+    );
+    client.push_response(
+        200,
+        json!({
+            "workflow_runs": [
+                task_with_head(1, 1, "build", "failure", "oldhead1234567"),
+                task_with_head(2, 2, "build", "success", "newhead1234567")
+            ]
+        })
+        .to_string(),
+    );
+
+    let forge = forge(client);
+    let jobs = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            status: Some(CiJobStatus::Completed),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    let conclusions: Vec<_> = jobs.iter().map(|job| job.conclusion).collect();
+    assert_eq!(
+        conclusions,
+        vec![
+            Some(CiJobConclusion::Failure),
+            Some(CiJobConclusion::Success)
+        ]
+    );
+    assert_eq!(jobs[0].commit_sha, "oldhead1234567");
+    assert_eq!(jobs[1].commit_sha, "newhead1234567");
 }
 
 #[test]

@@ -23,7 +23,10 @@ pub(crate) struct ActionRunDto {
     #[serde(default)]
     #[allow(dead_code)]
     pub status: String,
+    // Decoded for provider-shape fidelity; matching no longer relies on the
+    // event kind because push-based PR CI is a first-class fixture shape.
     #[serde(default)]
+    #[allow(dead_code)]
     pub event: String,
     #[serde(default)]
     pub prettyref: String,

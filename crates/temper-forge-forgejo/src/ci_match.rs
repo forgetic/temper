@@ -4,8 +4,7 @@
 //! Adapts Forgejo Actions runs to a query target (a pull request and/or commit
 //! SHA), mirroring the matching rules, PR-number derivation, and newest-first
 //! sorting of the reference TypeScript tooling: PR-ref match, head-SHA match,
-//! event-payload PR number / head SHA match, and PR head-branch match (only for
-//! pull-request events).
+//! event-payload PR number / head SHA match, and PR head-branch match.
 
 use crate::types::ActionRunDto;
 use chrono::{DateTime, Utc};
@@ -23,7 +22,7 @@ pub(crate) enum MatchReason {
     EventPayloadNumber,
     /// The event payload's pull-request head SHA matches.
     EventPayloadHeadSha,
-    /// The run head branch matches the PR head ref (pull-request events only).
+    /// The run branch/pretty ref matches the PR head ref.
     HeadBranch,
 }
 
@@ -97,8 +96,7 @@ pub(crate) fn match_run(run: &ActionRunDto, target: &Target) -> Option<MatchReas
         }
     }
     if let Some(head_ref) = target.pr_head_ref.as_deref() {
-        if !head_ref.is_empty() && is_pull_request_event(&run.event) && run.head_branch == head_ref
-        {
+        if !head_ref.is_empty() && (run.head_branch == head_ref || run.prettyref == head_ref) {
             return Some(MatchReason::HeadBranch);
         }
     }
@@ -118,10 +116,6 @@ pub(crate) fn run_pr_number(run: &ActionRunDto) -> Option<u64> {
 
 fn parse_hash_ref(value: &str) -> Option<u64> {
     value.strip_prefix('#').and_then(|rest| rest.parse().ok())
-}
-
-fn is_pull_request_event(event: &str) -> bool {
-    event.starts_with("pull_request")
 }
 
 fn event_payload(run: &ActionRunDto) -> Option<Value> {
@@ -259,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn branch_match_only_for_pull_request_events() {
+    fn branch_match_includes_push_runs_for_pr_heads() {
         let target = Target {
             pr_head_ref: Some("feature".to_string()),
             ..Default::default()
@@ -267,7 +261,15 @@ mod tests {
         let pr_event = run("main", "feature", "abc", "pull_request");
         assert_eq!(match_run(&pr_event, &target), Some(MatchReason::HeadBranch));
         let push_event = run("main", "feature", "abc", "push");
-        assert_eq!(match_run(&push_event, &target), None);
+        assert_eq!(
+            match_run(&push_event, &target),
+            Some(MatchReason::HeadBranch)
+        );
+        let pretty_ref_only = run("feature", "", "abc", "push");
+        assert_eq!(
+            match_run(&pretty_ref_only, &target),
+            Some(MatchReason::HeadBranch)
+        );
     }
 
     #[test]
