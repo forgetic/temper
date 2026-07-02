@@ -10,6 +10,7 @@ use temper_testing::live_basic_delivery::{
 };
 
 use crate::run_context::ScenarioRunFacts;
+use crate::run_evidence;
 
 const PRIMARY_TEMPER_BIN_ENV: &str = "TEMPER_SCENARIO_TEMPER_BIN";
 const COMPAT_TEMPER_BIN_ENV: &str = "TEMPER_BIN";
@@ -19,12 +20,14 @@ pub(super) fn run_and_print(
     manifest_path: &Path,
     facts: &ScenarioRunFacts,
     temper_bin: Option<&Path>,
-) -> Result<(), String> {
+    context: &run_evidence::RunEvidenceContext,
+) -> Result<run_evidence::RunEvidenceArtifact, String> {
     let evidence = run_live(scenario_path, manifest_path, temper_bin)?;
     let lines = live_evidence_lines(&evidence, None);
-    retain_artifact_workspace(evidence);
+    let artifact = live_artifact(&evidence, context, &lines, None);
     print_outcome(&lines, facts);
-    Ok(())
+    retain_artifact_workspace(evidence);
+    Ok(artifact)
 }
 
 pub(super) fn evidence_lines(
@@ -126,6 +129,99 @@ fn copy_log(source: &Path, destination: &Path) -> Result<(), String> {
             destination.display()
         )
     })
+}
+
+fn live_artifact(
+    evidence: &LiveBasicDeliveryEvidence,
+    context: &run_evidence::RunEvidenceContext,
+    lines: &[String],
+    retained_logs: Option<&RetainedLogPaths>,
+) -> run_evidence::RunEvidenceArtifact {
+    let workspace_root = retained_logs
+        .map(|logs| &logs.workspace_root)
+        .unwrap_or(&evidence.logs.workspace_root);
+    let init_log = retained_logs
+        .map(|logs| &logs.init_log)
+        .unwrap_or(&evidence.logs.init_log);
+    let repo_populate_log = retained_logs
+        .map(|logs| &logs.repo_populate_log)
+        .unwrap_or(&evidence.logs.repo_populate_log);
+    let standalone_log = retained_logs
+        .map(|logs| &logs.standalone_log)
+        .unwrap_or(&evidence.logs.standalone_log);
+    let fake_llm_log = retained_logs
+        .map(|logs| &logs.fake_llm_log)
+        .unwrap_or(&evidence.logs.fake_llm_log);
+    let ci_diagnostics_log = retained_logs
+        .map(|logs| &logs.ci_diagnostics_log)
+        .unwrap_or(&evidence.logs.ci_diagnostics_log);
+
+    let mut artifact = context.artifact(run_evidence::FinalStateEvidence {
+        issues: vec![run_evidence::IssueStateEvidence {
+            number: evidence.final_state.issue.number,
+            title: Some(evidence.final_state.issue.title.clone()),
+            state: Some(evidence.final_state.issue.state.clone()),
+            labels: evidence.final_state.issue.labels.clone(),
+        }],
+        pull_requests: vec![run_evidence::PullRequestStateEvidence {
+            number: evidence.final_state.pull_request.number,
+            title: Some(evidence.final_state.pull_request.title.clone()),
+            state: Some(evidence.final_state.pull_request.state.clone()),
+            labels: evidence.final_state.pull_request.labels.clone(),
+            head_branch: Some(evidence.final_state.pull_request.head_branch.clone()),
+            head_sha: evidence.final_state.pull_request.head_sha.clone(),
+            merged_sha: evidence.final_state.pull_request.head_sha.clone(),
+        }],
+        ci: run_evidence::CiStateEvidence {
+            completed_jobs: Some(evidence.final_state.ci_jobs.len()),
+            jobs: evidence
+                .final_state
+                .ci_jobs
+                .iter()
+                .map(|job| run_evidence::CiJobEvidence {
+                    name: job.name.clone(),
+                    status: job.status.clone(),
+                    conclusion: job.conclusion.clone(),
+                    url: job.url.clone(),
+                })
+                .collect(),
+        },
+    });
+    artifact.convergence = Some(run_evidence::ConvergenceEvidence {
+        startup_ms: Some(duration_ms(evidence.startup)),
+        convergence_ms: Some(duration_ms(evidence.convergence)),
+        total_elapsed_ms: Some(duration_ms(evidence.total_elapsed)),
+        poll_backstop_ms: Some(duration_ms(evidence.poll_backstop)),
+        ..run_evidence::ConvergenceEvidence::default()
+    });
+    artifact.provider = Some(run_evidence::ProviderEvidence {
+        forgejo_url: Some(evidence.forge_url.clone()),
+        repo_slug: Some(evidence.repo_slug.clone()),
+        issue_number: Some(evidence.final_state.issue.number),
+        pr_number: Some(evidence.final_state.pull_request.number),
+        head_branch: Some(evidence.final_state.pull_request.head_branch.clone()),
+        merged_sha: evidence.final_state.pull_request.head_sha.clone(),
+        temper_binary: Some(evidence.temper_binary.display().to_string()),
+        fake_llm_url: Some(evidence.fake_llm.base_url.clone()),
+    });
+    artifact.artifacts = run_evidence::ArtifactCollections {
+        log_paths: vec![
+            init_log.display().to_string(),
+            repo_populate_log.display().to_string(),
+            standalone_log.display().to_string(),
+            fake_llm_log.display().to_string(),
+        ],
+        artifact_paths: vec![
+            workspace_root.display().to_string(),
+            ci_diagnostics_log.display().to_string(),
+        ],
+    };
+    artifact.evidence_lines = lines.to_vec();
+    artifact
+}
+
+fn duration_ms(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn live_evidence_lines(

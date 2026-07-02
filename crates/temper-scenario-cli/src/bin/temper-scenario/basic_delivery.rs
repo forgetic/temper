@@ -15,6 +15,8 @@ use temper_runner::{
 use temper_scenario_core::load_resolved_manifest_toml;
 use toml::Value;
 
+use super::run_evidence;
+
 #[path = "basic_delivery/live.rs"]
 mod live;
 
@@ -46,8 +48,13 @@ struct RunEvidence {
     issue_number: ItemNumber,
     issue_title: String,
     issue_state: IssueState,
+    issue_labels: Vec<String>,
     pr_number: ItemNumber,
+    pr_title: String,
     pr_state: PullRequestState,
+    pr_labels: Vec<String>,
+    pr_head_branch: String,
+    pr_head_sha: Option<String>,
     completed_ci_jobs: usize,
     closed_parent_issues: usize,
 }
@@ -56,10 +63,11 @@ pub(super) fn run_and_print(
     scenario_path: &Path,
     manifest_path: &Path,
     facts: &super::run_context::ScenarioRunFacts,
-) -> Result<(), String> {
+    context: &run_evidence::RunEvidenceContext,
+) -> Result<run_evidence::RunEvidenceArtifact, String> {
     let outcome = temper_testing::block_on(run_basic_delivery(scenario_path, manifest_path))?;
     print_outcome(&outcome, facts);
-    Ok(())
+    Ok(outcome_artifact(&outcome, context))
 }
 
 pub(super) fn run_evidence_lines(
@@ -75,8 +83,9 @@ pub(super) fn run_live_and_print(
     manifest_path: &Path,
     facts: &super::run_context::ScenarioRunFacts,
     temper_bin: Option<&Path>,
-) -> Result<(), String> {
-    live::run_and_print(scenario_path, manifest_path, facts, temper_bin)
+    context: &run_evidence::RunEvidenceContext,
+) -> Result<run_evidence::RunEvidenceArtifact, String> {
+    live::run_and_print(scenario_path, manifest_path, facts, temper_bin, context)
 }
 
 pub(super) fn run_live_evidence_lines_for_report(
@@ -239,8 +248,13 @@ async fn read_evidence(
         issue_number: issue.number,
         issue_title: issue.title.clone(),
         issue_state: issue.state,
+        issue_labels: issue.labels.clone(),
         pr_number: pull_request.number,
+        pr_title: pull_request.title.clone(),
         pr_state: pull_request.state,
+        pr_labels: pull_request.labels.clone(),
+        pr_head_branch: pull_request.source.branch.clone(),
+        pr_head_sha: pull_request.head_sha.clone(),
         completed_ci_jobs: ci_jobs.len(),
         closed_parent_issues,
     })
@@ -382,11 +396,73 @@ fn outcome_evidence_lines(outcome: &RunOutcome) -> Vec<String> {
     ]
 }
 
+fn outcome_artifact(
+    outcome: &RunOutcome,
+    context: &run_evidence::RunEvidenceContext,
+) -> run_evidence::RunEvidenceArtifact {
+    let mut artifact = context.artifact(run_evidence::FinalStateEvidence {
+        issues: vec![run_evidence::IssueStateEvidence {
+            number: outcome.evidence.issue_number.get(),
+            title: Some(outcome.evidence.issue_title.clone()),
+            state: Some(issue_state_value(outcome.evidence.issue_state).to_string()),
+            labels: outcome.evidence.issue_labels.clone(),
+        }],
+        pull_requests: vec![run_evidence::PullRequestStateEvidence {
+            number: outcome.evidence.pr_number.get(),
+            title: Some(outcome.evidence.pr_title.clone()),
+            state: Some(pr_state_value(outcome.evidence.pr_state).to_string()),
+            labels: outcome.evidence.pr_labels.clone(),
+            head_branch: Some(outcome.evidence.pr_head_branch.clone()),
+            head_sha: outcome.evidence.pr_head_sha.clone(),
+            merged_sha: if outcome.evidence.pr_state == PullRequestState::Merged {
+                outcome.evidence.pr_head_sha.clone()
+            } else {
+                None
+            },
+        }],
+        ci: run_evidence::CiStateEvidence {
+            completed_jobs: Some(outcome.evidence.completed_ci_jobs),
+            jobs: Vec::new(),
+        },
+    });
+    artifact.convergence = Some(run_evidence::ConvergenceEvidence {
+        ticks: Some(outcome.report.ticks),
+        workers: outcome
+            .report
+            .workers
+            .iter()
+            .map(|worker| run_evidence::WorkerTickEvidence {
+                name: worker.name.clone(),
+                ticks: worker.ticks,
+                actions: worker.actions,
+            })
+            .collect(),
+        ..run_evidence::ConvergenceEvidence::default()
+    });
+    artifact.evidence_lines = outcome_evidence_lines(outcome);
+    artifact
+}
+
 fn pr_state_evidence(state: PullRequestState) -> &'static str {
     match state {
         PullRequestState::Open => "open (not merged)",
         PullRequestState::Closed => "closed",
         PullRequestState::Merged => "merged",
+    }
+}
+
+fn pr_state_value(state: PullRequestState) -> &'static str {
+    match state {
+        PullRequestState::Open => "open",
+        PullRequestState::Closed => "closed",
+        PullRequestState::Merged => "merged",
+    }
+}
+
+fn issue_state_value(state: IssueState) -> &'static str {
+    match state {
+        IssueState::Open => "open",
+        IssueState::Closed => "closed",
     }
 }
 

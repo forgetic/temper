@@ -13,6 +13,8 @@ use super::run_context::{ScenarioRunFacts, ScenarioTier};
 
 #[path = "validate_pr/live.rs"]
 mod live;
+#[path = "validate_pr/run_evidence.rs"]
+mod run_evidence;
 #[path = "validate_pr/runner.rs"]
 mod runner;
 
@@ -21,19 +23,22 @@ const EX_USAGE: u8 = 64;
 const USAGE: &str = "\
 Write a temporary/manual post-merge validation Markdown report.
 
-Usage: temper-scenario validate-pr --pr <N> --sha <SHA> [--scenario <PATH>] [--tier <hermetic|live>] [--temper-bin <PATH>] [--output-dir <DIR>]
+Usage: temper-scenario validate-pr --pr <N> --sha <SHA> [--scenario <PATH>] [--run-evidence <PATH>] [--tier <hermetic|live>] [--temper-bin <PATH>] [--output-dir <DIR>]
 
 Options:
   --pr <N>             Pull request number under validation
   --sha <SHA>          Merged/main commit SHA under validation
-  --scenario <PATH>     Scenario directory or manifest file to check, and run when supported
-  --tier <hermetic|live>  Scenario confidence tier to run when --scenario is supported (default: hermetic)
+  --scenario <PATH>     Scenario directory or manifest file to check, and run when supported unless --run-evidence is supplied
+  --run-evidence <PATH>  Previous run-evidence JSON file or directory to cite instead of rerunning scenario evidence
+  --tier <hermetic|live>  Scenario confidence tier to run or compare (default: hermetic)
   --temper-bin <PATH>   Standalone `temper` binary for --tier live basic-delivery
   --output-dir <DIR>    Directory for the Markdown report (default: current directory)
   -h, --help           Print help
 
 The bridge records local scenario evidence when available, including scenario
-source, the selected confidence tier, and manifest topology. The live tier for
+source, the selected confidence tier, and manifest topology. Pass
+`--run-evidence <PATH>` to render from a previous `temper-scenario run
+--evidence-out <PATH>` artifact without rerunning scenario evidence. The live tier for
 `basic-delivery` records Forgejo/CI/convergence/log evidence via the shared live
 harness. It does not fetch live Forgejo PR context or prove that the supplied
 SHA is the current main commit.";
@@ -59,6 +64,10 @@ pub(super) fn command(args: &[String]) -> ExitCode {
             super::print_report_diagnostics(&report);
             return ExitCode::FAILURE;
         }
+        Err(Error::RunEvidence(message)) => {
+            eprintln!("temper-scenario validate-pr: {message}");
+            return ExitCode::FAILURE;
+        }
     };
 
     if let Err(error) = write_report(&output_path, &report) {
@@ -79,7 +88,9 @@ struct Args {
     pr_number: u64,
     sha: String,
     scenario: Option<PathBuf>,
+    run_evidence: Option<PathBuf>,
     tier: ScenarioTier,
+    tier_explicit: bool,
     temper_bin: Option<PathBuf>,
     output_dir: PathBuf,
 }
@@ -93,6 +104,7 @@ enum ParseResult {
 #[derive(Debug)]
 enum Error {
     InvalidScenario(Box<temper_scenario_core::CheckReport>),
+    RunEvidence(String),
 }
 
 fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
@@ -106,6 +118,7 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
     let mut pr_number = None;
     let mut sha = None;
     let mut scenario = None;
+    let mut run_evidence = None;
     let mut tier = None;
     let mut temper_bin = None;
     let mut output_dir = None;
@@ -149,6 +162,16 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
                 }
                 index += 2;
             }
+            "--run-evidence" => {
+                let value = flag_value(args, index, "--run-evidence")?;
+                if run_evidence.replace(PathBuf::from(value)).is_some() {
+                    eprintln!(
+                        "temper-scenario validate-pr: duplicate --run-evidence option\n\n{USAGE}"
+                    );
+                    return Err(());
+                }
+                index += 2;
+            }
             "--tier" => {
                 let value = flag_value(args, index, "--tier")?;
                 set_tier(&mut tier, value)?;
@@ -185,11 +208,14 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         return Err(());
     };
 
+    let tier_explicit = tier.is_some();
     Ok(ParseResult::Args(Args {
         pr_number,
         sha,
         scenario,
+        run_evidence,
         tier: tier.unwrap_or(ScenarioTier::Hermetic),
+        tier_explicit,
         temper_bin,
         output_dir: output_dir.unwrap_or_else(|| PathBuf::from(".")),
     }))
@@ -243,7 +269,12 @@ fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Err
         )
         .with_detail(format!("pr: #{}", args.pr_number))
         .with_detail(format!("sha: `{}`", args.sha))
-        .with_detail(format!("requested scenario tier: {}", args.tier.as_str())),
+        .with_detail(format!("requested scenario tier: {}", args.tier.as_str()))
+        .with_details(
+            args.run_evidence
+                .as_ref()
+                .map(|path| format!("run evidence: `{}`", path.display())),
+        ),
     );
     report.evidence.push(EvidenceEntry::new(
         EvidenceKind::Artifact,
@@ -271,39 +302,49 @@ fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Err
         args.pr_number, args.sha
     ));
 
-    match args.scenario.as_deref() {
-        Some(path) => add_scenario_validation(
+    if let Some(path) = args.run_evidence.as_deref() {
+        run_evidence::add_run_evidence_validation(
             &mut report,
             path,
+            args.scenario.as_deref(),
             args.tier,
-            args.temper_bin.as_deref(),
-            &args.output_dir,
-        )?,
-        None => {
-            report.validated_claims.push(
-                ValidatedClaim::new(
-                    "No scenario path was supplied for local post-merge validation.",
-                    ValidationStatus::Unproven,
-                )
-                .with_evidence(
-                    "Run with --scenario <PATH> to collect scenario check/run evidence.",
-                ),
-            );
-            report.acceptance_criteria.push(
-                AcceptanceCriterion::new(
-                    "A supplied scenario path is checked and, when supported, run at the requested tier.",
-                    ValidationStatus::Unproven,
-                )
-                .with_evidence("No --scenario argument was provided."),
-            );
-            report.evidence.push(EvidenceEntry::new(
-                EvidenceKind::Observation,
-                "No scenario path was supplied, so no scenario check or run evidence was collected.",
-            ));
-            report.limitations.push(
-                "No scenario path was supplied; the report contains no scenario check/run evidence."
-                    .to_string(),
-            );
+            args.tier_explicit,
+        )?;
+    } else {
+        match args.scenario.as_deref() {
+            Some(path) => add_scenario_validation(
+                &mut report,
+                path,
+                args.tier,
+                args.temper_bin.as_deref(),
+                &args.output_dir,
+            )?,
+            None => {
+                report.validated_claims.push(
+                    ValidatedClaim::new(
+                        "No scenario path or run evidence was supplied for local post-merge validation.",
+                        ValidationStatus::Unproven,
+                    )
+                    .with_evidence(
+                        "Run with --scenario <PATH> or --run-evidence <PATH> to collect scenario evidence.",
+                    ),
+                );
+                report.acceptance_criteria.push(
+                    AcceptanceCriterion::new(
+                        "A supplied scenario path is checked and, when supported, run at the requested tier, or a previous run-evidence artifact is ingested.",
+                        ValidationStatus::Unproven,
+                    )
+                    .with_evidence("No --scenario or --run-evidence argument was provided."),
+                );
+                report.evidence.push(EvidenceEntry::new(
+                    EvidenceKind::Observation,
+                    "No scenario path or run evidence was supplied, so no scenario check/run evidence was collected.",
+                ));
+                report.limitations.push(
+                    "No scenario path or run evidence was supplied; the report contains no scenario check/run evidence."
+                        .to_string(),
+                );
+            }
         }
     }
 

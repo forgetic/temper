@@ -1692,6 +1692,7 @@ dependencies = [
 name = "temper-scenario-cli"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "temper-engine",
  "temper-forge-memory",

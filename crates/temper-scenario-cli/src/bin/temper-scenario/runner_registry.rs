@@ -5,11 +5,19 @@ use std::path::Path;
 use temper_scenario_core::ScenarioManifest;
 
 use super::run_context::{ScenarioRunFacts, ScenarioTier};
+use super::run_evidence::{RunEvidenceArtifact, RunEvidenceContext};
 use super::{basic_delivery, implementation_pr_handoff};
 
-type HermeticRunAndPrint = fn(&Path, &Path, &ScenarioRunFacts) -> Result<(), String>;
+type HermeticRunAndPrint =
+    fn(&Path, &Path, &ScenarioRunFacts, &RunEvidenceContext) -> Result<RunEvidenceArtifact, String>;
 type HermeticEvidenceLines = fn(&Path, &Path) -> Result<Vec<String>, String>;
-type LiveRunAndPrint = fn(&Path, &Path, &ScenarioRunFacts, Option<&Path>) -> Result<(), String>;
+type LiveRunAndPrint = fn(
+    &Path,
+    &Path,
+    &ScenarioRunFacts,
+    Option<&Path>,
+    &RunEvidenceContext,
+) -> Result<RunEvidenceArtifact, String>;
 type LiveEvidenceLines = fn(&Path, &Path, Option<&Path>, &Path) -> Result<Vec<String>, String>;
 
 #[derive(Clone, Copy)]
@@ -166,18 +174,25 @@ impl SelectedRunner {
         facts: &ScenarioRunFacts,
         tier: ScenarioTier,
         temper_bin: Option<&Path>,
-    ) -> Result<(), String> {
+        evidence_context: &RunEvidenceContext,
+    ) -> Result<RunEvidenceArtifact, String> {
         match tier {
             ScenarioTier::Hermetic => {
                 let runner = self
                     .runner
                     .hermetic
                     .ok_or_else(|| self.invariant_error(tier))?;
-                (runner.run_and_print)(scenario_path, manifest_path, facts)
+                (runner.run_and_print)(scenario_path, manifest_path, facts, evidence_context)
             }
             ScenarioTier::Live => {
                 let runner = self.runner.live.ok_or_else(|| self.invariant_error(tier))?;
-                (runner.run_and_print)(scenario_path, manifest_path, facts, temper_bin)
+                (runner.run_and_print)(
+                    scenario_path,
+                    manifest_path,
+                    facts,
+                    temper_bin,
+                    evidence_context,
+                )
             }
         }
     }
@@ -206,6 +221,10 @@ impl SelectedRunner {
             .live
             .ok_or_else(|| self.invariant_error(ScenarioTier::Live))?;
         (runner.evidence_lines)(scenario_path, manifest_path, temper_bin, artifact_dir)
+    }
+
+    pub(super) fn selector_key(&self) -> &'static str {
+        self.selector.key()
     }
 
     fn invariant_error(&self, tier: ScenarioTier) -> String {
@@ -246,6 +265,13 @@ impl RunnerRegistryError {
 }
 
 impl RunnerSelector {
+    fn key(self) -> &'static str {
+        match self {
+            Self::RunnerUses => "runner.uses",
+            Self::LegacyName => "legacy_name",
+        }
+    }
+
     fn description(self) -> &'static str {
         match self {
             Self::RunnerUses => "runner.uses",

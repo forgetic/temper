@@ -69,6 +69,13 @@ impl ScenarioSource {
             Self::Ephemeral => "ephemeral validation bundle",
         }
     }
+
+    pub(super) fn evidence_value(self) -> &'static str {
+        match self {
+            Self::CheckedIn => "checked_in",
+            Self::Ephemeral => "ephemeral",
+        }
+    }
 }
 
 /// Source/tier/topology facts attached to a run and to validation evidence.

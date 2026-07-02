@@ -29,6 +29,27 @@ cargo run -p temper-scenario-cli -- validate-pr \
   --output-dir validation-artifacts/post-merge-pr-<merged-pr-number>
 ```
 
+The same report can be rendered from a previous scenario run without scraping
+stdout. Write a structured evidence file during the run, then pass that file (or
+its containing directory) to `validate-pr`:
+
+```sh
+cargo run -p temper-scenario-cli -- run \
+  --tier live \
+  --temper-bin target/debug/temper \
+  --evidence-out validation-artifacts/post-merge-pr-<merged-pr-number>/run-evidence.json \
+  scenarios/basic-delivery
+cargo run -p temper-scenario-cli -- validate-pr \
+  --pr <merged-pr-number> \
+  --sha <merged-main-sha> \
+  --run-evidence validation-artifacts/post-merge-pr-<merged-pr-number>/run-evidence.json \
+  --output-dir validation-artifacts/post-merge-pr-<merged-pr-number>
+```
+
+When both `--scenario` and `--run-evidence` are supplied, `validate-pr` checks
+that the artifact's scenario, tier, source classification, and runner match the
+supplied manifest but still does not rerun the scenario for report evidence.
+
 ## Where to find the report in CI
 
 When artifact upload is available on the Forgejo runner, the workflow uploads
@@ -48,6 +69,7 @@ validation-artifacts/post-merge-pr-<merged-pr-number>/
 │   ├── standalone.log
 │   ├── fake-llm.log
 │   └── ci-diagnostics.log
+├── run-evidence.json          # present when validate-pr renders from prior run evidence
 ├── report-path.txt
 ├── validate-pr.stderr
 └── validation-pr-<merged-pr-number>-<merged-main-sha>.md

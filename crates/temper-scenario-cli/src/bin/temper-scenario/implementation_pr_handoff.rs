@@ -20,6 +20,11 @@ use temper_workflow::{
 };
 use toml::Value;
 
+use super::run_evidence;
+
+#[path = "implementation_pr_handoff/evidence.rs"]
+mod evidence;
+
 pub(super) const SCENARIO_NAME: &str = "implementation-pr-handoff";
 
 #[derive(Debug)]
@@ -71,6 +76,10 @@ struct RunOutcome {
 struct CaseEvidence {
     issue_number: ItemNumber,
     pr_number: ItemNumber,
+    pr_state: String,
+    labels: Vec<String>,
+    head_branch: String,
+    head_sha: Option<String>,
     title: String,
     body_prefix: String,
     correlation_key: String,
@@ -80,10 +89,11 @@ pub(super) fn run_and_print(
     scenario_path: &Path,
     manifest_path: &Path,
     facts: &super::run_context::ScenarioRunFacts,
-) -> Result<(), String> {
+    context: &run_evidence::RunEvidenceContext,
+) -> Result<run_evidence::RunEvidenceArtifact, String> {
     let outcome = temper_testing::block_on(run_handoff(scenario_path, manifest_path))?;
     print_outcome(&outcome, facts);
-    Ok(())
+    Ok(evidence::outcome_artifact(&outcome, context))
 }
 
 pub(super) fn run_evidence_lines(
@@ -378,6 +388,10 @@ async fn verify_handoff_pr(
     Ok(CaseEvidence {
         issue_number: issue,
         pr_number: pull.number,
+        pr_state: evidence::pr_state_value(pull.state).to_string(),
+        labels: pull.labels.clone(),
+        head_branch: pull.source.branch.clone(),
+        head_sha: pull.head_sha.clone(),
         title: pull.title.clone(),
         body_prefix: first_line(expected_prefix),
         correlation_key: correlation,
