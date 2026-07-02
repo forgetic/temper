@@ -19,6 +19,7 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("implementation-report"));
     assert!(!engineer.contains("checkpoint(label)"));
     assert!(!engineer.contains("CHECKPOINTS:"));
+    assert!(!engineer.contains("CODEBASE MEMORY"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(architect.contains("ROLE: architect"));

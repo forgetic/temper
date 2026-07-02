@@ -111,6 +111,7 @@ fn agent_error(error: CodingAgentError) -> AgentRunError {
         | CodingAgentError::Run(_)
         | CodingAgentError::AgentStopped(_)
         | CodingAgentError::ModelUnavailable { .. }
+        | CodingAgentError::CodebaseMemory(_)
         | CodingAgentError::Parse { .. } => AgentRunError::transient(error.to_string()),
     }
 }

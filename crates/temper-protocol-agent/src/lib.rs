@@ -48,8 +48,8 @@ pub const PROVIDER_CREDENTIALS_ENV: &str = "TEMPER_AGENT_PROVIDER_CREDENTIALS_JS
 /// Process-boundary flag naming a non-secret JSON tool configuration file.
 ///
 /// The worker writes this only when an agent-local toolset is enabled for the
-/// current workflow role. The reference agent parses and stores the settings in
-/// this slice, but does not register MCP tools yet.
+/// current workflow role. The reference agent parses these settings and uses
+/// them to register safe codebase-memory MCP tools in coding-agent runs.
 pub const TOOL_CONFIG_FLAG: &str = "--tool-config";
 
 /// The non-secret agent tool configuration file the worker may hand the agent.

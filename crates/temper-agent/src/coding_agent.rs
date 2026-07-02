@@ -61,8 +61,10 @@ pub use prompt::{system_prompt, user_context};
 pub use run::{
     run_coding_agent_native, run_coding_agent_native_with_options,
     run_coding_agent_native_with_options_and_submit_for_pr,
-    run_coding_agent_native_with_submit_for_pr, run_coding_agent_native_with_totals,
-    run_coding_agent_native_with_totals_and_submit_for_pr,
+    run_coding_agent_native_with_options_tool_config_and_submit_for_pr,
+    run_coding_agent_native_with_submit_for_pr, run_coding_agent_native_with_tool_config,
+    run_coding_agent_native_with_totals, run_coding_agent_native_with_totals_and_submit_for_pr,
+    run_coding_agent_native_with_totals_tool_config_and_submit_for_pr,
 };
 pub use submit::{
     SubmitForPrCallback, SubmitForPrHost, bind_submit_for_pr_host, default_submit_for_pr_host,
@@ -74,7 +76,7 @@ pub use tools::tool_registry;
 #[cfg(test)]
 pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabulary};
 #[cfg(test)]
-pub(crate) use run::classify_run_error;
+pub(crate) use run::{classify_run_error, codebase_memory_prompt_section};
 #[cfg(test)]
 pub(crate) use tools::{SubAgentTier, add_subagents, subagent_specs, tool_registry_for_context};
 
