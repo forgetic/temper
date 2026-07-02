@@ -1355,6 +1355,7 @@ dependencies = [
  "serde_json",
  "temper-cli-common",
  "temper-config",
+ "temper-workflow",
 ]
 
 [[package]]
@@ -1875,6 +1876,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "serde_yaml",
  "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-memory",

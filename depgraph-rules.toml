@@ -159,9 +159,10 @@ temper-daemon-transport = ["temper-engine", "temper-protocol-worker", "temper-wo
 # here). No internal deps beyond temper-config.
 temper-cli-common = ["temper-config"]
 
-# `temper config` (validate/show/init-template). Thin over temper-config; carries
-# no engine/worker/agent deps.
-temper-cli-config = ["temper-cli-common", "temper-config"]
+# `temper config` (validate/show/init-template) and `temper check`. Thin over
+# temper-config, with a workflow-model dependency only for offline workflow-file
+# parsing/static validation.
+temper-cli-config = ["temper-cli-common", "temper-config", "temper-workflow"]
 
 # `temper daemon`: the standalone all-in-one + per-service runners. Inherits the
 # heavy engine/worker/agent wiring the monolithic CLI used to carry (the

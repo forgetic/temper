@@ -630,12 +630,15 @@ fn positive_secs_value(value: u64, field: &str) -> Result<u64, ConfigError> {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// The roles whose credentials we need to resolve: the engine's roles plus any
-/// role named only in worker capabilities.
+/// The roles whose credentials we need to resolve: the engine's roles, any
+/// role named only in worker capabilities, plus target-era worker pool roles.
 fn referenced_roles(engine: &EngineSettings, worker: &WorkerSettings) -> BTreeSet<String> {
     let mut roles: BTreeSet<String> = engine.roles.iter().cloned().collect();
     for capability in &worker.capabilities {
         roles.insert(capability.role.clone());
+    }
+    for pool in &worker.pools {
+        roles.extend(pool.roles.iter().cloned());
     }
     roles
 }

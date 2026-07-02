@@ -58,7 +58,7 @@ pub use build::{
 pub use cli::{CommonArgs, parse_common_args};
 pub use env::{EnvLookup, EnvMap, NoEnv, SystemEnv};
 pub use error::{ConfigError, FileKind};
-pub use inputs::{LoadInputs, PathResolver, load_explicit};
+pub use inputs::{LoadInputs, PathResolver, load_explicit, load_explicit_with_secret_validation};
 pub use json_schema::config_json_schema;
 pub use paths::{
     config_dir, config_path, credentials_path, default_workspace_root,
