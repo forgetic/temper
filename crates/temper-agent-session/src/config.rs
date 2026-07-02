@@ -37,8 +37,9 @@ pub struct AgentConfig {
     /// `entry` (`--capture-dir`, falling back to `XDG_CONFIG_HOME`/`HOME`).
     pub config_dir: Option<PathBuf>,
     /// Optional non-secret tool settings supplied by the worker via
-    /// `--tool-config`. Stored for later MCP registration slices; no tools are
-    /// registered from it yet.
+    /// `--tool-config`. The codebase-memory MCP bridge can build a toolset from
+    /// this config; the session run path stores it for the next wiring slice and
+    /// does not register those tools yet.
     pub tool_config: Option<AgentToolConfig>,
     /// Optional host submit callback. In out-of-process mode this is a thin
     /// client for the worker-owned local side channel; when absent the

@@ -1269,6 +1269,7 @@ dependencies = [
  "temper-agent-io",
  "temper-protocol-agent",
  "temper-protocol-interaction",
+ "tempfile",
  "tongs",
  "tracing",
  "tracing-subscriber",

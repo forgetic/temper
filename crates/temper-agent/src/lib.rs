@@ -7,11 +7,13 @@
 
 #![allow(clippy::result_large_err)]
 
+pub mod codebase_memory;
 pub mod coding_agent;
 pub mod decision;
 pub mod interaction_profile;
 mod interaction_profile_config;
 mod interaction_profile_config_raw;
+pub mod mcp;
 mod observability;
 pub mod product_manager;
 pub mod prompt_overlays;
