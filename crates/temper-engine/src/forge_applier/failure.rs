@@ -2,7 +2,8 @@
 
 //! Failure-path application: permanent/protocol worker failures label the source
 //! issue for human attention and add a one-time, idempotency-marked audit
-//! comment. Transient and canceled failures are not applied here.
+//! comment. Transient and canceled failures release any assignment-time source
+//! claim for a later rescan.
 
 use temper_forge::{CreateComment, Forge, UpdateIssue};
 use temper_protocol_worker::{FailureClass, JobResult};
@@ -16,7 +17,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn apply_failure(&self, job: InFlightJob, result: JobResult) {
         if matches!(
             result.failure.as_ref().map(|failure| failure.class),
-            Some(FailureClass::Transient)
+            Some(FailureClass::Transient | FailureClass::Canceled)
         ) {
             self.release_source_action_claim_for_retry(&job).await;
             return;

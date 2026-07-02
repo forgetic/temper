@@ -10,9 +10,10 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_protocol_worker::{
-    Artifact, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
+    Artifact, Assign, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
 };
 
+use crate::InFlightJob;
 use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
 
 use super::machine::{DaemonMachine, DaemonRequest, PollWaiter};
@@ -129,18 +130,32 @@ impl DaemonMachine {
                 delay: Duration::from_millis(wait_ms),
             }]
         } else {
-            let mut requests = Vec::new();
-            if let WorkerProtocolMessage::Assign(assign) = &response {
-                requests.push(DaemonRequest::Log(assignment_log_line(
-                    assign,
-                    &poll.worker_id,
-                )));
+            self.poll_response_requests(response, &poll.worker_id, responder)
+        }
+    }
+
+    pub(super) fn poll_response_requests(
+        &self,
+        response: WorkerProtocolMessage,
+        worker_id: &str,
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
+        match response {
+            WorkerProtocolMessage::Assign(assign) => {
+                let job = in_flight_job_from_assign(&assign);
+                vec![
+                    DaemonRequest::Log(assignment_log_line(&assign, worker_id)),
+                    DaemonRequest::RunClaimAndRespond {
+                        job,
+                        responder,
+                        response: protocol_response(Some(WorkerProtocolMessage::Assign(assign))),
+                    },
+                ]
             }
-            requests.push(DaemonRequest::Respond {
+            response => vec![DaemonRequest::Respond {
                 responder,
                 response: protocol_response(Some(response)),
-            });
-            requests
+            }],
         }
     }
 
@@ -176,9 +191,14 @@ impl DaemonMachine {
                 // is not a terminal workflow outcome.
                 ResultDisposition::DropForRescan => {
                     self.applying.insert(job.job_id.clone());
-                    requests.push(DaemonRequest::RunApply { job, result });
+                    requests.push(DaemonRequest::RunApplyAndRespond {
+                        job,
+                        result,
+                        responder,
+                        response: protocol_response(response),
+                    });
+                    return requests;
                 }
-                ResultDisposition::Drop => {}
             }
         }
 
@@ -332,18 +352,23 @@ impl DaemonMachine {
                 .waiters
                 .remove(&id)
                 .expect("waiter exists after successful poll response");
-            if let WorkerProtocolMessage::Assign(assign) = &response {
-                requests.push(DaemonRequest::Log(assignment_log_line(
-                    assign,
-                    &waiter.poll.worker_id,
-                )));
-            }
-            requests.push(DaemonRequest::Respond {
-                responder: waiter.responder,
-                response: protocol_response(Some(response)),
-            });
+            requests.extend(self.poll_response_requests(
+                response,
+                &waiter.poll.worker_id,
+                waiter.responder,
+            ));
         }
         requests
+    }
+}
+
+fn in_flight_job_from_assign(assign: &Assign) -> InFlightJob {
+    InFlightJob {
+        job_id: assign.job_id.clone(),
+        role: assign.role.clone(),
+        repo: assign.repo.clone(),
+        artifact: assign.artifact.clone(),
+        job_payload: assign.job_payload.clone(),
     }
 }
 

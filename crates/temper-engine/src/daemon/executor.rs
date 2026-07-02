@@ -40,6 +40,32 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     let _ = cq.send(DaemonCompletion::ApplyFinished { job_id });
                 });
             }
+            DaemonRequest::RunApplyAndRespond {
+                job,
+                result,
+                responder,
+                response,
+            } => {
+                let applier = Arc::clone(&self.applier);
+                let cq = self.cq.clone();
+                let job_id = job.job_id.clone();
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    applier.apply(job, result).await;
+                    let _ = cq.send(DaemonCompletion::ApplyFinished { job_id });
+                    responder.respond(response);
+                });
+            }
+            DaemonRequest::RunClaimAndRespond {
+                job,
+                responder,
+                response,
+            } => {
+                let applier = Arc::clone(&self.applier);
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    applier.claim(job).await;
+                    responder.respond(response);
+                });
+            }
             DaemonRequest::RunPullRequestFreshnessCheck { check, responder } => {
                 let applier = Arc::clone(&self.applier);
                 self.spawner.spawn_with_cx(move |_cx| async move {

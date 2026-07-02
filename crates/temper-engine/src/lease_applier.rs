@@ -65,6 +65,13 @@ impl<F: Forge + ?Sized> LeaseApplier<F> {
 
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
+    async fn claim(&self, job: InFlightJob) {
+        // Assignment-time claims are idempotent source signals that make the
+        // worker-owned item disappear from ready scans before the worker starts.
+        // The durable result application below remains lease-gated.
+        self.inner.claim(job).await;
+    }
+
     async fn check_pull_request_freshness(
         &self,
         check: PullRequestFreshness,

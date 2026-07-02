@@ -23,8 +23,6 @@ use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
 use crate::webhook::WebhookConfig;
 
-use super::protocol::protocol_response;
-
 /// `<io-event-completion>`s observed by the daemon machine.
 pub(super) enum DaemonCompletion {
     /// One inbound HTTP request (worker protocol or webhook).
@@ -83,6 +81,21 @@ pub(super) enum DaemonRequest {
     RunApply {
         job: InFlightJob,
         result: JobResult,
+    },
+    /// Apply retry bookkeeping before acknowledging a retryable/canceled result
+    /// to the worker so the source claim is released before the next rescan.
+    RunApplyAndRespond {
+        job: InFlightJob,
+        result: JobResult,
+        responder: HttpResponder,
+        response: HttpResponseData,
+    },
+    /// Apply an assignment-time source claim before returning the assignment to
+    /// the worker that will start the job.
+    RunClaimAndRespond {
+        job: InFlightJob,
+        responder: HttpResponder,
+        response: HttpResponseData,
     },
     RunPullRequestFreshnessCheck {
         check: PullRequestFreshness,
@@ -180,10 +193,7 @@ impl Machine for DaemonMachine {
                     .core
                     .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
                     .expect("poll messages produce a response");
-                vec![DaemonRequest::Respond {
-                    responder: waiter.responder,
-                    response: protocol_response(Some(response)),
-                }]
+                self.poll_response_requests(response, &waiter.poll.worker_id, waiter.responder)
             }
             DaemonCompletion::ApplyFinished { job_id } => {
                 self.applying.remove(&job_id);

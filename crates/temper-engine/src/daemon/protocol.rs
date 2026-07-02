@@ -88,7 +88,6 @@ pub(super) fn result_disposition_log_value(disposition: ResultDisposition) -> &'
     match disposition {
         ResultDisposition::Apply => "apply",
         ResultDisposition::DropForRescan => "rescan",
-        ResultDisposition::Drop => "drop",
     }
 }
 
@@ -96,15 +95,15 @@ pub(super) fn result_disposition_log_value(disposition: ResultDisposition) -> &'
 pub(super) enum ResultDisposition {
     Apply,
     DropForRescan,
-    Drop,
 }
 
 pub(super) fn result_disposition(result: &JobResult) -> ResultDisposition {
     match result.status {
         ResultStatus::Success => ResultDisposition::Apply,
         ResultStatus::Failure => match result.failure.as_ref().map(|failure| failure.class) {
-            Some(FailureClass::Transient) => ResultDisposition::DropForRescan,
-            Some(FailureClass::Canceled) => ResultDisposition::Drop,
+            Some(FailureClass::Transient | FailureClass::Canceled) => {
+                ResultDisposition::DropForRescan
+            }
             Some(FailureClass::Permanent | FailureClass::Protocol) | None => {
                 ResultDisposition::Apply
             }
@@ -190,7 +189,7 @@ mod tests {
         let cases = [
             (FailureClass::Transient, "transient", "rescan"),
             (FailureClass::Permanent, "permanent", "apply"),
-            (FailureClass::Canceled, "canceled", "drop"),
+            (FailureClass::Canceled, "canceled", "rescan"),
             (FailureClass::Protocol, "protocol", "apply"),
         ];
 
@@ -248,13 +247,13 @@ mod tests {
     }
 
     #[test]
-    fn result_disposition_routes_canceled_failure_to_drop() {
+    fn result_disposition_routes_canceled_failure_to_drop_for_rescan() {
         assert_eq!(
             result_disposition(&result_for_disposition(
                 ResultStatus::Failure,
                 Some(FailureClass::Canceled),
             )),
-            ResultDisposition::Drop
+            ResultDisposition::DropForRescan
         );
     }
 

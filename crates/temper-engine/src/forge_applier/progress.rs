@@ -12,6 +12,10 @@ use crate::forge_applier::ForgeApplier;
 
 #[async_trait::async_trait]
 impl<F: temper_forge::Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
+    async fn claim(&self, job: InFlightJob) {
+        self.apply_source_action_claim(&job).await;
+    }
+
     async fn apply(&self, job: InFlightJob, result: JobResult) {
         let self_pushed_head = result
             .repos
