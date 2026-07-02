@@ -63,6 +63,17 @@ provider = \"anthropic\"
 max_iterations = 250
 enable_subagents = false
 
+# Optional agent-local codebase-memory MCP tool settings. This first slice only
+# passes the resolved settings to agent runs; the MCP bridge is not spawned yet.
+# [agent.tools.codebase_memory]
+# mode = \"auto\"          # off | auto | required
+# command = \"codebase-memory-mcp\"
+# args = []
+# roles = [\"*\"]          # or selected workflow roles
+# index = \"background\"   # off | background | blocking
+# startup_timeout_secs = 5
+# index_timeout_secs = 30
+
 [agent.providers.anthropic]
 # url = \"https://api.anthropic.com\"
 models = { main = \"claude-opus-4-8\", investigate = \"claude-haiku-4-5\" }

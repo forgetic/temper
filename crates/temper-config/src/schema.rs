@@ -301,6 +301,11 @@ pub struct AgentConfig {
     /// Optional agent config directory (prompt overlays).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
+    /// Target-era agent-local tool configuration. Parsed/resolved for the
+    /// worker→agent boundary; individual tool runtimes are registered in later
+    /// slices.
+    #[serde(default, skip_serializing_if = "AgentToolsConfig::is_empty")]
+    pub tools: AgentToolsConfig,
     /// Provider profiles, keyed by provider name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, AgentProviderConfig>,
@@ -318,9 +323,54 @@ impl AgentConfig {
             && self.max_iterations.is_none()
             && self.enable_subagents.is_none()
             && self.config_dir.is_none()
+            && self.tools.is_empty()
             && self.providers.is_empty()
             && self.profiles.is_empty()
     }
+}
+
+/// `[agent.tools]` — agent-local non-secret tool configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentToolsConfig {
+    /// Codebase-memory MCP tool settings, when configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase_memory: Option<CodebaseMemoryToolConfig>,
+}
+
+impl AgentToolsConfig {
+    /// `true` when every field is unset, so the section can be omitted entirely.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.codebase_memory.is_none()
+    }
+}
+
+/// `[agent.tools.codebase_memory]` — process-boundary settings for the future
+/// codebase-memory MCP toolset.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodebaseMemoryToolConfig {
+    /// Tool mode: `off`, `auto`, or `required`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// MCP server command to spawn in the future bridge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Additional command arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// Workflow roles that receive this tool; `*` matches all roles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<Vec<String>>,
+    /// Indexing behavior: `off`, `background`, or `blocking`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<String>,
+    /// Startup timeout in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_timeout_secs: Option<u64>,
+    /// Indexing timeout in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_timeout_secs: Option<u64>,
 }
 
 /// `[agent.profiles.<name>]` — target-era named agent execution profile.

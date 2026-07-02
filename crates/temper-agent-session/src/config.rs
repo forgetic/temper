@@ -17,6 +17,7 @@
 use std::path::PathBuf;
 
 use temper_agent::{ProviderConfig, SubmitForPrHost};
+use temper_protocol_agent::AgentToolConfig;
 
 /// Everything the coding-agent session is configured by, in one struct.
 ///
@@ -35,6 +36,10 @@ pub struct AgentConfig {
     /// Optional prompt-overlay / debug-capture directory, fully resolved in
     /// `entry` (`--capture-dir`, falling back to `XDG_CONFIG_HOME`/`HOME`).
     pub config_dir: Option<PathBuf>,
+    /// Optional non-secret tool settings supplied by the worker via
+    /// `--tool-config`. Stored for later MCP registration slices; no tools are
+    /// registered from it yet.
+    pub tool_config: Option<AgentToolConfig>,
     /// Optional host submit callback. In out-of-process mode this is a thin
     /// client for the worker-owned local side channel; when absent the
     /// `submit_for_pr` tool is not exposed by this agent process.
@@ -54,8 +59,15 @@ impl AgentConfig {
             max_iterations,
             enable_subagents,
             config_dir,
+            tool_config: None,
             submit_for_pr: None,
         }
+    }
+
+    /// Stores the parsed non-secret agent tool config for this session.
+    pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
+        self.tool_config = tool_config;
+        self
     }
 
     /// Installs the host submit callback for this session.
@@ -84,6 +96,7 @@ mod tests {
         assert_eq!(config.max_iterations, 42);
         assert!(config.enable_subagents);
         assert_eq!(config.config_dir, Some(PathBuf::from("/cfg")));
+        assert!(config.tool_config.is_none());
         assert_eq!(config.provider.base_url(), "https://llm.example");
     }
 }

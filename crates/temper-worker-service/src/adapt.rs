@@ -9,6 +9,11 @@ use temper_config::provider;
 use temper_config::{ExposeSecret, Resolved};
 use temper_worker::config::{CapabilitySpec, ExecutorSelection, WorkerConfig};
 use temper_worker::workspace::RoleGitIdentity;
+use temper_worker::{
+    AgentToolConfig, CodebaseMemoryIndex as ProtocolCodebaseMemoryIndex,
+    CodebaseMemoryMode as ProtocolCodebaseMemoryMode,
+    CodebaseMemoryToolConfig as ProtocolCodebaseMemoryToolConfig,
+};
 
 /// Builds the worker runtime config. The `executor` field is a placeholder
 /// (`Stub`): [`run_worker`](temper_worker::run_worker) takes the real executor
@@ -81,6 +86,7 @@ pub fn role_identities(resolved: &Resolved) -> BTreeMap<String, RoleGitIdentity>
 pub struct AgentInvocation {
     pub command: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub tool_config: Option<AgentToolConfig>,
 }
 
 /// Assembles the agent command (the given program prefix plus the non-secret
@@ -115,5 +121,111 @@ pub fn agent_invocation(
         env.push((provider::PROVIDER_CREDENTIALS_ENV.to_string(), json));
     }
 
-    Ok(AgentInvocation { command, env })
+    Ok(AgentInvocation {
+        command,
+        env,
+        tool_config: agent_tool_config(resolved),
+    })
+}
+
+/// Converts resolved non-secret agent tool settings into the worker→agent JSON
+/// protocol shape. Returns `None` when no tool section is enabled.
+pub fn agent_tool_config(resolved: &Resolved) -> Option<AgentToolConfig> {
+    let codebase_memory = resolved.agent.tools.codebase_memory.as_ref().map(|tool| {
+        ProtocolCodebaseMemoryToolConfig {
+            mode: match tool.mode {
+                temper_config::CodebaseMemoryMode::Auto => ProtocolCodebaseMemoryMode::Auto,
+                temper_config::CodebaseMemoryMode::Required => ProtocolCodebaseMemoryMode::Required,
+            },
+            command: tool.command.clone(),
+            args: tool.args.clone(),
+            roles: tool.roles.clone(),
+            index: match tool.index {
+                temper_config::CodebaseMemoryIndex::Off => ProtocolCodebaseMemoryIndex::Off,
+                temper_config::CodebaseMemoryIndex::Background => {
+                    ProtocolCodebaseMemoryIndex::Background
+                }
+                temper_config::CodebaseMemoryIndex::Blocking => {
+                    ProtocolCodebaseMemoryIndex::Blocking
+                }
+            },
+            startup_timeout_secs: tool.startup_timeout_secs,
+            index_timeout_secs: tool.index_timeout_secs,
+        }
+    });
+
+    codebase_memory.map(|codebase_memory| AgentToolConfig {
+        codebase_memory: Some(codebase_memory),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_config::{
+        AgentConfig as FileAgentConfig, AgentToolsConfig, CodebaseMemoryToolConfig, Config,
+        Credentials, EngineConfig, NoEnv, resolve,
+    };
+    use temper_worker::{CodebaseMemoryIndex, CodebaseMemoryMode};
+
+    #[test]
+    fn agent_invocation_carries_resolved_tool_config_when_enabled() {
+        let resolved = resolved_with_codebase_memory(Some(CodebaseMemoryToolConfig {
+            mode: Some("required".to_string()),
+            command: Some(" codebase-memory-mcp ".to_string()),
+            args: Some(vec![" --cache ".to_string(), "local".to_string()]),
+            roles: Some(vec![" engineer ".to_string()]),
+            index: Some("blocking".to_string()),
+            startup_timeout_secs: Some(7),
+            index_timeout_secs: Some(90),
+        }));
+
+        let invocation =
+            agent_invocation(&resolved, &["temper-agent".to_string()]).expect("invocation builds");
+        let tool_config = invocation.tool_config.expect("tool config present");
+        let codebase_memory = tool_config.codebase_memory.expect("codebase memory config");
+        assert_eq!(codebase_memory.mode, CodebaseMemoryMode::Required);
+        assert_eq!(codebase_memory.command, "codebase-memory-mcp");
+        assert_eq!(codebase_memory.args, vec!["--cache", "local"]);
+        assert_eq!(codebase_memory.roles, vec!["engineer"]);
+        assert_eq!(codebase_memory.index, CodebaseMemoryIndex::Blocking);
+        assert_eq!(codebase_memory.startup_timeout_secs, 7);
+        assert_eq!(codebase_memory.index_timeout_secs, 90);
+    }
+
+    #[test]
+    fn agent_invocation_omits_tool_config_when_absent_or_off() {
+        let absent = resolved_with_codebase_memory(None);
+        assert!(agent_tool_config(&absent).is_none());
+        assert!(
+            agent_invocation(&absent, &["temper-agent".to_string()])
+                .expect("invocation builds")
+                .tool_config
+                .is_none()
+        );
+
+        let off = resolved_with_codebase_memory(Some(CodebaseMemoryToolConfig {
+            mode: Some("off".to_string()),
+            ..Default::default()
+        }));
+        assert!(agent_tool_config(&off).is_none());
+    }
+
+    fn resolved_with_codebase_memory(tool: Option<CodebaseMemoryToolConfig>) -> Resolved {
+        let config = Config {
+            engine: EngineConfig {
+                repos: Some(vec!["acme/widgets".to_string()]),
+                roles: Some(vec!["engineer".to_string()]),
+                ..Default::default()
+            },
+            agent: FileAgentConfig {
+                tools: AgentToolsConfig {
+                    codebase_memory: tool,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        resolve(&config, &Credentials::default(), &NoEnv).expect("config resolves")
+    }
 }

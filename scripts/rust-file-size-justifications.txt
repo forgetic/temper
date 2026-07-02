@@ -43,3 +43,8 @@ crates/temper-forge-filesystem/tests/issues.rs
 # is next refactored.
 crates/temper-cli-config/src/lib.rs
 crates/temper-config/src/schema.rs
+crates/temper-config/src/resolve.rs
+
+# Config resolution tests cover cross-section defaults and validation matrices;
+# split when the next config test fixture cleanup lands.
+crates/temper-config/src/tests.rs

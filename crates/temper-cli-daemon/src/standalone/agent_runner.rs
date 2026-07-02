@@ -21,7 +21,7 @@ use temper_agent::{
 };
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
-use temper_protocol_agent::WorkspaceContext;
+use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
 use temper_worker::{AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner};
 
 /// Runs coding/triage/review turns in-process on the host loop.
@@ -31,6 +31,7 @@ pub struct InProcessAgentRunner {
     max_iterations: usize,
     config_dir: Option<PathBuf>,
     enable_subagents: bool,
+    tool_config: Option<AgentToolConfig>,
     submit_for_pr: SubmitForPrHost,
 }
 
@@ -48,10 +49,27 @@ impl InProcessAgentRunner {
             max_iterations,
             config_dir,
             enable_subagents,
+            tool_config: None,
             submit_for_pr: std::sync::Arc::new(|request, context, cwd| {
                 temper_worker::submit_for_pr_pre_push_response_blocking(request, context, cwd)
             }),
         }
+    }
+
+    /// Sets the non-secret agent tool config stored with this in-process
+    /// runner. This slice does not register MCP tools yet; it only keeps the
+    /// resolved settings on the agent side of the standalone boundary.
+    #[must_use]
+    pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
+        self.tool_config = tool_config;
+        self
+    }
+
+    /// Returns the stored tool config when it applies to `role`.
+    pub fn tool_config_for_role(&self, role: &str) -> Option<&AgentToolConfig> {
+        self.tool_config
+            .as_ref()
+            .filter(|config| config.enabled_for_role(role))
     }
 
     /// Overrides the host-controlled `submit_for_pr` gate used by writable
@@ -304,6 +322,43 @@ mod tests {
             error: "no JSON object".into(),
         });
         assert_eq!(err.class, FailureClass::Transient);
+    }
+
+    #[test]
+    fn in_process_runner_stores_tool_config_and_filters_by_role() {
+        let tool_config = test_tool_config();
+        let expected = tool_config.clone();
+        temper_engine_io::block_on_with(move |_cx, handle| async move {
+            let provider = ProviderConfig::new(
+                "test-provider",
+                "test-model",
+                "https://llm.example",
+                "test-key",
+            );
+            let runner = InProcessAgentRunner::new(handle, provider, 42, None, false)
+                .with_tool_config(Some(tool_config));
+
+            assert_eq!(runner.tool_config_for_role("engineer"), Some(&expected));
+            assert!(runner.tool_config_for_role("architect").is_none());
+        });
+    }
+
+    fn test_tool_config() -> AgentToolConfig {
+        use temper_protocol_agent::{
+            CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
+        };
+
+        AgentToolConfig {
+            codebase_memory: Some(CodebaseMemoryToolConfig {
+                mode: CodebaseMemoryMode::Auto,
+                command: "codebase-memory-mcp".to_string(),
+                args: Vec::new(),
+                roles: vec!["engineer".to_string()],
+                index: CodebaseMemoryIndex::Background,
+                startup_timeout_secs: 5,
+                index_timeout_secs: 30,
+            }),
+        }
     }
 
     #[test]

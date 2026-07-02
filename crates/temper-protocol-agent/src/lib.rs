@@ -45,6 +45,111 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// workspace path) is a CLI flag — only the credential crosses as env.
 pub const PROVIDER_CREDENTIALS_ENV: &str = "TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON";
 
+/// Process-boundary flag naming a non-secret JSON tool configuration file.
+///
+/// The worker writes this only when an agent-local toolset is enabled for the
+/// current workflow role. The reference agent parses and stores the settings in
+/// this slice, but does not register MCP tools yet.
+pub const TOOL_CONFIG_FLAG: &str = "--tool-config";
+
+/// The non-secret agent tool configuration file the worker may hand the agent.
+///
+/// The top-level object is intentionally small and future-friendly:
+///
+/// ```json
+/// {"codebase_memory":{"mode":"auto","command":"codebase-memory-mcp","args":[],"roles":["*"],"index":"background","startup_timeout_secs":5,"index_timeout_secs":30}}
+/// ```
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AgentToolConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase_memory: Option<CodebaseMemoryToolConfig>,
+}
+
+impl AgentToolConfig {
+    /// Returns true when any configured tool applies to `role`.
+    pub fn enabled_for_role(&self, role: &str) -> bool {
+        self.codebase_memory
+            .as_ref()
+            .is_some_and(|config| config.applies_to_role(role))
+    }
+
+    /// Parses and validates a tool config JSON document.
+    pub fn from_json(raw: &str) -> Result<Self, String> {
+        let config: Self = serde_json::from_str(raw.trim()).map_err(|error| error.to_string())?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Serializes the tool config to JSON.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if let Some(config) = &self.codebase_memory {
+            config.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Resolved codebase-memory MCP tool settings.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CodebaseMemoryToolConfig {
+    pub mode: CodebaseMemoryMode,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
+    pub index: CodebaseMemoryIndex,
+    pub startup_timeout_secs: u64,
+    pub index_timeout_secs: u64,
+}
+
+impl CodebaseMemoryToolConfig {
+    pub fn applies_to_role(&self, role: &str) -> bool {
+        self.roles
+            .iter()
+            .any(|allowed| allowed == "*" || allowed == role)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.command.trim().is_empty() {
+            return Err("codebase_memory.command must not be empty".to_string());
+        }
+        if self.startup_timeout_secs == 0 {
+            return Err(
+                "codebase_memory.startup_timeout_secs must be greater than zero".to_string(),
+            );
+        }
+        if self.index_timeout_secs == 0 {
+            return Err("codebase_memory.index_timeout_secs must be greater than zero".to_string());
+        }
+        for role in &self.roles {
+            if role.trim().is_empty() {
+                return Err("codebase_memory.roles entries must not be empty".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodebaseMemoryMode {
+    Auto,
+    Required,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodebaseMemoryIndex {
+    Off,
+    Background,
+    Blocking,
+}
+
 /// The provider credential the worker hands the agent via
 /// [`PROVIDER_CREDENTIALS_ENV`].
 ///
@@ -284,6 +389,41 @@ pub struct WorkspaceResultChild {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codebase_memory_tool_config_round_trips_and_filters_roles() {
+        let json = r#"{
+            "codebase_memory": {
+                "mode": "auto",
+                "command": "codebase-memory-mcp",
+                "args": ["--cache", "local"],
+                "roles": ["engineer"],
+                "index": "background",
+                "startup_timeout_secs": 5,
+                "index_timeout_secs": 30
+            }
+        }"#;
+        let config = AgentToolConfig::from_json(json).expect("parse tool config");
+        assert!(config.enabled_for_role("engineer"));
+        assert!(!config.enabled_for_role("architect"));
+        let rendered = config.to_json().expect("serialize tool config");
+        assert_eq!(AgentToolConfig::from_json(&rendered).unwrap(), config);
+    }
+
+    #[test]
+    fn codebase_memory_tool_config_rejects_invalid_values() {
+        for json in [
+            r#"{"codebase_memory":{"mode":"auto","command":"","roles":["*"],"index":"background","startup_timeout_secs":5,"index_timeout_secs":30}}"#,
+            r#"{"codebase_memory":{"mode":"auto","command":"cmd","roles":[""],"index":"background","startup_timeout_secs":5,"index_timeout_secs":30}}"#,
+            r#"{"codebase_memory":{"mode":"auto","command":"cmd","roles":["*"],"index":"background","startup_timeout_secs":0,"index_timeout_secs":30}}"#,
+            r#"{"codebase_memory":{"mode":"auto","command":"cmd","roles":["*"],"index":"eventually","startup_timeout_secs":5,"index_timeout_secs":30}}"#,
+        ] {
+            assert!(
+                AgentToolConfig::from_json(json).is_err(),
+                "invalid config should fail: {json}"
+            );
+        }
+    }
 
     #[test]
     fn api_key_credential_round_trips() {

@@ -214,9 +214,77 @@ pub struct AgentSettings {
     pub max_iterations: usize,
     pub enable_subagents: bool,
     pub config_dir: Option<PathBuf>,
+    /// Non-secret agent-local tool settings to pass across the worker→agent
+    /// boundary. Empty when no tool section is configured or codebase-memory is
+    /// `mode = "off"`.
+    pub tools: AgentToolSettings,
     /// Target-era named agent profiles. Resolved for inspection/future pool
     /// dispatch, but not selected by the active agent runtime yet.
     pub profiles: BTreeMap<String, AgentProfileSettings>,
+}
+
+/// Resolved agent-local tool settings.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct AgentToolSettings {
+    pub codebase_memory: Option<CodebaseMemoryToolSettings>,
+}
+
+impl AgentToolSettings {
+    pub fn is_empty(&self) -> bool {
+        self.codebase_memory.is_none()
+    }
+}
+
+/// Resolved codebase-memory MCP tool settings.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CodebaseMemoryToolSettings {
+    pub mode: CodebaseMemoryMode,
+    pub command: String,
+    pub args: Vec<String>,
+    pub roles: Vec<String>,
+    pub index: CodebaseMemoryIndex,
+    pub startup_timeout_secs: u64,
+    pub index_timeout_secs: u64,
+}
+
+impl CodebaseMemoryToolSettings {
+    pub fn applies_to_role(&self, role: &str) -> bool {
+        self.roles
+            .iter()
+            .any(|allowed| allowed == "*" || allowed == role)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CodebaseMemoryMode {
+    Auto,
+    Required,
+}
+
+impl CodebaseMemoryMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CodebaseMemoryMode::Auto => "auto",
+            CodebaseMemoryMode::Required => "required",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CodebaseMemoryIndex {
+    Off,
+    Background,
+    Blocking,
+}
+
+impl CodebaseMemoryIndex {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CodebaseMemoryIndex::Off => "off",
+            CodebaseMemoryIndex::Background => "background",
+            CodebaseMemoryIndex::Blocking => "blocking",
+        }
+    }
 }
 
 /// A target-era `[agent.profiles.<name>]` execution profile.

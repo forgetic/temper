@@ -314,6 +314,7 @@ fn agent_config_schema() -> Value {
                 "config_dir",
                 string_schema("Optional agent config directory for prompt overlays."),
             ),
+            ("tools", agent_tools_config_schema()),
             (
                 "providers",
                 object_schema(
@@ -329,6 +330,48 @@ fn agent_config_schema() -> Value {
                     Vec::<(&'static str, Value)>::new(),
                     agent_profile_config_schema(),
                 ),
+            ),
+        ],
+    )
+}
+
+fn agent_tools_config_schema() -> Value {
+    closed_object_schema(
+        "Agent-local non-secret tool configuration.",
+        [("codebase_memory", codebase_memory_tool_config_schema())],
+    )
+}
+
+fn codebase_memory_tool_config_schema() -> Value {
+    closed_object_schema(
+        "Codebase-memory MCP tool process-boundary settings.",
+        [
+            (
+                "mode",
+                enum_string_schema("Tool mode.", ["off", "auto", "required"]),
+            ),
+            (
+                "command",
+                string_schema("MCP server command to spawn in a future bridge."),
+            ),
+            ("args", string_array_schema("Additional command arguments.")),
+            (
+                "roles",
+                string_array_schema(
+                    "Workflow roles that receive this tool; `*` matches all roles.",
+                ),
+            ),
+            (
+                "index",
+                enum_string_schema("Indexing behavior.", ["off", "background", "blocking"]),
+            ),
+            (
+                "startup_timeout_secs",
+                positive_integer_schema("Startup timeout in seconds."),
+            ),
+            (
+                "index_timeout_secs",
+                positive_integer_schema("Indexing timeout in seconds."),
             ),
         ],
     )
