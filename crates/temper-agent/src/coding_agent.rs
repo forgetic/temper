@@ -46,6 +46,7 @@
 //! live in the submodules below and are re-exported here.
 
 mod capability;
+mod codebase_memory;
 mod error;
 mod prompt;
 mod result;
@@ -74,9 +75,11 @@ pub use tools::tool_registry;
 
 // Internal items the unit tests reach through `super::*`.
 #[cfg(test)]
+pub(crate) use codebase_memory::codebase_memory_prompt_section;
+#[cfg(test)]
 pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabulary};
 #[cfg(test)]
-pub(crate) use run::{classify_run_error, codebase_memory_prompt_section};
+pub(crate) use run::classify_run_error;
 #[cfg(test)]
 pub(crate) use tools::{SubAgentTier, add_subagents, subagent_specs, tool_registry_for_context};
 
