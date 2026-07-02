@@ -55,6 +55,7 @@ fn in_process_runner_passes_tool_config_to_native_loop() {
             .with_tool_config(Some(tool_config));
         let context = ctx("ai", "temper", "issue", "Issue { number: ItemNumber(42) }");
         let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("temper")).expect("prepared repo dir");
 
         let error = runner
             .run(&context, temp.path())

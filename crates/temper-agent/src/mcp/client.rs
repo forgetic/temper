@@ -141,6 +141,55 @@ impl StdioMcpClient {
         Ok(client)
     }
 
+    /// Spawns the configured command and initializes it from synchronous code.
+    ///
+    /// This is used only for host-controlled background bootstrap work where we
+    /// deliberately do not want to hold up the agent's main skein task. Normal
+    /// MCP use should prefer [`Self::connect`].
+    pub fn connect_blocking(config: StdioMcpServerConfig) -> Result<Self, McpError> {
+        let connection = Connection::spawn(&config)?;
+        let client = Self {
+            inner: Arc::new(ClientInner {
+                connection: Mutex::new(connection),
+            }),
+            call_timeout: config.call_timeout,
+        };
+        client.initialize_blocking(config.startup_timeout)?;
+        client
+            .notify_initialized_blocking(config.startup_timeout)
+            .map_err(|error| match error {
+                McpError::Timeout { .. } => McpError::Timeout {
+                    method: "notifications/initialized".to_string(),
+                    timeout: config.startup_timeout,
+                },
+                other => other,
+            })?;
+        Ok(client)
+    }
+
+    /// Calls one MCP tool by its server-side name from synchronous code.
+    pub fn call_tool_blocking(
+        &self,
+        name: &str,
+        arguments: Value,
+        timeout: Duration,
+    ) -> Result<McpToolCallResult, McpError> {
+        let arguments = if arguments.is_null() {
+            json!({})
+        } else {
+            arguments
+        };
+        let result = self.request_blocking(
+            "tools/call",
+            json!({
+                "name": name,
+                "arguments": arguments,
+            }),
+            timeout,
+        )?;
+        Ok(parse_call_tool_result(result))
+    }
+
     /// Returns the configured default call timeout for this client.
     pub fn call_timeout(&self) -> Duration {
         self.call_timeout
@@ -197,6 +246,42 @@ impl StdioMcpClient {
             )
             .await?;
         Ok(parse_call_tool_result(result))
+    }
+
+    fn initialize_blocking(&self, timeout: Duration) -> Result<(), McpError> {
+        let result = self.request_blocking(
+            "initialize",
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "temper-agent",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            }),
+            timeout,
+        )?;
+        if !result.is_object() {
+            return Err(McpError::Protocol(
+                "initialize result must be a JSON object".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn notify_initialized_blocking(&self, timeout: Duration) -> Result<(), McpError> {
+        self.with_connection(|connection| {
+            connection.notify("notifications/initialized", json!({}), timeout)
+        })
+    }
+
+    fn request_blocking(
+        &self,
+        method: &'static str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, McpError> {
+        self.with_connection(|connection| connection.request(method, params, timeout))
     }
 
     async fn initialize(&self, timeout: Duration) -> Result<(), McpError> {

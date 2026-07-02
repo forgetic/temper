@@ -1,107 +1,35 @@
+#[path = "test_support.rs"]
+mod test_support;
 use super::*;
+use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
-
-fn fake_server_script() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().expect("tempdir");
-    fs::write(
-        dir.path().join("fake_codebase_memory_mcp.py"),
-        r#"
-import json
-import sys
-import time
-
-mode = sys.argv[1] if len(sys.argv) > 1 else "normal"
-if mode == "hang":
-    time.sleep(60)
-    sys.exit(0)
-
-TOOLS = [
-    {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
-    {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "delete_project", "description": "Delete project", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "manage_adr", "description": "Write ADRs", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "ingest_traces", "description": "Ingest traces", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "query_graph", "description": "Raw graph query", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "index_repository", "description": "Index arbitrary path", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}},
-]
-
-def send(value):
-    sys.stdout.write(json.dumps(value) + "\n")
-    sys.stdout.flush()
-
-for line in sys.stdin:
-    if not line.strip():
-        continue
-    request = json.loads(line)
-    if "id" not in request:
-        continue
-    method = request.get("method")
-    if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "fake-codebase-memory", "version": "1"}, "capabilities": {"tools": {}}}})
-    elif method == "tools/list":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
-    elif method == "tools/call":
-        params = request.get("params", {})
-        name = params.get("name")
-        args = params.get("arguments") or {}
-        payload = f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": payload}], "isError": False}})
-    else:
-        send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
-"#,
-    )
-        .expect("write fake server");
-    dir
-}
-
-fn script_path(dir: &tempfile::TempDir) -> PathBuf {
-    dir.path().join("fake_codebase_memory_mcp.py")
-}
-
-fn config(dir: &tempfile::TempDir, mode: CodebaseMemoryMode) -> AgentToolConfig {
-    AgentToolConfig {
-        codebase_memory: Some(CodebaseMemoryToolConfig {
-            mode,
-            command: "python3".to_string(),
-            args: vec!["-u".to_string(), script_path(dir).display().to_string()],
-            roles: vec!["engineer".to_string()],
-            index: temper_protocol_agent::CodebaseMemoryIndex::Off,
-            startup_timeout_secs: 1,
-            index_timeout_secs: 2,
-        }),
-    }
-}
-
-fn hanging_config(dir: &tempfile::TempDir, mode: CodebaseMemoryMode) -> AgentToolConfig {
-    let mut config = config(dir, mode);
-    let codebase_memory = config
-        .codebase_memory
-        .as_mut()
-        .expect("codebase memory config");
-    codebase_memory.args.push("hang".to_string());
-    config
-}
-
-fn output_text(output: &ToolOutput) -> String {
-    output
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
-}
+use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode};
+use test_support::*;
+use tongs::tools::ToolEffects;
 
 #[test]
 fn codebase_memory_bridge_wraps_allowed_tool_and_filters_destructive_tools() {
     let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("mcp.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    let repo_path = workspace.path().join("demo");
+    let projects =
+        json!({"projects": [{"id": "project-demo", "name": "acme/demo", "path": repo_path}]});
+
     temper_agent_io::block_on(async move {
         let toolset = build_codebase_memory_toolset(
-            Some(&config(&dir, CodebaseMemoryMode::Required)),
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "normal",
+                &log_path,
+                projects,
+            )),
             "engineer",
+            &context,
+            workspace.path(),
         )
         .await
         .expect("build required codebase-memory toolset");
@@ -136,40 +64,433 @@ fn codebase_memory_bridge_wraps_allowed_tool_and_filters_destructive_tools() {
         assert!(!output.is_error);
         assert!(text.contains("search_code result"));
         assert!(text.contains("needle"));
+        assert!(text.contains("project-demo"));
         assert!(text.contains("output truncated"));
         assert!(text.len() <= MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
     });
 }
 
 #[test]
-fn codebase_memory_bridge_auto_vs_required_startup_failures() {
-    let auto = AgentToolConfig {
-        codebase_memory: Some(CodebaseMemoryToolConfig {
-            mode: CodebaseMemoryMode::Auto,
-            command: "definitely-not-a-temper-codebase-memory-mcp".to_string(),
-            args: Vec::new(),
-            roles: vec!["engineer".to_string()],
-            index: temper_protocol_agent::CodebaseMemoryIndex::Off,
-            startup_timeout_secs: 1,
-            index_timeout_secs: 1,
-        }),
-    };
-    let required = AgentToolConfig {
-        codebase_memory: Some(CodebaseMemoryToolConfig {
-            mode: CodebaseMemoryMode::Required,
-            command: "definitely-not-a-temper-codebase-memory-mcp".to_string(),
-            args: Vec::new(),
-            roles: vec!["engineer".to_string()],
-            index: temper_protocol_agent::CodebaseMemoryIndex::Off,
-            startup_timeout_secs: 1,
-            index_timeout_secs: 1,
-        }),
-    };
+fn codebase_memory_workspace_aliases_default_primary_and_filter_project_list() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("mcp.log");
+    let context = workspace_context(
+        workspace.path(),
+        &[("acme", "app", "app"), ("acme", "lib", "lib")],
+    );
+    let projects = json!({"projects": [
+        {"id": "cbm-app", "name": "app-index", "path": workspace.path().join("app")},
+        {"id": "cbm-lib", "name": "lib-index", "path": workspace.path().join("lib")},
+        {"id": "evil", "name": "evil", "path": "/tmp/not-this-workspace"}
+    ]});
 
     temper_agent_io::block_on(async move {
-        let auto_toolset = build_codebase_memory_toolset(Some(&auto), "engineer")
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "normal",
+                &log_path,
+                projects,
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("build toolset");
+        let tools = toolset.into_tools();
+        let search = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search wrapper present");
+        search
+            .execute("default", json!({ "query": "Widget" }), None)
             .await
-            .expect("auto mode suppresses startup failure");
+            .expect("default project injected");
+        search
+            .execute(
+                "alias",
+                json!({ "query": "Helper", "project": "acme/lib" }),
+                None,
+            )
+            .await
+            .expect("alias translated");
+        search
+            .execute(
+                "repo-alias",
+                json!({ "query": "Helper", "repo": "acme/lib" }),
+                None,
+            )
+            .await
+            .expect("repo alias translated onto the MCP project field");
+
+        let search_calls = calls_named(&log_path, "search_code");
+        assert_eq!(search_calls.len(), 3);
+        assert_eq!(search_calls[0]["arguments"]["project"], "cbm-app");
+        assert_eq!(search_calls[1]["arguments"]["project"], "cbm-lib");
+        assert_eq!(search_calls[2]["arguments"]["project"], "cbm-lib");
+        assert!(search_calls[2]["arguments"].get("repo").is_none());
+
+        let list = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_list_projects")
+            .expect("list wrapper present");
+        let output = list
+            .execute("list", json!({}), None)
+            .await
+            .expect("workspace-scoped list works");
+        let text = output_text(&output);
+        assert!(text.contains("acme/app"));
+        assert!(text.contains("acme/lib"));
+        assert!(
+            !text.contains("evil"),
+            "list_projects must not leak arbitrary MCP projects: {text}"
+        );
+    });
+}
+
+#[test]
+fn codebase_memory_rejects_unknown_aliases_and_unsafe_paths() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("mcp.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    let projects = json!({"projects": [{"id": "cbm-demo", "name": "demo-index", "path": workspace.path().join("demo")}]});
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "normal",
+                &log_path,
+                projects,
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("build toolset");
+        let tools = toolset.into_tools();
+        let search = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search wrapper present");
+
+        let unknown = match search
+            .execute(
+                "unknown",
+                json!({ "query": "Widget", "project": "other/repo" }),
+                None,
+            )
+            .await
+        {
+            Ok(_) => panic!("unknown aliases are rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            unknown
+                .to_string()
+                .contains("unknown codebase-memory project/repo alias")
+        );
+
+        let path_alias = match search
+            .execute(
+                "path-alias",
+                json!({ "query": "Widget", "repo": "/tmp/demo" }),
+                None,
+            )
+            .await
+        {
+            Ok(_) => panic!("filesystem paths are not project aliases"),
+            Err(error) => error,
+        };
+        assert!(
+            path_alias
+                .to_string()
+                .contains("filesystem paths are not accepted")
+        );
+
+        let unsafe_path = match search
+            .execute(
+                "unsafe-path",
+                json!({ "query": "Widget", "path": "/etc/passwd" }),
+                None,
+            )
+            .await
+        {
+            Ok(_) => panic!("absolute paths are rejected"),
+            Err(error) => error,
+        };
+        assert!(unsafe_path.to_string().contains("repository-relative path"));
+        let nested_unsafe_path = match search
+            .execute(
+                "nested-unsafe-path",
+                json!({ "query": "Widget", "filters": {"path": "../secret"} }),
+                None,
+            )
+            .await
+        {
+            Ok(_) => panic!("nested parent paths are rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            nested_unsafe_path
+                .to_string()
+                .contains("selected workspace repository")
+        );
+    });
+}
+
+#[test]
+fn codebase_memory_workspace_path_safety_and_single_repo_cwd_checkout() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("mcp.log");
+    let mut unsafe_context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    unsafe_context.repos[0].dir = "../outside".to_string();
+
+    temper_agent_io::block_on(async move {
+        let error = match build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "normal",
+                &log_path,
+                json!({"projects": []}),
+            )),
+            "engineer",
+            &unsafe_context,
+            workspace.path(),
+        )
+        .await
+        {
+            Ok(_) => panic!("parent-dir repo roots are rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unsafe dir"));
+    });
+
+    let dir = fake_server_script();
+    let repo_cwd = tempfile::tempdir().expect("single repo cwd");
+    fs::create_dir_all(repo_cwd.path().join(".git")).expect("fake git dir");
+    let log_path = repo_cwd.path().join("single.log");
+    let mut context = workspace_context(repo_cwd.path(), &[("acme", "demo", ".")]);
+    context.repos[0].dir = "demo".to_string();
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "normal",
+                &log_path,
+                json!({"projects": []}),
+            )),
+            "engineer",
+            &context,
+            repo_cwd.path(),
+        )
+        .await
+        .expect("single-repo cwd checkout resolves safely even when repo.dir names the checkout");
+        assert_eq!(toolset.status(), &CodebaseMemoryToolsetStatus::Started);
+    });
+}
+
+#[test]
+fn codebase_memory_index_off_does_not_call_index_repository_and_marks_stale() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("mcp.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    let repo_path = workspace.path().join("demo");
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "normal",
+                &log_path,
+                json!({"projects": [{"id": "old-demo", "name": "acme/demo", "path": repo_path, "stale": true}]}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("build toolset with index off");
+        let prompt_status = toolset.prompt_status().expect("prompt status");
+        assert!(prompt_status.contains("index=off"));
+        assert!(prompt_status.contains("stale according to codebase-memory project metadata"));
+        assert!(calls_named(&log_path, "index_repository").is_empty());
+    });
+}
+
+#[test]
+fn codebase_memory_background_indexing_calls_only_prepared_repo_paths() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("mcp.log");
+    let context = workspace_context(
+        workspace.path(),
+        &[("acme", "app", "app"), ("acme", "lib", "lib")],
+    );
+    let app_path = workspace.path().join("app").canonicalize().unwrap();
+    let lib_path = workspace.path().join("lib").canonicalize().unwrap();
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Background,
+                "normal",
+                &log_path,
+                json!({"projects": [
+                    {"id": "evil", "name": "evil", "path": "/tmp/not-this-workspace"}
+                ]}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("background indexing starts");
+        let prompt_status = toolset.prompt_status().expect("prompt status");
+        assert!(prompt_status.contains("background indexing may still be in progress"));
+
+        let mut indexed_paths = wait_for_calls_named(&log_path, "index_repository", 2)
+            .into_iter()
+            .map(|call| call["arguments"]["path"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        indexed_paths.sort();
+        let mut expected = vec![
+            app_path.display().to_string(),
+            lib_path.display().to_string(),
+        ];
+        expected.sort();
+        assert_eq!(indexed_paths, expected);
+    });
+}
+
+#[test]
+fn codebase_memory_blocking_indexing_success_and_timeout_modes() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("mcp.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Blocking,
+                "normal",
+                &log_path,
+                json!({"projects": []}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("blocking indexing succeeds");
+        assert!(
+            toolset
+                .prompt_status()
+                .expect("prompt status")
+                .contains("blocking indexing completed")
+        );
+        assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
+    });
+
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("timeout.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    temper_agent_io::block_on(async move {
+        let error = match build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Blocking,
+                "index-hang",
+                &log_path,
+                json!({"projects": []}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        {
+            Ok(_) => panic!("required blocking indexing timeout fails setup"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("timed out"));
+    });
+
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("auto-timeout.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Auto,
+                CodebaseMemoryIndex::Blocking,
+                "index-hang",
+                &log_path,
+                json!({"projects": []}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("auto blocking indexing timeout continues");
+        assert_eq!(toolset.status(), &CodebaseMemoryToolsetStatus::Started);
+        assert!(
+            toolset
+                .prompt_status()
+                .expect("prompt status")
+                .contains("continuing in auto mode")
+        );
+        let tools = toolset.into_tools();
+        let search = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search remains available after auto indexing timeout");
+        let output = search
+            .execute("after-timeout", json!({"query": "still works"}), None)
+            .await
+            .expect("main MCP client survives indexing timeout");
+        assert!(output_text(&output).contains("still works"));
+    });
+}
+
+#[test]
+fn codebase_memory_bridge_auto_vs_required_startup_failures() {
+    let auto = bad_command_config(CodebaseMemoryMode::Auto);
+    let required = bad_command_config(CodebaseMemoryMode::Required);
+    let workspace = tempfile::tempdir().expect("workspace");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+
+    temper_agent_io::block_on(async move {
+        let auto_toolset =
+            build_codebase_memory_toolset(Some(&auto), "engineer", &context, workspace.path())
+                .await
+                .expect("auto mode suppresses startup failure");
         assert!(matches!(
             auto_toolset.status(),
             CodebaseMemoryToolsetStatus::AutoUnavailable { reason }
@@ -177,7 +498,13 @@ fn codebase_memory_bridge_auto_vs_required_startup_failures() {
         ));
         assert!(auto_toolset.registered_tool_names().is_empty());
 
-        let required_error = match build_codebase_memory_toolset(Some(&required), "engineer").await
+        let required_error = match build_codebase_memory_toolset(
+            Some(&required),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
         {
             Ok(_) => panic!("required mode hard-fails startup failure"),
             Err(error) => error,
@@ -193,19 +520,44 @@ fn codebase_memory_bridge_auto_vs_required_startup_failures() {
 #[test]
 fn codebase_memory_bridge_auto_timeout_is_best_effort_required_timeout_fails() {
     let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("startup-timeout.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
     temper_agent_io::block_on(async move {
-        let auto = hanging_config(&dir, CodebaseMemoryMode::Auto);
-        let auto_toolset = build_codebase_memory_toolset(Some(&auto), "engineer")
-            .await
-            .expect("auto mode suppresses timeout");
+        let auto = config(
+            &dir,
+            CodebaseMemoryMode::Auto,
+            CodebaseMemoryIndex::Off,
+            "hang",
+            &log_path,
+            json!({"projects": []}),
+        );
+        let auto_toolset =
+            build_codebase_memory_toolset(Some(&auto), "engineer", &context, workspace.path())
+                .await
+                .expect("auto mode suppresses timeout");
         assert!(matches!(
             auto_toolset.status(),
             CodebaseMemoryToolsetStatus::AutoUnavailable { reason }
                 if reason.contains("timed out")
         ));
 
-        let required = hanging_config(&dir, CodebaseMemoryMode::Required);
-        let error = match build_codebase_memory_toolset(Some(&required), "engineer").await {
+        let required = config(
+            &dir,
+            CodebaseMemoryMode::Required,
+            CodebaseMemoryIndex::Off,
+            "hang",
+            &log_path,
+            json!({"projects": []}),
+        );
+        let error = match build_codebase_memory_toolset(
+            Some(&required),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        {
             Ok(_) => panic!("required mode fails timeout"),
             Err(error) => error,
         };

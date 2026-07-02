@@ -6,7 +6,8 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::{
     CodebaseMemoryIndex, CodebaseMemoryMode, Config, Credentials, DeploymentTopology, FileKind,
-    NoEnv, ProviderCredential, ProviderKind, ResolveOptions, lint, resolve, resolve_with_options,
+    NoEnv, ProviderCredential, ProviderKind, ResolveOptions, config_template, lint, resolve,
+    resolve_with_options,
 };
 
 /// The raw value behind an optional secret, for assertions.
@@ -484,6 +485,22 @@ mode = "auto"
     assert_eq!(tool.index_timeout_secs, 30);
     assert!(tool.applies_to_role("engineer"));
     assert!(tool.applies_to_role("architect"));
+}
+
+#[test]
+fn config_template_enables_codebase_memory_auto_defaults() {
+    let config = parse_config(&config_template());
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("template resolves");
+    let tool = resolved
+        .agent
+        .tools
+        .codebase_memory
+        .expect("template enables codebase-memory");
+    assert_eq!(tool.mode, CodebaseMemoryMode::Auto);
+    assert_eq!(tool.command, "codebase-memory-mcp");
+    assert!(tool.args.is_empty());
+    assert_eq!(tool.roles, vec!["*".to_string()]);
+    assert_eq!(tool.index, CodebaseMemoryIndex::Background);
 }
 
 #[test]

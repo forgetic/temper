@@ -63,10 +63,12 @@ provider = \"anthropic\"
 max_iterations = 250
 enable_subagents = false
 
-# Optional agent-local codebase-memory MCP tool settings. This first slice only
-# passes the resolved settings to agent runs; the MCP bridge is not spawned yet.
-# [agent.tools.codebase_memory]
-# mode = \"auto\"          # off | auto | required
+# Agent-local codebase-memory MCP tool settings. Auto mode is best-effort: if
+# `codebase-memory-mcp` is not installed, agent runs continue without these
+# repository-index tools. The default index behavior starts prepared-workspace
+# repo indexing in the background.
+[agent.tools.codebase_memory]
+mode = \"auto\"          # off | auto | required
 # command = \"codebase-memory-mcp\"
 # args = []
 # roles = [\"*\"]          # or selected workflow roles

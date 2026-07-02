@@ -352,7 +352,7 @@ fn codebase_memory_tool_config_schema() -> Value {
             ),
             (
                 "command",
-                string_schema("MCP server command to spawn in a future bridge."),
+                string_schema("MCP server command to spawn for the bridge."),
             ),
             ("args", string_array_schema("Additional command arguments.")),
             (

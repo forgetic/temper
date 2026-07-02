@@ -263,7 +263,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let codebase_memory =
-        prepare_codebase_memory_tools(tool_config, &context.work_item.role).await?;
+        prepare_codebase_memory_tools(tool_config, &context.work_item.role, context, cwd).await?;
     let provider = provider_config.build_provider()?;
 
     let mut role_prompt = system_prompt(capability, &context.allowed_verdicts);
