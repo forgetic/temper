@@ -85,6 +85,7 @@ fn worker_settings_with_capacity(max_concurrent_jobs: u32) -> WorkerSettings {
         heartbeat_interval: Duration::from_secs(98),
         capabilities: Vec::new(),
         pools: Vec::new(),
+        selected_pool: None,
     }
 }
 
@@ -566,6 +567,25 @@ fn serve_components_reject_missing_target_flag_values() {
 
         assert!(error.contains(flag), "{error}");
         assert!(error.contains("requires a value"), "{error}");
+    }
+}
+
+#[test]
+fn serve_components_reject_empty_target_flag_values() {
+    for (component, flag) in [
+        ("standalone", "--id"),
+        ("engine", "--id"),
+        ("worker", "--id"),
+    ] {
+        let error = parse_serve_invocation(vec![
+            component.to_string(),
+            flag.to_string(),
+            "   ".to_string(),
+        ])
+        .expect_err("identity flags require non-empty values");
+
+        assert!(error.contains(flag), "{error}");
+        assert!(error.contains("non-empty"), "{error}");
     }
 }
 

@@ -262,6 +262,7 @@ impl HermeticRealStackBuilder {
         let worker_config = WorkerConfig {
             daemon_url: "in-process".to_string(),
             worker_id: primary_worker_role.worker_id.clone(),
+            worker_pool: None,
             capabilities: self
                 .worker_roles
                 .iter()

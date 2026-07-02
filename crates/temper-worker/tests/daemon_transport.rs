@@ -34,6 +34,7 @@ fn worker_config_with_capacity(max_concurrent_jobs: u32) -> WorkerConfig {
     WorkerConfig {
         daemon_url: "in-process".to_string(),
         worker_id: "worker-1".to_string(),
+        worker_pool: None,
         capabilities: vec![CapabilitySpec {
             repo: "ai/smith".to_string(),
             role: "engineer".to_string(),

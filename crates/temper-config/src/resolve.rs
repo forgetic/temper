@@ -321,8 +321,11 @@ fn resolve_engine(
         "engine.lease_ttl_secs",
     )?;
 
-    let daemon_id = trimmed(config.engine.daemon_id.as_deref())
-        .unwrap_or_else(|| DEFAULT_DAEMON_ID.to_string());
+    let daemon_id = resolve_identity(
+        config.engine.daemon_id.as_deref(),
+        "engine.daemon_id",
+        DEFAULT_DAEMON_ID,
+    )?;
 
     let webhook_secret_file = trimmed(config.engine.webhook_secret_file.as_deref())
         .map(|value| resolve_config_path(&value, env, options));
@@ -369,8 +372,11 @@ fn resolve_worker(
     options: &ResolveOptions,
     agent_profiles: &BTreeMap<String, AgentProfileSettings>,
 ) -> Result<WorkerSettings, ConfigError> {
-    let worker_id = trimmed(config.worker.worker_id.as_deref())
-        .unwrap_or_else(|| DEFAULT_WORKER_ID.to_string());
+    let worker_id = resolve_identity(
+        config.worker.worker_id.as_deref(),
+        "worker.worker_id",
+        DEFAULT_WORKER_ID,
+    )?;
 
     let daemon_url = trimmed(config.worker.daemon_url.as_deref())
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", engine.bind.port()));
@@ -434,7 +440,22 @@ fn resolve_worker(
         heartbeat_interval,
         capabilities,
         pools,
+        selected_pool: None,
     })
+}
+
+fn resolve_identity(
+    raw: Option<&str>,
+    field: &str,
+    default_value: &str,
+) -> Result<String, ConfigError> {
+    match raw {
+        Some(value) if value.trim().is_empty() => {
+            Err(ConfigError::invalid(format!("{field} must not be empty")))
+        }
+        Some(value) => Ok(value.trim().to_string()),
+        None => Ok(default_value.to_string()),
+    }
 }
 
 fn default_capabilities(engine: &EngineSettings) -> Vec<Capability> {

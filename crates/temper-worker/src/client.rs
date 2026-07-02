@@ -56,7 +56,7 @@ pub fn register_message_params(params: &crate::config::WorkerParams) -> WorkerPr
         capacity: Capacity {
             max_concurrent_jobs: params.max_concurrent_jobs,
         },
-        labels: None,
+        labels: worker_labels(params),
     })
 }
 
@@ -89,7 +89,15 @@ pub fn heartbeat_message_params(
             })
             .collect(),
         free_capacity: Some(free_capacity),
+        worker_pool: params.worker_pool.clone(),
     })
+}
+
+fn worker_labels(params: &crate::config::WorkerParams) -> Option<Vec<String>> {
+    params
+        .worker_pool
+        .as_ref()
+        .map(|pool| vec![format!("pool:{pool}")])
 }
 
 fn duration_millis(duration: std::time::Duration) -> u64 {
@@ -108,6 +116,7 @@ mod tests {
         WorkerConfig {
             daemon_url: "http://127.0.0.1:1234".to_string(),
             worker_id: "worker-1".to_string(),
+            worker_pool: Some("builders".to_string()),
             capabilities: vec![
                 CapabilitySpec {
                     repo: "ai/temper".to_string(),
@@ -134,6 +143,7 @@ mod tests {
             WorkerProtocolMessage::Register(register) => {
                 assert_eq!(register.protocol_version, WORKER_PROTOCOL_VERSION);
                 assert_eq!(register.worker_id, "worker-1");
+                assert_eq!(register.labels, Some(vec!["pool:builders".to_string()]));
                 assert_eq!(register.capacity.max_concurrent_jobs, 2);
                 assert_eq!(register.capabilities.len(), 2);
                 assert_eq!(register.capabilities[0].repo, "ai/temper");
@@ -156,6 +166,7 @@ mod tests {
             WorkerProtocolMessage::Heartbeat(heartbeat) => {
                 assert_eq!(heartbeat.protocol_version, WORKER_PROTOCOL_VERSION);
                 assert_eq!(heartbeat.worker_id, "worker-1");
+                assert_eq!(heartbeat.worker_pool.as_deref(), Some("builders"));
                 assert_eq!(heartbeat.free_capacity, Some(0));
                 assert_eq!(heartbeat.jobs.len(), 2);
                 assert_eq!(heartbeat.jobs[0].job_id, "job-a");

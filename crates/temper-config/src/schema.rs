@@ -239,8 +239,8 @@ pub struct WorkerConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<String>>,
     /// Target-era named capability classes, declared as `[[worker.pools]]`.
-    /// Parsed and validated for inspection/future dispatch, but not used by the
-    /// current worker runtime yet.
+    /// Runtime selection happens in `temper serve worker --pool` (or standalone
+    /// local/default pool selection), after config resolution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pools: Vec<WorkerPoolConfig>,
 }

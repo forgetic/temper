@@ -58,6 +58,7 @@ impl RealWorkerProfile {
         WorkerConfig {
             daemon_url: "in-process://temper-sim".to_string(),
             worker_id: self.worker_id.clone(),
+            worker_pool: None,
             capabilities: vec![CapabilitySpec {
                 repo: self.repo.clone(),
                 role: self.role.clone(),

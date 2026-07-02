@@ -183,9 +183,11 @@ pub struct WorkerSettings {
     pub poll_wait: Duration,
     pub heartbeat_interval: Duration,
     pub capabilities: Vec<Capability>,
-    /// Target-era named worker pools. Resolved for inspection/future dispatch,
-    /// but not used to derive [`capabilities`](Self::capabilities) yet.
+    /// Target-era named worker pools available for runtime selection.
     pub pools: Vec<WorkerPoolSettings>,
+    /// Pool selected by runtime shaping (`temper serve worker --pool`, or the
+    /// standalone local/default pool). `None` preserves legacy worker behavior.
+    pub selected_pool: Option<String>,
 }
 
 /// A target-era `[[worker.pools]]` capability class.

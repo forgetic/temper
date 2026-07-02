@@ -20,6 +20,14 @@ use temper_worker::{
 /// separately and only reads identity/cadence fields from this config.
 pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
     let worker = &resolved.worker;
+    if worker.worker_id.trim().is_empty() {
+        return Err("worker identity must not be empty".to_string());
+    }
+    if let Some(pool) = worker.selected_pool.as_deref() {
+        if pool.trim().is_empty() {
+            return Err("selected worker pool name must not be empty".to_string());
+        }
+    }
     if worker.capabilities.is_empty() {
         return Err("no worker capabilities; set `[engine] repos`/`roles` (or \
                     `[worker] capabilities`)"
@@ -36,6 +44,7 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
     Ok(WorkerConfig {
         daemon_url: worker.daemon_url.clone(),
         worker_id: worker.worker_id.clone(),
+        worker_pool: worker.selected_pool.clone(),
         capabilities,
         role_identities: role_identities(resolved),
         max_concurrent_jobs: worker.max_concurrent_jobs,
