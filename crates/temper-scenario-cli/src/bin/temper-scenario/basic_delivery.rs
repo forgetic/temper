@@ -56,6 +56,7 @@ struct RunEvidence {
     pr_head_branch: String,
     pr_head_sha: Option<String>,
     completed_ci_jobs: usize,
+    ci_jobs: Vec<run_evidence::CiJobEvidence>,
     closed_parent_issues: usize,
 }
 
@@ -256,6 +257,19 @@ async fn read_evidence(
         pr_head_branch: pull_request.source.branch.clone(),
         pr_head_sha: pull_request.head_sha.clone(),
         completed_ci_jobs: ci_jobs.len(),
+        ci_jobs: ci_jobs
+            .iter()
+            .map(|job| run_evidence::CiJobEvidence {
+                name: job.name.clone(),
+                status: format!("{:?}", job.status).to_ascii_lowercase(),
+                pull_request_number: Some(pull_request.number.get()),
+                conclusion: job
+                    .conclusion
+                    .map(ci_job_conclusion_value)
+                    .map(str::to_string),
+                url: job.url.clone(),
+            })
+            .collect(),
         closed_parent_issues,
     })
 }
@@ -403,12 +417,14 @@ fn outcome_artifact(
     let mut artifact = context.artifact(run_evidence::FinalStateEvidence {
         issues: vec![run_evidence::IssueStateEvidence {
             number: outcome.evidence.issue_number.get(),
+            id: Some("intake".to_string()),
             title: Some(outcome.evidence.issue_title.clone()),
             state: Some(issue_state_value(outcome.evidence.issue_state).to_string()),
             labels: outcome.evidence.issue_labels.clone(),
         }],
         pull_requests: vec![run_evidence::PullRequestStateEvidence {
             number: outcome.evidence.pr_number.get(),
+            id: Some("implementation".to_string()),
             title: Some(outcome.evidence.pr_title.clone()),
             state: Some(pr_state_value(outcome.evidence.pr_state).to_string()),
             labels: outcome.evidence.pr_labels.clone(),
@@ -422,7 +438,7 @@ fn outcome_artifact(
         }],
         ci: run_evidence::CiStateEvidence {
             completed_jobs: Some(outcome.evidence.completed_ci_jobs),
-            jobs: Vec::new(),
+            jobs: outcome.evidence.ci_jobs.clone(),
         },
     });
     artifact.convergence = Some(run_evidence::ConvergenceEvidence {
@@ -463,6 +479,17 @@ fn issue_state_value(state: IssueState) -> &'static str {
     match state {
         IssueState::Open => "open",
         IssueState::Closed => "closed",
+    }
+}
+
+fn ci_job_conclusion_value(conclusion: CiJobConclusion) -> &'static str {
+    match conclusion {
+        CiJobConclusion::Success => "success",
+        CiJobConclusion::Failure => "failure",
+        CiJobConclusion::Cancelled => "cancelled",
+        CiJobConclusion::Skipped => "skipped",
+        CiJobConclusion::TimedOut => "timed_out",
+        CiJobConclusion::Neutral => "neutral",
     }
 }
 

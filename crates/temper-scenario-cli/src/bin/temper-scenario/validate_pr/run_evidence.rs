@@ -75,8 +75,55 @@ pub(super) fn add_run_evidence_validation(
         return Ok(());
     }
 
+    add_manifest_assertion_validation(report, &loaded.artifact);
     compare_run_evidence(report, &loaded.artifact, scenario_path, tier, tier_explicit)?;
     Ok(())
+}
+
+fn add_manifest_assertion_validation(
+    report: &mut ValidationReport,
+    artifact: &crate::run_evidence::RunEvidenceArtifact,
+) {
+    let Some(assertions) = artifact.assertions.as_ref() else {
+        report.limitations.push(
+            "Run evidence artifact did not contain manifest assertion results; rerun with a newer temper-scenario run to populate them."
+                .to_string(),
+        );
+        return;
+    };
+
+    let summary = assertions.summary();
+    let status = if assertions.has_failures() {
+        report.verdict = ValidationVerdict::Failed;
+        ValidationStatus::Failed
+    } else {
+        ValidationStatus::Observed
+    };
+    report.validated_claims.push(
+        ValidatedClaim::new(
+            "Manifest assertions declared by the scenario have no failing results.",
+            status,
+        )
+        .with_evidence(summary.clone()),
+    );
+    report.acceptance_criteria.push(
+        AcceptanceCriterion::new(
+            "Declarative manifest expectations are evaluated from structured run evidence.",
+            if assertions.has_failures() {
+                ValidationStatus::Failed
+            } else {
+                ValidationStatus::Satisfied
+            },
+        )
+        .with_evidence(summary),
+    );
+    report.evidence.push(
+        EvidenceEntry::new(
+            EvidenceKind::ScenarioRun,
+            "Manifest assertion results were ingested from run evidence.",
+        )
+        .with_details(assertions.report_details()),
+    );
 }
 
 fn compare_run_evidence(

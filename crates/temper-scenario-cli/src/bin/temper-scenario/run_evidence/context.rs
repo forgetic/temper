@@ -72,6 +72,7 @@ impl RunEvidenceContext {
             provider: None,
             artifacts: ArtifactCollections::default(),
             evidence_lines: Vec::new(),
+            assertions: None,
         }
     }
 }

@@ -159,12 +159,14 @@ fn live_artifact(
     let mut artifact = context.artifact(run_evidence::FinalStateEvidence {
         issues: vec![run_evidence::IssueStateEvidence {
             number: evidence.final_state.issue.number,
+            id: Some("intake".to_string()),
             title: Some(evidence.final_state.issue.title.clone()),
             state: Some(evidence.final_state.issue.state.clone()),
             labels: evidence.final_state.issue.labels.clone(),
         }],
         pull_requests: vec![run_evidence::PullRequestStateEvidence {
             number: evidence.final_state.pull_request.number,
+            id: Some("implementation".to_string()),
             title: Some(evidence.final_state.pull_request.title.clone()),
             state: Some(evidence.final_state.pull_request.state.clone()),
             labels: evidence.final_state.pull_request.labels.clone(),
@@ -181,6 +183,7 @@ fn live_artifact(
                 .map(|job| run_evidence::CiJobEvidence {
                     name: job.name.clone(),
                     status: job.status.clone(),
+                    pull_request_number: Some(evidence.final_state.pull_request.number),
                     conclusion: job.conclusion.clone(),
                     url: job.url.clone(),
                 })

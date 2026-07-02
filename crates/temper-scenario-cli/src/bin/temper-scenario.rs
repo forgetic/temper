@@ -288,7 +288,22 @@ fn run_command(args: &[String]) -> ExitCode {
     );
 
     match result {
-        Ok(artifact) => {
+        Ok(mut artifact) => {
+            let assertion_evidence =
+                match run_evidence::evaluate_manifest_assertions(manifest_path, &artifact) {
+                    Ok(assertions) => assertions,
+                    Err(error) => {
+                        eprintln!("temper-scenario run: evaluate manifest assertions: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+            let assertions_failed = assertion_evidence
+                .as_ref()
+                .is_some_and(|assertions| assertions.has_failures());
+            if let Some(assertions) = assertion_evidence {
+                run_evidence::print_assertions(&assertions);
+                artifact.assertions = Some(assertions);
+            }
             if let Some(path) = args.evidence_out.as_deref() {
                 match artifact.write_to_path(path) {
                     Ok(path) => println!("run evidence: {}", path.display()),
@@ -298,7 +313,12 @@ fn run_command(args: &[String]) -> ExitCode {
                     }
                 }
             }
-            ExitCode::SUCCESS
+            if assertions_failed {
+                eprintln!("temper-scenario run: manifest assertions failed");
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
         }
         Err(error) => {
             eprintln!("temper-scenario run: {error}");
