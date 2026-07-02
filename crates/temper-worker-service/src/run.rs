@@ -31,7 +31,11 @@ async fn run_async(
     let workspace_root = resolved.worker.workspace_root.clone();
 
     let invocation = adapt::agent_invocation(resolved, agent_program)?;
-    let runner = Arc::new(OutOfProcessRunner::new(invocation.command).with_env(invocation.env));
+    let runner = Arc::new(
+        OutOfProcessRunner::new(invocation.command)
+            .with_env(invocation.env)
+            .with_tool_config(invocation.tool_config),
+    );
 
     // The coding executor's identities come from the worker config — the worker
     // subsystem's single source of truth for role identities (issue #199).

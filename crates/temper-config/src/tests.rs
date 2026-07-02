@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::{
-    Config, Credentials, DeploymentTopology, FileKind, NoEnv, ProviderCredential, ProviderKind,
-    ResolveOptions, lint, resolve, resolve_with_options,
+    CodebaseMemoryIndex, CodebaseMemoryMode, Config, Credentials, DeploymentTopology, FileKind,
+    NoEnv, ProviderCredential, ProviderKind, ResolveOptions, lint, resolve, resolve_with_options,
 };
 
 /// The raw value behind an optional secret, for assertions.
@@ -426,6 +426,151 @@ fn unknown_key_is_rejected() {
     )
     .expect_err("rejects unknown key");
     assert!(format!("{err}").contains("bogus"), "got: {err}");
+}
+
+#[test]
+fn codebase_memory_absent_and_off_resolve_disabled() {
+    let absent = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["engineer"]
+"#,
+    );
+    let resolved = resolve(&absent, &Credentials::default(), &NoEnv).expect("resolves");
+    assert!(resolved.agent.tools.is_empty());
+    assert!(resolved.agent.tools.codebase_memory.is_none());
+
+    let off = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["engineer"]
+[agent.tools.codebase_memory]
+mode = "off"
+"#,
+    );
+    let resolved = resolve(&off, &Credentials::default(), &NoEnv).expect("resolves");
+    assert!(resolved.agent.tools.codebase_memory.is_none());
+}
+
+#[test]
+fn codebase_memory_enabled_defaults_are_resolved() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["engineer"]
+[agent.tools.codebase_memory]
+mode = "auto"
+"#,
+    );
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+    let tool = resolved
+        .agent
+        .tools
+        .codebase_memory
+        .as_ref()
+        .expect("codebase-memory enabled");
+    assert_eq!(tool.mode, CodebaseMemoryMode::Auto);
+    assert_eq!(tool.command, "codebase-memory-mcp");
+    assert!(tool.args.is_empty());
+    assert_eq!(tool.roles, vec!["*".to_string()]);
+    assert_eq!(tool.index, CodebaseMemoryIndex::Background);
+    assert_eq!(tool.startup_timeout_secs, 5);
+    assert_eq!(tool.index_timeout_secs, 30);
+    assert!(tool.applies_to_role("engineer"));
+    assert!(tool.applies_to_role("architect"));
+}
+
+#[test]
+fn codebase_memory_valid_config_trims_deduplicates_and_filters_roles() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["engineer", "architect"]
+[agent.tools.codebase_memory]
+mode = " required "
+command = " codebase-memory-mcp "
+args = [" --cache ", "--cache", "", "  ", "local"]
+roles = [" engineer ", "architect", "engineer"]
+index = "blocking"
+startup_timeout_secs = 7
+index_timeout_secs = 90
+"#,
+    );
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+    let tool = resolved.agent.tools.codebase_memory.expect("enabled");
+    assert_eq!(tool.mode, CodebaseMemoryMode::Required);
+    assert_eq!(tool.command, "codebase-memory-mcp");
+    assert_eq!(tool.args, vec!["--cache".to_string(), "local".to_string()]);
+    assert_eq!(
+        tool.roles,
+        vec!["engineer".to_string(), "architect".to_string()]
+    );
+    assert_eq!(tool.index, CodebaseMemoryIndex::Blocking);
+    assert_eq!(tool.startup_timeout_secs, 7);
+    assert_eq!(tool.index_timeout_secs, 90);
+    assert!(tool.applies_to_role("engineer"));
+    assert!(tool.applies_to_role("architect"));
+    assert!(!tool.applies_to_role("reviewer"));
+}
+
+#[test]
+fn codebase_memory_invalid_values_are_rejected() {
+    for (toml, expected) in [
+        (
+            r#"[agent.tools.codebase_memory]
+mode = "sometimes"
+"#,
+            "agent.tools.codebase_memory.mode",
+        ),
+        (
+            r#"[agent.tools.codebase_memory]
+index = "eventually"
+"#,
+            "agent.tools.codebase_memory.index",
+        ),
+        (
+            r#"[agent.tools.codebase_memory]
+command = "   "
+"#,
+            "agent.tools.codebase_memory.command",
+        ),
+        (
+            r#"[agent.tools.codebase_memory]
+roles = ["engineer", "  "]
+"#,
+            "agent.tools.codebase_memory.roles",
+        ),
+        (
+            r#"[agent.tools.codebase_memory]
+startup_timeout_secs = 0
+"#,
+            "agent.tools.codebase_memory.startup_timeout_secs",
+        ),
+        (
+            r#"[agent.tools.codebase_memory]
+index_timeout_secs = 0
+"#,
+            "agent.tools.codebase_memory.index_timeout_secs",
+        ),
+    ] {
+        let config = parse_config(&format!(
+            "schema_version = 1\n[engine]\nrepos = [\"a/b\"]\nroles = [\"engineer\"]\n{toml}"
+        ));
+        let error = resolve(&config, &Credentials::default(), &NoEnv)
+            .expect_err("invalid codebase-memory config should fail");
+        assert!(
+            format!("{error}").contains(expected),
+            "error `{error}` should contain `{expected}`"
+        );
+    }
 }
 
 #[test]

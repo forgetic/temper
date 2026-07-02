@@ -20,20 +20,21 @@
 //!
 //! Every non-secret input is a flag: `--provider <anthropic|chatgpt|deepseek>`,
 //! `--model <id>`, `--investigate-model <id>`, `--provider-url <url>`,
-//! `--max-iterations <n>`, `--subagents <on|off>`, `--capture-dir <dir>`, the
-//! optional worker-owned `--submit-for-pr-address <addr>` side channel, plus
-//! the required `--context`/`--result` paths and the optional `--workspace`. The
-//! **one** secret, the provider credential, arrives via
+//! `--max-iterations <n>`, `--subagents <on|off>`, `--capture-dir <dir>`,
+//! optional non-secret `--tool-config <file>`, the optional worker-owned
+//! `--submit-for-pr-address <addr>` side channel, plus the required
+//! `--context`/`--result` paths and the optional `--workspace`. The **one**
+//! secret, the provider credential, arrives via
 //! `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`.
 //!
 //! ## Config objects
 //!
 //! The agent session is configured by one struct, [`AgentConfig`], which the
 //! coding-loop factory accepts. It bundles the provider wiring plus every
-//! loop/session knob (iterations, sub-agents, capture dir) so the factory takes a
-//! single struct rather than a growing parameter list. It is constructible in
-//! memory for tests. Per the per-subsystem config-object rule, big factories take
-//! a config object; small ones stay as-is.
+//! loop/session knob (iterations, sub-agents, capture dir, stored tool config)
+//! so the factory takes a single struct rather than a growing parameter list. It
+//! is constructible in memory for tests. Per the per-subsystem config-object
+//! rule, big factories take a config object; small ones stay as-is.
 //!
 //! [`WorkspaceContext`]: temper_protocol_agent::WorkspaceContext
 //! [`WorkspaceResult`]: temper_protocol_agent::WorkspaceResult

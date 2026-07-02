@@ -66,16 +66,18 @@ pub use paths::{
 };
 pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
-    AgentProfileSettings, AgentSettings, Capability, DeploymentSettings, DeploymentTopology,
+    AgentProfileSettings, AgentSettings, AgentToolSettings, Capability, CodebaseMemoryIndex,
+    CodebaseMemoryMode, CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology,
     EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
     ProviderKind, ProviderSettings, RepoPath, Resolved, SecretReference, WebUiCreds,
     WorkerPoolSettings, WorkerSettings,
 };
 pub use schema::{
-    AgentConfig, AgentCredentials, AgentProfileConfig, AgentProviderConfig, Config, Credentials,
-    DeploymentConfig, EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
-    NamedSecret, NamedSecretEntry, PathsConfig, ProviderCredential as ProviderCredentialFile,
-    SCHEMA_VERSION, WorkerConfig as WorkerFileConfig, WorkerPoolConfig, WorkflowConfig,
+    AgentConfig, AgentCredentials, AgentProfileConfig, AgentProviderConfig, AgentToolsConfig,
+    CodebaseMemoryToolConfig, Config, Credentials, DeploymentConfig, EngineConfig, ForgeConfig,
+    ForgeCredentials, ForgeUser, ModelMap, NamedSecret, NamedSecretEntry, PathsConfig,
+    ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
+    WorkerPoolConfig, WorkflowConfig,
 };
 pub use template::{config_template, credentials_template};
 

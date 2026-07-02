@@ -25,7 +25,9 @@ use std::path::PathBuf;
 use temper_agent::{
     AuthChoice, ProviderConfig, ProviderEnv, XDG_CONFIG_HOME_ENV, resolve_config_dir_from,
 };
-use temper_protocol_agent::{PROVIDER_CREDENTIALS_ENV, ProviderCredentialJson, WorkspaceContext};
+use temper_protocol_agent::{
+    AgentToolConfig, PROVIDER_CREDENTIALS_ENV, ProviderCredentialJson, WorkspaceContext,
+};
 
 use crate::config::AgentConfig;
 use crate::options::Options;
@@ -98,12 +100,25 @@ fn build_config(
         options.max_iterations,
         options.subagents,
         config_dir,
-    );
+    )
+    .with_tool_config(read_tool_config(options.tool_config.as_deref())?);
     let config = match options.submit_for_pr_address {
         Some(address) => config.with_submit_for_pr(crate::submit_client::host_for_address(address)),
         None => config,
     };
     Ok((config, auth_dir))
+}
+
+/// Reads and validates the optional non-secret agent tool config JSON file.
+fn read_tool_config(path: Option<&std::path::Path>) -> Result<Option<AgentToolConfig>, String> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| format!("read tool config file {}: {error}", path.display()))?;
+    AgentToolConfig::from_json(&raw)
+        .map(Some)
+        .map_err(|error| format!("parse tool config file {}: {error}", path.display()))
 }
 
 /// Builds the [`ProviderConfig`] from the flags + the parsed credential.
@@ -253,7 +268,55 @@ fn path_var(name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::path::Path;
+
+    #[test]
+    fn tool_config_absent_is_none() {
+        assert!(read_tool_config(None).expect("absent ok").is_none());
+    }
+
+    #[test]
+    fn tool_config_file_is_parsed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("tools.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "codebase_memory": {
+                    "mode": "auto",
+                    "command": "codebase-memory-mcp",
+                    "roles": ["engineer"],
+                    "index": "background",
+                    "startup_timeout_secs": 5,
+                    "index_timeout_secs": 30
+                }
+            }"#,
+        )
+        .expect("write tool config");
+
+        let config = read_tool_config(Some(&path))
+            .expect("tool config parses")
+            .expect("tool config present");
+        assert!(config.enabled_for_role("engineer"));
+        assert!(!config.enabled_for_role("architect"));
+    }
+
+    #[test]
+    fn tool_config_read_and_parse_failures_are_errors() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let missing = temp.path().join("missing.json");
+        let missing_error = read_tool_config(Some(&missing)).expect_err("missing file fails");
+        assert!(missing_error.contains("read tool config file"));
+
+        let directory_error = read_tool_config(Some(temp.path())).expect_err("directory fails");
+        assert!(directory_error.contains("read tool config file"));
+
+        let invalid = temp.path().join("invalid.json");
+        std::fs::write(&invalid, "not json").expect("write invalid json");
+        let parse_error = read_tool_config(Some(&invalid)).expect_err("invalid json fails");
+        assert!(parse_error.contains("parse tool config file"));
+    }
 
     /// `entry` (plus the binary shim) is the only module in this crate and in
     /// `temper-agent` that reads `std::env`, and it reads only the one secret

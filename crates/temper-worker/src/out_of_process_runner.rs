@@ -28,8 +28,8 @@ use std::thread;
 use std::time::Duration;
 
 use temper_protocol_agent::{
-    PROTOCOL_VERSION, SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest, SubmitForPrResponse,
-    WorkspaceContext,
+    AgentToolConfig, PROTOCOL_VERSION, SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest,
+    SubmitForPrResponse, TOOL_CONFIG_FLAG, WorkspaceContext,
 };
 
 use crate::agent_runner::{
@@ -60,6 +60,10 @@ pub struct OutOfProcessRunner {
     /// config-driven worker passes explicitly rather than relying on its own
     /// inherited environment.
     env: Vec<(String, String)>,
+    /// Non-secret agent-local tool settings. When present and enabled for the
+    /// current workflow role, these are written to a per-run JSON file and
+    /// passed as `--tool-config <file>`.
+    tool_config: Option<AgentToolConfig>,
     /// Host-controlled submit gate serviced over a worker-owned local channel
     /// while the child process remains alive.
     submit_for_pr: SubmitForPrHandler,
@@ -74,6 +78,7 @@ impl std::fmt::Debug for OutOfProcessRunner {
                 "env",
                 &self.env.iter().map(|(key, _)| key).collect::<Vec<_>>(),
             )
+            .field("tool_config", &self.tool_config)
             .field("submit_for_pr", &"<handler>")
             .finish()
     }
@@ -85,6 +90,7 @@ impl OutOfProcessRunner {
         Self {
             command,
             env: Vec::new(),
+            tool_config: None,
             submit_for_pr: default_submit_for_pr_handler(),
         }
     }
@@ -93,6 +99,14 @@ impl OutOfProcessRunner {
     #[must_use]
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
         self.env = env;
+        self
+    }
+
+    /// Sets the non-secret agent tool config written per run when enabled for
+    /// the assigned workflow role.
+    #[must_use]
+    pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
+        self.tool_config = tool_config;
         self
     }
 
@@ -133,6 +147,24 @@ impl AgentRunner for OutOfProcessRunner {
             AgentRunError::transient(format!("write agent context file: {error}"))
         })?;
 
+        let tool_config_path = match self
+            .tool_config
+            .as_ref()
+            .filter(|config| config.enabled_for_role(&context.work_item.role))
+        {
+            Some(tool_config) => {
+                let path = temp.path().join("tool-config.json");
+                let bytes = serde_json::to_vec_pretty(tool_config).map_err(|error| {
+                    AgentRunError::transient(format!("serialize agent tool config: {error}"))
+                })?;
+                std::fs::write(&path, bytes).map_err(|error| {
+                    AgentRunError::transient(format!("write agent tool config file: {error}"))
+                })?;
+                Some(path)
+            }
+            None => None,
+        };
+
         let submit_listener = if submit_for_pr_available(context) {
             let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
                 AgentRunError::transient(format!("bind submit_for_pr side channel: {error}"))
@@ -156,6 +188,7 @@ impl AgentRunner for OutOfProcessRunner {
         let submit_for_pr = self.submit_for_pr.clone();
         let context_path_owned = context_path.clone();
         let result_path_owned = result_path.clone();
+        let tool_config_path_owned = tool_config_path.clone();
         let accepted_submit_for_child = accepted_submit.clone();
         // `skein::runtime::spawn_blocking` returns the closure's value
         // directly (no JoinError wrapper), so the closure's own
@@ -169,6 +202,7 @@ impl AgentRunner for OutOfProcessRunner {
                 context: &context_owned,
                 context_path: &context_path_owned,
                 result_path: &result_path_owned,
+                tool_config_path: tool_config_path_owned.as_deref(),
                 submit_listener,
                 submit_for_pr,
                 accepted_submit: accepted_submit_for_child,
@@ -221,6 +255,7 @@ struct ChildRunRequest<'a> {
     context: &'a WorkspaceContext,
     context_path: &'a Path,
     result_path: &'a Path,
+    tool_config_path: Option<&'a Path>,
     submit_listener: Option<(TcpListener, String)>,
     submit_for_pr: SubmitForPrHandler,
     accepted_submit: AcceptedSubmitProofStore,
@@ -239,6 +274,7 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         context,
         context_path,
         result_path,
+        tool_config_path,
         submit_listener,
         submit_for_pr,
         accepted_submit,
@@ -256,6 +292,9 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         .arg(result_path)
         .arg("--workspace")
         .arg(cwd);
+    if let Some(path) = tool_config_path {
+        command.arg(TOOL_CONFIG_FLAG).arg(path);
+    }
     let submit_server = submit_listener.map(|(listener, address)| {
         command.arg(SUBMIT_FOR_PR_ADDRESS_FLAG).arg(&address);
         start_submit_server(
@@ -429,7 +468,151 @@ mod tests {
         assert_eq!(error.class, temper_protocol_worker::FailureClass::Permanent);
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn tool_config_flag_and_file_are_passed_for_matching_role() {
+        let config = test_tool_config();
+        let (args, copied_config) =
+            run_fake_agent_with_tool_config("memory-role", Some(config.clone()))
+                .expect("agent run succeeds");
+
+        let flag = args
+            .iter()
+            .position(|arg| arg == TOOL_CONFIG_FLAG)
+            .expect("tool-config flag is present");
+        assert!(
+            args.get(flag + 1).is_some(),
+            "tool-config path follows flag"
+        );
+        assert_eq!(copied_config, Some(config));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn tool_config_flag_is_omitted_for_non_matching_role() {
+        let (args, copied_config) =
+            run_fake_agent_with_tool_config("architect", Some(test_tool_config()))
+                .expect("agent run succeeds");
+
+        assert!(!args.iter().any(|arg| arg == TOOL_CONFIG_FLAG));
+        assert_eq!(copied_config, None);
+    }
+
+    #[cfg(unix)]
+    fn run_fake_agent_with_tool_config(
+        role: &str,
+        tool_config: Option<AgentToolConfig>,
+    ) -> Result<(Vec<String>, Option<AgentToolConfig>), AgentRunError> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let script = fake_agent_script(temp.path());
+        let args_path = temp.path().join("args.txt");
+        let copied_tool_config_path = temp.path().join("tool-config-copy.json");
+        let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+            .with_env(vec![
+                (
+                    "TEMPER_ARGS_OUT".to_string(),
+                    args_path.display().to_string(),
+                ),
+                (
+                    "TEMPER_TOOL_OUT".to_string(),
+                    copied_tool_config_path.display().to_string(),
+                ),
+            ])
+            .with_tool_config(tool_config);
+        let context = test_context_for_role(role);
+        let cwd = temp.path().to_path_buf();
+        temper_worker_io::block_on(async move { runner.run(&context, &cwd).await })?;
+
+        let args = std::fs::read_to_string(&args_path)
+            .expect("args captured")
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let copied_config = if copied_tool_config_path.exists() {
+            let raw = std::fs::read_to_string(&copied_tool_config_path)
+                .expect("copied tool config readable");
+            Some(AgentToolConfig::from_json(&raw).expect("copied tool config parses"))
+        } else {
+            None
+        };
+        Ok((args, copied_config))
+    }
+
+    #[cfg(unix)]
+    fn fake_agent_script(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("fake-agent.sh");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+set -eu
+args_out="${TEMPER_ARGS_OUT:?}"
+tool_out="${TEMPER_TOOL_OUT:?}"
+: > "$args_out"
+result=""
+tool=""
+while [ "$#" -gt 0 ]; do
+  arg="$1"
+  printf '%s\n' "$arg" >> "$args_out"
+  shift
+  case "$arg" in
+    --result)
+      result="$1"
+      printf '%s\n' "$1" >> "$args_out"
+      shift
+      ;;
+    --tool-config)
+      tool="$1"
+      printf '%s\n' "$1" >> "$args_out"
+      shift
+      ;;
+    --context|--workspace|--submit-for-pr-address|--provider|--model|--investigate-model|--provider-url|--max-iterations|--subagents|--capture-dir)
+      if [ "$#" -gt 0 ]; then
+        printf '%s\n' "$1" >> "$args_out"
+        shift
+      fi
+      ;;
+  esac
+done
+if [ -n "$tool" ]; then
+  cp "$tool" "$tool_out"
+fi
+printf '{"summary":"ok"}' > "$result"
+"#,
+        )
+        .expect("write fake agent script");
+        let mut permissions = std::fs::metadata(&path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).expect("chmod fake agent script");
+        path
+    }
+
+    fn test_tool_config() -> AgentToolConfig {
+        use temper_protocol_agent::{
+            CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
+        };
+
+        AgentToolConfig {
+            codebase_memory: Some(CodebaseMemoryToolConfig {
+                mode: CodebaseMemoryMode::Auto,
+                command: "codebase-memory-mcp".to_string(),
+                args: vec!["--cache".to_string(), "local".to_string()],
+                roles: vec!["memory-role".to_string()],
+                index: CodebaseMemoryIndex::Background,
+                startup_timeout_secs: 5,
+                index_timeout_secs: 30,
+            }),
+        }
+    }
+
     fn test_context() -> WorkspaceContext {
+        test_context_for_role("engineer")
+    }
+
+    fn test_context_for_role(role: &str) -> WorkspaceContext {
         use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
         WorkspaceContext {
             repos: vec![WorkspaceRepository {
@@ -443,7 +626,7 @@ mod tests {
                 branch_hint: Some("smith/engineer/issue-7".to_string()),
             }],
             work_item: WorkspaceWorkItem {
-                role: "engineer".to_string(),
+                role: role.to_string(),
                 queue: "code".to_string(),
                 kind: "issue".to_string(),
                 target: "Issue { number: ItemNumber(7) }".to_string(),
