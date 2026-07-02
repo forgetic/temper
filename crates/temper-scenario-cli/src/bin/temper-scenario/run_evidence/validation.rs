@@ -49,6 +49,30 @@ impl RunEvidenceArtifact {
                 "run evidence final_state has no issue, pull request, or CI data".to_string(),
             );
         }
+        if let Some(assertions) = &self.assertions {
+            if assertions.total != assertions.results.len() {
+                diagnostics.push(format!(
+                    "run evidence assertions.total is {}, but {} result(s) are present",
+                    assertions.total,
+                    assertions.results.len()
+                ));
+            }
+            for status in [&assertions.status]
+                .into_iter()
+                .chain(assertions.results.iter().map(|result| &result.status))
+            {
+                if !matches!(
+                    status.as_str(),
+                    super::model::ASSERTION_STATUS_PASSED
+                        | super::model::ASSERTION_STATUS_FAILED
+                        | super::model::ASSERTION_STATUS_UNSUPPORTED
+                ) {
+                    diagnostics.push(format!(
+                        "run evidence assertion status must be `passed`, `failed`, or `unsupported`, got `{status}`"
+                    ));
+                }
+            }
+        }
         diagnostics
     }
 }

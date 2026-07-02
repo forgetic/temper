@@ -60,6 +60,45 @@ scenario for evidence population. The older direct path remains available: omit
 `--run-evidence` and pass `--scenario <PATH>` when you want `validate-pr` to run
 a supported scenario itself.
 
+### Declarative expectation assertions
+
+After a supported runner completes, `temper-scenario run` evaluates manifest
+`[expect]` counts and `[[expect.checks]]` entries against the structured run
+evidence it just produced. Results are printed under an `assertions:` block and
+stored in the run-evidence JSON as `assertions.results[]`. A failed assertion
+makes `temper-scenario run` exit non-zero after the runner has completed; when
+`--evidence-out` is supplied, the evidence file is still written with the failed
+assertion diagnostics. `temper-scenario validate-pr --run-evidence ...` renders
+those stored assertion results without rerunning the scenario and fails the
+report when any stored assertion failed.
+
+Supported primitives are intentionally limited to facts already present in run
+evidence:
+
+- `[expect] merged_pull_requests = <n>` counts final PRs whose state is
+  `merged`.
+- `[expect] closed_parent_issues = <n>` counts final issues whose state is
+  `closed`.
+- `template = "single-pr-merged-source-closed"` checks for one merged PR and one
+  closed source/parent issue when the runner identifies that issue (or when only
+  one issue is present).
+- `template = "no-duplicate-prs"` checks implementation-labeled PRs for duplicate
+  `head_branch` facts.
+- `[[expect.checks]] artifact = "issue:<id>"` supports `state`, `labels`, and
+  `labels_cleared` against final issue facts. If older evidence has no issue ids
+  and exactly one issue, the engine uses that single issue for compatibility.
+- `[[expect.checks]] artifact = "pull_request"` (or `pull_request:<id>`) supports
+  `state`, `labels`, `labels_cleared`, and `ci = "passed"`/`"failed"` against
+  final PR and CI-job conclusion facts.
+
+Unsupported or missing-fact declarations are diagnostics, not failures: the
+result is recorded with `status = "unsupported"` and the run still succeeds if no
+supported assertion failed. This is how branch/ref checks such as
+`artifact = "repo:service"` plus `branch = "main"` are reported until a later
+script-hook/provider-probe phase supplies repository branch facts. Unknown check
+fields (for example body-prefix or metadata assertions) are likewise reported as
+unsupported instead of being silently treated as passed.
+
 ## Validation reports vs. promotion artifacts
 
 Every post-merge validation run must produce a validation report: what target

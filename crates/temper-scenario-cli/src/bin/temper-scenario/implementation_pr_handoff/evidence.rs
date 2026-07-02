@@ -12,12 +12,14 @@ pub(super) fn outcome_artifact(
         issues: vec![
             run_evidence::IssueStateEvidence {
                 number: outcome.create.issue_number.get(),
+                id: Some("source:create".to_string()),
                 title: None,
                 state: Some("open".to_string()),
                 labels: vec!["code".to_string(), "ready".to_string()],
             },
             run_evidence::IssueStateEvidence {
                 number: outcome.refresh.issue_number.get(),
+                id: Some("source:refresh".to_string()),
                 title: None,
                 state: Some("open".to_string()),
                 labels: vec!["code".to_string(), "ready".to_string()],
@@ -26,6 +28,7 @@ pub(super) fn outcome_artifact(
         pull_requests: vec![
             run_evidence::PullRequestStateEvidence {
                 number: outcome.create.pr_number.get(),
+                id: Some("create".to_string()),
                 title: Some(outcome.create.title.clone()),
                 state: Some(outcome.create.pr_state.clone()),
                 labels: outcome.create.labels.clone(),
@@ -35,6 +38,7 @@ pub(super) fn outcome_artifact(
             },
             run_evidence::PullRequestStateEvidence {
                 number: outcome.refresh.pr_number.get(),
+                id: Some("refresh".to_string()),
                 title: Some(outcome.refresh.title.clone()),
                 state: Some(outcome.refresh.pr_state.clone()),
                 labels: outcome.refresh.labels.clone(),

@@ -24,6 +24,8 @@ pub(crate) struct RunEvidenceArtifact {
     pub(crate) artifacts: ArtifactCollections,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) evidence_lines: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) assertions: Option<AssertionEvidence>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -76,6 +78,8 @@ pub(crate) struct FinalStateEvidence {
 pub(crate) struct IssueStateEvidence {
     pub(crate) number: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) state: Option<String>,
@@ -86,6 +90,8 @@ pub(crate) struct IssueStateEvidence {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PullRequestStateEvidence {
     pub(crate) number: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,6 +118,8 @@ pub(crate) struct CiStateEvidence {
 pub(crate) struct CiJobEvidence {
     pub(crate) name: String,
     pub(crate) status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pull_request_number: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) conclusion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,12 +170,73 @@ pub(crate) struct ProviderEvidence {
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AssertionEvidence {
+    pub(crate) status: String,
+    pub(crate) total: usize,
+    pub(crate) passed: usize,
+    pub(crate) failed: usize,
+    pub(crate) unsupported: usize,
+    #[serde(default)]
+    pub(crate) results: Vec<AssertionResultEvidence>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AssertionResultEvidence {
+    pub(crate) id: String,
+    pub(crate) status: String,
+    pub(crate) description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) artifact: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) details: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ArtifactCollections {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) log_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) artifact_paths: Vec<String>,
 }
+
+impl AssertionEvidence {
+    pub(crate) fn has_failures(&self) -> bool {
+        self.failed > 0
+            || self
+                .results
+                .iter()
+                .any(|result| result.status == ASSERTION_STATUS_FAILED)
+    }
+
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "{} ({} passed, {} failed, {} unsupported)",
+            self.status, self.passed, self.failed, self.unsupported
+        )
+    }
+
+    pub(crate) fn report_details(&self) -> Vec<String> {
+        let mut details = vec![format!("manifest assertions: {}", self.summary())];
+        for result in &self.results {
+            let mut line = format!(
+                "assertion {} `{}`: {}",
+                result.status, result.id, result.description
+            );
+            if let Some(artifact) = result.artifact.as_deref() {
+                line.push_str(&format!(" ({artifact})"));
+            }
+            details.push(line);
+            for detail in &result.details {
+                details.push(format!("assertion `{}` detail: {detail}", result.id));
+            }
+        }
+        details
+    }
+}
+
+pub(crate) const ASSERTION_STATUS_PASSED: &str = "passed";
+pub(crate) const ASSERTION_STATUS_FAILED: &str = "failed";
+pub(crate) const ASSERTION_STATUS_UNSUPPORTED: &str = "unsupported";
 
 impl ArtifactCollections {
     fn is_empty(&self) -> bool {

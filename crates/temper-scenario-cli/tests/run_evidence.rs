@@ -26,6 +26,26 @@ fn write_inherited_basic_delivery_bundle(bundle: &Path, name: &str) {
     .expect("write inherited manifest");
 }
 
+fn write_failing_assertion_bundle(bundle: &Path) {
+    std::fs::create_dir_all(bundle).expect("create failing assertion bundle");
+    std::fs::write(
+        bundle.join("scenario.toml"),
+        "name = \"failing-basic-delivery-assertion\"\n\
+         intent = \"Ephemeral validation bundle with an intentionally failing manifest assertion.\"\n\
+         [fixtures]\n\
+         extends = \"scenarios/basic-delivery\"\n\
+         [runner]\n\
+         uses = \"basic-delivery\"\n\
+         [expect]\n\
+         merged_pull_requests = 1\n\
+         [[expect.checks]]\n\
+         id = \"intentional-open-state\"\n\
+         artifact = \"issue:intake\"\n\
+         state = \"open\"\n",
+    )
+    .expect("write failing assertion manifest");
+}
+
 fn read_json(path: &Path) -> serde_json::Value {
     let source = std::fs::read_to_string(path).expect("read json");
     serde_json::from_str(&source).expect("parse json")
@@ -62,6 +82,15 @@ fn run_writes_basic_delivery_evidence_artifact() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(stdout.contains("run evidence:"), "{stdout}");
+    assert!(stdout.contains("assertions: passed"), "{stdout}");
+    assert!(
+        stdout.contains("[passed] implementation-pr-landed"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("[unsupported] default-branch-updated"),
+        "{stdout}"
+    );
     let json = read_json(&evidence);
     assert_eq!(json["schema"], "temper.scenario.run-evidence");
     assert_eq!(json["version"], 1);
@@ -83,9 +112,46 @@ fn run_writes_basic_delivery_evidence_artifact() {
         }),
         "{json:#?}"
     );
+    assert_eq!(json["final_state"]["issues"][0]["id"], "intake");
     assert_eq!(json["final_state"]["issues"][0]["state"], "closed");
+    assert_eq!(
+        json["final_state"]["pull_requests"][0]["id"],
+        "implementation"
+    );
     assert_eq!(json["final_state"]["pull_requests"][0]["state"], "merged");
     assert_eq!(json["final_state"]["ci"]["completed_jobs"], 1);
+    assert_eq!(
+        json["final_state"]["ci"]["jobs"][0]["conclusion"],
+        "success"
+    );
+    assert_eq!(
+        json["final_state"]["ci"]["jobs"][0]["pull_request_number"],
+        1
+    );
+    assert_eq!(json["assertions"]["status"], "passed");
+    assert_eq!(json["assertions"]["failed"], 0);
+    assert!(
+        json["assertions"]["unsupported"].as_u64().unwrap() >= 1,
+        "{json:#?}"
+    );
+    assert!(
+        json["assertions"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|result| {
+                result["id"] == "implementation-pr-landed" && result["status"] == "passed"
+            })
+    );
+    assert!(
+        json["assertions"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|result| {
+                result["id"] == "default-branch-updated" && result["status"] == "unsupported"
+            })
+    );
     assert!(json["convergence"]["ticks"].as_u64().unwrap() > 0);
 }
 
@@ -131,6 +197,100 @@ fn run_evidence_records_ephemeral_inherited_bundle_context() {
         }),
         "{json:#?}"
     );
+}
+
+#[test]
+fn run_writes_failing_assertions_and_exits_nonzero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("failing-assertion-bundle");
+    write_failing_assertion_bundle(&bundle);
+    let evidence = dir.path().join("failing.run-evidence.json");
+
+    let output = temper_scenario(&[
+        "run",
+        "--evidence-out",
+        &evidence.to_string_lossy(),
+        &bundle.to_string_lossy(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "failing assertion should fail run"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
+    assert!(stdout.contains("assertions: failed"), "{stdout}");
+    assert!(
+        stdout.contains("[failed] intentional-open-state"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("expected issue `intake` state `open`, observed `closed`"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("run evidence:"), "{stdout}");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("manifest assertions failed"), "{stderr}");
+    let json = read_json(&evidence);
+    assert_eq!(json["assertions"]["status"], "failed");
+    assert_eq!(json["assertions"]["failed"], 1);
+    assert!(
+        json["assertions"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|result| {
+                result["id"] == "intentional-open-state" && result["status"] == "failed"
+            })
+    );
+}
+
+#[test]
+fn validate_pr_ingests_failing_assertion_results() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("failing-assertion-bundle");
+    write_failing_assertion_bundle(&bundle);
+    let evidence = dir.path().join("failing.run-evidence.json");
+    let run = temper_scenario(&[
+        "run",
+        "--evidence-out",
+        &evidence.to_string_lossy(),
+        &bundle.to_string_lossy(),
+    ]);
+    assert!(!run.status.success(), "failing assertion should fail run");
+    let output_dir = dir.path().join("reports");
+
+    let output = temper_scenario(&[
+        "validate-pr",
+        "--pr",
+        "123",
+        "--sha",
+        "deadbeef",
+        "--run-evidence",
+        &evidence.to_string_lossy(),
+        "--output-dir",
+        &output_dir.to_string_lossy(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "failing assertion report should fail"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
+    assert!(
+        markdown.contains("Manifest assertion results were ingested from run evidence"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("assertion failed `intentional-open-state`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("expected issue `intake` state `open`"),
+        "{markdown}"
+    );
+    assert!(markdown.contains("- Verdict: failed"), "{markdown}");
 }
 
 #[test]
@@ -192,6 +352,18 @@ fn validate_pr_ingests_run_evidence_without_rerunning_scenario() {
     );
     assert!(
         markdown.contains("runner evidence: report: ticks="),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("Manifest assertion results were ingested from run evidence"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("manifest assertions: passed"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("assertion unsupported `default-branch-updated`"),
         "{markdown}"
     );
     assert!(

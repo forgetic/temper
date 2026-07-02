@@ -54,6 +54,9 @@ impl RunEvidenceArtifact {
         for line in &self.evidence_lines {
             details.push(format!("runner evidence: {line}"));
         }
+        if let Some(assertions) = &self.assertions {
+            details.extend(assertions.report_details());
+        }
         details
     }
 }
@@ -90,6 +93,12 @@ fn final_state_details(final_state: &FinalStateEvidence) -> Vec<String> {
             "final issue: #{} `{}` state={} labels={:?}",
             issue.number, title, state, issue.labels
         ));
+        if let Some(id) = issue.id.as_deref() {
+            details.push(format!(
+                "final issue id: #{number} -> `{id}`",
+                number = issue.number
+            ));
+        }
     }
     for pull_request in &final_state.pull_requests {
         let state = pull_request.state.as_deref().unwrap_or("unknown");
@@ -107,6 +116,9 @@ fn final_state_details(final_state: &FinalStateEvidence) -> Vec<String> {
         if let Some(merged_sha) = pull_request.merged_sha.as_deref() {
             detail.push_str(&format!(" merged_sha={merged_sha}"));
         }
+        if let Some(id) = pull_request.id.as_deref() {
+            detail.push_str(&format!(" id={id}"));
+        }
         details.push(detail);
     }
     if let Some(completed_jobs) = final_state.ci.completed_jobs {
@@ -114,8 +126,8 @@ fn final_state_details(final_state: &FinalStateEvidence) -> Vec<String> {
     }
     for job in &final_state.ci.jobs {
         details.push(format!(
-            "final CI job: name={} status={} conclusion={:?} url={:?}",
-            job.name, job.status, job.conclusion, job.url
+            "final CI job: name={} status={} pr={:?} conclusion={:?} url={:?}",
+            job.name, job.status, job.pull_request_number, job.conclusion, job.url
         ));
     }
     details
