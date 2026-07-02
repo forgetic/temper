@@ -188,59 +188,61 @@ fn transient_failure_does_not_create_pull_request_or_mark_issue() {
 }
 
 #[test]
-fn transient_failure_releases_claimed_source_issue_for_rescan() {
+fn retryable_failure_releases_claimed_source_issue_for_rescan() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
-        let root = MemoryForge::new();
-        let repo = new_repo(&root, "stable").await;
-        let issue = create_ready_issue(&root, &repo).await;
-        let issue_record = root
-            .get_issue_by_number(&repo, issue)
-            .await
-            .expect("issue lookup succeeds")
-            .expect("issue exists");
-        root.update_issue(
-            &issue_record.id,
-            UpdateIssue {
-                remove_labels: vec!["ready".to_string()],
-                add_labels: vec!["in-progress".to_string()],
-                add_assignees: vec![UserId::new("engineer")],
-                ..UpdateIssue::default()
-            },
-        )
-        .await
-        .expect("source issue is claimed");
-
-        let forge = Arc::new(root.as_user(role_user("engineer")));
-        let workflow = Arc::new(workflow());
-        let applier = ForgeApplier::new(forge, workflow);
-        let job = open_pr_in_flight_job("acme/service", issue);
-
-        applier
-            .apply(
-                job.clone(),
-                failure_result(
-                    "worker-a",
-                    &job.job_id,
-                    Some(FailureClass::Transient),
-                    "try again later",
-                ),
-            )
-            .await;
-
-        assert_no_pull_requests(&root, &repo).await;
-        let issue = root
-            .get_issue_by_number(&repo, issue)
-            .await
-            .expect("issue reload succeeds")
-            .expect("issue exists");
-        assert_eq!(issue.labels, vec!["code".to_string(), "ready".to_string()]);
-        assert!(issue.assignees.is_empty());
-        assert!(
-            root.list_issue_comments(&issue.id)
+        for failure_class in [FailureClass::Transient, FailureClass::Canceled] {
+            let root = MemoryForge::new();
+            let repo = new_repo(&root, "stable").await;
+            let issue = create_ready_issue(&root, &repo).await;
+            let issue_record = root
+                .get_issue_by_number(&repo, issue)
                 .await
-                .expect("list issue comments succeeds")
-                .is_empty()
-        );
+                .expect("issue lookup succeeds")
+                .expect("issue exists");
+            root.update_issue(
+                &issue_record.id,
+                UpdateIssue {
+                    remove_labels: vec!["ready".to_string()],
+                    add_labels: vec!["in-progress".to_string()],
+                    add_assignees: vec![UserId::new("engineer")],
+                    ..UpdateIssue::default()
+                },
+            )
+            .await
+            .expect("source issue is claimed");
+
+            let forge = Arc::new(root.as_user(role_user("engineer")));
+            let workflow = Arc::new(workflow());
+            let applier = ForgeApplier::new(forge, workflow);
+            let job = open_pr_in_flight_job("acme/service", issue);
+
+            applier
+                .apply(
+                    job.clone(),
+                    failure_result(
+                        "worker-a",
+                        &job.job_id,
+                        Some(failure_class),
+                        "try again later",
+                    ),
+                )
+                .await;
+
+            assert_no_pull_requests(&root, &repo).await;
+            let issue = root
+                .get_issue_by_number(&repo, issue)
+                .await
+                .expect("issue reload succeeds")
+                .expect("issue exists");
+            assert_eq!(issue.labels, vec!["code".to_string(), "ready".to_string()]);
+            assert!(issue.assignees.is_empty());
+            assert!(
+                root.list_issue_comments(&issue.id)
+                    .await
+                    .expect("list issue comments succeeds")
+                    .is_empty()
+            );
+        }
     })
 }
 

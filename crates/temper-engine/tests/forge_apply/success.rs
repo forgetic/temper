@@ -76,6 +76,90 @@ fn success_result_finalizes_source_issue_claim_state() {
 }
 
 #[test]
+fn assignment_claims_source_issue_before_result_and_success_clears_working_label() {
+    temper_engine_io::block_on_with(move |cx, handle| async move {
+        let root = MemoryForge::new();
+        let repo = new_repo(&root, "stable").await;
+        let issue_number = create_ready_issue(&root, &repo).await;
+        let forge = Arc::new(root.as_user(role_user("engineer")));
+        let workflow = Arc::new(workflow());
+        let compiled = workflow.compile();
+        let applier = Arc::new(LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+            temper_engine::system_clock(),
+        ));
+        let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);
+        let url = spawn(&handle, &daemon).await;
+        let client = temper_engine_io::http::JsonClient::new();
+        let role = RoleId::new("engineer");
+
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "acme/service")
+            )
+            .await
+            .status,
+            204
+        );
+        assert_eq!(
+            daemon
+                .enqueue_scanned_role_work(
+                    forge.as_ref(),
+                    &repo,
+                    workflow.as_ref(),
+                    &compiled,
+                    ts("2026-05-29T00:00:00Z"),
+                    &role,
+                    RoleFeedMode::Normal,
+                )
+                .await
+                .expect("feed succeeds"),
+            1
+        );
+
+        let assignment = poll_assignment(&client, &url, "worker-a", issue_number).await;
+        let issue = root
+            .get_issue_by_number(&repo, issue_number)
+            .await
+            .expect("issue reload succeeds")
+            .expect("issue exists");
+        assert_eq!(
+            issue.labels,
+            vec!["code".to_string(), "in-progress".to_string()]
+        );
+        assert_eq!(issue.assignees, vec![UserId::new("engineer")]);
+        assert_no_pull_requests(&root, &repo).await;
+
+        let branch_name = format!("agent/pr-for-code-{}", issue_number.get());
+        let posted_result = success_result(
+            "worker-a",
+            &assignment.job_id,
+            &assignment.repo,
+            &branch_name,
+            "implemented daemon assignment claim",
+        );
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(posted_result)).await,
+            "worker-a",
+            &assignment.job_id,
+        );
+
+        wait_for_pull_request_count(&cx, &root, &repo, 1).await;
+        let issue = root
+            .get_issue_by_number(&repo, issue_number)
+            .await
+            .expect("issue reload succeeds")
+            .expect("issue exists");
+        assert_eq!(issue.labels, vec!["code".to_string()]);
+    })
+}
+
+#[test]
 fn stale_pr_guard_accepts_success_result_at_self_pushed_head() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());

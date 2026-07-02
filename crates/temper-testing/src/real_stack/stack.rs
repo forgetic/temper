@@ -314,10 +314,15 @@ impl Transport for ResultTappingTransport {
         let inner = self.inner.clone();
         let result_tx = self.result_tx.clone();
         async move {
-            if let WorkerProtocolMessage::Result(result) = &message {
-                let _ = result_tx.send(result.clone());
+            let recorded = match &message {
+                WorkerProtocolMessage::Result(result) => Some(result.clone()),
+                _ => None,
+            };
+            let reply = inner.send(cx, message).await;
+            if let Some(result) = recorded {
+                let _ = result_tx.send(result);
             }
-            inner.send(cx, message).await
+            reply
         }
     }
 }
