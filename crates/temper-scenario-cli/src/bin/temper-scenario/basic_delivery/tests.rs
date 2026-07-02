@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use super::{IntakeSeed, RepoSeed, read_evidence};
+use super::evidence::read_evidence;
+use super::fixture::{IntakeSeed, RepoSeed};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest, Forge,
