@@ -70,6 +70,8 @@ pub(crate) struct FinalStateEvidence {
     pub(crate) issues: Vec<IssueStateEvidence>,
     #[serde(default)]
     pub(crate) pull_requests: Vec<PullRequestStateEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) repositories: Vec<RepositoryStateEvidence>,
     #[serde(default)]
     pub(crate) ci: CiStateEvidence,
 }
@@ -104,6 +106,25 @@ pub(crate) struct PullRequestStateEvidence {
     pub(crate) head_sha: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) merged_sha: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RepositoryStateEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) slug: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) branches: Vec<RepositoryBranchStateEvidence>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RepositoryBranchStateEvidence {
+    pub(crate) name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) head_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) contains_engineer_diff: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]

@@ -55,6 +55,7 @@ fn validate_workflow_writes_evidence_markdown_and_json_artifacts() {
     assert_eq!(evidence["scenario"]["tier"], "hermetic");
     assert_eq!(evidence["scenario"]["runner_id"], "basic-delivery");
     assert_eq!(evidence["assertions"]["status"], "passed");
+    assert_eq!(evidence["assertions"]["unsupported"], 0);
 
     let markdown = std::fs::read_to_string(markdown_path).expect("read report");
     assert!(
@@ -63,6 +64,10 @@ fn validate_workflow_writes_evidence_markdown_and_json_artifacts() {
     );
     assert!(
         markdown.contains("Manifest assertion results were ingested"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("assertion passed `default-branch-updated`"),
         "{markdown}"
     );
 

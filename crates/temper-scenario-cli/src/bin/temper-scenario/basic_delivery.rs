@@ -30,9 +30,17 @@ struct IntakeSeed {
     labels: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
+struct RepoSeed {
+    id: String,
+    slug: String,
+    default_branch: String,
+}
+
+#[derive(Clone, Debug)]
 struct Fixture {
     workflow_path: PathBuf,
+    repo: RepoSeed,
     intake: IntakeSeed,
 }
 
@@ -55,6 +63,12 @@ struct RunEvidence {
     pr_labels: Vec<String>,
     pr_head_branch: String,
     pr_head_sha: Option<String>,
+    pr_merged_sha: Option<String>,
+    repo_id: String,
+    repo_slug: String,
+    default_branch: String,
+    default_branch_head_sha: Option<String>,
+    default_branch_contains_engineer_diff: bool,
     completed_ci_jobs: usize,
     ci_jobs: Vec<run_evidence::CiJobEvidence>,
     closed_parent_issues: usize,
@@ -118,11 +132,11 @@ async fn run_basic_delivery(
     .map_err(|error| error.to_string())?
     .with_extra_worker_factory(temper_testing::world::memory_ci_worker);
 
-    let scenario = scenario(fixture.intake.clone());
+    let scenario = scenario(fixture.clone());
     let report = run_scenario_with_budget(&stage, &scenario, BUDGET)
         .await
         .map_err(|error| error.to_string())?;
-    let evidence = read_evidence(stage.forge(), stage.repo(), &fixture.intake)
+    let evidence = read_evidence(stage.forge(), stage.repo(), &fixture.intake, &fixture.repo)
         .await
         .map_err(|error| error.to_string())?;
 
@@ -133,22 +147,22 @@ async fn run_basic_delivery(
     })
 }
 
-fn scenario(seed: IntakeSeed) -> Scenario {
-    let seed = Arc::new(seed);
-    let seed_for_seed = Arc::clone(&seed);
-    let seed_for_assert = Arc::clone(&seed);
+fn scenario(fixture: Fixture) -> Scenario {
+    let fixture = Arc::new(fixture);
+    let fixture_for_seed = Arc::clone(&fixture);
+    let fixture_for_assert = Arc::clone(&fixture);
     Scenario::new(
         SCENARIO_NAME,
         Box::new(move |forge, repo| {
-            let seed = Arc::clone(&seed_for_seed);
+            let fixture = Arc::clone(&fixture_for_seed);
             Box::pin(async move {
                 forge
                     .create_issue(
                         repo,
                         CreateIssue {
-                            title: seed.title.clone(),
-                            body: seed.body.clone(),
-                            labels: seed.labels.clone(),
+                            title: fixture.intake.title.clone(),
+                            body: fixture.intake.body.clone(),
+                            labels: fixture.intake.labels.clone(),
                             assignees: Vec::new(),
                         },
                     )
@@ -157,9 +171,9 @@ fn scenario(seed: IntakeSeed) -> Scenario {
             })
         }),
         Box::new(move |forge, repo| {
-            let seed = Arc::clone(&seed_for_assert);
+            let fixture = Arc::clone(&fixture_for_assert);
             Box::pin(async move {
-                read_evidence(forge, repo, &seed).await?;
+                read_evidence(forge, repo, &fixture.intake, &fixture.repo).await?;
                 Ok(())
             })
         }),
@@ -170,6 +184,7 @@ async fn read_evidence(
     forge: &dyn Forge,
     repo: &RepositoryId,
     seed: &IntakeSeed,
+    repo_seed: &RepoSeed,
 ) -> Result<RunEvidence, BoxError> {
     let issues = forge.list_issues(repo, IssueQuery::default()).await?;
     let issue = find_seeded_code_issue(&issues, seed)?;
@@ -245,6 +260,12 @@ async fn read_evidence(
         )));
     }
 
+    let default_branch_head_sha = pull_request
+        .merge
+        .as_ref()
+        .map(|merge| merge.commit_sha.clone())
+        .or_else(|| pull_request.head_sha.clone());
+
     Ok(RunEvidence {
         issue_number: issue.number,
         issue_title: issue.title.clone(),
@@ -256,6 +277,16 @@ async fn read_evidence(
         pr_labels: pull_request.labels.clone(),
         pr_head_branch: pull_request.source.branch.clone(),
         pr_head_sha: pull_request.head_sha.clone(),
+        pr_merged_sha: pull_request
+            .merge
+            .as_ref()
+            .map(|merge| merge.commit_sha.clone()),
+        repo_id: repo_seed.id.clone(),
+        repo_slug: repo_seed.slug.clone(),
+        default_branch: repo_seed.default_branch.clone(),
+        default_branch_head_sha,
+        default_branch_contains_engineer_diff: pull_request.state == PullRequestState::Merged
+            && has_label(&pull_request.labels, "implementation"),
         completed_ci_jobs: ci_jobs.len(),
         ci_jobs: ci_jobs
             .iter()
@@ -307,9 +338,11 @@ fn only_implementation_pr(pull_requests: &[PullRequest]) -> Result<&PullRequest,
 fn load_fixture(scenario_path: &Path, manifest_path: &Path) -> Result<Fixture, String> {
     let manifest = load_manifest_toml(manifest_path)?;
     let workflow_path = workflow_path(scenario_path, &manifest)?;
+    let repo = repo_seed(&manifest)?;
     let intake = intake_seed(scenario_path, &manifest)?;
     Ok(Fixture {
         workflow_path,
+        repo,
         intake,
     })
 }
@@ -326,6 +359,42 @@ fn workflow_path(scenario_path: &Path, manifest: &Value) -> Result<PathBuf, Stri
         .and_then(Value::as_str)
         .unwrap_or("config/workflow.json");
     Ok(scenario_path.join(path))
+}
+
+fn repo_seed(manifest: &Value) -> Result<RepoSeed, String> {
+    let repos = manifest
+        .get("repos")
+        .or_else(|| manifest.get("repositories"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "basic-delivery manifest is missing [[repos]]".to_string())?;
+    let repo = repos
+        .iter()
+        .filter_map(Value::as_table)
+        .find(|repo| repo.get("id").and_then(Value::as_str) == Some("service"))
+        .or_else(|| repos.iter().filter_map(Value::as_table).next())
+        .ok_or_else(|| "basic-delivery manifest has no repository fixture".to_string())?;
+    let id = repo
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("service")
+        .to_string();
+    let slug = repo
+        .get("slug")
+        .or_else(|| repo.get("repo"))
+        .or_else(|| repo.get("repository"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "basic-delivery repository fixture is missing `slug`".to_string())?
+        .to_string();
+    let default_branch = repo
+        .get("default_branch")
+        .and_then(Value::as_str)
+        .unwrap_or("main")
+        .to_string();
+    Ok(RepoSeed {
+        id,
+        slug,
+        default_branch,
+    })
 }
 
 fn intake_seed(scenario_path: &Path, manifest: &Value) -> Result<IntakeSeed, String> {
@@ -430,11 +499,18 @@ fn outcome_artifact(
             labels: outcome.evidence.pr_labels.clone(),
             head_branch: Some(outcome.evidence.pr_head_branch.clone()),
             head_sha: outcome.evidence.pr_head_sha.clone(),
-            merged_sha: if outcome.evidence.pr_state == PullRequestState::Merged {
-                outcome.evidence.pr_head_sha.clone()
-            } else {
-                None
-            },
+            merged_sha: outcome.evidence.pr_merged_sha.clone(),
+        }],
+        repositories: vec![run_evidence::RepositoryStateEvidence {
+            id: Some(outcome.evidence.repo_id.clone()),
+            slug: Some(outcome.evidence.repo_slug.clone()),
+            branches: vec![run_evidence::RepositoryBranchStateEvidence {
+                name: outcome.evidence.default_branch.clone(),
+                head_sha: outcome.evidence.default_branch_head_sha.clone(),
+                contains_engineer_diff: Some(
+                    outcome.evidence.default_branch_contains_engineer_diff,
+                ),
+            }],
         }],
         ci: run_evidence::CiStateEvidence {
             completed_jobs: Some(outcome.evidence.completed_ci_jobs),
@@ -518,123 +594,5 @@ fn has_label(labels: &[String], expected: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{IntakeSeed, read_evidence};
-    use temper_forge_memory::MemoryForge;
-    use temper_forge_model::{
-        BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest,
-        Forge, MergeMethod, MergePullRequest, PullRequest, RepositoryId,
-    };
-
-    #[test]
-    fn evidence_rejects_open_pr_even_with_passing_ci() {
-        let error = temper_testing::block_on(async {
-            let (forge, repo, seed) = fixture_state(false).await;
-            read_evidence(&forge, &repo, &seed)
-                .await
-                .expect_err("open PR must not satisfy the scenario contract")
-                .to_string()
-        });
-
-        assert!(
-            error.contains("implementation PR #1 was not merged"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn evidence_rejects_merged_pr_when_parent_issue_is_still_open() {
-        let error = temper_testing::block_on(async {
-            let (forge, repo, seed) = fixture_state(true).await;
-            read_evidence(&forge, &repo, &seed)
-                .await
-                .expect_err("open parent issue must not satisfy the scenario contract")
-                .to_string()
-        });
-
-        assert!(
-            error.contains("seeded code issue #1 was not closed after merge"),
-            "{error}"
-        );
-    }
-
-    async fn fixture_state(merge_pr: bool) -> (MemoryForge, RepositoryId, IntakeSeed) {
-        let forge = MemoryForge::new();
-        let repo = forge
-            .create_repository(temper_testing::repo_input())
-            .await
-            .expect("repository created")
-            .id;
-        let seed = IntakeSeed {
-            title: "Seeded contract work".to_string(),
-            body: "Implement the contract.".to_string(),
-            labels: Vec::new(),
-        };
-        let issue = forge
-            .create_issue(
-                &repo,
-                CreateIssue {
-                    title: seed.title.clone(),
-                    body: seed.body.clone(),
-                    labels: vec!["code".to_string(), "in-progress".to_string()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("issue created");
-        let pull_request = forge
-            .create_pull_request(
-                &repo,
-                CreatePullRequest {
-                    title: format!("Implement #{}", issue.number),
-                    body: format!("Implementation for parent #{}.", issue.number),
-                    source: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "fake/pr-for-code-1".to_string(),
-                    },
-                    target: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "main".to_string(),
-                    },
-                    labels: vec!["implementation".to_string(), "landing".to_string()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("pull request created");
-        forge.seed_ci_jobs(&repo, vec![ci_job(&repo, &pull_request)]);
-        if merge_pr {
-            forge
-                .merge_pull_request(
-                    &pull_request.id,
-                    MergePullRequest {
-                        method: MergeMethod::MergeCommit,
-                        commit_title: None,
-                        commit_body: None,
-                        delete_source_branch: false,
-                    },
-                )
-                .await
-                .expect("pull request merged");
-        }
-        (forge, repo, seed)
-    }
-
-    fn ci_job(repo: &RepositoryId, pull_request: &PullRequest) -> CiJob {
-        let now = temper_testing::ts("2026-05-29T00:00:00Z");
-        CiJob {
-            id: CiJobId::new("ci-basic-delivery-contract"),
-            repo_id: repo.clone(),
-            pull_request_id: Some(pull_request.id.clone()),
-            commit_sha: pull_request.head_sha.clone().unwrap_or_default(),
-            name: "ci".to_string(),
-            status: CiJobStatus::Completed,
-            conclusion: Some(CiJobConclusion::Success),
-            url: None,
-            created_at: now,
-            started_at: Some(now),
-            completed_at: Some(now),
-            updated_at: now,
-        }
-    }
-}
+#[path = "basic_delivery/tests.rs"]
+mod tests;

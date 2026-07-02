@@ -47,6 +47,7 @@ pub(super) fn outcome_artifact(
                 merged_sha: None,
             },
         ],
+        repositories: Vec::new(),
         ci: run_evidence::CiStateEvidence::default(),
     });
     artifact.evidence_lines = super::outcome_evidence_lines(outcome);
