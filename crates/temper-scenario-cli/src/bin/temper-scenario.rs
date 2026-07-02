@@ -12,6 +12,8 @@ mod run_context;
 mod run_evidence;
 #[path = "temper-scenario/runner_registry.rs"]
 mod runner_registry;
+#[path = "temper-scenario/validate.rs"]
+mod validate;
 #[path = "temper-scenario/validate_pr.rs"]
 mod validate_pr;
 
@@ -37,6 +39,7 @@ Commands:
   list         List scenario directories and stable manifest metadata
   check        Validate one scenario path or all scenarios under a scenarios directory
   run          Run a supported scenario at an explicit confidence tier
+  validate     Run a scenario bundle and render validation artifacts from structured evidence
   validate-pr  Write a temporary post-merge PR validation Markdown report
   promote      Draft an optional scenario-promotion candidate from validation artifacts
 
@@ -114,6 +117,7 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
         "list" => list_command(rest),
         "check" => check_command(rest),
         "run" => run_command(rest),
+        "validate" => validate::command(rest),
         "validate-pr" => validate_pr::command(rest),
         "promote" => promote::command(rest),
         other => {

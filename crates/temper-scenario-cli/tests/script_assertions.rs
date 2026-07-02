@@ -237,6 +237,68 @@ fn run_rejects_unsafe_script_assertion_command_path() {
 }
 
 #[test]
+fn validate_workflow_retains_report_for_script_assertion_failure() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("script-hook-workflow-failure");
+    write_script_assertion_bundle(
+        &bundle,
+        "script-hook-workflow-failure",
+        "set -euo pipefail\necho 'workflow hook failure evidence' >&2\nexit 7\n",
+        "[[assertions]]\n\
+         id = \"script-exits-nonzero\"\n\
+         kind = \"command\"\n\
+         command = \"scripts/assert-hook.sh\"\n\
+         timeout_ms = 5000\n",
+    );
+    let output_dir = dir.path().join("validation-artifacts");
+
+    let output = temper_scenario(&[
+        "validate",
+        "--pr",
+        "123",
+        "--sha",
+        "deadbeef",
+        "--scenario",
+        &bundle.to_string_lossy(),
+        "--output-dir",
+        &output_dir.to_string_lossy(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "script hook failure should fail validation workflow"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(stdout.contains("[failed] script-exits-nonzero"), "{stdout}");
+    assert!(stdout.contains("validation report:"), "{stdout}");
+    assert!(stdout.contains("validation result:"), "{stdout}");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("scenario assertions failed"), "{stderr}");
+
+    let evidence_path = output_dir.join("run-evidence.json");
+    let markdown_path = output_dir.join("validation-pr-123-deadbeef.md");
+    let json_path = output_dir.join("validation-pr-123-deadbeef.json");
+    assert!(evidence_path.is_file(), "evidence path: {evidence_path:?}");
+    assert!(markdown_path.is_file(), "markdown path: {markdown_path:?}");
+    assert!(json_path.is_file(), "json path: {json_path:?}");
+    assert!(
+        output_dir.join("script-assertions").is_dir(),
+        "script assertion artifacts should be retained"
+    );
+
+    let markdown = std::fs::read_to_string(markdown_path).expect("read report");
+    assert!(markdown.contains("- Verdict: failed"), "{markdown}");
+    assert!(
+        markdown.contains("assertion failed `script-exits-nonzero`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("workflow hook failure evidence"),
+        "{markdown}"
+    );
+}
+
+#[test]
 fn validate_pr_renders_script_assertion_hook_results() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bundle = dir.path().join("script-hook-report");

@@ -28,6 +28,77 @@ Use `cargo dev-scenario-run` for the live lane (it builds and passes the
 standalone `temper` binary) and `cargo dev-scenario-run-hermetic` for the fast
 lower-confidence memory runner.
 
+### Single validator workflow command
+
+Use `temper-scenario validate` when you want the complete author-and-run UX for a
+focused validation bundle. It runs the bundle, writes `run-evidence.json`, runs
+the `validate-pr` report builder against that evidence, and leaves Markdown plus
+JSON validation output in one artifact directory:
+
+```sh
+cargo run -p temper-scenario-cli -- validate \
+  --pr <merged-pr-number> \
+  --sha <merged-main-sha> \
+  --scenario /tmp/renamed-inherited-delivery \
+  --tier hermetic \
+  --output-dir /tmp/temper-validation/pr-<merged-pr-number>
+```
+
+For live runners that need a standalone `temper`, the command resolves an
+existing binary or builds `cargo build --bin temper` automatically. Promotion is
+not part of this workflow; run `temper-scenario promote` separately only when an
+ad-hoc bundle should become a checked-in regression input.
+
+A config-only inherited bundle can be as small as:
+
+```toml
+name = "renamed-inherited-delivery"
+intent = "Validate the merged change with the checked-in basic-delivery fixtures."
+
+[fixtures]
+extends = "scenarios/basic-delivery"
+
+[runner]
+uses = "basic-delivery"
+```
+
+Run it with the command above and inspect the artifact directory for
+`run-evidence.json`, `validation-pr-<pr>-<sha>.md`, and
+`validation-pr-<pr>-<sha>.json`.
+
+A bundle with one focused script hook adds the hook declaration and a local
+script, but uses the same command path:
+
+```toml
+name = "delivery-with-branch-hook"
+intent = "Validate basic delivery plus one provider-side branch cleanup check."
+
+[fixtures]
+extends = "scenarios/basic-delivery"
+
+[runner]
+uses = "basic-delivery"
+
+[[assertions]]
+id = "branch-cleanup-observed"
+kind = "command"
+command = "scripts/assert-branch-cleanup.sh"
+phase = "after-convergence"
+timeout_ms = 5000
+```
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+context="${1:?context}"
+grep -q '"runner_id": "basic-delivery"' "$context"
+echo "branch cleanup evidence checked from $context"
+```
+
+Hook context, stdout, stderr, and status files are retained under
+`<output-dir>/script-assertions/` and are also cited from the run evidence and
+validation report.
+
 ### Structured run evidence
 
 `temper-scenario run` can also write a versioned JSON run-evidence artifact:
