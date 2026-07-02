@@ -84,15 +84,15 @@ pub(super) fn command(args: &[String]) -> ExitCode {
 }
 
 #[derive(Debug)]
-struct Args {
-    pr_number: u64,
-    sha: String,
-    scenario: Option<PathBuf>,
-    run_evidence: Option<PathBuf>,
-    tier: ScenarioTier,
-    tier_explicit: bool,
-    temper_bin: Option<PathBuf>,
-    output_dir: PathBuf,
+pub(super) struct Args {
+    pub(super) pr_number: u64,
+    pub(super) sha: String,
+    pub(super) scenario: Option<PathBuf>,
+    pub(super) run_evidence: Option<PathBuf>,
+    pub(super) tier: ScenarioTier,
+    pub(super) tier_explicit: bool,
+    pub(super) temper_bin: Option<PathBuf>,
+    pub(super) output_dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -102,7 +102,7 @@ enum ParseResult {
 }
 
 #[derive(Debug)]
-enum Error {
+pub(super) enum Error {
     InvalidScenario(Box<temper_scenario_core::CheckReport>),
     RunEvidence(String),
 }
@@ -255,7 +255,7 @@ fn set_temper_bin(temper_bin: &mut Option<PathBuf>, value: &str) -> Result<(), (
     Ok(())
 }
 
-fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Error> {
+pub(super) fn build_report(args: &Args, output_path: &Path) -> Result<ValidationReport, Error> {
     let mut report = ValidationReport::new(
         args.pr_number,
         args.sha.clone(),
@@ -420,7 +420,7 @@ fn add_scenario_validation(
     Ok(())
 }
 
-fn validation_report_path(output_dir: &Path, pr_number: u64, sha: &str) -> PathBuf {
+pub(super) fn validation_report_path(output_dir: &Path, pr_number: u64, sha: &str) -> PathBuf {
     output_dir.join(format!(
         "validation-pr-{pr_number}-{}.md",
         safe_file_component(sha)
@@ -445,7 +445,7 @@ fn safe_file_component(value: &str) -> String {
     }
 }
 
-fn write_report(path: &Path, report: &ValidationReport) -> Result<(), String> {
+pub(super) fn write_report(path: &Path, report: &ValidationReport) -> Result<(), String> {
     let Some(parent) = path.parent() else {
         return Err(format!("report path has no parent: {}", path.display()));
     };

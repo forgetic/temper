@@ -14,24 +14,21 @@ topology, Forgejo URL, issue/PR numbers, CI evidence, convergence timing, fake
 LLM request counts, and log/artifact paths.
 
 ```sh
-cargo dev-scenario-check
-cargo build --bin temper
-cargo run -p temper-scenario-cli -- run \
-  --tier live \
-  --temper-bin target/debug/temper \
-  scenarios/basic-delivery
-cargo run -p temper-scenario-cli -- validate-pr \
+cargo run -p temper-scenario-cli -- validate \
   --pr <merged-pr-number> \
   --sha <merged-main-sha> \
   --scenario scenarios/basic-delivery \
   --tier live \
-  --temper-bin target/debug/temper \
   --output-dir validation-artifacts/post-merge-pr-<merged-pr-number>
 ```
 
-The same report can be rendered from a previous scenario run without scraping
-stdout. Write a structured evidence file during the run, then pass that file (or
-its containing directory) to `validate-pr`:
+For the live `basic-delivery` runner, `validate` resolves an existing
+standalone `temper` binary or builds one with `cargo build --bin temper` before
+starting the live topology. Pass `--temper-bin <PATH>` only when you need to pin
+a prebuilt binary explicitly.
+
+The lower-level commands remain available when you need to split the run from
+report rendering or inspect an intermediate artifact manually:
 
 ```sh
 cargo run -p temper-scenario-cli -- run \
@@ -48,7 +45,11 @@ cargo run -p temper-scenario-cli -- validate-pr \
 
 When both `--scenario` and `--run-evidence` are supplied, `validate-pr` checks
 that the artifact's scenario, tier, source classification, and runner match the
-supplied manifest but still does not rerun the scenario for report evidence.
+supplied manifest but still does not rerun the scenario for report evidence. To
+validate a focused ephemeral bundle instead of the checked-in `basic-delivery`
+scenario, keep the same `validate` command and replace `--scenario` with the
+bundle path; the [scenario authoring guide](../../scenarios/README.md#single-validator-workflow-command)
+shows both a config-only inherited bundle and a bundle with a small script hook.
 
 ## Where to find the report in CI
 
@@ -63,21 +64,26 @@ Inside that artifact, the Markdown report uses this layout:
 
 ```text
 validation-artifacts/post-merge-pr-<merged-pr-number>/
-├── live-basic-delivery-artifacts/
+├── live-basic-delivery-artifacts/        # live tier logs/artifacts when used
 │   ├── init.log
 │   ├── repo-populate.log
 │   ├── standalone.log
 │   ├── fake-llm.log
 │   └── ci-diagnostics.log
-├── run-evidence.json          # present when validate-pr renders from prior run evidence
+├── script-assertions/                    # present when bundle hooks run
+│   └── .../context.json stdout.log stderr.log status.txt
+├── run-evidence.json
 ├── report-path.txt
-├── validate-pr.stderr
-└── validation-pr-<merged-pr-number>-<merged-main-sha>.md
+├── result-path.txt
+├── validation-pr-<merged-pr-number>-<merged-main-sha>.md
+└── validation-pr-<merged-pr-number>-<merged-main-sha>.json
 ```
 
-The same directory also contains `report-path.txt`, which records the exact path
-printed by `temper-scenario validate-pr`. The live artifact subdirectory is the
-retained copy of the log paths cited by the report.
+The Markdown report is the human-readable validation report. The sibling JSON
+file is the structured `temper.validator.result.v1` result rendered from the
+same `validate-pr` report model and run-evidence artifact. `report-path.txt` and
+`result-path.txt` repeat the exact paths printed by the workflow command for
+artifact consumers that prefer stable filenames.
 
 The workflow always prints the report path and report contents in the job log
 before attempting the upload. If `actions/upload-artifact` is not available
@@ -92,23 +98,16 @@ Check out the commit that was validated, then run:
 
 ```sh
 mkdir -p /tmp/temper-validation/pr-<merged-pr-number>
-cargo dev-scenario-check
-cargo build --bin temper
-cargo run -p temper-scenario-cli -- run \
-  --tier live \
-  --temper-bin target/debug/temper \
-  scenarios/basic-delivery
-cargo run -p temper-scenario-cli -- validate-pr \
+cargo run -p temper-scenario-cli -- validate \
   --pr <merged-pr-number> \
   --sha "$(git rev-parse HEAD)" \
   --scenario scenarios/basic-delivery \
   --tier live \
-  --temper-bin target/debug/temper \
   --output-dir /tmp/temper-validation/pr-<merged-pr-number>
 ```
 
 Use the merged `main` SHA from the Forgejo run or PR page when reproducing an
-older report. The temporary `validate-pr` bridge records the supplied PR
-number and SHA; it does not fetch live Forgejo PR context or prove that the SHA
-is still the current tip of `main`. For a quick local smoke test that does not
-produce validation-grade evidence, run `cargo dev-scenario-run-hermetic`.
+older report. The temporary report bridge records the supplied PR number and
+SHA; it does not fetch live Forgejo PR context or prove that the SHA is still
+the current tip of `main`. For a quick local smoke test that does not produce
+validation-grade evidence, run the same command with `--tier hermetic`.

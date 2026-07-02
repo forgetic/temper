@@ -30,6 +30,7 @@ struct HermeticRunner {
 struct LiveRunner {
     run_and_print: LiveRunAndPrint,
     evidence_lines: LiveEvidenceLines,
+    requires_standalone_temper: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -78,6 +79,7 @@ static RUNNERS: &[RunnerDefinition] = &[
         live: Some(LiveRunner {
             run_and_print: basic_delivery::run_live_and_print,
             evidence_lines: basic_delivery::run_live_evidence_lines_for_report,
+            requires_standalone_temper: true,
         }),
     },
     RunnerDefinition {
@@ -225,6 +227,16 @@ impl SelectedRunner {
 
     pub(super) fn selector_key(&self) -> &'static str {
         self.selector.key()
+    }
+
+    pub(super) fn requires_standalone_temper(&self, tier: ScenarioTier) -> bool {
+        match tier {
+            ScenarioTier::Hermetic => false,
+            ScenarioTier::Live => self
+                .runner
+                .live
+                .is_some_and(|runner| runner.requires_standalone_temper),
+        }
     }
 
     fn invariant_error(&self, tier: ScenarioTier) -> String {

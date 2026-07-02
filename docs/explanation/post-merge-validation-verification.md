@@ -1,10 +1,11 @@
 # Post-merge validation tooling verification report
 
 > Historical note: this report records the first-pass hermetic bridge that
-> existed before the validation-grade live `basic-delivery` lane was wired into
-> `temper-scenario`. Current post-merge validation uses `--tier live` with a
-> standalone `temper` binary and records real Forgejo/CI/convergence/log
-> evidence; see [Find a post-merge validation report](../how-to/post-merge-validation-report.md).
+> existed before the validation-grade live `basic-delivery` lane and the cohesive
+> `temper-scenario validate` workflow were wired in. Current post-merge
+> validation uses `validate --tier live`, which writes run evidence plus
+> Markdown/JSON report artifacts in one directory; see [Find a post-merge
+> validation report](../how-to/post-merge-validation-report.md).
 
 This report verifies the first-pass post-merge validation path for #35 using
 current `main` as the merged state and PR #73 as the representative recently
@@ -141,9 +142,11 @@ merged-only lane:
   `actions/checkout@v4` checks out the same expression. The workflow then
   compares `git rev-parse HEAD` with `MERGED_MAIN_SHA`, records the checked-out
   SHA in `$GITHUB_ENV`, and logs the PR number plus artifact directory.
-- Local mirror: the workflow runs the same cheap commands checked here:
-  scenario manifest check, deterministic hermetic `basic-delivery` run, and
-  `validate-pr` into `validation-artifacts/post-merge-pr-<pr-number>`.
+- Local mirror at the time of this historical report: the workflow ran the
+  same cheap commands checked here: scenario manifest check, deterministic
+  hermetic `basic-delivery` run, and `validate-pr` into
+  `validation-artifacts/post-merge-pr-<pr-number>`. The current workflow uses
+  the single `temper-scenario validate --tier live` command instead.
 - Report retention and visibility: the workflow writes `report-path.txt`, tests
   that the Markdown report exists, prints the path, prints the full report in a
   log group, appends it to `$GITHUB_STEP_SUMMARY` when available, and uploads the

@@ -16,7 +16,6 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       MERGED_MAIN_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
       VALIDATION_ARTIFACT_DIR: validation-artifacts/post-merge-pr-${{ github.event.pull_request.number }}
-      TEMPER_SCENARIO_TEMPER_BIN: target/debug/temper
     steps:
       - name: Checkout merged main commit
         # For a merged pull_request.closed event, the PR payload carries the
@@ -41,49 +40,48 @@ jobs:
           echo "Validating merged PR #${PR_NUMBER} at ${checked_out_sha}"
           echo "Validation artifact directory: ${VALIDATION_ARTIFACT_DIR}"
 
-      - name: Scenario manifest check
-        run: cargo dev-scenario-check
-
-      - name: Build standalone temper binary for live scenario validation
-        run: cargo build --bin temper
-
-      - name: Live basic-delivery scenario run
+      - name: Run live validator workflow
         # Validation-grade lane: real Forgejo, host forgejo-runner, standalone
-        # temper, and Jig fake LLM agents. This step fails instead of falling
-        # back to the hermetic memory runner if the live topology cannot run.
-        run: cargo run -p temper-scenario-cli -- run --tier live --temper-bin "$TEMPER_SCENARIO_TEMPER_BIN" scenarios/basic-delivery
-
-      - name: Write validation report
+        # temper, and Jig fake LLM agents. The cohesive validator command
+        # writes run evidence, retained logs, Markdown, and JSON output in one
+        # artifact directory, and builds/resolves standalone temper as needed.
         run: |
           set -eu
           mkdir -p "$VALIDATION_ARTIFACT_DIR"
-          report_path_file="$VALIDATION_ARTIFACT_DIR/report-path.txt"
-          validate_stderr="$VALIDATION_ARTIFACT_DIR/validate-pr.stderr"
           set +e
-          report_path=$(cargo run -p temper-scenario-cli -- validate-pr \
+          cargo run -p temper-scenario-cli -- validate \
             --pr "$PR_NUMBER" \
             --sha "$MERGED_MAIN_SHA" \
             --scenario scenarios/basic-delivery \
             --tier live \
-            --temper-bin "$TEMPER_SCENARIO_TEMPER_BIN" \
-            --output-dir "$VALIDATION_ARTIFACT_DIR" 2>"$validate_stderr")
+            --output-dir "$VALIDATION_ARTIFACT_DIR"
           validate_status=$?
           set -e
-          if [ -s "$validate_stderr" ]; then
-            cat "$validate_stderr" >&2
-          fi
-          if [ -z "$report_path" ]; then
-            echo "temper-scenario validate-pr did not print a report path" >&2
+          report_path="$VALIDATION_ARTIFACT_DIR/validation-pr-${PR_NUMBER}-${MERGED_MAIN_SHA}.md"
+          result_path="$VALIDATION_ARTIFACT_DIR/validation-pr-${PR_NUMBER}-${MERGED_MAIN_SHA}.json"
+          printf '%s\n' "$report_path" > "$VALIDATION_ARTIFACT_DIR/report-path.txt"
+          printf '%s\n' "$result_path" > "$VALIDATION_ARTIFACT_DIR/result-path.txt"
+          if [ ! -f "$report_path" ]; then
+            echo "temper-scenario validate did not write the expected report: $report_path" >&2
+            if [ "$validate_status" -eq 0 ]; then
+              exit 1
+            fi
             exit "$validate_status"
           fi
-          printf '%s\n' "$report_path" > "$report_path_file"
-          printf '%s\n' "$report_path"
-          test -f "$report_path"
           echo "VALIDATION_REPORT_PATH=$report_path" >> "$GITHUB_ENV"
+          echo "VALIDATION_RESULT_PATH=$result_path" >> "$GITHUB_ENV"
           echo "Markdown validation report: $report_path"
+          if [ -f "$result_path" ]; then
+            echo "JSON validation result: $result_path"
+          fi
           echo "::group::Post-merge validation report"
           cat "$report_path"
           echo "::endgroup::"
+          if [ -f "$result_path" ]; then
+            echo "::group::Post-merge validation result JSON"
+            cat "$result_path"
+            echo "::endgroup::"
+          fi
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
               echo "# Post-merge validation report"
@@ -91,12 +89,15 @@ jobs:
               echo "PR: #${PR_NUMBER}"
               echo "SHA: ${MERGED_MAIN_SHA}"
               echo "Report path: \`${report_path}\`"
+              if [ -f "$result_path" ]; then
+                echo "JSON result path: \`${result_path}\`"
+              fi
               echo
               cat "$report_path"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "$validate_status" -ne 0 ]; then
-            echo "temper-scenario validate-pr exited with status ${validate_status}" >&2
+            echo "temper-scenario validate exited with status ${validate_status}" >&2
             exit "$validate_status"
           fi
 
@@ -117,8 +118,14 @@ jobs:
           echo "actions/upload-artifact did not complete on this runner."
           echo "The Markdown report was printed above in the job log."
           echo "Report path for the retained job workspace: ${VALIDATION_REPORT_PATH:-unset}"
+          echo "JSON result path for the retained job workspace: ${VALIDATION_RESULT_PATH:-unset}"
           if [ -n "${VALIDATION_REPORT_PATH:-}" ] && [ -f "$VALIDATION_REPORT_PATH" ]; then
             echo "::group::Fallback validation report contents"
             cat "$VALIDATION_REPORT_PATH"
+            echo "::endgroup::"
+          fi
+          if [ -n "${VALIDATION_RESULT_PATH:-}" ] && [ -f "$VALIDATION_RESULT_PATH" ]; then
+            echo "::group::Fallback validation result JSON"
+            cat "$VALIDATION_RESULT_PATH"
             echo "::endgroup::"
           fi
