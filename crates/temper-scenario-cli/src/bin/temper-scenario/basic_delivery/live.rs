@@ -172,7 +172,21 @@ fn live_artifact(
             labels: evidence.final_state.pull_request.labels.clone(),
             head_branch: Some(evidence.final_state.pull_request.head_branch.clone()),
             head_sha: evidence.final_state.pull_request.head_sha.clone(),
-            merged_sha: evidence.final_state.pull_request.head_sha.clone(),
+            merged_sha: evidence.final_state.pull_request.merged_sha.clone(),
+        }],
+        repositories: vec![run_evidence::RepositoryStateEvidence {
+            id: Some(evidence.repo_id.clone()),
+            slug: Some(evidence.repo_slug.clone()),
+            branches: vec![run_evidence::RepositoryBranchStateEvidence {
+                name: evidence.repo_default_branch.clone(),
+                head_sha: evidence
+                    .final_state
+                    .pull_request
+                    .merged_sha
+                    .clone()
+                    .or_else(|| evidence.final_state.pull_request.head_sha.clone()),
+                contains_engineer_diff: Some(evidence.final_state.pull_request.state == "merged"),
+            }],
         }],
         ci: run_evidence::CiStateEvidence {
             completed_jobs: Some(evidence.final_state.ci_jobs.len()),
@@ -203,7 +217,7 @@ fn live_artifact(
         issue_number: Some(evidence.final_state.issue.number),
         pr_number: Some(evidence.final_state.pull_request.number),
         head_branch: Some(evidence.final_state.pull_request.head_branch.clone()),
-        merged_sha: evidence.final_state.pull_request.head_sha.clone(),
+        merged_sha: evidence.final_state.pull_request.merged_sha.clone(),
         temper_binary: Some(evidence.temper_binary.display().to_string()),
         fake_llm_url: Some(evidence.fake_llm.base_url.clone()),
     });
@@ -264,7 +278,7 @@ fn live_evidence_lines(
             evidence.final_state.issue.labels
         ),
         format!(
-            "implementation PR: #{} \"{}\" state={} author={} merged_by={:?} head={} sha={:?} labels={:?}",
+            "implementation PR: #{} \"{}\" state={} author={} merged_by={:?} head={} sha={:?} merged_sha={:?} labels={:?}",
             evidence.final_state.pull_request.number,
             evidence.final_state.pull_request.title,
             evidence.final_state.pull_request.state,
@@ -272,6 +286,7 @@ fn live_evidence_lines(
             evidence.final_state.pull_request.merged_by,
             evidence.final_state.pull_request.head_branch,
             evidence.final_state.pull_request.head_sha,
+            evidence.final_state.pull_request.merged_sha,
             evidence.final_state.pull_request.labels
         ),
         format!(

@@ -4,7 +4,7 @@ use toml::Value;
 
 use super::super::model::{
     ASSERTION_STATUS_FAILED, ASSERTION_STATUS_PASSED, ASSERTION_STATUS_UNSUPPORTED,
-    AssertionResultEvidence, IssueStateEvidence, PullRequestStateEvidence,
+    AssertionResultEvidence, IssueStateEvidence, PullRequestStateEvidence, RepositoryStateEvidence,
 };
 
 pub(super) struct SelectedIssue<'a> {
@@ -14,6 +14,11 @@ pub(super) struct SelectedIssue<'a> {
 
 pub(super) struct SelectedPullRequest<'a> {
     pub(super) pull_request: &'a PullRequestStateEvidence,
+    pub(super) note: Option<String>,
+}
+
+pub(super) struct SelectedRepository<'a> {
+    pub(super) repository: &'a RepositoryStateEvidence,
     pub(super) note: Option<String>,
 }
 
@@ -137,10 +142,92 @@ pub(super) fn select_pull_request<'a>(
     }
 }
 
+pub(super) fn select_repository<'a>(
+    repositories: &'a [RepositoryStateEvidence],
+    id: Option<&str>,
+) -> Result<SelectedRepository<'a>, SelectionProblem> {
+    if repositories.is_empty() {
+        return Err(SelectionProblem::Unsupported(
+            "run evidence has no final repository facts".to_string(),
+        ));
+    }
+    if let Some(id) = id {
+        let matches = repositories
+            .iter()
+            .filter(|repository| repository_matches_id(repository, id))
+            .collect::<Vec<_>>();
+        return match matches.as_slice() {
+            [repository] => Ok(SelectedRepository {
+                repository,
+                note: None,
+            }),
+            [] if repositories.iter().all(repository_has_no_identity) && repositories.len() == 1 => {
+                Ok(SelectedRepository {
+                    repository: &repositories[0],
+                    note: Some(
+                        "matched sole repository because run evidence has no repository ids or slugs"
+                            .to_string(),
+                    ),
+                })
+            }
+            [] if repositories.iter().all(repository_has_no_identity) => {
+                Err(SelectionProblem::Unsupported(format!(
+                    "cannot resolve repository artifact `repo:{id}` because run evidence has multiple repositories and no repository ids or slugs"
+                )))
+            }
+            [] => Err(SelectionProblem::Failed(format!(
+                "expected repository artifact `repo:{id}` was not present; observed repositories {:?}",
+                repository_identities(repositories)
+            ))),
+            _ => Err(SelectionProblem::Failed(format!(
+                "repository artifact id `repo:{id}` matched multiple repositories"
+            ))),
+        };
+    }
+    match repositories {
+        [repository] => Ok(SelectedRepository {
+            repository,
+            note: None,
+        }),
+        _ => Err(SelectionProblem::Unsupported(
+            "repository assertion without a repository id is ambiguous because multiple repositories are present"
+                .to_string(),
+        )),
+    }
+}
+
+fn repository_matches_id(repository: &RepositoryStateEvidence, id: &str) -> bool {
+    repository.id.as_deref() == Some(id) || repository.slug.as_deref() == Some(id)
+}
+
+fn repository_has_no_identity(repository: &RepositoryStateEvidence) -> bool {
+    repository.id.is_none() && repository.slug.is_none()
+}
+
+fn repository_identities(repositories: &[RepositoryStateEvidence]) -> Vec<String> {
+    repositories
+        .iter()
+        .map(|repository| {
+            [
+                repository.id.as_deref().map(|id| format!("id={id}")),
+                repository
+                    .slug
+                    .as_deref()
+                    .map(|slug| format!("slug={slug}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ")
+        })
+        .filter(|identity| !identity.is_empty())
+        .collect()
+}
+
 pub(super) enum ArtifactSelector {
     Issue(Option<String>),
     PullRequest(Option<String>),
-    Repo,
+    Repo(Option<String>),
     Unknown(String),
 }
 
@@ -153,7 +240,7 @@ impl ArtifactSelector {
         match kind {
             "issue" => Self::Issue(id),
             "pull_request" | "pr" => Self::PullRequest(id),
-            "repo" | "repository" => Self::Repo,
+            "repo" | "repository" => Self::Repo(id),
             other => Self::Unknown(other.to_string()),
         }
     }

@@ -46,6 +46,26 @@ fn write_failing_assertion_bundle(bundle: &Path) {
     .expect("write failing assertion manifest");
 }
 
+fn write_failing_repo_assertion_bundle(bundle: &Path) {
+    std::fs::create_dir_all(bundle).expect("create failing repo assertion bundle");
+    std::fs::write(
+        bundle.join("scenario.toml"),
+        "name = \"failing-basic-delivery-repo-assertion\"\n\
+         intent = \"Ephemeral validation bundle with an intentionally failing repository assertion.\"\n\
+         [fixtures]\n\
+         extends = \"scenarios/basic-delivery\"\n\
+         [runner]\n\
+         uses = \"basic-delivery\"\n\
+         [expect]\n\
+         [[expect.checks]]\n\
+         id = \"wrong-default-branch\"\n\
+         artifact = \"repo:service\"\n\
+         branch = \"trunk\"\n\
+         contains_engineer_diff = true\n",
+    )
+    .expect("write failing repo assertion manifest");
+}
+
 fn read_json(path: &Path) -> serde_json::Value {
     let source = std::fs::read_to_string(path).expect("read json");
     serde_json::from_str(&source).expect("parse json")
@@ -88,7 +108,7 @@ fn run_writes_basic_delivery_evidence_artifact() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("[unsupported] default-branch-updated"),
+        stdout.contains("[passed] default-branch-updated"),
         "{stdout}"
     );
     let json = read_json(&evidence);
@@ -128,12 +148,22 @@ fn run_writes_basic_delivery_evidence_artifact() {
         json["final_state"]["ci"]["jobs"][0]["pull_request_number"],
         1
     );
+    assert_eq!(json["final_state"]["repositories"][0]["id"], "service");
+    assert_eq!(
+        json["final_state"]["repositories"][0]["slug"],
+        "acme/service"
+    );
+    assert_eq!(
+        json["final_state"]["repositories"][0]["branches"][0]["name"],
+        "main"
+    );
+    assert_eq!(
+        json["final_state"]["repositories"][0]["branches"][0]["contains_engineer_diff"],
+        true
+    );
     assert_eq!(json["assertions"]["status"], "passed");
     assert_eq!(json["assertions"]["failed"], 0);
-    assert!(
-        json["assertions"]["unsupported"].as_u64().unwrap() >= 1,
-        "{json:#?}"
-    );
+    assert_eq!(json["assertions"]["unsupported"], 0);
     assert!(
         json["assertions"]["results"]
             .as_array()
@@ -149,7 +179,7 @@ fn run_writes_basic_delivery_evidence_artifact() {
             .unwrap()
             .iter()
             .any(|result| {
-                result["id"] == "default-branch-updated" && result["status"] == "unsupported"
+                result["id"] == "default-branch-updated" && result["status"] == "passed"
             })
     );
     assert!(json["convergence"]["ticks"].as_u64().unwrap() > 0);
@@ -183,6 +213,8 @@ fn run_evidence_records_ephemeral_inherited_bundle_context() {
     assert_eq!(json["scenario"]["source"], "ephemeral");
     assert_eq!(json["scenario"]["tier"], "hermetic");
     assert_eq!(json["scenario"]["runner_id"], "basic-delivery");
+    assert_eq!(json["assertions"]["status"], "passed");
+    assert_eq!(json["assertions"]["unsupported"], 0);
     assert_eq!(json["scenario"]["runner_selector"], "runner.uses");
     assert_eq!(
         json["scenario"]["topology"]["kind"],
@@ -196,6 +228,42 @@ fn run_evidence_records_ephemeral_inherited_bundle_context() {
                 })
         }),
         "{json:#?}"
+    );
+}
+
+#[test]
+fn run_writes_failing_repo_assertion_diagnostic() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("failing-repo-assertion-bundle");
+    write_failing_repo_assertion_bundle(&bundle);
+    let evidence = dir.path().join("failing-repo.run-evidence.json");
+
+    let output = temper_scenario(&[
+        "run",
+        "--evidence-out",
+        &evidence.to_string_lossy(),
+        &bundle.to_string_lossy(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "failing assertion should fail run"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(stdout.contains("[failed] wrong-default-branch"), "{stdout}");
+    assert!(
+        stdout.contains("expected repository `service` branch `trunk` was absent"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("observed branches [\"main\"]"), "{stdout}");
+    let json = read_json(&evidence);
+    assert_eq!(json["assertions"]["status"], "failed");
+    assert!(
+        json["assertions"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|result| result["id"] == "wrong-default-branch" && result["status"] == "failed")
     );
 }
 
@@ -363,9 +431,10 @@ fn validate_pr_ingests_run_evidence_without_rerunning_scenario() {
         "{markdown}"
     );
     assert!(
-        markdown.contains("assertion unsupported `default-branch-updated`"),
+        markdown.contains("assertion passed `default-branch-updated`"),
         "{markdown}"
     );
+    assert!(!markdown.contains("assertion unsupported"), "{markdown}");
     assert!(
         markdown.contains("No --scenario path was supplied with --run-evidence"),
         "{markdown}"

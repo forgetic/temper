@@ -249,6 +249,8 @@ impl LiveBasicDeliveryHarness {
             temper_binary: self.temper.binary.clone(),
             forge_url: server.base_url().to_string(),
             repo_slug: self.scenario.repo.slug.clone(),
+            repo_id: self.scenario.repo.id.clone(),
+            repo_default_branch: self.scenario.repo.default_branch.clone(),
             forge_cache_hit: cached.cache_hit,
             runner_running: runner.is_running(),
             startup: started.elapsed().saturating_sub(convergence),
@@ -283,6 +285,8 @@ pub struct LiveBasicDeliveryEvidence {
     pub temper_binary: PathBuf,
     pub forge_url: String,
     pub repo_slug: String,
+    pub repo_id: String,
+    pub repo_default_branch: String,
     pub forge_cache_hit: bool,
     pub runner_running: bool,
     pub startup: Duration,
@@ -407,6 +411,7 @@ pub struct PullRequestEvidence {
     pub merged_by: Option<String>,
     pub head_branch: String,
     pub head_sha: Option<String>,
+    pub merged_sha: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

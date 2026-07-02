@@ -7,7 +7,7 @@ use toml::Value;
 
 use super::model::{
     AssertionEvidence, AssertionResultEvidence, CiJobEvidence, PullRequestStateEvidence,
-    RunEvidenceArtifact,
+    RepositoryBranchStateEvidence, RepositoryStateEvidence, RunEvidenceArtifact,
 };
 
 #[path = "assertions/summary.rs"]
@@ -17,15 +17,16 @@ mod support;
 
 use summary::{evaluate_counts, evaluate_templates};
 use support::{
-    ArtifactSelector, ResultBuilder, SelectedIssue, SelectedPullRequest, SelectionProblem,
-    ci_conclusion_failed, ci_conclusion_passed, has_label, same_normalized, select_issue,
-    select_pull_request, string_array,
+    ArtifactSelector, ResultBuilder, SelectedIssue, SelectedPullRequest, SelectedRepository,
+    SelectionProblem, ci_conclusion_failed, ci_conclusion_passed, has_label, same_normalized,
+    select_issue, select_pull_request, select_repository, string_array,
 };
 
 const CONTROL_FIELDS: &[&str] = &["id", "artifact"];
 const SUPPORTED_CHECK_FIELDS: &[&str] = &["state", "labels", "labels_cleared", "ci"];
+const SUPPORTED_REPO_CHECK_FIELDS: &[&str] = &["branch", "contains_engineer_diff"];
 const SOURCE_LINK_FIELDS: &[&str] = &["source_artifact", "metadata_parent"];
-const BRANCH_REF_FIELDS: &[&str] = &["branch", "ref", "contains_engineer_diff"];
+const PROVIDER_REF_FIELDS: &[&str] = &["ref"];
 
 pub(crate) fn evaluate_manifest_assertions(
     manifest_path: &Path,
@@ -121,7 +122,9 @@ fn evaluate_check(
     let mut builder = ResultBuilder::new(id, description, artifact_name.clone());
 
     for key in check.keys() {
-        if CONTROL_FIELDS.contains(&key.as_str()) || SUPPORTED_CHECK_FIELDS.contains(&key.as_str())
+        if CONTROL_FIELDS.contains(&key.as_str())
+            || SUPPORTED_CHECK_FIELDS.contains(&key.as_str())
+            || SUPPORTED_REPO_CHECK_FIELDS.contains(&key.as_str())
         {
             continue;
         }
@@ -129,9 +132,9 @@ fn evaluate_check(
             builder = builder.unsupported(format!(
                 "field `{key}` requires source/parent relationship facts that are not present in structured run evidence yet"
             ));
-        } else if BRANCH_REF_FIELDS.contains(&key.as_str()) {
+        } else if PROVIDER_REF_FIELDS.contains(&key.as_str()) {
             builder = builder.unsupported(format!(
-                "field `{key}` requires repository branch/ref facts; provider probing is deferred to the script-hook phase"
+                "field `{key}` requires provider branch/ref probing; keep provider-only ref existence checks in script-hook assertions"
             ));
         } else {
             builder = builder.unsupported(format!(
@@ -149,15 +152,17 @@ fn evaluate_check(
     };
 
     match ArtifactSelector::parse(&artifact_name) {
-        ArtifactSelector::Issue(id) => evaluate_issue_check(check, artifact, id.as_deref(), builder),
+        ArtifactSelector::Issue(id) => {
+            evaluate_issue_check(check, artifact, id.as_deref(), builder)
+        }
         ArtifactSelector::PullRequest(id) => {
             evaluate_pull_request_check(check, artifact, id.as_deref(), builder)
         }
-        ArtifactSelector::Repo => builder
-            .unsupported("repository branch/ref assertions are declared, but run evidence has no repository branch facts")
-            .build(),
+        ArtifactSelector::Repo(id) => evaluate_repo_check(check, artifact, id.as_deref(), builder),
         ArtifactSelector::Unknown(kind) => builder
-            .unsupported(format!("artifact kind `{kind}` is not supported by the assertion engine"))
+            .unsupported(format!(
+                "artifact kind `{kind}` is not supported by the assertion engine"
+            ))
             .build(),
     }
 }
@@ -201,6 +206,7 @@ fn evaluate_issue_check(
     if check.contains_key("ci") {
         builder = builder.unsupported("field `ci` requires a pull_request artifact");
     }
+    builder = reject_repo_fields_for_non_repo(builder, check);
 
     builder.build()
 }
@@ -248,8 +254,207 @@ fn evaluate_pull_request_check(
             builder = builder.failed("ci must be a string (`passed` or `failed`)");
         }
     }
+    builder = reject_repo_fields_for_non_repo(builder, check);
 
     builder.build()
+}
+
+fn evaluate_repo_check(
+    check: &toml::Table,
+    artifact: &RunEvidenceArtifact,
+    id: Option<&str>,
+    mut builder: ResultBuilder,
+) -> AssertionResultEvidence {
+    let selected = select_repository(&artifact.final_state.repositories, id);
+    let SelectedRepository { repository, note } = match selected {
+        Ok(selected) => selected,
+        Err(SelectionProblem::Failed(message)) => return builder.failed(message).build(),
+        Err(SelectionProblem::Unsupported(message)) => return builder.unsupported(message).build(),
+    };
+    if let Some(note) = note {
+        builder = builder.passed(note);
+    }
+
+    for key in ["state", "labels", "labels_cleared", "ci"] {
+        if check.contains_key(key) {
+            builder = builder.failed(format!(
+                "field `{key}` requires an issue or pull_request artifact"
+            ));
+        }
+    }
+
+    let repo_name = repository_display_name(repository, id);
+    let expected_branch = match check.get("branch") {
+        Some(value) => match value.as_str().map(str::trim) {
+            Some(branch) if !branch.is_empty() => Some(branch),
+            Some(_) => {
+                builder = builder.failed("branch must be a non-empty string");
+                None
+            }
+            None => {
+                builder = builder.failed("branch must be a string");
+                None
+            }
+        },
+        None => None,
+    };
+
+    let selected_branch = select_repository_branch(
+        repository,
+        expected_branch,
+        &repo_name,
+        check.contains_key("contains_engineer_diff"),
+    );
+    let branch = match selected_branch {
+        BranchSelection::Selected { branch, detail } => {
+            builder = builder.passed(detail);
+            Some(branch)
+        }
+        BranchSelection::Missing(detail) => {
+            builder = builder.failed(detail);
+            None
+        }
+        BranchSelection::Ambiguous(detail) | BranchSelection::Unsupported(detail) => {
+            builder = builder.unsupported(detail);
+            None
+        }
+        BranchSelection::NotNeeded => None,
+    };
+
+    if let Some(value) = check.get("contains_engineer_diff") {
+        let Some(expected) = value.as_bool() else {
+            return builder
+                .failed("contains_engineer_diff must be a boolean")
+                .build();
+        };
+        let Some(branch) = branch else {
+            return builder
+                .unsupported(
+                    "contains_engineer_diff could not be evaluated because no branch fact matched",
+                )
+                .build();
+        };
+        builder = evaluate_contains_engineer_diff(builder, &repo_name, branch, expected);
+    }
+
+    builder.build()
+}
+
+fn reject_repo_fields_for_non_repo(
+    mut builder: ResultBuilder,
+    check: &toml::Table,
+) -> ResultBuilder {
+    for key in SUPPORTED_REPO_CHECK_FIELDS {
+        if check.contains_key(*key) {
+            builder = builder.failed(format!("field `{key}` requires a repository artifact"));
+        }
+    }
+    builder
+}
+
+fn repository_display_name(repository: &RepositoryStateEvidence, id: Option<&str>) -> String {
+    id.map(str::to_string)
+        .or_else(|| repository.id.clone())
+        .or_else(|| repository.slug.clone())
+        .unwrap_or_else(|| "<unknown>".to_string())
+}
+
+enum BranchSelection<'a> {
+    Selected {
+        branch: &'a RepositoryBranchStateEvidence,
+        detail: String,
+    },
+    Missing(String),
+    Ambiguous(String),
+    Unsupported(String),
+    NotNeeded,
+}
+
+fn select_repository_branch<'a>(
+    repository: &'a RepositoryStateEvidence,
+    expected_branch: Option<&str>,
+    repo_name: &str,
+    branch_required: bool,
+) -> BranchSelection<'a> {
+    if let Some(expected) = expected_branch {
+        let matches = repository
+            .branches
+            .iter()
+            .filter(|branch| same_normalized(&branch.name, expected))
+            .collect::<Vec<_>>();
+        return match matches.as_slice() {
+            [branch] => BranchSelection::Selected {
+                branch,
+                detail: format!(
+                    "repository `{repo_name}` branch `{}` is present",
+                    branch.name
+                ),
+            },
+            [] => BranchSelection::Missing(format!(
+                "expected repository `{repo_name}` branch `{expected}` was absent; observed branches {:?}",
+                repository_branch_names(repository)
+            )),
+            _ => BranchSelection::Ambiguous(format!(
+                "repository `{repo_name}` branch `{expected}` matched multiple branch facts"
+            )),
+        };
+    }
+
+    match repository.branches.as_slice() {
+        [] if branch_required => BranchSelection::Unsupported(format!(
+            "run evidence has no branch facts for repository `{repo_name}`"
+        )),
+        [] => BranchSelection::NotNeeded,
+        [branch] => BranchSelection::Selected {
+            branch,
+            detail: format!(
+                "matched sole repository branch `{}` because check has no `branch` selector",
+                branch.name
+            ),
+        },
+        _ if branch_required => BranchSelection::Unsupported(format!(
+            "contains_engineer_diff requires a `branch` selector because repository `{repo_name}` has multiple branch facts"
+        )),
+        _ => BranchSelection::NotNeeded,
+    }
+}
+
+fn repository_branch_names(repository: &RepositoryStateEvidence) -> Vec<&str> {
+    repository
+        .branches
+        .iter()
+        .map(|branch| branch.name.as_str())
+        .collect()
+}
+
+fn evaluate_contains_engineer_diff(
+    builder: ResultBuilder,
+    repo_name: &str,
+    branch: &RepositoryBranchStateEvidence,
+    expected: bool,
+) -> ResultBuilder {
+    let Some(actual) = branch.contains_engineer_diff else {
+        return builder.unsupported(format!(
+            "repository `{repo_name}` branch `{}` is missing contains_engineer_diff fact",
+            branch.name
+        ));
+    };
+    if actual == expected {
+        let state = if actual {
+            "contains"
+        } else {
+            "does not contain"
+        };
+        builder.passed(format!(
+            "repository `{repo_name}` branch `{}` {state} the engineer diff",
+            branch.name
+        ))
+    } else {
+        builder.failed(format!(
+            "expected repository `{repo_name}` branch `{}` contains_engineer_diff={expected}, observed {actual}",
+            branch.name
+        ))
+    }
 }
 
 fn evaluate_state(

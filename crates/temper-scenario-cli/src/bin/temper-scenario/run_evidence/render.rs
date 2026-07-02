@@ -121,6 +121,21 @@ fn final_state_details(final_state: &FinalStateEvidence) -> Vec<String> {
         }
         details.push(detail);
     }
+    for repository in &final_state.repositories {
+        let id = repository.id.as_deref().unwrap_or("unknown");
+        let slug = repository.slug.as_deref().unwrap_or("unknown");
+        details.push(format!("final repo: id={id} slug={slug}"));
+        for branch in &repository.branches {
+            let mut detail = format!("final repo branch: repo={id} name={}", branch.name);
+            if let Some(head_sha) = branch.head_sha.as_deref() {
+                detail.push_str(&format!(" head_sha={head_sha}"));
+            }
+            if let Some(contains) = branch.contains_engineer_diff {
+                detail.push_str(&format!(" contains_engineer_diff={contains}"));
+            }
+            details.push(detail);
+        }
+    }
     if let Some(completed_jobs) = final_state.ci.completed_jobs {
         details.push(format!("final CI: {completed_jobs} completed job(s)"));
     }

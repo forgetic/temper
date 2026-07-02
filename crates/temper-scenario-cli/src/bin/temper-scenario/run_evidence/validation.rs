@@ -42,11 +42,13 @@ impl RunEvidenceArtifact {
         }
         if self.final_state.issues.is_empty()
             && self.final_state.pull_requests.is_empty()
+            && self.final_state.repositories.is_empty()
             && self.final_state.ci.completed_jobs.is_none()
             && self.final_state.ci.jobs.is_empty()
         {
             diagnostics.push(
-                "run evidence final_state has no issue, pull request, or CI data".to_string(),
+                "run evidence final_state has no issue, pull request, repository, or CI data"
+                    .to_string(),
             );
         }
         if let Some(assertions) = &self.assertions {

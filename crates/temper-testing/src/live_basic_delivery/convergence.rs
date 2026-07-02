@@ -378,6 +378,7 @@ fn pr_evidence(pr: &PullRequest) -> PullRequestEvidence {
         merged_by: pr.merge.as_ref().map(|merge| merge.merged_by.to_string()),
         head_branch: pr.source.branch.clone(),
         head_sha: pr.head_sha.clone(),
+        merged_sha: pr.merge.as_ref().map(|merge| merge.commit_sha.clone()),
     }
 }
 
