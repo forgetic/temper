@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+mod finding;
 mod findings;
+mod online;
 mod options;
 mod output;
 
@@ -10,11 +12,33 @@ use temper_cli_common::{EX_USAGE, EnvMap, LoadOptions, OutputFormat, PathResolve
 use temper_config::{Finding, LoadedPaths};
 
 use crate::load_for_with_secret_validation;
+use finding::{CheckCategory, CheckFinding};
 use findings::{add_offline_findings, error_finding, scoped_findings};
+use online::add_online_findings;
 use options::{CheckAction, CheckOptions, parse_check_args};
 use output::{has_blocking_findings, print_validation_json};
 
-pub(crate) use output::{has_error_findings, print_validation_human};
+pub(crate) fn print_validation_human(loaded: &LoadedPaths, findings: &[Finding]) {
+    let findings = findings
+        .iter()
+        .map(|finding| {
+            if finding.error {
+                CheckFinding::offline_error(
+                    "config",
+                    CheckCategory::Config,
+                    finding.message.clone(),
+                )
+            } else {
+                CheckFinding::offline_note("config", CheckCategory::Config, finding.message.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+    output::print_validation_human(loaded, &findings);
+}
+
+pub(crate) fn has_error_findings(findings: &[Finding]) -> bool {
+    findings.iter().any(|finding| finding.error)
+}
 
 /// Everything top-level `temper check` needs, with no ambient environment access.
 pub struct CheckInputs<'a> {
@@ -31,7 +55,7 @@ pub struct CheckInputs<'a> {
 }
 
 pub const CHECK_USAGE: &str = "\
-Validate the resolved Temper config and credentials offline.
+Validate the resolved Temper config and credentials.
 
 Usage: temper [GLOBAL OPTIONS] check [OPTIONS]
 
@@ -40,7 +64,7 @@ Options:
                            Component scope to validate (default: standalone)
       --pool <NAME>        Worker pool to validate with --component worker
       --strict             Treat notes and warnings as failures
-      --online             Accepted for future provider/reachability checks; currently offline only
+      --online             Also run component-scoped Forge/provider reachability checks
   -h, --help               Print help
 
 Global options:
@@ -80,7 +104,7 @@ fn run_check(
 ) -> ExitCode {
     let report = validation_report(options, env, paths, &check_options);
     match format {
-        OutputFormat::Human => print_validation_human(&report.loaded, &report.findings),
+        OutputFormat::Human => output::print_validation_human(&report.loaded, &report.findings),
         OutputFormat::Json => {
             if let Err(error) =
                 print_validation_json(&report.loaded, &report.findings, &check_options)
@@ -100,7 +124,7 @@ fn run_check(
 #[derive(Debug, Clone)]
 struct ValidationReport {
     loaded: LoadedPaths,
-    findings: Vec<Finding>,
+    findings: Vec<CheckFinding>,
     load_failed: bool,
 }
 
@@ -114,6 +138,9 @@ fn validation_report(
         Ok((resolved, loaded)) => {
             let mut findings = scoped_findings(&resolved, check_options);
             add_offline_findings(&resolved, check_options, &mut findings);
+            if check_options.online {
+                add_online_findings(&resolved, env, paths, check_options, &mut findings);
+            }
             ValidationReport {
                 loaded,
                 findings,

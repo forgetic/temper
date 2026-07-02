@@ -4,6 +4,8 @@
 mod compat;
 #[path = "check_cli/help.rs"]
 mod help;
+#[path = "check_cli/online.rs"]
+mod online;
 #[path = "check_cli/secrets.rs"]
 mod secrets;
 #[path = "check_cli/status.rs"]

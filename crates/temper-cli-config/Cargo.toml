@@ -4,10 +4,11 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "The `temper config` subcommand: validate / show / init-template. Thin argv + terminal-I/O over temper-config; carries no engine/worker/agent deps."
+description = "The `temper config` subcommand: validate / show / init-template. Thin argv + terminal-I/O over temper-config, with HTTP I/O only for `temper check --online` probes."
 
 [dependencies]
 serde_json = { workspace = true }
+skein = { workspace = true }
 temper-cli-common = { path = "../temper-cli-common" }
 temper-config = { path = "../temper-config" }
 temper-workflow = { path = "../temper-workflow" }

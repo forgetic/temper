@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use temper_config::{Finding, LoadedPaths};
+use temper_config::LoadedPaths;
 
+use super::finding::{CheckFinding, CheckPhase};
 use super::options::CheckOptions;
 
-pub(crate) fn print_validation_human(loaded: &LoadedPaths, findings: &[Finding]) {
+pub(crate) fn print_validation_human(loaded: &LoadedPaths, findings: &[CheckFinding]) {
     if let Some(path) = &loaded.config {
         println!("config:      {}", path.display());
     } else {
@@ -21,18 +22,26 @@ pub(crate) fn print_validation_human(loaded: &LoadedPaths, findings: &[Finding])
         println!("OK — no problems found.");
         return;
     }
-    for Finding { error, message } in findings {
-        if *error {
-            println!("error: {message}");
+    for finding in findings {
+        if finding.check == CheckPhase::Online {
+            let prefix = if finding.error { "error:" } else { "note: " };
+            println!(
+                "{prefix} [online/{}/{}] {}",
+                finding.scope,
+                finding.category.as_str(),
+                finding.message
+            );
+        } else if finding.error {
+            println!("error: {}", finding.message);
         } else {
-            println!("note:  {message}");
+            println!("note:  {}", finding.message);
         }
     }
 }
 
 pub(super) fn print_validation_json(
     loaded: &LoadedPaths,
-    findings: &[Finding],
+    findings: &[CheckFinding],
     options: &CheckOptions,
 ) -> Result<(), String> {
     let status = if has_blocking_findings(findings, options.strict) {
@@ -54,6 +63,9 @@ pub(super) fn print_validation_json(
             serde_json::json!({
                 "severity": if finding.error { "error" } else { "note" },
                 "message": &finding.message,
+                "check": finding.check.as_str(),
+                "scope": &finding.scope,
+                "category": finding.category.as_str(),
             })
         })
         .collect::<Vec<_>>();
@@ -78,10 +90,10 @@ pub(super) fn print_validation_json(
     Ok(())
 }
 
-pub(crate) fn has_error_findings(findings: &[Finding]) -> bool {
+pub(crate) fn has_error_findings(findings: &[CheckFinding]) -> bool {
     findings.iter().any(|finding| finding.error)
 }
 
-pub(super) fn has_blocking_findings(findings: &[Finding], strict: bool) -> bool {
+pub(super) fn has_blocking_findings(findings: &[CheckFinding], strict: bool) -> bool {
     has_error_findings(findings) || (strict && !findings.is_empty())
 }
