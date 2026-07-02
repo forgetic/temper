@@ -269,6 +269,8 @@ fn is_path_leaf_key(key: &str) -> bool {
             | "manifest"
             | "intent_path"
             | "ci_source"
+            | "command"
+            | "cwd"
     ) || key.ends_with("_path")
         || key.ends_with("_file")
         || key.ends_with("_dir")

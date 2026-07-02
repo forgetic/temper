@@ -297,12 +297,24 @@ fn run_command(args: &[String]) -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                 };
-            let assertions_failed = assertion_evidence
+            if let Some(assertions) = assertion_evidence {
+                artifact.assertions = Some(assertions);
+            }
+
+            let artifact_dir = run_artifact_dir(args.evidence_out.as_deref(), &manifest.name);
+            if let Err(error) =
+                run_evidence::append_script_assertions(manifest_path, &mut artifact, &artifact_dir)
+            {
+                eprintln!("temper-scenario run: evaluate script assertions: {error}");
+                return ExitCode::FAILURE;
+            }
+
+            let assertions_failed = artifact
+                .assertions
                 .as_ref()
                 .is_some_and(|assertions| assertions.has_failures());
-            if let Some(assertions) = assertion_evidence {
-                run_evidence::print_assertions(&assertions);
-                artifact.assertions = Some(assertions);
+            if let Some(assertions) = artifact.assertions.as_ref() {
+                run_evidence::print_assertions(assertions);
             }
             if let Some(path) = args.evidence_out.as_deref() {
                 match artifact.write_to_path(path) {
@@ -324,6 +336,45 @@ fn run_command(args: &[String]) -> ExitCode {
             eprintln!("temper-scenario run: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn run_artifact_dir(evidence_out: Option<&Path>, scenario_name: &str) -> PathBuf {
+    if let Some(path) = evidence_out {
+        if path.is_dir() {
+            return path.to_path_buf();
+        }
+        return path
+            .parent()
+            .map(Path::to_path_buf)
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+
+    PathBuf::from("target")
+        .join("temper-scenario-artifacts")
+        .join(format!(
+            "{}-{}",
+            safe_file_component(scenario_name),
+            std::process::id()
+        ))
+}
+
+fn safe_file_component(value: &str) -> String {
+    let safe = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if safe.is_empty() {
+        "scenario".to_string()
+    } else {
+        safe
     }
 }
 

@@ -10,6 +10,8 @@ mod io;
 mod model;
 #[path = "run_evidence/render.rs"]
 mod render;
+#[path = "run_evidence/script_assertions.rs"]
+mod script_assertions;
 #[path = "run_evidence/validation.rs"]
 mod validation;
 
@@ -21,3 +23,4 @@ pub(super) use model::{
     IssueStateEvidence, ProviderEvidence, PullRequestStateEvidence, RunEvidenceArtifact,
     WorkerTickEvidence,
 };
+pub(super) use script_assertions::append_script_assertions;

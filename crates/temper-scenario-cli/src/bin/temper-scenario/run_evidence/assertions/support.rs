@@ -213,6 +213,17 @@ impl ResultBuilder {
             status: status.to_string(),
             description: self.description,
             artifact: self.artifact,
+            kind: None,
+            phase: None,
+            command: None,
+            cwd: None,
+            context_path: None,
+            stdout_path: None,
+            stderr_path: None,
+            status_path: None,
+            exit_status: None,
+            timeout_ms: None,
+            duration_ms: None,
             details: self.details,
         }
     }

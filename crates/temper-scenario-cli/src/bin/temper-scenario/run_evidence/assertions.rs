@@ -6,7 +6,6 @@ use temper_scenario_core::load_resolved_manifest_toml;
 use toml::Value;
 
 use super::model::{
-    ASSERTION_STATUS_FAILED, ASSERTION_STATUS_PASSED, ASSERTION_STATUS_UNSUPPORTED,
     AssertionEvidence, AssertionResultEvidence, CiJobEvidence, PullRequestStateEvidence,
     RunEvidenceArtifact,
 };
@@ -59,36 +58,6 @@ pub(crate) fn print_assertions(assertions: &AssertionEvidence) {
         println!("    {}", result.description);
         for detail in &result.details {
             println!("    - {detail}");
-        }
-    }
-}
-
-impl AssertionEvidence {
-    fn from_results(results: Vec<AssertionResultEvidence>) -> Self {
-        let passed = results
-            .iter()
-            .filter(|result| result.status == ASSERTION_STATUS_PASSED)
-            .count();
-        let failed = results
-            .iter()
-            .filter(|result| result.status == ASSERTION_STATUS_FAILED)
-            .count();
-        let unsupported = results
-            .iter()
-            .filter(|result| result.status == ASSERTION_STATUS_UNSUPPORTED)
-            .count();
-        let status = if failed == 0 {
-            ASSERTION_STATUS_PASSED
-        } else {
-            ASSERTION_STATUS_FAILED
-        };
-        Self {
-            status: status.to_string(),
-            total: results.len(),
-            passed,
-            failed,
-            unsupported,
-            results,
         }
     }
 }
