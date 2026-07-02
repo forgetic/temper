@@ -1379,6 +1379,7 @@ dependencies = [
  "temper-protocol-worker",
  "temper-reference-delivery",
  "temper-worker",
+ "temper-worker-registry",
  "temper-worker-service",
  "temper-workflow",
  "tempfile",

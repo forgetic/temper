@@ -121,6 +121,21 @@ fn add_pool_findings(
     pool: &WorkerPoolSettings,
     findings: &mut Vec<CheckFinding>,
 ) {
+    if pool.repos.is_empty() {
+        findings.push(config_error(
+            "worker",
+            format!("worker pool `{}` must declare at least one repo", pool.name),
+        ));
+    }
+    if pool.max_concurrent_jobs.is_none() {
+        findings.push(config_error(
+            "worker",
+            format!(
+                "worker pool `{}` must set max_concurrent_jobs for runtime capacity policy",
+                pool.name
+            ),
+        ));
+    }
     add_missing_secret(
         &format!("worker pool `{}` worker_token", pool.name),
         pool.worker_token.as_ref(),

@@ -20,6 +20,7 @@ fn provider_profile_online_validation_redacts_secret_values() {
          name = \"engineers\"\n\
          roles = [\"engineer\"]\n\
          repos = [\"ai/temper\"]\n\
+         max_concurrent_jobs = 2\n\
          agent_profile = \"coding\"\n\
          [agent.profiles.coding]\n\
          provider = \"deepseek\"\n\

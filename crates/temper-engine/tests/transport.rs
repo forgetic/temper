@@ -61,6 +61,7 @@ fn heartbeat(worker_id: &str) -> WorkerProtocolMessage {
         worker_id: worker_id.to_string(),
         jobs: Vec::new(),
         free_capacity: Some(1),
+        worker_pool: None,
     })
 }
 

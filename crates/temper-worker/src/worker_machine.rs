@@ -201,6 +201,7 @@ impl Machine for WorkerMachine {
                 let mut requests = vec![WorkerRequest::Log(
                     crate::observability::registered_worker_line(
                         &self.params.worker_id,
+                        self.params.worker_pool.as_deref(),
                         self.params.capabilities.len(),
                     ),
                 )];

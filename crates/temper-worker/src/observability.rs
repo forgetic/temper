@@ -7,8 +7,17 @@
 
 use temper_protocol_worker::{Assign, FailureClass, JobResult, ResultStatus};
 
-pub fn registered_worker_line(worker_id: &str, capability_count: usize) -> String {
-    format!("worker: registered worker_id={worker_id} capabilities={capability_count}")
+pub fn registered_worker_line(
+    worker_id: &str,
+    worker_pool: Option<&str>,
+    capability_count: usize,
+) -> String {
+    match worker_pool {
+        Some(pool) => format!(
+            "worker: registered worker_id={worker_id} pool={pool} capabilities={capability_count}"
+        ),
+        None => format!("worker: registered worker_id={worker_id} capabilities={capability_count}"),
+    }
 }
 
 pub fn assigned_job_line(assign: &Assign) -> String {
@@ -69,8 +78,12 @@ mod tests {
     #[test]
     fn registered_worker_line_matches_observability_contract() {
         assert_eq!(
-            registered_worker_line("basic-delivery-1", 2),
+            registered_worker_line("basic-delivery-1", None, 2),
             "worker: registered worker_id=basic-delivery-1 capabilities=2"
+        );
+        assert_eq!(
+            registered_worker_line("basic-delivery-1", Some("builders"), 2),
+            "worker: registered worker_id=basic-delivery-1 pool=builders capabilities=2"
         );
     }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Resolution for target-era pools/profiles that are parsed and validated today
-//! but not yet wired into runtime dispatch/execution.
+//! Resolution for target-era pools/profiles. Pools remain metadata at plain
+//! config resolution time; runtime adapters select one later for worker shape.
 
 use std::collections::{BTreeMap, BTreeSet};
 

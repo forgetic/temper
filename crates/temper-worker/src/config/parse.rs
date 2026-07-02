@@ -103,6 +103,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome, Str
     Ok(ParseOutcome::Run(WorkerConfig {
         daemon_url,
         worker_id,
+        worker_pool: None,
         capabilities,
         // The CLI surface carries no identities; the `smith-worker` binary fills
         // them from the environment for the coding executor (the env reads stay in

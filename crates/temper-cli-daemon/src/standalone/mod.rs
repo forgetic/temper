@@ -205,13 +205,17 @@ async fn run_async(
         &resolved.worker.workspace_root.join(".temper-auth"),
     )?;
     let git_base_url = temper_worker_service::git_base_url(resolved)?;
-    let capabilities: Vec<CapabilitySpec> = repo_paths
+    // The worker's runtime capabilities come from the resolved worker shape. In
+    // legacy configs that is `[worker] capabilities` (or the engine repo/role
+    // default); when target-era pools are present, `apply_runtime_overrides`
+    // narrows it to the selected standalone pool before this point.
+    let capabilities: Vec<CapabilitySpec> = resolved
+        .worker
+        .capabilities
         .iter()
-        .flat_map(|repo| {
-            daemon_config.roles.iter().map(move |role| CapabilitySpec {
-                role: role.as_str().to_string(),
-                repo: repo.clone(),
-            })
+        .map(|capability| CapabilitySpec {
+            role: capability.role.clone(),
+            repo: capability.repo.clone(),
         })
         .collect();
 
@@ -356,6 +360,7 @@ pub(super) fn standalone_worker_config(
         // Unused on the in-process transport, but the struct carries it.
         daemon_url: String::new(),
         worker_id: worker.worker_id.clone(),
+        worker_pool: worker.selected_pool.clone(),
         capabilities,
         role_identities,
         max_concurrent_jobs: worker.max_concurrent_jobs,

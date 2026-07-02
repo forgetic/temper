@@ -24,6 +24,8 @@ pub struct Heartbeat {
     pub jobs: Vec<JobHeartbeat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub free_capacity: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_pool: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

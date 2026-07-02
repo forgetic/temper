@@ -42,6 +42,10 @@ fn apply_standalone_runtime_overrides(
         resolved.engine.daemon_id = process_id.to_string();
         resolved.worker.worker_id = process_id.to_string();
     }
+    if !resolved.worker.pools.is_empty() {
+        let pool_name = standalone_pool_name(&resolved.worker.pools)?;
+        apply_worker_pool_policy(resolved, &pool_name, None)?;
+    }
     Ok(())
 }
 
@@ -67,25 +71,19 @@ fn apply_worker_runtime_overrides(
         resolved.worker.daemon_url =
             non_empty_runtime_override("--engine-url", engine_url)?.to_string();
     }
-    if let Some(pool_name) = runtime.worker_pool.as_deref() {
-        let pool_name = non_empty_runtime_override("--pool", pool_name)?;
-        let pool = resolved
-            .worker
-            .pools
-            .iter()
-            .find(|pool| pool.name == pool_name)
-            .ok_or_else(|| format!("unknown worker pool `{pool_name}`"))?;
-        let capabilities = capabilities_from_pool(pool)?;
-        if let Some(capacity) = pool.max_concurrent_jobs {
-            resolved.worker.max_concurrent_jobs = capacity;
+
+    match runtime.worker_pool.as_deref() {
+        Some(pool_name) => {
+            let pool_name = non_empty_runtime_override("--pool", pool_name)?;
+            apply_worker_pool_policy(resolved, pool_name, runtime.worker_capacity)?;
         }
-        resolved.worker.capabilities = capabilities;
-    }
-    if let Some(capacity) = runtime.worker_capacity {
-        if capacity == 0 {
-            return Err("--capacity must be greater than zero".to_string());
+        None if !resolved.worker.pools.is_empty() => {
+            return Err(
+                "worker pools are configured; select one with `temper serve worker --pool <NAME>`"
+                    .to_string(),
+            );
         }
-        resolved.worker.max_concurrent_jobs = capacity;
+        None => apply_legacy_capacity_override(resolved, runtime.worker_capacity)?,
     }
     Ok(())
 }
@@ -108,6 +106,87 @@ fn reject_worker_only_runtime_overrides(
         return Err(format!(
             "`--engine-url` cannot be used with `temper serve {component}` (got `{url}`); use `temper serve worker`"
         ));
+    }
+    Ok(())
+}
+
+fn standalone_pool_name(pools: &[WorkerPoolSettings]) -> Result<String, String> {
+    for preferred in ["local", "default"] {
+        if let Some(pool) = pools.iter().find(|pool| pool.name == preferred) {
+            return Ok(pool.name.clone());
+        }
+    }
+    if pools.len() == 1 {
+        return Ok(pools[0].name.clone());
+    }
+    Err(
+        "standalone worker pools are configured; configure a `local` or `default` pool so standalone can select target-era capabilities"
+            .to_string(),
+    )
+}
+
+fn apply_worker_pool_policy(
+    resolved: &mut Resolved,
+    pool_name: &str,
+    capacity_override: Option<u32>,
+) -> Result<(), String> {
+    let pool = resolved
+        .worker
+        .pools
+        .iter()
+        .find(|pool| pool.name == pool_name)
+        .cloned()
+        .ok_or_else(|| format!("unknown worker pool `{pool_name}`"))?;
+
+    validate_pool_agent_profile(resolved, &pool)?;
+    let policy_capacity = pool.max_concurrent_jobs.ok_or_else(|| {
+        format!(
+            "worker pool `{}` must set max_concurrent_jobs before it can be used at runtime",
+            pool.name
+        )
+    })?;
+    let runtime_capacity = match capacity_override {
+        Some(0) => return Err("--capacity must be greater than zero".to_string()),
+        Some(capacity) if capacity > policy_capacity => {
+            return Err(format!(
+                "--capacity {capacity} exceeds worker pool `{}` max_concurrent_jobs {policy_capacity}",
+                pool.name
+            ));
+        }
+        Some(capacity) => capacity,
+        None => policy_capacity,
+    };
+
+    resolved.worker.capabilities = capabilities_from_pool(&pool)?;
+    resolved.worker.max_concurrent_jobs = runtime_capacity;
+    resolved.worker.selected_pool = Some(pool.name);
+    Ok(())
+}
+
+fn validate_pool_agent_profile(
+    resolved: &Resolved,
+    pool: &WorkerPoolSettings,
+) -> Result<(), String> {
+    if let Some(profile_name) = pool.agent_profile.as_deref() {
+        if !resolved.agent.profiles.contains_key(profile_name) {
+            return Err(format!(
+                "worker pool `{}` references missing agent profile `{profile_name}`",
+                pool.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn apply_legacy_capacity_override(
+    resolved: &mut Resolved,
+    capacity: Option<u32>,
+) -> Result<(), String> {
+    if let Some(capacity) = capacity {
+        if capacity == 0 {
+            return Err("--capacity must be greater than zero".to_string());
+        }
+        resolved.worker.max_concurrent_jobs = capacity;
     }
     Ok(())
 }

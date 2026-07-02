@@ -60,6 +60,7 @@ impl Rng {
 fn params(max_concurrent: u32) -> WorkerParams {
     WorkerParams {
         worker_id: "fuzz-worker".to_string(),
+        worker_pool: None,
         capabilities: vec![CapabilitySpec {
             repo: "ai/smith".to_string(),
             role: "engineer".to_string(),

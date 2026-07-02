@@ -20,6 +20,7 @@ fn in_memory_worker_config() -> WorkerConfig {
     WorkerConfig {
         daemon_url: "in-process".to_string(),
         worker_id: "worker-unit".to_string(),
+        worker_pool: None,
         capabilities: vec![CapabilitySpec {
             repo: "acme/widgets".to_string(),
             role: "engineer".to_string(),

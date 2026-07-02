@@ -21,6 +21,7 @@ use crate::executor::{JobOutcome, job_result};
 fn params() -> WorkerParams {
     WorkerParams {
         worker_id: "worker-1".to_string(),
+        worker_pool: None,
         capabilities: vec![CapabilitySpec {
             repo: "ai/smith".to_string(),
             role: "engineer".to_string(),

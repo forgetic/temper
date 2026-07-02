@@ -30,6 +30,7 @@ fn worker_online_uses_role_token_without_engine_credentials() {
              name = \"engineers\"\n\
              roles = [\"engineer\"]\n\
              repos = [\"ai/temper\"]\n\
+             max_concurrent_jobs = 2\n\
              agent_profile = \"coding\"\n\
              [agent.profiles.coding]\n\
              provider = \"anthropic\"\n\

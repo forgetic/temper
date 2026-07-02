@@ -14,6 +14,9 @@ pub struct CapabilitySpec {
 pub struct WorkerConfig {
     pub daemon_url: String,
     pub worker_id: String,
+    /// Selected target-era worker pool name, when this worker was shaped from a
+    /// `[[worker.pools]]` policy.
+    pub worker_pool: Option<String>,
     pub capabilities: Vec<CapabilitySpec>,
     /// Role id -> git identity (user, email, push token) for the worker's
     /// per-role checkouts/pushes.
@@ -58,6 +61,7 @@ pub const DEFAULT_POLL_BACKOFF: Duration = Duration::from_millis(500);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerParams {
     pub worker_id: String,
+    pub worker_pool: Option<String>,
     pub capabilities: Vec<CapabilitySpec>,
     pub max_concurrent_jobs: u32,
     pub poll_wait: Duration,
@@ -71,6 +75,7 @@ impl WorkerParams {
     pub fn from_config(config: &WorkerConfig) -> Self {
         Self {
             worker_id: config.worker_id.clone(),
+            worker_pool: config.worker_pool.clone(),
             capabilities: config.capabilities.clone(),
             max_concurrent_jobs: config.max_concurrent_jobs,
             poll_wait: config.poll_wait,
