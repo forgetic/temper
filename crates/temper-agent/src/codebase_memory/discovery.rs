@@ -160,6 +160,8 @@ fn is_path_key(key: &str) -> bool {
             | "repository_path"
             | "repositoryPath"
             | "root"
+            | "root_path"
+            | "rootPath"
             | "dir"
             | "directory"
             | "workspace"
@@ -253,6 +255,8 @@ fn indexed_project_from_object(object: &Map<String, Value>) -> Option<IndexedPro
         "root",
         "repo_path",
         "repository_path",
+        "root_path",
+        "rootPath",
     ]
     .iter()
     .any(|key| object.contains_key(*key));
@@ -271,6 +275,8 @@ fn indexed_project_from_object(object: &Map<String, Value>) -> Option<IndexedPro
             "repoPath",
             "repository_path",
             "repositoryPath",
+            "root_path",
+            "rootPath",
             "workspace_path",
             "workspacePath",
         ],
