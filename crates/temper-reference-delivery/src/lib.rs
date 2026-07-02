@@ -5,8 +5,6 @@
 //! and runner defaults. Runtime processes compose it with narrower production
 //! crates instead of depending on an aggregate production crate.
 
-use std::error::Error;
-use std::fmt;
 use std::path::Path;
 
 use chrono::Duration;
@@ -20,6 +18,9 @@ pub use forgejo_demo::{
     CI_PASS_MARKER, CI_WORKFLOW, DEFAULT_INTAKE_BODY, DEFAULT_INTAKE_TITLE, ci_seed_commits,
     ci_sentinel_commit,
 };
+pub use temper_workflow::{
+    WorkflowLoadError, load_workflow, load_workflow_spec, parse_workflow_spec,
+};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
@@ -29,79 +30,6 @@ const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-del
 /// pattern as the reference-delivery default.
 const BASIC_DELIVERY_FIXTURE: &str =
     include_str!("../../temper-workflow/fixtures/basic-delivery.json");
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WorkflowFileFormat {
-    Json,
-    Yaml,
-}
-
-impl WorkflowFileFormat {
-    fn for_path(path: &Path) -> Self {
-        let extension = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or_default();
-        if extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml") {
-            WorkflowFileFormat::Yaml
-        } else {
-            WorkflowFileFormat::Json
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            WorkflowFileFormat::Json => "JSON",
-            WorkflowFileFormat::Yaml => "YAML",
-        }
-    }
-}
-
-/// Failure loading a runtime-selected workflow from a file.
-#[derive(Debug)]
-pub enum WorkflowLoadError {
-    /// The workflow file could not be read.
-    Read {
-        path: String,
-        source: std::io::Error,
-    },
-    /// The workflow file is not valid JSON/YAML for [`RawWorkflowSpec`].
-    Parse { path: String, detail: String },
-    /// The workflow parsed but failed static validation.
-    Validate { path: String, detail: String },
-}
-
-impl fmt::Display for WorkflowLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            WorkflowLoadError::Read { path, source } => {
-                write!(formatter, "failed to read workflow file {path}: {source}")
-            }
-            WorkflowLoadError::Parse { path, detail } => {
-                let format = WorkflowFileFormat::for_path(Path::new(path)).name();
-                write!(
-                    formatter,
-                    "workflow file {path} is not valid {format}: {detail}"
-                )
-            }
-            WorkflowLoadError::Validate { path, detail } => {
-                write!(
-                    formatter,
-                    "workflow file {path} failed validation:\n{detail}"
-                )
-            }
-        }
-    }
-}
-
-impl Error for WorkflowLoadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            WorkflowLoadError::Read { source, .. } => Some(source),
-            WorkflowLoadError::Parse { .. } | WorkflowLoadError::Validate { .. } => None,
-        }
-    }
-}
 
 /// Loads the bundled reference-delivery workflow used by the demo binaries.
 pub fn workflow() -> ValidatedWorkflow {
@@ -133,63 +61,6 @@ pub fn basic_delivery_workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec =
         serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery fixture parses");
     spec.validate().expect("basic-delivery fixture validates")
-}
-
-/// Parses a workflow document from `contents` using the format selected by
-/// `path`'s extension (`.yaml`/`.yml` for YAML, JSON otherwise).
-///
-/// Parse errors are reported against `path` and name the selected format so an
-/// operator can see whether a JSON or YAML reader rejected the file.
-pub fn parse_workflow_spec(
-    path: impl AsRef<Path>,
-    contents: &str,
-) -> Result<RawWorkflowSpec, WorkflowLoadError> {
-    let path = path.as_ref();
-    let display = path.display().to_string();
-    match WorkflowFileFormat::for_path(path) {
-        WorkflowFileFormat::Json => {
-            serde_json::from_str(contents).map_err(|error| WorkflowLoadError::Parse {
-                path: display,
-                detail: error.to_string(),
-            })
-        }
-        WorkflowFileFormat::Yaml => {
-            serde_yaml::from_str(contents).map_err(|error| WorkflowLoadError::Parse {
-                path: display,
-                detail: error.to_string(),
-            })
-        }
-    }
-}
-
-/// Loads a raw workflow spec from `path` without validating it.
-///
-/// The file extension selects the input format: `.yaml`/`.yml` are parsed as
-/// YAML, while `.json` and all other extensions keep the historical JSON path.
-pub fn load_workflow_spec(path: impl AsRef<Path>) -> Result<RawWorkflowSpec, WorkflowLoadError> {
-    let path = path.as_ref();
-    let display = path.display().to_string();
-    let contents = std::fs::read_to_string(path).map_err(|source| WorkflowLoadError::Read {
-        path: display,
-        source,
-    })?;
-    parse_workflow_spec(path, &contents)
-}
-
-/// Loads and validates a workflow from `path`.
-///
-/// This is the runtime workflow source behind the binaries' `--workflow` flag.
-/// Errors are reported against `path` so an operator can see which file failed
-/// and why (read, parse, or validation).
-pub fn load_workflow(path: impl AsRef<Path>) -> Result<ValidatedWorkflow, WorkflowLoadError> {
-    let path = path.as_ref();
-    let display = path.display().to_string();
-    let spec = load_workflow_spec(path)?;
-    spec.validate()
-        .map_err(|errors| WorkflowLoadError::Validate {
-            path: display,
-            detail: errors.to_string(),
-        })
 }
 
 /// Resolves the workflow to operate against: the file at `path` when supplied,

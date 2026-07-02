@@ -10,6 +10,7 @@ description = "The `temper config` subcommand: validate / show / init-template. 
 serde_json = { workspace = true }
 temper-cli-common = { path = "../temper-cli-common" }
 temper-config = { path = "../temper-config" }
+temper-workflow = { path = "../temper-workflow" }
 
 [lints]
 workspace = true

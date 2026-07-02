@@ -119,6 +119,20 @@ pub struct LoadInputs<'a> {
 /// sibling credentials can load — nothing is discovered from the real
 /// environment.
 pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), ConfigError> {
+    load_explicit_with_secret_validation(inputs, true)
+}
+
+/// Loads + resolves like [`load_explicit`], with control over missing
+/// target-era named secret references.
+///
+/// Runtime callers should keep the default strict validation. Offline checkers
+/// can set `validate_secret_references` to `false` so they can load the full
+/// config and report component-scoped missing-secret findings instead of
+/// failing on the first unrelated reference.
+pub fn load_explicit_with_secret_validation(
+    inputs: &LoadInputs,
+    validate_secret_references: bool,
+) -> Result<(Resolved, LoadedPaths), ConfigError> {
     let explicit_config = inputs
         .explicit_config
         .clone()
@@ -149,11 +163,12 @@ pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), Con
     let (config, config_file) = load_optional(config_source, FileKind::Config, Config::parse)?;
     let (credentials, credentials_file) = load_credentials_optional(credentials_source)?;
 
-    let resolve_options = config_file
+    let mut resolve_options = config_file
         .as_deref()
         .and_then(config_base_dir)
         .map(ResolveOptions::from_config_base_dir)
         .unwrap_or_default();
+    resolve_options.validate_secret_references = validate_secret_references;
     let resolved =
         resolve::resolve_with_options(&config, &credentials, &inputs.env, &resolve_options)?;
     Ok((

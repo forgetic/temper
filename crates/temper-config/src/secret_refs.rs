@@ -90,12 +90,11 @@ pub(crate) fn resolve_secret_reference(
         }));
     };
 
+    let value = secret.value.map(SecretString::from);
+    let available = validate_exists || value.is_some();
     Ok(Some(ResolvedSecretReference {
-        reference: SecretReference {
-            name,
-            available: true,
-        },
-        value: secret.value.map(SecretString::from),
+        reference: SecretReference { name, available },
+        value,
     }))
 }
 

@@ -9,12 +9,12 @@ description = "Reference-delivery workflow defaults shared by Temper tools."
 [dependencies]
 chrono.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 temper-forge = { path = "../temper-forge" }
 temper-runner = { path = "../temper-runner" }
 temper-workflow = { path = "../temper-workflow" }
 
 [dev-dependencies]
+serde_yaml = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

@@ -15,6 +15,7 @@
 //! config schema, resolution, and writing all live in [`temper_config`], and the
 //! shared file-writing/exit-code helpers in [`temper_cli_common`].
 
+mod check;
 mod paths;
 mod schema;
 
@@ -25,9 +26,11 @@ use temper_cli_common::{
     restrict_600, run, write_new_file,
 };
 use temper_config::{
-    ConfigError, Finding, LoadInputs, LoadedPaths, ProviderCredential, Resolved, SecretReference,
-    WebUiCreds, config_template, credentials_template, lint, load_explicit,
+    ConfigError, LoadInputs, LoadedPaths, ProviderCredential, Resolved, SecretReference,
+    WebUiCreds, config_template, credentials_template, lint, load_explicit_with_secret_validation,
 };
+
+pub use check::{CheckInputs, check};
 
 /// Everything `temper config` needs, with no ambient environment access.
 ///
@@ -47,20 +50,6 @@ pub struct ConfigInputs<'a> {
     pub paths: &'a PathResolver,
 }
 
-/// Everything top-level `temper check` needs, with no ambient environment access.
-pub struct CheckInputs<'a> {
-    /// The program arguments after `check`.
-    pub args: Vec<String>,
-    /// Global file-location options parsed before `check`.
-    pub options: LoadOptions,
-    /// Global output format parsed before `check`.
-    pub format: OutputFormat,
-    /// The injected environment snapshot.
-    pub env: &'a EnvMap,
-    /// The injected base directories (HOME / XDG_*) for default-location discovery.
-    pub paths: &'a PathResolver,
-}
-
 /// Loads + resolves a deployment for `validate` / `show`, honoring the same
 /// hermeticity rule the daemon uses: an explicit `--config` / `--secrets`
 /// suppresses default `~/.config/temper` discovery. `CREDENTIALS_DIRECTORY` from
@@ -73,15 +62,27 @@ fn load_for(
     env: &EnvMap,
     paths: &PathResolver,
 ) -> Result<(Resolved, LoadedPaths), ConfigError> {
+    load_for_with_secret_validation(options, env, paths, true)
+}
+
+pub(crate) fn load_for_with_secret_validation(
+    options: &LoadOptions,
+    env: &EnvMap,
+    paths: &PathResolver,
+    validate_secret_references: bool,
+) -> Result<(Resolved, LoadedPaths), ConfigError> {
     let explicit = options.config.is_some() || options.credentials.is_some();
     let empty = PathResolver::default();
     let paths: &PathResolver = if explicit { &empty } else { paths };
-    load_explicit(&LoadInputs {
-        explicit_config: options.config.clone(),
-        explicit_credentials: options.credentials.clone(),
-        env,
-        paths,
-    })
+    load_explicit_with_secret_validation(
+        &LoadInputs {
+            explicit_config: options.config.clone(),
+            explicit_credentials: options.credentials.clone(),
+            env,
+            paths,
+        },
+        validate_secret_references,
+    )
 }
 
 pub const USAGE: &str = "\
@@ -104,19 +105,6 @@ Prefer `temper check` for validation; `temper config validate` remains for compa
 
 Global options:
   --format <human|json>  `temper check` and `config paths` output format; schema always emits JSON; accepted before the command only";
-
-pub const CHECK_USAGE: &str = "\
-Validate the resolved Temper config and credentials offline.
-
-Usage: temper [GLOBAL OPTIONS] check [OPTIONS]
-
-Options:
-  -h, --help  Print help
-
-Global options:
-  -c, --config <DIR|FILE>   Path to configuration file or bundle directory
-      --secrets <DIR|FILE>  Explicit secret source directory or credentials.toml
-      --format <human|json> Output format (default: human)";
 
 pub fn main(inputs: ConfigInputs) -> ExitCode {
     let ConfigInputs {
@@ -150,57 +138,6 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
     }
 }
 
-pub fn check(inputs: CheckInputs) -> ExitCode {
-    let CheckInputs {
-        args,
-        options,
-        format,
-        env,
-        paths,
-    } = inputs;
-    match parse_check_args(&args) {
-        Ok(CheckAction::Help) => {
-            println!("{CHECK_USAGE}");
-            ExitCode::SUCCESS
-        }
-        Ok(CheckAction::Run) => {
-            let report = validation_report(&options, env, paths);
-            match format {
-                OutputFormat::Human => print_validation_human(&report.loaded, &report.findings),
-                OutputFormat::Json => {
-                    if let Err(error) = print_validation_json(&report.loaded, &report.findings) {
-                        eprintln!("temper check: {error}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-            }
-            if report.load_failed || has_error_findings(&report.findings) {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
-        Err(error) => {
-            eprintln!("temper check: {error}\n\n{CHECK_USAGE}");
-            ExitCode::from(EX_USAGE)
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum CheckAction {
-    Run,
-    Help,
-}
-
-fn parse_check_args(args: &[String]) -> Result<CheckAction, String> {
-    match args {
-        [] => Ok(CheckAction::Run),
-        [arg] if matches!(arg.as_str(), "-h" | "--help" | "help") => Ok(CheckAction::Help),
-        [arg, ..] => Err(format!("unexpected argument `{arg}`")),
-    }
-}
-
 /// Parses config-subcommand-local flags. File-location flags are global-only and
 /// are supplied via [`ConfigInputs::options`].
 fn parse_options(args: &[String], allow_force: bool) -> Result<bool, String> {
@@ -223,111 +160,12 @@ fn validate(
     parse_options(args, false)?;
     let (resolved, loaded) = load_for(options, env, paths).map_err(|error| error.to_string())?;
     let findings = lint(&resolved);
-    print_validation_human(&loaded, &findings);
-    if has_error_findings(&findings) {
+    check::print_validation_human(&loaded, &findings);
+    if check::has_error_findings(&findings) {
         Ok(ExitCode::FAILURE)
     } else {
         Ok(ExitCode::SUCCESS)
     }
-}
-
-#[derive(Debug, Clone)]
-struct ValidationReport {
-    loaded: LoadedPaths,
-    findings: Vec<Finding>,
-    load_failed: bool,
-}
-
-fn validation_report(
-    options: &LoadOptions,
-    env: &EnvMap,
-    paths: &PathResolver,
-) -> ValidationReport {
-    match load_for(options, env, paths) {
-        Ok((resolved, loaded)) => ValidationReport {
-            loaded,
-            findings: lint(&resolved),
-            load_failed: false,
-        },
-        Err(error) => ValidationReport {
-            loaded: LoadedPaths::default(),
-            findings: vec![Finding {
-                error: true,
-                message: error.to_string(),
-            }],
-            load_failed: true,
-        },
-    }
-}
-
-fn print_validation_human(loaded: &LoadedPaths, findings: &[Finding]) {
-    if let Some(path) = &loaded.config {
-        println!("config:      {}", path.display());
-    } else {
-        println!("config:      (none — defaults + environment)");
-    }
-    if let Some(path) = &loaded.credentials {
-        println!("credentials: {}", path.display());
-    } else {
-        println!("credentials: (none — environment)");
-    }
-    println!();
-
-    if findings.is_empty() {
-        println!("OK — no problems found.");
-        return;
-    }
-    for Finding { error, message } in findings {
-        if *error {
-            println!("error: {message}");
-        } else {
-            println!("note:  {message}");
-        }
-    }
-}
-
-fn print_validation_json(loaded: &LoadedPaths, findings: &[Finding]) -> Result<(), String> {
-    let status = if has_error_findings(findings) {
-        "error"
-    } else {
-        "ok"
-    };
-    let config_path = loaded
-        .config
-        .as_ref()
-        .map(|path| path.display().to_string());
-    let credentials_path = loaded
-        .credentials
-        .as_ref()
-        .map(|path| path.display().to_string());
-    let findings = findings
-        .iter()
-        .map(|finding| {
-            serde_json::json!({
-                "severity": if finding.error { "error" } else { "note" },
-                "message": &finding.message,
-            })
-        })
-        .collect::<Vec<_>>();
-    let report = serde_json::json!({
-        "status": status,
-        "result": status,
-        "config_path": config_path.clone(),
-        "credentials_path": credentials_path.clone(),
-        "paths": {
-            "config": config_path,
-            "credentials": credentials_path,
-        },
-        "findings": findings,
-    });
-    let text = serde_json::to_string_pretty(&report)
-        .map_err(|error| format!("serialize validation report: {error}"))?;
-    println!("{text}");
-    Ok(())
-}
-
-fn has_error_findings(findings: &[Finding]) -> bool {
-    findings.iter().any(|finding| finding.error)
 }
 
 fn show(

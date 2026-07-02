@@ -92,6 +92,7 @@ pub mod execute;
 pub mod ids;
 pub mod journal;
 pub mod lease;
+pub mod load;
 pub mod metadata;
 pub mod plan;
 mod prompt;
@@ -129,6 +130,7 @@ pub use journal::{
 pub use lease::{
     LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy, PreparedAcquire,
 };
+pub use load::{WorkflowLoadError, load_workflow, load_workflow_spec, parse_workflow_spec};
 pub use metadata::{
     Lease, METADATA_BEGIN, METADATA_END, MetadataError, WorkflowMetadata,
     global_child_correlation_key, parse_metadata_block, render_metadata_block,
