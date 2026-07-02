@@ -345,7 +345,7 @@ impl AgentToolsConfig {
     }
 }
 
-/// `[agent.tools.codebase_memory]` — process-boundary settings for the future
+/// `[agent.tools.codebase_memory]` — process-boundary settings for the
 /// codebase-memory MCP toolset.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -353,7 +353,7 @@ pub struct CodebaseMemoryToolConfig {
     /// Tool mode: `off`, `auto`, or `required`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
-    /// MCP server command to spawn in the future bridge.
+    /// MCP server command to spawn for the bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// Additional command arguments.

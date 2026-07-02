@@ -1,7 +1,9 @@
 use crate::codebase_memory::{
     CodebaseMemoryToolMetadata, CodebaseMemoryToolset, build_codebase_memory_toolset,
 };
-use temper_protocol_agent::AgentToolConfig;
+use std::path::Path;
+
+use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
 
 use super::CodingAgentError;
 
@@ -13,19 +15,32 @@ pub(super) struct PreparedCodebaseMemoryTools {
 pub(super) async fn prepare_codebase_memory_tools(
     tool_config: Option<&AgentToolConfig>,
     role: &str,
+    context: &WorkspaceContext,
+    cwd: &Path,
 ) -> Result<PreparedCodebaseMemoryTools, CodingAgentError> {
-    let toolset = build_codebase_memory_toolset(tool_config, role)
+    let toolset = build_codebase_memory_toolset(tool_config, role, context, cwd)
         .await
         .map_err(|error| CodingAgentError::CodebaseMemory(error.to_string()))?;
-    let prompt_section = codebase_memory_prompt_section(toolset.registered_tool_metadata());
+    let prompt_section = codebase_memory_prompt_section_with_status(
+        toolset.registered_tool_metadata(),
+        toolset.prompt_status(),
+    );
     Ok(PreparedCodebaseMemoryTools {
         prompt_section,
         toolset,
     })
 }
 
+#[cfg(test)]
 pub(crate) fn codebase_memory_prompt_section(
     tools: &[CodebaseMemoryToolMetadata],
+) -> Option<String> {
+    codebase_memory_prompt_section_with_status(tools, None)
+}
+
+pub(crate) fn codebase_memory_prompt_section_with_status(
+    tools: &[CodebaseMemoryToolMetadata],
+    status: Option<&str>,
 ) -> Option<String> {
     if tools.is_empty() {
         return None;
@@ -45,6 +60,9 @@ pub(crate) fn codebase_memory_prompt_section(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let status = status
+        .map(|status| format!("\nWorkspace/index status:\n{status}\n"))
+        .unwrap_or_default();
 
     Some(format!(
         "\nCODEBASE MEMORY:\n\
@@ -55,7 +73,8 @@ pub(crate) fn codebase_memory_prompt_section(
          - engineer: find relevant symbols/callers before editing;\n\
          - reviewer: inspect impacted code paths and callers before verdicts.\n\n\
          Treat the graph as an index, not truth. Verify exact code with read/grep/git diff\n\
-         before editing or making final claims.\n\n\
+         before editing or making final claims.\n\
+{status}\n\
          Registered codebase-memory tools:\n{rendered_tools}\n"
     ))
 }
@@ -64,9 +83,10 @@ pub(crate) fn codebase_memory_prompt_section(
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use temper_protocol_agent::{
-        CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
+        CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig, WorkspaceContext,
+        WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
     };
     use tongs::tools::ToolEffects;
 
@@ -144,34 +164,79 @@ for line in sys.stdin:
         }
     }
 
+    fn workspace_context(cwd: &Path) -> WorkspaceContext {
+        let repo_dir = cwd.join("demo");
+        fs::create_dir_all(&repo_dir).expect("create repo dir");
+        WorkspaceContext {
+            repos: vec![WorkspaceRepository {
+                id: "repo-1".to_string(),
+                owner: "acme".to_string(),
+                name: "demo".to_string(),
+                default_branch: "main".to_string(),
+                dir: "demo".to_string(),
+                access: "writable".to_string(),
+                base_branch: "main".to_string(),
+                branch_hint: Some("agent/pr-for-code-25".to_string()),
+            }],
+            work_item: WorkspaceWorkItem {
+                role: "engineer".to_string(),
+                queue: "code_ready".to_string(),
+                kind: "code".to_string(),
+                target: "Issue { number: ItemNumber(25) }".to_string(),
+                context: "{}".to_string(),
+            },
+            action: "open_pr".to_string(),
+            correlation_key: "pr-for-code-25".to_string(),
+            checkout: Some("writable".to_string()),
+            allowed_verdicts: vec!["needs_architect".to_string()],
+            guidance: WorkspaceGuidance::default(),
+            pull_request_freshness: None,
+            agent_session: None,
+        }
+    }
+
     #[test]
     fn codebase_memory_prompt_appears_only_after_safe_tools_registered() {
         let dir = fake_server_script();
+        let cwd = tempfile::tempdir().expect("workspace");
+        let context = workspace_context(cwd.path());
+        let cwd_path = cwd.path().to_path_buf();
         temper_agent_io::block_on(async move {
-            let absent = prepare_codebase_memory_tools(None, "engineer")
+            let absent = prepare_codebase_memory_tools(None, "engineer", &context, &cwd_path)
                 .await
                 .expect("absent config is ok");
             assert!(absent.prompt_section.is_none());
             assert!(absent.toolset.registered_tool_names().is_empty());
 
             let role_mismatch = config(&dir, CodebaseMemoryMode::Required, vec!["reviewer"]);
-            let mismatch = prepare_codebase_memory_tools(Some(&role_mismatch), "engineer")
-                .await
-                .expect("role mismatch is ok");
+            let mismatch = prepare_codebase_memory_tools(
+                Some(&role_mismatch),
+                "engineer",
+                &context,
+                &cwd_path,
+            )
+            .await
+            .expect("role mismatch is ok");
             assert!(mismatch.prompt_section.is_none());
             assert!(mismatch.toolset.registered_tool_names().is_empty());
 
             let auto_unavailable = bad_command_config(CodebaseMemoryMode::Auto);
-            let unavailable = prepare_codebase_memory_tools(Some(&auto_unavailable), "engineer")
-                .await
-                .expect("auto startup failure is best effort");
+            let unavailable = prepare_codebase_memory_tools(
+                Some(&auto_unavailable),
+                "engineer",
+                &context,
+                &cwd_path,
+            )
+            .await
+            .expect("auto startup failure is best effort");
             assert!(unavailable.prompt_section.is_none());
             assert!(unavailable.toolset.registered_tool_names().is_empty());
 
             let enabled = config(&dir, CodebaseMemoryMode::Required, vec!["engineer"]);
-            let prepared = prepare_codebase_memory_tools(Some(&enabled), "engineer")
-                .await
-                .expect("required fake server starts");
+            let prepared =
+                prepare_codebase_memory_tools(Some(&enabled), "engineer", &context, &cwd_path)
+                    .await
+                    .expect("required fake server starts");
             let prompt = prepared
                 .prompt_section
                 .as_deref()
@@ -193,8 +258,18 @@ for line in sys.stdin:
     #[test]
     fn required_codebase_memory_startup_failure_is_coding_agent_error() {
         let required = bad_command_config(CodebaseMemoryMode::Required);
+        let cwd = tempfile::tempdir().expect("workspace");
+        let context = workspace_context(cwd.path());
+        let cwd_path = cwd.path().to_path_buf();
         temper_agent_io::block_on(async move {
-            let error = match prepare_codebase_memory_tools(Some(&required), "engineer").await {
+            let error = match prepare_codebase_memory_tools(
+                Some(&required),
+                "engineer",
+                &context,
+                &cwd_path,
+            )
+            .await
+            {
                 Ok(_) => panic!("required mode startup failure must fail the run"),
                 Err(error) => error,
             };
