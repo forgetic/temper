@@ -5,31 +5,28 @@
 //! and the prepared workspace scope, and it returns safe, prefixed, read-only
 //! tools plus metadata for prompt generation.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use temper_protocol_agent::{
-    AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
-    WorkspaceContext,
+    AgentToolConfig, CodebaseMemoryMode, CodebaseMemoryToolConfig, WorkspaceContext,
 };
 use tongs::error::{Error, Result};
 use tongs::model::{ContentBlock, TextContent};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
 
-use crate::mcp::{
-    McpError, McpToolCallResult, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig,
-};
+use crate::mcp::{McpError, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig};
 
+mod indexing;
 mod scope;
+mod tool_schema;
 
-use scope::{
-    IndexedProject, ProjectIndexState, WorkspaceScope, default_project_key, description_for,
-    parse_indexed_projects, scoped_parameters,
-};
+use indexing::{discover_indexed_projects, prepare_indexes};
+use scope::WorkspaceScope;
+use tool_schema::{default_project_key, description_for, scoped_parameters};
 
 /// Maximum UTF-8 bytes returned to the model from one MCP tool call.
 pub(crate) const MAX_CODEBASE_MEMORY_OUTPUT_BYTES: usize = 16 * 1024;
@@ -267,7 +264,8 @@ async fn start_toolset(
         scope.apply_discovered_projects(Vec::new(), false);
     }
 
-    setup_notes.extend(prepare_indexes(config, &mcp_config, &advertised, &mut scope).await?);
+    setup_notes
+        .extend(prepare_indexes(config, &client, &mcp_config, &advertised, &mut scope).await?);
     scope.rebuild_alias_map();
     let prompt_status = scope.prompt_status(config.index, &setup_notes);
     let scope = Arc::new(scope);
@@ -313,185 +311,6 @@ fn allowed_tool(name: &str) -> Option<&'static AllowedCodebaseMemoryTool> {
 
 fn advertised_tool(advertised: &[McpToolDescriptor], name: &str) -> bool {
     advertised.iter().any(|descriptor| descriptor.name == name)
-}
-
-async fn discover_indexed_projects(
-    client: &StdioMcpClient,
-    timeout: Duration,
-) -> std::result::Result<Vec<IndexedProject>, McpError> {
-    let result = client
-        .call_tool("list_projects", json!({}), timeout)
-        .await?;
-    Ok(parse_indexed_projects(&result.text))
-}
-
-async fn prepare_indexes(
-    config: &CodebaseMemoryToolConfig,
-    mcp_config: &StdioMcpServerConfig,
-    advertised: &[McpToolDescriptor],
-    scope: &mut WorkspaceScope,
-) -> std::result::Result<Vec<String>, McpError> {
-    let mut notes = Vec::new();
-    if config.index == CodebaseMemoryIndex::Off {
-        notes.push("index=off; no internal indexing was attempted".to_string());
-        return Ok(notes);
-    }
-
-    let repo_indices = scope.projects_needing_index();
-    if repo_indices.is_empty() {
-        notes.push("all prepared repos matched a non-stale codebase-memory project".to_string());
-        return Ok(notes);
-    }
-
-    if !advertised_tool(advertised, "index_repository") {
-        let message = format!(
-            "index={}; codebase-memory MCP server did not advertise index_repository for prepared repos: {}",
-            index_setting(config.index),
-            scope.display_project_list(&repo_indices)
-        );
-        if config.mode == CodebaseMemoryMode::Auto {
-            notes.push(message);
-            return Ok(notes);
-        }
-        return Err(McpError::Protocol(message));
-    }
-
-    let timeout = Duration::from_secs(config.index_timeout_secs);
-    for index in repo_indices {
-        let path = scope.projects[index].root.clone();
-        if config.index == CodebaseMemoryIndex::Background {
-            match start_background_index_repository(mcp_config, path.clone(), timeout) {
-                Ok(()) => {
-                    scope.projects[index].index_state = ProjectIndexState::BackgroundInProgress;
-                    notes.push(format!(
-                        "index_repository started for prepared repo `{}` (background indexing may still be in progress)",
-                        scope.projects[index].canonical_alias
-                    ));
-                }
-                Err(message) if config.mode == CodebaseMemoryMode::Auto => {
-                    scope.projects[index].index_state = ProjectIndexState::IndexFailed;
-                    notes.push(format!(
-                        "index_repository background start failed for prepared repo `{}`; continuing in auto mode with possibly stale tools: {message}",
-                        scope.projects[index].canonical_alias
-                    ));
-                }
-                Err(message) => return Err(McpError::Protocol(message)),
-            }
-            continue;
-        }
-
-        let result = call_index_repository(mcp_config, &path, timeout).await;
-        match result {
-            Ok(result) if result.is_error => {
-                let message = format!(
-                    "index_repository reported an error for prepared repo `{}`: {}",
-                    scope.projects[index].canonical_alias, result.text
-                );
-                if config.mode == CodebaseMemoryMode::Auto {
-                    scope.projects[index].index_state = ProjectIndexState::IndexFailed;
-                    notes.push(message);
-                } else {
-                    return Err(McpError::Rpc {
-                        method: "tools/call index_repository".to_string(),
-                        message,
-                    });
-                }
-            }
-            Ok(result) => {
-                if let Some(project) = parse_indexed_projects(&result.text).into_iter().next() {
-                    scope.projects[index].apply_indexed_project(project);
-                }
-                scope.projects[index].index_state = match config.index {
-                    CodebaseMemoryIndex::Background => ProjectIndexState::BackgroundInProgress,
-                    CodebaseMemoryIndex::Blocking => ProjectIndexState::Fresh,
-                    CodebaseMemoryIndex::Off => ProjectIndexState::Unknown,
-                };
-                notes.push(format!(
-                    "index_repository called for prepared repo `{}` ({})",
-                    scope.projects[index].canonical_alias,
-                    match config.index {
-                        CodebaseMemoryIndex::Background =>
-                            "background indexing may still be in progress",
-                        CodebaseMemoryIndex::Blocking => "blocking indexing completed",
-                        CodebaseMemoryIndex::Off => "index off",
-                    }
-                ));
-            }
-            Err(error) if config.mode == CodebaseMemoryMode::Auto => {
-                scope.projects[index].index_state = ProjectIndexState::IndexFailed;
-                notes.push(format!(
-                    "index_repository failed for prepared repo `{}`; continuing in auto mode with possibly stale tools: {error}",
-                    scope.projects[index].canonical_alias
-                ));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(notes)
-}
-
-fn start_background_index_repository(
-    mcp_config: &StdioMcpServerConfig,
-    path: PathBuf,
-    timeout: Duration,
-) -> std::result::Result<(), String> {
-    let mcp_config = mcp_config.clone();
-    let path_display = path.display().to_string();
-    thread::Builder::new()
-        .name("codebase-memory-index".to_string())
-        .spawn(move || {
-            let result = StdioMcpClient::connect_blocking(mcp_config).and_then(|client| {
-                client.call_tool_blocking(
-                    "index_repository",
-                    json!({ "path": path_display }),
-                    timeout,
-                )
-            });
-            match result {
-                Ok(result) if result.is_error => {
-                    tracing::warn!(
-                        target: "temper::agent",
-                        "background codebase-memory index_repository returned an error: {}",
-                        result.text
-                    );
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        target: "temper::agent",
-                        "background codebase-memory index_repository failed: {error}"
-                    );
-                }
-            }
-        })
-        .map(|_| ())
-        .map_err(|error| format!("spawn background index_repository worker: {error}"))
-}
-
-async fn call_index_repository(
-    mcp_config: &StdioMcpServerConfig,
-    path: &Path,
-    timeout: Duration,
-) -> std::result::Result<McpToolCallResult, McpError> {
-    // Use a short-lived MCP process for indexing so a blocking/timeout indexing
-    // call cannot kill the long-lived client whose read-only tools are exposed
-    // to the model.
-    let index_client = StdioMcpClient::connect(mcp_config.clone()).await?;
-    index_client
-        .call_tool(
-            "index_repository",
-            json!({ "path": path.display().to_string() }),
-            timeout,
-        )
-        .await
-}
-
-fn index_setting(index: CodebaseMemoryIndex) -> &'static str {
-    match index {
-        CodebaseMemoryIndex::Off => "off",
-        CodebaseMemoryIndex::Background => "background",
-        CodebaseMemoryIndex::Blocking => "blocking",
-    }
 }
 
 struct CodebaseMemoryTool {

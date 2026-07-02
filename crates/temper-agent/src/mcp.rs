@@ -6,6 +6,7 @@
 //! client/tool handle is dropped. It does not try to be a full MCP SDK.
 
 mod client;
+mod connection;
 mod protocol;
 
 pub use client::{McpError, StdioMcpClient, StdioMcpServerConfig};

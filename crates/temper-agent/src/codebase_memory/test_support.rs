@@ -3,7 +3,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use temper_protocol_agent::{
-    WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
+    CodebaseMemoryIndex, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
+    WorkspaceWorkItem,
 };
 
 pub(super) fn fake_server_script() -> tempfile::TempDir {
@@ -29,6 +30,15 @@ try:
 except Exception:
     projects = []
 
+state_path = log_path + ".projects.json" if log_path else ""
+
+def current_projects():
+    if mode == "index-rediscovers" and state_path and os.path.exists(state_path):
+        with open(state_path, "r", encoding="utf-8") as handle:
+            parsed = json.load(handle)
+        return parsed.get("projects", parsed if isinstance(parsed, list) else [])
+    return projects
+
 TOOLS = [
     {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
     {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
@@ -39,7 +49,7 @@ TOOLS = [
     {"name": "manage_adr", "description": "Write ADRs", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "ingest_traces", "description": "Ingest traces", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "query_graph", "description": "Raw graph query", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "index_repository", "description": "Index arbitrary path", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}},
+    {"name": "index_repository", "description": "Index arbitrary path", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}}}},
 ]
 
 def send(value):
@@ -69,12 +79,21 @@ for line in sys.stdin:
         args = params.get("arguments") or {}
         log_tool(name, args)
         if name == "list_projects":
-            payload = json.dumps({"projects": projects}, sort_keys=True)
+            payload = json.dumps({"projects": current_projects()}, sort_keys=True)
         elif name == "index_repository":
+            repo_path = args.get("repo_path", "")
+            if not isinstance(repo_path, str) or not repo_path:
+                payload = "index_repository requires repo_path"
+                send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": payload}], "isError": True}})
+                continue
             if mode == "index-hang":
                 time.sleep(60)
-            path = args.get("path", "")
-            payload = json.dumps({"project": {"id": "indexed:" + path, "name": "indexed-" + os.path.basename(path), "path": path}}, sort_keys=True)
+            if mode == "index-rediscovers" and state_path:
+                with open(state_path, "w", encoding="utf-8") as handle:
+                    json.dump({"projects": [{"name": "generated-project", "root_path": repo_path}]}, handle)
+                payload = json.dumps({"project": {"root_path": repo_path}}, sort_keys=True)
+            else:
+                payload = json.dumps({"project": {"id": "indexed:" + repo_path, "name": "indexed-" + os.path.basename(repo_path), "repo_path": repo_path}}, sort_keys=True)
         else:
             payload = f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": payload}], "isError": False}})
