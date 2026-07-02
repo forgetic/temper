@@ -99,6 +99,49 @@ script-hook/provider-probe phase supplies repository branch facts. Unknown check
 fields (for example body-prefix or metadata assertions) are likewise reported as
 unsupported instead of being silently treated as passed.
 
+### Script assertion hooks
+
+Validation bundles may add focused bash hooks as a constrained escape hatch for
+provider-side checks that are not declarative yet:
+
+```toml
+[[assertions]]
+id = "branch-deleted"
+kind = "command"
+command = "scripts/assert-branch-deleted.sh"
+phase = "after-convergence"
+timeout_ms = 30000
+# cwd = "repo"             # optional; bundle root is the default
+# env = ["SAFE_FLAG"]      # optional explicit pass-through allowlist
+```
+
+Only `kind = "command"` bash hooks at `phase = "after-convergence"` are
+supported. `command` and optional `cwd` are local manifest paths: absolute paths,
+URLs, missing files, and `..` components are rejected by `temper-scenario check`.
+When a hook is inherited through `[fixtures] extends`, those path fields resolve
+from the manifest that declared them; otherwise they resolve from the current
+bundle. Hooks run under Rust-owned orchestration after the runner has produced
+structured evidence and after declarative assertions have been evaluated.
+
+Temper writes a JSON context file and passes it as both the first script argument
+and `TEMPER_SCENARIO_CONTEXT`. The context contains the full `run_evidence`, the
+scenario/manifest paths, hook and run artifact directories, runner id, tier, and
+known provider facts such as Forgejo URL, repo slug, issue/PR number, head
+branch, and merged SHA. Scripts should read that context, assert one focused
+condition, print concise evidence, and exit non-zero on failure. They should not
+perform scenario orchestration, cleanup shared state, or require ambient
+credentials. The hook environment is cleared except for a minimal `PATH`,
+`LC_ALL`, Temper context variables, and extra variables named explicitly in
+`env`; allowlisted variables may not override Temper-managed names.
+
+Each hook has a required/default timeout (`timeout_ms`, default 30000, maximum
+600000). Stdout, stderr, status, and context paths are retained under the run
+artifact directory, appended to the structured run evidence, printed in the
+`assertions:` block, and rendered by `temper-scenario validate-pr --run-evidence`.
+A failed hook, timeout, or spawn/configuration error makes `temper-scenario run`
+exit non-zero after writing evidence when `--evidence-out` is supplied; unsafe
+manifest paths are rejected by `check`/`run` before execution.
+
 ## Validation reports vs. promotion artifacts
 
 Every post-merge validation run must produce a validation report: what target

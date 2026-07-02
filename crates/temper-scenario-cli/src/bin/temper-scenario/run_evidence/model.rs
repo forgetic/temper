@@ -187,6 +187,28 @@ pub(crate) struct AssertionResultEvidence {
     pub(crate) description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) artifact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) context_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stdout_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stderr_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) status_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) details: Vec<String>,
 }
@@ -200,6 +222,40 @@ pub(crate) struct ArtifactCollections {
 }
 
 impl AssertionEvidence {
+    pub(crate) fn from_results(results: Vec<AssertionResultEvidence>) -> Self {
+        let passed = results
+            .iter()
+            .filter(|result| result.status == ASSERTION_STATUS_PASSED)
+            .count();
+        let failed = results
+            .iter()
+            .filter(|result| result.status == ASSERTION_STATUS_FAILED)
+            .count();
+        let unsupported = results
+            .iter()
+            .filter(|result| result.status == ASSERTION_STATUS_UNSUPPORTED)
+            .count();
+        let status = if failed == 0 {
+            ASSERTION_STATUS_PASSED
+        } else {
+            ASSERTION_STATUS_FAILED
+        };
+        Self {
+            status: status.to_string(),
+            total: results.len(),
+            passed,
+            failed,
+            unsupported,
+            results,
+        }
+    }
+
+    pub(crate) fn append_result(&mut self, result: AssertionResultEvidence) {
+        let mut results = self.results.clone();
+        results.push(result);
+        *self = Self::from_results(results);
+    }
+
     pub(crate) fn has_failures(&self) -> bool {
         self.failed > 0
             || self
@@ -222,6 +278,12 @@ impl AssertionEvidence {
                 "assertion {} `{}`: {}",
                 result.status, result.id, result.description
             );
+            if let Some(kind) = result.kind.as_deref() {
+                line.push_str(&format!(" kind={kind}"));
+            }
+            if let Some(phase) = result.phase.as_deref() {
+                line.push_str(&format!(" phase={phase}"));
+            }
             if let Some(artifact) = result.artifact.as_deref() {
                 line.push_str(&format!(" ({artifact})"));
             }
