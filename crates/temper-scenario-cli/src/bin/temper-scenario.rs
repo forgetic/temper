@@ -8,6 +8,8 @@ mod implementation_pr_handoff;
 mod promote;
 #[path = "temper-scenario/run_context.rs"]
 mod run_context;
+#[path = "temper-scenario/run_evidence.rs"]
+mod run_evidence;
 #[path = "temper-scenario/runner_registry.rs"]
 mod runner_registry;
 #[path = "temper-scenario/validate_pr.rs"]
@@ -68,7 +70,7 @@ a concise `path: error: field: message` form suitable for CI logs.";
 const RUN_USAGE: &str = "\
 Run a supported Temper scenario at an explicit confidence tier.
 
-Usage: temper-scenario run [--tier <hermetic|live>] [--temper-bin <PATH>] <SCENARIO_PATH>
+Usage: temper-scenario run [--tier <hermetic|live>] [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>
 
 Arguments:
   SCENARIO_PATH  Scenario directory or manifest file to run
@@ -76,6 +78,7 @@ Arguments:
 Options:
   --tier <hermetic|live>  Confidence tier to request (default: hermetic)
   --temper-bin <PATH>    Standalone `temper` binary for --tier live
+  --evidence-out <PATH>  Write structured JSON run evidence to PATH
   -h, --help             Print help
 
 The hermetic tier is a fast in-process/memory runner and is lower confidence
@@ -273,16 +276,30 @@ fn run_command(args: &[String]) -> ExitCode {
         }
     };
 
+    let evidence_context =
+        run_evidence::RunEvidenceContext::from_check_report(&report, &facts, &selected_runner);
     let result = selected_runner.run_and_print(
         &report.scenario_path,
         manifest_path,
         &facts,
         args.tier,
         args.temper_bin.as_deref(),
+        &evidence_context,
     );
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(artifact) => {
+            if let Some(path) = args.evidence_out.as_deref() {
+                match artifact.write_to_path(path) {
+                    Ok(path) => println!("run evidence: {}", path.display()),
+                    Err(error) => {
+                        eprintln!("temper-scenario run: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("temper-scenario run: {error}");
             ExitCode::FAILURE
@@ -322,6 +339,7 @@ struct RunArgs {
     path: PathBuf,
     tier: ScenarioTier,
     temper_bin: Option<PathBuf>,
+    evidence_out: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -341,6 +359,7 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
     let mut path = None;
     let mut tier = None;
     let mut temper_bin = None;
+    let mut evidence_out = None;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -374,6 +393,21 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
             index += 1;
             continue;
         }
+        if arg == "--evidence-out" {
+            let value = run_flag_value(args, index, "--evidence-out")?;
+            set_evidence_out(&mut evidence_out, value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--evidence-out=") {
+            if value.is_empty() {
+                eprintln!("temper-scenario run: --evidence-out requires a value\n\n{RUN_USAGE}");
+                return Err(());
+            }
+            set_evidence_out(&mut evidence_out, value)?;
+            index += 1;
+            continue;
+        }
         if arg.starts_with("--") {
             eprintln!("temper-scenario run: unexpected option `{arg}`\n\n{RUN_USAGE}");
             return Err(());
@@ -394,6 +428,7 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
         path,
         tier: tier.unwrap_or(ScenarioTier::Hermetic),
         temper_bin,
+        evidence_out,
     }))
 }
 
@@ -426,6 +461,14 @@ fn set_run_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> 
 fn set_temper_bin(temper_bin: &mut Option<PathBuf>, value: &str) -> Result<(), ()> {
     if temper_bin.replace(PathBuf::from(value)).is_some() {
         eprintln!("temper-scenario run: duplicate --temper-bin option\n\n{RUN_USAGE}");
+        return Err(());
+    }
+    Ok(())
+}
+
+fn set_evidence_out(evidence_out: &mut Option<PathBuf>, value: &str) -> Result<(), ()> {
+    if evidence_out.replace(PathBuf::from(value)).is_some() {
+        eprintln!("temper-scenario run: duplicate --evidence-out option\n\n{RUN_USAGE}");
         return Err(());
     }
     Ok(())

@@ -28,6 +28,38 @@ Use `cargo dev-scenario-run` for the live lane (it builds and passes the
 standalone `temper` binary) and `cargo dev-scenario-run-hermetic` for the fast
 lower-confidence memory runner.
 
+### Structured run evidence
+
+`temper-scenario run` can also write a versioned JSON run-evidence artifact:
+
+```sh
+temper-scenario run --tier hermetic \
+  --evidence-out validation-artifacts/run-evidence.json \
+  scenarios/basic-delivery
+```
+
+The artifact records the schema/version, scenario source classification,
+manifest path, scenario name, selected runner/tier/topology, resolved fixture
+paths, final issue/PR/CI facts observed by the runner, convergence data, and any
+known provider/log/artifact paths. `validate-pr` can render from that artifact
+without scraping stdout or rerunning the scenario:
+
+```sh
+temper-scenario validate-pr \
+  --pr <merged-pr-number> \
+  --sha <merged-main-sha> \
+  --run-evidence validation-artifacts/run-evidence.json \
+  --output-dir validation-artifacts
+```
+
+`--run-evidence` accepts either a JSON file or a directory containing
+`run-evidence.json` (or one `*.run-evidence.json` file). Supplying both
+`--scenario` and `--run-evidence` makes `validate-pr` re-check the manifest and
+report scenario/tier/runner/source mismatches, but it still does not rerun the
+scenario for evidence population. The older direct path remains available: omit
+`--run-evidence` and pass `--scenario <PATH>` when you want `validate-pr` to run
+a supported scenario itself.
+
 ## Validation reports vs. promotion artifacts
 
 Every post-merge validation run must produce a validation report: what target

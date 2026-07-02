@@ -16,6 +16,7 @@ temper-runner = { path = "../temper-runner" }
 temper-scenario-core = { path = "../temper-scenario-core" }
 temper-testing = { path = "../temper-testing" }
 temper-workflow = { path = "../temper-workflow" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 

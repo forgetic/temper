@@ -345,7 +345,7 @@ fn run_help_documents_tier_selector() {
     assert!(output.status.success(), "status: {:?}", output.status);
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(
-        stdout.contains("Usage: temper-scenario run [--tier <hermetic|live>] [--temper-bin <PATH>] <SCENARIO_PATH>"),
+        stdout.contains("Usage: temper-scenario run [--tier <hermetic|live>] [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>"),
         "{stdout}"
     );
     assert!(
