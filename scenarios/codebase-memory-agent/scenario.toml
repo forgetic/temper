@@ -1,0 +1,70 @@
+schema = "temper.scenario.v1"
+name = "codebase-memory-agent"
+status = "active"
+intent = "Validate #82 by proving the codebase-memory MCP tool path reaches an engineer agent end-to-end with hermetic fake LLM/MCP components."
+introduced_by = "#82"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "2m"
+
+[runner]
+uses = "codebase-memory-agent"
+
+[topology]
+kind = "single-repo-hermetic-agent-mcp"
+forge = "none"
+runner = "temper-scenario-codebase-memory-agent"
+temper = "in-process-native-agent"
+agent_model = "jig-fake-llm"
+repos = ["service"]
+
+[[repos]]
+id = "service"
+slug = "acme/demo"
+default_branch = "main"
+seed_path = "repo"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Validate codebase-memory agent tool path"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "jig-fake"
+tool = "coding_workspace"
+queues = ["code_ready"]
+expected_output = "memory_guided_file"
+
+[expect]
+outcome = "A native engineer agent receives codebase-memory AgentToolConfig, sees CODEBASE MEMORY guidance only after safe tools register, calls search_code without project, receives the fake MCP result, and writes a file influenced by that result."
+
+[codebase_memory]
+mode = "required"
+index = "blocking"
+fake_mcp_tools = ["search_code", "list_projects", "index_status", "index_repository", "delete_project"]
+model_callable_safe_tools = ["codebase_memory_search_code", "codebase_memory_list_projects", "codebase_memory_index_status"]
+model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
+
+default_project = "acme/demo"
+actual_project = "actual-demo-project"
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify scenario documentation without changing the fake MCP contract.",
+  "Add evidence lines that further narrow the same codebase-memory agent contract.",
+]
+requires_new_scenario_or_major_update = [
+  "Replacing the hermetic fake MCP/LLM proof with a live provider or real codebase-memory binary.",
+  "Removing workspace defaulting or safe-tool filtering from the validation contract.",
+]

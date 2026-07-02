@@ -2,6 +2,8 @@
 
 #[path = "temper-scenario/basic_delivery.rs"]
 mod basic_delivery;
+#[path = "temper-scenario/codebase_memory_agent.rs"]
+mod codebase_memory_agent;
 #[path = "temper-scenario/implementation_pr_handoff.rs"]
 mod implementation_pr_handoff;
 #[path = "temper-scenario/promote.rs"]
@@ -93,7 +95,8 @@ For live `basic-delivery`, pass --temper-bin <PATH>, set
 TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling target-dir `temper` binary.
 `cargo dev-scenario-run` builds and delegates to the live lane.
 
-Supported runner ids are `basic-delivery` and `implementation-pr-handoff`.
+Supported runner ids are `basic-delivery`, `implementation-pr-handoff`, and
+`codebase-memory-agent`.
 Manifests may select a reusable runner with `[runner] uses = \"...\"`; when
 that selector is absent, `run` falls back to the legacy manifest `name`.
 Unsupported scenario manifests fail clearly instead of being treated as passed.";
