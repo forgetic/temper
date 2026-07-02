@@ -1,10 +1,9 @@
 //! Codebase-memory MCP allowlist and read-only tongs tool wrappers.
 //!
-//! The public entry point for the next coding-agent wiring slice is
-//! [`build_codebase_memory_toolset`]: pass the parsed worker→agent
-//! [`temper_protocol_agent::AgentToolConfig`] and the current role, and it
-//! returns a set of safe, prefixed, read-only tools plus metadata for prompt
-//! generation. The current coding-agent run path does not call this module yet.
+//! The public entry point is [`build_codebase_memory_toolset`]: pass the parsed
+//! worker→agent [`temper_protocol_agent::AgentToolConfig`] and the current role,
+//! and it returns a set of safe, prefixed, read-only tools plus metadata for
+//! prompt generation.
 
 use std::time::Duration;
 
@@ -52,7 +51,15 @@ impl AllowedCodebaseMemoryTool {
 pub struct CodebaseMemoryToolset {
     status: CodebaseMemoryToolsetStatus,
     registered_tool_names: Vec<String>,
+    registered_tool_metadata: Vec<CodebaseMemoryToolMetadata>,
     tools: Vec<Box<dyn Tool>>,
+}
+
+/// Agent-facing metadata for one registered safe codebase-memory tool.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CodebaseMemoryToolMetadata {
+    pub name: String,
+    pub description: String,
 }
 
 impl CodebaseMemoryToolset {
@@ -60,14 +67,23 @@ impl CodebaseMemoryToolset {
         Self {
             status,
             registered_tool_names: Vec::new(),
+            registered_tool_metadata: Vec::new(),
             tools: Vec::new(),
         }
     }
 
-    fn started(tools: Vec<Box<dyn Tool>>, registered_tool_names: Vec<String>) -> Self {
+    fn started(
+        tools: Vec<Box<dyn Tool>>,
+        registered_tool_metadata: Vec<CodebaseMemoryToolMetadata>,
+    ) -> Self {
+        let registered_tool_names = registered_tool_metadata
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
         Self {
             status: CodebaseMemoryToolsetStatus::Started,
             registered_tool_names,
+            registered_tool_metadata,
             tools,
         }
     }
@@ -80,6 +96,11 @@ impl CodebaseMemoryToolset {
     /// Stable agent-facing tool names registered from the MCP server.
     pub fn registered_tool_names(&self) -> &[String] {
         &self.registered_tool_names
+    }
+
+    /// Agent-facing tool names and descriptions registered from the MCP server.
+    pub fn registered_tool_metadata(&self) -> &[CodebaseMemoryToolMetadata] {
+        &self.registered_tool_metadata
     }
 
     /// Consumes the toolset and returns the wrapped tongs tools.
@@ -179,22 +200,32 @@ async fn start_required_toolset(
     let client = StdioMcpClient::connect(mcp_config).await?;
     let advertised = client.list_tools(startup_timeout).await?;
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
-    let mut registered_tool_names = Vec::new();
+    let mut registered_tool_metadata = Vec::new();
 
     for descriptor in advertised {
         let Some(allowed) = allowed_tool(&descriptor.name) else {
             continue;
         };
-        registered_tool_names.push(allowed.public_name.to_string());
+        let public_name = allowed.public_name.to_string();
+        let description = description_for(*allowed, &descriptor.description);
+        registered_tool_metadata.push(CodebaseMemoryToolMetadata {
+            name: public_name.clone(),
+            description: description.clone(),
+        });
         tools.push(Box::new(CodebaseMemoryTool::new(
             client.clone(),
             descriptor,
             *allowed,
+            public_name,
+            description,
             call_timeout,
         )));
     }
 
-    Ok(CodebaseMemoryToolset::started(tools, registered_tool_names))
+    Ok(CodebaseMemoryToolset::started(
+        tools,
+        registered_tool_metadata,
+    ))
 }
 
 fn allowed_tool(name: &str) -> Option<&'static AllowedCodebaseMemoryTool> {
@@ -215,13 +246,16 @@ impl CodebaseMemoryTool {
         client: StdioMcpClient,
         descriptor: McpToolDescriptor,
         allowed: AllowedCodebaseMemoryTool,
+        public_name: String,
+        description: String,
         call_timeout: Duration,
     ) -> Self {
+        debug_assert_eq!(public_name, allowed.public_name);
         Self {
             client,
             mcp_name: descriptor.name,
-            public_name: allowed.public_name.to_string(),
-            description: description_for(allowed, &descriptor.description),
+            public_name,
+            description,
             parameters: descriptor.input_schema,
             call_timeout,
         }

@@ -9,7 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use temper_agent::{CodingAgentError, run_coding_agent_native_with_options_and_submit_for_pr};
+use temper_agent::{
+    CodingAgentError, run_coding_agent_native_with_options_tool_config_and_submit_for_pr,
+};
 use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 
 use crate::config::AgentConfig;
@@ -50,9 +52,10 @@ fn drive_coding_loop(
     let max_iterations = config.max_iterations;
     let config_dir = config.config_dir.clone();
     let enable_subagents = config.enable_subagents;
+    let tool_config = config.tool_config.clone();
     let submit_for_pr = config.submit_for_pr.clone();
     temper_agent_io::block_on_with(move |_cx, handle| async move {
-        run_coding_agent_native_with_options_and_submit_for_pr(
+        run_coding_agent_native_with_options_tool_config_and_submit_for_pr(
             handle,
             &provider,
             &run_context,
@@ -60,6 +63,7 @@ fn drive_coding_loop(
             max_iterations,
             config_dir.as_deref(),
             enable_subagents,
+            tool_config.as_ref(),
             submit_for_pr,
         )
         .await
@@ -88,5 +92,89 @@ fn describe_agent_error(error: &CodingAgentError) -> String {
             format!("model-unavailable: {error}")
         }
         _ => format!("coding agent failed: {error}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AgentConfig;
+    use temper_agent::ProviderConfig;
+    use temper_protocol_agent::{
+        AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
+        WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
+    };
+
+    #[test]
+    fn drive_passes_tool_config_to_native_loop() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let result_path = temp.path().join("result.json");
+        let config = AgentConfig::new(
+            ProviderConfig::new(
+                "test-provider",
+                "test-model",
+                "https://llm.example",
+                "test-key",
+            ),
+            1,
+            false,
+            None,
+        )
+        .with_tool_config(Some(required_bad_tool_config()));
+
+        let error = drive(
+            config,
+            workspace_context("engineer"),
+            temp.path().to_path_buf(),
+            result_path.display().to_string(),
+        )
+        .expect_err("required codebase-memory startup failure aborts session");
+
+        assert!(error.contains("codebase-memory tool setup failed"));
+        assert!(error.contains("required codebase-memory MCP startup failed"));
+        assert!(!result_path.exists());
+    }
+
+    fn required_bad_tool_config() -> AgentToolConfig {
+        AgentToolConfig {
+            codebase_memory: Some(CodebaseMemoryToolConfig {
+                mode: CodebaseMemoryMode::Required,
+                command: "definitely-not-a-temper-codebase-memory-mcp".to_string(),
+                args: Vec::new(),
+                roles: vec!["engineer".to_string()],
+                index: CodebaseMemoryIndex::Off,
+                startup_timeout_secs: 1,
+                index_timeout_secs: 1,
+            }),
+        }
+    }
+
+    fn workspace_context(role: &str) -> WorkspaceContext {
+        WorkspaceContext {
+            repos: vec![WorkspaceRepository {
+                id: "repo-1".to_string(),
+                owner: "acme".to_string(),
+                name: "demo".to_string(),
+                default_branch: "main".to_string(),
+                dir: ".".to_string(),
+                access: "writable".to_string(),
+                base_branch: "main".to_string(),
+                branch_hint: Some("agent/pr-for-code-1".to_string()),
+            }],
+            work_item: WorkspaceWorkItem {
+                role: role.to_string(),
+                queue: "code_ready".to_string(),
+                kind: "code".to_string(),
+                target: "Issue { number: ItemNumber(1) }".to_string(),
+                context: "{}".to_string(),
+            },
+            action: "open_pr".to_string(),
+            correlation_key: "pr-for-code-1".to_string(),
+            checkout: Some("writable".to_string()),
+            allowed_verdicts: vec!["needs_architect".to_string()],
+            guidance: WorkspaceGuidance::default(),
+            pull_request_freshness: None,
+            agent_session: None,
+        }
     }
 }

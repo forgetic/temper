@@ -4,6 +4,7 @@
 //! prompt.
 
 use super::common::*;
+use crate::codebase_memory::CodebaseMemoryToolMetadata;
 use crate::coding_agent::*;
 use crate::prompt_overlays::PromptOverlays;
 
@@ -84,6 +85,37 @@ fn compose_turns_folds_into_user_turn_under_anthropic_identity() {
     assert!(turns.user.contains("Work item context"));
 
     let _ = std::fs::remove_dir_all(&config_dir);
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[test]
+fn compose_turns_folds_codebase_memory_guidance_under_anthropic_identity() {
+    // Dynamic codebase-memory guidance is appended to the built-in role prompt
+    // only after tools are actually registered. Under Anthropic OAuth it must
+    // follow the same identity-only system block rule as the rest of the role
+    // prompt: no extra system text, all guidance folded into the user turn.
+    let cwd = overlay_temp_dir("fold-codebase-memory-cwd");
+    let section = codebase_memory_prompt_section(&[CodebaseMemoryToolMetadata {
+        name: "codebase_memory_search_code".to_string(),
+        description: "Search indexed code".to_string(),
+    }])
+    .expect("metadata renders a codebase-memory prompt section");
+    let role_prompt = format!(
+        "{}{}",
+        system_prompt(Capability::CodingWorkspace, &[]),
+        section
+    );
+    let user = user_context(&parsed_fixture());
+    let overlays = PromptOverlays::load(None, &cwd, Capability::CodingWorkspace);
+    let turns = overlays.compose_turns(&role_prompt, &user, Some(TEST_IDENTITY));
+
+    assert_eq!(turns.system, TEST_IDENTITY);
+    assert!(!turns.system.contains("CODEBASE MEMORY"));
+    assert!(turns.user.contains("ROLE: engineer"));
+    assert!(turns.user.contains("CODEBASE MEMORY"));
+    assert!(turns.user.contains("codebase_memory_search_code"));
+    assert!(turns.user.contains("Work item context"));
+
     let _ = std::fs::remove_dir_all(&cwd);
 }
 

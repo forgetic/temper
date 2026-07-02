@@ -17,7 +17,7 @@ use std::time::Instant;
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
     CodingAgentError, ProviderConfig, RunTotals, SubmitForPrHost,
-    run_coding_agent_native_with_totals_and_submit_for_pr,
+    run_coding_agent_native_with_totals_tool_config_and_submit_for_pr,
 };
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
@@ -57,8 +57,8 @@ impl InProcessAgentRunner {
     }
 
     /// Sets the non-secret agent tool config stored with this in-process
-    /// runner. This slice does not register MCP tools yet; it only keeps the
-    /// resolved settings on the agent side of the standalone boundary.
+    /// runner. The native coding loop registers codebase-memory tools from it
+    /// when it applies to the current role.
     #[must_use]
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
@@ -110,6 +110,7 @@ impl AgentRunner for InProcessAgentRunner {
         let max_iterations = self.max_iterations;
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
+        let tool_config = self.tool_config.clone();
         let submit_for_pr = self.submit_for_pr.clone();
         let accepted_submit = AcceptedSubmitProofStore::new();
         let accepted_submit_for_host = accepted_submit.clone();
@@ -127,7 +128,7 @@ impl AgentRunner for InProcessAgentRunner {
         let cwd = cwd.to_path_buf();
 
         async move {
-            let outcome = run_coding_agent_native_with_totals_and_submit_for_pr(
+            let outcome = run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
                 handle,
                 &provider,
                 &context,
@@ -135,6 +136,7 @@ impl AgentRunner for InProcessAgentRunner {
                 max_iterations,
                 config_dir.as_deref(),
                 enable_subagents,
+                tool_config.as_ref(),
                 submit_for_pr,
             )
             .await
@@ -291,6 +293,7 @@ fn classify_coding_agent_error(error: CodingAgentError) -> AgentRunError {
         | CodingAgentError::Run(_)
         | CodingAgentError::AgentStopped(_)
         | CodingAgentError::ModelUnavailable { .. }
+        | CodingAgentError::CodebaseMemory(_)
         | CodingAgentError::Parse { .. } => AgentRunError::transient(error.to_string()),
         CodingAgentError::NoProduct | CodingAgentError::UndeclaredVerdict { .. } => {
             AgentRunError::permanent(error.to_string())
@@ -343,6 +346,35 @@ mod tests {
         });
     }
 
+    #[test]
+    fn in_process_runner_passes_tool_config_to_native_loop() {
+        let tool_config = required_bad_tool_config_for_role("architect");
+        temper_engine_io::block_on_with(move |_cx, handle| async move {
+            let provider = ProviderConfig::new(
+                "test-provider",
+                "test-model",
+                "https://llm.example",
+                "test-key",
+            );
+            let runner = InProcessAgentRunner::new(handle, provider, 1, None, false)
+                .with_tool_config(Some(tool_config));
+            let context = ctx("ai", "temper", "issue", "Issue { number: ItemNumber(42) }");
+            let temp = tempfile::tempdir().expect("tempdir");
+
+            let error = runner
+                .run(&context, temp.path())
+                .await
+                .expect_err("required codebase-memory startup failure aborts run");
+            assert_eq!(error.class, FailureClass::Transient);
+            assert!(error.message.contains("codebase-memory tool setup failed"));
+            assert!(
+                error
+                    .message
+                    .contains("required codebase-memory MCP startup failed")
+            );
+        });
+    }
+
     fn test_tool_config() -> AgentToolConfig {
         use temper_protocol_agent::{
             CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
@@ -357,6 +389,24 @@ mod tests {
                 index: CodebaseMemoryIndex::Background,
                 startup_timeout_secs: 5,
                 index_timeout_secs: 30,
+            }),
+        }
+    }
+
+    fn required_bad_tool_config_for_role(role: &str) -> AgentToolConfig {
+        use temper_protocol_agent::{
+            CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
+        };
+
+        AgentToolConfig {
+            codebase_memory: Some(CodebaseMemoryToolConfig {
+                mode: CodebaseMemoryMode::Required,
+                command: "definitely-not-a-temper-codebase-memory-mcp".to_string(),
+                args: Vec::new(),
+                roles: vec![role.to_string()],
+                index: CodebaseMemoryIndex::Off,
+                startup_timeout_secs: 1,
+                index_timeout_secs: 1,
             }),
         }
     }

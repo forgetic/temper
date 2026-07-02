@@ -17,6 +17,9 @@ pub enum CodingAgentError {
     /// any provider-suggested fallback, and an operator can fix it by passing a
     /// different `--model` (or setting the provider profile's `models.main`).
     ModelUnavailable { model: String, detail: String },
+    /// The configured codebase-memory MCP toolset was required but could not be
+    /// started or listed.
+    CodebaseMemory(String),
     /// The model's reply was not the expected JSON result object.
     Parse { snippet: String, error: String },
     /// A writable (engineer) run finished without leaving a product diff and
@@ -44,6 +47,9 @@ impl std::fmt::Display for CodingAgentError {
                 "model `{model}` is unavailable: {detail}. Pass --model (or set the \
                  provider profile's models.main) to a model the credential grants."
             ),
+            CodingAgentError::CodebaseMemory(message) => {
+                write!(formatter, "codebase-memory tool setup failed: {message}")
+            }
             CodingAgentError::Parse { snippet, error } => {
                 write!(
                     formatter,
