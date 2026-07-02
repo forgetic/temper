@@ -17,6 +17,7 @@ not migrate, deduplicate, or replace an example.
 
 - `basic-delivery` — `--tier live` is the validation-grade path: it boots real Forgejo, a host-mode `forgejo-runner`, standalone `temper`, and Jig fake LLM agents through the shared live harness. `--tier hermetic` remains the fast deterministic memory/in-process smoke runner and is lower confidence.
 - `implementation-pr-handoff` — focused hermetic ForgeApplier proof that authored implementation PR title/body and source metadata survive create and refresh.
+- `codebase-memory-agent` — focused hermetic native-agent proof that enabled `AgentToolConfig` starts a fake codebase-memory MCP server, exposes only safe `codebase_memory_*` tools, defaults the workspace project from `list_projects.root_path`, and returns the fake MCP result to the model.
 
 Run output always prints the scenario source classification, confidence tier, and
 manifest topology before the verdict. Bundles under this repository's
