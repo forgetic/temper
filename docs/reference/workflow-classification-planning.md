@@ -16,6 +16,7 @@ inside an HTML comment in an issue or pull-request body:
   "parents": [12],
   "dependencies": [{ "repository_id": "forgejo:acme/lib", "number": 34 }],
   "correlation_key": "code-issue-42",
+  "target_branch": "feature/144-plan-branch",
   "lease": {
     "role": "engineer",
     "worker": "run-abc",
@@ -34,8 +35,10 @@ ends at the first `-->`, so values must not contain that sequence.
 
 Relation projections accept bare item numbers as same-repository shorthand or
 objects with `repository_id` and `number` for explicit cross-repository targets.
-Cross-repo fan-out uses the length-prefixed global child correlation key defined
-in [cross-repo workflow contracts](cross-repo-workflows.md).
+`target_branch`, when present, is a non-empty branch name source work should use
+as the implementation PR target/base branch. Cross-repo fan-out uses the
+length-prefixed global child correlation key defined in [cross-repo workflow
+contracts](cross-repo-workflows.md).
 
 ## Artifact classification
 

@@ -14,6 +14,8 @@ mod review;
 mod success;
 #[path = "forge_apply/support.rs"]
 mod support;
+#[path = "forge_apply/target_branch.rs"]
+mod target_branch;
 #[path = "forge_apply/triage.rs"]
 mod triage;
 #[path = "forge_apply/trivial.rs"]

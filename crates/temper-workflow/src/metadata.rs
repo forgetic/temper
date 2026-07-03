@@ -17,6 +17,7 @@
 //!   "parents": [12],
 //!   "dependencies": [34],
 //!   "correlation_key": "code-issue-42",
+//!   "target_branch": "feature/144-plan-branch",
 //!   "lease": { ... }
 //! }
 //! -->
@@ -79,6 +80,10 @@ pub struct WorkflowMetadata {
     /// Idempotency key used to avoid creating duplicate artifacts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_key: Option<String>,
+    /// Non-empty branch name source work should use as the implementation PR
+    /// target/base branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_branch: Option<String>,
     /// Active claim lease, if the artifact is currently claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<Lease>,

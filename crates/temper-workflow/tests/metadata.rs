@@ -20,6 +20,7 @@ fn full_metadata() -> WorkflowMetadata {
             ArtifactRef::same_repo(ItemNumber::new(56)),
         ],
         correlation_key: Some("code-issue-42".to_string()),
+        target_branch: Some("feature/144-plan-branch".to_string()),
         lease: Some(Lease {
             role: RoleId::new("engineer"),
             worker: "run-abc".to_string(),
@@ -62,6 +63,21 @@ fn repo_qualified_metadata_projection_round_trips() {
 
     let rendered = render_metadata_block(&metadata);
     assert!(rendered.contains("\"repository_id\": \"repo-service\""));
+    let parsed = parse_metadata_block(&rendered)
+        .expect("renders to parseable block")
+        .expect("block is present");
+    assert_eq!(parsed, metadata);
+}
+
+#[test]
+fn target_branch_metadata_round_trips() {
+    let metadata = WorkflowMetadata {
+        target_branch: Some("feature/144-plan-branch".to_string()),
+        ..WorkflowMetadata::default()
+    };
+
+    let rendered = render_metadata_block(&metadata);
+    assert!(rendered.contains("\"target_branch\": \"feature/144-plan-branch\""));
     let parsed = parse_metadata_block(&rendered)
         .expect("renders to parseable block")
         .expect("block is present");

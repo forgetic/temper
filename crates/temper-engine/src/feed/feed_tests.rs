@@ -27,6 +27,8 @@ const REFERENCE_DELIVERY_FIXTURE: &str =
 mod action_assignment;
 #[path = "feed_tests/reconciliation.rs"]
 mod reconciliation;
+#[path = "feed_tests/target_branch.rs"]
+mod target_branch;
 
 fn work_item(target: ArtifactSource) -> WorkItem {
     WorkItem {
