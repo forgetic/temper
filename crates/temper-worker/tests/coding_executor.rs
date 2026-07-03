@@ -19,5 +19,7 @@ mod read_only;
 mod review;
 #[path = "coding_executor/support/mod.rs"]
 mod support;
+#[path = "coding_executor/target_branch.rs"]
+mod target_branch;
 #[path = "coding_executor/writable.rs"]
 mod writable;

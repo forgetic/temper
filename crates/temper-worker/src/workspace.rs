@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
 mod git;
+mod target_branch;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoleGitIdentity {
@@ -66,6 +67,8 @@ pub enum WorkspaceError {
     Utf8(String),
     #[error("invalid repo `{0}`: expected owner/name")]
     InvalidRepo(String),
+    #[error("{0}")]
+    BranchMaterialization(String),
 }
 
 pub fn forgejo_remote_url(base_url: &str, repo: &str) -> Result<String, WorkspaceError> {
@@ -288,18 +291,7 @@ impl Workspace {
     /// start is safe: a later non-fast-forward push fails loudly rather than
     /// clobbering remote state).
     async fn try_fetch_work_branch(&self, work_branch: &str) -> bool {
-        let refspec = format!("+refs/heads/{work_branch}:refs/remotes/origin/{work_branch}");
-        self.run_workspace_git(
-            true,
-            format!("git fetch origin {work_branch}"),
-            vec![
-                OsString::from("fetch"),
-                OsString::from("origin"),
-                OsString::from(refspec),
-            ],
-        )
-        .await
-        .is_ok()
+        self.fetch_remote_branch(work_branch).await.is_ok()
     }
 
     /// Prepare the workspace at a pull request's head (read-only review checkout):
@@ -343,6 +335,13 @@ impl Workspace {
     }
 
     async fn prepare_base_checkout(&self) -> Result<(), WorkspaceError> {
+        self.ensure_checkout_repo().await?;
+        self.fetch_remote_branch(&self.base_branch).await?;
+
+        Ok(())
+    }
+
+    async fn ensure_checkout_repo(&self) -> Result<(), WorkspaceError> {
         if self.path.exists() {
             self.run_workspace_git(
                 false,
@@ -379,22 +378,22 @@ impl Workspace {
             .await?;
         }
 
-        let refspec = format!(
-            "+refs/heads/{}:refs/remotes/origin/{}",
-            self.base_branch, self.base_branch
-        );
+        Ok(())
+    }
+
+    async fn fetch_remote_branch(&self, branch: &str) -> Result<(), WorkspaceError> {
+        let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
         self.run_workspace_git(
             true,
-            format!("git fetch origin {}", self.base_branch),
+            format!("git fetch origin {branch}"),
             vec![
                 OsString::from("fetch"),
                 OsString::from("origin"),
                 OsString::from(refspec),
             ],
         )
-        .await?;
-
-        Ok(())
+        .await
+        .map(|_| ())
     }
 
     pub async fn commit_all(&self, message: &str) -> Result<String, WorkspaceError> {
