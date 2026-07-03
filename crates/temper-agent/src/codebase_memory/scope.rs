@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 use temper_protocol_agent::{CodebaseMemoryIndex, WorkspaceContext, WorkspaceRepository};
 use tongs::model::{ContentBlock, TextContent};
 use tongs::tools::ToolOutput;
 
+use super::background::BackgroundIndex;
 use super::indexing::index_setting;
 
 #[path = "discovery.rs"]
@@ -139,9 +141,13 @@ impl WorkspaceScope {
     }
 
     pub(super) fn primary(&self) -> &ScopedProject {
+        &self.projects[self.primary_index()]
+    }
+
+    fn primary_index(&self) -> usize {
         self.projects
             .iter()
-            .find(|project| project.primary)
+            .position(|project| project.primary)
             .expect("scope always contains primary project")
     }
 
@@ -186,6 +192,7 @@ impl WorkspaceScope {
         mcp_name: &str,
         default_project_key: Option<&'static str>,
         input: Value,
+        wait_timeout: Duration,
     ) -> std::result::Result<Value, String> {
         let mut object = match input {
             Value::Null => Map::new(),
@@ -202,10 +209,17 @@ impl WorkspaceScope {
 
         let project_index = self.selected_project_index(&object)?;
         let should_default = mcp_name != "list_projects";
+        let default_index =
+            (should_default && default_project_key.is_some()).then(|| self.primary_index());
+        let target_index = project_index.or(default_index);
+        if let Some(index) = target_index {
+            self.projects[index].wait_for_background_index(wait_timeout)?;
+        }
+
         match project_index {
             Some(index) => {
                 let project = &self.projects[index];
-                let actual = Value::String(project.actual_project.clone());
+                let actual = Value::String(project.actual_project());
                 let had_project = object.remove("project").is_some();
                 let had_repo = object.remove("repo").is_some();
                 let target_key =
@@ -218,7 +232,7 @@ impl WorkspaceScope {
                 if let Some(key) = default_project_key {
                     object.insert(
                         key.to_string(),
-                        Value::String(self.primary().actual_project.clone()),
+                        Value::String(self.primary().actual_project()),
                     );
                 }
             }
@@ -265,7 +279,7 @@ impl WorkspaceScope {
         lines.push(format!(
             "- Default project: `{}` (actual codebase-memory project `{}`)",
             self.primary().canonical_alias,
-            self.primary().actual_project
+            self.primary().actual_project()
         ));
         lines.push(format!(
             "- Project aliases accepted in `project`/`repo`: {}",
@@ -289,8 +303,8 @@ impl WorkspaceScope {
             lines.push(format!(
                 "- `{}` status: {} (actual `{}`)",
                 project.canonical_alias,
-                project.index_state.as_prompt_text(),
-                project.actual_project
+                project.index_state().as_prompt_text(),
+                project.actual_project()
             ));
         }
         for note in notes {
@@ -334,6 +348,7 @@ pub(super) struct ScopedProject {
     pub(super) root: PathBuf,
     actual_project: String,
     pub(super) index_state: ProjectIndexState,
+    pub(super) background_index: Option<BackgroundIndex>,
 }
 
 impl ScopedProject {
@@ -354,6 +369,7 @@ impl ScopedProject {
             root,
             actual_project: canonical_alias,
             index_state: ProjectIndexState::Unknown,
+            background_index: None,
         };
         Ok(project)
     }
@@ -388,26 +404,64 @@ impl ScopedProject {
     }
 
     pub(super) fn apply_indexed_project(&mut self, indexed: IndexedProject) -> bool {
-        if let Some(id) = indexed.id.filter(|id| !id.trim().is_empty()) {
-            self.actual_project = id;
-            true
-        } else if let Some(name) = indexed.name.filter(|name| !name.trim().is_empty()) {
-            self.actual_project = name;
+        if let Some(actual_project) = actual_project_from_indexed(indexed) {
+            self.actual_project = actual_project;
+            self.background_index = None;
             true
         } else {
             false
         }
     }
 
+    fn actual_project(&self) -> String {
+        self.background_index
+            .as_ref()
+            .and_then(BackgroundIndex::actual_project)
+            .unwrap_or_else(|| self.actual_project.clone())
+    }
+
+    fn index_state(&self) -> ProjectIndexState {
+        self.background_index
+            .as_ref()
+            .map(BackgroundIndex::index_state)
+            .unwrap_or(self.index_state)
+    }
+
+    fn wait_for_background_index(&self, timeout: Duration) -> std::result::Result<(), String> {
+        let Some(background) = &self.background_index else {
+            return Ok(());
+        };
+        background.wait(timeout).map_err(|message| {
+            format!(
+                "codebase-memory project `{}` is not ready: {message}",
+                self.canonical_alias
+            )
+        })?;
+        if background.actual_project().is_none() && self.actual_project == self.canonical_alias {
+            return Err(format!(
+                "codebase-memory project `{}` is not ready: background indexing finished without reporting a project id",
+                self.canonical_alias
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn details_json(&self) -> Value {
         json!({
             "project": self.canonical_alias,
             "aliases": self.documented_aliases().into_iter().collect::<Vec<_>>(),
-            "actual_project": self.actual_project,
-            "index_status": self.index_state.as_prompt_text(),
+            "actual_project": self.actual_project(),
+            "index_status": self.index_state().as_prompt_text(),
             "primary": self.primary,
         })
     }
+}
+
+pub(super) fn actual_project_from_indexed(indexed: IndexedProject) -> Option<String> {
+    indexed
+        .id
+        .filter(|id| !id.trim().is_empty())
+        .or_else(|| indexed.name.filter(|name| !name.trim().is_empty()))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -20,6 +20,7 @@ use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
 
 use crate::mcp::{McpError, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig};
 
+mod background;
 mod indexing;
 mod scope;
 mod tool_schema;
@@ -379,10 +380,15 @@ impl Tool for CodebaseMemoryTool {
         input: Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
-        let input = self
-            .scope
-            .prepare_tool_input(&self.mcp_name, self.default_project_key, input)
-            .map_err(|message| Error::tool(self.public_name.clone(), message))?;
+        let scope = Arc::clone(&self.scope);
+        let mcp_name = self.mcp_name.clone();
+        let default_project_key = self.default_project_key;
+        let wait_timeout = self.call_timeout;
+        let input = skein::runtime::spawn_blocking(move || {
+            scope.prepare_tool_input(&mcp_name, default_project_key, input, wait_timeout)
+        })
+        .await
+        .map_err(|message| Error::tool(self.public_name.clone(), message))?;
 
         if self.mcp_name == "list_projects" {
             return Ok(self.scope.list_projects_output());

@@ -6,11 +6,11 @@ use temper_protocol_agent::WorkspaceRepository;
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::codebase_memory) struct IndexedProject {
-    pub(super) id: Option<String>,
-    pub(super) name: Option<String>,
-    pub(super) path: Option<PathBuf>,
+    pub(in crate::codebase_memory) id: Option<String>,
+    pub(in crate::codebase_memory) name: Option<String>,
+    pub(in crate::codebase_memory) path: Option<PathBuf>,
     aliases: BTreeSet<String>,
-    pub(super) stale: Option<bool>,
+    pub(in crate::codebase_memory) stale: Option<bool>,
 }
 
 impl IndexedProject {
