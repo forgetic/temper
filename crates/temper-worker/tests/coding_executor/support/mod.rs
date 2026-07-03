@@ -17,6 +17,7 @@ pub use tempfile::TempDir;
 mod assertions;
 mod fake_agent;
 mod fixture;
+pub mod target_branch;
 
 pub use assertions::*;
 pub use fake_agent::*;

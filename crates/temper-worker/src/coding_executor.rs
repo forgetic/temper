@@ -298,11 +298,8 @@ async fn prepare_repo(
 ) -> Result<PreparedRepo, JobOutcome> {
     let remote_url = forgejo_remote_url(request.git_base_url, &repo_spec.repo)
         .map_err(|error| workspace_failure("construct git remote URL", error))?;
-    let base_branch = if repo_spec.base_branch.trim().is_empty() {
-        "main".to_string()
-    } else {
-        repo_spec.base_branch.clone()
-    };
+    let base_branch = normalize_manifest_branch(&repo_spec.base_branch);
+    let default_branch = normalize_manifest_branch(&repo_spec.default_branch);
     let checkout_path = request.workspace_root.join(&repo_spec.dir);
     let workspace = Workspace::at(
         checkout_path,
@@ -311,7 +308,7 @@ async fn prepare_repo(
         remote_url,
     );
 
-    prepare_workspace(&workspace, request, repo_spec).await?;
+    prepare_workspace(&workspace, request, repo_spec, &default_branch).await?;
     let start_head_sha = workspace
         .head_sha()
         .await
@@ -325,10 +322,19 @@ async fn prepare_repo(
     })
 }
 
+fn normalize_manifest_branch(branch: &str) -> String {
+    if branch.trim().is_empty() {
+        "main".to_string()
+    } else {
+        branch.to_string()
+    }
+}
+
 async fn prepare_workspace(
     workspace: &Workspace,
     request: &PrepareRequest<'_>,
     repo_spec: &WorkspaceRepo,
+    default_branch: &str,
 ) -> Result<(), JobOutcome> {
     let result = match request.mode {
         JobMode::PullRequestReadOnly => {
@@ -348,6 +354,10 @@ async fn prepare_workspace(
             return prepare_writable(workspace, repo_spec).await;
         }
         JobMode::Writable if repo_spec.is_writable() => {
+            workspace
+                .ensure_base_branch_exists_from_default(default_branch)
+                .await
+                .map_err(|error| workspace_failure("prepare workspace target branch", error))?;
             return prepare_writable(workspace, repo_spec).await;
         }
         // Read-only sibling in a writable job, or any repo in a read-only
