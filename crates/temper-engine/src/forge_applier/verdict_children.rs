@@ -6,7 +6,10 @@
 
 use temper_forge::{Forge, ItemNumber, Repository, RepositoryId};
 use temper_protocol_worker::JobChild;
-use temper_workflow::{ArtifactKindId, CreateIssuesChild};
+use temper_workflow::{
+    ArtifactKindId, ArtifactTarget, CreateIssuesChild, WorkflowMetadata, parse_metadata_block,
+    replace_metadata_block,
+};
 
 use temper_runner::workspace_content_key;
 
@@ -15,7 +18,7 @@ use crate::forge_applier::ForgeApplier;
 use crate::forge_applier::verdict::{
     VerdictChildrenBinding, create_issues_effect_index, parse_child_target_repo,
 };
-use crate::workflow_meta::code_child_create_labels;
+use crate::workflow_meta::artifact_kind_child_create_labels;
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn bind_create_issues_children(
@@ -70,24 +73,71 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         number: ItemNumber,
         child: JobChild,
     ) -> Option<CreateIssuesChild> {
-        // Breakdown children are `code` work items. The labels that route a code
-        // issue to the engineer's queue are declared by the workflow (the `code`
-        // artifact-kind's identifying + initial labels), NOT left to the agent: a
-        // child created label-less (or missing the activation label) would be
-        // classified as the catch-all `intake` kind and spuriously re-triaged,
-        // wiping its parent back-reference. Union the workflow-required labels with
-        // whatever the agent authored so the child is always created
-        // engineer-ready, exactly as the single-repo triage path is.
-        let mut labels = code_child_create_labels(self.workflow.as_ref());
-        for label in child.labels {
-            if !labels.contains(&label) {
-                labels.push(label);
+        let metadata = match parse_metadata_block(&child.body) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    issue = %number,
+                    child_slug = %child.slug,
+                    %error,
+                    "forge applier dropped verdict apply with malformed child workflow metadata"
+                );
+                return None;
             }
+        };
+        let child_kind =
+            self.resolve_child_artifact_kind(job, number, &child, metadata.as_ref())?;
+        let Some(kind) = self.workflow.artifact_kind(&child_kind) else {
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                issue = %number,
+                child_slug = %child.slug,
+                child_kind = %child_kind,
+                "forge applier dropped verdict apply with unknown child artifact kind"
+            );
+            return None;
+        };
+        if kind.target != ArtifactTarget::Issue {
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                issue = %number,
+                child_slug = %child.slug,
+                child_kind = %child_kind,
+                child_target = %kind.target,
+                "forge applier dropped verdict apply with non-issue child artifact kind"
+            );
+            return None;
         }
+
+        let labels =
+            artifact_kind_child_create_labels(self.workflow.as_ref(), &child_kind, &child.labels)?;
+        let body = match child_body_with_artifact_kind(&child.body, metadata, &child_kind) {
+            Ok(body) => body,
+            Err(error) => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    issue = %number,
+                    child_slug = %child.slug,
+                    child_kind = %child_kind,
+                    %error,
+                    "forge applier dropped verdict apply after child workflow metadata update failed"
+                );
+                return None;
+            }
+        };
         let mut mapped = CreateIssuesChild {
             slug: child.slug,
             title: child.title,
-            body: child.body,
+            body,
             labels,
             dependencies: child.depends_on,
             target_repo: None,
@@ -101,6 +151,57 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         }
 
         Some(mapped)
+    }
+
+    fn resolve_child_artifact_kind(
+        &self,
+        job: &InFlightJob,
+        number: ItemNumber,
+        child: &JobChild,
+        metadata: Option<&WorkflowMetadata>,
+    ) -> Option<ArtifactKindId> {
+        let explicit_kind = match child.kind.as_deref() {
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        repo = %job.repo,
+                        issue = %number,
+                        child_slug = %child.slug,
+                        "forge applier dropped verdict apply with empty child artifact kind"
+                    );
+                    return None;
+                }
+                Some(ArtifactKindId::new(trimmed))
+            }
+            None => None,
+        };
+        let metadata_kind = metadata.and_then(|metadata| metadata.kind.as_ref());
+        if let Some(explicit) = &explicit_kind {
+            if let Some(existing) = metadata_kind {
+                if explicit != existing {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        repo = %job.repo,
+                        issue = %number,
+                        child_slug = %child.slug,
+                        child_kind = %explicit,
+                        metadata_kind = %existing,
+                        "forge applier dropped verdict apply with conflicting child artifact kinds"
+                    );
+                    return None;
+                }
+            }
+        }
+
+        Some(
+            explicit_kind
+                .or_else(|| metadata_kind.cloned())
+                .unwrap_or_else(|| ArtifactKindId::new("code")),
+        )
     }
 
     async fn resolve_child_target_repository(
@@ -151,4 +252,17 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             }
         }
     }
+}
+
+fn child_body_with_artifact_kind(
+    body: &str,
+    metadata: Option<WorkflowMetadata>,
+    kind: &ArtifactKindId,
+) -> Result<String, String> {
+    let mut metadata = metadata.unwrap_or_default();
+    if metadata.kind.is_some() {
+        return Ok(body.to_string());
+    }
+    metadata.kind = Some(kind.clone());
+    replace_metadata_block(body, &metadata).map_err(|error| error.to_string())
 }

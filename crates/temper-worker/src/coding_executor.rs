@@ -423,6 +423,7 @@ async fn verdict_only_outcome(
             slug: child.slug,
             title: child.title,
             body: child.body,
+            kind: child.kind,
             labels: child.labels,
             depends_on: child.depends_on,
             target_repo: child.target_repo,

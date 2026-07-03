@@ -313,6 +313,10 @@
     "body": {
      "type": "string"
     },
+    "kind": {
+     "type": "string",
+     "minLength": 1
+    },
     "labels": {
      "type": "array",
      "items": {
