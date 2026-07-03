@@ -16,6 +16,7 @@
       "slug": "web-client",
       "title": "Implement the web client",
       "body": "Build the web client against the API schema.",
+      "kind": "code",
       "labels": ["code", "ready"],
       "depends_on": ["api-schema"],
       "target_repo": "acme/web"

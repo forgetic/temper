@@ -61,9 +61,10 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              - `needs_design` with an authored `body` (a design proposal) when \
              design work is required first;\n\
              - `needs_breakdown` with a `children` list (each: slug, title, body, \
-             labels, depends_on, and optional target_repo as an owner/name \
-             repository path when the intake plan names target repositories) \
-             when the item must be split into child issues.\n",
+             optional kind, labels, depends_on, and optional target_repo as an \
+             owner/name repository path when the intake plan names target \
+             repositories) when the item must be split into child issues. Omit \
+             child kind only for ordinary `code` children.\n",
         ),
         Capability::ReviewWorkspace => prompt.push_str(
             "ROLE: reviewer (review_workspace capability).\n\
@@ -136,7 +137,7 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
          code fences, no explanation. The JSON object describes the result, with \
          these optional fields: `verdict` (string), `title` (string), `summary` \
          (string), `body` (string), `review_body` (string), `labels` (array of \
-         strings), and `children` (array of {slug, title, body, labels, depends_on, \
+         strings), and `children` (array of {slug, title, body, kind?, labels, depends_on, \
          target_repo?}). Omit fields you are not using. For a no-verdict engineer \
          success, emit a compact current implementation report as `body` and a PR \
          title as `title`, for example \

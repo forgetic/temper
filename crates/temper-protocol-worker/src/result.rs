@@ -48,6 +48,10 @@ pub struct JobChild {
     pub slug: String,
     pub title: String,
     pub body: String,
+    /// Workflow artifact kind for this child issue. Omitted defaults to `code`
+    /// when the daemon applies verdict child fan-out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     /// Slugs of sibling children in the same result that must land before

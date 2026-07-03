@@ -377,6 +377,10 @@ pub struct WorkspaceResultChild {
     pub slug: String,
     pub title: String,
     pub body: String,
+    /// Workflow artifact kind for this child issue. Omitted defaults to `code`
+    /// on the daemon verdict fan-out path for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]

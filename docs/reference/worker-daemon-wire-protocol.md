@@ -31,8 +31,9 @@ connections to workers or pushes unsolicited jobs to them.
 JSON keeps v1 easy to inspect and fixture-test while preserving message
 semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.action`, `JobContext.checkout_capability`,
-`JobContext.allowed_verdicts`, `JobResult.verdict`, `JobResult.body`, and
-`JobResult.children` are all optional, and the protocol version remains `1`.
+`JobContext.allowed_verdicts`, `JobResult.verdict`, `JobResult.body`,
+`JobResult.children`, and `JobResult.children[].kind` are all optional, and the
+protocol version remains `1`.
 
 ## Envelope
 
@@ -183,7 +184,8 @@ Worker returns the structured result for one assigned job.
 | `children[].slug` | string | yes | Stable per-child identifier within the result; seeds the child's correlation key and is referenced by sibling `depends_on` entries. |
 | `children[].title` | string | yes | Child issue title. |
 | `children[].body` | string | yes | Child issue body. |
-| `children[].labels` | array of strings | no | Labels to apply when creating the child issue. |
+| `children[].kind` | string | no | Workflow artifact kind to create, for example `code`, `plan`, or `validation`. Omitted defaults to `code` for backward compatibility. The daemon derives required identifying labels, and non-conflicting initial labels, from this kind. |
+| `children[].labels` | array of strings | no | Labels to apply when creating the child issue. Child-authored lifecycle/state labels are preserved; for example, a `code` child with `blocked` is not also given the default `ready` label. |
 | `children[].depends_on` | array of strings | no | Slugs of sibling children in the same result that must land before this one. |
 | `children[].target_repo` | string | no | Target repository as an `owner/name` path. Omitted means the assignment's own repository. |
 | `failure` | object | required for failures | Failure details. |
@@ -202,9 +204,13 @@ or breakdown `children` and no `branch`; the allowed vocabulary comes from the
 assignment payload's `allowed_verdicts`. The daemon binds `children` only when
 the routed verdict transition declares a `create_issues` effect; a child's
 optional `target_repo` uses the same `owner/name` shape as daemon `--repo` and
-omits to the assignment's repository. These result fields are optional for
-backward compatibility, and their addition does not change the protocol version:
-it remains `1`.
+omits to the assignment's repository. Child `kind` defaults to `code`; when set,
+it must name a workflow issue artifact kind. The daemon stamps that kind into the
+child workflow metadata block when the body lacks one, preserving any existing
+metadata fields such as `target_branch`. If the body already carries a metadata
+`kind`, it is preserved. These result fields are optional for backward
+compatibility, and their addition does not change the protocol version: it
+remains `1`.
 
 ### `release` — daemon → worker
 

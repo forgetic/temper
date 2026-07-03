@@ -20,9 +20,9 @@ pub(crate) use temper_protocol_worker::{
 };
 pub(crate) use temper_worker_registry::InFlightJob;
 pub(crate) use temper_workflow::{
-    ArtifactKindId, ArtifactRef, ArtifactSource, LeaseManager, LeasePolicy, RawWorkflowSpec,
-    RoleId, ValidatedWorkflow, WorkflowMetadata, global_child_correlation_key,
-    parse_metadata_block, render_metadata_block,
+    ArtifactKindId, ArtifactRef, ArtifactSource, ArtifactTarget, LeaseManager, LeasePolicy,
+    RawArtifactKind, RawLabel, RawWorkflowSpec, RoleId, ValidatedWorkflow, WorkflowMetadata,
+    global_child_correlation_key, parse_metadata_block, render_metadata_block,
 };
 
 const REFERENCE_FIXTURE: &str =
@@ -31,6 +31,22 @@ const REFERENCE_FIXTURE: &str =
 pub(crate) fn workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec = serde_json::from_str(REFERENCE_FIXTURE).expect("workflow parses");
     spec.validate().expect("workflow validates")
+}
+
+pub(crate) fn workflow_with_plan_kind() -> ValidatedWorkflow {
+    let mut spec: RawWorkflowSpec =
+        serde_json::from_str(REFERENCE_FIXTURE).expect("workflow parses");
+    spec.labels.push(RawLabel {
+        id: "plan".to_string(),
+        description: Some("identifies an architect-authored plan issue".to_string()),
+    });
+    spec.artifact_kinds.push(RawArtifactKind {
+        id: "plan".to_string(),
+        target: ArtifactTarget::Issue,
+        identifying_labels: vec!["plan".to_string()],
+        initial_labels: Vec::new(),
+    });
+    spec.validate().expect("workflow with plan validates")
 }
 
 pub(crate) fn ts(value: &str) -> chrono::DateTime<chrono::Utc> {
@@ -301,6 +317,7 @@ pub(crate) fn job_child(slug: &str, title: &str, body: &str, labels: &[&str]) ->
         slug: slug.to_string(),
         title: title.to_string(),
         body: body.to_string(),
+        kind: None,
         labels: labels.iter().map(|label| (*label).to_string()).collect(),
         depends_on: Vec::new(),
         target_repo: None,

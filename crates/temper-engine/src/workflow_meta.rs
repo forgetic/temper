@@ -38,13 +38,73 @@ pub(crate) fn implementation_pr_create_labels(workflow: &ValidatedWorkflow) -> V
     artifact_kind_create_labels(workflow, "implementation_pr")
 }
 
-/// Labels a freshly-materialised `code` child issue must carry to be a valid,
-/// engineer-ready code artifact: the `code` artifact-kind's identifying labels
-/// (so it classifies as `code`, not the catch-all `intake`) plus its initial
-/// labels (the activation label, e.g. `ready`, that routes it to the engineer's
-/// queue). Derived from the workflow so the daemon never hardcodes label names.
-pub(crate) fn code_child_create_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
-    artifact_kind_create_labels(workflow, "code")
+/// Labels a freshly-created child issue of `kind_id` must carry. The artifact
+/// kind's identifying labels are always included. Initial labels are included
+/// only when they do not conflict with state labels the child explicitly
+/// authored for the same artifact kind (for example, a `blocked` code child must
+/// not also receive the code kind's default `ready` lifecycle label).
+pub(crate) fn artifact_kind_child_create_labels(
+    workflow: &ValidatedWorkflow,
+    kind_id: &ArtifactKindId,
+    child_labels: &[String],
+) -> Option<Vec<String>> {
+    let kind = workflow.artifact_kind(kind_id)?;
+
+    let mut labels = Vec::new();
+    for label in &kind.identifying_labels {
+        push_label(&mut labels, label.as_str());
+    }
+    for label in &kind.initial_labels {
+        if !initial_label_conflicts_with_child_state(
+            workflow,
+            kind_id,
+            label.as_str(),
+            child_labels,
+        ) {
+            push_label(&mut labels, label.as_str());
+        }
+    }
+    for label in child_labels {
+        push_label(&mut labels, label);
+    }
+    Some(labels)
+}
+
+fn initial_label_conflicts_with_child_state(
+    workflow: &ValidatedWorkflow,
+    kind_id: &ArtifactKindId,
+    initial_label: &str,
+    child_labels: &[String],
+) -> bool {
+    workflow
+        .state_dimensions()
+        .iter()
+        .filter(|dimension| dimension.exclusive)
+        .any(|dimension| {
+            let initial_is_state_for_kind = dimension.states.iter().any(|state| {
+                state.allows_artifact(kind_id)
+                    && state
+                        .label
+                        .as_ref()
+                        .is_some_and(|label| label.as_str() == initial_label)
+            });
+            initial_is_state_for_kind
+                && dimension.states.iter().any(|state| {
+                    state.allows_artifact(kind_id)
+                        && state.label.as_ref().is_some_and(|label| {
+                            label.as_str() != initial_label
+                                && child_labels
+                                    .iter()
+                                    .any(|child| child.as_str() == label.as_str())
+                        })
+                })
+        })
+}
+
+fn push_label(labels: &mut Vec<String>, label: &str) {
+    if !labels.iter().any(|existing| existing == label) {
+        labels.push(label.to_string());
+    }
 }
 
 /// Union of an artifact-kind's identifying and initial labels, in declaration
