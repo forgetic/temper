@@ -140,6 +140,48 @@ fn codebase_memory_background_indexing_calls_only_prepared_repo_paths() {
 }
 
 #[test]
+fn codebase_memory_background_tool_calls_wait_for_index_identity() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("mcp.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Background,
+                "index-rediscovers-slow",
+                &log_path,
+                json!({"projects": []}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("background indexing starts");
+
+        let tools = toolset.into_tools();
+        let search = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search wrapper present");
+        search
+            .execute("default", json!({"query": "needle"}), None)
+            .await
+            .expect("default waits for background project identity");
+
+        let search_calls = calls_named(&log_path, "search_code");
+        assert_eq!(search_calls.len(), 1);
+        assert_eq!(search_calls[0]["arguments"]["project"], "generated-project");
+        assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
+        assert!(calls_named(&log_path, "list_projects").len() >= 2);
+    });
+}
+
+#[test]
 fn codebase_memory_blocking_indexing_success_and_timeout_modes() {
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");

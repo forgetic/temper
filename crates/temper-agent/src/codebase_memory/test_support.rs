@@ -33,7 +33,7 @@ except Exception:
 state_path = log_path + ".projects.json" if log_path else ""
 
 def current_projects():
-    if mode == "index-rediscovers" and state_path and os.path.exists(state_path):
+    if mode.startswith("index-rediscovers") and state_path and os.path.exists(state_path):
         with open(state_path, "r", encoding="utf-8") as handle:
             parsed = json.load(handle)
         return parsed.get("projects", parsed if isinstance(parsed, list) else [])
@@ -88,7 +88,9 @@ for line in sys.stdin:
                 continue
             if mode == "index-hang":
                 time.sleep(60)
-            if mode == "index-rediscovers" and state_path:
+            if mode == "index-rediscovers-slow":
+                time.sleep(0.15)
+            if mode.startswith("index-rediscovers") and state_path:
                 with open(state_path, "w", encoding="utf-8") as handle:
                     json.dump({"projects": [{"name": "generated-project", "root_path": repo_path}]}, handle)
                 payload = json.dumps({"project": {"root_path": repo_path}}, sort_keys=True)
