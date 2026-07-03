@@ -4,6 +4,8 @@
 mod assertions;
 #[path = "forge_apply/breakdown.rs"]
 mod breakdown;
+#[path = "forge_apply/breakdown_child_kind.rs"]
+mod breakdown_child_kind;
 #[path = "forge_apply/failure.rs"]
 mod failure;
 #[path = "forge_apply/handoff.rs"]
