@@ -123,7 +123,7 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `repository.owner` | string | yes when `repository` is present | Repository owner. |
 | `repository.name` | string | yes when `repository` is present | Repository name. |
 | `repository.default_branch` | string | yes when `repository` is present | Forge repository default branch as reported by the backend. |
-| `base_branch` | string | no | Normalized base branch for workspace output, falling back to `main` when the Forge repository default branch is blank. |
+| `base_branch` | string | no | Workspace base branch for checkout and implementation PR target. Defaults to the normalized Forge default branch, but workflow metadata `target_branch` may override it for issue-backed implementation work. |
 | `branch_hint` | string | no | Deterministic worker branch suggestion, for example `agent/pr-for-code-42`. |
 | `correlation_key` | string | no | Deterministic PR correlation key, for example `pr-for-code-42`. |
 | `artifact` | object | no | Enqueue-time issue snapshot. Omitted for older minimal payloads and for PR-targeted jobs in v1. |

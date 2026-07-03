@@ -23,11 +23,9 @@ use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
 use crate::forge_applier::coordinated::{
     CoordinatedSet, coordinated_landing_order, coordinated_pr_pull_request_input,
-    manifest_depends_on,
+    manifest_base_branches, manifest_depends_on, pr_target_branch,
 };
-use crate::workflow_meta::{
-    default_base_branch, implementation_pr_create_labels, implementation_pr_labels,
-};
+use crate::workflow_meta::{implementation_pr_create_labels, implementation_pr_labels};
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn apply_success(&self, job: InFlightJob, result: JobResult) {
@@ -115,6 +113,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         // links (ADR 0023, acyclic). The `dependency_gate` then holds each PR
         // closed until its prerequisites merge.
         let depends_on = manifest_depends_on(&context);
+        let base_branches = manifest_base_branches(&context);
         let order = coordinated_landing_order(&result.repos, &depends_on);
         let mut opened: BTreeMap<String, (RepositoryId, ItemNumber)> = BTreeMap::new();
 
@@ -130,6 +129,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             lookup_labels: &lookup_labels,
             create_labels: &create_labels,
             depends_on: &depends_on,
+            base_branches: &base_branches,
         };
         for index in order {
             self.open_coordinated_pr(&set, &result.repos[index], &mut opened)
@@ -161,7 +161,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         let Some(target_repository) = self.resolve_repo_path(set.job, &outcome.repo).await else {
             return;
         };
-        let base_branch = default_base_branch(&target_repository);
+        let base_branch = pr_target_branch(set, &outcome.repo, &target_repository);
         let coordinating = if &target_repository.id == set.primary_id {
             temper_workflow::ArtifactRef::same_repo(set.number)
         } else {

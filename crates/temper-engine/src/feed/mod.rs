@@ -113,6 +113,7 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     let coordination_key = inherited_pull_request_coordination_key(item, &artifact.body)
         .unwrap_or_else(|| pr_correlation_key(&item.kind, number));
     let branch_hint = pr_branch_hint(&item.kind, number);
+    let target_base_branch = issue_metadata_target_branch(item, &artifact.body);
     let workspace = build_workspace_manifest(
         forge,
         &repository,
@@ -120,6 +121,7 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
         &coordination_key,
         &branch_hint,
         &artifact.body,
+        target_base_branch.as_deref(),
     )
     .await?;
 
@@ -182,6 +184,21 @@ fn inherited_pull_request_coordination_key(item: &WorkItem, artifact_body: &str)
         .and_then(|metadata| metadata.correlation_key)
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
+}
+
+fn issue_metadata_target_branch(item: &WorkItem, artifact_body: &str) -> Option<String> {
+    if !matches!(item.target, ArtifactSource::Issue { .. }) {
+        return None;
+    }
+
+    parse_metadata_block(artifact_body)
+        .ok()
+        .flatten()
+        .and_then(|metadata| metadata.target_branch)
+        .and_then(|branch| {
+            let trimmed = branch.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
 }
 
 async fn implementation_pull_request_exists_for_correlation<F: Forge + ?Sized>(

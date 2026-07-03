@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_forge::{CreatePullRequest, ItemNumber, RepositoryId};
+use temper_forge::{CreatePullRequest, ItemNumber, Repository, RepositoryId};
 use temper_protocol_worker::{JobContext, RepoOutcome};
 use temper_runner::{implementation_pr_body_from_report_or_summary, implementation_pr_title};
 use temper_workflow::ArtifactKindId;
@@ -26,6 +26,7 @@ pub(super) struct CoordinatedSet<'a> {
     pub(super) lookup_labels: &'a [String],
     pub(super) create_labels: &'a [String],
     pub(super) depends_on: &'a BTreeMap<String, Vec<String>>,
+    pub(super) base_branches: &'a BTreeMap<String, String>,
 }
 
 impl CoordinatedSet<'_> {
@@ -75,6 +76,45 @@ pub(super) fn manifest_depends_on(context: &JobContext) -> BTreeMap<String, Vec<
                 .collect()
         })
         .unwrap_or_default()
+}
+
+pub(super) fn manifest_base_branches(context: &JobContext) -> BTreeMap<String, String> {
+    context
+        .workspace
+        .as_ref()
+        .map(|workspace| {
+            workspace
+                .repos
+                .iter()
+                .filter_map(|repo| {
+                    let base_branch = repo.base_branch.trim();
+                    (!base_branch.is_empty()).then(|| (repo.repo.clone(), base_branch.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(super) fn pr_target_branch(
+    set: &CoordinatedSet<'_>,
+    outcome_repo: &str,
+    target_repository: &Repository,
+) -> String {
+    set.base_branches
+        .get(outcome_repo)
+        .map(|branch| branch.trim())
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| repository_default_branch(target_repository))
+}
+
+fn repository_default_branch(repository: &Repository) -> String {
+    let default_branch = repository.default_branch.trim();
+    if default_branch.is_empty() {
+        "main".to_string()
+    } else {
+        default_branch.to_string()
+    }
 }
 
 /// Orders the repo outcomes so a repo comes after every repo it depends on

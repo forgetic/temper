@@ -95,14 +95,23 @@ pub(super) async fn build_workspace_manifest<F: Forge + ?Sized>(
     coordination_key: &str,
     branch_hint: &str,
     body: &str,
+    target_base_branch: Option<&str>,
 ) -> Result<WorkspaceManifest, ScanError> {
     let declared = parse_workspace_decl(body);
-    let primary_base = default_base_branch(primary);
+    let target_base_branch = target_base_branch
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty());
+    let primary_default = default_base_branch(primary);
+    let primary_base = base_branch_for_access(
+        primary_default.as_str(),
+        target_base_branch,
+        RepoAccess::Writable,
+    );
     let mut repos = vec![WorkspaceRepo {
         repo: primary_path.to_string(),
         dir: repo_dir(primary_path),
         access: RepoAccess::Writable,
-        default_branch: primary_base.clone(),
+        default_branch: primary_default,
         base_branch: primary_base,
         branch_hint: Some(branch_hint.to_string()),
         // The primary's landing order is taken from its own declaration entry,
@@ -133,7 +142,9 @@ pub(super) async fn build_workspace_manifest<F: Forge + ?Sized>(
                     decl.repo
                 )))
             })?;
-        let base = default_base_branch(&repository);
+        let default_branch = default_base_branch(&repository);
+        let base_branch =
+            base_branch_for_access(default_branch.as_str(), target_base_branch, decl.access);
         let branch_hint = match decl.access {
             RepoAccess::Writable => Some(branch_hint.to_string()),
             RepoAccess::ReadOnly => None,
@@ -142,8 +153,8 @@ pub(super) async fn build_workspace_manifest<F: Forge + ?Sized>(
             repo: decl.repo,
             dir: repo_dir(&repository.name),
             access: decl.access,
-            default_branch: base.clone(),
-            base_branch: base,
+            default_branch,
+            base_branch,
             branch_hint,
             depends_on: decl.depends_on,
         });
@@ -153,6 +164,17 @@ pub(super) async fn build_workspace_manifest<F: Forge + ?Sized>(
         coordination_key: coordination_key.to_string(),
         repos,
     })
+}
+
+fn base_branch_for_access(
+    default_branch: &str,
+    target_base_branch: Option<&str>,
+    access: RepoAccess,
+) -> String {
+    match access {
+        RepoAccess::Writable => target_base_branch.unwrap_or(default_branch).to_string(),
+        RepoAccess::ReadOnly => default_branch.to_string(),
+    }
 }
 
 pub(super) fn target_number(target: ArtifactSource) -> ItemNumber {
