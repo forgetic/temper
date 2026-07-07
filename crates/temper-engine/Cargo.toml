@@ -26,6 +26,7 @@ temper-workflow = { path = "../temper-workflow" }
 
 [dev-dependencies]
 temper-forge-memory = { path = "../temper-forge-memory" }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
