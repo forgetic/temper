@@ -132,6 +132,7 @@ fn architect_triage_intake_routes_verdicts_to_content_bearing_transitions() {
         vec![
             WorkflowEffect::CreateIssues {
                 correlation_key: Some("triage-intake-breakdown".to_string()),
+                record_parent_dependencies: false,
             },
             WorkflowEffect::RemoveLabel(LabelId::new("untriaged")),
             WorkflowEffect::AddLabel(LabelId::new("epic")),

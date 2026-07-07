@@ -357,9 +357,13 @@ pub enum Effect {
     /// children come from the workspace work product through a keyed
     /// runtime-input seam, exactly as `CreatePullRequest` reads its head; the
     /// optional correlation key is the base under which each child is made
-    /// idempotent across retries.
+    /// idempotent across retries. When `record_parent_dependencies` is true,
+    /// same-repository fan-outs also record the created children as source-issue
+    /// dependency metadata.
     CreateIssues {
         correlation_key: Option<String>,
+        #[serde(default)]
+        record_parent_dependencies: bool,
     },
     MergePullRequest,
     /// Close parent issues of a pull request. See [`crate::spec::RawEffect::CloseParentIssues`].

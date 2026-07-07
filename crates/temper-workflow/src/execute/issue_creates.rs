@@ -2,10 +2,10 @@
 //!
 //! This child module holds the `CreateIssues` effect's apply path: creating each
 //! workspace-authored child issue idempotently, linking declared sibling
-//! dependencies, and recording parent dependency refs for cross-repository
-//! fan-outs. It is split from the sibling `apply` module to keep both files
-//! within the source-size budget; it accesses the parent's private [`Executor`]
-//! items as a descendant module.
+//! dependencies, and recording parent dependency refs for cross-repository or
+//! explicitly opted-in source-issue fan-outs. It is split from the sibling
+//! `apply` module to keep both files within the source-size budget; it accesses
+//! the parent's private [`Executor`] items as a descendant module.
 
 use super::{ExecutionError, Executor};
 use crate::artifact::ArtifactRef;
@@ -26,6 +26,17 @@ use temper_forge::{CreateIssue, Forge, ItemNumber, RepositoryId};
 pub(super) struct PreparedCreateIssues {
     pub(super) base_correlation_key: String,
     pub(super) children: Vec<CreateIssuesChild>,
+    pub(super) record_parent_dependencies: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ParentDependencyStyle {
+    /// Preserve the historical cross-repository fan-out projection: every child
+    /// ref is repo-qualified, including children in the source repository.
+    LegacyRepoQualified,
+    /// Use the natural ref shape for explicit parent-completion sets: same-repo
+    /// children use shorthand refs, cross-repo children stay repo-qualified.
+    Natural,
 }
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -47,9 +58,12 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     /// relations are recorded only after every child exists, so a dependency
     /// target's repository and number are always known. When an issue transition
     /// fans out to at least one cross-repository child, the parent issue also
-    /// records repo-qualified fallback dependency refs for every child in
-    /// declaration order; all-same-repository fan-outs leave the parent metadata
-    /// untouched for byte-for-byte compatibility with existing artifacts.
+    /// records fallback dependency refs for every child in declaration order;
+    /// legacy cross-repository fan-outs keep repo-qualified refs for every child.
+    /// All-same-repository fan-outs leave the parent metadata untouched unless
+    /// the workflow declares `record_parent_dependencies: true`, in which case
+    /// same-repository children are recorded with same-repository refs and
+    /// cross-repository children with repo-qualified refs.
     pub(super) async fn apply_issue_creates(
         &self,
         repo_id: &RepositoryId,
@@ -102,12 +116,18 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
             self.link_child_dependencies(&create.children, &child_numbers_by_slug)
                 .await?;
-            if any_cross_repo {
+            if any_cross_repo || create.record_parent_dependencies {
+                let style = if create.record_parent_dependencies {
+                    ParentDependencyStyle::Natural
+                } else {
+                    ParentDependencyStyle::LegacyRepoQualified
+                };
                 self.link_parent_dependencies(
                     repo_id,
                     target,
                     &create.children,
                     &child_numbers_by_slug,
+                    style,
                 )
                 .await?;
             }
@@ -150,13 +170,14 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         Ok(())
     }
 
-    /// Third pass: cross-repo issue fan-out records parent dependency refs.
+    /// Third pass: eligible issue fan-outs record parent dependency refs.
     async fn link_parent_dependencies(
         &self,
         repo_id: &RepositoryId,
         target: ArtifactSource,
         children: &[CreateIssuesChild],
         child_numbers_by_slug: &BTreeMap<String, (RepositoryId, ItemNumber)>,
+        style: ParentDependencyStyle,
     ) -> Result<(), ExecutionError> {
         let ArtifactSource::Issue { number } = target else {
             return Ok(());
@@ -168,11 +189,16 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .ok_or(ExecutionError::TargetMissing { target })?;
         for child in children {
             let (child_repo, child_number) = child_numbers_by_slug[&child.slug].clone();
-            self.ensure_issue_dependency_metadata(
-                &parent_issue.id,
-                &ArtifactRef::in_repo(child_repo, child_number),
-            )
-            .await?;
+            let dependency = match style {
+                ParentDependencyStyle::Natural if &child_repo == repo_id => {
+                    ArtifactRef::same_repo(child_number)
+                }
+                ParentDependencyStyle::Natural | ParentDependencyStyle::LegacyRepoQualified => {
+                    ArtifactRef::in_repo(child_repo, child_number)
+                }
+            };
+            self.ensure_issue_dependency_metadata(&parent_issue.id, &dependency)
+                .await?;
         }
         Ok(())
     }

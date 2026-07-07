@@ -11,11 +11,12 @@ mod support;
 
 use std::collections::BTreeMap;
 
-use support::{TestRoot, block_on, create_issue, issue_labels, new_repo};
+use support::{TestRoot, block_on, close_issue, create_issue, issue_labels, new_repo};
 use temper_forge::{CreateRepository, Forge, Issue, IssueQuery, ItemNumber, RepositoryId};
 use temper_workflow::{
-    ArtifactRef, ArtifactSource, CreateIssuesChild, Effect, ExecutionContext, ExecutionError,
-    RawEffect, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
+    ArtifactRef, ArtifactSource, CreateIssuesChild, DefaultRecoveryPolicy, Effect,
+    ExecutionContext, ExecutionError, InMemoryJournal, RawEffect, RawWorkflowSpec,
+    ReconcileFinding, RecoveryAction, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
     WorkflowMetadata, global_child_correlation_key, parse_metadata_block,
 };
 
@@ -42,6 +43,57 @@ const DYNAMIC_CREATE_ISSUES_WORKFLOW: &str = r#"{
     "transitions": [{"id": "break_into_children", "artifact": "epic", "roles": ["architect"], "effects": [
         {"kind": "create_issues"}
     ]}]
+}"#;
+
+const DYNAMIC_RECORD_PARENT_CREATE_ISSUES_WORKFLOW: &str = r#"{
+    "name": "dynamic-record-parent-create-issues",
+    "roles": [{"id": "architect"}],
+    "labels": [{"id": "intake"}, {"id": "code"}],
+    "artifact_kinds": [
+        {"id": "epic", "target": "issue", "identifying_labels": ["intake"]}
+    ],
+    "transitions": [{"id": "break_into_children", "artifact": "epic", "roles": ["architect"], "effects": [
+        {"kind": "create_issues", "record_parent_dependencies": true}
+    ]}]
+}"#;
+
+const RECORD_PARENT_CREATE_ISSUES_WORKFLOW: &str = r#"{
+    "name": "record-parent-create-issues",
+    "roles": [{"id": "architect"}],
+    "labels": [{"id": "intake"}, {"id": "planned"}, {"id": "code"}, {"id": "ready"}],
+    "artifact_kinds": [
+        {"id": "epic", "target": "issue", "identifying_labels": ["intake"]}
+    ],
+    "transitions": [{"id": "break_into_children", "artifact": "epic", "roles": ["architect"], "effects": [
+        {"kind": "create_issues", "correlation_key": "plan-epic-1", "record_parent_dependencies": true},
+        {"kind": "add_label", "label": "planned"}
+    ]}]
+}"#;
+
+const PLAN_COMPLETION_WORKFLOW: &str = r#"{
+    "name": "plan-completion",
+    "roles": [{"id": "architect"}],
+    "labels": [{"id": "plan"}, {"id": "blocked"}, {"id": "ready"}, {"id": "code"}],
+    "artifact_kinds": [
+        {"id": "plan", "target": "issue", "identifying_labels": ["plan"]},
+        {"id": "code", "target": "issue", "identifying_labels": ["code"]}
+    ],
+    "relations": [
+        {"kind": "dependency", "source": "plan", "target": "code"}
+    ],
+    "transitions": [
+        {"id": "break_into_children", "artifact": "plan", "roles": ["architect"], "effects": [
+            {"kind": "create_issues", "correlation_key": "plan-completion", "record_parent_dependencies": true},
+            {"kind": "add_label", "label": "blocked"}
+        ]},
+        {"id": "mark_plan_ready", "artifact": "plan", "roles": ["architect"], "requires_gates": ["dependency_gate"], "effects": [
+            {"kind": "remove_label", "label": "blocked"},
+            {"kind": "add_label", "label": "ready"}
+        ]}
+    ],
+    "gates": [
+        {"id": "dependency_gate", "condition": {"kind": "dependencies_resolved"}}
+    ]
 }"#;
 
 fn validate(spec_json: &str) -> ValidatedWorkflow {
@@ -166,18 +218,35 @@ fn metadata(issue: &Issue) -> WorkflowMetadata {
 }
 
 #[test]
-fn create_issues_deserializes_with_and_without_a_correlation_key() {
+fn create_issues_deserializes_with_and_without_parent_dependency_recording() {
     let with_key: RawEffect =
         serde_json::from_str(r#"{"kind": "create_issues", "correlation_key": "k1"}"#).unwrap();
     assert!(matches!(
         with_key,
-        RawEffect::CreateIssues { correlation_key: Some(ref k) } if k == "k1"
+        RawEffect::CreateIssues {
+            correlation_key: Some(ref k),
+            record_parent_dependencies: false,
+        } if k == "k1"
     ));
+
+    let with_parent_deps: RawEffect = serde_json::from_str(
+        r#"{"kind": "create_issues", "correlation_key": "k2", "record_parent_dependencies": true}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        with_parent_deps,
+        RawEffect::CreateIssues {
+            correlation_key: Some(ref k),
+            record_parent_dependencies: true,
+        } if k == "k2"
+    ));
+
     let defaulted: RawEffect = serde_json::from_str(r#"{"kind": "create_issues"}"#).unwrap();
     assert!(matches!(
         defaulted,
         RawEffect::CreateIssues {
-            correlation_key: None
+            correlation_key: None,
+            record_parent_dependencies: false,
         }
     ));
 }
@@ -194,7 +263,26 @@ fn create_issues_validates_and_compiles_into_a_tool_manifest() {
         .expect("break_into_children tool compiles");
     assert!(tool.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CreateIssues { correlation_key: Some(key) } if key == "plan-epic-1"
+        Effect::CreateIssues {
+            correlation_key: Some(key),
+            record_parent_dependencies: false,
+        } if key == "plan-epic-1"
+    )));
+
+    let workflow = validate(RECORD_PARENT_CREATE_ISSUES_WORKFLOW);
+    let compiled = workflow.compile();
+    let role = compiled.role(&architect()).expect("role compiles");
+    let tool = role
+        .tools
+        .iter()
+        .find(|tool| tool.transition == transition())
+        .expect("break_into_children tool compiles");
+    assert!(tool.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CreateIssues {
+            correlation_key: Some(key),
+            record_parent_dependencies: true,
+        } if key == "plan-epic-1"
     )));
 }
 
@@ -218,6 +306,7 @@ fn create_issues_creates_dependent_children_with_authored_content() {
     .expect("create_issues executes");
     assert!(report.applied.contains(&WorkflowEffect::CreateIssues {
         correlation_key: Some("plan-epic-1".into()),
+        record_parent_dependencies: false,
     }));
 
     let children = children_by_title(&forge, &repo, epic);
@@ -415,6 +504,42 @@ fn create_issues_cross_repo_replay_is_idempotent() {
 }
 
 #[test]
+fn create_issues_cross_repo_parent_dependency_flag_records_each_child_once() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = validate(RECORD_PARENT_CREATE_ISSUES_WORKFLOW);
+    let repo_a = create_repo(&forge, "api-service");
+    let repo_b = create_repo(&forge, "web-service");
+    let epic = create_issue(&forge, &repo_a, &["intake"], "raw human epic");
+    let context = ExecutionContext::new().with_create_issues_at(
+        transition(),
+        0,
+        cross_repo_planned_children(repo_b.clone()),
+    );
+    let executor = workflow.executor_with_context(&forge, context);
+
+    block_on(executor.execute(
+        &repo_a,
+        ArtifactSource::Issue { number: epic },
+        &transition(),
+        &architect(),
+    ))
+    .expect("cross-repo create_issues with parent deps executes");
+
+    let api = issue_by_title(&forge, &repo_a, "Define the API schema");
+    let web = issue_by_title(&forge, &repo_b, "Build the web client");
+    let parent_meta = issue_metadata(&forge, &repo_a, epic);
+    assert_eq!(
+        parent_meta.dependencies,
+        vec![
+            ArtifactRef::same_repo(api.number),
+            ArtifactRef::in_repo(repo_b.clone(), web.number),
+        ],
+        "opt-in parent dependency refs use same-repo shorthand without duplicate cross-repo refs"
+    );
+}
+
+#[test]
 fn create_issues_same_repo_records_no_parent_dependencies() {
     let root = TestRoot::new();
     let forge = root.forge();
@@ -443,6 +568,107 @@ fn create_issues_same_repo_records_no_parent_dependencies() {
         parent_meta.dependencies.is_empty(),
         "all-same-repo create_issues must not record parent dependency refs, got {:?}",
         parent_meta.dependencies
+    );
+}
+
+#[test]
+fn create_issues_same_repo_parent_dependencies_are_recorded_and_idempotent() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = validate(DYNAMIC_RECORD_PARENT_CREATE_ISSUES_WORKFLOW);
+    let repo = new_repo(&forge);
+    let epic = create_issue(&forge, &repo, &["intake"], "raw human epic");
+    let context = ExecutionContext::new()
+        .with_create_issues_at(transition(), 0, planned_children())
+        .with_create_issues_correlation_key_at(transition(), 0, "plan-epic-recorded");
+    let executor = workflow.executor_with_context(&forge, context);
+    let target = ArtifactSource::Issue { number: epic };
+
+    block_on(executor.execute(&repo, target, &transition(), &architect()))
+        .expect("first same-repo create_issues with parent deps executes");
+    block_on(executor.execute(&repo, target, &transition(), &architect()))
+        .expect("retry same-repo create_issues with parent deps executes");
+
+    let api = issue_by_title(&forge, &repo, "Define the API schema");
+    let web = issue_by_title(&forge, &repo, "Build the web client");
+    let parent_meta = issue_metadata(&forge, &repo, epic);
+    assert_eq!(
+        parent_meta.dependencies,
+        vec![
+            ArtifactRef::same_repo(api.number),
+            ArtifactRef::same_repo(web.number),
+        ],
+        "same-repo child refs are recorded once in declaration order"
+    );
+}
+
+#[test]
+fn create_issues_recorded_child_dependencies_make_plan_unblockable() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = validate(PLAN_COMPLETION_WORKFLOW);
+    let repo = new_repo(&forge);
+    let plan = create_issue(&forge, &repo, &["plan"], "plan body");
+    let context =
+        ExecutionContext::new().with_create_issues_at(transition(), 0, planned_children());
+    let executor = workflow.executor_with_context(&forge, context);
+
+    block_on(executor.execute(
+        &repo,
+        ArtifactSource::Issue { number: plan },
+        &transition(),
+        &architect(),
+    ))
+    .expect("plan creates and records child dependencies");
+    assert_eq!(
+        issue_labels(&forge, &repo, plan),
+        vec!["blocked".to_string(), "plan".to_string()]
+    );
+
+    let quiet = block_on(
+        workflow
+            .reconciler(&DefaultRecoveryPolicy)
+            .reconcile_deep_audit(
+                &forge,
+                &repo,
+                &InMemoryJournal::new(),
+                support::ts("2026-05-29T00:00:00Z"),
+            ),
+    )
+    .expect("reconcile before child completion succeeds");
+    assert!(quiet.is_clean(), "open child issues keep the plan blocked");
+
+    let children = children_by_title(&forge, &repo, plan);
+    close_issue(&forge, &repo, children["Define the API schema"].number);
+    close_issue(&forge, &repo, children["Build the web client"].number);
+
+    let report = block_on(
+        workflow
+            .reconciler(&DefaultRecoveryPolicy)
+            .reconcile_deep_audit(
+                &forge,
+                &repo,
+                &InMemoryJournal::new(),
+                support::ts("2026-05-29T00:00:01Z"),
+            ),
+    )
+    .expect("reconcile after child completion succeeds");
+    assert_eq!(
+        report.findings,
+        vec![ReconcileFinding::DependenciesResolved {
+            target: ArtifactSource::Issue { number: plan },
+            transition: TransitionId::new("mark_plan_ready"),
+        }]
+    );
+    assert_eq!(
+        report.actions,
+        vec![RecoveryAction::Unblock {
+            target: ArtifactSource::Issue { number: plan },
+            effects: vec![
+                WorkflowEffect::RemoveLabel("blocked".into()),
+                WorkflowEffect::AddLabel("ready".into()),
+            ],
+        }]
     );
 }
 
