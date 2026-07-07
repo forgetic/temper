@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -67,6 +68,11 @@ pub(super) fn run_temper_init(request: TemperInitRequest<'_>) -> Result<(), Stri
         )
     })?;
     let log_file = log_file_truncate(request.log)?;
+    let workflow_arg: Cow<'_, str> = if request.scenario.workflow_name == "basic-delivery" {
+        Cow::Borrowed(request.scenario.workflow_name.as_str())
+    } else {
+        Cow::Owned(request.scenario.workflow_path.display().to_string())
+    };
     let status = request
         .temper
         .command()
@@ -82,7 +88,7 @@ pub(super) fn run_temper_init(request: TemperInitRequest<'_>) -> Result<(), Stri
         .arg("--repo")
         .arg(&request.scenario.repo.slug)
         .arg("--workflow")
-        .arg(&request.scenario.workflow_name)
+        .arg(workflow_arg.as_ref())
         .arg("--bind")
         .arg(format!("127.0.0.1:{}", request.bind_port))
         .arg("--workspace")

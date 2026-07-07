@@ -156,6 +156,23 @@ fn expected_value(value: &Value, artifact: &RunEvidenceArtifact) -> Result<Strin
 }
 
 fn resolve_placeholder(raw: &str, artifact: &RunEvidenceArtifact) -> String {
+    if let Some(id) = raw.strip_prefix("$issue:") {
+        return issue_ref_by_id(artifact, id).unwrap_or_else(|| raw.to_string());
+    }
+    if let Some(id) = raw.strip_prefix("$artifact:issue:") {
+        return issue_ref_by_id(artifact, id).unwrap_or_else(|| raw.to_string());
+    }
+    if let Some(id) = raw.strip_prefix("$pr:") {
+        return pull_request_ref_by_id(artifact, id).unwrap_or_else(|| raw.to_string());
+    }
+    if let Some(id) = raw.strip_prefix("$pull_request:") {
+        return pull_request_ref_by_id(artifact, id).unwrap_or_else(|| raw.to_string());
+    }
+    if let Some(id) = raw.strip_prefix("$correlation:") {
+        return issue_number_by_id(artifact, id)
+            .map(|number| format!("pr-for-code-{number}"))
+            .unwrap_or_else(|| raw.to_string());
+    }
     match raw {
         "$source_artifact" | "$issue:intake" | "$issue:source" | "$artifact:issue:intake" => {
             source_issue_ref(artifact).unwrap_or_else(|| raw.to_string())
@@ -177,6 +194,32 @@ fn resolve_placeholder(raw: &str, artifact: &RunEvidenceArtifact) -> String {
             .unwrap_or_else(|| raw.to_string()),
         _ => raw.to_string(),
     }
+}
+
+fn issue_ref_by_id(artifact: &RunEvidenceArtifact, id: &str) -> Option<String> {
+    let repo = repo_slug(artifact)?;
+    let issue = issue_number_by_id(artifact, id)?;
+    Some(format!("{repo}#{issue}"))
+}
+
+fn issue_number_by_id(artifact: &RunEvidenceArtifact, id: &str) -> Option<u64> {
+    artifact
+        .final_state
+        .issues
+        .iter()
+        .find(|issue| issue.id.as_deref() == Some(id))
+        .map(|issue| issue.number)
+}
+
+fn pull_request_ref_by_id(artifact: &RunEvidenceArtifact, id: &str) -> Option<String> {
+    let repo = repo_slug(artifact)?;
+    let pr = artifact
+        .final_state
+        .pull_requests
+        .iter()
+        .find(|pull_request| pull_request.id.as_deref() == Some(id))
+        .map(|pull_request| pull_request.number)?;
+    Some(format!("{repo} PR#{pr}"))
 }
 
 fn source_issue_ref(artifact: &RunEvidenceArtifact) -> Option<String> {
@@ -261,6 +304,13 @@ pub(super) fn field_alias(key: &str) -> Option<&'static str> {
         "role" => Some("role"),
         "for_issue" | "for_issue_number" => Some("for_issue"),
         "scenario_run_id" | "scenario.run_id" => Some("scenario.run_id"),
+        "action" => Some("action"),
+        "pr_title" | "pr.title" => Some("pr.title"),
+        "title_source" | "title.source" => Some("title.source"),
+        "body_source" | "body.source" => Some("body.source"),
+        "metadata_kind" | "metadata.kind" => Some("metadata.kind"),
+        "metadata_parent_ref" | "metadata.parent.ref" => Some("metadata.parent.ref"),
+        "correlation_key" | "correlation.key" => Some("correlation.key"),
         _ => None,
     }
 }

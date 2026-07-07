@@ -15,17 +15,15 @@ not migrate, deduplicate, or replace an example.
 
 `temper-scenario run` currently has these runners:
 
-- `manifest` — live-only validation-grade e2e runner. The checked-in `basic-delivery` scenario selects this runner with `runner.uses = "manifest"` and boots real Forgejo, real `forgejo-runner` CI, a real standalone `temper` process, and Jig fake LLM agents. Hermetic/MemoryForge/in-process substitutes are rejected.
-- `implementation-pr-handoff` — focused hermetic ForgeApplier proof that authored implementation PR title/body and source metadata survive create and refresh.
+- `manifest` — live-only validation-grade e2e runner. The checked-in `basic-delivery` and `implementation-pr-handoff` scenarios select this runner with `runner.uses = "manifest"` and boot real Forgejo, real `forgejo-runner` CI, a real standalone `temper` process, and Jig fake LLM agents. Hermetic/MemoryForge/in-process substitutes are rejected.
 - `codebase-memory-agent` — focused hermetic native-agent proof that enabled `AgentToolConfig` starts a fake codebase-memory MCP server, exposes only safe `codebase_memory_*` tools, defaults the workspace project from `list_projects.root_path`, and returns the fake MCP result to the model.
 
 Run output always prints the scenario source classification, confidence tier, and
 manifest topology before the verdict. Bundles under this repository's
 `scenarios/` directory are labeled `checked-in scenario`; valid copied bundles
-outside that corpus are labeled `ephemeral validation bundle`. Live manifest
-`basic-delivery` output also includes the Forgejo URL, issue/PR numbers, CI job
-evidence, convergence timing, fake LLM request counts, structured Temper event
-facts, and log/artifact paths. Use `cargo dev-scenario-run` for the live lane
+outside that corpus are labeled `ephemeral validation bundle`. Live manifest output also includes the Forgejo URL, issue/PR numbers, CI job
+evidence when applicable, convergence timing, fake LLM request counts, structured
+Temper event facts, and log/artifact paths. Use `cargo dev-scenario-run` for the live lane
 (it builds and passes the standalone `temper` binary).
 
 ### Single validator workflow command
@@ -150,6 +148,10 @@ evidence:
   `merged`.
 - `[expect] closed_parent_issues = <n>` counts final issues whose state is
   `closed`.
+- `[expect] created_pull_requests = <n>` counts structured `pr.opened` events
+  with `action = "created"`.
+- `[expect] refreshed_pull_requests = <n>` counts structured `pr.updated` events
+  with `action = "refreshed"`.
 - `template = "single-pr-merged-source-closed"` checks for one merged PR and one
   closed source/parent issue when the runner identifies that issue (or when only
   one issue is present).
@@ -159,21 +161,22 @@ evidence:
   `labels_cleared` against final issue facts. If older evidence has no issue ids
   and exactly one issue, the engine uses that single issue for compatibility.
 - `[[expect.checks]] artifact = "pull_request"` (or `pull_request:<id>`) supports
-  `state`, `labels`, `labels_cleared`, and `ci = "passed"`/`"failed"` against
-  final PR and CI-job conclusion facts.
+  `state`, `labels`, `labels_cleared`, `title`, `body_prefix`,
+  `body_prefix_file`, `stale_body_absent`, `metadata_kind`, `metadata_parent`,
+  `correlation_key`, and `ci = "passed"`/`"failed"` against final PR, body,
+  metadata, and CI-job conclusion facts.
 - `[[expect.events]]`, `[[expect.sequence]]`, and `[[expect.count]]` assert over
   captured structured Temper JSON events from live manifest runs. They support
   event presence, ordered sequences, and grouped count/no-duplicate checks over
   fields such as `event`, `artifact_ref`, `pr_ref`, `source_artifact`,
-  `transition`, and CI `conclusion`.
+  `transition`, `action`, handoff metadata/title/body-source fields, and CI
+  `conclusion`.
 
 Unsupported or missing-fact declarations are diagnostics, not failures: the
 result is recorded with `status = "unsupported"` and the run still succeeds if no
-supported assertion failed. This is how branch/ref checks such as
-`artifact = "repo:service"` plus `branch = "main"` are reported until a later
-script-hook/provider-probe phase supplies repository branch facts. Unknown check
-fields (for example body-prefix or metadata assertions) are likewise reported as
-unsupported instead of being silently treated as passed.
+supported assertion failed. Use this for provider-only facts that are not yet in
+structured run evidence; add production observability or a generic probe before
+turning such facts into hard declarative assertions.
 
 ### Script assertion hooks
 

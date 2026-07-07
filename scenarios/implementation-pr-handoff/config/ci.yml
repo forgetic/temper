@@ -1,0 +1,10 @@
+name: dormant-ci
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dormant:
+    runs-on: docker
+    steps:
+      - run: echo "implementation-pr-handoff CI is intentionally manual"

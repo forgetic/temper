@@ -163,54 +163,116 @@ fn live_artifact(
         .map(|logs| &logs.ci_diagnostics_log)
         .unwrap_or(&evidence.logs.ci_diagnostics_log);
 
-    let mut artifact = context.artifact(run_evidence::FinalStateEvidence {
-        issues: vec![run_evidence::IssueStateEvidence {
-            number: evidence.final_state.issue.number,
-            id: Some("intake".to_string()),
-            title: Some(evidence.final_state.issue.title.clone()),
-            state: Some(evidence.final_state.issue.state.clone()),
-            labels: evidence.final_state.issue.labels.clone(),
-        }],
-        pull_requests: vec![run_evidence::PullRequestStateEvidence {
-            number: evidence.final_state.pull_request.number,
-            id: Some("implementation".to_string()),
-            title: Some(evidence.final_state.pull_request.title.clone()),
-            state: Some(evidence.final_state.pull_request.state.clone()),
-            labels: evidence.final_state.pull_request.labels.clone(),
-            head_branch: Some(evidence.final_state.pull_request.head_branch.clone()),
-            head_sha: evidence.final_state.pull_request.head_sha.clone(),
-            merged_sha: evidence.final_state.pull_request.merged_sha.clone(),
-        }],
-        repositories: vec![run_evidence::RepositoryStateEvidence {
-            id: Some(evidence.repo_id.clone()),
-            slug: Some(evidence.repo_slug.clone()),
-            branches: vec![run_evidence::RepositoryBranchStateEvidence {
-                name: evidence.repo_default_branch.clone(),
-                head_sha: evidence
-                    .final_state
-                    .pull_request
-                    .merged_sha
-                    .clone()
-                    .or_else(|| evidence.final_state.pull_request.head_sha.clone()),
-                contains_engineer_diff: Some(evidence.final_state.pull_request.state == "merged"),
+    let final_state = if let Some(handoff) = evidence.handoff.as_ref() {
+        run_evidence::FinalStateEvidence {
+            issues: vec![
+                run_evidence::IssueStateEvidence {
+                    number: handoff.create.issue_number,
+                    id: Some("create".to_string()),
+                    title: None,
+                    state: Some("open".to_string()),
+                    labels: vec!["code".to_string(), "in-progress".to_string()],
+                },
+                run_evidence::IssueStateEvidence {
+                    number: handoff.refresh.issue_number,
+                    id: Some("refresh".to_string()),
+                    title: None,
+                    state: Some("open".to_string()),
+                    labels: vec!["code".to_string(), "in-progress".to_string()],
+                },
+            ],
+            pull_requests: vec![
+                run_evidence::PullRequestStateEvidence {
+                    number: handoff.create.pr_number,
+                    id: Some("create".to_string()),
+                    title: Some(handoff.create.title.clone()),
+                    body: Some(handoff.create.body.clone()),
+                    state: Some(handoff.create.pr_state.clone()),
+                    labels: handoff.create.labels.clone(),
+                    head_branch: Some(handoff.create.head_branch.clone()),
+                    head_sha: handoff.create.head_sha.clone(),
+                    merged_sha: None,
+                },
+                run_evidence::PullRequestStateEvidence {
+                    number: handoff.refresh.pr_number,
+                    id: Some("refresh".to_string()),
+                    title: Some(handoff.refresh.title.clone()),
+                    body: Some(handoff.refresh.body.clone()),
+                    state: Some(handoff.refresh.pr_state.clone()),
+                    labels: handoff.refresh.labels.clone(),
+                    head_branch: Some(handoff.refresh.head_branch.clone()),
+                    head_sha: handoff.refresh.head_sha.clone(),
+                    merged_sha: None,
+                },
+            ],
+            repositories: vec![run_evidence::RepositoryStateEvidence {
+                id: Some(evidence.repo_id.clone()),
+                slug: Some(evidence.repo_slug.clone()),
+                branches: vec![run_evidence::RepositoryBranchStateEvidence {
+                    name: evidence.repo_default_branch.clone(),
+                    head_sha: None,
+                    contains_engineer_diff: Some(false),
+                }],
             }],
-        }],
-        ci: run_evidence::CiStateEvidence {
-            completed_jobs: Some(evidence.final_state.ci_jobs.len()),
-            jobs: evidence
-                .final_state
-                .ci_jobs
-                .iter()
-                .map(|job| run_evidence::CiJobEvidence {
-                    name: job.name.clone(),
-                    status: job.status.clone(),
-                    pull_request_number: Some(evidence.final_state.pull_request.number),
-                    conclusion: job.conclusion.clone(),
-                    url: job.url.clone(),
-                })
-                .collect(),
-        },
-    });
+            ci: run_evidence::CiStateEvidence {
+                completed_jobs: Some(0),
+                jobs: Vec::new(),
+            },
+        }
+    } else {
+        run_evidence::FinalStateEvidence {
+            issues: vec![run_evidence::IssueStateEvidence {
+                number: evidence.final_state.issue.number,
+                id: Some("intake".to_string()),
+                title: Some(evidence.final_state.issue.title.clone()),
+                state: Some(evidence.final_state.issue.state.clone()),
+                labels: evidence.final_state.issue.labels.clone(),
+            }],
+            pull_requests: vec![run_evidence::PullRequestStateEvidence {
+                number: evidence.final_state.pull_request.number,
+                id: Some("implementation".to_string()),
+                title: Some(evidence.final_state.pull_request.title.clone()),
+                body: None,
+                state: Some(evidence.final_state.pull_request.state.clone()),
+                labels: evidence.final_state.pull_request.labels.clone(),
+                head_branch: Some(evidence.final_state.pull_request.head_branch.clone()),
+                head_sha: evidence.final_state.pull_request.head_sha.clone(),
+                merged_sha: evidence.final_state.pull_request.merged_sha.clone(),
+            }],
+            repositories: vec![run_evidence::RepositoryStateEvidence {
+                id: Some(evidence.repo_id.clone()),
+                slug: Some(evidence.repo_slug.clone()),
+                branches: vec![run_evidence::RepositoryBranchStateEvidence {
+                    name: evidence.repo_default_branch.clone(),
+                    head_sha: evidence
+                        .final_state
+                        .pull_request
+                        .merged_sha
+                        .clone()
+                        .or_else(|| evidence.final_state.pull_request.head_sha.clone()),
+                    contains_engineer_diff: Some(
+                        evidence.final_state.pull_request.state == "merged",
+                    ),
+                }],
+            }],
+            ci: run_evidence::CiStateEvidence {
+                completed_jobs: Some(evidence.final_state.ci_jobs.len()),
+                jobs: evidence
+                    .final_state
+                    .ci_jobs
+                    .iter()
+                    .map(|job| run_evidence::CiJobEvidence {
+                        name: job.name.clone(),
+                        status: job.status.clone(),
+                        pull_request_number: Some(evidence.final_state.pull_request.number),
+                        conclusion: job.conclusion.clone(),
+                        url: job.url.clone(),
+                    })
+                    .collect(),
+            },
+        }
+    };
+    let mut artifact = context.artifact(final_state);
     artifact.convergence = Some(run_evidence::ConvergenceEvidence {
         startup_ms: Some(duration_ms(evidence.startup)),
         convergence_ms: Some(duration_ms(evidence.convergence)),
@@ -309,6 +371,31 @@ fn live_evidence_lines(
             fake_llm_log.display()
         ),
     ];
+    if let Some(handoff) = evidence.handoff.as_ref() {
+        lines.extend([
+            format!(
+                "create authored PR title/body: PR #{} for issue #{} has title \"{}\" and body prefix \"{}\"",
+                handoff.create.pr_number,
+                handoff.create.issue_number,
+                handoff.create.title,
+                handoff.create.body_prefix
+            ),
+            format!(
+                "refresh authored PR title/body: existing PR #{} for issue #{} has title \"{}\" and stale body text was cleared",
+                handoff.refresh.pr_number,
+                handoff.refresh.issue_number,
+                handoff.refresh.title
+            ),
+            format!(
+                "workflow metadata/source relation: create parent {} correlation {}; refresh parent {} correlation {}",
+                handoff.create.source_artifact,
+                handoff.create.correlation_key,
+                handoff.refresh.source_artifact,
+                handoff.refresh.correlation_key
+            ),
+            "metadata kind verified: implementation_pr".to_string(),
+        ]);
+    }
     lines.push(format!(
         "CI jobs: {} completed job(s)",
         evidence.final_state.ci_jobs.len()

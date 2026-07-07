@@ -100,6 +100,8 @@ pub(crate) struct PullRequestStateEvidence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) state: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) labels: Vec<String>,

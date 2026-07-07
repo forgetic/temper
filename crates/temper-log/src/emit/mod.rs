@@ -26,6 +26,8 @@
 
 pub mod human;
 
+use std::borrow::Cow;
+
 use crate::WorkItemRef;
 use crate::event::Event;
 use crate::service::Service;
@@ -165,17 +167,55 @@ pub struct GateEvaluated<'a> {
     pub note: &'a str,
 }
 
+/// Structured implementation PR handoff facts attached to `pr.opened` and
+/// `pr.updated` events when a worker-authored handoff is applied.
+#[derive(Clone, Debug)]
+pub struct PrHandoffFacts<'a> {
+    /// Source issue/work item (`source_artifact` join key, e.g. `acme/widgets#42`).
+    pub source_artifact: Cow<'a, str>,
+    /// Confirmed PR title after the create/update.
+    pub title: Cow<'a, str>,
+    /// Source of the confirmed title (`agent` or a fallback descriptor).
+    pub title_source: Cow<'a, str>,
+    /// Source of the confirmed body/report (`agent` or a fallback descriptor).
+    pub body_source: Cow<'a, str>,
+    /// Workflow metadata kind stamped on the PR body (e.g. `implementation_pr`).
+    pub metadata_kind: Cow<'a, str>,
+    /// Workflow metadata parent/source reference (e.g. `acme/widgets#42`).
+    pub metadata_parent_ref: Cow<'a, str>,
+    /// Workflow correlation key (e.g. `pr-for-code-42`).
+    pub correlation_key: Cow<'a, str>,
+    /// Result application action (`created` or `refreshed`).
+    pub action: Cow<'a, str>,
+}
+
 /// Inputs for [`emit_pr_opened`] (`engine` / `pr.opened`).
 #[derive(Clone, Debug)]
 pub struct PrOpened<'a> {
     /// The newly opened pull request.
     pub item: &'a WorkItemRef,
-    /// PR title (free text; previewed + redacted).
+    /// PR title (free text; previewed + redacted in the human message).
     pub title: &'a str,
     /// PR kind (e.g. `implementation`).
     pub kind: &'a str,
     /// Issue number the PR implements (the `for #n` alias).
     pub for_issue: u64,
+    /// Optional implementation handoff facts when the PR was opened from a
+    /// worker-authored success result.
+    pub handoff: Option<PrHandoffFacts<'a>>,
+}
+
+/// Inputs for [`emit_pr_updated`] (`engine` / `pr.updated`).
+#[derive(Clone, Debug)]
+pub struct PrUpdated<'a> {
+    /// The updated pull request.
+    pub item: &'a WorkItemRef,
+    /// PR kind (e.g. `implementation`).
+    pub kind: &'a str,
+    /// Issue number the PR implements (the `for #n` alias).
+    pub for_issue: u64,
+    /// Implementation handoff facts confirmed after the update.
+    pub handoff: PrHandoffFacts<'a>,
 }
 
 /// Inputs for [`emit_pr_merged`] (`engine` / `pr.merged`).
@@ -446,6 +486,16 @@ pub fn emit_pr_opened(ev: PrOpened<'_>) {
         Service::Engine,
         human::pr_opened(ev.item, ev.title, ev.kind, ev.for_issue),
     );
+    let (
+        source_artifact,
+        pr_title,
+        title_source,
+        body_source,
+        metadata_kind,
+        metadata_parent_ref,
+        correlation_key,
+        action,
+    ) = handoff_fields(ev.handoff.as_ref());
     tracing::info!(
         target: "temper::engine",
         service = Service::Engine.as_str(),
@@ -455,8 +505,86 @@ pub fn emit_pr_opened(ev: PrOpened<'_>) {
         artifact.ref = %ev.item,
         kind = ev.kind,
         for_issue = ev.for_issue,
+        source_artifact = source_artifact,
+        pr.title = pr_title,
+        title.source = title_source,
+        body.source = body_source,
+        metadata.kind = metadata_kind,
+        metadata.parent.ref = metadata_parent_ref,
+        correlation.key = correlation_key,
+        action = action,
         "{message}",
     );
+}
+
+/// Emits `engine` / `pr.updated`.
+pub fn emit_pr_updated(ev: PrUpdated<'_>) {
+    let message = prefixed(
+        Service::Engine,
+        human::pr_updated(
+            ev.item,
+            ev.handoff.title.as_ref(),
+            ev.kind,
+            ev.for_issue,
+            ev.handoff.action.as_ref(),
+        ),
+    );
+    let handoff = Some(&ev.handoff);
+    let (
+        source_artifact,
+        pr_title,
+        title_source,
+        body_source,
+        metadata_kind,
+        metadata_parent_ref,
+        correlation_key,
+        action,
+    ) = handoff_fields(handoff);
+    tracing::info!(
+        target: "temper::engine",
+        service = Service::Engine.as_str(),
+        event = Event::PrUpdated.as_str(),
+        repo = ev.item.repo(),
+        pr.ref = %ev.item,
+        artifact.ref = %ev.item,
+        kind = ev.kind,
+        for_issue = ev.for_issue,
+        source_artifact = source_artifact,
+        pr.title = pr_title,
+        title.source = title_source,
+        body.source = body_source,
+        metadata.kind = metadata_kind,
+        metadata.parent.ref = metadata_parent_ref,
+        correlation.key = correlation_key,
+        action = action,
+        "{message}",
+    );
+}
+
+fn handoff_fields<'a>(
+    handoff: Option<&'a PrHandoffFacts<'a>>,
+) -> (
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+) {
+    handoff.map_or(("", "", "", "", "", "", "", ""), |handoff| {
+        (
+            handoff.source_artifact.as_ref(),
+            handoff.title.as_ref(),
+            handoff.title_source.as_ref(),
+            handoff.body_source.as_ref(),
+            handoff.metadata_kind.as_ref(),
+            handoff.metadata_parent_ref.as_ref(),
+            handoff.correlation_key.as_ref(),
+            handoff.action.as_ref(),
+        )
+    })
 }
 
 /// Emits `engine` / `pr.merged`.
@@ -594,6 +722,7 @@ mod tests {
             (Event::QueueEntered, Service::Engine),
             (Event::GateEvaluated, Service::Engine),
             (Event::PrOpened, Service::Engine),
+            (Event::PrUpdated, Service::Engine),
             (Event::PrMerged, Service::Engine),
             (Event::ItemResolved, Service::Engine),
         ];

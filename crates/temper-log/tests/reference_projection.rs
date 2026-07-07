@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 use temper_log::emit::{
     self, AgentFinished, AgentStarted, CiCompleted, GateEvaluated, IssueOpened, ItemResolved,
-    LeaseClaimed, LeaseReleased, PrMerged, PrOpened, QueueEntered, RoleSaturated,
-    TransitionApplied, WakeReceived,
+    LeaseClaimed, LeaseReleased, PrHandoffFacts, PrMerged, PrOpened, PrUpdated, QueueEntered,
+    RoleSaturated, TransitionApplied, WakeReceived,
 };
 use temper_log::{Event, WorkItemRef, work_item_span};
 use tracing::field::{Field, Visit};
@@ -157,6 +157,7 @@ fn section_seven_reference_projection_is_prefixed_and_structured() {
             "engine:  [acme/widgets#42] -> queue 'code_ready' | awaiting engineer",
             "worker:  [acme/widgets#42] architect lease released",
             "engine:  [acme/widgets PR#44] opened \"Fix cache invalidation on resize\" | implementation, for #42",
+            "engine:  [acme/widgets PR#44] refreshed \"Fix cache invalidation on resize\" | implementation, for #42",
             "engine:  [acme/widgets PR#44] gates: ci_gate=pending dependency_gate=ok | waiting on CI",
             "trigger: [acme/widgets PR#44] CI completed: success (4m40s)",
             "engine:  [acme/widgets PR#44] gates: ci_gate=ok dependency_gate=ok | -> queue 'landing' eligible to land",
@@ -211,6 +212,24 @@ fn section_seven_reference_projection_is_prefixed_and_structured() {
     assert_eq!(pr_opened.text("pr.ref"), "acme/widgets PR#44");
     assert_eq!(pr_opened.text("artifact.ref"), "acme/widgets PR#44");
     assert_eq!(pr_opened.u64("for_issue"), 42);
+    assert_eq!(
+        pr_opened.text("pr.title"),
+        "Fix cache invalidation on resize"
+    );
+    assert_eq!(pr_opened.text("title.source"), "agent");
+    assert_eq!(pr_opened.text("body.source"), "agent");
+    assert_eq!(pr_opened.text("metadata.kind"), "implementation_pr");
+    assert_eq!(pr_opened.text("metadata.parent.ref"), "acme/widgets#42");
+    assert_eq!(pr_opened.text("correlation.key"), "pr-for-code-42");
+    assert_eq!(pr_opened.text("action"), "created");
+
+    let pr_updated = event_named(&captured, Event::PrUpdated.as_str());
+    assert_eq!(pr_updated.text("pr.ref"), "acme/widgets PR#44");
+    assert_eq!(pr_updated.text("action"), "refreshed");
+    assert_eq!(
+        pr_updated.text("pr.title"),
+        "Fix cache invalidation on resize"
+    );
 
     let gate = event_named(&captured, Event::GateEvaluated.as_str());
     assert_eq!(gate.text("pr.ref"), "acme/widgets PR#44");
@@ -370,11 +389,31 @@ fn emit_reference_lifecycle() {
         item: &issue,
         role: "architect",
     });
+    let handoff_created = PrHandoffFacts {
+        source_artifact: "acme/widgets#42".into(),
+        title: "Fix cache invalidation on resize".into(),
+        title_source: "agent".into(),
+        body_source: "agent".into(),
+        metadata_kind: "implementation_pr".into(),
+        metadata_parent_ref: "acme/widgets#42".into(),
+        correlation_key: "pr-for-code-42".into(),
+        action: "created".into(),
+    };
     emit::emit_pr_opened(PrOpened {
         item: &pr,
         title: "Fix cache invalidation on resize",
         kind: "implementation",
         for_issue: 42,
+        handoff: Some(handoff_created.clone()),
+    });
+    emit::emit_pr_updated(PrUpdated {
+        item: &pr,
+        kind: "implementation",
+        for_issue: 42,
+        handoff: PrHandoffFacts {
+            action: "refreshed".into(),
+            ..handoff_created
+        },
     });
     emit::emit_gate_evaluated(GateEvaluated {
         item: &pr,

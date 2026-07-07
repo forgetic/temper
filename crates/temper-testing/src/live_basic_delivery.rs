@@ -10,6 +10,7 @@
 mod bundle;
 mod convergence;
 mod fake_llm;
+mod handoff;
 mod process;
 
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ use convergence::{
     admin_forge, ci_diagnostics, drive_full_basic_delivery, repository, seed_intake,
 };
 use fake_llm::BasicDeliveryFake;
+pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
 use process::{
     TemperInitRequest, assert_init_workflow_yaml_matches, convergence_timeout, free_port,
     mint_site_admin_token, populate_repo, read_tail, run_temper_init, spawn_temper_standalone,
@@ -97,6 +99,10 @@ impl LiveBasicDeliveryHarness {
     /// paths named in the evidence remain readable long enough for callers to
     /// print or archive them.
     pub fn run(&self) -> Result<LiveBasicDeliveryEvidence, String> {
+        if self.scenario.is_implementation_pr_handoff() {
+            return handoff::run_live_implementation_pr_handoff(self);
+        }
+
         let started = Instant::now();
         self.scenario.assert_workflow_matches_reference()?;
 
@@ -274,6 +280,7 @@ impl LiveBasicDeliveryHarness {
                 log_path: logs.fake_llm_log.clone(),
             },
             final_state,
+            handoff: None,
             logs,
         })
     }
@@ -331,6 +338,7 @@ pub struct LiveBasicDeliveryEvidence {
     pub poll_backstop: Duration,
     pub fake_llm: FakeLlmEvidence,
     pub final_state: FinalStateEvidence,
+    pub handoff: Option<LiveHandoffEvidence>,
     pub logs: LiveLogPaths,
 }
 

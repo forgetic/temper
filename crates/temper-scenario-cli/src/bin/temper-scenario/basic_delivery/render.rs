@@ -61,6 +61,7 @@ pub(super) fn outcome_artifact(
             number: outcome.evidence.pr_number.get(),
             id: Some("implementation".to_string()),
             title: Some(outcome.evidence.pr_title.clone()),
+            body: None,
             state: Some(pr_state_value(outcome.evidence.pr_state).to_string()),
             labels: outcome.evidence.pr_labels.clone(),
             head_branch: Some(outcome.evidence.pr_head_branch.clone()),
