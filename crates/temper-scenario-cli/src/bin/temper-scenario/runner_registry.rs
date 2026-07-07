@@ -4,13 +4,10 @@ use std::path::Path;
 
 use temper_scenario_core::ScenarioManifest;
 
+use super::manifest_runner;
 use super::run_context::{ScenarioRunFacts, ScenarioTier};
 use super::run_evidence::{RunEvidenceArtifact, RunEvidenceContext};
-use super::{basic_delivery, manifest_runner};
 
-type HermeticRunAndPrint =
-    fn(&Path, &Path, &ScenarioRunFacts, &RunEvidenceContext) -> Result<RunEvidenceArtifact, String>;
-type HermeticEvidenceLines = fn(&Path, &Path) -> Result<Vec<String>, String>;
 type LiveRunAndPrint = fn(
     &Path,
     &Path,
@@ -19,12 +16,6 @@ type LiveRunAndPrint = fn(
     &RunEvidenceContext,
 ) -> Result<RunEvidenceArtifact, String>;
 type LiveEvidenceLines = fn(&Path, &Path, Option<&Path>, &Path) -> Result<Vec<String>, String>;
-
-#[derive(Clone, Copy)]
-struct HermeticRunner {
-    run_and_print: HermeticRunAndPrint,
-    evidence_lines: HermeticEvidenceLines,
-}
 
 #[derive(Clone, Copy)]
 struct LiveRunner {
@@ -37,84 +28,63 @@ struct LiveRunner {
 pub(super) struct RunnerDefinition {
     id: &'static str,
     supported_tiers: &'static [ScenarioTier],
-    hermetic: Option<HermeticRunner>,
-    live: Option<LiveRunner>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RunnerSelector {
-    RunnerUses,
-    LegacyName,
+    live: LiveRunner,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct SelectedRunner {
     runner: &'static RunnerDefinition,
-    selector: RunnerSelector,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(super) enum RunnerRegistryError {
+    MissingRunnerUses {
+        scenario_name: String,
+    },
     UnsupportedRunner {
         requested: String,
-        selector: RunnerSelector,
     },
     UnsupportedTier {
         requested: String,
-        selector: RunnerSelector,
         runner_id: &'static str,
         tier: ScenarioTier,
         supported_tiers: String,
     },
 }
 
-static RUNNERS: &[RunnerDefinition] = &[
-    RunnerDefinition {
-        id: manifest_runner::RUNNER_ID,
-        supported_tiers: &[ScenarioTier::Live],
-        hermetic: None,
-        live: Some(LiveRunner {
-            run_and_print: manifest_runner::run_live_and_print,
-            evidence_lines: manifest_runner::run_live_evidence_lines_for_report,
-            requires_standalone_temper: true,
-        }),
+static RUNNERS: &[RunnerDefinition] = &[RunnerDefinition {
+    id: manifest_runner::RUNNER_ID,
+    supported_tiers: &[ScenarioTier::Live],
+    live: LiveRunner {
+        run_and_print: manifest_runner::run_live_and_print,
+        evidence_lines: manifest_runner::run_live_evidence_lines_for_report,
+        requires_standalone_temper: true,
     },
-    RunnerDefinition {
-        id: basic_delivery::SCENARIO_NAME,
-        supported_tiers: &[ScenarioTier::Hermetic, ScenarioTier::Live],
-        hermetic: Some(HermeticRunner {
-            run_and_print: basic_delivery::run_and_print,
-            evidence_lines: basic_delivery::run_evidence_lines,
-        }),
-        live: Some(LiveRunner {
-            run_and_print: basic_delivery::run_live_and_print,
-            evidence_lines: basic_delivery::run_live_evidence_lines_for_report,
-            requires_standalone_temper: true,
-        }),
-    },
-];
+}];
 
 pub(super) fn select_runner(
     manifest: &ScenarioManifest,
     tier: ScenarioTier,
 ) -> Result<SelectedRunner, RunnerRegistryError> {
-    let (selector, requested) = requested_runner(manifest);
+    let Some(requested) = manifest.runner.uses.as_deref() else {
+        return Err(RunnerRegistryError::MissingRunnerUses {
+            scenario_name: manifest.name.clone(),
+        });
+    };
     let Some(runner) = RUNNERS.iter().find(|runner| runner.id == requested) else {
         return Err(RunnerRegistryError::UnsupportedRunner {
             requested: requested.to_string(),
-            selector,
         });
     };
     if !runner.supports_tier(tier) {
         return Err(RunnerRegistryError::UnsupportedTier {
             requested: requested.to_string(),
-            selector,
             runner_id: runner.id,
             tier,
             supported_tiers: runner.supported_tiers_display(),
         });
     }
-    Ok(SelectedRunner { runner, selector })
+    Ok(SelectedRunner { runner })
 }
 
 pub(super) fn supported_runners_display() -> String {
@@ -129,14 +99,6 @@ pub(super) fn supported_runners_display() -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn requested_runner(manifest: &ScenarioManifest) -> (RunnerSelector, &str) {
-    if let Some(uses) = manifest.runner.uses.as_deref() {
-        (RunnerSelector::RunnerUses, uses)
-    } else {
-        (RunnerSelector::LegacyName, manifest.name.as_str())
-    }
 }
 
 impl RunnerDefinition {
@@ -163,11 +125,7 @@ impl SelectedRunner {
     }
 
     pub(super) fn selection_detail(&self) -> String {
-        format!(
-            "runner: `{}` selected by {}",
-            self.runner.id(),
-            self.selector.description()
-        )
+        format!("runner: `{}` selected by runner.uses", self.runner.id())
     }
 
     pub(super) fn run_and_print(
@@ -179,37 +137,16 @@ impl SelectedRunner {
         temper_bin: Option<&Path>,
         evidence_context: &RunEvidenceContext,
     ) -> Result<RunEvidenceArtifact, String> {
-        match tier {
-            ScenarioTier::Hermetic => {
-                let runner = self
-                    .runner
-                    .hermetic
-                    .ok_or_else(|| self.invariant_error(tier))?;
-                (runner.run_and_print)(scenario_path, manifest_path, facts, evidence_context)
-            }
-            ScenarioTier::Live => {
-                let runner = self.runner.live.ok_or_else(|| self.invariant_error(tier))?;
-                (runner.run_and_print)(
-                    scenario_path,
-                    manifest_path,
-                    facts,
-                    temper_bin,
-                    evidence_context,
-                )
-            }
+        if tier != ScenarioTier::Live {
+            return Err(self.invariant_error(tier));
         }
-    }
-
-    pub(super) fn hermetic_evidence_lines(
-        &self,
-        scenario_path: &Path,
-        manifest_path: &Path,
-    ) -> Result<Vec<String>, String> {
-        let runner = self
-            .runner
-            .hermetic
-            .ok_or_else(|| self.invariant_error(ScenarioTier::Hermetic))?;
-        (runner.evidence_lines)(scenario_path, manifest_path)
+        (self.runner.live.run_and_print)(
+            scenario_path,
+            manifest_path,
+            facts,
+            temper_bin,
+            evidence_context,
+        )
     }
 
     pub(super) fn live_evidence_lines(
@@ -219,25 +156,15 @@ impl SelectedRunner {
         temper_bin: Option<&Path>,
         artifact_dir: &Path,
     ) -> Result<Vec<String>, String> {
-        let runner = self
-            .runner
-            .live
-            .ok_or_else(|| self.invariant_error(ScenarioTier::Live))?;
-        (runner.evidence_lines)(scenario_path, manifest_path, temper_bin, artifact_dir)
+        (self.runner.live.evidence_lines)(scenario_path, manifest_path, temper_bin, artifact_dir)
     }
 
     pub(super) fn selector_key(&self) -> &'static str {
-        self.selector.key()
+        "runner.uses"
     }
 
     pub(super) fn requires_standalone_temper(&self, tier: ScenarioTier) -> bool {
-        match tier {
-            ScenarioTier::Hermetic => false,
-            ScenarioTier::Live => self
-                .runner
-                .live
-                .is_some_and(|runner| runner.requires_standalone_temper),
-        }
+        tier == ScenarioTier::Live && self.runner.live.requires_standalone_temper
     }
 
     fn invariant_error(&self, tier: ScenarioTier) -> String {
@@ -252,75 +179,27 @@ impl SelectedRunner {
 impl RunnerRegistryError {
     pub(super) fn message(&self, scenario_path: &Path) -> String {
         match self {
-            Self::UnsupportedRunner {
-                requested,
-                selector,
-            } => unsupported_runner_message(requested, *selector, scenario_path),
-            Self::UnsupportedTier {
-                requested,
-                selector,
-                runner_id,
-                tier,
-                supported_tiers,
-            } if *runner_id == manifest_runner::RUNNER_ID => format!(
-                "unsupported tier `{}` for runner `{runner_id}` selected by {} at {}; requested runner `{requested}`; supported tiers: {supported_tiers}; the manifest runner is validation-grade live only (real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM) and has no hermetic, MemoryForge, or in-process substitute; refusing to substitute another runner; supported runner ids: {}",
-                tier.as_str(),
-                selector.description(),
+            Self::MissingRunnerUses { scenario_name } => format!(
+                "scenario `{scenario_name}` at {} does not declare `[runner] uses = \"manifest\"`; the legacy scenario-name fallback has been removed and Temper will not dispatch by `name`; supported runner ids: {}; use the validation-grade live stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM",
+                scenario_path.display(),
+                supported_runners_display()
+            ),
+            Self::UnsupportedRunner { requested } => format!(
+                "unsupported runner `{requested}` selected by runner.uses at {}; supported runner ids: {}; no compatibility aliases are registered; use `runner.uses = \"manifest\"` for the validation-grade live stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM",
                 scenario_path.display(),
                 supported_runners_display()
             ),
             Self::UnsupportedTier {
                 requested,
-                selector,
                 runner_id,
                 tier,
                 supported_tiers,
             } => format!(
-                "unsupported tier `{}` for runner `{runner_id}` selected by {} at {}; requested runner `{requested}`; supported tiers: {supported_tiers}; supported runner ids: {}; refusing to substitute another runner",
+                "unsupported tier `{}` for runner `{runner_id}` selected by runner.uses at {}; requested runner `{requested}`; supported tiers: {supported_tiers}; the manifest runner is validation-grade live only (real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM) and has no hermetic, MemoryForge, or in-process substitute; refusing to substitute another runner; supported runner ids: {}",
                 tier.as_str(),
-                selector.description(),
                 scenario_path.display(),
                 supported_runners_display()
             ),
         }
-    }
-
-    pub(super) fn is_unsupported_runner(&self) -> bool {
-        matches!(self, Self::UnsupportedRunner { .. })
-    }
-}
-
-impl RunnerSelector {
-    fn key(self) -> &'static str {
-        match self {
-            Self::RunnerUses => "runner.uses",
-            Self::LegacyName => "legacy_name",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            Self::RunnerUses => "runner.uses",
-            Self::LegacyName => "legacy scenario name fallback",
-        }
-    }
-}
-
-fn unsupported_runner_message(
-    requested: &str,
-    selector: RunnerSelector,
-    scenario_path: &Path,
-) -> String {
-    match selector {
-        RunnerSelector::RunnerUses => format!(
-            "unsupported runner `{requested}` selected by runner.uses at {}; supported runner ids: {}",
-            scenario_path.display(),
-            supported_runners_display()
-        ),
-        RunnerSelector::LegacyName => format!(
-            "unsupported scenario `{requested}`: unsupported runner `{requested}` selected by legacy scenario name fallback at {}; supported runner ids: {}",
-            scenario_path.display(),
-            supported_runners_display()
-        ),
     }
 }

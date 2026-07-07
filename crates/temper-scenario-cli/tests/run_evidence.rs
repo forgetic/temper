@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use serde_json::json;
+
 fn temper_scenario(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_temper-scenario"))
         .args(args)
@@ -10,397 +12,116 @@ fn temper_scenario(args: &[&str]) -> Output {
         .expect("run temper-scenario")
 }
 
-fn write_inherited_basic_delivery_bundle(bundle: &Path, name: &str) {
-    std::fs::create_dir_all(bundle).expect("create inherited bundle");
-    std::fs::write(
-        bundle.join("scenario.toml"),
-        format!(
-            "name = \"{name}\"\n\
-             intent = \"Ephemeral validation bundle reusing checked-in basic-delivery fixtures.\"\n\
-             [fixtures]\n\
-             extends = \"scenarios/basic-delivery\"\n\
-             [runner]\n\
-             uses = \"basic-delivery\"\n\
-             [expect]\n\
-             template = \"single-pr-merged-source-closed\"\n\
-             merged_pull_requests = 1\n\
-             closed_parent_issues = 1\n\
-             events = []\n\
-             sequence = []\n\
-             count = []\n\
-             [[expect.checks]]\n\
-             id = \"intake-triaged-and-finalized\"\n\
-             artifact = \"issue:intake\"\n\
-             state = \"closed\"\n\
-             labels = [\"code\"]\n\
-             [[expect.checks]]\n\
-             id = \"implementation-pr-landed\"\n\
-             artifact = \"pull_request\"\n\
-             state = \"merged\"\n\
-             labels_cleared = [\"landing\"]\n\
-             ci = \"passed\"\n\
-             [[expect.checks]]\n\
-             id = \"default-branch-updated\"\n\
-             artifact = \"repo:service\"\n\
-             branch = \"main\"\n\
-             contains_engineer_diff = true\n"
-        ),
-    )
-    .expect("write inherited manifest");
-}
-
-fn write_failing_assertion_bundle(bundle: &Path) {
-    std::fs::create_dir_all(bundle).expect("create failing assertion bundle");
-    std::fs::write(
-        bundle.join("scenario.toml"),
-        "name = \"failing-basic-delivery-assertion\"\n\
-         intent = \"Ephemeral validation bundle with an intentionally failing manifest assertion.\"\n\
-         [fixtures]\n\
-         extends = \"scenarios/basic-delivery\"\n\
-         [runner]\n\
-         uses = \"basic-delivery\"\n\
-         [expect]\n\
-         merged_pull_requests = 1\n\
-         events = []\n\
-         sequence = []\n\
-         count = []\n\
-         [[expect.checks]]\n\
-         id = \"intentional-open-state\"\n\
-         artifact = \"issue:intake\"\n\
-         state = \"open\"\n",
-    )
-    .expect("write failing assertion manifest");
-}
-
-fn write_failing_repo_assertion_bundle(bundle: &Path) {
-    std::fs::create_dir_all(bundle).expect("create failing repo assertion bundle");
-    std::fs::write(
-        bundle.join("scenario.toml"),
-        "name = \"failing-basic-delivery-repo-assertion\"\n\
-         intent = \"Ephemeral validation bundle with an intentionally failing repository assertion.\"\n\
-         [fixtures]\n\
-         extends = \"scenarios/basic-delivery\"\n\
-         [runner]\n\
-         uses = \"basic-delivery\"\n\
-         [expect]\n\
-         events = []\n\
-         sequence = []\n\
-         count = []\n\
-         [[expect.checks]]\n\
-         id = \"wrong-default-branch\"\n\
-         artifact = \"repo:service\"\n\
-         branch = \"trunk\"\n\
-         contains_engineer_diff = true\n",
-    )
-    .expect("write failing repo assertion manifest");
-}
-
-fn read_json(path: &Path) -> serde_json::Value {
-    let source = std::fs::read_to_string(path).expect("read json");
-    serde_json::from_str(&source).expect("parse json")
-}
-
-#[test]
-fn run_writes_basic_delivery_evidence_artifact() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let scenario = dir.path().join("basic-delivery-evidence");
-    write_inherited_basic_delivery_bundle(&scenario, "basic-delivery-evidence");
-    let evidence = dir.path().join("basic-delivery.run-evidence.json");
-
-    let output = temper_scenario(&[
-        "run",
-        "--evidence-out",
-        &evidence.to_string_lossy(),
-        &scenario.to_string_lossy(),
-    ]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("run evidence:"), "{stdout}");
-    assert!(stdout.contains("assertions: passed"), "{stdout}");
-    assert!(
-        stdout.contains("[passed] implementation-pr-landed"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("[passed] default-branch-updated"),
-        "{stdout}"
-    );
-    let json = read_json(&evidence);
-    assert_eq!(json["schema"], "temper.scenario.run-evidence");
-    assert_eq!(json["version"], 1);
-    assert_eq!(json["scenario"]["name"], "basic-delivery-evidence");
-    assert_eq!(json["scenario"]["source"], "ephemeral");
-    assert_eq!(json["scenario"]["runner_id"], "basic-delivery");
-    assert_eq!(json["scenario"]["runner_selector"], "runner.uses");
-    assert_eq!(json["scenario"]["tier"], "hermetic");
-    assert_eq!(
-        json["scenario"]["topology"]["kind"],
-        "single-repo-forgejo-standalone"
-    );
-    assert!(
-        json["fixtures"].as_array().unwrap().iter().any(|fixture| {
-            fixture["field"] == "workflow.path"
-                && fixture["resolved_path"]
-                    .as_str()
-                    .is_some_and(|path| path.ends_with("config/workflow.json"))
-        }),
-        "{json:#?}"
-    );
-    assert_eq!(json["final_state"]["issues"][0]["id"], "intake");
-    assert_eq!(json["final_state"]["issues"][0]["state"], "closed");
-    assert_eq!(
-        json["final_state"]["pull_requests"][0]["id"],
-        "implementation"
-    );
-    assert_eq!(json["final_state"]["pull_requests"][0]["state"], "merged");
-    assert_eq!(json["final_state"]["ci"]["completed_jobs"], 1);
-    assert_eq!(
-        json["final_state"]["ci"]["jobs"][0]["conclusion"],
-        "success"
-    );
-    assert_eq!(
-        json["final_state"]["ci"]["jobs"][0]["pull_request_number"],
-        1
-    );
-    assert_eq!(json["final_state"]["repositories"][0]["id"], "service");
-    assert_eq!(
-        json["final_state"]["repositories"][0]["slug"],
-        "acme/service"
-    );
-    assert_eq!(
-        json["final_state"]["repositories"][0]["branches"][0]["name"],
-        "main"
-    );
-    assert_eq!(
-        json["final_state"]["repositories"][0]["branches"][0]["contains_engineer_diff"],
-        true
-    );
-    assert_eq!(json["assertions"]["status"], "passed");
-    assert_eq!(json["assertions"]["failed"], 0);
-    assert_eq!(json["assertions"]["unsupported"], 0);
-    assert!(
-        json["assertions"]["results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|result| {
-                result["id"] == "implementation-pr-landed" && result["status"] == "passed"
-            })
-    );
-    assert!(
-        json["assertions"]["results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|result| {
-                result["id"] == "default-branch-updated" && result["status"] == "passed"
-            })
-    );
-    assert!(json["convergence"]["ticks"].as_u64().unwrap() > 0);
+fn write_manifest_run_evidence(path: &Path, failed_assertion: bool) {
+    let (assertion_status, result_status, description) = if failed_assertion {
+        (
+            "failed",
+            "failed",
+            "expected issue `source` state `open`, observed `closed`",
+        )
+    } else {
+        (
+            "passed",
+            "passed",
+            "source issue closed after the implementation PR merged",
+        )
+    };
+    let artifact = json!({
+        "schema": "temper.scenario.run-evidence",
+        "version": 1,
+        "scenario": {
+            "name": "manifest-ingest",
+            "source": "ephemeral",
+            "source_description": "ephemeral validation bundle",
+            "scenario_path": "/tmp/manifest-ingest",
+            "manifest_path": "/tmp/manifest-ingest/scenario.toml",
+            "runner_id": "manifest",
+            "runner_selector": "runner.uses",
+            "runner_selection": "runner: `manifest` selected by runner.uses",
+            "tier": "live",
+            "tier_description": "validation-grade real Forgejo + real forgejo-runner CI + real Temper process + Jig fake LLM proof",
+            "topology": {
+                "kind": "single-repo-forgejo-standalone",
+                "forge": "forgejo",
+                "runner": "forgejo-actions-host",
+                "temper": "standalone",
+                "agent_model": "scripted-fake-llm"
+            }
+        },
+        "final_state": {
+            "issues": [{
+                "number": 1,
+                "id": "source",
+                "title": "Seed issue",
+                "state": "closed",
+                "labels": ["code"]
+            }],
+            "pull_requests": [{
+                "number": 1,
+                "id": "implementation",
+                "title": "Implement change",
+                "state": "merged",
+                "labels": [],
+                "head_branch": "temper/impl",
+                "merged_sha": "abc123"
+            }],
+            "repositories": [{
+                "id": "service",
+                "slug": "acme/service",
+                "branches": [{
+                    "name": "main",
+                    "head_sha": "abc123",
+                    "contains_engineer_diff": true
+                }]
+            }],
+            "ci": {
+                "completed_jobs": 1,
+                "jobs": [{
+                    "name": "ci",
+                    "status": "completed",
+                    "pull_request_number": 1,
+                    "conclusion": "success"
+                }]
+            }
+        },
+        "provider": {
+            "forgejo_url": "http://127.0.0.1:3000",
+            "repo_slug": "acme/service",
+            "issue_number": 1,
+            "pr_number": 1,
+            "head_branch": "temper/impl",
+            "merged_sha": "abc123",
+            "temper_binary": "target/debug/temper",
+            "fake_llm_url": "http://127.0.0.1:4000"
+        },
+        "evidence_lines": [
+            "Forgejo URL: http://127.0.0.1:3000",
+            "implementation PR: #1 state=merged",
+            "CI jobs: 1 completed job(s)"
+        ],
+        "assertions": {
+            "status": assertion_status,
+            "total": 1,
+            "passed": if failed_assertion { 0 } else { 1 },
+            "failed": if failed_assertion { 1 } else { 0 },
+            "unsupported": 0,
+            "results": [{
+                "id": "source-finalized",
+                "status": result_status,
+                "description": description,
+                "artifact": "issue:source",
+                "details": [description]
+            }]
+        }
+    });
+    std::fs::write(path, serde_json::to_string_pretty(&artifact).unwrap()).expect("write evidence");
 }
 
 #[test]
-fn run_evidence_records_ephemeral_inherited_bundle_context() {
+fn validate_pr_ingests_manifest_run_evidence_without_rerunning_scenario() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("renamed-inherited-delivery");
-    write_inherited_basic_delivery_bundle(&bundle, "renamed-inherited-delivery");
     let evidence = dir.path().join("run-evidence.json");
-
-    let output = temper_scenario(&[
-        "run",
-        "--tier",
-        "hermetic",
-        "--evidence-out",
-        &evidence.to_string_lossy(),
-        &bundle.to_string_lossy(),
-    ]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = read_json(&evidence);
-    assert_eq!(json["scenario"]["name"], "renamed-inherited-delivery");
-    assert_eq!(json["scenario"]["source"], "ephemeral");
-    assert_eq!(json["scenario"]["tier"], "hermetic");
-    assert_eq!(json["scenario"]["runner_id"], "basic-delivery");
-    assert_eq!(json["assertions"]["status"], "passed");
-    assert_eq!(json["assertions"]["unsupported"], 0);
-    assert_eq!(json["scenario"]["runner_selector"], "runner.uses");
-    assert_eq!(
-        json["scenario"]["topology"]["kind"],
-        "single-repo-forgejo-standalone"
-    );
-    assert!(
-        json["fixtures"].as_array().unwrap().iter().any(|fixture| {
-            fixture["field"] == "workflow.path"
-                && fixture["resolved_path"].as_str().is_some_and(|path| {
-                    path.contains("scenarios/basic-delivery/config/workflow.json")
-                })
-        }),
-        "{json:#?}"
-    );
-}
-
-#[test]
-fn run_writes_failing_repo_assertion_diagnostic() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("failing-repo-assertion-bundle");
-    write_failing_repo_assertion_bundle(&bundle);
-    let evidence = dir.path().join("failing-repo.run-evidence.json");
-
-    let output = temper_scenario(&[
-        "run",
-        "--evidence-out",
-        &evidence.to_string_lossy(),
-        &bundle.to_string_lossy(),
-    ]);
-
-    assert!(
-        !output.status.success(),
-        "failing assertion should fail run"
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("[failed] wrong-default-branch"), "{stdout}");
-    assert!(
-        stdout.contains("expected repository `service` branch `trunk` was absent"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("observed branches [\"main\"]"), "{stdout}");
-    let json = read_json(&evidence);
-    assert_eq!(json["assertions"]["status"], "failed");
-    assert!(
-        json["assertions"]["results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|result| result["id"] == "wrong-default-branch" && result["status"] == "failed")
-    );
-}
-
-#[test]
-fn run_writes_failing_assertions_and_exits_nonzero() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("failing-assertion-bundle");
-    write_failing_assertion_bundle(&bundle);
-    let evidence = dir.path().join("failing.run-evidence.json");
-
-    let output = temper_scenario(&[
-        "run",
-        "--evidence-out",
-        &evidence.to_string_lossy(),
-        &bundle.to_string_lossy(),
-    ]);
-
-    assert!(
-        !output.status.success(),
-        "failing assertion should fail run"
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
-    assert!(stdout.contains("assertions: failed"), "{stdout}");
-    assert!(
-        stdout.contains("[failed] intentional-open-state"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("expected issue `intake` state `open`, observed `closed`"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("run evidence:"), "{stdout}");
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("manifest assertions failed"), "{stderr}");
-    let json = read_json(&evidence);
-    assert_eq!(json["assertions"]["status"], "failed");
-    assert_eq!(json["assertions"]["failed"], 1);
-    assert!(
-        json["assertions"]["results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|result| {
-                result["id"] == "intentional-open-state" && result["status"] == "failed"
-            })
-    );
-}
-
-#[test]
-fn validate_pr_ingests_failing_assertion_results() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("failing-assertion-bundle");
-    write_failing_assertion_bundle(&bundle);
-    let evidence = dir.path().join("failing.run-evidence.json");
-    let run = temper_scenario(&[
-        "run",
-        "--evidence-out",
-        &evidence.to_string_lossy(),
-        &bundle.to_string_lossy(),
-    ]);
-    assert!(!run.status.success(), "failing assertion should fail run");
-    let output_dir = dir.path().join("reports");
-
-    let output = temper_scenario(&[
-        "validate-pr",
-        "--pr",
-        "123",
-        "--sha",
-        "deadbeef",
-        "--run-evidence",
-        &evidence.to_string_lossy(),
-        "--output-dir",
-        &output_dir.to_string_lossy(),
-    ]);
-
-    assert!(
-        !output.status.success(),
-        "failing assertion report should fail"
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
-    assert!(
-        markdown.contains("Manifest assertion results were ingested from run evidence"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("assertion failed `intentional-open-state`"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("expected issue `intake` state `open`"),
-        "{markdown}"
-    );
-    assert!(markdown.contains("- Verdict: failed"), "{markdown}");
-}
-
-#[test]
-fn validate_pr_ingests_run_evidence_without_rerunning_scenario() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let scenario = dir.path().join("basic-delivery-ingest");
-    write_inherited_basic_delivery_bundle(&scenario, "basic-delivery-ingest");
-    let evidence = dir.path().join("run-evidence.json");
-    let run = temper_scenario(&[
-        "run",
-        "--evidence-out",
-        &evidence.to_string_lossy(),
-        &scenario.to_string_lossy(),
-    ]);
-    assert!(
-        run.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        run.status,
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
+    write_manifest_run_evidence(&evidence, false);
     let output_dir = dir.path().join("reports");
 
     let output = temper_scenario(&[
@@ -433,15 +154,15 @@ fn validate_pr_ingests_run_evidence_without_rerunning_scenario() {
         "{markdown}"
     );
     assert!(
-        markdown.contains("scenario: `basic-delivery-ingest`"),
+        markdown.contains("scenario: `manifest-ingest`"),
         "{markdown}"
     );
     assert!(
-        markdown.contains("runner evidence: seeded issue:"),
+        markdown.contains("runner: `manifest` selected by runner.uses"),
         "{markdown}"
     );
     assert!(
-        markdown.contains("runner evidence: report: ticks="),
+        markdown.contains("runner evidence: implementation PR: #1 state=merged"),
         "{markdown}"
     );
     assert!(
@@ -453,14 +174,49 @@ fn validate_pr_ingests_run_evidence_without_rerunning_scenario() {
         "{markdown}"
     );
     assert!(
-        markdown.contains("assertion passed `default-branch-updated`"),
+        markdown.contains("assertion passed `source-finalized`"),
         "{markdown}"
     );
-    assert!(!markdown.contains("assertion unsupported"), "{markdown}");
+}
+
+#[test]
+fn validate_pr_ingests_failing_assertion_results() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let evidence = dir.path().join("failing.run-evidence.json");
+    write_manifest_run_evidence(&evidence, true);
+    let output_dir = dir.path().join("reports");
+
+    let output = temper_scenario(&[
+        "validate-pr",
+        "--pr",
+        "123",
+        "--sha",
+        "deadbeef",
+        "--run-evidence",
+        &evidence.to_string_lossy(),
+        "--output-dir",
+        &output_dir.to_string_lossy(),
+    ]);
+
     assert!(
-        markdown.contains("No --scenario path was supplied with --run-evidence"),
+        !output.status.success(),
+        "failing assertion report should fail"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
+    assert!(
+        markdown.contains("Manifest assertion results were ingested from run evidence"),
         "{markdown}"
     );
+    assert!(
+        markdown.contains("assertion failed `source-finalized`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("expected issue `source` state `open`, observed `closed`"),
+        "{markdown}"
+    );
+    assert!(markdown.contains("- Verdict: failed"), "{markdown}");
 }
 
 #[test]

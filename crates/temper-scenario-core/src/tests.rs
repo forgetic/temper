@@ -132,14 +132,14 @@ stability = "experimental"
 intent = "Runner metadata should select a reusable runner independently from name."
 
 [runner]
-uses = "basic-delivery"
+uses = "manifest"
 "##,
         ".",
     )
     .expect("runner selector manifest is valid");
 
     assert_eq!(manifest.name, "renamed-delivery");
-    assert_eq!(manifest.runner.uses.as_deref(), Some("basic-delivery"));
+    assert_eq!(manifest.runner.uses.as_deref(), Some("manifest"));
 }
 
 #[test]
@@ -437,7 +437,7 @@ intent = "Reuse the checked-in basic-delivery fixture material without copying i
 extends = "scenarios/basic-delivery"
 
 [runner]
-uses = "basic-delivery"
+uses = "manifest"
 "##,
     )
     .expect("write manifest");
@@ -447,7 +447,7 @@ uses = "basic-delivery"
     assert!(report.is_valid(), "diagnostics: {:#?}", report.diagnostics);
     let manifest = report.manifest.expect("resolved manifest");
     assert_eq!(manifest.name, "renamed-delivery");
-    assert_eq!(manifest.runner.uses.as_deref(), Some("basic-delivery"));
+    assert_eq!(manifest.runner.uses.as_deref(), Some("manifest"));
     assert_eq!(manifest.status, ScenarioStatus::Active);
     assert_eq!(manifest.stability, ScenarioStability::Provisional);
     assert_eq!(

@@ -10,6 +10,10 @@ use super::basic_delivery;
 use super::run_context::ScenarioRunFacts;
 use super::run_evidence;
 
+// Implementation detail: the manifest runner currently delegates live execution
+// to the historical basic-delivery harness adapter. The public registry still
+// exposes only RUNNER_ID (`manifest`); `basic-delivery` is not a runner alias.
+
 pub(super) const RUNNER_ID: &str = "manifest";
 
 const REQUIRED_STACK_SUMMARY: &str =

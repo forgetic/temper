@@ -97,7 +97,7 @@ Use the aliases in `.cargo/config.toml`:
 ```sh
 cargo dev-check          # fast workspace type check
 cargo dev-scenario-check # validate checked-in scenario manifests and local refs
-cargo dev-scenario-run   # build temper and run live validation-grade manifest basic-delivery
+cargo dev-scenario-run   # build temper and run the live manifest scenario (default: basic-delivery)
 cargo dev-scenario-run-live      # explicit name for the same live manifest lane
 cargo dev-test-quick     # default non-ignored suite via nextest
 cargo dev-test-build     # prebuild all test binaries
@@ -116,9 +116,9 @@ The web UI is separate from Cargo:
 CI runs format, depgraph, file-size, ambient-env, build, scenario manifest
 checks, quick Rust tests, the full ignored/manual e2e lane, clippy, and then a
 separate web job for Vitest/build. The validation-grade scenario command is
-`cargo dev-scenario-run`; it selects the live-only `manifest` runner for
-`basic-delivery` and uses real Forgejo + real forgejo-runner CI + real Temper +
-Jig fake LLM.
+`cargo dev-scenario-run`; it selects the live-only `manifest` runner for the
+checked-in scenario (default `basic-delivery`) and uses real Forgejo + real
+forgejo-runner CI + real Temper + Jig fake LLM.
 
 ## Current effectiveness assessment
 

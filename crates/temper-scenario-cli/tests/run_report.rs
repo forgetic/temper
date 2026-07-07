@@ -24,44 +24,17 @@ fn copy_dir_all(source: &Path, target: &Path) {
     }
 }
 
-fn select_runner_for_bundle(bundle: &Path, name: &str, runner: &str) {
+fn set_runner_for_bundle(bundle: &Path, runner: Option<&str>) {
     let manifest_path = bundle.join("scenario.toml");
     let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
-    let manifest = manifest.replacen(
-        "name = \"basic-delivery\"",
-        &format!("name = \"{name}\""),
-        1,
-    );
-    let manifest = if manifest.contains("[runner]\nuses = \"manifest\"") {
-        manifest.replacen(
-            "[runner]\nuses = \"manifest\"",
-            &format!("[runner]\nuses = \"{runner}\""),
-            1,
-        )
+    let rewritten = if let Some(runner) = runner {
+        manifest.replace("uses = \"manifest\"", &format!("uses = \"{runner}\""))
     } else {
-        manifest.replacen(
-            "[topology]\n",
-            &format!("[runner]\nuses = \"{runner}\"\n\n[topology]\n"),
-            1,
-        )
+        manifest
+            .replace("[runner]\nuses = \"manifest\"\n\n", "")
+            .replace("[runner]\nuses = \"manifest\"\r\n\r\n", "")
     };
-    std::fs::write(&manifest_path, manifest).expect("write manifest");
-}
-
-fn write_inherited_basic_delivery_bundle(bundle: &Path, name: &str) {
-    std::fs::create_dir_all(bundle).expect("create inherited bundle");
-    std::fs::write(
-        bundle.join("scenario.toml"),
-        format!(
-            "name = \"{name}\"\n\
-             intent = \"Ephemeral validation bundle reusing checked-in basic-delivery fixtures.\"\n\
-             [fixtures]\n\
-             extends = \"scenarios/basic-delivery\"\n\
-             [runner]\n\
-             uses = \"basic-delivery\"\n"
-        ),
-    )
-    .expect("write inherited manifest");
+    std::fs::write(&manifest_path, rewritten).expect("write manifest");
 }
 
 fn workspace_root() -> PathBuf {
@@ -74,234 +47,38 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
-fn checked_in_basic_delivery_rejects_default_hermetic_manifest_runner() {
-    let scenario = workspace_root().join("scenarios/basic-delivery");
+fn checked_in_manifest_scenarios_reject_explicit_hermetic_tier() {
+    for scenario_name in [
+        "basic-delivery",
+        "implementation-pr-handoff",
+        "codebase-memory-agent",
+    ] {
+        let scenario = workspace_root().join("scenarios").join(scenario_name);
 
-    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
+        let output = temper_scenario(&["run", "--tier", "hermetic", &scenario.to_string_lossy()]);
 
-    assert!(
-        !output.status.success(),
-        "manifest runner must reject default hermetic tier"
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(
-        stderr.contains("unsupported tier `hermetic` for runner `manifest`"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("runner.uses"), "{stderr}");
-    assert!(stderr.contains("real Forgejo"), "{stderr}");
-    assert!(
-        stderr.contains("no hermetic, MemoryForge, or in-process substitute"),
-        "{stderr}"
-    );
+        assert!(
+            !output.status.success(),
+            "manifest runner must reject hermetic tier for {scenario_name}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+        assert!(
+            stderr.contains("unsupported tier `hermetic` for runner `manifest`"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("runner.uses"), "{stderr}");
+        assert!(stderr.contains("supported tiers: live"), "{stderr}");
+        assert!(
+            stderr.contains("no hermetic, MemoryForge, or in-process substitute"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("basic-delivery (tiers"), "{stderr}");
+    }
 }
 
 #[test]
-fn run_succeeds_for_ephemeral_basic_delivery_bundle() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("basic-delivery-copy");
-    copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
-    select_runner_for_bundle(&bundle, "basic-delivery", "basic-delivery");
-
-    let check = temper_scenario(&["check", &bundle.to_string_lossy()]);
-    assert!(
-        check.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        check.status,
-        String::from_utf8_lossy(&check.stdout),
-        String::from_utf8_lossy(&check.stderr)
-    );
-
-    let output = temper_scenario(&["run", "--tier", "hermetic", &bundle.to_string_lossy()]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
-    assert!(
-        stdout.contains("source: ephemeral validation bundle"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("confidence tier: hermetic"), "{stdout}");
-    assert!(
-        stdout.contains("kind: single-repo-forgejo-standalone"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("verdict: passed"), "{stdout}");
-}
-
-#[test]
-fn run_uses_runner_selector_for_different_manifest_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("renamed-delivery");
-    copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
-    select_runner_for_bundle(&bundle, "renamed-delivery", "basic-delivery");
-
-    let check = temper_scenario(&["check", &bundle.to_string_lossy()]);
-    assert!(
-        check.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        check.status,
-        String::from_utf8_lossy(&check.stdout),
-        String::from_utf8_lossy(&check.stderr)
-    );
-
-    let output = temper_scenario(&["run", "--tier", "hermetic", &bundle.to_string_lossy()]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
-    assert!(
-        stdout.contains("source: ephemeral validation bundle"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("verdict: passed"), "{stdout}");
-}
-
-#[test]
-fn run_succeeds_for_ephemeral_inherited_basic_delivery_bundle() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("renamed-inherited-delivery");
-    write_inherited_basic_delivery_bundle(&bundle, "renamed-inherited-delivery");
-
-    assert!(!bundle.join("config").exists(), "fixture config was copied");
-    assert!(!bundle.join("repo").exists(), "fixture repo was copied");
-
-    let check = temper_scenario(&["check", &bundle.to_string_lossy()]);
-    assert!(
-        check.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        check.status,
-        String::from_utf8_lossy(&check.stdout),
-        String::from_utf8_lossy(&check.stderr)
-    );
-
-    let output = temper_scenario(&["run", "--tier", "hermetic", &bundle.to_string_lossy()]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
-    assert!(
-        stdout.contains("source: ephemeral validation bundle"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("confidence tier: hermetic"), "{stdout}");
-    assert!(
-        stdout.contains("kind: single-repo-forgejo-standalone"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("verdict: passed"), "{stdout}");
-}
-
-#[test]
-fn validate_pr_uses_runner_selector_for_different_manifest_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("renamed-delivery");
-    copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
-    select_runner_for_bundle(&bundle, "renamed-delivery", "basic-delivery");
-    let output_dir = dir.path().join("reports");
-
-    let output = temper_scenario(&[
-        "validate-pr",
-        "--pr",
-        "123",
-        "--sha",
-        "deadbeef",
-        "--scenario",
-        &bundle.to_string_lossy(),
-        "--output-dir",
-        &output_dir.to_string_lossy(),
-    ]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
-    assert!(
-        markdown.contains("scenario: `renamed-delivery`"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("runner: `basic-delivery` selected by runner.uses"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("Deterministic basic-delivery scenario run completed successfully"),
-        "{markdown}"
-    );
-}
-
-#[test]
-fn validate_pr_uses_ephemeral_inherited_basic_delivery_bundle() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("renamed-inherited-delivery");
-    write_inherited_basic_delivery_bundle(&bundle, "renamed-inherited-delivery");
-    let output_dir = dir.path().join("reports");
-
-    let output = temper_scenario(&[
-        "validate-pr",
-        "--pr",
-        "123",
-        "--sha",
-        "deadbeef",
-        "--scenario",
-        &bundle.to_string_lossy(),
-        "--output-dir",
-        &output_dir.to_string_lossy(),
-    ]);
-
-    assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
-    assert!(
-        markdown.contains("scenario: `renamed-inherited-delivery`"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("runner: `basic-delivery` selected by runner.uses"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("source: ephemeral validation bundle"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("Deterministic basic-delivery scenario run completed successfully"),
-        "{markdown}"
-    );
-}
-
-#[test]
-fn run_live_tier_with_missing_temper_binary_fails_before_substituting_hermetic_runner() {
+fn run_live_tier_with_missing_temper_binary_selects_manifest_only() {
     let scenario = workspace_root().join("scenarios/basic-delivery");
     let missing_temper = tempfile::tempdir()
         .expect("tempdir")
@@ -324,29 +101,85 @@ fn run_live_tier_with_missing_temper_binary_fails_before_substituting_hermetic_r
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(
-        stderr.contains("--temper-bin path does not exist"),
+        stderr.contains("live manifest runner --temper-bin path does not exist"),
         "{stderr}"
     );
     assert!(stderr.contains("missing-temper"), "{stderr}");
     assert!(!stderr.contains("seeded issue:"), "{stderr}");
+    assert!(!stderr.contains("basic-delivery (tiers"), "{stderr}");
 }
 
 #[test]
-fn run_help_documents_tier_selector() {
+fn run_rejects_missing_runner_selector_instead_of_falling_back_to_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("basic-delivery-copy");
+    copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
+    set_runner_for_bundle(&bundle, None);
+
+    let output = temper_scenario(&["run", &bundle.to_string_lossy()]);
+
+    assert!(
+        !output.status.success(),
+        "missing runner selector should fail"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("does not declare `[runner] uses = \"manifest\"`"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("legacy scenario-name fallback has been removed"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("will not dispatch by `name`"), "{stderr}");
+}
+
+#[test]
+fn run_rejects_retired_basic_delivery_runner_alias() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = dir.path().join("basic-delivery-copy");
+    copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
+    set_runner_for_bundle(&bundle, Some("basic-delivery"));
+
+    let output = temper_scenario(&["run", "--tier", "live", &bundle.to_string_lossy()]);
+
+    assert!(!output.status.success(), "retired alias should fail");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("unsupported runner `basic-delivery` selected by runner.uses"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("no compatibility aliases are registered"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("manifest (tiers: live)"), "{stderr}");
+    assert!(!stderr.contains("basic-delivery (tiers"), "{stderr}");
+}
+
+#[test]
+fn run_help_documents_manifest_only_stack() {
     let output = temper_scenario(&["run", "--help"]);
 
     assert!(output.status.success(), "status: {:?}", output.status);
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(
-        stdout.contains("Usage: temper-scenario run [--tier <hermetic|live>] [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>"),
+        stdout.contains("Usage: temper-scenario run [--tier <live|hermetic>] [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>"),
         "{stdout}"
     );
+    assert!(stdout.contains("default: live"), "{stdout}");
     assert!(
-        stdout.contains("The live manifest runner boots the validation-grade"),
+        stdout.contains("The only registered scenario runner is `manifest`"),
         "{stdout}"
     );
     assert!(stdout.contains("real forgejo-runner CI"), "{stdout}");
-    assert!(stdout.contains("TEMPER_SCENARIO_TEMPER_BIN"), "{stdout}");
+    assert!(
+        stdout.contains("legacy manifest `name` fallback has been removed"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("basic-delivery`"), "{stdout}");
 }
 
 #[test]
@@ -358,139 +191,14 @@ fn run_rejects_unknown_tier() {
     assert!(!output.status.success(), "unknown tier should fail");
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(stderr.contains("unknown --tier `medium`"), "{stderr}");
-    assert!(stderr.contains("expected hermetic or live"), "{stderr}");
+    assert!(stderr.contains("expected live or hermetic"), "{stderr}");
 }
 
 #[test]
-fn checked_in_implementation_pr_handoff_rejects_default_hermetic_manifest_runner() {
-    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
-
-    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
-
-    assert!(
-        !output.status.success(),
-        "manifest runner must reject default hermetic tier"
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(
-        stderr.contains("unsupported tier `hermetic` for runner `manifest`"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("runner.uses"), "{stderr}");
-    assert!(stderr.contains("supported tiers: live"), "{stderr}");
-    assert!(
-        stderr.contains("no hermetic, MemoryForge, or in-process substitute"),
-        "{stderr}"
-    );
-    assert!(
-        !stderr.contains("implementation-pr-handoff (tiers: hermetic)"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn run_live_checked_in_implementation_pr_handoff_selects_manifest_before_temper_binary() {
-    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
-    let missing_temper = tempfile::tempdir()
-        .expect("tempdir")
-        .path()
-        .join("missing-temper");
-
-    let output = temper_scenario(&[
-        "run",
-        "--tier",
-        "live",
-        "--temper-bin",
-        &missing_temper.to_string_lossy(),
-        &scenario.to_string_lossy(),
-    ]);
-
-    assert!(
-        !output.status.success(),
-        "missing live temper binary should fail"
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(
-        stderr.contains("--temper-bin path does not exist"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("missing-temper"), "{stderr}");
-    assert!(
-        !stderr.contains("implementation-pr-handoff (tiers: hermetic)"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn checked_in_codebase_memory_agent_rejects_default_hermetic_manifest_runner() {
-    let scenario = workspace_root().join("scenarios/codebase-memory-agent");
-
-    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
-
-    assert!(
-        !output.status.success(),
-        "manifest runner must reject default hermetic tier"
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(
-        stderr.contains("unsupported tier `hermetic` for runner `manifest`"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("runner.uses"), "{stderr}");
-    assert!(stderr.contains("supported tiers: live"), "{stderr}");
-    assert!(
-        stderr.contains("no hermetic, MemoryForge, or in-process substitute"),
-        "{stderr}"
-    );
-    assert!(
-        !stderr.contains("codebase-memory-agent (tiers: hermetic)"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn run_live_checked_in_codebase_memory_agent_selects_manifest_before_temper_binary() {
-    let scenario = workspace_root().join("scenarios/codebase-memory-agent");
-    let missing_temper = tempfile::tempdir()
-        .expect("tempdir")
-        .path()
-        .join("missing-temper");
-
-    let output = temper_scenario(&[
-        "run",
-        "--tier",
-        "live",
-        "--temper-bin",
-        &missing_temper.to_string_lossy(),
-        &scenario.to_string_lossy(),
-    ]);
-
-    assert!(
-        !output.status.success(),
-        "missing live temper binary should fail"
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(
-        stderr.contains("--temper-bin path does not exist"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("missing-temper"), "{stderr}");
-    assert!(
-        !stderr.contains("codebase-memory-agent (tiers: hermetic)"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn validate_pr_report_records_ephemeral_source_tier_and_topology() {
+fn validate_pr_live_missing_temper_binary_writes_failed_report() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let bundle = dir.path().join("basic-delivery-copy");
-    copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
-    select_runner_for_bundle(&bundle, "basic-delivery", "basic-delivery");
+    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
+    let missing_temper = dir.path().join("missing-temper");
     let output_dir = dir.path().join("reports");
 
     let output = temper_scenario(&[
@@ -500,47 +208,30 @@ fn validate_pr_report_records_ephemeral_source_tier_and_topology() {
         "--sha",
         "deadbeef",
         "--scenario",
-        &bundle.to_string_lossy(),
+        &scenario.to_string_lossy(),
+        "--tier",
+        "live",
+        "--temper-bin",
+        &missing_temper.to_string_lossy(),
         "--output-dir",
         &output_dir.to_string_lossy(),
     ]);
 
     assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "missing live temper binary should fail report"
     );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    let report_path = PathBuf::from(stdout.trim());
-    let markdown = std::fs::read_to_string(&report_path).expect("read report");
-    assert!(markdown.contains("**scenario check**"), "{markdown}");
-    assert!(markdown.contains("**scenario run**"), "{markdown}");
+    let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
+    assert!(markdown.contains("Verdict: failed"), "{markdown}");
+    assert!(markdown.contains("Live scenario run failed"), "{markdown}");
     assert!(
-        markdown.contains("source: ephemeral validation bundle"),
-        "{markdown}"
-    );
-    assert!(markdown.contains("confidence tier: hermetic"), "{markdown}");
-    assert!(markdown.contains("not a live Forgejo proof"), "{markdown}");
-    assert!(
-        markdown.contains("manifest topology.kind: `single-repo-forgejo-standalone`"),
+        markdown.contains("live manifest runner --temper-bin path does not exist"),
         "{markdown}"
     );
     assert!(
-        markdown.contains("manifest topology.forge: `forgejo`"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("manifest topology.runner: `forgejo-actions-host`"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("manifest topology.temper: `standalone`"),
-        "{markdown}"
-    );
-    assert!(
-        markdown.contains("manifest topology.agent_model: `scripted-fake-llm`"),
+        !markdown.contains("implementation-pr-handoff (tiers: hermetic)"),
         "{markdown}"
     );
 }

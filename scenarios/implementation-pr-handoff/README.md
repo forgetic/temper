@@ -62,6 +62,6 @@ cargo run -p temper-scenario-cli -- check scenarios/implementation-pr-handoff
 cargo run -p temper-scenario-cli -- run --tier live --temper-bin target/debug/temper scenarios/implementation-pr-handoff
 ```
 
-The default hermetic tier is rejected by the manifest runner. Use
+An explicit hermetic tier request is rejected by the manifest runner. Use
 `cargo dev-scenario-run scenarios/implementation-pr-handoff` if you want the
 helper to build and pass the standalone `temper` binary.
