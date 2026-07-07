@@ -12,6 +12,7 @@ mod codebase_memory;
 mod convergence;
 mod fake_llm;
 mod handoff;
+mod plan_feature;
 mod process;
 
 use std::path::{Path, PathBuf};
@@ -27,6 +28,11 @@ use convergence::{
 };
 use fake_llm::BasicDeliveryFake;
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
+pub use plan_feature::{
+    IssueState as PlanIssueState, LivePlanFeatureEvidence,
+    PullRequestCiJobEvidence as PlanCiJobEvidence,
+    PullRequestStateEvidence as PlanPullRequestStateEvidence,
+};
 use process::{
     TemperInitRequest, assert_init_workflow_yaml_matches, convergence_timeout, free_port,
     mint_site_admin_token, populate_repo, read_tail, run_temper_init, spawn_temper_standalone,
@@ -105,6 +111,9 @@ impl LiveBasicDeliveryHarness {
         }
         if self.scenario.declares_codebase_memory_contract() {
             return codebase_memory::run_live_codebase_memory_agent(self);
+        }
+        if self.scenario.is_plan_centric_feature_branch() {
+            return plan_feature::run_live_plan_feature_branch(self);
         }
 
         let started = Instant::now();
@@ -286,6 +295,7 @@ impl LiveBasicDeliveryHarness {
             final_state,
             handoff: None,
             codebase_memory: None,
+            plan_feature: None,
             logs,
         })
     }
@@ -345,6 +355,7 @@ pub struct LiveBasicDeliveryEvidence {
     pub final_state: FinalStateEvidence,
     pub handoff: Option<LiveHandoffEvidence>,
     pub codebase_memory: Option<LiveCodebaseMemoryEvidence>,
+    pub plan_feature: Option<LivePlanFeatureEvidence>,
     pub logs: LiveLogPaths,
 }
 

@@ -16,6 +16,8 @@ use super::run_evidence;
 mod live;
 #[path = "basic_delivery/observability.rs"]
 mod observability;
+#[path = "basic_delivery/plan_artifact.rs"]
+mod plan_artifact;
 
 pub(super) fn run_live_and_print(
     scenario_path: &Path,

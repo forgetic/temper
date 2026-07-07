@@ -1,0 +1,445 @@
+{
+  "name": "plan-centric-feature-delivery",
+  "intake_author": { "kind": "site_admin" },
+  "roles": [
+    {
+      "id": "architect",
+      "charter": "Own product feature shaping. Classify feature issues as config-only or hard-code work; for hard-code work create a durable plan issue, then decompose that plan into dependency-linked code issues targeting a feature branch.",
+      "prompt": {
+        "guidance": "For feature_planning, decide whether the request is config-only or requires repository hard-code changes. Use verdict config_only only when no repository code PR is required. Use verdict needs_plan for hard-code work and create exactly one child issue of kind plan. The plan body must preserve the product context, define a feature branch such as feature/<issue>-short-slug, and include valid workflow metadata with target_branch set to that branch. For decompose_plan, use verdict children_ready and create engineer-sized child issues of kind code. Put dependency slugs in depends_on for sequential work; blocked children should carry the blocked label and depend on earlier slugs. Child code issue bodies should normally omit target_branch so Temper inherits it from the plan. Do not create hard-code work directly from the feature issue; route it through the plan issue."
+      },
+      "external_tools": [
+        {
+          "id": "triage_workspace",
+          "description": "Read the feature or plan issue and linked context, then return the declared verdict with any plan/code child issues required by the workflow.",
+          "required": false,
+          "constraints": [
+            "Only read the work-item context and repository; never mutate Forge state directly.",
+            "Return one declared verdict; Temper applies labels, dependencies, metadata, and child creation."
+          ],
+          "guidance": "Use this from feature_planning and decompose_plan. If unavailable, fail the assigned job with a structured unavailable-workspace result."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "feature_planning",
+        "plan_ready"
+      ]
+    },
+    {
+      "id": "engineer",
+      "charter": "Claim ready code issues, implement them on their inherited feature branch, open implementation PRs into that feature branch, and repair CI failures before landing.",
+      "prompt": {
+        "guidance": "Use open_pr for ready code issues. The checkout base branch is the code issue target_branch metadata inherited from its plan; implementation PRs must target that feature branch rather than main. Use CI failure repair queues to push fixes to the writable PR head."
+      },
+      "external_tools": [
+        {
+          "id": "coding_workspace",
+          "description": "Prepare a checked-out repository workspace, make code edits, commit a PR head branch, and report changed files plus a short summary.",
+          "required": false,
+          "constraints": [
+            "Only touch the checked-out repository workspace.",
+            "Do not create bookkeeping-only diffs such as .temper-pr-prep or .temper-ci changes."
+          ],
+          "guidance": "Use this for open_pr on ready code issues and writable PR repair actions. If unavailable, fail the assigned implementation job with a structured unavailable-workspace result."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "code_ready",
+        "implementation_pr_ci_failed",
+        "feature_landing_pr_ci_failed"
+      ]
+    },
+    {
+      "id": "tester",
+      "charter": "Validate completed feature plans against the current feature branch head and, when evidence is sufficient, open the aggregate feature landing PR from the feature branch to main.",
+      "prompt": {
+        "guidance": "Use validate_plan only after reading the feature issue, plan, child code issues, merged implementation PRs, and scenario expectations. Return verdict validated with a concise landing PR title/body containing validation evidence when the feature branch is ready to land. Return needs_followup with child code issues if validation finds gaps."
+      },
+      "external_tools": [
+        {
+          "id": "triage_workspace",
+          "description": "Read plan context and validation evidence, then return a validate_plan verdict.",
+          "required": false,
+          "constraints": [
+            "Do not mutate Forge state directly.",
+            "Tie validation evidence to the current feature branch head when available."
+          ],
+          "guidance": "Use this from validate_plan. If unavailable, fail the assigned validation job with a structured unavailable-workspace result."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "plan_needs_validation"
+      ]
+    },
+    {
+      "id": "mechanical",
+      "charter": "Automation authority for dependency unblocking and CI-green PR landing; do not bind this role to an LLM worker.",
+      "prompt": {
+        "guidance": "Automation-only role id for queue automation authorization. It is serviced by the mechanical worker, not by a role worker."
+      },
+      "concurrency": 1,
+      "queues": []
+    }
+  ],
+  "labels": [
+    { "id": "feature", "description": "product-level feature or goal issue" },
+    { "id": "plan", "description": "architect-owned implementation plan issue" },
+    { "id": "code", "description": "engineer-owned code implementation issue" },
+    { "id": "validation", "description": "tester-owned validation or scenario work item" },
+    { "id": "ready", "description": "work item is ready for the next workflow step" },
+    { "id": "in-progress", "description": "work item is currently being advanced" },
+    { "id": "blocked", "description": "work item is blocked by unmet dependencies" },
+    { "id": "needs-validation", "description": "plan implementation is complete and awaits tester validation" },
+    { "id": "validated", "description": "plan has tester validation for the current feature branch" },
+    { "id": "planned", "description": "feature has an associated plan issue" },
+    { "id": "config-only", "description": "feature was classified as config-only and does not require code PRs" },
+    { "id": "implementation", "description": "identifies an implementation pull request" },
+    { "id": "feature-landing", "description": "identifies an aggregate feature branch landing pull request" },
+    { "id": "landing", "description": "PR is ready for mechanical landing once gates pass" }
+  ],
+  "artifact_kinds": [
+    {
+      "id": "feature",
+      "target": "issue",
+      "identifying_labels": ["feature"]
+    },
+    {
+      "id": "plan",
+      "target": "issue",
+      "identifying_labels": ["plan"],
+      "initial_labels": ["ready"]
+    },
+    {
+      "id": "code",
+      "target": "issue",
+      "identifying_labels": ["code"],
+      "initial_labels": ["ready"]
+    },
+    {
+      "id": "validation",
+      "target": "issue",
+      "identifying_labels": ["validation"],
+      "initial_labels": ["ready"]
+    },
+    {
+      "id": "implementation_pr",
+      "target": "pull_request",
+      "identifying_labels": ["implementation"],
+      "initial_labels": ["landing"]
+    },
+    {
+      "id": "feature_landing_pr",
+      "target": "pull_request",
+      "identifying_labels": ["feature-landing"],
+      "initial_labels": ["landing"]
+    }
+  ],
+  "relations": [
+    { "kind": "parent", "source": "plan", "target": "feature" },
+    { "kind": "parent", "source": "code", "target": "plan" },
+    { "kind": "parent", "source": "validation", "target": "plan" },
+    { "kind": "parent", "source": "implementation_pr", "target": "code" },
+    { "kind": "parent", "source": "feature_landing_pr", "target": "plan" },
+    { "kind": "parent", "source": "feature_landing_pr", "target": "feature" },
+    { "kind": "produced_pr", "source": "implementation_pr", "target": "code" },
+    { "kind": "produced_pr", "source": "feature_landing_pr", "target": "plan" },
+    { "kind": "dependency", "source": "feature", "target": "plan" },
+    { "kind": "dependency", "source": "plan", "target": "code" },
+    { "kind": "dependency", "source": "plan", "target": "validation" },
+    { "kind": "dependency", "source": "code", "target": "code" },
+    { "kind": "dependency", "source": "implementation_pr", "target": "implementation_pr" }
+  ],
+  "state_dimensions": [
+    {
+      "id": "work_lifecycle",
+      "exclusive": true,
+      "states": [
+        { "id": "ready", "label": "ready", "artifacts": ["plan", "code", "validation"] },
+        { "id": "in_progress", "label": "in-progress", "artifacts": ["plan", "code", "implementation_pr", "feature_landing_pr"] },
+        { "id": "blocked", "label": "blocked", "artifacts": ["code", "validation"] },
+        { "id": "needs_validation", "label": "needs-validation", "artifacts": ["plan"] },
+        { "id": "validated", "label": "validated", "artifacts": ["plan"] }
+      ]
+    },
+    {
+      "id": "feature_status",
+      "exclusive": true,
+      "states": [
+        { "id": "planned", "label": "planned", "artifacts": ["feature"] },
+        { "id": "config_only", "label": "config-only", "artifacts": ["feature"] }
+      ]
+    },
+    {
+      "id": "pr_routing",
+      "exclusive": false,
+      "states": [
+        { "id": "landing", "label": "landing", "artifacts": ["implementation_pr", "feature_landing_pr"] }
+      ]
+    }
+  ],
+  "queues": [
+    {
+      "id": "feature_planning",
+      "artifact": "feature",
+      "excluded_labels": ["planned", "config-only"],
+      "actions": [
+        { "role": "architect", "action": "plan_feature" }
+      ]
+    },
+    {
+      "id": "plan_ready",
+      "artifact": "plan",
+      "labels": ["ready"],
+      "actions": [
+        { "role": "architect", "action": "decompose_plan" }
+      ]
+    },
+    {
+      "id": "blocked_code_unblock",
+      "artifact": "code",
+      "labels": ["blocked"],
+      "condition": { "kind": "dependencies_resolved" },
+      "automation": { "actor": "mechanical", "transition": "mark_code_ready" }
+    },
+    {
+      "id": "code_ready",
+      "artifact": "code",
+      "labels": ["ready"],
+      "actions": [
+        { "role": "engineer", "action": "open_pr" }
+      ]
+    },
+    {
+      "id": "implementation_pr_ci_failed",
+      "artifact": "implementation_pr",
+      "condition": { "kind": "ci_failed" },
+      "actions": [
+        { "role": "engineer", "action": "address_implementation_ci_failure", "checkout": "pull_request_writable" }
+      ]
+    },
+    {
+      "id": "implementation_landing",
+      "artifact": "implementation_pr",
+      "labels": ["landing"],
+      "condition": { "kind": "ci_passed" },
+      "automation": { "actor": "mechanical", "transition": "land_implementation_pr" }
+    },
+    {
+      "id": "plan_dependencies_resolved",
+      "artifact": "plan",
+      "labels": ["in-progress"],
+      "condition": { "kind": "dependencies_resolved" },
+      "automation": { "actor": "mechanical", "transition": "mark_plan_needs_validation" }
+    },
+    {
+      "id": "plan_needs_validation",
+      "artifact": "plan",
+      "labels": ["needs-validation"],
+      "actions": [
+        { "role": "tester", "action": "validate_plan" }
+      ]
+    },
+    {
+      "id": "feature_landing_pr_ci_failed",
+      "artifact": "feature_landing_pr",
+      "condition": { "kind": "ci_failed" },
+      "actions": [
+        { "role": "engineer", "action": "address_feature_landing_ci_failure", "checkout": "pull_request_writable" }
+      ]
+    },
+    {
+      "id": "feature_landing",
+      "artifact": "feature_landing_pr",
+      "labels": ["landing"],
+      "condition": { "kind": "ci_passed" },
+      "automation": { "actor": "mechanical", "transition": "land_feature_pr" }
+    }
+  ],
+  "transitions": [
+    {
+      "id": "plan_feature",
+      "artifact": "feature",
+      "roles": ["architect"],
+      "outcomes": {
+        "needs_plan": "feature_to_plan",
+        "config_only": "feature_config_only"
+      },
+      "effects": [
+        { "kind": "set_assignee", "role": "architect" }
+      ]
+    },
+    {
+      "id": "feature_to_plan",
+      "artifact": "feature",
+      "roles": ["architect"],
+      "effects": [
+        { "kind": "create_issues", "correlation_key": "feature-plan", "record_parent_dependencies": true },
+        { "kind": "add_label", "label": "planned" },
+        { "kind": "set_assignee", "role": "architect" }
+      ]
+    },
+    {
+      "id": "feature_config_only",
+      "artifact": "feature",
+      "roles": ["architect"],
+      "effects": [
+        { "kind": "create_comment", "body": "Architect classified this feature as config-only. No code child issues were created; apply the configuration change outside the repository PR flow and close or update this feature manually with evidence." },
+        { "kind": "add_label", "label": "config-only" },
+        { "kind": "set_assignee", "role": "architect" }
+      ]
+    },
+    {
+      "id": "decompose_plan",
+      "artifact": "plan",
+      "roles": ["architect"],
+      "outcomes": {
+        "children_ready": "plan_children_created",
+        "config_only": "plan_config_only"
+      },
+      "effects": [
+        { "kind": "set_assignee", "role": "architect" }
+      ]
+    },
+    {
+      "id": "plan_children_created",
+      "artifact": "plan",
+      "roles": ["architect"],
+      "effects": [
+        { "kind": "create_issues", "correlation_key": "plan-children", "record_parent_dependencies": true },
+        { "kind": "remove_label", "label": "ready" },
+        { "kind": "add_label", "label": "in-progress" },
+        { "kind": "set_assignee", "role": "architect" }
+      ]
+    },
+    {
+      "id": "plan_config_only",
+      "artifact": "plan",
+      "roles": ["architect"],
+      "effects": [
+        { "kind": "create_comment", "body": "Architect classified this plan as config-only. No code child issues were created; apply the configuration change outside the repository PR flow and close or update this plan manually with evidence." },
+        { "kind": "remove_label", "label": "ready" },
+        { "kind": "add_label", "label": "validated" },
+        { "kind": "set_assignee", "role": "architect" }
+      ]
+    },
+    {
+      "id": "mark_code_ready",
+      "artifact": "code",
+      "roles": ["mechanical"],
+      "requires_gates": ["dependency_gate"],
+      "effects": [
+        { "kind": "remove_label", "label": "blocked" },
+        { "kind": "add_label", "label": "ready" }
+      ]
+    },
+    {
+      "id": "open_pr",
+      "artifact": "code",
+      "roles": ["engineer"],
+      "effects": [
+        { "kind": "remove_label", "label": "ready" },
+        { "kind": "add_label", "label": "in-progress" },
+        { "kind": "set_assignee", "role": "engineer" },
+        { "kind": "create_pull_request" }
+      ]
+    },
+    {
+      "id": "request_review",
+      "artifact": "implementation_pr",
+      "roles": ["engineer"],
+      "effects": [
+        { "kind": "remove_label", "label": "in-progress", "if_present": true },
+        { "kind": "add_label", "label": "landing" }
+      ]
+    },
+    {
+      "id": "address_implementation_ci_failure",
+      "artifact": "implementation_pr",
+      "roles": ["engineer"],
+      "effects": [
+        { "kind": "create_comment", "body": "CI failed before landing this implementation PR into the feature branch. Engineer: push a fix to the PR head; Temper will retry landing once fresh CI passes." }
+      ]
+    },
+    {
+      "id": "land_implementation_pr",
+      "artifact": "implementation_pr",
+      "roles": ["mechanical"],
+      "requires_gates": ["ci_gate", "dependency_gate"],
+      "effects": [
+        { "kind": "merge_pull_request" },
+        { "kind": "remove_label", "label": "landing" },
+        { "kind": "close_parent_issues" }
+      ]
+    },
+    {
+      "id": "mark_plan_needs_validation",
+      "artifact": "plan",
+      "roles": ["mechanical"],
+      "requires_gates": ["dependency_gate"],
+      "effects": [
+        { "kind": "remove_label", "label": "in-progress" },
+        { "kind": "add_label", "label": "needs-validation" }
+      ]
+    },
+    {
+      "id": "validate_plan",
+      "artifact": "plan",
+      "roles": ["tester"],
+      "outcomes": {
+        "validated": "plan_validated_create_landing",
+        "needs_followup": "plan_validation_needs_followup"
+      },
+      "effects": [
+        { "kind": "set_assignee", "role": "tester" }
+      ]
+    },
+    {
+      "id": "plan_validated_create_landing",
+      "artifact": "plan",
+      "roles": ["tester"],
+      "effects": [
+        { "kind": "create_pull_request", "artifact_kind": "feature_landing_pr" },
+        { "kind": "remove_label", "label": "needs-validation" },
+        { "kind": "add_label", "label": "validated" },
+        { "kind": "set_assignee", "role": "tester" }
+      ]
+    },
+    {
+      "id": "plan_validation_needs_followup",
+      "artifact": "plan",
+      "roles": ["tester"],
+      "effects": [
+        { "kind": "create_issues", "correlation_key": "validation-followup", "record_parent_dependencies": true },
+        { "kind": "remove_label", "label": "needs-validation" },
+        { "kind": "add_label", "label": "in-progress" },
+        { "kind": "set_assignee", "role": "tester" }
+      ]
+    },
+    {
+      "id": "address_feature_landing_ci_failure",
+      "artifact": "feature_landing_pr",
+      "roles": ["engineer"],
+      "effects": [
+        { "kind": "create_comment", "body": "CI failed before final feature landing. Engineer: repair the feature branch through the writable landing PR head; Temper will retry once fresh CI passes." }
+      ]
+    },
+    {
+      "id": "land_feature_pr",
+      "artifact": "feature_landing_pr",
+      "roles": ["mechanical"],
+      "requires_gates": ["ci_gate", "dependency_gate"],
+      "effects": [
+        { "kind": "merge_pull_request" },
+        { "kind": "remove_label", "label": "landing" },
+        { "kind": "close_parent_issues" }
+      ]
+    }
+  ],
+  "gates": [
+    { "id": "dependency_gate", "condition": { "kind": "dependencies_resolved" } },
+    { "id": "ci_gate", "condition": { "kind": "ci_passed" } }
+  ]
+}

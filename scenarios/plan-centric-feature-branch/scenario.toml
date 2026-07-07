@@ -1,0 +1,147 @@
+schema = "temper.scenario.v1"
+name = "plan-centric-feature-branch"
+status = "active"
+intent = "Validate #144 plan-centric feature branch dogfood delivery from feature issue through aggregate landing PR."
+introduced_by = "#144"
+owner_area = "delivery-validation"
+stability = "provisional"
+timeout = "15m"
+
+[runner]
+uses = "manifest"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "plan-centric-feature-delivery"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/service"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "repo/.forgejo/workflows/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "feature"
+repo = "service"
+kind = "feature"
+title = "Ship plan-centric dogfood feature branch delivery"
+body = "config/feature-issue.md"
+author = "site_admin"
+labels = ["feature"]
+created_after = "standalone_ready"
+
+[[agents]]
+role = "architect"
+kind = "llm"
+mode = "scripted-fake"
+tool = "triage_workspace"
+queues = ["feature_planning", "plan_ready"]
+expected_output = "plan_and_code_children"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready"]
+expected_output = "feature_branch_implementation_prs"
+
+[[agents]]
+role = "tester"
+kind = "llm"
+mode = "scripted-fake"
+tool = "triage_workspace"
+queues = ["plan_needs_validation"]
+expected_output = "feature_landing_pr"
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["blocked_code_unblock", "implementation_landing", "plan_dependencies_resolved", "feature_landing"]
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "repo/.forgejo/workflows/ci.yml"
+
+[[steps]]
+id = "configure-jig-architect-response"
+action = "jig.fake_llm"
+role = "architect"
+script = "plan-centric-feature-branch"
+
+[[steps]]
+id = "configure-jig-engineer-response"
+action = "jig.fake_llm"
+role = "engineer"
+script = "plan-centric-feature-branch"
+
+[[steps]]
+id = "configure-jig-tester-response"
+action = "jig.fake_llm"
+role = "tester"
+script = "plan-centric-feature-branch"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-feature-issue"
+action = "issue.seed"
+issue_id = "feature"
+bind = "feature"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-plan-centric-convergence"
+action = "workflow.wait_convergence"
+until = "feature landing PR merged and feature plus plan issues closed"
+
+[expect]
+outcome = "Feature issue is planned, decomposed into sequential code work, implemented on a feature branch, validated, and landed to main."
+closed_parent_issues = 4
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify scenario documentation without changing the workflow contract.",
+  "Add additional evidence lines or assertions for the same plan-centric flow.",
+]
+requires_new_scenario_or_major_update = [
+  "Removing the plan issue control plane.",
+  "Removing sequential dependency/unblock coverage.",
+  "Removing aggregate feature landing PR coverage.",
+]

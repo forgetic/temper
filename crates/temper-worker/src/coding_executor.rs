@@ -360,9 +360,22 @@ async fn prepare_workspace(
                 .map_err(|error| workspace_failure("prepare workspace target branch", error))?;
             return prepare_writable(workspace, repo_spec).await;
         }
-        // Read-only sibling in a writable job, or any repo in a read-only
-        // (triage) job: materialize the base branch, never push.
-        JobMode::Writable | JobMode::ReadOnly => workspace.prepare_read_only().await,
+        // A read-only issue job may still be pointed at a feature branch from
+        // workflow metadata (for example architect plan decomposition). Create
+        // that branch from the repository default when it is missing, then check
+        // it out read-only so the later implementation jobs inherit an existing
+        // target branch.
+        JobMode::ReadOnly => {
+            workspace
+                .ensure_base_branch_exists_from_default(default_branch)
+                .await
+                .map_err(|error| workspace_failure("prepare workspace target branch", error))?;
+            workspace.prepare_read_only().await
+        }
+        // Read-only sibling in a writable job: the feed gives read-only repos
+        // their repository default branch, so no target-branch materialization is
+        // required.
+        JobMode::Writable => workspace.prepare_read_only().await,
     };
     result.map_err(|error| workspace_failure("prepare workspace", error))
 }

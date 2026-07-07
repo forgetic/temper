@@ -108,6 +108,15 @@ impl ScenarioBundle {
         self.codebase_memory_contract
     }
 
+    pub fn is_plan_centric_feature_branch(&self) -> bool {
+        self.workflow_name == "plan-centric-feature-delivery"
+            || self
+                .scenario_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "plan-centric-feature-branch")
+    }
+
     /// Validates that the scenario workflow fixture is the canonical bundled
     /// basic-delivery workflow. This preserves the live proof's contract with
     /// `temper init --workflow basic-delivery` while letting the harness load the
@@ -315,6 +324,8 @@ fn intake_fixture(scenario_path: &Path, manifest: &TomlValue) -> Result<IntakeFi
         .find(|issue| {
             issue.get("kind").and_then(TomlValue::as_str) == Some("intake")
                 || issue.get("id").and_then(TomlValue::as_str) == Some("intake")
+                || issue.get("kind").and_then(TomlValue::as_str) == Some("feature")
+                || issue.get("id").and_then(TomlValue::as_str) == Some("feature")
         })
         .or_else(|| {
             issues.iter().filter_map(TomlValue::as_table).find(|issue| {
