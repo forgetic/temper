@@ -17,7 +17,7 @@ mod responders;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use temper_cli_common::{GlobalOptions, OutputFormat};
+use temper_cli_common::{EnvLookup, GlobalOptions, OutputFormat};
 use temper_config::EX_USAGE;
 
 // Re-exported so `src/bin/*` and tests construct the CLI's injected environment
@@ -89,7 +89,18 @@ pub fn run(cli: CliEnv) -> ExitCode {
         println!("{USAGE}");
         return ExitCode::from(EX_USAGE);
     };
-    dispatch(&command, parsed.rest, &env, &paths, parsed.globals)
+    with_scenario_run_span(&env, || {
+        dispatch(&command, parsed.rest, &env, &paths, parsed.globals)
+    })
+}
+
+fn with_scenario_run_span<R>(env: &dyn EnvLookup, run: impl FnOnce() -> R) -> R {
+    let Some(run_id) = env.non_empty("TEMPER_SCENARIO_RUN_ID") else {
+        return run();
+    };
+    let span = tracing::info_span!("scenario_run", scenario.run_id = %run_id);
+    let _guard = span.enter();
+    run()
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

@@ -21,6 +21,7 @@ pub struct ScenarioBundle {
     pub timeout: Duration,
     pub poll_backstop: Duration,
     pub mechanical_cadence: Duration,
+    pub observability: ObservabilityFixture,
 }
 
 impl ScenarioBundle {
@@ -74,6 +75,7 @@ impl ScenarioBundle {
             "mechanical_cadence",
             Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS),
         )?;
+        let observability = observability_fixture(&manifest)?;
 
         Ok(Self {
             scenario_path,
@@ -86,6 +88,7 @@ impl ScenarioBundle {
             timeout,
             poll_backstop,
             mechanical_cadence,
+            observability,
         })
     }
 
@@ -145,6 +148,23 @@ pub struct IntakeFixture {
     pub title: String,
     pub body: String,
     pub labels: Vec<String>,
+}
+
+/// Structured observability settings the live scenario harness applies to the
+/// real `temper` processes it spawns.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservabilityFixture {
+    pub log_format: String,
+    pub rust_log: String,
+}
+
+impl Default for ObservabilityFixture {
+    fn default() -> Self {
+        Self {
+            log_format: "json".to_string(),
+            rust_log: "temper=debug".to_string(),
+        }
+    }
 }
 
 fn load_manifest_toml(manifest_path: &Path) -> Result<TomlValue, String> {
@@ -313,6 +333,43 @@ fn intake_fixture(scenario_path: &Path, manifest: &TomlValue) -> Result<IntakeFi
     })
 }
 
+fn observability_fixture(manifest: &TomlValue) -> Result<ObservabilityFixture, String> {
+    let defaults = ObservabilityFixture::default();
+    let Some(table) = manifest.get("observability").and_then(TomlValue::as_table) else {
+        return Ok(defaults);
+    };
+    let log_format = table
+        .get("log_format")
+        .map(|value| non_empty_string(value, "observability.log_format"))
+        .transpose()?
+        .unwrap_or(defaults.log_format);
+    if !log_format.trim().eq_ignore_ascii_case("json") {
+        return Err(format!(
+            "observability.log_format must be `json` for validation-grade live scenario capture, got `{log_format}`"
+        ));
+    }
+    let rust_log = table
+        .get("rust_log")
+        .map(|value| non_empty_string(value, "observability.rust_log"))
+        .transpose()?
+        .unwrap_or(defaults.rust_log);
+    Ok(ObservabilityFixture {
+        log_format,
+        rust_log,
+    })
+}
+
+fn non_empty_string(value: &TomlValue, field: &str) -> Result<String, String> {
+    let Some(raw) = value.as_str() else {
+        return Err(format!("{field} must be a non-empty string"));
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field} must be a non-empty string"));
+    }
+    Ok(trimmed.to_string())
+}
+
 fn manifest_duration(
     manifest: &TomlValue,
     key: &str,
@@ -398,6 +455,8 @@ mod tests {
             bundle.mechanical_cadence,
             Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS)
         );
+        assert_eq!(bundle.observability.log_format, "json");
+        assert_eq!(bundle.observability.rust_log, "temper=debug");
         assert!(bundle.repo.seed_path.join("README.md").is_file());
         assert!(
             bundle

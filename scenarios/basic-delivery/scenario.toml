@@ -7,6 +7,13 @@ owner_area = "delivery-validation"
 stability = "provisional"
 timeout = "10m"
 
+[runner]
+uses = "manifest"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
 [topology]
 kind = "single-repo-forgejo-standalone"
 forge = "forgejo"
@@ -60,6 +67,47 @@ kind = "built-in"
 mode = "automation"
 queues = ["raw_intake", "landing"]
 
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the service repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+roles = ["architect", "engineer"]
+script = "basic-delivery"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-intake-issue"
+action = "issue.seed"
+issue_id = "intake"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-convergence"
+action = "workflow.wait_convergence"
+until = "single implementation PR merged and source issue closed"
+
 [expect]
 template = "single-pr-merged-source-closed"
 outcome = "The intake issue is triaged to ready code, implemented by one PR, passes CI, and lands automatically."
@@ -84,6 +132,36 @@ id = "default-branch-updated"
 artifact = "repo:service"
 branch = "main"
 contains_engineer_diff = true
+
+[[expect.events]]
+id = "triage-transition-observed"
+event = "transition.applied"
+artifact_ref = "$source_artifact"
+transition = "triage_intake_to_code"
+
+[[expect.events]]
+id = "implementation-pr-opened-event"
+event = "pr.opened"
+source_artifact = "$source_artifact"
+kind = "implementation"
+for_issue_number = "$provider.issue_number"
+
+[[expect.sequence]]
+id = "basic-delivery-converges-by-events"
+scope = "source_artifact"
+events = [
+  { event = "transition.applied", artifact_ref = "$source_artifact", transition = "triage_intake_to_code" },
+  { event = "pr.opened", source_artifact = "$source_artifact" },
+  { event = "ci.completed", pr_ref = "$implementation_pr", conclusion = "success" },
+  { event = "pr.merged", pr_ref = "$implementation_pr" },
+  { event = "item.resolved", artifact_ref = "$source_artifact" },
+]
+
+[[expect.count]]
+id = "no-duplicate-implementation-prs-by-source"
+event = "pr.opened"
+group_by = ["source_artifact"]
+max = 1
 
 [change_policy]
 validation_report_required = true

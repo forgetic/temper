@@ -11,6 +11,8 @@ use super::model::{AssertionEvidence, RunEvidenceArtifact};
 mod checks;
 #[path = "assertions/common.rs"]
 mod common;
+#[path = "assertions/events.rs"]
+mod events;
 #[path = "assertions/issue.rs"]
 mod issue;
 #[path = "assertions/pull_request.rs"]
@@ -35,6 +37,7 @@ pub(crate) fn evaluate_manifest_assertions(
     summary::evaluate_templates(expect, artifact, &mut results);
     summary::evaluate_counts(expect, artifact, &mut results);
     checks::evaluate_checks(expect, artifact, &mut results);
+    events::evaluate_event_expectations(expect, artifact, &mut results);
 
     if results.is_empty() {
         Ok(None)

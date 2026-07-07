@@ -32,11 +32,19 @@ fn select_runner_for_bundle(bundle: &Path, name: &str, runner: &str) {
         &format!("name = \"{name}\""),
         1,
     );
-    let manifest = manifest.replacen(
-        "[topology]\n",
-        &format!("[runner]\nuses = \"{runner}\"\n\n[topology]\n"),
-        1,
-    );
+    let manifest = if manifest.contains("[runner]\nuses = \"manifest\"") {
+        manifest.replacen(
+            "[runner]\nuses = \"manifest\"",
+            &format!("[runner]\nuses = \"{runner}\""),
+            1,
+        )
+    } else {
+        manifest.replacen(
+            "[topology]\n",
+            &format!("[runner]\nuses = \"{runner}\"\n\n[topology]\n"),
+            1,
+        )
+    };
     std::fs::write(&manifest_path, manifest).expect("write manifest");
 }
 
@@ -66,43 +74,27 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
-fn run_succeeds_for_checked_in_basic_delivery_scenario() {
+fn checked_in_basic_delivery_rejects_default_hermetic_manifest_runner() {
     let scenario = workspace_root().join("scenarios/basic-delivery");
 
     let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
 
     assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "manifest runner must reject default hermetic tier"
     );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("scenario: basic-delivery"), "{stdout}");
-    assert!(stdout.contains("source: checked-in scenario"), "{stdout}");
-    assert!(stdout.contains("confidence tier: hermetic"), "{stdout}");
-    assert!(stdout.contains("not a live Forgejo proof"), "{stdout}");
-    assert!(stdout.contains("manifest topology:"), "{stdout}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(
-        stdout.contains("kind: single-repo-forgejo-standalone"),
-        "{stdout}"
+        stderr.contains("unsupported tier `hermetic` for runner `manifest`"),
+        "{stderr}"
     );
-    assert!(stdout.contains("forge: forgejo"), "{stdout}");
-    assert!(stdout.contains("runner: forgejo-actions-host"), "{stdout}");
-    assert!(stdout.contains("temper: standalone"), "{stdout}");
+    assert!(stderr.contains("runner.uses"), "{stderr}");
+    assert!(stderr.contains("real Forgejo"), "{stderr}");
     assert!(
-        stdout.contains("agent_model: scripted-fake-llm"),
-        "{stdout}"
+        stderr.contains("no hermetic, MemoryForge, or in-process substitute"),
+        "{stderr}"
     );
-    assert!(stdout.contains("verdict: passed"), "{stdout}");
-    assert!(stdout.contains("seeded issue: #"), "{stdout}");
-    assert!(stdout.contains("closed as code"), "{stdout}");
-    assert!(stdout.contains("implementation PR: #"), "{stdout}");
-    assert!(stdout.contains("merged with passing CI"), "{stdout}");
-    assert!(stdout.contains("closed parent issues: 1"), "{stdout}");
-    assert!(!stdout.contains("open (not merged)"), "{stdout}");
-    assert!(stdout.contains("actions:"), "{stdout}");
 }
 
 #[test]
@@ -110,6 +102,7 @@ fn run_succeeds_for_ephemeral_basic_delivery_bundle() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bundle = dir.path().join("basic-delivery-copy");
     copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
+    select_runner_for_bundle(&bundle, "basic-delivery", "basic-delivery");
 
     let check = temper_scenario(&["check", &bundle.to_string_lossy()]);
     assert!(
@@ -349,9 +342,10 @@ fn run_help_documents_tier_selector() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("The live tier for `basic-delivery` boots the shared"),
+        stdout.contains("The live manifest runner boots the validation-grade"),
         "{stdout}"
     );
+    assert!(stdout.contains("real forgejo-runner CI"), "{stdout}");
     assert!(stdout.contains("TEMPER_SCENARIO_TEMPER_BIN"), "{stdout}");
 }
 
@@ -435,6 +429,7 @@ fn validate_pr_report_records_ephemeral_source_tier_and_topology() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bundle = dir.path().join("basic-delivery-copy");
     copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
+    select_runner_for_bundle(&bundle, "basic-delivery", "basic-delivery");
     let output_dir = dir.path().join("reports");
 
     let output = temper_scenario(&[

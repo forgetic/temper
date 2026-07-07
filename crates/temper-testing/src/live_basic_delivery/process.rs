@@ -8,7 +8,10 @@ use toml::Value as TomlValue;
 
 use crate::forgejo_server::ForgejoServer;
 
-use super::{DEFAULT_ADMIN_EMAIL, INIT_PROVIDER_KEY, RepoFixture, ScenarioBundle, TemperCommand};
+use super::{
+    DEFAULT_ADMIN_EMAIL, INIT_PROVIDER_KEY, ObservabilityFixture, RepoFixture, ScenarioBundle,
+    TemperCommand,
+};
 
 const STANDALONE_READY_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -46,6 +49,7 @@ pub(super) struct TemperInitRequest<'a> {
     pub(super) log: &'a Path,
     pub(super) admin_user: &'a str,
     pub(super) admin_password: &'a str,
+    pub(super) scenario_run_id: &'a str,
 }
 
 pub(super) fn run_temper_init(request: TemperInitRequest<'_>) -> Result<(), String> {
@@ -91,6 +95,12 @@ pub(super) fn run_temper_init(request: TemperInitRequest<'_>) -> Result<(), Stri
         .arg(request.fake_llm_url)
         .env("TEMPER_INIT_ADMIN_PASSWORD", request.admin_password)
         .env("TEMPER_INIT_PROVIDER_KEY", INIT_PROVIDER_KEY)
+        .env("TEMPER_SCENARIO_RUN_ID", request.scenario_run_id)
+        .env(
+            "TEMPER_LOG_FORMAT",
+            &request.scenario.observability.log_format,
+        )
+        .env("RUST_LOG", &request.scenario.observability.rust_log)
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))
         .env("XDG_STATE_HOME", fake_home.join(".local/state"))
@@ -302,6 +312,8 @@ pub(super) fn spawn_temper_standalone(
     temper: &TemperCommand,
     bundle_dir: &Path,
     log: &Path,
+    observability: &ObservabilityFixture,
+    scenario_run_id: &str,
 ) -> Result<ChildGuard, String> {
     let fake_home = bundle_dir.join("home-standalone");
     fs::create_dir_all(fake_home.join(".config")).map_err(|error| {
@@ -323,6 +335,9 @@ pub(super) fn spawn_temper_standalone(
         .arg(bundle_dir)
         .arg("serve")
         .arg("standalone")
+        .env("TEMPER_LOG_FORMAT", &observability.log_format)
+        .env("TEMPER_SCENARIO_RUN_ID", scenario_run_id)
+        .env("RUST_LOG", &observability.rust_log)
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))
         .env("XDG_STATE_HOME", fake_home.join(".local/state"))

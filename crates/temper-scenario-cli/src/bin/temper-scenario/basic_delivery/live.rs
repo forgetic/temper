@@ -12,6 +12,8 @@ use temper_testing::live_basic_delivery::{
 use crate::run_context::ScenarioRunFacts;
 use crate::run_evidence;
 
+use super::observability::capture_observability;
+
 const PRIMARY_TEMPER_BIN_ENV: &str = "TEMPER_SCENARIO_TEMPER_BIN";
 const COMPAT_TEMPER_BIN_ENV: &str = "TEMPER_BIN";
 
@@ -25,7 +27,7 @@ pub(super) fn run_and_print(
     let evidence = run_live(scenario_path, manifest_path, temper_bin)?;
     let lines = live_evidence_lines(&evidence, None);
     let artifact = live_artifact(&evidence, context, &lines, None);
-    print_outcome(&lines, facts);
+    print_outcome(&lines, facts, context);
     retain_artifact_workspace(evidence);
     Ok(artifact)
 }
@@ -62,9 +64,14 @@ fn run_live(
     run_live_basic_delivery(scenario, temper)
 }
 
-fn print_outcome(lines: &[String], facts: &ScenarioRunFacts) {
-    println!("scenario: {}", super::SCENARIO_NAME);
+fn print_outcome(
+    lines: &[String],
+    facts: &ScenarioRunFacts,
+    context: &run_evidence::RunEvidenceContext,
+) {
+    println!("scenario: {}", context.scenario.name);
     facts.print_stdout();
+    println!("{}", context.scenario.runner_selection);
     println!("verdict: passed");
     println!("evidence:");
     for line in lines {
@@ -221,6 +228,7 @@ fn live_artifact(
         temper_binary: Some(evidence.temper_binary.display().to_string()),
         fake_llm_url: Some(evidence.fake_llm.base_url.clone()),
     });
+    artifact.observability = Some(capture_observability(evidence, standalone_log));
     artifact.artifacts = run_evidence::ArtifactCollections {
         log_paths: vec![
             init_log.display().to_string(),
@@ -312,6 +320,11 @@ fn live_evidence_lines(
         ));
     }
     lines.extend([
+        format!(
+            "observability: TEMPER_LOG_FORMAT={} RUST_LOG={} scenario_run_id={}",
+            evidence.temper_log_format, evidence.rust_log, evidence.scenario_run_id
+        ),
+        format!("structured event log: {}", standalone_log.display()),
         format!("log/artifact workspace: {}", workspace_root.display()),
         format!("log init: {}", init_log.display()),
         format!("log repo_populate: {}", repo_populate_log.display()),

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,8 @@ pub(crate) struct RunEvidenceArtifact {
     pub(crate) convergence: Option<ConvergenceEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) provider: Option<ProviderEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) observability: Option<ObservabilityEvidence>,
     #[serde(default, skip_serializing_if = "ArtifactCollections::is_empty")]
     pub(crate) artifacts: ArtifactCollections,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -188,6 +191,29 @@ pub(crate) struct ProviderEvidence {
     pub(crate) temper_binary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) fake_llm_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ObservabilityEvidence {
+    pub(crate) scenario_run_id: String,
+    pub(crate) log_format: String,
+    pub(crate) rust_log: String,
+    pub(crate) event_log_path: String,
+    pub(crate) captured_events: usize,
+    #[serde(default)]
+    pub(crate) events: Vec<StructuredEventEvidence>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct StructuredEventEvidence {
+    pub(crate) sequence: usize,
+    pub(crate) event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) target: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) fields: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]

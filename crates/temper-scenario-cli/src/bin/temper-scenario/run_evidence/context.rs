@@ -70,6 +70,7 @@ impl RunEvidenceContext {
             final_state,
             convergence: None,
             provider: None,
+            observability: None,
             artifacts: ArtifactCollections::default(),
             evidence_lines: Vec::new(),
             assertions: None,

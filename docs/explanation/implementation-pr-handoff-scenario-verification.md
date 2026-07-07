@@ -62,7 +62,7 @@ OK - checked 1 scenario(s).
 ```
 
 Run the proof through the scenario framework. The command defaults to the
-hermetic tier; `--tier live` is only implemented for `basic-delivery` and fails
+hermetic tier; `--tier live` is reserved for live manifest scenarios and fails
 for this MemoryForge-specific scenario rather than substituting memory evidence:
 
 ```sh
