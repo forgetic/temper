@@ -23,10 +23,10 @@ on:
 #      artifacts key-match across steps (see the comment in .cargo/config.toml).
 #      clippy/check still recompile their own zero-byte `.rmeta` leaves, which
 #      kache cannot cache, but that leaf cost is small. The scenario manifest
-#      check and explicit hermetic smoke run below are tiny checked-in CLI runs
-#      after the build step, so they do not change that cache choreography. The
-#      validation-grade live scenario lane is `cargo dev-scenario-run`; PR CI
-#      already exercises live coverage in the ignored e2e lane.
+#      check below is a tiny checked-in CLI run after the build step, so it does
+#      not change that cache choreography. The validation-grade live scenario
+#      lane is `cargo dev-scenario-run`; PR CI already exercises live coverage
+#      in the ignored e2e lane.
 jobs:
   validate:
     runs-on: host
@@ -55,11 +55,6 @@ jobs:
         # Validate checked-in manifests and local fixture references without
         # running either scenario execution tier.
         run: cargo dev-scenario-check
-      - name: Hermetic scenario smoke run
-        # Exercise the fast in-process basic-delivery runner under its explicit
-        # lower-confidence alias. The validation-grade live lane is
-        # `cargo dev-scenario-run`/`cargo dev-scenario-run-live`.
-        run: cargo dev-scenario-run-hermetic
       - name: Test (quick)
         run: cargo dev-test-quick
       - name: Test (all e2e)
