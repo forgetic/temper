@@ -23,6 +23,9 @@ pub enum JobOutcome {
     },
     Verdict {
         verdict: String,
+        /// Optional agent-authored title for verdict transitions that create a
+        /// pull request from metadata instead of a pushed workspace head.
+        title: Option<String>,
         body: Option<String>,
         summary: Option<String>,
         children: Vec<JobChild>,
@@ -125,13 +128,14 @@ pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResu
         },
         JobOutcome::Verdict {
             verdict,
+            title,
             body,
             summary,
             children,
         } => JobResult {
             status: ResultStatus::Success,
             verdict: Some(verdict),
-            title: None,
+            title,
             body,
             children,
             summary,
@@ -248,6 +252,7 @@ mod tests {
             "job-789",
             JobOutcome::Verdict {
                 verdict: "ready_code".to_string(),
+                title: None,
                 body: Some("rewritten issue body".to_string()),
                 summary: Some("triaged".to_string()),
                 children: Vec::new(),
@@ -269,6 +274,28 @@ mod tests {
         assert!(
             serialized.get("children").is_none(),
             "empty children must stay wire-compatible: {serialized}"
+        );
+    }
+
+    #[test]
+    fn verdict_outcome_preserves_authored_title_for_metadata_pr_create() {
+        let result = job_result(
+            "worker-3",
+            "job-789",
+            JobOutcome::Verdict {
+                verdict: "passed".to_string(),
+                title: Some("Land validated feature branch".to_string()),
+                body: Some("# Validation report".to_string()),
+                summary: Some("validated".to_string()),
+                children: Vec::new(),
+            },
+        );
+
+        assert_eq!(result.status, ResultStatus::Success);
+        assert_eq!(result.verdict.as_deref(), Some("passed"));
+        assert_eq!(
+            result.title.as_deref(),
+            Some("Land validated feature branch")
         );
     }
 
@@ -300,6 +327,7 @@ mod tests {
             "job-789",
             JobOutcome::Verdict {
                 verdict: "needs_breakdown".to_string(),
+                title: None,
                 body: None,
                 summary: Some("planned breakdown".to_string()),
                 children: children.clone(),

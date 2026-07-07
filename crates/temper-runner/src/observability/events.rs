@@ -66,6 +66,7 @@ mod tests {
             },
             WorkflowEffect::CreatePullRequest {
                 correlation_key: Some("pr-correlation-key".to_string()),
+                artifact_kind: None,
             },
         ];
         let summary = workflow_effect_summary(&effects);

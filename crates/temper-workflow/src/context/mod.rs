@@ -9,8 +9,9 @@
 //! Pull-request creation also needs runtime data that deliberately stays out of
 //! the portable workflow spec: branch refs, title, body, labels, assignees, and
 //! sometimes a per-work-item idempotency correlation key. A `CreatePullRequest`
-//! effect may carry a static correlation key; when it does not, the matching
-//! runtime key and [`temper_forge::CreatePullRequest`] input are supplied here.
+//! effect may carry a static correlation key and may name the pull-request
+//! artifact kind being created; the matching runtime key and concrete
+//! [`temper_forge::CreatePullRequest`] input are still supplied here.
 //!
 //! The content-bearing `SetBody` and `AttachReview` effects share the same
 //! shape: the effect declares only an optional correlation key, while the

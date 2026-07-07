@@ -20,7 +20,7 @@ use super::messaging::PreparedAttachReview;
 use super::verify::AppliedState;
 use super::{ExecutionError, Executor, Loaded};
 use crate::context::CreateIssuesChild;
-use crate::ids::RoleId;
+use crate::ids::{ArtifactKindId, RoleId};
 use crate::plan::{TransitionPlan, WorkflowEffect};
 use temper_forge::{
     CreatePullRequest, Forge, ForgeError, IssueState, RepositoryId, ReviewDecision, UpdateIssue,
@@ -113,7 +113,10 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             WorkflowEffect::CreateComment { body } => {
                 prepared.comments.push(body.clone());
             }
-            WorkflowEffect::CreatePullRequest { correlation_key } => {
+            WorkflowEffect::CreatePullRequest {
+                correlation_key,
+                artifact_kind,
+            } => {
                 let effect_index = counters.pull_request_create;
                 counters.pull_request_create += 1;
                 let correlation_key = correlation_key
@@ -139,6 +142,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                     .push(PreparedPullRequestCreate {
                         correlation_key,
                         input,
+                        artifact_kind: artifact_kind.clone(),
                     });
             }
             WorkflowEffect::RequestReviewers { roles } => {
@@ -284,8 +288,20 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         creates: &[PreparedPullRequestCreate],
     ) -> Result<(), ExecutionError> {
         for create in creates {
-            self.ensure_pull_request(repo_id, &create.correlation_key, create.input.clone())
+            if let Some(artifact_kind) = &create.artifact_kind {
+                let lookup_labels = pull_request_lookup_labels(self.workflow, artifact_kind)
+                    .unwrap_or_else(|| create.input.labels.clone());
+                self.ensure_pull_request_with_lookup(
+                    repo_id,
+                    &create.correlation_key,
+                    &lookup_labels,
+                    create.input.clone(),
+                )
                 .await?;
+            } else {
+                self.ensure_pull_request(repo_id, &create.correlation_key, create.input.clone())
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -510,6 +526,19 @@ impl PreparedEffects {
 struct PreparedPullRequestCreate {
     correlation_key: String,
     input: CreatePullRequest,
+    artifact_kind: Option<ArtifactKindId>,
+}
+
+fn pull_request_lookup_labels(
+    workflow: &crate::validated::ValidatedWorkflow,
+    artifact_kind: &ArtifactKindId,
+) -> Option<Vec<String>> {
+    workflow.artifact_kind(artifact_kind).map(|kind| {
+        kind.identifying_labels
+            .iter()
+            .map(|label| label.as_str().to_string())
+            .collect()
+    })
 }
 
 fn stale_update_error(

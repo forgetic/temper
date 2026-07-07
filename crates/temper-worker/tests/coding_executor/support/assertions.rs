@@ -21,6 +21,7 @@ pub fn expect_success(outcome: JobOutcome) -> (String, String, Option<String>) {
         }
         JobOutcome::Verdict {
             verdict,
+            title: _,
             body,
             summary,
             children,
@@ -39,6 +40,7 @@ pub fn expect_verdict(
     match outcome {
         JobOutcome::Verdict {
             verdict,
+            title: _,
             body,
             summary,
             children,
@@ -71,6 +73,7 @@ pub fn expect_failure_class(outcome: JobOutcome, expected: FailureClass) -> Stri
         } => panic!("expected {expected:?} failure, got success {repos:?} {summary:?}"),
         JobOutcome::Verdict {
             verdict,
+            title: _,
             body,
             summary,
             children,

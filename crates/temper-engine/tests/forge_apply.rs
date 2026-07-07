@@ -10,6 +10,8 @@ mod breakdown_child_kind;
 mod failure;
 #[path = "forge_apply/handoff.rs"]
 mod handoff;
+#[path = "forge_apply/landing_pr.rs"]
+mod landing_pr;
 #[path = "forge_apply/review.rs"]
 mod review;
 #[path = "forge_apply/success.rs"]

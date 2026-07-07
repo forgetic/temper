@@ -328,6 +328,8 @@ pub enum Effect {
     },
     CreatePullRequest {
         correlation_key: Option<String>,
+        #[serde(default)]
+        artifact_kind: Option<ArtifactKindId>,
     },
     RequestReviewers {
         roles: Vec<RoleId>,

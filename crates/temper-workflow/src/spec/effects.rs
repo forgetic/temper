@@ -42,9 +42,16 @@ pub enum RawEffect {
     /// `correlation_key`, when present, identifies retries of the same create
     /// request. Branches, title, body, and labels come from runtime context at
     /// execution time.
+    ///
+    /// `artifact_kind`, when present, names the pull-request artifact kind being
+    /// created. Validation guarantees the kind exists and targets pull requests;
+    /// runtimes can then derive creation labels and metadata from workflow
+    /// declarations while preserving the older generic effect when it is omitted.
     CreatePullRequest {
         #[serde(default)]
         correlation_key: Option<String>,
+        #[serde(default)]
+        artifact_kind: Option<String>,
     },
     /// Request reviews from users resolved for workflow roles on the target PR.
     RequestReviewers { roles: Vec<String> },

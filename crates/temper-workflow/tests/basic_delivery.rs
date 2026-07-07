@@ -345,6 +345,7 @@ fn engineer_claims_ready_code_and_opens_a_pr() {
             },
             WorkflowEffect::CreatePullRequest {
                 correlation_key: None,
+                artifact_kind: None,
             },
         ]
     );

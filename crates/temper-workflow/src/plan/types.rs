@@ -37,8 +37,12 @@ pub enum WorkflowEffect {
     CreateIssue { correlation_key: String },
     /// Request creation of a new pull request. The optional correlation key
     /// identifies retries; branch, title, body, and labels come from runtime
-    /// context in a later execution phase.
-    CreatePullRequest { correlation_key: Option<String> },
+    /// context in a later execution phase. When `artifact_kind` is present,
+    /// validation has confirmed it names a pull-request artifact kind.
+    CreatePullRequest {
+        correlation_key: Option<String>,
+        artifact_kind: Option<ArtifactKindId>,
+    },
     /// Request reviews from users resolved for workflow roles on the target PR.
     RequestReviewers { roles: Vec<RoleId> },
     /// Submit a native pull-request review decision.

@@ -7,7 +7,7 @@
 //! source-size budget.
 
 use crate::diagnostics::Diagnostic;
-use crate::spec::{RawQueueAction, RawQueueAutomation, RawTransition, RawWorkflowSpec};
+use crate::spec::{RawEffect, RawQueueAction, RawQueueAutomation, RawTransition, RawWorkflowSpec};
 use std::collections::{HashMap, HashSet};
 
 /// Checks duplicate external tool ids within each role declaration.
@@ -271,6 +271,42 @@ pub(super) fn check_default_artifact_kinds(
                 target: target.to_string(),
                 kinds,
             });
+        }
+    }
+}
+
+/// Checks that `create_pull_request.artifact_kind`, when supplied, names a
+/// pull-request artifact kind. Undeclared kinds are reported by the reference
+/// pass; this semantic pass only checks declared kinds.
+pub(super) fn check_create_pull_request_artifact_kind_targets(
+    spec: &RawWorkflowSpec,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let artifacts: HashMap<&str, crate::ArtifactTarget> = spec
+        .artifact_kinds
+        .iter()
+        .map(|kind| (kind.id.as_str(), kind.target))
+        .collect();
+
+    for transition in &spec.transitions {
+        for effect in &transition.effects {
+            let RawEffect::CreatePullRequest {
+                artifact_kind: Some(artifact_kind),
+                ..
+            } = effect
+            else {
+                continue;
+            };
+            let Some(target) = artifacts.get(artifact_kind.as_str()).copied() else {
+                continue;
+            };
+            if target != crate::ArtifactTarget::PullRequest {
+                diagnostics.push(Diagnostic::CreatePullRequestArtifactKindTargetMismatch {
+                    transition: transition.id.clone(),
+                    artifact_kind: artifact_kind.clone(),
+                    target: target.to_string(),
+                });
+            }
         }
     }
 }

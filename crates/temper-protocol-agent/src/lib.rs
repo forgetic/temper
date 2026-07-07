@@ -357,7 +357,8 @@ pub struct WorkspaceResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// No-verdict engineer success: implementation PR title. Verdict results
-    /// ignore this field and continue to use `body` for routed content.
+    /// may also use this as the authored title for routed transitions whose
+    /// `create_pull_request` effect declares a PR artifact kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// No-verdict engineer success: implementation PR report body. Verdict

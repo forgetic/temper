@@ -78,8 +78,10 @@ pub struct JobResult {
     /// `allowed_verdicts`). A success result may carry a verdict and no repos.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
-    /// Agent-authored implementation PR title for a no-verdict success. Ignored
-    /// for verdict results.
+    /// Agent-authored PR title. Without a verdict this is the implementation PR
+    /// handoff title. With a verdict it is used only by routed transitions whose
+    /// `create_pull_request` effect declares a PR artifact kind; other verdict
+    /// effects ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Authored body. With a verdict, this is the verdict payload (e.g. the

@@ -5,8 +5,9 @@ mod support;
 use support::{TestRoot, block_on, create_issue, new_repo, workflow};
 use temper_forge::{BranchRef, CreatePullRequest, Forge, PullRequestQuery, RepositoryId, UserId};
 use temper_workflow::{
-    ArtifactSource, ExecutionContext, Executor, RawWorkflowSpec, RoleId, TransitionId,
-    ValidatedWorkflow, WorkflowEffect, parse_metadata_block,
+    ArtifactKindId, ArtifactSource, Diagnostic, Effect, ExecutionContext, Executor,
+    RawWorkflowSpec, ReferenceSite, RoleId, SymbolKind, TransitionId, ValidatedWorkflow,
+    WorkflowEffect, parse_metadata_block,
 };
 
 const PR_CREATE_WORKFLOW: &str = r#"{
@@ -159,6 +160,7 @@ fn create_pull_request_effect_uses_idempotent_ensure_path() {
         report.applied,
         vec![WorkflowEffect::CreatePullRequest {
             correlation_key: Some("pr-code-42".into()),
+            artifact_kind: None,
         }]
     );
 
@@ -202,6 +204,7 @@ fn create_pull_request_effect_accepts_runtime_correlation_key() {
         report.applied,
         vec![WorkflowEffect::CreatePullRequest {
             correlation_key: None,
+            artifact_kind: None,
         }]
     );
 
@@ -212,4 +215,96 @@ fn create_pull_request_effect_accepts_runtime_correlation_key() {
         .expect("metadata parses")
         .expect("metadata exists");
     assert_eq!(metadata.correlation_key.as_deref(), Some("pr-code-99"));
+}
+
+#[test]
+fn create_pull_request_effect_accepts_pr_artifact_kind() {
+    let spec: RawWorkflowSpec = serde_json::from_str(
+        r#"{
+    "name": "pr-kind-create",
+    "roles": [{"id": "engineer"}],
+    "labels": [{"id": "code"}, {"id": "implementation"}, {"id": "needs-reviewer"}],
+    "artifact_kinds": [
+        {"id": "code", "target": "issue", "identifying_labels": ["code"]},
+        {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"], "initial_labels": ["needs-reviewer"]}
+    ],
+    "transitions": [{"id": "open_pr", "artifact": "code", "roles": ["engineer"], "effects": [
+        {"kind": "create_pull_request", "artifact_kind": "implementation_pr"}
+    ]}]
+}"#,
+    )
+    .expect("json parses");
+    let workflow = spec.validate().expect("workflow validates");
+
+    assert_eq!(
+        workflow.transitions()[0].effects[0],
+        Effect::CreatePullRequest {
+            correlation_key: None,
+            artifact_kind: Some(ArtifactKindId::new("implementation_pr")),
+        }
+    );
+}
+
+#[test]
+fn create_pull_request_effect_rejects_unknown_artifact_kind() {
+    let spec: RawWorkflowSpec = serde_json::from_str(
+        r#"{
+    "name": "pr-kind-create",
+    "roles": [{"id": "engineer"}],
+    "labels": [{"id": "code"}],
+    "artifact_kinds": [
+        {"id": "code", "target": "issue", "identifying_labels": ["code"]}
+    ],
+    "transitions": [{"id": "open_pr", "artifact": "code", "roles": ["engineer"], "effects": [
+        {"kind": "create_pull_request", "artifact_kind": "implementation_pr"}
+    ]}]
+}"#,
+    )
+    .expect("json parses");
+
+    let errors = spec
+        .validate()
+        .expect_err("unknown PR artifact kind is rejected");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        matches!(
+            diagnostic,
+            Diagnostic::UndeclaredReference {
+                expected: SymbolKind::ArtifactKind,
+                id,
+                site: ReferenceSite::TransitionEffectArtifactKind { transition },
+            } if id == "implementation_pr" && transition == "open_pr"
+        )
+    }));
+}
+
+#[test]
+fn create_pull_request_effect_rejects_non_pr_artifact_kind() {
+    let spec: RawWorkflowSpec = serde_json::from_str(
+        r#"{
+    "name": "pr-kind-create",
+    "roles": [{"id": "engineer"}],
+    "labels": [{"id": "code"}],
+    "artifact_kinds": [
+        {"id": "code", "target": "issue", "identifying_labels": ["code"]}
+    ],
+    "transitions": [{"id": "open_pr", "artifact": "code", "roles": ["engineer"], "effects": [
+        {"kind": "create_pull_request", "artifact_kind": "code"}
+    ]}]
+}"#,
+    )
+    .expect("json parses");
+
+    let errors = spec
+        .validate()
+        .expect_err("non-PR artifact kind is rejected");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        matches!(
+            diagnostic,
+            Diagnostic::CreatePullRequestArtifactKindTargetMismatch {
+                transition,
+                artifact_kind,
+                target,
+            } if transition == "open_pr" && artifact_kind == "code" && target == "issue"
+        )
+    }));
 }
