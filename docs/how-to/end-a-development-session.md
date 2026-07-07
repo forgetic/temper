@@ -32,9 +32,9 @@ The script runs these commands in order and stops on the first failure:
 7. Drop linked test binaries from `target/debug` before linting
 8. `cargo dev-clippy`
 
-Use `cargo dev-scenario-check` plus either `cargo dev-scenario-run-hermetic` or
-the live `cargo dev-scenario-run` when your change touches scenario manifests,
-scenario runners, Forgejo/CI convergence, or post-merge validation evidence.
+Use `cargo dev-scenario-check` plus the live `cargo dev-scenario-run` when your
+change touches scenario manifests, scenario runners, Forgejo/CI convergence, or
+post-merge validation evidence.
 Use narrower commands only for intermediate local iteration; the cheap pre-PR
 script is the required local handoff check for implementation PRs. Keep Clippy
 output clean.

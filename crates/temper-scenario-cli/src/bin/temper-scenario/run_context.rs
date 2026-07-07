@@ -35,7 +35,7 @@ impl ScenarioTier {
                 "fast in-process/memory runner; lower confidence than live; not a live Forgejo proof"
             }
             Self::Live => {
-                "validation-grade live Forgejo + host forgejo-runner + standalone temper + Jig fake LLM proof"
+                "validation-grade real Forgejo + real forgejo-runner CI + real Temper process + Jig fake LLM proof"
             }
         }
     }

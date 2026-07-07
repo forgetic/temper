@@ -13,6 +13,8 @@ mod fixture;
 mod live;
 #[path = "basic_delivery/model.rs"]
 mod model;
+#[path = "basic_delivery/observability.rs"]
+mod observability;
 #[path = "basic_delivery/render.rs"]
 mod render;
 #[path = "basic_delivery/runner.rs"]

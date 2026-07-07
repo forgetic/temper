@@ -6,7 +6,7 @@ use temper_scenario_core::ScenarioManifest;
 
 use super::run_context::{ScenarioRunFacts, ScenarioTier};
 use super::run_evidence::{RunEvidenceArtifact, RunEvidenceContext};
-use super::{basic_delivery, codebase_memory_agent, implementation_pr_handoff};
+use super::{basic_delivery, codebase_memory_agent, implementation_pr_handoff, manifest_runner};
 
 type HermeticRunAndPrint =
     fn(&Path, &Path, &ScenarioRunFacts, &RunEvidenceContext) -> Result<RunEvidenceArtifact, String>;
@@ -69,6 +69,16 @@ pub(super) enum RunnerRegistryError {
 }
 
 static RUNNERS: &[RunnerDefinition] = &[
+    RunnerDefinition {
+        id: manifest_runner::RUNNER_ID,
+        supported_tiers: &[ScenarioTier::Live],
+        hermetic: None,
+        live: Some(LiveRunner {
+            run_and_print: manifest_runner::run_live_and_print,
+            evidence_lines: manifest_runner::run_live_evidence_lines_for_report,
+            requires_standalone_temper: true,
+        }),
+    },
     RunnerDefinition {
         id: basic_delivery::SCENARIO_NAME,
         supported_tiers: &[ScenarioTier::Hermetic, ScenarioTier::Live],
@@ -264,6 +274,19 @@ impl RunnerRegistryError {
                 requested,
                 selector,
             } => unsupported_runner_message(requested, *selector, scenario_path),
+            Self::UnsupportedTier {
+                requested,
+                selector,
+                runner_id,
+                tier,
+                supported_tiers,
+            } if *runner_id == manifest_runner::RUNNER_ID => format!(
+                "unsupported tier `{}` for runner `{runner_id}` selected by {} at {}; requested runner `{requested}`; supported tiers: {supported_tiers}; the manifest runner is validation-grade live only (real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM) and has no hermetic, MemoryForge, or in-process substitute; refusing to substitute another runner; supported runner ids: {}",
+                tier.as_str(),
+                selector.description(),
+                scenario_path.display(),
+                supported_runners_display()
+            ),
             Self::UnsupportedTier {
                 requested,
                 selector,

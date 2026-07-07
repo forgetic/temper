@@ -13,21 +13,20 @@ not migrate, deduplicate, or replace an example.
 
 ## Runnable scenarios
 
-`temper-scenario run` currently has focused runners for:
+`temper-scenario run` currently has these runners:
 
-- `basic-delivery` — `--tier live` is the validation-grade path: it boots real Forgejo, a host-mode `forgejo-runner`, standalone `temper`, and Jig fake LLM agents through the shared live harness. `--tier hermetic` remains the fast deterministic memory/in-process smoke runner and is lower confidence.
+- `manifest` — live-only validation-grade e2e runner. The checked-in `basic-delivery` scenario selects this runner with `runner.uses = "manifest"` and boots real Forgejo, real `forgejo-runner` CI, a real standalone `temper` process, and Jig fake LLM agents. Hermetic/MemoryForge/in-process substitutes are rejected.
 - `implementation-pr-handoff` — focused hermetic ForgeApplier proof that authored implementation PR title/body and source metadata survive create and refresh.
 - `codebase-memory-agent` — focused hermetic native-agent proof that enabled `AgentToolConfig` starts a fake codebase-memory MCP server, exposes only safe `codebase_memory_*` tools, defaults the workspace project from `list_projects.root_path`, and returns the fake MCP result to the model.
 
 Run output always prints the scenario source classification, confidence tier, and
 manifest topology before the verdict. Bundles under this repository's
 `scenarios/` directory are labeled `checked-in scenario`; valid copied bundles
-outside that corpus are labeled `ephemeral validation bundle`. Live
+outside that corpus are labeled `ephemeral validation bundle`. Live manifest
 `basic-delivery` output also includes the Forgejo URL, issue/PR numbers, CI job
-evidence, convergence timing, fake LLM request counts, and log/artifact paths.
-Use `cargo dev-scenario-run` for the live lane (it builds and passes the
-standalone `temper` binary) and `cargo dev-scenario-run-hermetic` for the fast
-lower-confidence memory runner.
+evidence, convergence timing, fake LLM request counts, structured Temper event
+facts, and log/artifact paths. Use `cargo dev-scenario-run` for the live lane
+(it builds and passes the standalone `temper` binary).
 
 ### Single validator workflow command
 
@@ -41,7 +40,7 @@ cargo run -p temper-scenario-cli -- validate \
   --pr <merged-pr-number> \
   --sha <merged-main-sha> \
   --scenario /tmp/renamed-inherited-delivery \
-  --tier hermetic \
+  --tier live \
   --output-dir /tmp/temper-validation/pr-<merged-pr-number>
 ```
 
@@ -60,7 +59,7 @@ intent = "Validate the merged change with the checked-in basic-delivery fixtures
 extends = "scenarios/basic-delivery"
 
 [runner]
-uses = "basic-delivery"
+uses = "manifest"
 ```
 
 Run it with the command above and inspect the artifact directory for
@@ -78,7 +77,7 @@ intent = "Validate basic delivery plus one provider-side branch cleanup check."
 extends = "scenarios/basic-delivery"
 
 [runner]
-uses = "basic-delivery"
+uses = "manifest"
 
 [[assertions]]
 id = "branch-cleanup-observed"
@@ -92,7 +91,7 @@ timeout_ms = 5000
 #!/usr/bin/env bash
 set -euo pipefail
 context="${1:?context}"
-grep -q '"runner_id": "basic-delivery"' "$context"
+grep -q '"runner_id": "manifest"' "$context"
 echo "branch cleanup evidence checked from $context"
 ```
 
@@ -105,7 +104,7 @@ validation report.
 `temper-scenario run` can also write a versioned JSON run-evidence artifact:
 
 ```sh
-temper-scenario run --tier hermetic \
+temper-scenario run --tier live \
   --evidence-out validation-artifacts/run-evidence.json \
   scenarios/basic-delivery
 ```
@@ -162,6 +161,11 @@ evidence:
 - `[[expect.checks]] artifact = "pull_request"` (or `pull_request:<id>`) supports
   `state`, `labels`, `labels_cleared`, and `ci = "passed"`/`"failed"` against
   final PR and CI-job conclusion facts.
+- `[[expect.events]]`, `[[expect.sequence]]`, and `[[expect.count]]` assert over
+  captured structured Temper JSON events from live manifest runs. They support
+  event presence, ordered sequences, and grouped count/no-duplicate checks over
+  fields such as `event`, `artifact_ref`, `pr_ref`, `source_artifact`,
+  `transition`, and CI `conclusion`.
 
 Unsupported or missing-fact declarations are diagnostics, not failures: the
 result is recorded with `status = "unsupported"` and the run still succeeds if no
@@ -266,7 +270,7 @@ cycles, and `..` components are rejected with `fixtures.extends` diagnostics.
 Overlay semantics are intentionally simple: the inherited manifest supplies
 defaults, and the child manifest recursively overrides tables while replacing
 arrays and scalar values wholesale. This lets a validation bundle set a distinct
-`name`, `[runner] uses = "basic-delivery"`, or local `[expect]` metadata while
+`name`, `[runner] uses = "manifest"`, or local `[expect]` metadata while
 reusing workflow, repo seed, CI, and issue-body fixtures. Local file references
 are resolved relative to the manifest that declared them, so inherited
 `config/workflow.json`, `repo`, and issue body paths continue to point at the
@@ -306,6 +310,7 @@ Required sections:
 | `[[issues]]` | Issues to seed, including title, author model, labels, and body file. |
 | `[[agents]]` | Roles expected to service the scenario and the tool or automation mode they use. |
 | `[expect]` | High-level convergence result plus machine-checkable expectation entries. |
+| `[[steps]]` | Manifest-runner setup primitives for the real e2e stack (Forgejo, forgejo-runner, repo/issue seeding, Jig fake LLM, Temper launch, convergence wait). |
 | `[change_policy]` | Compatibility notes for future edits and whether a validation report is required. |
 
 Optional sections:
@@ -313,6 +318,7 @@ Optional sections:
 | Section | Purpose |
 | --- | --- |
 | `[fixtures]` | Explicit local fixture inheritance for bundles that reuse another scenario's manifest/fixture defaults. |
+| `[observability]` | Structured log capture settings for live manifest runs (`log_format = "json"`, `rust_log = "temper=debug"`). |
 
 Scenarios may add explanatory keys inside those sections, but new keys should be
 documented in the scenario README when they affect validation semantics.

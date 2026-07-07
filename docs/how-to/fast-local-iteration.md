@@ -18,22 +18,18 @@ cargo dev-scenario-check
 ```
 
 Exercise the validation-grade live `basic-delivery` lane. This builds a
-standalone `temper` binary, then runs real Forgejo + host `forgejo-runner` +
-standalone Temper + Jig fake LLM agents through `temper-scenario run --tier
-live`:
+standalone `temper` binary, then runs real Forgejo + real `forgejo-runner` CI +
+real standalone Temper + Jig fake LLM agents through the live-only
+`runner.uses = "manifest"` path:
 
 ```sh
 cargo dev-scenario-run
 ```
 
-For a fast lower-confidence smoke check without live Forgejo or external
-processes, use the explicit hermetic alias. Its output labels the checked-in
-scenario source, the `hermetic` confidence tier, and manifest topology, and must
-not be cited as live validation:
-
-```sh
-cargo dev-scenario-run-hermetic
-```
+The manifest runner intentionally rejects hermetic, MemoryForge-only, and
+in-process Temper substitutes. For fast local coverage, use focused crate tests
+or `cargo dev-test-quick`; do not cite those lower-confidence checks as
+validation-grade scenario evidence.
 
 ## Tests
 

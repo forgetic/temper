@@ -6,6 +6,8 @@ mod basic_delivery;
 mod codebase_memory_agent;
 #[path = "temper-scenario/implementation_pr_handoff.rs"]
 mod implementation_pr_handoff;
+#[path = "temper-scenario/manifest_runner.rs"]
+mod manifest_runner;
 #[path = "temper-scenario/promote.rs"]
 mod promote;
 #[path = "temper-scenario/run_context.rs"]
@@ -87,16 +89,17 @@ Options:
   -h, --help             Print help
 
 The hermetic tier is a fast in-process/memory runner and is lower confidence
-than a live Forgejo proof. The live tier for `basic-delivery` boots the shared
-Forgejo + host forgejo-runner + standalone temper + Jig fake LLM topology and
-fails instead of substituting the hermetic runner when that topology cannot run.
+than a live Forgejo proof. The live manifest runner boots the validation-grade
+stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM. The
+manifest runner is live-only and rejects hermetic/MemoryForge/in-process
+substitutes instead of falling back.
 
-For live `basic-delivery`, pass --temper-bin <PATH>, set
+For live manifest/basic-delivery, pass --temper-bin <PATH>, set
 TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling target-dir `temper` binary.
 `cargo dev-scenario-run` builds and delegates to the live lane.
 
-Supported runner ids are `basic-delivery`, `implementation-pr-handoff`, and
-`codebase-memory-agent`.
+Supported runner ids include `manifest` (live only), `basic-delivery`,
+`implementation-pr-handoff`, and `codebase-memory-agent`.
 Manifests may select a reusable runner with `[runner] uses = \"...\"`; when
 that selector is absent, `run` falls back to the legacy manifest `name`.
 Unsupported scenario manifests fail clearly instead of being treated as passed.";

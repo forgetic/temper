@@ -1337,6 +1337,7 @@ dependencies = [
  "temper-provision-forgejo-cli",
  "temper-reference-delivery-validator",
  "temper-trigger-forgejo",
+ "tracing",
 ]
 
 [[package]]

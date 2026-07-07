@@ -36,9 +36,9 @@ The script runs these commands in order and stops on the first failure:
 7. Drop linked test binaries from `target/debug` before linting
 8. `cargo dev-clippy`
 
-Run `cargo dev-scenario-check`, `cargo dev-scenario-run-hermetic`, or the live
-`cargo dev-scenario-run` separately when your change touches scenario manifests,
-scenario execution, Forgejo/CI convergence, or post-merge validation evidence.
+Run `cargo dev-scenario-check` or the live `cargo dev-scenario-run` separately
+when your change touches scenario manifests, scenario execution, Forgejo/CI
+convergence, or post-merge validation evidence.
 
 The full `cargo dev-test-e2e-all` lane is intentionally left to CI (or an
 explicit manual local run) so the default pre-PR check stays cheap.

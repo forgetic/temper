@@ -20,7 +20,30 @@ fn write_inherited_basic_delivery_bundle(bundle: &Path, name: &str) {
              [fixtures]\n\
              extends = \"scenarios/basic-delivery\"\n\
              [runner]\n\
-             uses = \"basic-delivery\"\n"
+             uses = \"basic-delivery\"\n\
+             [expect]\n\
+             template = \"single-pr-merged-source-closed\"\n\
+             merged_pull_requests = 1\n\
+             closed_parent_issues = 1\n\
+             events = []\n\
+             sequence = []\n\
+             count = []\n\
+             [[expect.checks]]\n\
+             id = \"intake-triaged-and-finalized\"\n\
+             artifact = \"issue:intake\"\n\
+             state = \"closed\"\n\
+             labels = [\"code\"]\n\
+             [[expect.checks]]\n\
+             id = \"implementation-pr-landed\"\n\
+             artifact = \"pull_request\"\n\
+             state = \"merged\"\n\
+             labels_cleared = [\"landing\"]\n\
+             ci = \"passed\"\n\
+             [[expect.checks]]\n\
+             id = \"default-branch-updated\"\n\
+             artifact = \"repo:service\"\n\
+             branch = \"main\"\n\
+             contains_engineer_diff = true\n"
         ),
     )
     .expect("write inherited manifest");
@@ -38,6 +61,9 @@ fn write_failing_assertion_bundle(bundle: &Path) {
          uses = \"basic-delivery\"\n\
          [expect]\n\
          merged_pull_requests = 1\n\
+         events = []\n\
+         sequence = []\n\
+         count = []\n\
          [[expect.checks]]\n\
          id = \"intentional-open-state\"\n\
          artifact = \"issue:intake\"\n\
@@ -57,6 +83,9 @@ fn write_failing_repo_assertion_bundle(bundle: &Path) {
          [runner]\n\
          uses = \"basic-delivery\"\n\
          [expect]\n\
+         events = []\n\
+         sequence = []\n\
+         count = []\n\
          [[expect.checks]]\n\
          id = \"wrong-default-branch\"\n\
          artifact = \"repo:service\"\n\
@@ -71,19 +100,11 @@ fn read_json(path: &Path) -> serde_json::Value {
     serde_json::from_str(&source).expect("parse json")
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crate directory has workspace crates parent")
-        .parent()
-        .expect("crates directory has workspace root parent")
-        .to_path_buf()
-}
-
 #[test]
 fn run_writes_basic_delivery_evidence_artifact() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let scenario = workspace_root().join("scenarios/basic-delivery");
+    let scenario = dir.path().join("basic-delivery-evidence");
+    write_inherited_basic_delivery_bundle(&scenario, "basic-delivery-evidence");
     let evidence = dir.path().join("basic-delivery.run-evidence.json");
 
     let output = temper_scenario(&[
@@ -114,10 +135,10 @@ fn run_writes_basic_delivery_evidence_artifact() {
     let json = read_json(&evidence);
     assert_eq!(json["schema"], "temper.scenario.run-evidence");
     assert_eq!(json["version"], 1);
-    assert_eq!(json["scenario"]["name"], "basic-delivery");
-    assert_eq!(json["scenario"]["source"], "checked_in");
+    assert_eq!(json["scenario"]["name"], "basic-delivery-evidence");
+    assert_eq!(json["scenario"]["source"], "ephemeral");
     assert_eq!(json["scenario"]["runner_id"], "basic-delivery");
-    assert_eq!(json["scenario"]["runner_selector"], "legacy_name");
+    assert_eq!(json["scenario"]["runner_selector"], "runner.uses");
     assert_eq!(json["scenario"]["tier"], "hermetic");
     assert_eq!(
         json["scenario"]["topology"]["kind"],
@@ -364,7 +385,8 @@ fn validate_pr_ingests_failing_assertion_results() {
 #[test]
 fn validate_pr_ingests_run_evidence_without_rerunning_scenario() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let scenario = workspace_root().join("scenarios/basic-delivery");
+    let scenario = dir.path().join("basic-delivery-ingest");
+    write_inherited_basic_delivery_bundle(&scenario, "basic-delivery-ingest");
     let evidence = dir.path().join("run-evidence.json");
     let run = temper_scenario(&[
         "run",
@@ -411,7 +433,7 @@ fn validate_pr_ingests_run_evidence_without_rerunning_scenario() {
         "{markdown}"
     );
     assert!(
-        markdown.contains("scenario: `basic-delivery`"),
+        markdown.contains("scenario: `basic-delivery-ingest`"),
         "{markdown}"
     );
     assert!(

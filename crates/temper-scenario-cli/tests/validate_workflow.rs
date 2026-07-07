@@ -10,10 +10,45 @@ fn temper_scenario(args: &[&str]) -> Output {
         .expect("run temper-scenario")
 }
 
+fn write_inherited_basic_delivery_bundle(bundle: &Path, name: &str) {
+    std::fs::create_dir_all(bundle).expect("create inherited bundle");
+    std::fs::write(
+        bundle.join("scenario.toml"),
+        format!(
+            "name = \"{name}\"\n\
+             intent = \"Ephemeral validation bundle reusing checked-in basic-delivery fixtures.\"\n\
+             [fixtures]\n\
+             extends = \"scenarios/basic-delivery\"\n\
+             [runner]\n\
+             uses = \"basic-delivery\"\n\
+             [expect]\n\
+             template = \"single-pr-merged-source-closed\"\n\
+             merged_pull_requests = 1\n\
+             closed_parent_issues = 1\n\
+             events = []\n\
+             sequence = []\n\
+             count = []\n\
+             [[expect.checks]]\n\
+             id = \"implementation-pr-landed\"\n\
+             artifact = \"pull_request\"\n\
+             state = \"merged\"\n\
+             labels_cleared = [\"landing\"]\n\
+             ci = \"passed\"\n\
+             [[expect.checks]]\n\
+             id = \"default-branch-updated\"\n\
+             artifact = \"repo:service\"\n\
+             branch = \"main\"\n\
+             contains_engineer_diff = true\n"
+        ),
+    )
+    .expect("write inherited manifest");
+}
+
 #[test]
 fn validate_workflow_writes_evidence_markdown_and_json_artifacts() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let scenario = workspace_root().join("scenarios/basic-delivery");
+    let scenario = dir.path().join("basic-delivery-validation");
+    write_inherited_basic_delivery_bundle(&scenario, "basic-delivery-validation");
     let output_dir = dir.path().join("validation-artifacts");
 
     let output = temper_scenario(&[

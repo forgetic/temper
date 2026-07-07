@@ -181,6 +181,8 @@ Actions (`GITHUB_API_URL`, `GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_TOKEN`).
 | Variable or pattern | Purpose |
 | --- | --- |
 | `TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS` | Overrides ignored Forgejo e2e convergence timeouts. |
+| `TEMPER_SCENARIO_TEMPER_BIN` / `TEMPER_BIN` | Scenario CLI live-run fallback path for the standalone `temper` binary when `--temper-bin` is not supplied (`TEMPER_BIN` is compatibility-only). |
+| `TEMPER_SCENARIO_RUN_ID` | Scenario harness correlation id injected into live `temper` processes and captured with structured JSON event facts. |
 | `TEMPER_TESTING_DAEMON_WORKER_BIN` | Overrides the root e2e path to `temper-testing-daemon-worker`. |
 | `TEMPER_E2E_GIT_USER` / `TEMPER_E2E_GIT_TOKEN` | Git identity / optional push token for the daemon test worker. |
 | `TEMPER_ANTHROPIC_OAUTH`, `TEMPER_CHATGPT_OAUTH`, `TEMPER_DEEPSEEK_REQUEST_ORACLE` | Opt-in gates for ignored live provider/request-oracle tests. |

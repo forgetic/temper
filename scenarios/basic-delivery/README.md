@@ -6,11 +6,11 @@ removing that example: a thin site-admin intake issue is triaged into ready code
 an engineer produces one implementation PR, Forgejo Actions CI passes, and the
 mechanical worker lands the PR.
 
-A validation-grade live runner now exercises the topology described by the
-manifest: real Forgejo, host-mode `forgejo-runner`, standalone `temper`, and Jig
-fake LLM agents. The fast hermetic runner remains available for local smoke
-checks, but its memory/in-process evidence is lower confidence and is labeled as
-such.
+A validation-grade manifest runner exercises the topology described by the
+manifest: real Forgejo, real host-mode `forgejo-runner` CI, a real standalone
+`temper` process, and Jig fake LLM agents. The `manifest` runner is intentionally
+live-only; MemoryForge, hermetic, and in-process Temper substitutes are rejected
+so this scenario cannot be mistaken for lower-confidence validation.
 
 ## Files
 
@@ -51,8 +51,7 @@ scenarios/basic-delivery/
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/basic-delivery
-cargo dev-scenario-run                      # live validation-grade lane
-cargo dev-scenario-run-hermetic             # fast lower-confidence smoke lane
+cargo dev-scenario-run                      # live validation-grade manifest lane
 ```
 
 Direct live invocation is also supported when the standalone binary is already
@@ -67,20 +66,12 @@ cargo run -p temper-scenario-cli -- run \
 ```
 
 The live run output labels this bundle as `checked-in scenario`, reports the
-`live` confidence tier, prints the manifest topology, and then shows the Forgejo
-URL, issue/PR numbers, CI job evidence, convergence timing, fake LLM request
-counts, and log/artifact paths. A copied bundle outside `scenarios/` runs with
-the live tier too and is labeled `ephemeral validation bundle`.
-
-For the lower-confidence in-process runner:
-
-```sh
-cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/basic-delivery
-```
-
-That hermetic output records the same source/topology labels plus memory-backed
-evidence for the seeded issue, implementation PR, CI signal, and closed parent
-issue; it must not be cited as live Forgejo validation.
+`live` confidence tier and `runner.uses = "manifest"` selection, prints the
+manifest topology, and then shows the Forgejo URL, issue/PR numbers, CI job
+evidence, convergence timing, fake LLM request counts, structured Temper JSON
+event log path, and other log/artifact paths. A copied bundle outside
+`scenarios/` runs with the live tier too and is labeled `ephemeral validation
+bundle`.
 
 ## Provenance
 

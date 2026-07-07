@@ -9,6 +9,7 @@ description = "The unified `temper` command line: a thin dispatcher over the per
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 
 # Process-wide logging init, installed once at the top of `run`.
 temper-log = { path = "../temper-log" }

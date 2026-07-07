@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use super::model::{
-    ConvergenceEvidence, FinalStateEvidence, ProviderEvidence, RunEvidenceArtifact,
-    TopologyEvidence,
+    ConvergenceEvidence, FinalStateEvidence, ObservabilityEvidence, ProviderEvidence,
+    RunEvidenceArtifact, TopologyEvidence,
 };
 
 impl RunEvidenceArtifact {
@@ -44,6 +44,9 @@ impl RunEvidenceArtifact {
         }
         if let Some(provider) = &self.provider {
             details.extend(provider_details(provider));
+        }
+        if let Some(observability) = &self.observability {
+            details.extend(observability_details(observability));
         }
         for path in &self.artifacts.log_paths {
             details.push(format!("log path: `{path}`"));
@@ -191,6 +194,46 @@ fn provider_details(provider: &ProviderEvidence) -> Vec<String> {
     }
     if let Some(pr_number) = provider.pr_number {
         details.push(format!("provider pr_number: #{pr_number}"));
+    }
+    details
+}
+
+fn observability_details(observability: &ObservabilityEvidence) -> Vec<String> {
+    let mut details = vec![
+        format!(
+            "observability scenario_run_id: `{}`",
+            observability.scenario_run_id
+        ),
+        format!(
+            "observability capture: TEMPER_LOG_FORMAT={} RUST_LOG={}",
+            observability.log_format, observability.rust_log
+        ),
+        format!(
+            "observability event log: `{}`",
+            observability.event_log_path
+        ),
+        format!(
+            "observability events captured: {}",
+            observability.captured_events
+        ),
+    ];
+    for event in observability.events.iter().take(12) {
+        let artifact = event
+            .fields
+            .get("artifact.ref")
+            .or_else(|| event.fields.get("pr.ref"))
+            .map(|value| format!(" artifact={value}"))
+            .unwrap_or_default();
+        details.push(format!(
+            "observability event #{}: {}{}",
+            event.sequence, event.event, artifact
+        ));
+    }
+    if observability.events.len() > 12 {
+        details.push(format!(
+            "observability event sample truncated: {} additional event(s)",
+            observability.events.len() - 12
+        ));
     }
     details
 }

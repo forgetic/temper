@@ -58,7 +58,7 @@ pub(super) fn add_supported_run(
                     ValidationStatus::Satisfied,
                 )
                 .with_evidence(
-                    "live scenario run completed with real Forgejo, host forgejo-runner, standalone temper, and Jig fake LLM agents",
+                    "live scenario run completed with real Forgejo, real forgejo-runner CI, real Temper, and Jig fake LLM agents",
                 ),
             );
             report.evidence.push(

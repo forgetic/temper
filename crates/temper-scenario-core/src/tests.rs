@@ -394,6 +394,7 @@ fn load_manifest_accepts_checked_in_basic_delivery_shape() {
     assert_eq!(manifest.name, "basic-delivery");
     assert_eq!(manifest.status, ScenarioStatus::Active);
     assert_eq!(manifest.stability, ScenarioStability::Provisional);
+    assert_eq!(manifest.runner.uses.as_deref(), Some("manifest"));
     assert_eq!(manifest.repositories.len(), 1);
     assert_eq!(manifest.repositories[0].id.as_deref(), Some("service"));
     assert_eq!(manifest.repositories[0].repo, "acme/service");

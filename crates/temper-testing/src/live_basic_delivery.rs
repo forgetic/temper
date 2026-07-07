@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
 
-pub use bundle::{IntakeFixture, RepoFixture, ScenarioBundle};
+pub use bundle::{IntakeFixture, ObservabilityFixture, RepoFixture, ScenarioBundle};
 use convergence::{
     admin_forge, ci_diagnostics, drive_full_basic_delivery, repository, seed_intake,
 };
@@ -118,6 +118,7 @@ impl LiveBasicDeliveryHarness {
         let admin_token = mint_site_admin_token(&server, &self.admin_user)?;
 
         let fake = BasicDeliveryFake::start();
+        let scenario_run_id = scenario_run_id(&self.scenario);
         let workspace = RunWorkspace::new(&self.workspace_prefix);
         let bundle_dir = workspace.dir("bundle");
         let workspaces_dir = workspace.dir("workspaces");
@@ -142,6 +143,7 @@ impl LiveBasicDeliveryHarness {
             log: &logs.init_log,
             admin_user: &self.admin_user,
             admin_password: &self.admin_password,
+            scenario_run_id: &scenario_run_id,
         })?;
         assert_init_workflow_yaml_matches(&bundle_dir.join("workflow.yaml"), &self.scenario)?;
         tune_init_config(
@@ -158,8 +160,13 @@ impl LiveBasicDeliveryHarness {
             &logs.repo_populate_log,
         )?;
 
-        let mut standalone =
-            spawn_temper_standalone(&self.temper, &bundle_dir, &logs.standalone_log)?;
+        let mut standalone = spawn_temper_standalone(
+            &self.temper,
+            &bundle_dir,
+            &logs.standalone_log,
+            &self.scenario.observability,
+            &scenario_run_id,
+        )?;
         wait_for_standalone(&mut standalone)?;
 
         let forge = admin_forge(server.base_url(), &admin_token, &self.scenario.repo);
@@ -246,6 +253,9 @@ impl LiveBasicDeliveryHarness {
             _workspace: workspace,
             scenario_path: self.scenario.scenario_path.clone(),
             manifest_path: self.scenario.manifest_path.clone(),
+            scenario_run_id,
+            temper_log_format: self.scenario.observability.log_format.clone(),
+            rust_log: self.scenario.observability.rust_log.clone(),
             temper_binary: self.temper.binary.clone(),
             forge_url: server.base_url().to_string(),
             repo_slug: self.scenario.repo.slug.clone(),
@@ -277,11 +287,37 @@ pub fn run_live_basic_delivery(
     LiveBasicDeliveryHarness::new(scenario, temper).run()
 }
 
+fn scenario_run_id(scenario: &ScenarioBundle) -> String {
+    let scenario_name = scenario
+        .scenario_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("scenario");
+    let safe_name = scenario_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{safe_name}-{}-{nanos}", std::process::id())
+}
+
 /// Structured evidence emitted by a successful live basic-delivery run.
 pub struct LiveBasicDeliveryEvidence {
     _workspace: RunWorkspace,
     pub scenario_path: PathBuf,
     pub manifest_path: PathBuf,
+    pub scenario_run_id: String,
+    pub temper_log_format: String,
+    pub rust_log: String,
     pub temper_binary: PathBuf,
     pub forge_url: String,
     pub repo_slug: String,
@@ -305,6 +341,11 @@ impl LiveBasicDeliveryEvidence {
             "live_basic_delivery evidence:".to_string(),
             format!("  scenario: {}", self.scenario_path.display()),
             format!("  manifest: {}", self.manifest_path.display()),
+            format!("  scenario_run_id: {}", self.scenario_run_id),
+            format!(
+                "  observability: TEMPER_LOG_FORMAT={} RUST_LOG={}",
+                self.temper_log_format, self.rust_log
+            ),
             format!("  temper_binary: {}", self.temper_binary.display()),
             format!("  forge_url: {}", self.forge_url),
             format!("  repo: {}", self.repo_slug),

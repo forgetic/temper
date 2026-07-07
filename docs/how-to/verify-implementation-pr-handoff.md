@@ -31,9 +31,9 @@ with the authored create handoff, refreshes an existing implementation PR with
 the authored update handoff without duplicating it, clears stale body text, and
 preserves workflow metadata linking each PR back to its source issue.
 
-The hermetic real-stack basic-delivery test remains useful when you need the
-broader daemon/worker/native-agent/local-git path, but the scenario command is
-the focused handoff proof.
+The live manifest `basic-delivery` scenario remains useful when you need the
+broader real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM
+validation-grade path, but this scenario command is the focused handoff proof.
 
 For live Forgejo fixture internals and the remaining ignored e2e lanes, see
 [Run the daemon end-to-end fixture](run-daemon-e2e.md) and
