@@ -44,7 +44,8 @@ variant. Implemented transition effects are:
 - `AddLabel` / `RemoveLabel`;
 - `SetAssignee` / `RemoveAssignee` with role-to-user resolution;
 - `CreateComment`;
-- `CreatePullRequest` with transition-bound runtime input;
+- `CreatePullRequest` with transition-bound runtime input and optional PR
+  artifact-kind metadata;
 - `RequestReviewers` with role-to-user resolution;
 - `SubmitReview` (`approved`, `changes_requested`, `commented`, or `pending`,
   though Forgejo rejects pending submission);
@@ -84,10 +85,21 @@ look failed by advancing the artifact after the commit.
 
 ## PR creation and merge projection
 
-`CreatePullRequest` carries only an optional correlation key in the spec. Branch,
-title, body, labels, assignees, and a runtime correlation key come from
-`ExecutionContext`; a missing effective key or missing create input fails before
-mutation.
+`CreatePullRequest` carries an optional correlation key and an optional
+`artifact_kind` in the spec. Branch, title, body, labels, assignees, and a
+runtime correlation key still come from `ExecutionContext`; a missing effective
+key or missing create input fails before mutation. When `artifact_kind` is set,
+validation guarantees it names a pull-request artifact kind. The executor uses
+that kind's stable identifying labels for correlation lookup while callers use
+the kind's identifying plus initial labels for creation.
+
+On the daemon verdict path, an issue transition with
+`create_pull_request.artifact_kind` is metadata-driven: before executing the
+transition, the daemon binds the PR source branch from the source issue's
+`WorkflowMetadata.target_branch`, targets the repository default branch, derives
+labels from the named PR kind, and writes PR metadata containing the kind and a
+parent link to the source issue. Missing target-branch metadata aborts before any
+labels or assignees are changed.
 
 Post-merge `landed` and `alignment` labels are ordinary `add_label` effects on
 the merge transition. They survive on the closed PR and act as the planner

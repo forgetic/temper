@@ -261,8 +261,14 @@ fn build_effect(effect: &RawEffect) -> Effect {
         RawEffect::SetAssignee { role } => Effect::SetAssignee(RoleId::new(role)),
         RawEffect::RemoveAssignee { role } => Effect::RemoveAssignee(RoleId::new(role)),
         RawEffect::CreateComment { body } => Effect::CreateComment { body: body.clone() },
-        RawEffect::CreatePullRequest { correlation_key } => Effect::CreatePullRequest {
+        RawEffect::CreatePullRequest {
+            correlation_key,
+            artifact_kind,
+        } => Effect::CreatePullRequest {
             correlation_key: correlation_key.clone(),
+            artifact_kind: artifact_kind
+                .as_ref()
+                .map(|kind| ArtifactKindId::new(kind.clone())),
         },
         RawEffect::RequestReviewers { roles } => Effect::RequestReviewers {
             roles: roles.iter().map(RoleId::new).collect(),

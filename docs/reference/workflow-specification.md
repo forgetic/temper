@@ -71,7 +71,11 @@ undeclared bindings are rejected.
 
 The conventional `coding_workspace` provider prepares a checkout and branch for
 engineering work. It feeds `CreatePullRequest` runtime context, but workflow
-state and Forge mutation still happen through `RoleTools` and the executor.
+state and Forge mutation still happen through `RoleTools` and the executor. A
+`create_pull_request` effect may optionally declare `artifact_kind`; when set,
+validation requires that kind to exist and target `pull_request`, allowing
+verdict-driven runtimes to derive labels and metadata for PR artifacts such as a
+feature-branch landing PR without requiring a worker-produced diff.
 
 ## Queue filters
 
@@ -121,7 +125,9 @@ Validation rejects or diagnoses:
   incompatible with the queue's artifact kinds, or declares an unsupported
   checkout capability;
 - queue automation whose actor/transition/fallback is missing, unauthorized, or
-  incompatible with the queue's artifact kinds.
+  incompatible with the queue's artifact kinds;
+- `create_pull_request.artifact_kind` values that are undeclared or name a
+  non-`pull_request` artifact kind.
 
 Planned checks include contradictory transition effects, unsatisfiable gates,
 role tool declarations that exceed transition authority, unrepresentable Forge

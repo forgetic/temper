@@ -32,8 +32,9 @@
 //! preconditions and is correctly refused).
 //!
 //! `CreatePullRequest` is applied through [`Executor::ensure_pull_request`]. The
-//! effect supplies the correlation key; [`ExecutionContext`] supplies the
-//! concrete title, body, branches, labels, and assignees. The create runs before
+//! effect may supply the correlation key and an artifact kind for stable lookup;
+//! [`ExecutionContext`] supplies the concrete title, body, branches, labels, and
+//! assignees. The create runs before
 //! the label/assignee commit point so a retry after a landed create reuses the
 //! existing pull request rather than duplicating it.
 //!

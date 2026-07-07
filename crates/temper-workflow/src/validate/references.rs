@@ -312,6 +312,17 @@ fn check_transition_references(
                     diagnostics,
                 );
             }
+            if let Some(artifact_kind) = effect_artifact_kind(effect) {
+                check_reference(
+                    declared.artifacts,
+                    artifact_kind,
+                    SymbolKind::ArtifactKind,
+                    ReferenceSite::TransitionEffectArtifactKind {
+                        transition: transition.id.clone(),
+                    },
+                    diagnostics,
+                );
+            }
             for role in effect_roles(effect) {
                 check_reference(
                     declared.roles,
@@ -451,6 +462,29 @@ fn effect_label(effect: &RawEffect) -> Option<&str> {
     match effect {
         RawEffect::AddLabel { label } | RawEffect::RemoveLabel { label, .. } => Some(label),
         RawEffect::SetAssignee { .. }
+        | RawEffect::RemoveAssignee { .. }
+        | RawEffect::CreateComment { .. }
+        | RawEffect::CreatePullRequest { .. }
+        | RawEffect::RequestReviewers { .. }
+        | RawEffect::SubmitReview { .. }
+        | RawEffect::SetBody { .. }
+        | RawEffect::AttachReview { .. }
+        | RawEffect::CreateIssues { .. }
+        | RawEffect::MergePullRequest
+        | RawEffect::CloseParentIssues => None,
+    }
+}
+
+/// Returns the artifact kind id referenced by a raw effect, if any.
+fn effect_artifact_kind(effect: &RawEffect) -> Option<&str> {
+    match effect {
+        RawEffect::CreatePullRequest {
+            artifact_kind: Some(artifact_kind),
+            ..
+        } => Some(artifact_kind),
+        RawEffect::AddLabel { .. }
+        | RawEffect::RemoveLabel { .. }
+        | RawEffect::SetAssignee { .. }
         | RawEffect::RemoveAssignee { .. }
         | RawEffect::CreateComment { .. }
         | RawEffect::CreatePullRequest { .. }

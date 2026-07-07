@@ -379,8 +379,12 @@ fn to_effect(effect: &Effect) -> WorkflowEffect {
         Effect::SetAssignee(role) => WorkflowEffect::SetAssignee { role: role.clone() },
         Effect::RemoveAssignee(role) => WorkflowEffect::RemoveAssignee { role: role.clone() },
         Effect::CreateComment { body } => WorkflowEffect::CreateComment { body: body.clone() },
-        Effect::CreatePullRequest { correlation_key } => WorkflowEffect::CreatePullRequest {
+        Effect::CreatePullRequest {
+            correlation_key,
+            artifact_kind,
+        } => WorkflowEffect::CreatePullRequest {
             correlation_key: correlation_key.clone(),
+            artifact_kind: artifact_kind.clone(),
         },
         Effect::RequestReviewers { roles } => WorkflowEffect::RequestReviewers {
             roles: roles.clone(),

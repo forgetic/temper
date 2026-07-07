@@ -12,9 +12,10 @@
 //! application is enabled.
 //!
 //! The implementation is split by responsibility across child modules:
-//! [`success`] (PR opening), [`failure`] (audit + attention), [`verdict`] and
-//! [`verdict_children`] (routed transitions), [`resolve`] (Forge artifact
-//! lookups), and [`progress`] (the trait impl).
+//! [`success`] (PR opening), [`failure`] (audit + attention), [`verdict`],
+//! [`verdict_children`], and [`verdict_pr`] (routed transitions and their runtime
+//! bindings), [`resolve`] (Forge artifact lookups), and [`progress`] (the trait
+//! impl).
 
 mod body_merge;
 mod body_update;
@@ -26,6 +27,7 @@ mod resolve;
 mod success;
 mod verdict;
 mod verdict_children;
+mod verdict_pr;
 
 use std::sync::Arc;
 

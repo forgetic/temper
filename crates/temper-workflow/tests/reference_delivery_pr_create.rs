@@ -62,6 +62,7 @@ fn engineer_open_pr_claims_ready_code_and_expresses_pr_creation() {
             },
             WorkflowEffect::CreatePullRequest {
                 correlation_key: None,
+                artifact_kind: None,
             },
         ]
     );

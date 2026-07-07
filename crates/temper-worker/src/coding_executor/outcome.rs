@@ -126,6 +126,7 @@ async fn writable_verdict_outcome(
     }
     JobOutcome::Verdict {
         verdict,
+        title: result.title,
         body: result.body.or(result.review_body),
         summary: result
             .summary

@@ -2,7 +2,9 @@
 
 //! Verdict-path application: route a worker verdict through the compiled
 //! workflow to a declared transition and execute it against the source issue or
-//! pull request, binding any `create_issues` children the verdict produced.
+//! pull request, binding any `create_issues` children the verdict produced and
+//! metadata-driven `create_pull_request` inputs declared by the routed issue
+//! transition.
 
 use temper_forge::{Forge, ItemNumber, RepositoryId, RepositoryPath};
 use temper_protocol_worker::{JobChild, JobResult};
@@ -16,6 +18,7 @@ use temper_runner::{artifact_ref, queue_after_transition, workspace_content_key}
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
+use crate::forge_applier::verdict_pr::VerdictPullRequestBinding;
 
 /// Carries the arguments [`ForgeApplier::execute_routed_verdict`] needs without a
 /// long positional signature.
@@ -190,6 +193,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return;
         }
 
+        let result_title = result.title.clone();
+        let result_body = result.body.clone();
+        let result_children = result.children;
         let mut context = verdict_execution_context(
             self.forge.as_ref(),
             job,
@@ -197,10 +203,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             routed,
             role_id,
             number,
-            result.body,
+            result_body.clone(),
         )
         .await;
-        if !result.children.is_empty()
+        if !result_children.is_empty()
             && !self
                 .bind_create_issues_children(VerdictChildrenBinding {
                     job,
@@ -208,11 +214,24 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     artifact_kind: &job_context.artifact_kind,
                     routed,
                     number,
-                    children: result.children,
+                    children: result_children,
                     context: &mut context,
                 })
                 .await
         {
+            return;
+        }
+        if !self.bind_metadata_pull_request_creates(VerdictPullRequestBinding {
+            job,
+            repository: &repository,
+            issue: &issue,
+            artifact_kind: &job_context.artifact_kind,
+            routed,
+            number,
+            title: result_title.as_deref(),
+            body: result_body.as_deref(),
+            context: &mut context,
+        }) {
             return;
         }
 

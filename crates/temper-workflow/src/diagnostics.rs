@@ -69,6 +69,8 @@ pub enum ReferenceSite {
     TransitionEffectLabel { transition: String },
     /// A transition effect referenced a role.
     TransitionEffectRole { transition: String },
+    /// A transition effect referenced an artifact kind.
+    TransitionEffectArtifactKind { transition: String },
     /// A queue's `artifact` referenced an artifact kind.
     QueueArtifact { queue: String },
     /// A queue's `labels` list referenced a label.
@@ -127,7 +129,8 @@ impl fmt::Display for ReferenceSite {
                 write!(formatter, "transition `{transition}`")
             }
             ReferenceSite::TransitionEffectLabel { transition }
-            | ReferenceSite::TransitionEffectRole { transition } => {
+            | ReferenceSite::TransitionEffectRole { transition }
+            | ReferenceSite::TransitionEffectArtifactKind { transition } => {
                 write!(formatter, "an effect of transition `{transition}`")
             }
             ReferenceSite::QueueArtifact { queue }
@@ -297,6 +300,13 @@ pub enum Diagnostic {
         expected: String,
         actual: String,
     },
+    /// A `create_pull_request` effect named an artifact kind that is not backed
+    /// by Forge pull requests.
+    CreatePullRequestArtifactKindTargetMismatch {
+        transition: String,
+        artifact_kind: String,
+        target: String,
+    },
     /// More than one artifact kind for the same Forge target declares no
     /// identifying labels. A target may have at most one default (catch-all)
     /// kind, so the engine cannot decide which one admits an unlabeled artifact.
@@ -325,6 +335,7 @@ impl Diagnostic {
             | Diagnostic::ValidationBindingActionArtifactMismatch { .. }
             | Diagnostic::TransitionOutcomeUnauthorized { .. }
             | Diagnostic::TransitionOutcomeArtifactMismatch { .. }
+            | Diagnostic::CreatePullRequestArtifactKindTargetMismatch { .. }
             | Diagnostic::MultipleDefaultArtifactKinds { .. } => Severity::Error,
         }
     }
@@ -466,6 +477,14 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 formatter,
                 "transition `{transition}` routes verdict `{verdict}` to transition `{outcome_transition}` on artifact `{actual}`, but the primary transition acts on `{expected}`"
+            ),
+            Diagnostic::CreatePullRequestArtifactKindTargetMismatch {
+                transition,
+                artifact_kind,
+                target,
+            } => write!(
+                formatter,
+                "transition `{transition}` create_pull_request effect names artifact kind `{artifact_kind}`, but that kind targets `{target}` instead of `pull_request`"
             ),
             Diagnostic::MultipleDefaultArtifactKinds { target, kinds } => write!(
                 formatter,

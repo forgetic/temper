@@ -402,7 +402,7 @@ async fn verdict_only_outcome(
     let WorkspaceResult {
         verdict,
         summary,
-        title: _title,
+        title,
         body,
         review_body,
         children,
@@ -442,6 +442,7 @@ async fn verdict_only_outcome(
 
     JobOutcome::Verdict {
         verdict,
+        title,
         body: body.or(review_body),
         summary: summary.or_else(|| Some(format!("implemented {correlation_key}"))),
         children,

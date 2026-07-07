@@ -179,6 +179,7 @@ Worker returns the structured result for one assigned job.
 | `branch.name` | string | yes when `branch` is present | Pushed branch name. |
 | `branch.head_sha` | string | yes when `branch` is present | Git commit SHA at the branch head. |
 | `verdict` | string | no | Verdict chosen by a verdict job. Must be one of the assignment payload's `allowed_verdicts` when present. |
+| `title` | string | no | Agent-authored PR title. Without a verdict this is the implementation PR handoff title. With a verdict it is used only when the routed transition declares a metadata-driven `create_pull_request` PR artifact kind. |
 | `body` | string | no | Authored body accompanying a verdict, such as a rewritten issue spec or PR review body. |
 | `children` | array of objects | no | Workspace-authored child issues for breakdown verdicts such as `needs_breakdown`. Empty or absent means no children. |
 | `children[].slug` | string | yes | Stable per-child identifier within the result; seeds the child's correlation key and is referenced by sibling `depends_on` entries. |
@@ -199,18 +200,23 @@ role identity. It also routes declared verdicts through the compiled workflow an
 applies authored body, review, or child-issue effects when declared. The worker
 never calls the Forge API for PR create/update or artifact mutation.
 
-Verdict jobs are successful jobs whose result may carry `verdict` plus `body`
-or breakdown `children` and no `branch`; the allowed vocabulary comes from the
-assignment payload's `allowed_verdicts`. The daemon binds `children` only when
-the routed verdict transition declares a `create_issues` effect; a child's
+Verdict jobs are successful jobs whose result may carry `verdict` plus optional
+`title`/`body` or breakdown `children` and no `branch`; the allowed vocabulary
+comes from the assignment payload's `allowed_verdicts`. The daemon binds
+`children` only when the routed verdict transition declares a `create_issues`
+effect; a child's
 optional `target_repo` uses the same `owner/name` shape as daemon `--repo` and
 omits to the assignment's repository. Child `kind` defaults to `code`; when set,
 it must name a workflow issue artifact kind. The daemon stamps that kind into the
 child workflow metadata block when the body lacks one, preserving any existing
 metadata fields such as `target_branch`. If the body already carries a metadata
-`kind`, it is preserved. These result fields are optional for backward
-compatibility, and their addition does not change the protocol version: it
-remains `1`.
+`kind`, it is preserved. For routed issue verdicts whose transition declares
+`create_pull_request` with a PR `artifact_kind`, the daemon uses the source
+issue's `target_branch` workflow metadata as the PR head branch, the repository
+default branch as the PR base, derives labels from the named PR kind, and uses
+`title`/`body` as the PR handoff when that is unambiguous. These result fields
+are optional for backward compatibility, and their addition does not change the
+protocol version: it remains `1`.
 
 ### `release` — daemon → worker
 
