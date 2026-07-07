@@ -649,18 +649,20 @@ fn create_pr_with_body(
 }
 
 #[test]
-fn close_parent_issues_closes_open_same_repo_parent() {
+fn close_parent_issues_closes_open_same_repo_parents() {
     let root = TestRoot::new();
     let forge = root.forge();
     let workflow = close_parents_workflow();
     let repo = new_repo(&forge);
 
-    // Create a parent code issue with in-progress label.
-    let parent_number = create_issue(&forge, &repo, &["code", "in-progress"]);
+    let plan_parent = create_issue(&forge, &repo, &["code", "in-progress"]);
+    let feature_parent = create_issue(&forge, &repo, &["code", "in-progress"]);
 
-    // Create an implementation PR with metadata pointing to the parent.
     let metadata = temper_workflow::WorkflowMetadata {
-        parents: vec![ArtifactRef::same_repo(parent_number)],
+        parents: vec![
+            ArtifactRef::same_repo(plan_parent),
+            ArtifactRef::same_repo(feature_parent),
+        ],
         ..Default::default()
     };
     let block = temper_workflow::render_metadata_block(&metadata);
@@ -675,12 +677,13 @@ fn close_parent_issues_closes_open_same_repo_parent() {
     ))
     .expect("close_parent_issues executes on PR with parent metadata");
 
-    // Parent issue should now be closed and in-progress removed.
-    let parent = block_on(forge.get_issue_by_number(&repo, parent_number))
-        .expect("lookup succeeds")
-        .expect("parent issue exists");
-    assert_eq!(parent.state, IssueState::Closed);
-    assert!(!parent.labels.contains(&"in-progress".to_string()));
+    for parent_number in [plan_parent, feature_parent] {
+        let parent = block_on(forge.get_issue_by_number(&repo, parent_number))
+            .expect("lookup succeeds")
+            .expect("parent issue exists");
+        assert_eq!(parent.state, IssueState::Closed);
+        assert!(!parent.labels.contains(&"in-progress".to_string()));
+    }
 }
 
 #[test]

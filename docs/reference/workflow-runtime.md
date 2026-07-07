@@ -103,9 +103,10 @@ On the daemon verdict path, an issue transition with
 `create_pull_request.artifact_kind` is metadata-driven: before executing the
 transition, the daemon binds the PR source branch from the source issue's
 `WorkflowMetadata.target_branch`, targets the repository default branch, derives
-labels from the named PR kind, and writes PR metadata containing the kind and a
-parent link to the source issue. Missing target-branch metadata aborts before any
-labels or assignees are changed.
+labels from the named PR kind, and writes PR metadata containing the kind and
+parent links to the source issue followed by any de-duplicated parent refs
+already present on the source issue. Missing target-branch metadata aborts before
+any labels or assignees are changed.
 
 Post-merge `landed` and `alignment` labels are ordinary `add_label` effects on
 the merge transition. They survive on the closed PR and act as the planner
