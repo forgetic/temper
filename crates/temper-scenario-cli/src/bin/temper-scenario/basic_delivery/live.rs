@@ -104,7 +104,7 @@ fn copy_report_artifacts(
     evidence: &LiveBasicDeliveryEvidence,
     artifact_dir: &Path,
 ) -> Result<RetainedLogPaths, String> {
-    let root = artifact_dir.join("live-basic-delivery-artifacts");
+    let root = artifact_dir.join("live-manifest-artifacts");
     fs::create_dir_all(&root)
         .map_err(|error| format!("create live artifact directory {}: {error}", root.display()))?;
     let retained = RetainedLogPaths {
@@ -505,19 +505,19 @@ fn validate_env_temper_binary(name: &str, raw: std::ffi::OsString) -> Result<Pat
 fn validate_temper_binary(path: &Path, source: &str) -> Result<PathBuf, String> {
     if !path.exists() {
         return Err(format!(
-            "live basic-delivery {source} path does not exist: {}",
+            "live manifest runner {source} path does not exist: {}",
             path.display()
         ));
     }
     if !path.is_file() {
         return Err(format!(
-            "live basic-delivery {source} path is not a file: {}",
+            "live manifest runner {source} path is not a file: {}",
             path.display()
         ));
     }
     fs::canonicalize(path).map_err(|error| {
         format!(
-            "canonicalize live basic-delivery {source} path {}: {error}",
+            "canonicalize live manifest runner {source} path {}: {error}",
             path.display()
         )
     })
@@ -541,7 +541,7 @@ fn find_fallback_temper_binary() -> Result<PathBuf, String> {
         .collect::<Vec<_>>()
         .join("\n");
     Err(format!(
-        "could not resolve a standalone `temper` binary for live basic-delivery; pass --temper-bin <PATH>, set {PRIMARY_TEMPER_BIN_ENV}, or run `cargo dev-scenario-run`. Checked fallback candidates:\n{checked}"
+        "could not resolve a standalone `temper` binary for the live manifest runner; pass --temper-bin <PATH>, set {PRIMARY_TEMPER_BIN_ENV}, or run `cargo dev-scenario-run`. Checked fallback candidates:\n{checked}"
     ))
 }
 

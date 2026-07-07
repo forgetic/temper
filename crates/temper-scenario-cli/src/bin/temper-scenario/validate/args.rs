@@ -9,24 +9,26 @@ const DEFAULT_REPO: &str = "ai/temper";
 pub(super) const USAGE: &str = "\
 Run a validation bundle and render final PR validation artifacts from structured evidence.
 
-Usage: temper-scenario validate --pr <N> --sha <SHA> --scenario <PATH> --output-dir <DIR> [--tier <hermetic|live>] [--temper-bin <PATH>] [--repo <OWNER/NAME>]
+Usage: temper-scenario validate --pr <N> --sha <SHA> --scenario <PATH> --output-dir <DIR> [--tier <live|hermetic>] [--temper-bin <PATH>] [--repo <OWNER/NAME>]
 
 Options:
   --pr <N>               Pull request number under validation
   --sha <SHA>            Merged/main commit SHA under validation
   --scenario <PATH>      Scenario directory or manifest file to run
-  --tier <hermetic|live> Confidence tier to run (default: hermetic)
+  --tier <live|hermetic> Confidence tier to run (default: live)
   --temper-bin <PATH>    Standalone `temper` binary for live runners; when omitted, live runners resolve an existing binary or build `cargo build --bin temper`
   --output-dir <DIR>     Artifact directory for run evidence, hook logs, Markdown report, and JSON result
   --artifact-dir <DIR>   Alias for --output-dir
   --repo <OWNER/NAME>    Repository recorded in the structured validator result (default: ai/temper)
   -h, --help             Print help
 
-This command is the cohesive validator workflow: it runs the selected bundle,
-writes structured run evidence to the artifact directory, invokes the same
-validate-pr report builder against that evidence, and retains Markdown/JSON
-validation output. Lower-level `run --evidence-out` and `validate-pr
---run-evidence` remain available for manual use.";
+This command is the cohesive validator workflow: it runs the selected manifest
+bundle on the validation-grade live stack, writes structured run evidence to the
+artifact directory, invokes the same validate-pr report builder against that
+evidence, and retains Markdown/JSON validation output. Lower-level `run
+--evidence-out` and `validate-pr --run-evidence` remain available for manual
+use. The `manifest` runner is the only public runner; explicit `--tier hermetic`
+requests are rejected instead of substituting MemoryForge or in-process paths.";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(super) struct Args {
@@ -173,7 +175,7 @@ pub(super) fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         pr_number,
         sha,
         scenario,
-        tier: tier.unwrap_or(ScenarioTier::Hermetic),
+        tier: tier.unwrap_or(ScenarioTier::Live),
         tier_explicit,
         temper_bin,
         output_dir,
@@ -238,7 +240,7 @@ fn set_path(path: &mut Option<PathBuf>, value: &str, flag: &str) -> Result<(), (
 fn set_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
     let Some(parsed) = ScenarioTier::parse(value) else {
         eprintln!(
-            "temper-scenario validate: unknown --tier `{value}` (expected hermetic or live)\n\n{USAGE}"
+            "temper-scenario validate: unknown --tier `{value}` (expected live or hermetic)\n\n{USAGE}"
         );
         return Err(());
     };

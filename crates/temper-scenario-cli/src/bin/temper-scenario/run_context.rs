@@ -32,7 +32,7 @@ impl ScenarioTier {
     pub(super) fn description(self) -> &'static str {
         match self {
             Self::Hermetic => {
-                "fast in-process/memory runner; lower confidence than live; not a live Forgejo proof"
+                "unsupported legacy confidence selector; no registered scenario runner provides a hermetic, MemoryForge, or in-process substitute"
             }
             Self::Live => {
                 "validation-grade real Forgejo + real forgejo-runner CI + real Temper process + Jig fake LLM proof"

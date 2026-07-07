@@ -4,7 +4,7 @@ Target feature: #52 / PR #53, "Engineer PR handoff: carry agent-authored impleme
 
 ## Verdict
 
-**Pass when run on the live tier.** `scenarios/implementation-pr-handoff` selects `runner.uses = "manifest"` and uses real Forgejo, host `forgejo-runner` Actions CI readiness, a real standalone Temper process, and Jig fake LLM engineer responses. The previous MemoryForge/in-process runner is no longer selected by the scenario and the default hermetic tier is rejected.
+**Pass when run on the live tier.** `scenarios/implementation-pr-handoff` selects `runner.uses = "manifest"` and uses real Forgejo, host `forgejo-runner` Actions CI readiness, a real standalone Temper process, and Jig fake LLM engineer responses. The previous MemoryForge/in-process runner is no longer selected by the scenario, and an explicit hermetic tier request is rejected.
 
 ## Behavior contract
 

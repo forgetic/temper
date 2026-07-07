@@ -28,5 +28,5 @@ PR with the authored create handoff, refreshes an existing stale implementation
 PR without duplicating it, clears stale body text, and preserves workflow
 metadata linking each PR back to its source issue and correlation key.
 
-The default hermetic tier is intentionally rejected; this scenario no longer has
-a MemoryForge or in-process runner substitute.
+An explicit hermetic tier request is intentionally rejected; this scenario no
+longer has a MemoryForge or in-process runner substitute.

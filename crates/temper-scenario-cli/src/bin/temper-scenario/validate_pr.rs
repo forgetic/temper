@@ -23,24 +23,25 @@ const EX_USAGE: u8 = 64;
 const USAGE: &str = "\
 Write a temporary/manual post-merge validation Markdown report.
 
-Usage: temper-scenario validate-pr --pr <N> --sha <SHA> [--scenario <PATH>] [--run-evidence <PATH>] [--tier <hermetic|live>] [--temper-bin <PATH>] [--output-dir <DIR>]
+Usage: temper-scenario validate-pr --pr <N> --sha <SHA> [--scenario <PATH>] [--run-evidence <PATH>] [--tier <live|hermetic>] [--temper-bin <PATH>] [--output-dir <DIR>]
 
 Options:
   --pr <N>             Pull request number under validation
   --sha <SHA>          Merged/main commit SHA under validation
   --scenario <PATH>     Scenario directory or manifest file to check, and run when supported unless --run-evidence is supplied
   --run-evidence <PATH>  Previous run-evidence JSON file or directory to cite instead of rerunning scenario evidence
-  --tier <hermetic|live>  Scenario confidence tier to run or compare (default: hermetic)
-  --temper-bin <PATH>   Standalone `temper` binary for --tier live basic-delivery
+  --tier <live|hermetic>  Scenario confidence tier to run or compare (default: live)
+  --temper-bin <PATH>   Standalone `temper` binary for --tier live manifest scenarios
   --output-dir <DIR>    Directory for the Markdown report (default: current directory)
   -h, --help           Print help
 
 The bridge records local scenario evidence when available, including scenario
 source, the selected confidence tier, and manifest topology. Pass
 `--run-evidence <PATH>` to render from a previous `temper-scenario run
---evidence-out <PATH>` artifact without rerunning scenario evidence. The live tier for
-`basic-delivery` records Forgejo/CI/convergence/log evidence via the shared live
-harness. It does not fetch live Forgejo PR context or prove that the supplied
+--evidence-out <PATH>` artifact without rerunning scenario evidence. Direct
+`--scenario` runs use the single public `manifest` runner on the validation-grade
+live stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM.
+The command does not fetch live Forgejo PR context or prove that the supplied
 SHA is the current main commit.";
 
 pub(super) fn command(args: &[String]) -> ExitCode {
@@ -214,7 +215,7 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         sha,
         scenario,
         run_evidence,
-        tier: tier.unwrap_or(ScenarioTier::Hermetic),
+        tier: tier.unwrap_or(ScenarioTier::Live),
         tier_explicit,
         temper_bin,
         output_dir: output_dir.unwrap_or_else(|| PathBuf::from(".")),
@@ -236,7 +237,7 @@ fn flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a st
 fn set_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
     let Some(parsed) = ScenarioTier::parse(value) else {
         eprintln!(
-            "temper-scenario validate-pr: unknown --tier `{value}` (expected hermetic or live)\n\n{USAGE}"
+            "temper-scenario validate-pr: unknown --tier `{value}` (expected live or hermetic)\n\n{USAGE}"
         );
         return Err(());
     };

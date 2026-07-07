@@ -189,7 +189,25 @@ fn list_succeeds_for_checked_in_scenarios_directory() {
 }
 
 #[test]
-fn run_fails_clearly_for_unsupported_valid_scenario() {
+fn checked_in_scenarios_all_select_manifest_runner() {
+    let scenarios = workspace_root().join("scenarios");
+    for entry in std::fs::read_dir(&scenarios).expect("read scenarios") {
+        let entry = entry.expect("scenario entry");
+        let scenario_toml = entry.path().join("scenario.toml");
+        if !scenario_toml.is_file() {
+            continue;
+        }
+        let manifest = std::fs::read_to_string(&scenario_toml).expect("read scenario manifest");
+        assert!(
+            manifest.contains("[runner]\nuses = \"manifest\""),
+            "checked-in scenario must explicitly select manifest runner: {}",
+            scenario_toml.display()
+        );
+    }
+}
+
+#[test]
+fn run_fails_clearly_when_runner_selector_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scenarios = dir.path().join("scenarios");
     write_valid_scenario(
@@ -202,17 +220,21 @@ fn run_fails_clearly_for_unsupported_valid_scenario() {
 
     let output = temper_scenario(&["run", &scenarios.join("alpha").to_string_lossy()]);
 
-    assert!(!output.status.success(), "unsupported scenario should fail");
+    assert!(
+        !output.status.success(),
+        "missing runner selector should fail"
+    );
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(
-        stderr.contains("unsupported scenario `alpha`: unsupported runner `alpha`"),
+        stderr.contains("does not declare `[runner] uses = \"manifest\"`"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("legacy scenario-name fallback has been removed"),
         "{stderr}"
     );
     assert!(stderr.contains("supported runner ids:"), "{stderr}");
-    assert!(
-        stderr.contains("basic-delivery (tiers: hermetic, live)"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("manifest (tiers: live)"), "{stderr}");
 }
 
 #[test]
@@ -244,6 +266,8 @@ fn run_fails_clearly_for_unknown_runner_selector() {
         "{stderr}"
     );
     assert!(stderr.contains("supported runner ids:"), "{stderr}");
+    assert!(stderr.contains("manifest (tiers: live)"), "{stderr}");
+    assert!(!stderr.contains("basic-delivery (tiers"), "{stderr}");
 }
 
 #[test]
@@ -272,11 +296,8 @@ fn validate_pr_writes_report_and_prints_path() {
     ]);
 
     assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "missing runner selector should fail validation report"
     );
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
@@ -296,11 +317,15 @@ fn validate_pr_writes_report_and_prints_path() {
     ] {
         assert!(markdown.contains(section), "missing {section}:\n{markdown}");
     }
-    assert!(markdown.contains("Verdict: inconclusive"), "{markdown}");
+    assert!(markdown.contains("Verdict: failed"), "{markdown}");
     assert!(markdown.contains("**scenario check**"), "{markdown}");
     assert!(markdown.contains("No scenario run occurred"), "{markdown}");
     assert!(
-        markdown.contains("unsupported runner `alpha`"),
+        markdown.contains("does not declare `[runner] uses = \"manifest\"`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("legacy scenario-name fallback has been removed"),
         "{markdown}"
     );
     assert!(markdown.contains("supported runner ids:"), "{markdown}");

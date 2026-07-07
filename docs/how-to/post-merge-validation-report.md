@@ -7,7 +7,8 @@ merged. Opening, synchronizing, or reopening a pull request still uses the
 separate PR CI workflow in `.forgejo/workflows/ci.yml`.
 
 The post-merge job checks out the merged `main` commit for the close event,
-runs the validation-grade live `basic-delivery` lane, and writes a Markdown
+runs the validation-grade live manifest lane for `scenarios/basic-delivery`,
+and writes a Markdown
 report with the temporary bridge. Both the direct run and the report record that
 this is the checked-in scenario corpus, the `live` confidence tier, the manifest
 topology, Forgejo URL, issue/PR numbers, CI evidence, convergence timing, fake
@@ -22,7 +23,7 @@ cargo run -p temper-scenario-cli -- validate \
   --output-dir validation-artifacts/post-merge-pr-<merged-pr-number>
 ```
 
-For the live `basic-delivery` runner, `validate` resolves an existing
+For the live `manifest` runner, `validate` resolves an existing
 standalone `temper` binary or builds one with `cargo build --bin temper` before
 starting the live topology. Pass `--temper-bin <PATH>` only when you need to pin
 a prebuilt binary explicitly.
@@ -64,7 +65,7 @@ Inside that artifact, the Markdown report uses this layout:
 
 ```text
 validation-artifacts/post-merge-pr-<merged-pr-number>/
-├── live-basic-delivery-artifacts/        # live tier logs/artifacts when used
+├── live-manifest-artifacts/              # live tier logs/artifacts when used
 │   ├── init.log
 │   ├── repo-populate.log
 │   ├── standalone.log
@@ -109,5 +110,6 @@ cargo run -p temper-scenario-cli -- validate \
 Use the merged `main` SHA from the Forgejo run or PR page when reproducing an
 older report. The temporary report bridge records the supplied PR number and
 SHA; it does not fetch live Forgejo PR context or prove that the SHA is still
-the current tip of `main`. For a quick local smoke test that does not produce
-validation-grade evidence, run the same command with `--tier hermetic`.
+the current tip of `main`. The scenario command has no validation-grade
+hermetic substitute; use focused Rust tests for fast local coverage and reserve
+post-merge reports for the live manifest stack.

@@ -73,31 +73,29 @@ a concise `path: error: field: message` form suitable for CI logs.";
 const RUN_USAGE: &str = "\
 Run a supported Temper scenario at an explicit confidence tier.
 
-Usage: temper-scenario run [--tier <hermetic|live>] [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>
+Usage: temper-scenario run [--tier <live|hermetic>] [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>
 
 Arguments:
   SCENARIO_PATH  Scenario directory or manifest file to run
 
 Options:
-  --tier <hermetic|live>  Confidence tier to request (default: hermetic)
+  --tier <live|hermetic>  Confidence tier to request (default: live)
   --temper-bin <PATH>    Standalone `temper` binary for --tier live
   --evidence-out <PATH>  Write structured JSON run evidence to PATH
   -h, --help             Print help
 
-The hermetic tier is a fast in-process/memory runner and is lower confidence
-than a live Forgejo proof. The live manifest runner boots the validation-grade
-stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM. The
-manifest runner is live-only and rejects hermetic/MemoryForge/in-process
-substitutes instead of falling back.
+The only registered scenario runner is `manifest`, which boots the validation-grade
+stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM. It is
+live-only and rejects hermetic, MemoryForge, or in-process substitutes instead
+of falling back.
 
 For live manifest scenarios, pass --temper-bin <PATH>, set
 TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling target-dir `temper` binary.
 `cargo dev-scenario-run` builds and delegates to the live lane.
 
-Supported runner ids include `manifest` (live only) and `basic-delivery`.
-Manifests may select a reusable runner with `[runner] uses = \"...\"`; when
-that selector is absent, `run` falls back to the legacy manifest `name`.
-Unsupported scenario manifests fail clearly instead of being treated as passed.";
+Supported runner ids: `manifest` (live only). Manifests must select it with
+`[runner] uses = \"manifest\"`; when that selector is absent, `run` fails clearly
+because the legacy manifest `name` fallback has been removed.";
 
 fn main() -> ExitCode {
     run(env::args().skip(1))
@@ -502,7 +500,7 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
 
     Ok(RunParseResult::Args(RunArgs {
         path,
-        tier: tier.unwrap_or(ScenarioTier::Hermetic),
+        tier: tier.unwrap_or(ScenarioTier::Live),
         temper_bin,
         evidence_out,
     }))
@@ -523,7 +521,7 @@ fn run_flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'
 fn set_run_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
     let Some(parsed) = ScenarioTier::parse(value) else {
         eprintln!(
-            "temper-scenario run: unknown --tier `{value}` (expected hermetic or live)\n\n{RUN_USAGE}"
+            "temper-scenario run: unknown --tier `{value}` (expected live or hermetic)\n\n{RUN_USAGE}"
         );
         return Err(());
     };
