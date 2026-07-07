@@ -6,7 +6,7 @@ use temper_scenario_core::ScenarioManifest;
 
 use super::run_context::{ScenarioRunFacts, ScenarioTier};
 use super::run_evidence::{RunEvidenceArtifact, RunEvidenceContext};
-use super::{basic_delivery, codebase_memory_agent, manifest_runner};
+use super::{basic_delivery, manifest_runner};
 
 type HermeticRunAndPrint =
     fn(&Path, &Path, &ScenarioRunFacts, &RunEvidenceContext) -> Result<RunEvidenceArtifact, String>;
@@ -91,15 +91,6 @@ static RUNNERS: &[RunnerDefinition] = &[
             evidence_lines: basic_delivery::run_live_evidence_lines_for_report,
             requires_standalone_temper: true,
         }),
-    },
-    RunnerDefinition {
-        id: codebase_memory_agent::SCENARIO_NAME,
-        supported_tiers: &[ScenarioTier::Hermetic],
-        hermetic: Some(HermeticRunner {
-            run_and_print: codebase_memory_agent::run_and_print,
-            evidence_lines: codebase_memory_agent::run_evidence_lines,
-        }),
-        live: None,
     },
 ];
 

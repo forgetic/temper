@@ -320,6 +320,14 @@ impl WorkspaceScope {
         })
     }
 
+    pub(super) fn primary_root(&self) -> &Path {
+        &self.primary().root
+    }
+
+    pub(super) fn primary_actual_project(&self) -> String {
+        self.primary().actual_project()
+    }
+
     pub(super) fn list_projects_output(&self) -> ToolOutput {
         let text = serde_json::to_string_pretty(&self.details_json())
             .unwrap_or_else(|_| "{\"projects\":[]}".to_string());

@@ -311,6 +311,13 @@ pub(super) fn field_alias(key: &str) -> Option<&'static str> {
         "metadata_kind" | "metadata.kind" => Some("metadata.kind"),
         "metadata_parent_ref" | "metadata.parent.ref" => Some("metadata.parent.ref"),
         "correlation_key" | "correlation.key" => Some("correlation.key"),
+        "tool_name" | "tool.name" => Some("tool.name"),
+        "tool_model_visible" | "tool.model_visible" => Some("tool.model_visible"),
+        "mcp_tool" | "mcp.tool" => Some("mcp.tool"),
+        "mcp_project" | "mcp.project" => Some("mcp.project"),
+        "repo_root" | "repo.root" => Some("repo.root"),
+        "file_path" | "file.path" => Some("file.path"),
+        "result_preview" | "result.preview" => Some("result.preview"),
         _ => None,
     }
 }

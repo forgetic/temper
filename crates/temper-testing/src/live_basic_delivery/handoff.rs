@@ -318,6 +318,7 @@ pub(super) fn run_live_implementation_pr_handoff(
             refresh,
             stale_body: fixture.stale_body,
         }),
+        codebase_memory: None,
         logs,
     })
 }

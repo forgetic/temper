@@ -12,7 +12,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use temper_protocol_agent::{
-    AgentToolConfig, CodebaseMemoryMode, CodebaseMemoryToolConfig, WorkspaceContext,
+    AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
+    WorkspaceContext,
 };
 use tongs::error::{Error, Result};
 use tongs::model::{ContentBlock, TextContent};
@@ -226,7 +227,7 @@ pub async fn build_codebase_memory_toolset(
         }
     };
 
-    match start_toolset(codebase_memory, scope).await {
+    match start_toolset(codebase_memory, role, scope).await {
         Ok(toolset) => Ok(toolset),
         Err(error) if codebase_memory.mode == CodebaseMemoryMode::Auto => Ok(
             CodebaseMemoryToolset::disabled(CodebaseMemoryToolsetStatus::AutoUnavailable {
@@ -239,6 +240,7 @@ pub async fn build_codebase_memory_toolset(
 
 async fn start_toolset(
     config: &CodebaseMemoryToolConfig,
+    role: &str,
     mut scope: WorkspaceScope,
 ) -> std::result::Result<CodebaseMemoryToolset, McpError> {
     let startup_timeout = Duration::from_secs(config.startup_timeout_secs);
@@ -246,7 +248,20 @@ async fn start_toolset(
     let mcp_config = StdioMcpServerConfig::new(config.command.clone(), config.args.clone())
         .with_startup_timeout(startup_timeout)
         .with_call_timeout(call_timeout);
+    emit_agent_tool_configured(AgentToolConfigured {
+        role,
+        tool_name: "codebase_memory",
+        mode: codebase_memory_mode(config.mode),
+        index: codebase_memory_index(config.index),
+        model_visible: false,
+        repo_root: &scope.primary_root().display().to_string(),
+    });
     let client = StdioMcpClient::connect(mcp_config.clone()).await?;
+    emit_mcp_server_started(McpServerStarted {
+        tool_name: "codebase_memory",
+        command: &config.command,
+        repo_root: &scope.primary_root().display().to_string(),
+    });
     let advertised = client.list_tools(startup_timeout).await?;
     let mut setup_notes = Vec::new();
 
@@ -276,12 +291,28 @@ async fn start_toolset(
 
     for descriptor in advertised {
         let Some(allowed) = allowed_tool(&descriptor.name) else {
+            let hidden_name = format!("codebase_memory_{}", descriptor.name);
+            emit_agent_tool_hidden(AgentToolHidden {
+                role,
+                tool_name: &hidden_name,
+                mcp_tool: &descriptor.name,
+                model_visible: false,
+                reason: "not on safe model allowlist",
+            });
             continue;
         };
         let public_name = allowed.public_name.to_string();
         let default_project_key = default_project_key(allowed.mcp_name, &descriptor.input_schema);
         let description = description_for(*allowed, &descriptor.description, &scope);
         let parameters = scoped_parameters(&descriptor.input_schema, *allowed, &scope);
+        emit_agent_tool_exposed(AgentToolExposed {
+            role,
+            tool_name: &public_name,
+            mcp_tool: &descriptor.name,
+            model_visible: true,
+            repo_root: &scope.primary_root().display().to_string(),
+            mcp_project: &scope.primary_actual_project(),
+        });
         registered_tool_metadata.push(CodebaseMemoryToolMetadata {
             name: public_name.clone(),
             description: description.clone(),
@@ -312,6 +343,207 @@ fn allowed_tool(name: &str) -> Option<&'static AllowedCodebaseMemoryTool> {
 
 fn advertised_tool(advertised: &[McpToolDescriptor], name: &str) -> bool {
     advertised.iter().any(|descriptor| descriptor.name == name)
+}
+
+struct AgentToolConfigured<'a> {
+    role: &'a str,
+    tool_name: &'a str,
+    mode: &'a str,
+    index: &'a str,
+    model_visible: bool,
+    repo_root: &'a str,
+}
+
+struct AgentToolExposed<'a> {
+    role: &'a str,
+    tool_name: &'a str,
+    mcp_tool: &'a str,
+    model_visible: bool,
+    repo_root: &'a str,
+    mcp_project: &'a str,
+}
+
+struct AgentToolHidden<'a> {
+    role: &'a str,
+    tool_name: &'a str,
+    mcp_tool: &'a str,
+    model_visible: bool,
+    reason: &'a str,
+}
+
+struct McpServerStarted<'a> {
+    tool_name: &'a str,
+    command: &'a str,
+    repo_root: &'a str,
+}
+
+struct McpToolCalled<'a> {
+    tool_name: &'a str,
+    mcp_tool: &'a str,
+    mcp_project: &'a str,
+    repo_root: &'a str,
+    argument_preview: &'a str,
+}
+
+struct McpToolResult<'a> {
+    tool_name: &'a str,
+    mcp_tool: &'a str,
+    mcp_project: &'a str,
+    is_error: bool,
+    truncated: bool,
+    result_preview: &'a str,
+}
+
+fn emit_agent_tool_configured(ev: AgentToolConfigured<'_>) {
+    tracing::debug!(
+        target: "temper::agent",
+        service = "agent",
+        event = "agent.tool.configured",
+        role = ev.role,
+        tool.name = ev.tool_name,
+        tool.model_visible = ev.model_visible,
+        mode = ev.mode,
+        index = ev.index,
+        repo.root = ev.repo_root,
+        "agent:   tool configured: {} role={} mode={} index={}",
+        ev.tool_name,
+        ev.role,
+        ev.mode,
+        ev.index,
+    );
+}
+
+fn emit_agent_tool_exposed(ev: AgentToolExposed<'_>) {
+    tracing::debug!(
+        target: "temper::agent",
+        service = "agent",
+        event = "agent.tool.exposed",
+        role = ev.role,
+        tool.name = ev.tool_name,
+        mcp.tool = ev.mcp_tool,
+        tool.model_visible = ev.model_visible,
+        repo.root = ev.repo_root,
+        mcp.project = ev.mcp_project,
+        "agent:   tool exposed: {} -> {}",
+        ev.tool_name,
+        ev.mcp_tool,
+    );
+}
+
+fn emit_agent_tool_hidden(ev: AgentToolHidden<'_>) {
+    tracing::debug!(
+        target: "temper::agent",
+        service = "agent",
+        event = "agent.tool.hidden",
+        role = ev.role,
+        tool.name = ev.tool_name,
+        mcp.tool = ev.mcp_tool,
+        tool.model_visible = ev.model_visible,
+        reason = ev.reason,
+        "agent:   tool hidden: {} ({})",
+        ev.tool_name,
+        ev.reason,
+    );
+}
+
+fn emit_mcp_server_started(ev: McpServerStarted<'_>) {
+    tracing::debug!(
+        target: "temper::agent",
+        service = "agent",
+        event = "mcp.server.started",
+        tool.name = ev.tool_name,
+        command = ev.command,
+        repo.root = ev.repo_root,
+        "agent:   MCP server started: {}",
+        ev.tool_name,
+    );
+}
+
+fn emit_mcp_tool_called(ev: McpToolCalled<'_>) {
+    tracing::debug!(
+        target: "temper::agent",
+        service = "agent",
+        event = "mcp.tool.called",
+        tool.name = ev.tool_name,
+        mcp.tool = ev.mcp_tool,
+        mcp.project = ev.mcp_project,
+        repo.root = ev.repo_root,
+        argument.preview = ev.argument_preview,
+        "agent:   MCP tool called: {}",
+        ev.mcp_tool,
+    );
+}
+
+fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
+    tracing::debug!(
+        target: "temper::agent",
+        service = "agent",
+        event = "mcp.tool.result",
+        tool.name = ev.tool_name,
+        mcp.tool = ev.mcp_tool,
+        mcp.project = ev.mcp_project,
+        is_error = ev.is_error,
+        truncated = ev.truncated,
+        result.preview = ev.result_preview,
+        "agent:   MCP tool result: {} error={}",
+        ev.mcp_tool,
+        ev.is_error,
+    );
+}
+
+fn redacted_preview(text: &str, max_chars: usize) -> String {
+    if contains_secret_like(text) {
+        return "<redacted>".to_string();
+    }
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    if max_chars == 1 {
+        return "…".to_string();
+    }
+    let mut preview = normalized.chars().take(max_chars - 1).collect::<String>();
+    preview.push('…');
+    preview
+}
+
+fn contains_secret_like(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    [
+        "token=",
+        "token:",
+        "password=",
+        "password:",
+        "secret=",
+        "secret:",
+        "authorization=",
+        "authorization:",
+        "bearer ",
+        "api_key=",
+        "api-key=",
+        "auth=",
+        "-----begin ",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn codebase_memory_mode(mode: CodebaseMemoryMode) -> &'static str {
+    match mode {
+        CodebaseMemoryMode::Auto => "auto",
+        CodebaseMemoryMode::Required => "required",
+    }
+}
+
+fn codebase_memory_index(index: CodebaseMemoryIndex) -> &'static str {
+    match index {
+        CodebaseMemoryIndex::Off => "off",
+        CodebaseMemoryIndex::Background => "background",
+        CodebaseMemoryIndex::Blocking => "blocking",
+    }
 }
 
 struct CodebaseMemoryTool {
@@ -394,12 +626,36 @@ impl Tool for CodebaseMemoryTool {
             return Ok(self.scope.list_projects_output());
         }
 
+        let mcp_project = input
+            .get("project")
+            .or_else(|| input.get("repo"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let argument_preview = redacted_preview(&input.to_string(), 240);
+        emit_mcp_tool_called(McpToolCalled {
+            tool_name: &self.public_name,
+            mcp_tool: &self.mcp_name,
+            mcp_project: &mcp_project,
+            repo_root: &self.scope.primary_root().display().to_string(),
+            argument_preview: &argument_preview,
+        });
+
         let result = self
             .client
             .call_tool(&self.mcp_name, input, self.call_timeout)
             .await
             .map_err(|error| Error::tool(self.public_name.clone(), error))?;
         let bounded = bound_text(&result.text, MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
+        let result_preview = redacted_preview(&bounded.text, 240);
+        emit_mcp_tool_result(McpToolResult {
+            tool_name: &self.public_name,
+            mcp_tool: &self.mcp_name,
+            mcp_project: &mcp_project,
+            is_error: result.is_error,
+            truncated: bounded.truncated,
+            result_preview: &result_preview,
+        });
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {
                 text: bounded.text,

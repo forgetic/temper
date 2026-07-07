@@ -8,6 +8,7 @@
 //! the topology proof here so later CLI wiring can reuse the same evidence model.
 
 mod bundle;
+mod codebase_memory;
 mod convergence;
 mod fake_llm;
 mod handoff;
@@ -101,6 +102,9 @@ impl LiveBasicDeliveryHarness {
     pub fn run(&self) -> Result<LiveBasicDeliveryEvidence, String> {
         if self.scenario.is_implementation_pr_handoff() {
             return handoff::run_live_implementation_pr_handoff(self);
+        }
+        if self.scenario.declares_codebase_memory_contract() {
+            return codebase_memory::run_live_codebase_memory_agent(self);
         }
 
         let started = Instant::now();
@@ -281,6 +285,7 @@ impl LiveBasicDeliveryHarness {
             },
             final_state,
             handoff: None,
+            codebase_memory: None,
             logs,
         })
     }
@@ -339,6 +344,7 @@ pub struct LiveBasicDeliveryEvidence {
     pub fake_llm: FakeLlmEvidence,
     pub final_state: FinalStateEvidence,
     pub handoff: Option<LiveHandoffEvidence>,
+    pub codebase_memory: Option<LiveCodebaseMemoryEvidence>,
     pub logs: LiveLogPaths,
 }
 
@@ -432,6 +438,16 @@ pub struct FakeLlmEvidence {
     pub architect_requests: usize,
     pub engineer_requests: usize,
     pub log_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveCodebaseMemoryEvidence {
+    pub produced_file: String,
+    pub expected_result: String,
+    pub fake_mcp_log: PathBuf,
+    pub mcp_search_calls: usize,
+    pub safe_tools: Vec<String>,
+    pub hidden_tools: Vec<String>,
 }
 
 /// Terminal Forge state proving the scenario converged.

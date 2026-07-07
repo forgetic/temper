@@ -97,6 +97,7 @@ struct RetainedLogPaths {
     standalone_log: PathBuf,
     fake_llm_log: PathBuf,
     ci_diagnostics_log: PathBuf,
+    codebase_mcp_log: Option<PathBuf>,
 }
 
 fn copy_report_artifacts(
@@ -113,6 +114,10 @@ fn copy_report_artifacts(
         standalone_log: root.join("standalone.log"),
         fake_llm_log: root.join("fake-llm.log"),
         ci_diagnostics_log: root.join("ci-diagnostics.log"),
+        codebase_mcp_log: evidence
+            .codebase_memory
+            .as_ref()
+            .map(|_| root.join("fake-codebase-memory-mcp.jsonl")),
     };
     copy_log(&evidence.logs.init_log, &retained.init_log)?;
     copy_log(
@@ -125,6 +130,12 @@ fn copy_report_artifacts(
         &evidence.logs.ci_diagnostics_log,
         &retained.ci_diagnostics_log,
     )?;
+    if let (Some(codebase_memory), Some(destination)) = (
+        evidence.codebase_memory.as_ref(),
+        retained.codebase_mcp_log.as_ref(),
+    ) {
+        copy_log(&codebase_memory.fake_mcp_log, destination)?;
+    }
     Ok(retained)
 }
 
@@ -162,6 +173,15 @@ fn live_artifact(
     let ci_diagnostics_log = retained_logs
         .map(|logs| &logs.ci_diagnostics_log)
         .unwrap_or(&evidence.logs.ci_diagnostics_log);
+
+    let codebase_mcp_log = retained_logs
+        .and_then(|logs| logs.codebase_mcp_log.as_ref())
+        .or_else(|| {
+            evidence
+                .codebase_memory
+                .as_ref()
+                .map(|codebase_memory| &codebase_memory.fake_mcp_log)
+        });
 
     let final_state = if let Some(handoff) = evidence.handoff.as_ref() {
         run_evidence::FinalStateEvidence {
@@ -223,7 +243,14 @@ fn live_artifact(
         run_evidence::FinalStateEvidence {
             issues: vec![run_evidence::IssueStateEvidence {
                 number: evidence.final_state.issue.number,
-                id: Some("intake".to_string()),
+                id: Some(
+                    if evidence.codebase_memory.is_some() {
+                        "source"
+                    } else {
+                        "intake"
+                    }
+                    .to_string(),
+                ),
                 title: Some(evidence.final_state.issue.title.clone()),
                 state: Some(evidence.final_state.issue.state.clone()),
                 labels: evidence.final_state.issue.labels.clone(),
@@ -291,13 +318,17 @@ fn live_artifact(
         fake_llm_url: Some(evidence.fake_llm.base_url.clone()),
     });
     artifact.observability = Some(capture_observability(evidence, standalone_log));
+    let mut log_paths = vec![
+        init_log.display().to_string(),
+        repo_populate_log.display().to_string(),
+        standalone_log.display().to_string(),
+        fake_llm_log.display().to_string(),
+    ];
+    if let Some(codebase_mcp_log) = codebase_mcp_log {
+        log_paths.push(codebase_mcp_log.display().to_string());
+    }
     artifact.artifacts = run_evidence::ArtifactCollections {
-        log_paths: vec![
-            init_log.display().to_string(),
-            repo_populate_log.display().to_string(),
-            standalone_log.display().to_string(),
-            fake_llm_log.display().to_string(),
-        ],
+        log_paths,
         artifact_paths: vec![
             workspace_root.display().to_string(),
             ci_diagnostics_log.display().to_string(),
@@ -333,6 +364,14 @@ fn live_evidence_lines(
     let ci_diagnostics_log = retained_logs
         .map(|logs| &logs.ci_diagnostics_log)
         .unwrap_or(&evidence.logs.ci_diagnostics_log);
+    let codebase_mcp_log = retained_logs
+        .and_then(|logs| logs.codebase_mcp_log.as_ref())
+        .or_else(|| {
+            evidence
+                .codebase_memory
+                .as_ref()
+                .map(|codebase_memory| &codebase_memory.fake_mcp_log)
+        });
     let mut lines = vec![
         format!("Forgejo URL: {}", evidence.forge_url),
         format!(
@@ -371,6 +410,25 @@ fn live_evidence_lines(
             fake_llm_log.display()
         ),
     ];
+    if let Some(codebase_memory) = evidence.codebase_memory.as_ref() {
+        lines.extend([
+            format!(
+                "codebase-memory tools: exposed {:?}; hidden {:?}",
+                codebase_memory.safe_tools, codebase_memory.hidden_tools
+            ),
+            format!(
+                "codebase-memory MCP: search_code calls={} log={}",
+                codebase_memory.mcp_search_calls,
+                codebase_mcp_log
+                    .unwrap_or(&codebase_memory.fake_mcp_log)
+                    .display()
+            ),
+            format!(
+                "codebase-memory diff: engineer produced {} containing {}",
+                codebase_memory.produced_file, codebase_memory.expected_result
+            ),
+        ]);
+    }
     if let Some(handoff) = evidence.handoff.as_ref() {
         lines.extend([
             format!(

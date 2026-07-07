@@ -513,6 +513,71 @@ impl Workspace {
 
         Ok(!output.stdout.is_empty())
     }
+
+    /// Repository-relative paths changed in the working tree.
+    pub async fn status_paths(&self) -> Result<Vec<String>, WorkspaceError> {
+        let output = self
+            .run_workspace_git(
+                false,
+                "git status --porcelain=v1 --untracked-files=all".to_string(),
+                vec![
+                    OsString::from("status"),
+                    OsString::from("--porcelain=v1"),
+                    OsString::from("--untracked-files=all"),
+                ],
+            )
+            .await?;
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|error| WorkspaceError::Utf8(error.to_string()))?;
+        Ok(status_porcelain_paths(&stdout))
+    }
+
+    /// Repository-relative paths whose trees differ from the fetched base branch.
+    pub async fn diff_paths_from_base(&self) -> Result<Vec<String>, WorkspaceError> {
+        let base = format!("origin/{}", self.base_branch);
+        self.diff_paths_from_ref(&base).await
+    }
+
+    /// Repository-relative paths whose HEAD tree differs from another commit/ref.
+    pub async fn diff_paths_from_ref(
+        &self,
+        reference: &str,
+    ) -> Result<Vec<String>, WorkspaceError> {
+        let output = self
+            .run_workspace_git(
+                false,
+                format!("git diff --name-only {reference} HEAD"),
+                vec![
+                    OsString::from("diff"),
+                    OsString::from("--name-only"),
+                    OsString::from(reference),
+                    OsString::from("HEAD"),
+                ],
+            )
+            .await?;
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|error| WorkspaceError::Utf8(error.to_string()))?;
+        Ok(stdout
+            .lines()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+}
+
+fn status_porcelain_paths(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let path = line.get(3..)?.trim();
+            if path.is_empty() {
+                None
+            } else {
+                Some(path.rsplit(" -> ").next().unwrap_or(path).to_string())
+            }
+        })
+        .collect()
 }
 
 fn validate_repo(repo: &str) -> Result<(), WorkspaceError> {

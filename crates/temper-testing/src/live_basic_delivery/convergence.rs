@@ -294,7 +294,7 @@ fn verify_metadata(pr: &PullRequest, issue: ItemNumber) -> Result<(), String> {
     Ok(())
 }
 
-async fn completed_ci_jobs(
+pub(super) async fn completed_ci_jobs(
     forge: &ForgejoForge,
     repository: &RepositoryId,
     pr: &PullRequest,
@@ -359,7 +359,7 @@ pub(super) fn ci_diagnostics(forge: &ForgejoForge, repository: &RepositoryId) ->
     })
 }
 
-fn issue_evidence(issue: &Issue) -> IssueEvidence {
+pub(super) fn issue_evidence(issue: &Issue) -> IssueEvidence {
     IssueEvidence {
         number: issue.number.get(),
         title: issue.title.clone(),
@@ -368,7 +368,7 @@ fn issue_evidence(issue: &Issue) -> IssueEvidence {
     }
 }
 
-fn pr_evidence(pr: &PullRequest) -> PullRequestEvidence {
+pub(super) fn pr_evidence(pr: &PullRequest) -> PullRequestEvidence {
     PullRequestEvidence {
         number: pr.number.get(),
         title: pr.title.clone(),
@@ -382,7 +382,7 @@ fn pr_evidence(pr: &PullRequest) -> PullRequestEvidence {
     }
 }
 
-fn ci_job_evidence(job: &CiJob) -> CiJobEvidence {
+pub(super) fn ci_job_evidence(job: &CiJob) -> CiJobEvidence {
     CiJobEvidence {
         name: job.name.clone(),
         status: format!("{:?}", job.status),
@@ -391,7 +391,7 @@ fn ci_job_evidence(job: &CiJob) -> CiJobEvidence {
     }
 }
 
-fn require_labels(labels: &[String], required: &[&str]) -> Result<(), String> {
+pub(super) fn require_labels(labels: &[String], required: &[&str]) -> Result<(), String> {
     for required in required {
         if !labels.iter().any(|label| label == required) {
             return Err(format!("missing label `{required}` from {labels:?}"));
@@ -400,7 +400,7 @@ fn require_labels(labels: &[String], required: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn reject_labels(labels: &[String], rejected: &[&str]) -> Result<(), String> {
+pub(super) fn reject_labels(labels: &[String], rejected: &[&str]) -> Result<(), String> {
     for rejected in rejected {
         if labels.iter().any(|label| label == rejected) {
             return Err(format!("unexpected label `{rejected}` in {labels:?}"));
@@ -409,7 +409,7 @@ fn reject_labels(labels: &[String], rejected: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn poll_until<T>(
+pub(super) fn poll_until<T>(
     deadline: Instant,
     standalone: &mut ChildGuard,
     mut assert: impl FnMut() -> Result<T, String>,

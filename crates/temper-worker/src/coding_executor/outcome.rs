@@ -10,6 +10,30 @@ use crate::pre_push::fingerprint_writable_repos;
 
 use super::{PreparedRepo, failure, workspace_failure};
 
+struct WorkspaceDiffProduced<'a> {
+    repo: &'a str,
+    repo_root: &'a str,
+    file_path: &'a str,
+    changed_files: &'a str,
+    changed_count: usize,
+}
+
+fn emit_workspace_diff_produced(ev: WorkspaceDiffProduced<'_>) {
+    tracing::debug!(
+        target: "temper::worker",
+        service = "worker",
+        event = "workspace.diff.produced",
+        repo = ev.repo,
+        repo.root = ev.repo_root,
+        file.path = ev.file_path,
+        changed.files = ev.changed_files,
+        changed_count = ev.changed_count,
+        "worker:  workspace diff produced: {} changed file(s) in {}",
+        ev.changed_count,
+        ev.repo,
+    );
+}
+
 pub(super) struct WritableOutcomeRequest<'a> {
     pub(super) prepared: &'a [PreparedRepo],
     pub(super) result: WorkspaceResult,
@@ -276,6 +300,7 @@ async fn push_writable_repo(
     if !repo_produced_diff(prepared, has_tree_changes, pull_request_fix).await? {
         return Ok(None);
     }
+    emit_produced_diff(prepared, has_tree_changes, pull_request_fix).await?;
     if has_tree_changes {
         let message = if pull_request_fix {
             pr_fix_commit_message(coordination_key, action)
@@ -300,6 +325,42 @@ async fn push_writable_repo(
             head_sha,
         },
     }))
+}
+
+async fn emit_produced_diff(
+    prepared: &PreparedRepo,
+    has_tree_changes: bool,
+    pull_request_fix: bool,
+) -> Result<(), JobOutcome> {
+    let paths = if has_tree_changes {
+        prepared
+            .workspace
+            .status_paths()
+            .await
+            .map_err(|error| workspace_failure("inspect workspace changed paths", error))?
+    } else if pull_request_fix {
+        prepared
+            .workspace
+            .diff_paths_from_ref(&prepared.start_head_sha)
+            .await
+            .map_err(|error| workspace_failure("inspect workspace diff paths", error))?
+    } else {
+        prepared
+            .workspace
+            .diff_paths_from_base()
+            .await
+            .map_err(|error| workspace_failure("inspect workspace diff paths", error))?
+    };
+    let first = paths.first().cloned().unwrap_or_default();
+    let joined = paths.join(",");
+    emit_workspace_diff_produced(WorkspaceDiffProduced {
+        repo: &prepared.repo,
+        repo_root: &prepared.workspace.path().display().to_string(),
+        file_path: &first,
+        changed_files: &joined,
+        changed_count: paths.len(),
+    });
+    Ok(())
 }
 
 async fn repo_has_tree_changes(prepared: &PreparedRepo) -> Result<bool, JobOutcome> {

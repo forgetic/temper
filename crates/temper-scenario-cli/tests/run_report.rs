@@ -424,6 +424,68 @@ fn run_live_checked_in_implementation_pr_handoff_selects_manifest_before_temper_
 }
 
 #[test]
+fn checked_in_codebase_memory_agent_rejects_default_hermetic_manifest_runner() {
+    let scenario = workspace_root().join("scenarios/codebase-memory-agent");
+
+    let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
+
+    assert!(
+        !output.status.success(),
+        "manifest runner must reject default hermetic tier"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("unsupported tier `hermetic` for runner `manifest`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("runner.uses"), "{stderr}");
+    assert!(stderr.contains("supported tiers: live"), "{stderr}");
+    assert!(
+        stderr.contains("no hermetic, MemoryForge, or in-process substitute"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("codebase-memory-agent (tiers: hermetic)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn run_live_checked_in_codebase_memory_agent_selects_manifest_before_temper_binary() {
+    let scenario = workspace_root().join("scenarios/codebase-memory-agent");
+    let missing_temper = tempfile::tempdir()
+        .expect("tempdir")
+        .path()
+        .join("missing-temper");
+
+    let output = temper_scenario(&[
+        "run",
+        "--tier",
+        "live",
+        "--temper-bin",
+        &missing_temper.to_string_lossy(),
+        &scenario.to_string_lossy(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "missing live temper binary should fail"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("--temper-bin path does not exist"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("missing-temper"), "{stderr}");
+    assert!(
+        !stderr.contains("codebase-memory-agent (tiers: hermetic)"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn validate_pr_report_records_ephemeral_source_tier_and_topology() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bundle = dir.path().join("basic-delivery-copy");
