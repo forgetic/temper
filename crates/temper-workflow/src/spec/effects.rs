@@ -88,9 +88,17 @@ pub enum RawEffect {
     /// `correlation_key`, when present, is the base key under which the children
     /// are made idempotent; each child derives a stable per-child key from it so
     /// a retry reuses the existing children instead of duplicating them.
+    ///
+    /// `record_parent_dependencies`, when true, records every created child as a
+    /// dependency of the source issue after all children exist and sibling
+    /// dependency slugs have been linked. The default `false` preserves legacy
+    /// same-repository fan-out behavior, while cross-repository fan-outs continue
+    /// to record parent dependencies for compatibility.
     CreateIssues {
         #[serde(default)]
         correlation_key: Option<String>,
+        #[serde(default)]
+        record_parent_dependencies: bool,
     },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,

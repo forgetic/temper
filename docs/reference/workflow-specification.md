@@ -77,6 +77,15 @@ validation requires that kind to exist and target `pull_request`, allowing
 verdict-driven runtimes to derive labels and metadata for PR artifacts such as a
 feature-branch landing PR without requiring a worker-produced diff.
 
+A `create_issues` effect creates one or more child issues from the workspace
+result. It accepts an optional `correlation_key` for idempotent child creation
+and an optional `record_parent_dependencies` boolean. The default `false`
+preserves legacy same-repository fan-out behavior. When set to `true`, the
+executor records every created child as dependency metadata on the source issue
+after all children exist and sibling dependency slugs have been linked. Use this
+for plan-completion issues whose `dependencies_resolved` gate should remain
+blocked until their architect-created code/validation children close or land.
+
 ## Queue filters
 
 `labels` are conjunctive required labels; `excluded_labels` are labels that must

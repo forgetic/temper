@@ -46,6 +46,8 @@ variant. Implemented transition effects are:
 - `CreateComment`;
 - `CreatePullRequest` with transition-bound runtime input and optional PR
   artifact-kind metadata;
+- `CreateIssues` with transition-bound child issue input, idempotent child keys,
+  sibling dependency metadata, and optional source-issue dependency recording;
 - `RequestReviewers` with role-to-user resolution;
 - `SubmitReview` (`approved`, `changes_requested`, `commented`, or `pending`,
   though Forgejo rejects pending submission);
@@ -55,10 +57,10 @@ variant. Implemented transition effects are:
 executor; lease mutation goes through `LeaseManager`.
 
 Effect application order is intentional: idempotent comments first, PR creation
-next, reviewer requests and review submissions, PR merge, then labels and
-assignees together in one backend update. Creates and merges therefore happen
-before the label commit point, while retries can still finish the state
-projection.
+next, child issue creation and sibling/parent dependency linking, reviewer
+requests and review submissions, PR merge, then labels and assignees together in
+one backend update. Creates and merges therefore happen before the label commit
+point, while retries can still finish the state projection.
 
 ## Idempotency rules
 
@@ -74,7 +76,11 @@ projection.
 - `ensure_issue`, `ensure_issue_with_parent`, and `ensure_pull_request` stamp a
   correlation key into workflow metadata before creating, search explicit states
   with bounded summary queries, and parse exact metadata before returning an
-  existing artifact.
+  existing artifact. `create_issues` derives one stable key per child, validates
+  sibling dependency slugs before mutation, creates/ensures every child before
+  linking dependencies, and can record the child set on the source issue when
+  `record_parent_dependencies: true`; retrying reuses children and appends no
+  duplicate dependency refs.
 - `MergePullRequest` is skipped when the freshly loaded PR is already merged. A
   merge `Conflict` is re-read: already merged continues post-merge projection,
   missing/closed is stale, and open/unmerged becomes `MergeConflict`.

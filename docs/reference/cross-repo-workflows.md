@@ -61,6 +61,15 @@ scripted architect fan-out. Children without `target_repo` keep the legacy
 same-repository key/backref shape unless the parent dependency list must qualify
 them because a sibling crossed repositories.
 
+Workflows may opt same-repository fan-outs into parent dependency recording with
+`"record_parent_dependencies": true` on the `create_issues` effect. With that
+flag, the source issue records every created child after all children exist and
+sibling dependencies have been linked. Same-repository children use the compact
+same-repository metadata ref; children created in another repository use a
+repo-qualified ref. The existing cross-repository recording path still runs for
+fan-outs that cross repositories, but the opt-in is applied in a single parent
+metadata pass so a child is not appended twice.
+
 ## Relation and dependency semantics
 
 `parent` and `produced_pr` relations are metadata-projected. `dependency`

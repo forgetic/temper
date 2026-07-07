@@ -206,7 +206,10 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                     body,
                 });
             }
-            WorkflowEffect::CreateIssues { correlation_key } => {
+            WorkflowEffect::CreateIssues {
+                correlation_key,
+                record_parent_dependencies,
+            } => {
                 let effect_index = counters.create_issues;
                 counters.create_issues += 1;
                 // A create is not naturally idempotent, so — like
@@ -236,6 +239,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 prepared.issue_creates.push(PreparedCreateIssues {
                     base_correlation_key,
                     children,
+                    record_parent_dependencies: *record_parent_dependencies,
                 });
             }
             WorkflowEffect::MergePullRequest => {

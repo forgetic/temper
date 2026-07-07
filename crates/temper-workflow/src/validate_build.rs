@@ -286,8 +286,12 @@ fn build_effect(effect: &RawEffect) -> Effect {
             decision: *decision,
             correlation_key: correlation_key.clone(),
         },
-        RawEffect::CreateIssues { correlation_key } => Effect::CreateIssues {
+        RawEffect::CreateIssues {
+            correlation_key,
+            record_parent_dependencies,
+        } => Effect::CreateIssues {
             correlation_key: correlation_key.clone(),
+            record_parent_dependencies: *record_parent_dependencies,
         },
         RawEffect::MergePullRequest => Effect::MergePullRequest,
         RawEffect::CloseParentIssues => Effect::CloseParentIssues,

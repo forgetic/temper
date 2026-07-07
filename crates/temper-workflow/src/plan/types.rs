@@ -16,8 +16,9 @@ use temper_forge::ReviewDecision;
 /// except the create variants, which request a brand-new artifact.
 ///
 /// Transition specs can produce label, assignee, comment, pull-request create,
-/// and merge effects. The executor applies those runtime effects except for the
-/// lease placeholders, which are still rejected as unsupported before mutation.
+/// issue fan-out, and merge effects. The executor applies those runtime effects
+/// except for the lease placeholders, which are still rejected as unsupported
+/// before mutation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkflowEffect {
     /// Add a label to the target artifact. Produced from an `add_label` effect.
@@ -65,7 +66,12 @@ pub enum WorkflowEffect {
     /// relations between them) come from runtime context in the execution phase,
     /// exactly as `CreatePullRequest` reads its head. The optional correlation
     /// key is the base under which each child is made idempotent across retries.
-    CreateIssues { correlation_key: Option<String> },
+    /// `record_parent_dependencies` opts same-repository fan-outs into recording
+    /// every child as a dependency ref on the source issue.
+    CreateIssues {
+        correlation_key: Option<String>,
+        record_parent_dependencies: bool,
+    },
     /// Set or refresh the claim lease on the target artifact.
     ///
     /// Placeholder: leases are modeled in [`crate::metadata`] but no transition
