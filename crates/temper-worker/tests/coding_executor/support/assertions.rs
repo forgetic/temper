@@ -86,7 +86,25 @@ pub fn expect_failure_class(outcome: JobOutcome, expected: FailureClass) -> Stri
 }
 
 pub fn assert_no_origin_branch(fixture: &Fixture, branch_name: &str) {
-    let output = Command::new("git")
+    let output = origin_branch_ref(fixture, branch_name);
+    assert!(
+        !output.status.success(),
+        "origin unexpectedly has branch {branch_name}: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+pub fn assert_origin_branch_exists(fixture: &Fixture, branch_name: &str) {
+    let output = origin_branch_ref(fixture, branch_name);
+    assert!(
+        output.status.success(),
+        "origin missing branch {branch_name}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn origin_branch_ref(fixture: &Fixture, branch_name: &str) -> std::process::Output {
+    Command::new("git")
         .args([
             "-C",
             path_str(&fixture.origin),
@@ -95,12 +113,7 @@ pub fn assert_no_origin_branch(fixture: &Fixture, branch_name: &str) {
             &format!("refs/heads/{branch_name}"),
         ])
         .output()
-        .expect("run git show-ref");
-    assert!(
-        !output.status.success(),
-        "origin unexpectedly has branch {branch_name}: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
+        .expect("run git show-ref")
 }
 
 pub fn assert_no_extra_origin_head_branches(fixture: &Fixture, expected: &[&str]) {

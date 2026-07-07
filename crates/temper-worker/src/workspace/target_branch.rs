@@ -4,10 +4,10 @@ use super::{Workspace, WorkspaceError};
 
 impl Workspace {
     /// Ensures the configured base branch exists on the forge, creating it
-    /// from the repository default branch when it is missing. This is only for
-    /// issue-backed writable workspaces whose implementation PR target can be a
-    /// feature branch declared in workflow metadata; callers deliberately avoid
-    /// invoking it for read-only siblings and PR-head repair/review checkouts.
+    /// from the repository default branch when it is missing. Issue-backed jobs
+    /// use this when workflow metadata names a feature branch before any PR has
+    /// created it. Callers deliberately avoid invoking it for read-only sibling
+    /// repositories and PR-head repair/review checkouts.
     pub async fn ensure_base_branch_exists_from_default(
         &self,
         default_branch: &str,

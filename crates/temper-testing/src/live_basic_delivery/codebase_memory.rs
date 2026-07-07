@@ -210,6 +210,7 @@ pub(super) fn run_live_codebase_memory_agent(
                 "codebase_memory_delete_project".to_string(),
             ],
         }),
+        plan_feature: None,
         logs,
     })
 }

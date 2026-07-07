@@ -183,7 +183,9 @@ fn live_artifact(
                 .map(|codebase_memory| &codebase_memory.fake_mcp_log)
         });
 
-    let final_state = if let Some(handoff) = evidence.handoff.as_ref() {
+    let final_state = if let Some(plan) = evidence.plan_feature.as_ref() {
+        super::plan_artifact::final_state(evidence, plan)
+    } else if let Some(handoff) = evidence.handoff.as_ref() {
         run_evidence::FinalStateEvidence {
             issues: vec![
                 run_evidence::IssueStateEvidence {
@@ -428,6 +430,9 @@ fn live_evidence_lines(
                 codebase_memory.produced_file, codebase_memory.expected_result
             ),
         ]);
+    }
+    if let Some(plan) = evidence.plan_feature.as_ref() {
+        lines.extend(super::plan_artifact::evidence_lines(plan));
     }
     if let Some(handoff) = evidence.handoff.as_ref() {
         lines.extend([

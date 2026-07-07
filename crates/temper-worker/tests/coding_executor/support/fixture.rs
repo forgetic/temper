@@ -205,6 +205,11 @@ pub struct TestJobArtifactSnapshot {
 }
 
 impl TestJobContext {
+    pub fn with_base_branch(mut self, base_branch: &str) -> Self {
+        self.base_branch = base_branch.to_string();
+        self
+    }
+
     /// Serialize into the v2 `JobContext` wire shape (the workspace manifest
     /// carries the per-repo branch data; this is exactly what the daemon emits
     /// and the coding executor parses).

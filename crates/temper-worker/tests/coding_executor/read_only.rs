@@ -24,6 +24,29 @@ fn read_only_job_returns_verdict_and_body() {
 }
 
 #[test]
+fn read_only_job_materializes_missing_target_base_without_head_push() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReadOnlyVerdict.runner(), true);
+        let context =
+            read_only_job_context("agent/plan-7", "plan-7").with_base_branch("feature/plan-7");
+
+        let (verdict, body, summary, children) = expect_verdict(
+            executor
+                .execute(assign_with_context("plan-7", context))
+                .await,
+        );
+
+        assert_eq!(verdict, "ready_code");
+        assert_eq!(body.as_deref(), Some("rewritten"));
+        assert_eq!(summary.as_deref(), Some("did triage"));
+        assert!(children.is_empty());
+        assert_origin_branch_exists(&fixture, "feature/plan-7");
+        assert_no_origin_branch(&fixture, "agent/plan-7");
+    });
+}
+
+#[test]
 fn read_only_job_with_diff_still_returns_verdict_without_push() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
