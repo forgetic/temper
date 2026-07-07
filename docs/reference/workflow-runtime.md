@@ -47,7 +47,10 @@ variant. Implemented transition effects are:
 - `CreatePullRequest` with transition-bound runtime input and optional PR
   artifact-kind metadata;
 - `CreateIssues` with transition-bound child issue input, idempotent child keys,
-  sibling dependency metadata, and optional source-issue dependency recording;
+  sibling dependency metadata, optional source-issue dependency recording, and
+  child workflow metadata that preserves explicit child `target_branch` values
+  while inheriting a non-empty source issue `target_branch` when the child omits
+  one;
 - `RequestReviewers` with role-to-user resolution;
 - `SubmitReview` (`approved`, `changes_requested`, `commented`, or `pending`,
   though Forgejo rejects pending submission);
@@ -77,10 +80,12 @@ point, while retries can still finish the state projection.
   correlation key into workflow metadata before creating, search explicit states
   with bounded summary queries, and parse exact metadata before returning an
   existing artifact. `create_issues` derives one stable key per child, validates
-  sibling dependency slugs before mutation, creates/ensures every child before
-  linking dependencies, and can record the child set on the source issue when
-  `record_parent_dependencies: true`; retrying reuses children and appends no
-  duplicate dependency refs.
+  sibling dependency slugs before mutation, preserves explicit child workflow
+  metadata such as `target_branch`, inherits the source issue's non-empty
+  `target_branch` for child issues that omit it, creates/ensures every child
+  before linking dependencies, and can record the child set on the source issue
+  when `record_parent_dependencies: true`; retrying reuses children and appends
+  no duplicate dependency refs.
 - `MergePullRequest` is skipped when the freshly loaded PR is already merged. A
   merge `Conflict` is re-read: already merged continues post-merge projection,
   missing/closed is stale, and open/unmerged becomes `MergeConflict`.

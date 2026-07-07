@@ -208,8 +208,10 @@ effect; a child's
 optional `target_repo` uses the same `owner/name` shape as daemon `--repo` and
 omits to the assignment's repository. Child `kind` defaults to `code`; when set,
 it must name a workflow issue artifact kind. The daemon stamps that kind into the
-child workflow metadata block when the body lacks one, preserving any existing
-metadata fields such as `target_branch`. If the body already carries a metadata
+child workflow metadata block when the body lacks one, preserving existing
+metadata fields. An explicit non-empty child metadata `target_branch` is kept;
+otherwise, a non-empty source issue `target_branch` is inherited into the child
+metadata. If the body already carries a metadata
 `kind`, it is preserved. For routed issue verdicts whose transition declares
 `create_pull_request` with a PR `artifact_kind`, the daemon uses the source
 issue's `target_branch` workflow metadata as the PR head branch, the repository
