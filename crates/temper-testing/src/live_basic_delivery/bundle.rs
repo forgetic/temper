@@ -92,6 +92,15 @@ impl ScenarioBundle {
         })
     }
 
+    pub fn is_implementation_pr_handoff(&self) -> bool {
+        self.workflow_name == "implementation-pr-handoff"
+            || self
+                .scenario_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "implementation-pr-handoff")
+    }
+
     /// Validates that the scenario workflow fixture is the canonical bundled
     /// basic-delivery workflow. This preserves the live proof's contract with
     /// `temper init --workflow basic-delivery` while letting the harness load the
@@ -289,16 +298,25 @@ fn split_repo_slug(slug: &str) -> Result<(String, String), String> {
 }
 
 fn intake_fixture(scenario_path: &Path, manifest: &TomlValue) -> Result<IntakeFixture, String> {
-    let issue = manifest
+    let issues = manifest
         .get("issues")
         .and_then(TomlValue::as_array)
-        .and_then(|issues| {
+        .ok_or_else(|| "manifest is missing [[issues]]".to_string())?;
+    let issue = issues
+        .iter()
+        .filter_map(TomlValue::as_table)
+        .find(|issue| {
+            issue.get("kind").and_then(TomlValue::as_str) == Some("intake")
+                || issue.get("id").and_then(TomlValue::as_str) == Some("intake")
+        })
+        .or_else(|| {
             issues.iter().filter_map(TomlValue::as_table).find(|issue| {
-                issue.get("kind").and_then(TomlValue::as_str) == Some("intake")
-                    || issue.get("id").and_then(TomlValue::as_str) == Some("intake")
+                issue.get("id").and_then(TomlValue::as_str) == Some("source")
+                    || issue.get("id").and_then(TomlValue::as_str) == Some("create")
+                    || issue.get("kind").and_then(TomlValue::as_str) == Some("code")
             })
         })
-        .ok_or_else(|| "basic-delivery manifest has no intake issue fixture".to_string())?;
+        .ok_or_else(|| "manifest has no intake/source issue fixture".to_string())?;
     let title = issue
         .get("title")
         .and_then(TomlValue::as_str)

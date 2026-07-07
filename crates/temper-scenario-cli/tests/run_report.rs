@@ -362,65 +362,64 @@ fn run_rejects_unknown_tier() {
 }
 
 #[test]
-fn run_rejects_unsupported_tier_from_registry() {
-    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
-
-    let output = temper_scenario(&["run", "--tier", "live", &scenario.to_string_lossy()]);
-
-    assert!(!output.status.success(), "unsupported tier should fail");
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(
-        stderr.contains("unsupported tier `live` for runner `implementation-pr-handoff`"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("supported tiers: hermetic"), "{stderr}");
-    assert!(stderr.contains("supported runner ids:"), "{stderr}");
-    assert!(
-        stderr.contains("basic-delivery (tiers: hermetic, live)"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn run_succeeds_for_checked_in_implementation_pr_handoff_scenario() {
+fn checked_in_implementation_pr_handoff_rejects_default_hermetic_manifest_runner() {
     let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
 
     let output = temper_scenario(&["run", &scenario.to_string_lossy()]);
 
     assert!(
-        output.status.success(),
-        "status: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "manifest runner must reject default hermetic tier"
     );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(
-        stdout.contains("scenario: implementation-pr-handoff"),
-        "{stdout}"
+        stderr.contains("unsupported tier `hermetic` for runner `manifest`"),
+        "{stderr}"
     );
-    assert!(stdout.contains("source: checked-in scenario"), "{stdout}");
-    assert!(stdout.contains("confidence tier: hermetic"), "{stdout}");
+    assert!(stderr.contains("runner.uses"), "{stderr}");
+    assert!(stderr.contains("supported tiers: live"), "{stderr}");
     assert!(
-        stdout.contains("kind: single-repo-in-memory-forge"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("verdict: passed"), "{stdout}");
-    assert!(stdout.contains("create authored PR title/body"), "{stdout}");
-    assert!(stdout.contains("Implement durable PR handoff"), "{stdout}");
-    assert!(
-        stdout.contains("refresh authored PR title/body"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("Implement refreshed handoff"), "{stdout}");
-    assert!(
-        stdout.contains("workflow metadata/source relation"),
-        "{stdout}"
+        stderr.contains("no hermetic, MemoryForge, or in-process substitute"),
+        "{stderr}"
     );
     assert!(
-        stdout.contains("metadata kind verified: implementation_pr"),
-        "{stdout}"
+        !stderr.contains("implementation-pr-handoff (tiers: hermetic)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn run_live_checked_in_implementation_pr_handoff_selects_manifest_before_temper_binary() {
+    let scenario = workspace_root().join("scenarios/implementation-pr-handoff");
+    let missing_temper = tempfile::tempdir()
+        .expect("tempdir")
+        .path()
+        .join("missing-temper");
+
+    let output = temper_scenario(&[
+        "run",
+        "--tier",
+        "live",
+        "--temper-bin",
+        &missing_temper.to_string_lossy(),
+        &scenario.to_string_lossy(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "missing live temper binary should fail"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("--temper-bin path does not exist"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("missing-temper"), "{stderr}");
+    assert!(
+        !stderr.contains("implementation-pr-handoff (tiers: hermetic)"),
+        "{stderr}"
     );
 }
 

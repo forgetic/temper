@@ -162,6 +162,26 @@ pub(crate) fn pr_opened(item: &WorkItemRef, title: &str, kind: &str, for_issue: 
     )
 }
 
+/// `[acme/widgets PR#44] refreshed "title" | implementation, for #42`
+pub(crate) fn pr_updated(
+    item: &WorkItemRef,
+    title: &str,
+    kind: &str,
+    for_issue: u64,
+    action: &str,
+) -> String {
+    let action = if action.trim().is_empty() {
+        "updated"
+    } else {
+        action.trim()
+    };
+    format!(
+        "{} {action} \"{}\" | {kind}, for #{for_issue}",
+        item.human_tag(),
+        redacted_preview(title, PREVIEW_LIMIT)
+    )
+}
+
 /// `[acme/widgets PR#44] merged -> main (squash e3f9a1c) | +landed`
 pub(crate) fn pr_merged(
     item: &WorkItemRef,
@@ -319,6 +339,16 @@ mod tests {
                 42
             ),
             "[acme/widgets PR#44] opened \"Fix cache invalidation on resize\" | implementation, for #42"
+        );
+        assert_eq!(
+            pr_updated(
+                &pr44(),
+                "Fix cache invalidation on resize",
+                "implementation",
+                42,
+                "refreshed"
+            ),
+            "[acme/widgets PR#44] refreshed \"Fix cache invalidation on resize\" | implementation, for #42"
         );
         assert_eq!(
             pr_merged(&pr44(), "main", "squash", "e3f9a1c", "+landed"),

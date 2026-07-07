@@ -3,13 +3,14 @@
 //! Success-path application: opening one coordinated implementation PR per
 //! writable repo that produced a diff, in coordinated landing order (ADR 0023).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use temper_forge::{
     Forge, ItemNumber, PullRequest, PullRequestQuery, PullRequestState, Repository, RepositoryId,
     RepositoryPath, RequestReviewers, UpdatePullRequest, UserId,
 };
-use temper_log::emit::{PrOpened, emit_pr_opened};
+use temper_log::emit::{PrHandoffFacts, PrOpened, PrUpdated, emit_pr_opened, emit_pr_updated};
 use temper_protocol_worker::{JobContext, JobResult, RepoOutcome};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, Effect, Executor, WorkflowMetadata, parse_metadata_block,
@@ -296,9 +297,15 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         );
         emit_pr_opened(PrOpened {
             item: &pr_ref,
-            title: set.issue_title,
+            title: &pull_request.title,
             kind: "implementation",
             for_issue: set.number.get(),
+            handoff: Some(pr_handoff_facts(
+                set,
+                &pull_request.title,
+                set.body.is_some(),
+                "created",
+            )),
         });
         self.apply_implementation_pr_handoff_if_needed(set.job, &pull_request, true)
             .await;
@@ -320,7 +327,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         desired_body: &str,
         operation: &'static str,
     ) {
-        let pull_request = self
+        let result = self
             .update_implementation_pr_handoff(
                 set.job,
                 pull_request,
@@ -329,6 +336,26 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 operation,
             )
             .await;
+        let pull_request = result.pull_request;
+        if result.updated {
+            let pr_ref = artifact_ref(
+                target_repo_id,
+                ArtifactSource::PullRequest {
+                    number: pull_request.number,
+                },
+            );
+            emit_pr_updated(PrUpdated {
+                item: &pr_ref,
+                kind: "implementation",
+                for_issue: set.number.get(),
+                handoff: pr_handoff_facts(
+                    set,
+                    &pull_request.title,
+                    set.body.is_some(),
+                    "refreshed",
+                ),
+            });
+        }
         self.apply_implementation_pr_handoff_if_needed(set.job, &pull_request, false)
             .await;
         opened.insert(
@@ -442,14 +469,15 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             result.summary.as_deref().unwrap_or_default(),
             &metadata,
         );
-        self.update_implementation_pr_handoff(
-            job,
-            pull_request,
-            &desired_title,
-            &desired_body,
-            "pull request repair",
-        )
-        .await;
+        let _ = self
+            .update_implementation_pr_handoff(
+                job,
+                pull_request,
+                &desired_title,
+                &desired_body,
+                "pull request repair",
+            )
+            .await;
     }
 
     async fn apply_implementation_pr_handoff_if_needed(
@@ -578,6 +606,34 @@ struct ReviewHandoff {
 impl ReviewHandoff {
     fn is_empty(&self) -> bool {
         self.add_labels.is_empty() && self.remove_labels.is_empty() && self.reviewers.is_empty()
+    }
+}
+
+fn pr_handoff_facts(
+    set: &CoordinatedSet<'_>,
+    title: &str,
+    body_authored: bool,
+    action: &'static str,
+) -> PrHandoffFacts<'static> {
+    let source_ref =
+        artifact_ref(set.primary_id, ArtifactSource::Issue { number: set.number }).to_string();
+    PrHandoffFacts {
+        source_artifact: Cow::Owned(source_ref.clone()),
+        title: Cow::Owned(title.to_string()),
+        title_source: Cow::Borrowed(if set.title.is_some() {
+            "agent"
+        } else {
+            "fallback"
+        }),
+        body_source: Cow::Borrowed(if body_authored {
+            "agent"
+        } else {
+            "summary_fallback"
+        }),
+        metadata_kind: Cow::Borrowed("implementation_pr"),
+        metadata_parent_ref: Cow::Owned(source_ref),
+        correlation_key: Cow::Owned(set.coordination_key.to_string()),
+        action: Cow::Borrowed(action),
     }
 }
 

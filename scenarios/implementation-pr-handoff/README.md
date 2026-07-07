@@ -1,14 +1,15 @@
 # Implementation PR handoff scenario
 
-`implementation-pr-handoff` is a focused feature scenario for the #52/#53
-engineer handoff behavior. It proves that a scripted coding-workspace success
-can author the durable implementation PR title/body and that Temper preserves the
-workflow metadata that relates the PR back to its source code issue.
+`implementation-pr-handoff` validates the engineer handoff behavior for
+implementation PRs on the manifest runner's validation-grade live stack. It
+proves that a Jig-scripted coding-workspace success can author the durable PR
+title/body and that Temper preserves workflow metadata relating the PR back to
+its source code issue.
 
-Unlike `basic-delivery`, this scenario is not a full convergence run with CI and
-mechanical merge. The runner is intentionally narrow: it drives the daemon
-`ForgeApplier` path in process over `MemoryForge`, once for a newly-created PR
-and once for an already-existing implementation PR with stale handoff text.
+The scenario uses real Forgejo, a registered host `forgejo-runner`, a real
+standalone `temper` process, and Jig fake LLM responses. The checked-in runner
+path is `runner.uses = "manifest"`; there is no hermetic MemoryForge or
+in-process compatibility runner for this scenario.
 
 ## Files
 
@@ -18,49 +19,49 @@ scenarios/implementation-pr-handoff/
 ├── README.md
 ├── config/
 │   ├── workflow.json
+│   ├── ci.yml
 │   ├── source-issue.md
 │   ├── create-handoff.md
 │   └── refresh-handoff.md
 └── repo/
-    └── README.md
+    ├── README.md
+    └── .forgejo/workflows/ci.yml
 ```
 
-- `config/workflow.json` is the bundled workflow fixture used by the focused
-  in-process proof.
-- `config/source-issue.md` is the ready code issue body seeded by the runner.
-- `config/create-handoff.md` is the authored report body expected on a newly
-  opened implementation PR.
-- `config/refresh-handoff.md` is the authored report body expected to replace a
-  stale existing PR handoff.
-- `repo/` is a minimal placeholder default-branch seed so manifest path checks
-  remain self-contained.
+- `config/workflow.json` is the workflow fixture loaded by `temper init`.
+- `config/ci.yml` is copied into the repo seed so the live stack provisions
+  Forgejo Actions/runner state; it is intentionally manual so the PRs remain
+  open for handoff assertions.
+- `config/source-issue.md` is the ready code issue body seeded for the create
+  and refresh phases.
+- `config/create-handoff.md` and `config/refresh-handoff.md` are the authored
+  reports expected on the created and refreshed implementation PRs.
 
 ## Expected flow
 
-1. Create one in-memory repository, `acme/service`, with default branch `main`.
-2. Seed a ready `code` issue and apply a scripted engineer success carrying
-   `title = "Implement durable PR handoff"` and the create report body.
-3. Expect Temper to open one implementation PR through the ForgeApplier workflow
-   path, with the authored title/body and an `implementation_pr` metadata block
-   whose parent is the source issue and whose correlation key is
-   `pr-for-code-<issue>`.
-4. Seed another ready `code` issue plus an existing implementation PR containing
-   stale title/body but correct metadata.
-5. Apply a second scripted engineer success carrying
-   `title = "Implement refreshed handoff"` and the refresh report body.
-6. Expect Temper to update the same PR rather than opening a duplicate, replace
-   the stale handoff text, and preserve metadata kind, parent, and correlation.
+1. Provision real Forgejo, register the host `forgejo-runner`, seed
+   `acme/service`, configure Jig fake engineer responses, and launch real
+   standalone Temper with JSON observability.
+2. Seed a ready code issue. Temper assigns an engineer job, Jig returns
+   `title = "Implement durable PR handoff"` and `config/create-handoff.md`, and
+   Temper opens an implementation PR.
+3. Seed a second ready code issue, let Temper claim the engineer job, then seed
+   an existing stale implementation PR on the expected branch/correlation key.
+   Jig returns `title = "Implement refreshed handoff"` and
+   `config/refresh-handoff.md`, and Temper refreshes the same PR rather than
+   opening a duplicate.
+4. Manifest assertions check final PR state plus structured `pr.opened` and
+   `pr.updated` events for authored title/body source, `metadata.kind =
+   "implementation_pr"`, source parent refs, correlation keys, and
+   `action = "created" | "refreshed"`.
 
 ## Running
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/implementation-pr-handoff
-cargo run -p temper-scenario-cli -- run --tier hermetic scenarios/implementation-pr-handoff
+cargo run -p temper-scenario-cli -- run --tier live --temper-bin target/debug/temper scenarios/implementation-pr-handoff
 ```
 
-The `run` command prints the source classification (`checked-in scenario` for
-this corpus bundle), the `hermetic` confidence tier, manifest topology, and then
-concise evidence lines for the authored create handoff, the authored refresh
-handoff, and the preserved workflow metadata/source issue relation. `--tier
-live` is not implemented yet and fails instead of silently reusing this memory
-runner.
+The default hermetic tier is rejected by the manifest runner. Use
+`cargo dev-scenario-run scenarios/implementation-pr-handoff` if you want the
+helper to build and pass the standalone `temper` binary.

@@ -140,17 +140,20 @@ pub(super) fn evaluate_counts(
                 count_closed_parent_issues(artifact),
                 "run evidence has no final issue facts".to_string(),
             )),
-            "created_pull_requests" | "refreshed_pull_requests" => results.push(
-                ResultBuilder::new(
-                    format!("expect.{field}"),
-                    format!("Count expectation `{field}` is declared."),
-                    None,
-                )
-                .unsupported(format!(
-                    "run evidence does not yet distinguish created/refreshed pull request actions for `{field}`; script-hook or provider action facts are required"
-                ))
-                .build(),
-            ),
+            "created_pull_requests" => results.push(evaluate_count(
+                format!("expect.{field}"),
+                "Created pull request action count matches the manifest expectation.".to_string(),
+                expected,
+                count_pull_request_action_events(artifact, "pr.opened", "created"),
+                "run evidence has no structured pr.opened action facts".to_string(),
+            )),
+            "refreshed_pull_requests" => results.push(evaluate_count(
+                format!("expect.{field}"),
+                "Refreshed pull request action count matches the manifest expectation.".to_string(),
+                expected,
+                count_pull_request_action_events(artifact, "pr.updated", "refreshed"),
+                "run evidence has no structured pr.updated action facts".to_string(),
+            )),
             _ => {}
         }
     }
@@ -264,6 +267,27 @@ fn count_closed_parent_issues(artifact: &RunEvidenceArtifact) -> Option<u64> {
     )
 }
 
+fn count_pull_request_action_events(
+    artifact: &RunEvidenceArtifact,
+    event_name: &str,
+    action: &str,
+) -> Option<u64> {
+    let observability = artifact.observability.as_ref()?;
+    Some(
+        observability
+            .events
+            .iter()
+            .filter(|event| {
+                event.event == event_name
+                    && event
+                        .fields
+                        .get("action")
+                        .is_some_and(|actual| actual == action)
+            })
+            .count() as u64,
+    )
+}
+
 enum SourceIssueCandidates<'a> {
     Issues(Vec<&'a IssueStateEvidence>),
     Unsupported(String),
@@ -311,4 +335,98 @@ fn source_issue_candidates(artifact: &RunEvidenceArtifact) -> SourceIssueCandida
         "run evidence has multiple issues but no source/parent issue id or provider issue number fact"
             .to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::super::super::model::{
+        ArtifactCollections, CiStateEvidence, FinalStateEvidence, ObservabilityEvidence,
+        RUN_EVIDENCE_SCHEMA, RUN_EVIDENCE_VERSION, ScenarioEvidence, StructuredEventEvidence,
+        TopologyEvidence,
+    };
+    use super::*;
+
+    #[test]
+    fn counts_created_and_refreshed_pull_requests_from_structured_actions() {
+        let artifact = artifact_with_events(vec![
+            event(1, "pr.opened", "created"),
+            event(2, "pr.updated", "refreshed"),
+            event(3, "pr.opened", ""),
+            event(4, "pr.updated", "created"),
+        ]);
+
+        assert_eq!(
+            count_pull_request_action_events(&artifact, "pr.opened", "created"),
+            Some(1)
+        );
+        assert_eq!(
+            count_pull_request_action_events(&artifact, "pr.updated", "refreshed"),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn action_counts_need_observability_facts() {
+        let mut artifact = artifact_with_events(Vec::new());
+        artifact.observability = None;
+
+        assert_eq!(
+            count_pull_request_action_events(&artifact, "pr.opened", "created"),
+            None
+        );
+    }
+
+    fn artifact_with_events(events: Vec<StructuredEventEvidence>) -> RunEvidenceArtifact {
+        RunEvidenceArtifact {
+            schema: RUN_EVIDENCE_SCHEMA.to_string(),
+            version: RUN_EVIDENCE_VERSION,
+            scenario: ScenarioEvidence {
+                name: "implementation-pr-handoff".to_string(),
+                source: "checked-in".to_string(),
+                source_description: "checked-in scenario".to_string(),
+                scenario_path: "scenarios/implementation-pr-handoff".to_string(),
+                manifest_path: "scenarios/implementation-pr-handoff/scenario.toml".to_string(),
+                runner_id: "manifest".to_string(),
+                runner_selector: "runner.uses".to_string(),
+                runner_selection: "runner: `manifest` selected by runner.uses".to_string(),
+                tier: "live".to_string(),
+                tier_description: "live".to_string(),
+                topology: TopologyEvidence::default(),
+            },
+            fixtures: Vec::new(),
+            final_state: FinalStateEvidence {
+                issues: Vec::new(),
+                pull_requests: Vec::new(),
+                repositories: Vec::new(),
+                ci: CiStateEvidence::default(),
+            },
+            convergence: None,
+            provider: None,
+            observability: Some(ObservabilityEvidence {
+                scenario_run_id: "test-run".to_string(),
+                log_format: "json".to_string(),
+                rust_log: "temper=debug".to_string(),
+                event_log_path: "standalone.log".to_string(),
+                captured_events: events.len(),
+                events,
+            }),
+            artifacts: ArtifactCollections::default(),
+            evidence_lines: Vec::new(),
+            assertions: None,
+        }
+    }
+
+    fn event(sequence: usize, event: &str, action: &str) -> StructuredEventEvidence {
+        let mut fields = BTreeMap::new();
+        fields.insert("action".to_string(), action.to_string());
+        StructuredEventEvidence {
+            sequence,
+            event: event.to_string(),
+            service: Some("engine".to_string()),
+            target: Some("temper::engine".to_string()),
+            fields,
+        }
+    }
 }

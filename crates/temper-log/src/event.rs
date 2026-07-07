@@ -43,6 +43,8 @@ pub enum Event {
     GateEvaluated,
     /// A pull request was opened for an issue (`pr.opened`).
     PrOpened,
+    /// A pull request title/body handoff was updated (`pr.updated`).
+    PrUpdated,
     /// A pull request was merged to the target branch (`pr.merged`).
     PrMerged,
     /// A work item was resolved end-to-end (`item.resolved`).
@@ -70,6 +72,7 @@ impl Event {
             Self::QueueEntered => "queue.entered",
             Self::GateEvaluated => "gate.evaluated",
             Self::PrOpened => "pr.opened",
+            Self::PrUpdated => "pr.updated",
             Self::PrMerged => "pr.merged",
             Self::ItemResolved => "item.resolved",
             Self::RoleSaturated => "role.saturated",
@@ -80,7 +83,7 @@ impl Event {
     ///
     /// Kept in sync with the enum by the `all_variants_have_unique_dotted_form`
     /// test, which fails if a new variant is added without listing it here.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::IssueOpened,
         Self::WakeReceived,
         Self::CiCompleted,
@@ -93,6 +96,7 @@ impl Event {
         Self::QueueEntered,
         Self::GateEvaluated,
         Self::PrOpened,
+        Self::PrUpdated,
         Self::PrMerged,
         Self::ItemResolved,
         Self::RoleSaturated,
@@ -120,6 +124,7 @@ mod tests {
             "queue.entered",
             "gate.evaluated",
             "pr.opened",
+            "pr.updated",
             "pr.merged",
             "item.resolved",
             "role.saturated",
@@ -152,6 +157,6 @@ mod tests {
         // variant is added but not appended to ALL, this and the uniqueness test
         // catch it (the array literal would also fail to compile on a length
         // mismatch).
-        assert_eq!(Event::ALL.len(), 15);
+        assert_eq!(Event::ALL.len(), 16);
     }
 }

@@ -8,6 +8,11 @@ use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
 use crate::forge_applier::body_merge::merge_implementation_pr_body;
 
+pub(super) struct HandoffUpdateResult {
+    pub(super) pull_request: PullRequest,
+    pub(super) updated: bool,
+}
+
 impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn update_implementation_pr_handoff(
         &self,
@@ -16,7 +21,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         desired_title: &str,
         desired_body: &str,
         operation: &'static str,
-    ) -> PullRequest {
+    ) -> HandoffUpdateResult {
         for _ in 0..3 {
             let title = (pull_request.title != desired_title).then(|| desired_title.to_string());
             let body = match merge_implementation_pr_body(&pull_request.body, desired_body) {
@@ -29,12 +34,18 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         %error,
                         "forge applier could not merge implementation PR body for {operation}"
                     );
-                    return pull_request;
+                    return HandoffUpdateResult {
+                        pull_request,
+                        updated: false,
+                    };
                 }
             };
 
             if title.is_none() && body.is_none() {
-                return pull_request;
+                return HandoffUpdateResult {
+                    pull_request,
+                    updated: false,
+                };
             }
 
             match self
@@ -50,7 +61,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 )
                 .await
             {
-                Ok(updated) => return updated,
+                Ok(updated) => {
+                    return HandoffUpdateResult {
+                        pull_request: updated,
+                        updated: true,
+                    };
+                }
                 Err(ForgeError::Conflict(_)) => {
                     match self.forge.get_pull_request(&pull_request.id).await {
                         Ok(Some(reloaded)) => {
@@ -64,7 +80,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                                 pull_request = %pull_request.number,
                                 "forge applier could not reload PR after handoff conflict for {operation}"
                             );
-                            return pull_request;
+                            return HandoffUpdateResult {
+                                pull_request,
+                                updated: false,
+                            };
                         }
                         Err(error) => {
                             tracing::warn!(
@@ -74,7 +93,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                                 %error,
                                 "forge applier could not reload PR after handoff conflict for {operation}"
                             );
-                            return pull_request;
+                            return HandoffUpdateResult {
+                                pull_request,
+                                updated: false,
+                            };
                         }
                     }
                 }
@@ -86,7 +108,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         %error,
                         "forge applier could not update implementation PR handoff for {operation}"
                     );
-                    return pull_request;
+                    return HandoffUpdateResult {
+                        pull_request,
+                        updated: false,
+                    };
                 }
             }
         }
@@ -97,6 +122,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             pull_request = %pull_request.number,
             "forge applier gave up updating implementation PR handoff after conflicts for {operation}"
         );
-        pull_request
+        HandoffUpdateResult {
+            pull_request,
+            updated: false,
+        }
     }
 }

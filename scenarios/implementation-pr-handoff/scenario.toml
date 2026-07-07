@@ -5,14 +5,21 @@ intent = "Prove engineer-authored implementation PR handoff title/body survive c
 introduced_by = "#78"
 owner_area = "delivery-validation"
 stability = "provisional"
-timeout = "2m"
+timeout = "10m"
+
+[runner]
+uses = "manifest"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
 
 [topology]
-kind = "single-repo-in-memory-forge"
-forge = "memory"
-runner = "temper-scenario-forge-applier"
-temper = "in-process"
-agent_model = "scripted-coding-workspace-result"
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
 repos = ["service"]
 
 [workflow]
@@ -25,6 +32,9 @@ id = "service"
 slug = "acme/service"
 default_branch = "main"
 seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
 
 [[issues]]
 id = "source"
@@ -59,6 +69,81 @@ kind = "built-in"
 mode = "automation"
 queues = []
 
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the service repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "configure-jig-engineer-create-response"
+action = "jig.fake_llm"
+role = "engineer"
+script = "implementation-pr-handoff"
+case = "create"
+title = "Implement durable PR handoff"
+body_path = "config/create-handoff.md"
+summary = "scripted coding workspace summary"
+
+[[steps]]
+id = "configure-jig-engineer-refresh-response"
+action = "jig.fake_llm"
+role = "engineer"
+script = "implementation-pr-handoff"
+case = "refresh"
+title = "Implement refreshed handoff"
+body_path = "config/refresh-handoff.md"
+summary = "scripted coding workspace summary"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-create-source-issue"
+action = "issue.seed"
+issue_id = "source"
+bind = "create"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "seed-refresh-source-issue"
+action = "issue.seed"
+issue_id = "source"
+bind = "refresh"
+repo = "service"
+after = "create implementation PR observed"
+
+[[steps]]
+id = "seed-stale-refresh-pr"
+action = "pr.seed_existing"
+repo = "service"
+source_issue_id = "refresh"
+title = "Old generated title"
+stale_body = "Old report that must be replaced."
+metadata_kind = "implementation_pr"
+correlation_key = "$correlation:refresh"
+after = "refresh engineer job claimed"
+
+[[steps]]
+id = "wait-for-handoff-convergence"
+action = "workflow.wait_convergence"
+until = "create PR opened and existing refresh PR updated with authored handoff"
+
 [expect]
 outcome = "Temper creates an implementation PR and refreshes an existing implementation PR using the authored title/body, while preserving implementation_pr metadata, source parent, and correlation key."
 created_pull_requests = 1
@@ -66,23 +151,71 @@ refreshed_pull_requests = 1
 closed_parent_issues = 0
 
 [[expect.checks]]
-id = "create-uses-authored-handoff"
-artifact = "pull_request"
-source_artifact = "source"
+id = "create-final-state-uses-authored-handoff"
+artifact = "pull_request:create"
+state = "open"
+labels = ["implementation", "landing"]
 title = "Implement durable PR handoff"
 body_prefix_file = "config/create-handoff.md"
 metadata_kind = "implementation_pr"
-metadata_parent = "source"
+metadata_parent = "issue:create"
+correlation_key = "$correlation:create"
 
 [[expect.checks]]
-id = "refresh-keeps-existing-pr-and-metadata"
-artifact = "pull_request"
-source_artifact = "source"
+id = "refresh-final-state-keeps-existing-pr-and-metadata"
+artifact = "pull_request:refresh"
+state = "open"
+labels = ["implementation", "landing"]
 title = "Implement refreshed handoff"
 body_prefix_file = "config/refresh-handoff.md"
 metadata_kind = "implementation_pr"
-metadata_parent = "source"
+metadata_parent = "issue:refresh"
+correlation_key = "$correlation:refresh"
 stale_body_absent = "Old report that must be replaced."
+
+[[expect.events]]
+id = "create-pr-opened-observed"
+event = "pr.opened"
+action = "created"
+source_artifact = "$issue:create"
+fields."pr.title" = "Implement durable PR handoff"
+fields."title.source" = "agent"
+fields."body.source" = "agent"
+fields."metadata.kind" = "implementation_pr"
+fields."metadata.parent.ref" = "$issue:create"
+fields."correlation.key" = "$correlation:create"
+
+[[expect.events]]
+id = "refresh-pr-updated-observed"
+event = "pr.updated"
+action = "refreshed"
+source_artifact = "$issue:refresh"
+fields."pr.title" = "Implement refreshed handoff"
+fields."title.source" = "agent"
+fields."body.source" = "agent"
+fields."metadata.kind" = "implementation_pr"
+fields."metadata.parent.ref" = "$issue:refresh"
+fields."correlation.key" = "$correlation:refresh"
+
+[[expect.sequence]]
+id = "handoff-create-then-refresh"
+scope = "source_artifact"
+events = [
+  { event = "pr.opened", action = "created", source_artifact = "$issue:create" },
+  { event = "pr.updated", action = "refreshed", source_artifact = "$issue:refresh" },
+]
+
+[[expect.count]]
+id = "one-created-handoff-event"
+event = "pr.opened"
+action = "created"
+exactly = 1
+
+[[expect.count]]
+id = "one-refreshed-handoff-event"
+event = "pr.updated"
+action = "refreshed"
+exactly = 1
 
 [change_policy]
 validation_report_required = true
@@ -95,7 +228,6 @@ compatible_changes = [
   "Add evidence lines that further narrow the same handoff contract.",
 ]
 requires_new_scenario_or_major_update = [
-  "Replacing the in-memory ForgeApplier proof with live Forgejo.",
   "Changing the source artifact away from a ready code issue.",
   "Removing either the create or refresh half of the handoff contract.",
 ]

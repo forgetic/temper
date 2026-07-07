@@ -10,7 +10,19 @@ use super::repository::evaluate_repo_check;
 use super::support::{ArtifactSelector, ResultBuilder};
 
 const CONTROL_FIELDS: &[&str] = &["id", "artifact"];
-const SUPPORTED_CHECK_FIELDS: &[&str] = &["state", "labels", "labels_cleared", "ci"];
+const SUPPORTED_CHECK_FIELDS: &[&str] = &[
+    "state",
+    "labels",
+    "labels_cleared",
+    "ci",
+    "title",
+    "body_prefix",
+    "body_prefix_file",
+    "stale_body_absent",
+    "metadata_kind",
+    "metadata_parent",
+    "correlation_key",
+];
 const SOURCE_LINK_FIELDS: &[&str] = &["source_artifact", "metadata_parent"];
 const PROVIDER_REF_FIELDS: &[&str] = &["ref"];
 
