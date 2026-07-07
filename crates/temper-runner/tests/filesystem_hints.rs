@@ -91,6 +91,27 @@ impl Worker for CountingWorker {
     }
 }
 
+struct TickObservedWorker<W> {
+    inner: W,
+    completed_ticks: Arc<AtomicU64>,
+}
+
+#[async_trait]
+impl<W: Worker> Worker for TickObservedWorker<W> {
+    async fn tick(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Progress, temper_runner::WorkerError> {
+        let progress = self.inner.tick(now).await?;
+        self.completed_ticks.fetch_add(1, Ordering::SeqCst);
+        Ok(progress)
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+}
+
 fn create_repo(forge: &FilesystemForge) -> RepositoryId {
     block_on(forge.create_repository(repo_input()))
         .expect("repository is created")
@@ -255,12 +276,17 @@ fn mechanical_landing_wake_driven_by(final_wake: LandingWake) {
     let counted = CountingForge::new(root.forge());
     let workflow = workflow();
     let journal = InMemoryJournal::new();
-    let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+    let mechanical = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+    let completed_ticks = Arc::new(AtomicU64::new(0));
+    let worker = TickObservedWorker {
+        inner: mechanical,
+        completed_ticks: completed_ticks.clone(),
+    };
     let observer = root.forge();
     let pr_id = pr.id.clone();
     let target = WakeTarget::Mechanical;
     let loop_ = WakeablePollLoop::new(&worker, target.clone(), Duration::seconds(30));
-    let start = Instant::now();
+    let mut wake_elapsed = StdDuration::ZERO;
 
     std::thread::scope(|scope| {
         let handle = scope.spawn(|| {
@@ -271,7 +297,8 @@ fn mechanical_landing_wake_driven_by(final_wake: LandingWake) {
             ))
         });
 
-        std::thread::sleep(StdDuration::from_millis(50));
+        wait_for_completed_tick(&completed_ticks);
+        let wake_start = Instant::now();
         match final_wake {
             LandingWake::ReviewApproval => approve(&writer, &pr.id),
             LandingWake::CiCompletion => seed_successful_ci(&writer, &repo, &pr),
@@ -282,11 +309,12 @@ fn mechanical_landing_wake_driven_by(final_wake: LandingWake) {
             .join()
             .expect("worker thread joins")
             .expect("wake loop runs");
+        wake_elapsed = wake_start.elapsed();
         assert!(report.ticks >= 2);
     });
 
     assert!(
-        start.elapsed() < StdDuration::from_secs(1),
+        wake_elapsed < StdDuration::from_secs(1),
         "landing hint should beat the 30s poll interval"
     );
     assert!(pull_request_is_merged(&root.forge(), &pr.id));
@@ -310,6 +338,17 @@ fn mechanical_landing_wake_driven_by(final_wake: LandingWake) {
             .iter()
             .all(is_bounded_pull_request_query)
     );
+}
+
+fn wait_for_completed_tick(completed_ticks: &AtomicU64) {
+    let deadline = Instant::now() + StdDuration::from_secs(5);
+    while Instant::now() < deadline {
+        if completed_ticks.load(Ordering::SeqCst) > 0 {
+            return;
+        }
+        std::thread::sleep(StdDuration::from_millis(5));
+    }
+    panic!("mechanical worker did not complete its initial tick");
 }
 
 #[test]
