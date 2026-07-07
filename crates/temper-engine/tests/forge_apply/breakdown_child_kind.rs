@@ -3,6 +3,40 @@
 use crate::assertions::*;
 use crate::support::*;
 
+fn body_with_target_branch(body: &str, target_branch: &str) -> String {
+    format!(
+        "{body}\n\n{}",
+        render_metadata_block(&WorkflowMetadata {
+            target_branch: Some(target_branch.to_string()),
+            ..WorkflowMetadata::default()
+        })
+    )
+}
+
+async fn set_issue_body(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    body: String,
+) {
+    let issue = forge
+        .get_issue_by_number(repo, number)
+        .await
+        .expect("issue reload succeeds")
+        .expect("issue exists");
+    forge
+        .update_issue(
+            &issue.id,
+            UpdateIssue {
+                body: Some(body),
+                expected_version: Some(issue.version),
+                ..UpdateIssue::default()
+            },
+        )
+        .await
+        .expect("issue body is updated");
+}
+
 #[test]
 fn omitted_child_kind_defaults_to_ready_code_child() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
@@ -33,6 +67,48 @@ fn omitted_child_kind_defaults_to_ready_code_child() {
             .expect("child metadata parses")
             .expect("child metadata exists");
         assert_eq!(metadata.kind, Some(ArtifactKindId::new("code")));
+        assert!(metadata.target_branch.is_none());
+    })
+}
+
+#[test]
+fn source_target_branch_is_inherited_by_code_child_without_child_target() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo).await;
+        set_issue_body(
+            &forge,
+            &repo,
+            issue,
+            body_with_target_branch("rough user request", "feature/plan-work"),
+        )
+        .await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
+        let job = triage_in_flight_job("acme/service", issue);
+        let result = verdict_result_with_children(
+            "worker-a",
+            &job.job_id,
+            "needs_breakdown",
+            vec![job_child(
+                "api-schema",
+                "Define the API schema",
+                "Write the shared API schema.",
+                &[],
+            )],
+        );
+
+        applier.apply(job, result).await;
+
+        let issues = list_issues(&forge, &repo).await;
+        assert_eq!(issues.len(), 2);
+        let child = issue_by_slug(&issues, "api-schema");
+        let metadata = parse_metadata_block(&child.body)
+            .expect("child metadata parses")
+            .expect("child metadata exists");
+        assert_eq!(metadata.kind, Some(ArtifactKindId::new("code")));
+        assert_eq!(metadata.parents, vec![ArtifactRef::same_repo(issue)]);
+        assert_eq!(metadata.target_branch.as_deref(), Some("feature/plan-work"));
     })
 }
 
@@ -122,6 +198,13 @@ fn child_metadata_target_branch_is_preserved_while_kind_is_stamped_or_kept() {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_untriaged_intake_issue(&forge, &repo).await;
+        set_issue_body(
+            &forge,
+            &repo,
+            issue,
+            body_with_target_branch("rough user request", "feature/source-work"),
+        )
+        .await;
         let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow_with_plan_kind()));
         let job = triage_in_flight_job("acme/service", issue);
 
@@ -176,6 +259,108 @@ fn child_metadata_target_branch_is_preserved_while_kind_is_stamped_or_kept() {
             code_metadata.target_branch.as_deref(),
             Some("feature/code-work")
         );
+    })
+}
+
+#[test]
+fn malformed_source_metadata_aborts_without_children_or_label_effects() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo).await;
+        set_issue_body(
+            &forge,
+            &repo,
+            issue,
+            "rough user request\n\n<!-- temper:workflow\n{ not valid json }\n-->".to_string(),
+        )
+        .await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
+        let job = triage_in_flight_job("acme/service", issue);
+        let before = issue_body_and_labels(&forge, &repo, issue).await;
+        let result = verdict_result_with_children(
+            "worker-a",
+            &job.job_id,
+            "needs_breakdown",
+            vec![job_child(
+                "api-schema",
+                "Define the API schema",
+                "Write the shared API schema.",
+                &[],
+            )],
+        );
+
+        applier.apply(job, result).await;
+
+        assert_eq!(issue_body_and_labels(&forge, &repo, issue).await, before);
+        assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+    })
+}
+
+#[test]
+fn cross_repo_children_inherit_source_target_branch_unless_overridden() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo_a = new_repo(&forge, "stable").await;
+        let repo_b = create_repo(&forge, "acme", "web", "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo_a).await;
+        set_issue_body(
+            &forge,
+            &repo_a,
+            issue,
+            body_with_target_branch("rough user request", "feature/source-plan"),
+        )
+        .await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
+        let job = triage_in_flight_job("acme/service", issue);
+
+        let mut inherited = job_child(
+            "web-client",
+            "Implement the web client",
+            "Build the web client against the API schema.",
+            &[],
+        );
+        inherited.target_repo = Some("acme/web".to_string());
+
+        let override_body = body_with_target_branch("Build the admin UI.", "feature/admin-ui");
+        let mut overridden = job_child("admin-ui", "Implement the admin UI", &override_body, &[]);
+        overridden.target_repo = Some("acme/web".to_string());
+
+        let result = verdict_result_with_children(
+            "worker-a",
+            &job.job_id,
+            "needs_breakdown",
+            vec![inherited, overridden],
+        );
+
+        applier.apply(job, result).await;
+
+        assert_eq!(list_issues(&forge, &repo_a).await.len(), 1);
+        let web_issues = list_issues(&forge, &repo_b).await;
+        assert_eq!(web_issues.len(), 2);
+        let inherited = issue_by_slug(&web_issues, "web-client");
+        let inherited_metadata = parse_metadata_block(&inherited.body)
+            .expect("inherited child metadata parses")
+            .expect("inherited child metadata exists");
+        assert_eq!(
+            inherited_metadata.target_branch.as_deref(),
+            Some("feature/source-plan")
+        );
+        assert_eq!(inherited_metadata.kind, Some(ArtifactKindId::new("code")));
+        assert_eq!(
+            inherited_metadata.parents,
+            vec![ArtifactRef::in_repo(repo_a.clone(), issue)]
+        );
+
+        let overridden = issue_by_slug(&web_issues, "admin-ui");
+        let overridden_metadata = parse_metadata_block(&overridden.body)
+            .expect("overridden child metadata parses")
+            .expect("overridden child metadata exists");
+        assert_eq!(
+            overridden_metadata.target_branch.as_deref(),
+            Some("feature/admin-ui")
+        );
+        assert_eq!(overridden_metadata.kind, Some(ArtifactKindId::new("code")));
     })
 }
 
