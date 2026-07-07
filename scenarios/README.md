@@ -15,8 +15,7 @@ not migrate, deduplicate, or replace an example.
 
 `temper-scenario run` currently has these runners:
 
-- `manifest` — live-only validation-grade e2e runner. The checked-in `basic-delivery` and `implementation-pr-handoff` scenarios select this runner with `runner.uses = "manifest"` and boot real Forgejo, real `forgejo-runner` CI, a real standalone `temper` process, and Jig fake LLM agents. Hermetic/MemoryForge/in-process substitutes are rejected.
-- `codebase-memory-agent` — focused hermetic native-agent proof that enabled `AgentToolConfig` starts a fake codebase-memory MCP server, exposes only safe `codebase_memory_*` tools, defaults the workspace project from `list_projects.root_path`, and returns the fake MCP result to the model.
+- `manifest` — live-only validation-grade e2e runner. The checked-in `basic-delivery`, `implementation-pr-handoff`, and `codebase-memory-agent` scenarios select this runner with `runner.uses = "manifest"` and boot real Forgejo, real `forgejo-runner` CI, a real standalone `temper` process, and Jig fake LLM agents. Hermetic/MemoryForge/in-process substitutes are rejected.
 
 Run output always prints the scenario source classification, confidence tier, and
 manifest topology before the verdict. Bundles under this repository's

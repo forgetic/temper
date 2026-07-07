@@ -22,6 +22,7 @@ pub struct ScenarioBundle {
     pub poll_backstop: Duration,
     pub mechanical_cadence: Duration,
     pub observability: ObservabilityFixture,
+    pub codebase_memory_contract: bool,
 }
 
 impl ScenarioBundle {
@@ -76,6 +77,7 @@ impl ScenarioBundle {
             Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS),
         )?;
         let observability = observability_fixture(&manifest)?;
+        let codebase_memory_contract = manifest.get("codebase_memory").is_some();
 
         Ok(Self {
             scenario_path,
@@ -89,6 +91,7 @@ impl ScenarioBundle {
             poll_backstop,
             mechanical_cadence,
             observability,
+            codebase_memory_contract,
         })
     }
 
@@ -99,6 +102,10 @@ impl ScenarioBundle {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name == "implementation-pr-handoff")
+    }
+
+    pub fn declares_codebase_memory_contract(&self) -> bool {
+        self.codebase_memory_contract
     }
 
     /// Validates that the scenario workflow fixture is the canonical bundled

@@ -11,12 +11,16 @@
 //! one place the vocabulary lives, and `info`-level emit sites draw their `event`
 //! value from it.
 
-/// A workflow-state-change event in temper's closed `info`-level vocabulary.
+/// A structured event in temper's closed vocabulary.
 ///
-/// The set is the §3/§5/§7 catalog. It is `#[non_exhaustive]`-free on purpose:
+/// The set is the §3/§5/§7 catalog plus debug-level tool-boundary facts used by
+/// validation and operators. It is `#[non_exhaustive]`-free on purpose:
 /// it is a *closed* enum so a `match` over it is exhaustive and the vocabulary
 /// is fixed at compile time. New events are added by editing this enum (and the
 /// corresponding `emit` constructor), never by passing a free string.
+/// Workflow state changes are emitted at `info`; tool-boundary events are
+/// emitted at `debug` so production deployments keep pay-for-what-you-use
+/// volume unless they opt in.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Event {
     /// A new issue was observed on the forge (`issue.opened`).
@@ -35,6 +39,20 @@ pub enum Event {
     AgentStarted,
     /// An agent workspace run finished (`agent.finished`).
     AgentFinished,
+    /// Agent tool configuration was accepted for a run (`agent.tool.configured`).
+    AgentToolConfigured,
+    /// A tool was exposed to the model at the registration boundary (`agent.tool.exposed`).
+    AgentToolExposed,
+    /// A tool was hidden from the model at the registration boundary (`agent.tool.hidden`).
+    AgentToolHidden,
+    /// A codebase-memory MCP server was initialized (`mcp.server.started`).
+    McpServerStarted,
+    /// A model-visible MCP wrapper invoked a server tool (`mcp.tool.called`).
+    McpToolCalled,
+    /// A model-visible MCP wrapper returned a server tool result (`mcp.tool.result`).
+    McpToolResult,
+    /// A workspace contains a product diff after an agent run (`workspace.diff.produced`).
+    WorkspaceDiffProduced,
     /// The engine applied a workflow transition (`transition.applied`).
     TransitionApplied,
     /// A work item entered a queue (`queue.entered`).
@@ -68,6 +86,13 @@ impl Event {
             Self::LeaseLost => "lease.lost",
             Self::AgentStarted => "agent.started",
             Self::AgentFinished => "agent.finished",
+            Self::AgentToolConfigured => "agent.tool.configured",
+            Self::AgentToolExposed => "agent.tool.exposed",
+            Self::AgentToolHidden => "agent.tool.hidden",
+            Self::McpServerStarted => "mcp.server.started",
+            Self::McpToolCalled => "mcp.tool.called",
+            Self::McpToolResult => "mcp.tool.result",
+            Self::WorkspaceDiffProduced => "workspace.diff.produced",
             Self::TransitionApplied => "transition.applied",
             Self::QueueEntered => "queue.entered",
             Self::GateEvaluated => "gate.evaluated",
@@ -83,7 +108,7 @@ impl Event {
     ///
     /// Kept in sync with the enum by the `all_variants_have_unique_dotted_form`
     /// test, which fails if a new variant is added without listing it here.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 23] = [
         Self::IssueOpened,
         Self::WakeReceived,
         Self::CiCompleted,
@@ -92,6 +117,13 @@ impl Event {
         Self::LeaseLost,
         Self::AgentStarted,
         Self::AgentFinished,
+        Self::AgentToolConfigured,
+        Self::AgentToolExposed,
+        Self::AgentToolHidden,
+        Self::McpServerStarted,
+        Self::McpToolCalled,
+        Self::McpToolResult,
+        Self::WorkspaceDiffProduced,
         Self::TransitionApplied,
         Self::QueueEntered,
         Self::GateEvaluated,
@@ -120,6 +152,13 @@ mod tests {
             "lease.lost",
             "agent.started",
             "agent.finished",
+            "agent.tool.configured",
+            "agent.tool.exposed",
+            "agent.tool.hidden",
+            "mcp.server.started",
+            "mcp.tool.called",
+            "mcp.tool.result",
+            "workspace.diff.produced",
             "transition.applied",
             "queue.entered",
             "gate.evaluated",
@@ -157,6 +196,6 @@ mod tests {
         // variant is added but not appended to ALL, this and the uniqueness test
         // catch it (the array literal would also fail to compile on a length
         // mismatch).
-        assert_eq!(Event::ALL.len(), 16);
+        assert_eq!(Event::ALL.len(), 23);
     }
 }

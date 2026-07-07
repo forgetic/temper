@@ -1,3 +1,15 @@
+# Codebase-memory live scenario flow keeps Forgejo/runner/Temper setup,
+# fake MCP wiring, and final-state probes together until manifest primitives are extracted.
+crates/temper-testing/src/live_basic_delivery/codebase_memory.rs
+
+# Codebase-memory tool bridge carries allowlist, workspace scoping, and
+# production observability at one registration boundary; split with next MCP bridge refactor.
+crates/temper-agent/src/codebase_memory.rs
+
+# Workspace git wrapper keeps checkout, diff probing, and cleanup helpers together;
+# new diff-path observability reuses the same command boundary.
+crates/temper-worker/src/workspace.rs
+
 # Implementation-PR handoff live scenario flow keeps create/refresh orchestration,
 # provider setup, and final-state probing together; fake LLM scripting is split out.
 crates/temper-testing/src/live_basic_delivery/handoff.rs
