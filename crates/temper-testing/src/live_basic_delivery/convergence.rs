@@ -67,22 +67,107 @@ pub(super) fn drive_full_basic_delivery(
     let deadline = Instant::now() + timeout;
 
     poll_until(deadline, standalone, || {
-        engine_block_on(assert_issue_has_label(
+        engine_block_on(assert_basic_delivery_reached(
             forge,
             repository,
             issue,
-            "untriaged",
+            admin_user,
+            BasicDeliveryPhase::Untriaged,
         ))
     })?;
     poll_until(deadline, standalone, || {
-        engine_block_on(assert_issue_triaged_ready(forge, repository, issue))
+        engine_block_on(assert_basic_delivery_reached(
+            forge,
+            repository,
+            issue,
+            admin_user,
+            BasicDeliveryPhase::TriagedReady,
+        ))
     })?;
     poll_until(deadline, standalone, || {
-        engine_block_on(assert_pr_open_with_landing(forge, repository, issue))
+        engine_block_on(assert_basic_delivery_reached(
+            forge,
+            repository,
+            issue,
+            admin_user,
+            BasicDeliveryPhase::ImplementationPrOpen,
+        ))
     })?;
     poll_until(deadline, standalone, || {
         engine_block_on(assert_converged(forge, repository, issue, admin_user))
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum BasicDeliveryPhase {
+    Untriaged,
+    TriagedReady,
+    ImplementationPrOpen,
+}
+
+impl BasicDeliveryPhase {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Untriaged => "untriaged issue",
+            Self::TriagedReady => "triaged-ready issue",
+            Self::ImplementationPrOpen => "open implementation PR",
+        }
+    }
+}
+
+async fn assert_basic_delivery_reached(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+    admin_user: &str,
+    minimum: BasicDeliveryPhase,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    if minimum <= BasicDeliveryPhase::Untriaged {
+        match assert_issue_has_label(forge, repository, issue, "untriaged").await {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push((BasicDeliveryPhase::Untriaged.description(), error)),
+        }
+    }
+    if minimum <= BasicDeliveryPhase::TriagedReady {
+        match assert_issue_triaged_ready(forge, repository, issue).await {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push((BasicDeliveryPhase::TriagedReady.description(), error)),
+        }
+    }
+    if minimum <= BasicDeliveryPhase::ImplementationPrOpen {
+        match assert_pr_open_with_landing(forge, repository, issue).await {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push((
+                BasicDeliveryPhase::ImplementationPrOpen.description(),
+                error,
+            )),
+        }
+    }
+
+    match assert_converged(forge, repository, issue, admin_user).await {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            errors.push(("final convergence", error));
+            Err(format_phase_wait_errors(minimum, &errors))
+        }
+    }
+}
+
+fn format_phase_wait_errors(
+    minimum: BasicDeliveryPhase,
+    errors: &[(&'static str, String)],
+) -> String {
+    let details = errors
+        .iter()
+        .map(|(phase, error)| format!("{phase}: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "workflow has not reached {} or any later valid phase yet ({details})",
+        minimum.description()
+    )
 }
 
 async fn assert_issue_has_label(
