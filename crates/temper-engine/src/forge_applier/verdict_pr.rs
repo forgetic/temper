@@ -38,9 +38,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return true;
         }
 
-        let Some(source_branch) = issue_metadata_target_branch(binding.job, binding.issue) else {
+        let Some(source_metadata) = issue_pr_source_metadata(binding.job, binding.issue) else {
             return false;
         };
+        let IssuePullRequestMetadata {
+            target_branch: source_branch,
+            parents: source_parents,
+        } = source_metadata;
         let target_branch = default_base_branch(binding.repository);
         let authored_text_unambiguous = authored_pr_text_unambiguous(
             self.workflow.as_ref(),
@@ -81,7 +85,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
 
             let metadata = WorkflowMetadata {
                 kind: Some(artifact_kind.clone()),
-                parents: vec![ArtifactRef::same_repo(binding.number)],
+                parents: landing_pr_parents(binding.number, &source_parents),
                 ..WorkflowMetadata::default()
             };
             let input = CreatePullRequest {
@@ -168,7 +172,12 @@ fn authored_pr_text_unambiguous(
         })
 }
 
-fn issue_metadata_target_branch(job: &InFlightJob, issue: &Issue) -> Option<String> {
+struct IssuePullRequestMetadata {
+    target_branch: String,
+    parents: Vec<ArtifactRef>,
+}
+
+fn issue_pr_source_metadata(job: &InFlightJob, issue: &Issue) -> Option<IssuePullRequestMetadata> {
     let metadata = match parse_metadata_block(&issue.body) {
         Ok(metadata) => metadata,
         Err(error) => {
@@ -183,7 +192,10 @@ fn issue_metadata_target_branch(job: &InFlightJob, issue: &Issue) -> Option<Stri
             return None;
         }
     };
-    let Some(branch) = metadata.and_then(|metadata| metadata.target_branch) else {
+    let Some(branch) = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.target_branch.as_deref())
+    else {
         tracing::warn!(
             target: "temper_daemon",
             job_id = %job.job_id,
@@ -204,7 +216,25 @@ fn issue_metadata_target_branch(job: &InFlightJob, issue: &Issue) -> Option<Stri
         );
         return None;
     }
-    Some(branch.to_string())
+    Some(IssuePullRequestMetadata {
+        target_branch: branch.to_string(),
+        parents: metadata
+            .map(|metadata| metadata.parents)
+            .unwrap_or_default(),
+    })
+}
+
+fn landing_pr_parents(
+    source_issue: ItemNumber,
+    source_parents: &[ArtifactRef],
+) -> Vec<ArtifactRef> {
+    let mut parents = vec![ArtifactRef::same_repo(source_issue)];
+    for parent in source_parents {
+        if !parents.iter().any(|candidate| candidate == parent) {
+            parents.push(parent.clone());
+        }
+    }
+    parents
 }
 
 fn create_pull_request_correlation_key(

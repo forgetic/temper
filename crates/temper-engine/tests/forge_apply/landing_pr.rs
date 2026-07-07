@@ -56,7 +56,17 @@ async fn create_plan_issue(
     repo: &RepositoryId,
     target_branch: Option<&str>,
 ) -> ItemNumber {
+    create_plan_issue_with_parents(forge, repo, target_branch, Vec::new()).await
+}
+
+async fn create_plan_issue_with_parents(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    target_branch: Option<&str>,
+    parents: Vec<ArtifactRef>,
+) -> ItemNumber {
     let metadata = WorkflowMetadata {
+        parents,
         target_branch: target_branch.map(str::to_string),
         ..WorkflowMetadata::default()
     };
@@ -75,6 +85,22 @@ async fn create_plan_issue(
         )
         .await
         .expect("plan issue is created")
+        .number
+}
+
+async fn create_feature_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemNumber {
+    forge
+        .create_issue(
+            repo,
+            CreateIssue {
+                title: "Product feature".to_string(),
+                body: "Build the product feature.".to_string(),
+                labels: vec!["feature".to_string()],
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("feature issue is created")
         .number
 }
 
@@ -153,6 +179,77 @@ fn verdict_transition_creates_feature_landing_pr_from_plan_metadata() {
         assert!(
             !has_label(&labels, "ready"),
             "ready label is cleared: {labels:?}"
+        );
+    })
+}
+
+#[test]
+fn verdict_transition_carries_source_parents_into_feature_landing_pr_metadata() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let feature = create_feature_issue(&forge, &repo).await;
+        let issue = create_plan_issue_with_parents(
+            &forge,
+            &repo,
+            Some("feature/144-plan-branch"),
+            vec![ArtifactRef::same_repo(feature)],
+        )
+        .await;
+        let workflow = Arc::new(landing_workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = plan_validation_job("acme/service", issue);
+        let result = verdict_result("worker-a", &job.job_id, "passed", None);
+
+        applier.apply(job, result).await;
+
+        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
+        let metadata = parse_metadata_block(&pulls[0].body)
+            .expect("landing PR metadata parses")
+            .expect("landing PR metadata exists");
+        assert_eq!(
+            metadata.parents,
+            vec![
+                ArtifactRef::same_repo(issue),
+                ArtifactRef::same_repo(feature)
+            ]
+        );
+    })
+}
+
+#[test]
+fn verdict_transition_deduplicates_source_parent_refs_in_landing_pr_metadata() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let feature = create_feature_issue(&forge, &repo).await;
+        let issue = create_plan_issue_with_parents(
+            &forge,
+            &repo,
+            Some("feature/144-plan-branch"),
+            vec![
+                ArtifactRef::same_repo(feature),
+                ArtifactRef::same_repo(feature),
+            ],
+        )
+        .await;
+        let workflow = Arc::new(landing_workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = plan_validation_job("acme/service", issue);
+        let result = verdict_result("worker-a", &job.job_id, "passed", None);
+
+        applier.apply(job, result).await;
+
+        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
+        let metadata = parse_metadata_block(&pulls[0].body)
+            .expect("landing PR metadata parses")
+            .expect("landing PR metadata exists");
+        assert_eq!(
+            metadata.parents,
+            vec![
+                ArtifactRef::same_repo(issue),
+                ArtifactRef::same_repo(feature)
+            ]
         );
     })
 }
