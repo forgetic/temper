@@ -4,12 +4,12 @@ use crate::observability::gate_summary;
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use temper_forge::{Forge, Issue, PullRequest, RepositoryId};
-use temper_log::emit::{GateEvaluated, emit_gate_evaluated};
+use temper_log::emit::{CiCompleted, GateEvaluated, emit_ci_completed, emit_gate_evaluated};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
-    ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow, ExecutionError, GateSignals,
-    QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow, queue_active,
+    ArtifactSource, CiState, ClassifiedArtifact, Classifier, CompiledWorkflow, ExecutionError,
+    GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow, queue_active,
 };
 
 use super::candidate::{self, CandidateQueryPlan, ScanMode, candidate_query_plan};
@@ -38,7 +38,7 @@ pub(super) async fn scan_inner<F: Forge + ?Sized>(
     }
 
     let query_plan = candidate_query_plan(workflow, compiled, role, mode);
-    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan).await?;
+    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan, false).await?;
     Ok(work_items(&queues, &artifacts, now, role_filter))
 }
 
@@ -55,7 +55,7 @@ pub(super) async fn scan_automated_inner<F: Forge + ?Sized>(
     }
 
     let query_plan = candidate_query_plan(workflow, compiled, None, ScanMode::Automated);
-    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan).await?;
+    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan, true).await?;
     Ok(automated_work_items(&queues, &artifacts, now))
 }
 
@@ -72,7 +72,16 @@ pub(super) async fn targeted_automated_inner<F: Forge + ?Sized>(
         return Ok(Vec::new());
     }
     let mut artifacts = Vec::new();
-    push_candidate(forge, repo, workflow, &queues, classified, &mut artifacts).await?;
+    push_candidate(
+        forge,
+        repo,
+        workflow,
+        &queues,
+        classified,
+        &mut artifacts,
+        true,
+    )
+    .await?;
     Ok(automated_work_items(&queues, &artifacts, now))
 }
 
@@ -82,6 +91,7 @@ async fn read_artifacts<F: Forge + ?Sized>(
     workflow: &ValidatedWorkflow,
     queues: &[&QueueManifest],
     query_plan: &CandidateQueryPlan,
+    emit_ci_completed: bool,
 ) -> Result<Vec<ScannedArtifact>, ScanError> {
     let classifier = Classifier::new(workflow);
     let mut artifacts = Vec::new();
@@ -96,7 +106,16 @@ async fn read_artifacts<F: Forge + ?Sized>(
             let Ok(classified) = classifier.classify_issue(&issue) else {
                 continue;
             };
-            push_candidate(forge, repo, workflow, queues, classified, &mut artifacts).await?;
+            push_candidate(
+                forge,
+                repo,
+                workflow,
+                queues,
+                classified,
+                &mut artifacts,
+                emit_ci_completed,
+            )
+            .await?;
         }
     }
 
@@ -108,7 +127,16 @@ async fn read_artifacts<F: Forge + ?Sized>(
             let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
                 continue;
             };
-            push_candidate(forge, repo, workflow, queues, classified, &mut artifacts).await?;
+            push_candidate(
+                forge,
+                repo,
+                workflow,
+                queues,
+                classified,
+                &mut artifacts,
+                emit_ci_completed,
+            )
+            .await?;
         }
     }
 
@@ -133,6 +161,7 @@ async fn push_candidate<F: Forge + ?Sized>(
     queues: &[&QueueManifest],
     classified: ClassifiedArtifact,
     artifacts: &mut Vec<ScannedArtifact>,
+    emit_ci_completed: bool,
 ) -> Result<(), ScanError> {
     let Some(needs) = signal_needs_for_candidate(queues, &classified) else {
         return Ok(());
@@ -150,7 +179,7 @@ async fn push_candidate<F: Forge + ?Sized>(
             Err(error) => return Err(error.into()),
         }
     };
-    emit_pr_gate_evaluated(repo, &classified, &signals, needs);
+    emit_pr_gate_evaluated(repo, &classified, &signals, needs, emit_ci_completed);
     artifacts.push(ScannedArtifact {
         classified,
         signals,
@@ -158,15 +187,15 @@ async fn push_candidate<F: Forge + ?Sized>(
     Ok(())
 }
 
-/// Emits the §7 `engine` / `gate.evaluated` line for a CI-gated pull-request
-/// candidate whose gates were just read freshly from the forge.
+/// Emits §7 engine observability for a CI-gated pull-request candidate whose
+/// gates were just read freshly from the forge.
 ///
-/// Only pull requests on a CI-gated track (`needs.ci`) produce this line — these
-/// are the landing-track PRs §7 shows: while CI is pending the note is
-/// `waiting on CI`; once CI passes it becomes
-/// `-> queue 'landing' eligible to land`. The gate summary itself is rendered
-/// from the same fresh [`GateSignals`] by [`gate_summary`]. Issues and ungated
-/// PRs emit nothing.
+/// Only pull requests on a CI-gated track (`needs.ci`) produce these lines. When
+/// the fresh aggregate CI signal is terminal during an automated scan, the scan
+/// emits `ci.completed` for the PR before the gate summary. The `gate.evaluated`
+/// line is emitted for both pending and terminal reads: while CI is pending the
+/// note is `waiting on CI`; once CI passes it becomes `-> queue 'landing'
+/// eligible to land`.
 ///
 /// This fires per scan pass that re-reads a gated PR's signals, so an idle PR
 /// awaiting CI re-emits on each backstop tick; deduping that to state changes is
@@ -176,6 +205,7 @@ fn emit_pr_gate_evaluated(
     classified: &ClassifiedArtifact,
     signals: &GateSignals,
     needs: SignalNeeds,
+    emit_ci_completed_event: bool,
 ) {
     if !needs.ci {
         return;
@@ -184,6 +214,22 @@ fn emit_pr_gate_evaluated(
         return;
     };
     let item = WorkItemRef::pull_request(strip_provider_scheme(repo.as_str()), number.get());
+    if emit_ci_completed_event {
+        match signals.ci().state() {
+            CiState::Passed => emit_ci_completed(CiCompleted {
+                item: &item,
+                conclusion: "success",
+                duration_ms: 0,
+            }),
+            CiState::Failed => emit_ci_completed(CiCompleted {
+                item: &item,
+                conclusion: "failure",
+                duration_ms: 0,
+            }),
+            CiState::Pending => {}
+        }
+    }
+
     let gates = gate_summary(signals);
     let note = if signals.ci().is_passed() {
         "-> queue 'landing' eligible to land"

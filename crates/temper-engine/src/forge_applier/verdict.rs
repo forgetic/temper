@@ -13,8 +13,10 @@ use temper_workflow::{
     RoleId, TransitionId, ValidatedWorkflow, VerdictId,
 };
 
-use temper_log::emit::{QueueEntered, emit_queue_entered};
-use temper_runner::{artifact_ref, queue_after_transition, workspace_content_key};
+use temper_log::emit::{
+    QueueEntered, TransitionApplied, emit_queue_entered, emit_transition_applied,
+};
+use temper_runner::{artifact_ref, labels_delta, queue_after_transition, workspace_content_key};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
@@ -336,25 +338,33 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         }
     }
 
-    /// Emits the §7 `engine` / `queue.entered` line after a routed verdict
-    /// transition applies on the daemon path.
+    /// Emits the §7 `engine` routed-verdict observability after the Forge
+    /// transition has applied on the daemon path.
     ///
-    /// A routed verdict such as `triage_intake_to_code` flips identifying labels
-    /// and so moves the artifact into a new workflow queue; §7 renders that as
-    /// `-> queue '<queue>' | awaiting <role>`. The destination queue and waiting
-    /// role are derived purely from the applied label effects and the compiled
-    /// workflow (see [`queue_after_transition`]). Transitions that enter no
-    /// labelled queue emit no line.
+    /// Successful agent verdict outcomes such as `triage_intake_to_code` are
+    /// real workflow transitions, so they emit the same `transition.applied`
+    /// fact as mechanical automation. The label delta comes from the executor's
+    /// applied effects. When the label effects also move the artifact into a new
+    /// workflow queue, a follow-up `queue.entered` line is derived from the
+    /// compiled workflow (see [`queue_after_transition`]).
     fn emit_routed_verdict_observability(
         &self,
         repository_id: &RepositoryId,
         source: ArtifactSource,
         report: &temper_workflow::ExecutionReport,
     ) {
+        let item = artifact_ref(repository_id, source);
+        let delta = labels_delta(&report.applied);
+        emit_transition_applied(TransitionApplied {
+            item: &item,
+            transition: report.transition.as_str(),
+            detail: "",
+            labels_delta: &delta,
+        });
+
         let Some((queue, role)) = queue_after_transition(&self.compiled, &report.applied) else {
             return;
         };
-        let item = artifact_ref(repository_id, source);
         let note = role
             .map(|role| format!("awaiting {role}"))
             .unwrap_or_default();
