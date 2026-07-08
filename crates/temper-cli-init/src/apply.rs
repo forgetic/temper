@@ -189,7 +189,10 @@ fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
             .parent()
             .map(ResolveOptions::from_config_base_dir)
             .unwrap_or_default();
-        resolve_options.validate_secret_references = true;
+        // Local init bundles may reference the forge token that `temper apply`
+        // is about to mint. Resolve non-strictly here so apply can converge the
+        // bundle; normal runtime/check paths keep strict secret validation after apply.
+        resolve_options.validate_secret_references = false;
         temper_config::resolve_with_options(&config, &credentials, &opts.env, &resolve_options)
             .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?
     };
@@ -263,6 +266,7 @@ fn merge_provisioned_credentials(
         .entry(admin_key.to_string())
         .or_default();
     admin.token = Some(outcome.admin_token.clone());
+    write::add_forge_engine_token_secret(credentials, outcome.admin_token.clone());
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {
@@ -364,6 +368,51 @@ mod tests {
             creds.contains("sk-key"),
             "provider secret preserved: {creds}"
         );
+    }
+
+    #[test]
+    fn run_apply_loads_target_init_bundle_with_relative_paths_and_mints_named_forge_secret() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+        let credentials_path = dir.path().join("credentials.toml");
+        let webhook_secret_path = dir.path().join("webhook-secret");
+        let workflow_path = dir.path().join("workflow.yaml");
+        std::fs::write(&webhook_secret_path, "secret").expect("webhook secret");
+        let workflow_spec: temper_workflow::RawWorkflowSpec =
+            serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
+                .expect("basic workflow parses");
+        let workflow_yaml = serde_yaml::to_string(&workflow_spec).expect("workflow yaml");
+        std::fs::write(&workflow_path, workflow_yaml).expect("workflow");
+        std::fs::write(
+            &config_path,
+            "schema_version = 1\n\n[deployment]\ntopology = \"standalone\"\n\n[workflow]\nfile = \"workflow.yaml\"\n\n[paths]\nworkspace_dir = \"workspace\"\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\nci_user = \"bot\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nworkflow = \"workflow.yaml\"\nrepos = [\"acme/service\"]\nroles = [\"architect\", \"engineer\"]\nforge_token = \"forge-engine-token\"\nwebhook_secret = \"webhook-secret\"\nwebhook_secret_file = \"webhook-secret\"\n\n[worker]\nworkspace = \"workspace\"\n\n[[worker.pools]]\nname = \"local\"\nroles = [\"architect\", \"engineer\"]\nrepos = [\"acme/service\"]\nmax_concurrent_jobs = 1\nworker_token = \"worker-local-token\"\n",
+        )
+        .expect("config");
+        std::fs::write(
+            &credentials_path,
+            "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n\n[secrets.webhook-secret]\nkind = \"webhook-secret\"\nsecret = \"secret\"\n\n[secrets.worker-local-token]\nkind = \"worker-token\"\ntoken = \"worker-secret\"\n",
+        )
+        .expect("credentials");
+
+        let opts = ApplyOptions {
+            options: LoadOptions {
+                config: Some(config_path.clone()),
+                credentials: Some(credentials_path.clone()),
+            },
+            yes: true,
+            ..Default::default()
+        };
+        let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+        let mut provisioner = StubProvisioner { seen: None };
+
+        run_apply(&mut prompter, &mut provisioner, &opts).expect("target apply succeeds");
+
+        let seen = provisioner.seen.expect("provisioner called");
+        assert_eq!(seen.webhook_secret_file, webhook_secret_path);
+        assert_eq!(seen.workflow_path.as_deref(), Some(workflow_path.as_path()));
+        let creds = std::fs::read_to_string(&credentials_path).expect("credentials updated");
+        assert!(creds.contains("[secrets.forge-engine-token]"), "{creds}");
+        assert!(creds.contains("token = \"admin-rest-token\""), "{creds}");
     }
 
     #[test]

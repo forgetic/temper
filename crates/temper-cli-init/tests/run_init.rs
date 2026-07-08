@@ -14,53 +14,18 @@
 //! Issue #183's e2e reuses this exact seam: `run_init` + `ScriptedPrompter` +
 //! `InitOptions`, but with a real `ForgejoProvisioner` instead of the stub.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
 use temper_cli_common::{EnvMap, LoadOptions, PathResolver, ScriptedPrompter};
 use temper_cli_init::{
-    InitOptions, InitOverrides, InitTopology, ProvisionOutcome, ProvisionRequest, Provisioner,
-    RepoSelection, main_with_options, run_init,
+    InitOptions, InitOverrides, InitTopology, RepoSelection, main_with_options, run_init,
 };
-use temper_forge::RepositoryId;
-use temper_provision::{Provisioned, RoleIdentity};
-use temper_workflow::{RawWorkflowSpec, RoleId};
+use temper_config::{DeploymentTopology, lint};
+use temper_workflow::RawWorkflowSpec;
 
-/// Returns a canned `Provisioned` for `acme/service` with two role identities
-/// (architect, engineer) + a `bot` automation identity, and records the request
-/// it was handed so the test can assert the wiring.
-struct StubProvisioner {
-    seen: Option<ProvisionRequest>,
-}
-
-impl Provisioner for StubProvisioner {
-    fn provision(&mut self, request: &ProvisionRequest) -> Result<ProvisionOutcome, String> {
-        self.seen = Some(request.clone());
-        let identity = |user: &str| RoleIdentity {
-            user: user.to_string(),
-            email: format!("{user}@example.invalid"),
-            token: format!("token-{user}"),
-            password: format!("pw-{user}"),
-        };
-        let mut roles = BTreeMap::new();
-        roles.insert(RoleId::new("architect"), identity("architect"));
-        roles.insert(RoleId::new("engineer"), identity("engineer"));
-        let provisioned = Provisioned {
-            owner: request.owner.clone(),
-            name: request.name.clone(),
-            repository: RepositoryId::new(format!("{}/{}", request.owner, request.name)),
-            roles,
-            automation: identity("bot"),
-        };
-        Ok(ProvisionOutcome {
-            provisioned,
-            // The admin token the live ForgejoProvisioner would mint from the
-            // Q4 password; the stub returns a deterministic stand-in.
-            admin_token: "admin-rest-token".to_string(),
-        })
-    }
-}
+mod support;
+use support::{StubProvisioner, load_generated_bundle};
 
 fn basic_delivery_spec() -> RawWorkflowSpec {
     serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
@@ -131,12 +96,26 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert!(config.contains("engineer"), "{config}");
     // Webhook bind address scheme-stripped to host:port.
     assert!(config.contains("bind = \"127.0.0.1:8314\""), "{config}");
-    // Provider profile + webhook secret + workflow file wired.
+    // Provider profile + target sections + workflow file wired.
+    assert!(config.contains("[deployment]"), "{config}");
+    assert!(config.contains("topology = \"standalone\""), "{config}");
+    assert!(config.contains("[workflow]"), "{config}");
+    assert!(config.contains("file = \"workflow.yaml\""), "{config}");
+    assert!(config.contains("[paths]"), "{config}");
+    assert!(config.contains("workspace_dir = \"workspace\""), "{config}");
+    assert!(config.contains("[[worker.pools]]"), "{config}");
+    assert!(config.contains("name = \"local\""), "{config}");
+    assert!(config.contains("[agent.profiles.local]"), "{config}");
     assert!(config.contains("provider = \"deepseek\""), "{config}");
     assert!(config.contains("workflow.yaml"), "{config}");
-    assert!(config.contains("webhook-secret"), "{config}");
-    // No explicit workspace is written unless requested; runtime defaults apply.
-    assert!(!config.contains("workspace ="), "{config}");
+    assert!(
+        config.contains("webhook_secret = \"webhook-secret\""),
+        "{config}"
+    );
+    assert!(
+        config.contains("forge_token = \"forge-engine-token\""),
+        "{config}"
+    );
 
     // ── workflow.yaml ─────────────────────────────────────────────────────────
     let workflow_path = dir.path().join("workflow.yaml");
@@ -152,9 +131,60 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert!(creds.contains("token-engineer"), "{creds}");
     // Automation bot identity.
     assert!(creds.contains("token-bot"), "{creds}");
-    // Provider key under [agent.providers.deepseek] as an api-key.
+    // Provider key under both legacy [agent.providers.deepseek] and target-era
+    // structured local-development named secrets.
     assert!(creds.contains("sk-deepseek-xyz"), "{creds}");
     assert!(creds.contains("api-key"), "{creds}");
+    assert!(creds.contains("[secrets.forge-engine-token]"), "{creds}");
+    assert!(creds.contains("[secrets.webhook-secret]"), "{creds}");
+    assert!(creds.contains("[secrets.worker-local-token]"), "{creds}");
+    assert!(creds.contains("[secrets.agent-provider]"), "{creds}");
+    assert!(creds.contains("provider = \"deepseek\""), "{creds}");
+    assert!(creds.contains("api_key = \"sk-deepseek-xyz\""), "{creds}");
+
+    let resolved = load_generated_bundle(&config_path, &credentials_path);
+    assert_eq!(
+        resolved.deployment.topology,
+        Some(DeploymentTopology::Standalone)
+    );
+    assert_eq!(
+        resolved.paths.workflow_file.as_deref(),
+        Some(workflow_path.as_path())
+    );
+    assert_eq!(
+        resolved.paths.workspace_dir.as_path(),
+        dir.path().join("workspace")
+    );
+    assert_eq!(
+        resolved
+            .engine
+            .forge_token
+            .as_ref()
+            .map(|reference| (reference.name.as_str(), reference.available)),
+        Some(("forge-engine-token", true))
+    );
+    assert_eq!(
+        resolved
+            .engine
+            .webhook_secret
+            .as_ref()
+            .map(|reference| (reference.name.as_str(), reference.available)),
+        Some(("webhook-secret", true))
+    );
+    let pool = resolved.worker.pools.first().expect("target pool resolves");
+    assert_eq!(pool.name, "local");
+    assert_eq!(pool.repos[0].display(), "acme/service");
+    assert_eq!(pool.agent_profile.as_deref(), Some("local"));
+    assert_eq!(pool.max_concurrent_jobs, Some(1));
+    assert!(resolved.agent.profiles.contains_key("local"));
+    let errors: Vec<_> = lint(&resolved)
+        .into_iter()
+        .filter(|finding| finding.error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "generated applied bundle lint errors: {errors:?}"
+    );
 
     // ── 0600 on the two secret files ─────────────────────────────────────────
     #[cfg(unix)]
