@@ -311,12 +311,12 @@ fn serve_usage_documents_supported_components() {
         "serve help should advertise engine as supported: {SERVE_USAGE}"
     );
     assert!(
-        SERVE_USAGE.contains("worker      Run the worker service"),
+        SERVE_USAGE.contains("worker      Run one worker process"),
         "serve help should advertise worker as supported: {SERVE_USAGE}"
     );
     assert!(
-        SERVE_USAGE.contains("trigger     Not implemented yet"),
-        "serve help should keep trigger explicitly unimplemented"
+        SERVE_USAGE.contains("trigger     No separate process"),
+        "serve help should document the trigger contract"
     );
     assert!(
         SERVE_USAGE.contains("temper --config") && SERVE_USAGE.contains("--secrets"),
@@ -327,8 +327,8 @@ fn serve_usage_documents_supported_components() {
     assert!(!SERVE_STANDALONE_USAGE.contains("--secrets"));
     assert!(!SERVE_STANDALONE_USAGE.contains("--config"));
     assert!(
-        SERVE_STANDALONE_USAGE.contains("temper daemon"),
-        "standalone help should identify the compatibility wrapper"
+        SERVE_USAGE.contains("temper daemon"),
+        "serve help should keep a compact compatibility note"
     );
     for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
         assert!(
@@ -345,7 +345,7 @@ fn serve_service_help_documents_implemented_target_flags() {
         "{SERVE_ENGINE_USAGE}"
     );
     assert!(
-        SERVE_ENGINE_USAGE.contains("temper daemon --service engine"),
+        SERVE_ENGINE_USAGE.contains("/forgejo/webhook"),
         "{SERVE_ENGINE_USAGE}"
     );
     assert!(
@@ -370,7 +370,7 @@ fn serve_service_help_documents_implemented_target_flags() {
         "{SERVE_WORKER_USAGE}"
     );
     assert!(
-        SERVE_WORKER_USAGE.contains("temper daemon --service worker"),
+        SERVE_WORKER_USAGE.contains("[[worker.pools]]"),
         "{SERVE_WORKER_USAGE}"
     );
     assert!(
@@ -632,13 +632,14 @@ fn serve_components_reject_flags_for_wrong_component() {
 }
 
 #[test]
-fn serve_trigger_remains_rejected_with_helpful_message() {
+fn serve_trigger_documents_engine_owned_webhook_contract() {
     let error = parse_serve_invocation(vec!["trigger".to_string()])
         .expect_err("trigger serve component should remain rejected");
 
     assert!(error.contains("temper serve trigger"), "{error}");
-    assert!(error.contains("not implemented yet"), "{error}");
-    assert!(error.contains("later workitem"), "{error}");
+    assert!(error.contains("no separate process"), "{error}");
+    assert!(error.contains("temper serve engine"), "{error}");
+    assert!(error.contains("polling"), "{error}");
 }
 
 #[test]

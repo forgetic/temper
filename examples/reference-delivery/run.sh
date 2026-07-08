@@ -3,8 +3,9 @@
 #
 # It follows the long-term Temper UX: `temper --config <bundle-dir> init
 # --apply --yes` writes and provisions a deployment bundle from the checked-in
-# reference workflow, then `temper --config <bundle-dir> serve standalone`
-# runs the engine, worker, and agent in one process.
+# reference workflow, `temper --config <bundle-dir> check` validates it, then
+# `temper --config <bundle-dir> serve standalone` runs the engine, worker, and
+# agent in one process.
 # The only direct Forgejo API use is demo setup: create the throwaway admin,
 # seed a tiny repository baseline, and file the intake issue after Temper is
 # ready so the issue-created webhook drives the wake path.
@@ -404,6 +405,14 @@ run_temper_init() {
     log "temper init --apply wrote config/credentials and registered $WEBHOOK_URL"
 }
 
+run_temper_check() {
+    log 'running temper check for the generated standalone bundle ...'
+    : >"$LOG_DIR/check.log"
+    "$RUN_BIN" --config "$RUN_DIR" check --component standalone \
+        >"$LOG_DIR/check.log" 2>&1 || die 'temper check failed (see logs/check.log)'
+    printf 'repo=%s check=standalone status=ok\n' "$REPO" >>"$LOG_DIR/provision.log"
+}
+
 percent_encode() {
     python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
 }
@@ -765,6 +774,7 @@ cmd_single_repo() {
     boot_jig
     bootstrap_admin
     run_temper_init
+    run_temper_check
     populate_repo
     boot_run
     seed_intake

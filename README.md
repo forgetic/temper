@@ -16,6 +16,42 @@ Define a workflow as a state machine. Temper executes it.
 
 ---
 
+## Operator command flow
+
+The public runtime UX is centered on a small command set:
+
+```sh
+temper --config ./deploy init        # write a local deployment bundle
+temper --config ./deploy check       # validate config, credentials, pools, secrets
+temper --config ./deploy apply       # provision the Forgejo repo/users/labels/webhook
+temper --config ./deploy serve standalone
+# or split runtime services:
+temper --config ./deploy serve engine
+temper --config ./deploy serve worker --pool engineers
+```
+
+`temper init --apply` combines the local write and provisioning steps for demos.
+For production, review the generated config/workflow and the provisioning-plan
+inputs before `apply`; `temper check --component engine` and
+`temper check --component worker --pool <name>` validate the same bundle without
+starting services. Use top-level `temper check` for validation —
+`temper config validate` remains only a compatibility path.
+
+`temper serve` is the documented long-lived runtime surface. Legacy
+`temper daemon` forms are still accepted for existing automation but are hidden
+from onboarding help. The engine owns the Forgejo webhook endpoint
+(`/forgejo/webhook`); webhook deliveries are wake hints and polling remains the
+correctness backstop, so there is no separate trigger service.
+
+Temper's long-term environment surface is intentionally narrow: standard
+`HOME`/`XDG_*`, systemd `CREDENTIALS_DIRECTORY`, logging controls, and the
+single worker-to-agent provider credential env. Put deployment state in
+config/credentials files or systemd credentials, not `TEMPER_*` overrides. See
+[Environment variables](docs/reference/environment-variables.md) and the
+[systemd examples](examples/systemd/README.md).
+
+---
+
 ## Why
 
 Most workflow systems keep their state in a separate orchestration service.

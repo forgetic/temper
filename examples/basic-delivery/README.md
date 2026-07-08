@@ -28,12 +28,14 @@ alone.
 4. Because init does not seed project content, `run.sh` creates the initial
    default-branch commit explicitly: a tiny `README.md` plus
    `.forgejo/workflows/ci.yml` copied from `config/ci.yml`.
-5. `run.sh` launches
+5. `run.sh` validates the generated bundle with
+   `temper --config run check --component standalone` before starting runtime.
+6. `run.sh` launches
    `temper --config run serve standalone`.
-6. After standalone readiness, `run.sh` uses the site-admin token to file one
+7. After standalone readiness, `run.sh` uses the site-admin token to file one
    unlabeled intake issue. That issue-created webhook is the demonstrated wake
    path.
-7. The architect rewrites the thin intake into a ready code issue, the engineer
+8. The architect rewrites the thin intake into a ready code issue, the engineer
    opens a PR, real Forgejo Actions CI runs, and the bot auto-merges when CI is
    green.
 
@@ -82,10 +84,10 @@ short and auditable.
 ## Troubleshooting
 
 `./run.sh stop` removes the throwaway Forgejo state and init-emitted
-credentials, but logs are retained. Inspect `logs/provision.log` and
-`logs/run.log` for init/webhook records, standalone readiness, webhook delivery
-and wake scan, job assignment/result lines, worker assignment/result lines, and
-CI-read fallback diagnostics.
+credentials, but logs are retained. Inspect `logs/provision.log`,
+`logs/check.log`, and `logs/run.log` for init/webhook records, standalone
+readiness, webhook delivery and wake scan, job assignment/result lines, worker
+assignment/result lines, and CI-read fallback diagnostics.
 
 If a run is force-killed, clean up possible orphans:
 

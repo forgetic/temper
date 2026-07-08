@@ -22,6 +22,7 @@ Current reference pages:
   - [Workflow recovery](workflow-recovery.md)
 - [Post-merge validator handoff](post-merge-validator-handoff.md)
 - [Production worker runtime](production-worker.md)
+- [Environment variables](environment-variables.md)
 - [Cross-repository workflow contracts](cross-repo-workflows.md)
 - [Interactive conversation interface](interactive-conversation-interface.md)
 - [Interaction profile spec](interaction-profile-spec.md)

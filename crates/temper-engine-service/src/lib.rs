@@ -4,7 +4,7 @@
 //! and lands PRs.
 //!
 //! [`run`] is the entry point used by both the slim `temper-engine` binary and
-//! the unified binary's `temper daemon --service engine`. The reusable wiring
+//! the unified binary's `temper serve engine` path. The reusable wiring
 //! ([`resolve_repositories`], [`role_feed_targets`], [`ensure_workflow_labels`],
 //! [`result_applier`]) is `pub` so the unified binary's standalone (all-in-one)
 //! mode composes the same engine without duplicating it.

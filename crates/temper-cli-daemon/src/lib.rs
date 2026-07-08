@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! `temper daemon` / `temper serve` — run the full standalone daemon, or one
-//! service of it.
+//! `temper serve` plus legacy `temper daemon` — run the full standalone
+//! runtime, or one service of it.
 //!
-//! `temper daemon` with no `--service` and `temper serve standalone` both run the
-//! all-in-one (engine + worker + agent in one process). `temper daemon --service
-//! engine`, `temper serve engine`, `temper daemon --service worker`, and
-//! `temper serve worker` run a single service for a distributed topology,
-//! sharing the exact code the slim `temper-engine` / `temper-worker` binaries
-//! run.
+//! `temper serve standalone` is the public all-in-one path (engine + worker +
+//! agent in one process). `temper serve engine` and `temper serve worker` run a
+//! single service for a distributed topology, sharing the exact code the slim
+//! `temper-engine` / `temper-worker` binaries run. The older `temper daemon`
+//! forms remain dispatchable for existing scripts but are no longer advertised
+//! as the onboarding/runtime surface.
 //!
 //! This crate carries the heavy engine/worker/agent wiring; the slimmer
 //! `temper-cli` dispatcher delegates `temper daemon` here and re-exports the
@@ -54,20 +54,21 @@ pub(crate) use serve_args::{ServeInvocation, parse_serve_invocation};
 pub use standalone::{InProcessAgentRunner, InProcessTransport};
 
 pub const USAGE: &str = "\
-Run the temper daemon.
+Legacy compatibility command for running Temper.
 
-The temper daemon can be run as:
+Prefer the public runtime commands:
+  temper [GLOBAL OPTIONS] serve standalone
+  temper [GLOBAL OPTIONS] serve engine
+  temper [GLOBAL OPTIONS] serve worker
 
-- Standalone: all services run in one process (engine, workers, agents, etc.)
-- Distributed topology: individual services run as scalable separate processes
-
-Use top-level `temper --config ... --secrets ... daemon` to select a deployment
-bundle; config files provide runtime settings.
+`temper daemon` with no `--service` still maps to `serve standalone`; `--service
+engine|worker` still maps to the corresponding `serve` component for existing
+automation.
 
 Usage: temper [GLOBAL OPTIONS] daemon [OPTIONS]
 
 Options:
-  --service <NAME>  Which individual service to run (engine, worker). If not
+  --service <NAME>  Compatibility service selector (engine, worker). If not
                     given, run as standalone.
   -h, --help        Print help";
 

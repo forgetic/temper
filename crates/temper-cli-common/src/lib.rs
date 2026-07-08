@@ -203,7 +203,7 @@ pub struct FileTargets {
 /// This is the single place a CLI turns "where should I write?" into concrete
 /// paths. It intentionally ignores `CREDENTIALS_DIRECTORY` unless `--secrets` is
 /// explicit: systemd credential directories are input secret sources, not output
-/// targets for `temper init` or `temper config init`. The environment is
+/// targets for `temper init` or legacy `temper config init`. The environment is
 /// injected (the snapshot `src/bin` took): this helper never reads `std::env`.
 pub fn resolve_targets(
     options: &LoadOptions,

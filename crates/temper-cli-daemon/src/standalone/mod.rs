@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Standalone (all-in-one) `temper daemon`: engine + worker + agent on one
-//! single-threaded event loop.
+//! Standalone (all-in-one) `temper serve standalone`: engine + worker + agent on
+//! one single-threaded event loop.
 //!
 //! Assembles all three planes in one process: a [`Daemon`] (the orchestrator),
 //! an in-process worker driving an [`InProcessAgentRunner`], wired by the

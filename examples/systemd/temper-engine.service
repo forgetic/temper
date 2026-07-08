@@ -1,0 +1,29 @@
+[Unit]
+Description=Temper engine
+Documentation=https://github.com/temper-rs/temper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=temper
+Group=temper
+StateDirectory=temper
+WorkingDirectory=/var/lib/temper
+Environment=RUST_LOG=info
+LoadCredential=credentials.toml:/etc/temper/credentials.toml
+LoadCredential=webhook-secret:/etc/temper/webhook-secret
+ExecStart=/usr/local/bin/temper --config /etc/temper/config.toml serve engine --id %H-engine
+Restart=on-failure
+RestartSec=5s
+
+# Tighten further for your deployment once workspace paths and git helpers are
+# known. Workers, not the engine, need writable checkout space.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/temper
+
+[Install]
+WantedBy=multi-user.target

@@ -14,11 +14,11 @@ support.
 | Path | Look here for |
 | --- | --- |
 | `src/bin/temper.rs` | The unified `temper` binary composition root. It snapshots argv/env/paths/cwd once and delegates to `temper-cli`. |
-| `crates/temper-cli/` | Thin dispatcher for `temper init`, `config`, `daemon`/`serve`, the `agent` entrypoint, and hidden operator/responder tools. |
+| `crates/temper-cli/` | Thin dispatcher for public `temper init`, `check`, `apply`, `config`, and `serve` commands plus legacy/internal entry points. |
 | `crates/temper-cli-common/` | Shared CLI plumbing: prompt abstraction, argv helpers, exit-code wrappers, file target resolution, and terminal-safe file writes. |
-| `crates/temper-cli-config/` | `temper config` subcommands: validate/check, show, paths, schema, and starter template output over `temper-config`. |
-| `crates/temper-cli-init/` | Interactive `temper init`: collect operator answers, write config/workflow/credential artifacts, and optionally provision when `--apply` is explicit. |
-| `crates/temper-cli-daemon/` | `temper daemon` / `temper serve` wiring for standalone all-in-one mode or individual engine/worker services. This is where the unified CLI pulls in the heavy engine/worker/agent stack. |
+| `crates/temper-cli-config/` | `temper config` inspection helpers: show, paths, schema, plus compatibility validation/template commands over `temper-config`. |
+| `crates/temper-cli-init/` | Interactive `temper init` and explicit `temper apply`: collect operator answers, write config/workflow/credential artifacts, derive the provisioning plan, and optionally mutate Forgejo. |
+| `crates/temper-cli-daemon/` | `temper serve` wiring for standalone all-in-one mode or individual engine/worker services; legacy `temper daemon` dispatch remains here for compatibility. This is where the unified CLI pulls in the heavy engine/worker/agent stack. |
 | `crates/temper-engine-service/` | Slim `temper-engine` service binary and adapters from resolved config into a running engine daemon. |
 | `crates/temper-worker-service/` | Slim `temper-worker` service binary and adapters from resolved config into a long-polling worker that spawns out-of-process agents. |
 | `crates/temper-agent-session/` | Slim `temper-agent` process boundary: read `WorkspaceContext`, run one native coding-agent session in the prepared workspace, write `WorkspaceResult`. |

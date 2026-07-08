@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "The `temper daemon` subcommand: run the full standalone (all-in-one) daemon, or one of its services (engine, worker). Carries the heavy engine/worker/agent wiring; the in-process agent runner lives here while the worker→daemon transport is shared via temper-daemon-transport."
+description = "The `temper serve` runtime subcommands plus legacy `temper daemon` compatibility: run standalone or one engine/worker service. Carries the heavy engine/worker/agent wiring; the in-process agent runner lives here while the worker→daemon transport is shared via temper-daemon-transport."
 
 [dependencies]
 async-trait = { workspace = true }

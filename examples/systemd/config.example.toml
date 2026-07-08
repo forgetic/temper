@@ -1,0 +1,49 @@
+# Example split-runtime Temper config for systemd.
+# Copy to /etc/temper/config.toml and edit for your forge/workflow.
+schema_version = 1
+
+[forge]
+type = "forgejo"
+url = "https://forge.example.com"
+admin = "bot"
+ci_user = "bot"
+
+[engine]
+bind = "0.0.0.0:4000"
+repos = ["acme/service"]
+roles = ["architect", "engineer", "reviewer"]
+poll_cadence_secs = 300
+mechanical_cadence_secs = 120
+lease_ttl_secs = 300
+# Named secret resolved from CREDENTIALS_DIRECTORY/webhook-secret.
+webhook_secret = "webhook-secret"
+
+[worker]
+daemon_url = "http://127.0.0.1:4000"
+workspace = "/var/lib/temper/workspace"
+
+[[worker.pools]]
+name = "architects"
+roles = ["architect"]
+repos = ["acme/service"]
+max_concurrent_jobs = 1
+
+[[worker.pools]]
+name = "engineers"
+roles = ["engineer"]
+repos = ["acme/service"]
+max_concurrent_jobs = 2
+
+[[worker.pools]]
+name = "reviewers"
+roles = ["reviewer"]
+repos = ["acme/service"]
+max_concurrent_jobs = 1
+
+[agent]
+provider = "anthropic"
+max_iterations = 250
+enable_subagents = false
+
+[agent.providers.anthropic]
+models = { main = "claude-opus-4-8", investigate = "claude-haiku-4-5" }

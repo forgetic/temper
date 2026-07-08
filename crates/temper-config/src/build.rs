@@ -12,9 +12,9 @@
 //!
 //! 1. **Round-trip validated before write.** [`write_config`]/[`write_credentials`]
 //!    serialize the in-memory document to TOML, then *re-parse it through the
-//!    same loader the daemon uses* ([`Config::parse`]/[`Credentials::parse`])
+//!    same loader the runtime uses* ([`Config::parse`]/[`Credentials::parse`])
 //!    before any byte touches disk. A document that would not load can never be
-//!    written, so `temper init` cannot emit a file `temper daemon` would reject.
+//!    written, so `temper init` cannot emit a file `temper serve` would reject.
 //! 2. **Credentials are written `0600`.** [`write_credentials`] sets owner-only
 //!    permissions on Unix immediately after creating the file.
 //!
