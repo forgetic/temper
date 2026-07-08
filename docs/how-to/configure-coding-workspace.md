@@ -63,8 +63,9 @@ which the worker builds from the credentials file and injects into the child.
 
 Put non-secret wiring in the config file (`temper.toml`; the on-disk default
 filename is `config.toml`) and the provider secret in the credentials file
-(`credentials.toml`). `temper config init` writes copy-pasteable templates for
-both.
+(`credentials.toml`). Top-level `temper init` writes a complete deployment
+bundle for onboarding; the legacy `temper config init` template writer remains
+available only for scripts that need bare copy-pasteable TOML templates.
 
 ```toml
 # temper.toml — non-secret deployment settings

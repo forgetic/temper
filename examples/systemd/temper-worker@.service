@@ -1,0 +1,28 @@
+[Unit]
+Description=Temper worker pool %i
+Documentation=https://github.com/temper-rs/temper
+After=network-online.target temper-engine.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=temper
+Group=temper
+StateDirectory=temper
+WorkingDirectory=/var/lib/temper
+Environment=RUST_LOG=info
+LoadCredential=credentials.toml:/etc/temper/credentials.toml
+LoadCredential=webhook-secret:/etc/temper/webhook-secret
+ExecStart=/usr/local/bin/temper --config /etc/temper/config.toml serve worker --pool %i --id %H-%i --engine-url http://127.0.0.1:4000
+Restart=on-failure
+RestartSec=5s
+
+# Workers need writable workspace state for prepared checkouts and agent runs.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/temper
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use crate::WorkerAuth;
 use crate::coding_executor::CodingExecutorConfig;
 use crate::config::{CapabilitySpec, ExecutorSelection, WorkerConfig, WorkerParams};
 use crate::workspace::RoleGitIdentity;
@@ -21,6 +22,7 @@ fn in_memory_worker_config() -> WorkerConfig {
         daemon_url: "in-process".to_string(),
         worker_id: "worker-unit".to_string(),
         worker_pool: None,
+        worker_auth: None,
         capabilities: vec![CapabilitySpec {
             repo: "acme/widgets".to_string(),
             role: "engineer".to_string(),
@@ -42,6 +44,19 @@ fn worker_config_carries_role_identities() {
             .get("engineer")
             .map(|id| id.user.as_str()),
         Some("Engineer"),
+    );
+}
+
+#[test]
+fn worker_config_debug_redacts_worker_auth_token() {
+    let mut config = in_memory_worker_config();
+    config.worker_auth = Some(WorkerAuth::bearer("super-secret-worker-token"));
+
+    let rendered = format!("{config:?}");
+    assert!(rendered.contains("[REDACTED]"), "{rendered}");
+    assert!(
+        !rendered.contains("super-secret-worker-token"),
+        "{rendered}"
     );
 }
 

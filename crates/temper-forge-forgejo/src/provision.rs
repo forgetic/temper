@@ -30,8 +30,8 @@ use base64::Engine;
 use serde_json::{Value, json};
 use temper_forge_model::{
     AccessGrant, AccessScope, CommitFile, CreateBranch, EnsureRepository, ForgeAdmin, ForgeContent,
-    ForgeError, ForgeResult, NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope,
-    WebhookEvents, WebhookSpec,
+    ForgeError, ForgeReadiness, ForgeResult, NewUser, ProvisionedUserStatus, RepoPermission,
+    RepositoryId, RepositoryPath, TokenScope, WebhookEvents, WebhookSpec, WebhookStatus,
 };
 
 /// The shared password assigned to demo role users.
@@ -421,6 +421,68 @@ impl<C: HttpClient> ForgeAdmin for ForgejoForge<C> {
     }
 }
 
+#[async_trait::async_trait]
+impl<C: HttpClient> ForgeReadiness for ForgejoForge<C> {
+    async fn get_provisioned_user(
+        &self,
+        login: &str,
+    ) -> ForgeResult<Option<ProvisionedUserStatus>> {
+        let path = format!("/users/{login}");
+        let Some(response) = self
+            .request_optional("get user", HttpMethod::Get, &path, Vec::new(), None)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let user: crate::types::UserDto = Self::decode("get user", &response)?;
+        Ok(Some(ProvisionedUserStatus {
+            login: user.login,
+            email: user.email,
+        }))
+    }
+
+    async fn list_webhook_statuses(&self, repo: &RepositoryId) -> ForgeResult<Vec<WebhookStatus>> {
+        let coord = parse_repository_id(repo)?;
+        let hooks_path = format!("/repos/{}/{}/hooks", coord.owner, coord.name);
+        let response = self
+            .provision_send(HttpMethod::Get, &hooks_path, None)
+            .await?;
+        if !response.is_success() {
+            return Err(crate::error::map_status_error("list repo hooks", &response));
+        }
+        let hooks: Value = serde_json::from_str(&response.body).map_err(|err| {
+            ForgeError::Backend(format!("list repo hooks: failed to decode response: {err}"))
+        })?;
+        Ok(hooks
+            .as_array()
+            .into_iter()
+            .flat_map(|hooks| hooks.iter())
+            .filter_map(|hook| {
+                let url = hook_config_url(hook)?.to_string();
+                Some(WebhookStatus {
+                    url,
+                    events: hook_events_from_response(hook),
+                })
+            })
+            .collect())
+    }
+
+    async fn repository_ci_enabled(&self, repo: &RepositoryId) -> ForgeResult<Option<bool>> {
+        let coord = parse_repository_id(repo)?;
+        let path = format!("/repos/{}/{}", coord.owner, coord.name);
+        let Some(response) = self
+            .request_optional("get repository", HttpMethod::Get, &path, Vec::new(), None)
+            .await?
+        else {
+            return Err(ForgeError::NotFound(format!("repository {repo}")));
+        };
+        let body: Value = serde_json::from_str(&response.body).map_err(|err| {
+            ForgeError::Backend(format!("get repository: failed to decode response: {err}"))
+        })?;
+        Ok(body.get("has_actions").and_then(Value::as_bool))
+    }
+}
+
 impl<C: HttpClient> ForgejoForge<C> {
     /// Resolves the `Owners` team id of an organization
     /// (`GET /orgs/{owner}/teams`), used by [`AccessScope::OrgOwners`] grants.
@@ -472,6 +534,24 @@ fn hook_config_url(hook: &Value) -> Option<&str> {
     hook.pointer("/config/url")
         .and_then(Value::as_str)
         .or_else(|| hook["url"].as_str())
+}
+
+fn hook_events_from_response(hook: &Value) -> WebhookEvents {
+    let events = hook["events"]
+        .as_array()
+        .map(|events| {
+            events
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if events.is_empty() {
+        WebhookEvents::Only(Vec::new())
+    } else {
+        WebhookEvents::Only(events)
+    }
 }
 
 /// The Forgejo event identifiers a [`WebhookEvents`] selection maps to.

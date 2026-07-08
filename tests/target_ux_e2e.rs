@@ -10,20 +10,24 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 use temper_cli_common::{LoadOptions, ScriptedPrompter};
-use temper_cli_init::{ApplyOptions, ProvisionOutcome, ProvisionRequest, Provisioner, run_apply};
+use temper_cli_init::{
+    ApplyOptions, ApplyPlanOutcome, ApplyPlanRequest, ApplyProvisioner, run_apply,
+};
 use temper_forge::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
-use temper_workflow::RoleId;
 
 use support::{FakeForge, temper};
 
 #[derive(Default)]
 struct RecordingProvisioner {
-    seen: Option<ProvisionRequest>,
+    seen: Option<ApplyPlanRequest>,
 }
 
-impl Provisioner for RecordingProvisioner {
-    fn provision(&mut self, request: &ProvisionRequest) -> Result<ProvisionOutcome, String> {
+impl ApplyProvisioner for RecordingProvisioner {
+    fn provision_apply_plan(
+        &mut self,
+        request: &ApplyPlanRequest,
+    ) -> Result<ApplyPlanOutcome, String> {
         self.seen = Some(request.clone());
         let identity = |user: &str| RoleIdentity {
             user: user.to_string(),
@@ -31,18 +35,22 @@ impl Provisioner for RecordingProvisioner {
             token: format!("token-{user}"),
             password: format!("pw-{user}"),
         };
-        let mut roles = BTreeMap::new();
-        roles.insert(RoleId::new("architect"), identity("architect"));
-        roles.insert(RoleId::new("engineer"), identity("engineer"));
-        roles.insert(RoleId::new("reviewer"), identity("reviewer"));
-        Ok(ProvisionOutcome {
-            provisioned: Provisioned {
-                owner: request.owner.clone(),
-                name: request.name.clone(),
-                repository: RepositoryId::new(format!("{}/{}", request.owner, request.name)),
+        let mut provisioned = Vec::new();
+        for plan in &request.plans {
+            let mut roles = BTreeMap::new();
+            for binding in &plan.roles {
+                roles.insert(binding.role.clone(), identity(&binding.user.handle));
+            }
+            provisioned.push(Provisioned {
+                owner: plan.repo.owner.clone(),
+                name: plan.repo.name.clone(),
+                repository: RepositoryId::new(format!("{}/{}", plan.repo.owner, plan.repo.name)),
                 roles,
-                automation: identity("bot"),
-            },
+                automation: identity(&plan.automation_login),
+            });
+        }
+        Ok(ApplyPlanOutcome {
+            provisioned,
             admin_token: "token-root".to_string(),
         })
     }
@@ -100,7 +108,10 @@ fn target_ux_init_check_apply_flow_uses_json_input_and_yaml_bundle() {
         dir.path(),
     );
     assert_eq!(before_apply["status"], "error");
-    assert_finding_contains(&before_apply, "forge admin token is unset");
+    assert_finding_contains(
+        &before_apply,
+        "engine.forge_token references missing secret",
+    );
 
     let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
     let mut provisioner = RecordingProvisioner::default();
@@ -110,7 +121,7 @@ fn target_ux_init_check_apply_flow_uses_json_input_and_yaml_bundle() {
         &ApplyOptions {
             options: LoadOptions {
                 config: Some(bundle.clone()),
-                credentials: None,
+                credentials: Some(bundle.join("credentials.toml")),
             },
             yes: true,
             ..Default::default()
@@ -120,16 +131,21 @@ fn target_ux_init_check_apply_flow_uses_json_input_and_yaml_bundle() {
 
     let request = provisioner.seen.expect("apply planned provisioning");
     assert_eq!(request.base_url, "http://forge.example.invalid");
-    assert_eq!(request.owner, "acme");
-    assert_eq!(request.name, "service");
+    assert_eq!(request.admin_user.as_deref(), Some("root"));
     assert_eq!(
-        request.webhook_url,
-        "http://127.0.0.1:38100/forgejo/webhook"
+        request.admin_password.as_deref(),
+        Some("fixture-root-password")
     );
-    assert_eq!(
-        request.workflow_path.as_deref(),
-        Some(bundle.join("workflow.yaml").as_path())
-    );
+    assert_eq!(request.plans.len(), 1);
+    let plan = &request.plans[0];
+    assert_eq!(plan.repo.owner, "acme");
+    assert_eq!(plan.repo.name, "service");
+    let webhook = plan.webhook.as_ref().expect("webhook planned");
+    assert_eq!(webhook.url, "http://127.0.0.1:38100/forgejo/webhook");
+    let credentials = std::fs::read_to_string(bundle.join("credentials.toml"))
+        .expect("credentials updated by apply");
+    assert!(credentials.contains("token-root"), "{credentials}");
+    assert!(credentials.contains("token-engineer"), "{credentials}");
 
     let after_apply = temper_json(
         &[
@@ -142,11 +158,6 @@ fn target_ux_init_check_apply_flow_uses_json_input_and_yaml_bundle() {
         dir.path(),
     );
     assert_eq!(after_apply["status"], "ok");
-    let credentials = std::fs::read_to_string(bundle.join("credentials.toml"))
-        .expect("credentials updated by apply");
-    assert!(credentials.contains("token-root"), "{credentials}");
-    assert!(credentials.contains("token-engineer"), "{credentials}");
-
     let help = temper(&["serve", "standalone", "--help"], dir.path());
     assert_success(&help);
     let stdout = String::from_utf8(help.stdout).expect("stdout utf8");
@@ -314,9 +325,10 @@ fn target_ux_trigger_contract_is_selected_and_documented() {
     );
     let stderr = String::from_utf8(rejected.stderr).expect("stderr utf8");
     assert!(
-        stderr.contains("`temper serve trigger` is not implemented yet"),
+        stderr.contains("`temper serve trigger` is not a supported separate component"),
         "{stderr}"
     );
+    assert!(stderr.contains("POST /forgejo/webhook"), "{stderr}");
 }
 
 fn temper_with_env(args: &[&str], env_root: &Path, envs: &[(&str, &str)]) -> Output {

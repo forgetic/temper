@@ -1,16 +1,20 @@
 # Production worker runtime
 
-In the consolidated two-tier deployment, one `temper-daemon` (see
-`deploy/README.md`) replaces the per-role worker, mechanical worker, and webhook
-trigger processes with webhook intake, poll backstops, and queue dispatch.
-Workers long-poll the daemon for work; the per-process model below remains valid
-for legacy or standalone operation.
+In the current two-tier deployment, `temper serve engine` owns webhook intake,
+poll backstops, and queue scheduling while one or more `temper serve worker`
+processes long-poll it for jobs. Forgejo webhooks are posted to the
+engine/standalone HTTP surface at `POST /forgejo/webhook` when `[engine]
+webhook_secret` or `webhook_secret_file` is configured; there is no separate
+`temper serve trigger` process. The older per-role worker, mechanical worker,
+and standalone daemon wording below remains useful for legacy or test-only
+operation, but operator-facing docs should prefer `serve engine` / `serve
+worker`.
 
 This page records the operator-visible knobs on the Forgejo `temper-worker`
 binary. The deployable entrypoint lives in the root `temper` package and
-delegates to `crates/temper-worker`; its wake socket support is shared through
-`crates/temper-wake`, and optional local-git edits are bound through
-`crates/temper-coding-workspace`.
+delegates to `crates/temper-worker`; its legacy/internal wake socket support is
+shared through `crates/temper-wake`, and optional local-git edits are bound
+through `crates/temper-coding-workspace`.
 
 It complements the workflow and Forge references; workflow authority still comes
 from the compiled workflow and every mutation still goes through `Forge`.
@@ -40,8 +44,9 @@ the Forgejo token decides what the worker may read or mutate.
   Mechanical audit ticks are the explicit deep-audit path and may run
   all-history reconciliation.
 - `--wake-socket <path>` plus optional `--wake-secret-file <path>` enables
-  authenticated webhook wakeups. Pull-request, review, CI/status, label-change,
-  and push hints are all safe triggers for the same normal scan path. A wake with
+  authenticated webhook wakeups for the legacy/internal wake-socket topology.
+  Pull-request, review, CI/status, label-change, and push hints are all safe
+  triggers for the same normal scan path. A wake with
   known repository hints immediately narrows role scans to the hinted configured
   repositories. No-hint or unknown hints fall back to a broad configured-repo
   scan. Mechanical wake scans still visit all configured repositories in
@@ -52,8 +57,9 @@ the Forgejo token decides what the worker may read or mutate.
   worker binary reads it once at startup and passes a concrete duration to the
   wake bus (`temper-wake` itself never reads the environment).
 
-Every tick re-reads fresh Forge state before planning or mutating. Webhooks only
-accelerate latency; polling and audits remain the correctness backstops.
+Every tick re-reads fresh Forge state before planning or mutating. Engine or
+standalone webhooks only accelerate latency; polling and audits remain the
+correctness backstops.
 
 ## Diagnostics
 

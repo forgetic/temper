@@ -15,6 +15,7 @@ use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
     engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
+    worker_pool_auth_config,
 };
 
 /// Runs the engine on the skein runtime until SIGINT/SIGTERM, then drains.
@@ -49,7 +50,7 @@ pub async fn run_async(
     let wake_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Wake);
     let lease_ttl = lease_ttl(&config)?;
 
-    let daemon = Daemon::with_applier(
+    let daemon = Daemon::with_applier_and_worker_pools(
         Arc::clone(&spawner),
         result_applier(
             forge.clone(),
@@ -59,7 +60,9 @@ pub async fn run_async(
             &role_tokens,
             lease_ttl,
         ),
-    );
+        config.worker_pools.clone(),
+    )
+    .with_worker_pool_auth(worker_pool_auth_config(resolved)?);
 
     spawn_poll(
         &spawner,

@@ -7,10 +7,103 @@ use temper_protocol_worker::{
     Assign, ErrorCode, Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
+use crate::WorkerPoolPolicy;
 use crate::daemon_core::{DaemonCore, InFlightJob};
 use crate::test_support::{
     artifact, assert_error, coordinated_payload, heartbeat, poll, register, register_multi, result,
 };
+
+fn builders_policy() -> Vec<WorkerPoolPolicy> {
+    vec![WorkerPoolPolicy::new(
+        "builders",
+        vec!["engineer".to_string()],
+        vec!["ai/temper".to_string(), "ai/smith".to_string()],
+        Some(2),
+    )]
+}
+
+#[test]
+fn register_validates_selected_pool_policy_before_dispatch() {
+    let mut core = DaemonCore::with_pool_policies(builders_policy());
+    let mut msg = register_multi("worker-a", "engineer", &["ai/temper", "ai/smith"], 2);
+    msg.worker_pool = Some("builders".to_string());
+
+    assert_eq!(core.handle(WorkerProtocolMessage::Register(msg)), None);
+    core.enqueue_job(
+        "job-1",
+        "engineer",
+        "ai/temper",
+        artifact(),
+        coordinated_payload("coord-1", &["ai/temper", "ai/smith"]),
+    );
+
+    match core.handle(poll("worker-a")) {
+        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-1"),
+        other => panic!("expected assign, got {other:?}"),
+    }
+}
+
+#[test]
+fn register_rejects_selected_pool_that_violates_policy() {
+    let mut core = DaemonCore::with_pool_policies(builders_policy());
+    let mut too_large = register("worker-a", "engineer", "ai/temper", 3);
+    too_large.worker_pool = Some("builders".to_string());
+
+    assert_error(
+        core.handle(WorkerProtocolMessage::Register(too_large)),
+        ErrorCode::RegistrationRejected,
+        "worker capacity 3 exceeds worker pool `builders` max_concurrent_jobs 2",
+    );
+    assert_error(
+        core.handle(poll("worker-a")),
+        ErrorCode::UnknownWorker,
+        "unknown worker",
+    );
+
+    let mut wrong_repo = register("worker-a", "engineer", "ai/other", 1);
+    wrong_repo.worker_pool = Some("builders".to_string());
+    assert_error(
+        core.handle(WorkerProtocolMessage::Register(wrong_repo)),
+        ErrorCode::RegistrationRejected,
+        "worker capability `ai/other:engineer` is outside worker pool `builders` policy",
+    );
+}
+
+#[test]
+fn register_without_pool_preserves_legacy_capabilities_with_pool_policies() {
+    let mut core = DaemonCore::with_pool_policies(builders_policy());
+    assert_eq!(
+        core.handle(WorkerProtocolMessage::Register(register(
+            "legacy-worker",
+            "legacy",
+            "legacy/repo",
+            1,
+        ))),
+        None
+    );
+    core.enqueue_job("job-1", "legacy", "legacy/repo", artifact(), json!({}));
+
+    match core.handle(poll("legacy-worker")) {
+        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-1"),
+        other => panic!("expected legacy assign, got {other:?}"),
+    }
+}
+
+#[test]
+fn register_rejects_empty_worker_id() {
+    let mut core = DaemonCore::new();
+
+    assert_error(
+        core.handle(WorkerProtocolMessage::Register(register(
+            " ",
+            "engineer",
+            "ai/temper",
+            1,
+        ))),
+        ErrorCode::RegistrationRejected,
+        "worker_id must not be empty",
+    );
+}
 
 #[test]
 fn coordinated_job_dispatches_only_to_an_all_repo_capable_worker() {

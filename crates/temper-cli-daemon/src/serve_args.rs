@@ -11,9 +11,15 @@ Usage: temper [GLOBAL OPTIONS] serve <COMPONENT> [OPTIONS]
 
 Components:
   standalone  Run all Temper planes in one local process
-  engine      Run the engine service (`temper daemon --service engine`)
-  worker      Run the worker service (`temper daemon --service worker`)
-  trigger     Not implemented yet for `temper serve`
+  engine      Run the engine service and Forgejo webhook endpoint
+  worker      Run the worker service, optionally scoped to a worker pool
+
+Forgejo webhook intake:
+  There is no separate `temper serve trigger` process. Configure
+  `[engine] webhook_secret` or `[engine] webhook_secret_file` and point
+  HMAC-signed Forgejo webhooks at POST /forgejo/webhook on
+  `temper serve engine` or `temper serve standalone`. Periodic polling remains
+  the correctness backstop.
 
 Options:
   -h, --help  Print help
@@ -26,13 +32,17 @@ Component options:
 Place `--config` / `--secrets` before `serve`, for example:
   temper --config ./deploy --secrets ./deploy/credentials.toml serve engine
 
+Legacy `temper daemon` forms remain dispatchable for existing automation, but
+new deployments should use `temper serve <component>`.
+
 Run `temper serve <component> --help` for component-specific usage.";
 
 pub const SERVE_STANDALONE_USAGE: &str = "\
 Run Temper in standalone mode.
 
-This is a compatibility wrapper for the existing all-in-one `temper daemon` path
-without `--service`: engine, worker, and agent execution run in one process.
+The engine, worker, webhook intake, poll backstops, and agent execution run in
+one local process. Use this for demos and small single-host deployments. Legacy
+`temper daemon` without `--service` maps to this component for compatibility.
 
 Usage: temper [GLOBAL OPTIONS] serve standalone [--id <ID>]
 
@@ -43,21 +53,22 @@ Options:
 pub const SERVE_ENGINE_USAGE: &str = "\
 Run the Temper engine service.
 
-This is a compatibility wrapper for the existing `temper daemon --service engine`
-path. Put deployment file flags before `serve`:
+The engine owns queue scheduling, the worker protocol, Forgejo webhook intake at
+`/forgejo/webhook`, and poll/mechanical backstops. Put deployment file flags
+before `serve`:
   temper --config ./deploy --secrets ./deploy/credentials.toml serve engine
 
 Usage: temper [GLOBAL OPTIONS] serve engine [--id <ID>]
 
 Options:
-      --id <ID>  Override the engine daemon/process identity
+      --id <ID>  Override the engine process identity
   -h, --help    Print help";
 
 pub const SERVE_WORKER_USAGE: &str = "\
 Run the Temper worker service.
 
-This is a compatibility wrapper for the existing `temper daemon --service worker`
-path. Put deployment file flags before `serve`:
+The worker long-polls the engine for jobs and may be scoped to one configured
+`[[worker.pools]]` capability class. Put deployment file flags before `serve`:
   temper --config ./deploy --secrets ./deploy/credentials.toml serve worker
 
 Usage: temper [GLOBAL OPTIONS] serve worker [OPTIONS]
@@ -66,7 +77,7 @@ Options:
       --pool <NAME>       Select a resolved [[worker.pools]] capability class
       --id <ID>           Override the worker registration/logging identity
       --capacity <N>      Override max concurrent jobs for this worker (N > 0)
-      --engine-url <URL>  Override the engine/daemon URL for this worker
+      --engine-url <URL>  Override the engine URL for this worker
   -h, --help             Print help";
 
 #[derive(Debug, Eq, PartialEq)]
@@ -101,7 +112,10 @@ pub(crate) fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocatio
         "engine" => parse_serve_service(Service::Engine, iter.collect()),
         "worker" => parse_serve_service(Service::Worker, iter.collect()),
         "trigger" => Err(
-            "`temper serve trigger` is not implemented yet; trigger support remains a later workitem"
+            "`temper serve trigger` is not a supported separate component; configure \
+             `[engine] webhook_secret` or `[engine] webhook_secret_file` and point HMAC-signed \
+             Forgejo webhooks at POST /forgejo/webhook on `temper serve engine` or \
+             `temper serve standalone`; periodic polling remains the correctness backstop."
                 .to_string(),
         ),
         other => Err(format!(

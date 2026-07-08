@@ -14,17 +14,17 @@ support.
 | Path | Look here for |
 | --- | --- |
 | `src/bin/temper.rs` | The unified `temper` binary composition root. It snapshots argv/env/paths/cwd once and delegates to `temper-cli`. |
-| `crates/temper-cli/` | Thin dispatcher for `temper init`, `config`, `daemon`/`serve`, the `agent` entrypoint, and hidden operator/responder tools. |
+| `crates/temper-cli/` | Thin dispatcher for public `temper init`, `check`, `apply`, `config`, and `serve` commands plus legacy/internal entry points. |
 | `crates/temper-cli-common/` | Shared CLI plumbing: prompt abstraction, argv helpers, exit-code wrappers, file target resolution, and terminal-safe file writes. |
-| `crates/temper-cli-config/` | `temper config` subcommands: validate/check, show, paths, schema, and starter template output over `temper-config`. |
-| `crates/temper-cli-init/` | Interactive `temper init`: collect operator answers, write config/workflow/credential artifacts, and optionally provision when `--apply` is explicit. |
-| `crates/temper-cli-daemon/` | `temper daemon` / `temper serve` wiring for standalone all-in-one mode or individual engine/worker services. This is where the unified CLI pulls in the heavy engine/worker/agent stack. |
+| `crates/temper-cli-config/` | `temper config` inspection helpers: check/validate, show, paths, schema, and starter template output over `temper-config`. |
+| `crates/temper-cli-init/` | Interactive `temper init`, `temper plan`, and explicit `temper apply`: collect operator answers, write config/workflow/credential artifacts, derive/preview provisioning plans, and optionally mutate Forgejo. |
+| `crates/temper-cli-daemon/` | `temper serve` wiring for standalone all-in-one mode or individual engine/worker services, including engine/standalone `POST /forgejo/webhook` intake; legacy `temper daemon` dispatch remains here for compatibility. There is no runnable `serve trigger` component. |
 | `crates/temper-engine-service/` | Slim `temper-engine` service binary and adapters from resolved config into a running engine daemon. |
 | `crates/temper-worker-service/` | Slim `temper-worker` service binary and adapters from resolved config into a long-polling worker that spawns out-of-process agents. |
 | `crates/temper-agent-session/` | Slim `temper-agent` process boundary: read `WorkspaceContext`, run one native coding-agent session in the prepared workspace, write `WorkspaceResult`. |
 | `crates/temper-web/` | Web dashboard: Rust HTTP/SSE server, read model, feed adapters, and bundled TypeScript UI under `ui/`. |
 | `crates/temper-interaction-service/` | Deployable REPL/HTTP interaction service, args, bindings, DTOs, and transport glue for interactive profiles. |
-| `crates/temper-trigger-forgejo/` | Forgejo webhook receiver that verifies payloads and emits authenticated wake hints. |
+| `crates/temper-trigger-forgejo/` | Legacy/internal Forgejo webhook receiver that verifies payloads and emits authenticated wake hints for wake-socket fixtures/older topologies; not a `temper serve` process. Supported operator webhook intake is the engine/standalone `/forgejo/webhook` route. |
 | `crates/temper-scenario-cli/` | Standalone `temper-scenario` facade for listing, checking, running, validation-report bridging, and promotion-draft scaffolding for executable scenario manifests. |
 
 ## Configuration, provisioning, and reference delivery
@@ -59,8 +59,8 @@ support.
 | `crates/temper-worker-registry/` | In-memory worker scheduling registry used by the daemon as a soft hint for worker capabilities, health, and in-flight capacity. |
 | `crates/temper-daemon-transport/` | Tiny in-process worker-to-daemon transport glue for co-resident daemon/worker stacks, simulations, and hermetic tests. |
 | `crates/temper-engine-io/` | Completion-engine shell for daemon/control services: pure `Machine` contract, drive loop, completion queues, and HTTP/timer/process/cadence executors; see `io-engine-architecture.md`. |
-| `crates/temper-wake/` | Host-local authenticated wake socket bus shared by worker, trigger, and tests. |
-| `crates/temper-log/` | Process-wide logging initialization and the structured event model used by engine, worker, agent, and trigger emit sites. |
+| `crates/temper-wake/` | Host-local authenticated wake socket bus shared by worker, legacy/internal trigger fixtures, and tests. |
+| `crates/temper-log/` | Process-wide logging initialization and the structured event model used by engine, worker, agent, and the `trigger` service plane for inbound facts. |
 | `crates/temper-sim/` | Deterministic simulation harness that runs production daemon/worker code under skein's lab runtime with virtual time and reproducible schedules. |
 
 ## Worker, agent, and process protocols

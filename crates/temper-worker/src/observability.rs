@@ -7,17 +7,32 @@
 
 use temper_protocol_worker::{Assign, FailureClass, JobResult, ResultStatus};
 
+use crate::config::CapabilitySpec;
+
 pub fn registered_worker_line(
     worker_id: &str,
     worker_pool: Option<&str>,
-    capability_count: usize,
+    max_concurrent_jobs: u32,
+    capabilities: &[CapabilitySpec],
 ) -> String {
+    let capabilities = capability_list(capabilities);
     match worker_pool {
         Some(pool) => format!(
-            "worker: registered worker_id={worker_id} pool={pool} capabilities={capability_count}"
+            "worker: registered worker_id={worker_id} pool={pool} capacity={max_concurrent_jobs} capabilities={capabilities}"
         ),
-        None => format!("worker: registered worker_id={worker_id} capabilities={capability_count}"),
+        None => format!(
+            "worker: registered worker_id={worker_id} capacity={max_concurrent_jobs} capabilities={capabilities}"
+        ),
     }
+}
+
+fn capability_list(capabilities: &[CapabilitySpec]) -> String {
+    let values = capabilities
+        .iter()
+        .map(|capability| format!("{}:{}", capability.repo, capability.role))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{values}]")
 }
 
 pub fn assigned_job_line(assign: &Assign) -> String {
@@ -59,6 +74,8 @@ mod tests {
     use serde_json::json;
     use temper_protocol_worker::{Artifact, Branch, Failure, WORKER_PROTOCOL_VERSION};
 
+    use crate::config::CapabilitySpec;
+
     use super::*;
 
     fn assign() -> Assign {
@@ -75,15 +92,29 @@ mod tests {
         }
     }
 
+    fn capabilities() -> Vec<CapabilitySpec> {
+        vec![
+            CapabilitySpec {
+                repo: "ai/temper".to_string(),
+                role: "engineer".to_string(),
+            },
+            CapabilitySpec {
+                repo: "acme/service".to_string(),
+                role: "reviewer".to_string(),
+            },
+        ]
+    }
+
     #[test]
     fn registered_worker_line_matches_observability_contract() {
+        let capabilities = capabilities();
         assert_eq!(
-            registered_worker_line("basic-delivery-1", None, 2),
-            "worker: registered worker_id=basic-delivery-1 capabilities=2"
+            registered_worker_line("basic-delivery-1", None, 2, &capabilities),
+            "worker: registered worker_id=basic-delivery-1 capacity=2 capabilities=[ai/temper:engineer,acme/service:reviewer]"
         );
         assert_eq!(
-            registered_worker_line("basic-delivery-1", Some("builders"), 2),
-            "worker: registered worker_id=basic-delivery-1 pool=builders capabilities=2"
+            registered_worker_line("basic-delivery-1", Some("builders"), 2, &capabilities),
+            "worker: registered worker_id=basic-delivery-1 pool=builders capacity=2 capabilities=[ai/temper:engineer,acme/service:reviewer]"
         );
     }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Starter templates emitted by `temper config init`.
+//! Starter templates emitted by the legacy `temper config init` helper.
 //!
 //! These are heavily commented, ready-to-edit TOML files at the current
 //! [`SCHEMA_VERSION`](crate::SCHEMA_VERSION). Both are parseable as-is (every
@@ -19,13 +19,13 @@ schema_version = 1
 type = \"forgejo\"
 url = \"http://localhost:3000\"
 # The admin/default user: the key into [forge.users.<admin>] in the credentials
-# file whose token becomes the daemon's default forge identity.
+# file whose token becomes the engine's default forge identity.
 admin = \"bot\"
 # The user whose web-UI password authenticates CI status reads (ADR 0019).
 ci_user = \"bot\"
 
 [engine]
-# Bind address for the daemon's HTTP surface. `port` is shorthand for
+# Bind address for the engine HTTP surface. `port` is shorthand for
 # 127.0.0.1:<port>; set `bind` for a non-loopback host.
 port = 4000
 # Workflow definition (JSON). Omit to use the bundled reference-delivery workflow.
@@ -52,8 +52,8 @@ lease_ttl_secs = 300
 # ~/.local/state/temper/workspace ($XDG_STATE_HOME/temper/workspace). A leading
 # ~ is expanded at load time.
 # workspace = \"~/.local/state/temper/workspace\"
-# Distributed topology only — where `temper daemon --service worker` reaches the
-# engine. Defaults to http://127.0.0.1:<engine.port>.
+# Distributed topology only — where `temper serve worker` reaches the engine.
+# Defaults to http://127.0.0.1:<engine.port>.
 # daemon_url = \"http://engine-host:4000\"
 # Defaults to the cross-product of engine.repos x engine.roles.
 # capabilities = [\"acme/widgets:engineer\"]

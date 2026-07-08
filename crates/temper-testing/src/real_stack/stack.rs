@@ -12,7 +12,7 @@ use temper_daemon_transport::InProcessTransport;
 use temper_engine::{Daemon, RoleFeedMode};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId};
-use temper_protocol_worker::{JobResult, ResultStatus, WorkerProtocolMessage};
+use temper_protocol_worker::{JobResult, ResultStatus, WorkerAuth, WorkerProtocolMessage};
 use temper_worker::{CodingExecutor, Transport, WorkerConfig, run_worker_with_transport};
 use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
 
@@ -310,6 +310,7 @@ impl Transport for ResultTappingTransport {
         &self,
         cx: Cx,
         message: WorkerProtocolMessage,
+        auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
         let inner = self.inner.clone();
         let result_tx = self.result_tx.clone();
@@ -318,7 +319,7 @@ impl Transport for ResultTappingTransport {
                 WorkerProtocolMessage::Result(result) => Some(result.clone()),
                 _ => None,
             };
-            let reply = inner.send(cx, message).await;
+            let reply = inner.send(cx, message, auth).await;
             if let Some(result) = recorded {
                 let _ = result_tx.send(result);
             }

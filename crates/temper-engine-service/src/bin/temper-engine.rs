@@ -13,9 +13,9 @@ temper-engine — run only the orchestrator (engine) service
 
 usage: temper-engine [--config <PATH>] [--secrets <PATH>]
 
-Reads the same config + credentials files as the unified `temper daemon`, runs
-only the engine, and serves until SIGINT/SIGTERM. Equivalent to
-`temper daemon --service engine`.";
+Reads the same config + credentials files as `temper serve engine`, runs only
+the engine, and serves until SIGINT/SIGTERM. Equivalent to the public runtime
+surface `temper serve engine`.";
 
 fn main() -> ExitCode {
     // Install the global tracing subscriber before arg parsing or the runtime

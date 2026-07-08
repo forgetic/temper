@@ -33,6 +33,13 @@ directories (`HOME` / `XDG_*` / `CREDENTIALS_DIRECTORY`) from the snapshot the
 binary captures at startup; the logging crate reads `RUST_LOG` / `JOURNAL_STREAM`
 / `NO_COLOR` at its own init boundary.
 
+For systemd deployments, prefer `LoadCredential=` over exported secret env vars.
+When `--secrets` is omitted, systemd's `CREDENTIALS_DIRECTORY` becomes the
+selected secret source; it may contain `credentials.toml`, one file per named
+secret such as `webhook-secret`, or both. The service command should still pass
+non-secret deployment selection on argv, for example
+`temper --config /etc/temper/config.toml serve engine`.
+
 ### Temper-specific variable
 
 | Variable | Purpose | Shape |

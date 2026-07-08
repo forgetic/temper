@@ -219,7 +219,7 @@ pub const EX_USAGE: u8 = 64;
 /// directory secret source when `--secrets` is absent; otherwise an explicit
 /// config root may load sibling `credentials.toml`, but the operator's global
 /// credentials never ambiently layer in behind an explicit deployment — matching
-/// the unified `temper daemon` path.
+/// the unified `temper serve` runtime path.
 pub fn service_main(
     name: &str,
     usage: &str,

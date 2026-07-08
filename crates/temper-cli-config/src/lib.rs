@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! `temper config` — guided or programmatic configuration.
+//! `temper config` — configuration inspection and compatibility helpers.
 //!
-//! - `validate` — compatibility path for top-level `temper check`: load the
-//!   config + credentials, resolve them, and report any problems (and advisory
-//!   notes) without starting anything.
 //! - `show` — print the effective resolved deployment, with secrets redacted.
 //! - `paths` — print the config, secret, state, workspace, and workflow paths
 //!   Temper will use.
 //! - `schema` — print the canonical JSON Schema for `config.toml`.
-//! - `init` — write starter `config.toml` + `credentials.toml` templates.
+//! - `validate` — compatibility path for top-level `temper check`: load the
+//!   config + credentials, resolve them, and report any problems (and advisory
+//!   notes) without starting anything.
+//! - `init` — legacy bare-template writer. Public onboarding should use
+//!   top-level `temper init`, which writes a complete deployment bundle.
 //!
 //! This crate owns only argv parsing, terminal output, and exit codes; the
 //! config schema, resolution, and writing all live in [`temper_config`], and the
@@ -86,22 +87,25 @@ pub(crate) fn load_for_with_secret_validation(
 }
 
 pub const USAGE: &str = "\
-Guided or programmatic configuration.
+Configuration inspection utilities.
 
 Usage: temper [GLOBAL OPTIONS] config <COMMAND> [OPTIONS]
 
 Commands:
-  validate  Compatibility path for `temper check` (load and validate offline)
   show      Print the effective resolved configuration (secrets redacted)
   paths     Print resolved config, secret, state, workspace, and workflow paths
   schema    Print the canonical JSON Schema for config.toml
-  init      Write starter config.toml + credentials.toml templates
+
+Compatibility commands:
+  validate  Legacy offline validation path; prefer top-level `temper check`
+  init      Legacy bare-template writer; prefer top-level `temper init`
 
 Options:
-  --force     (init) overwrite existing files
+  --force     (compat init) overwrite existing files
   -h, --help  Print help
 
-Prefer `temper check` for validation; `temper config validate` remains for compatibility.
+Onboarding flow: `temper init`, `temper check`, optional review of the generated
+provisioning plan inputs, `temper apply`, then `temper serve`.
 
 Global options:
   --format <human|json>  `temper check` and `config paths` output format; schema always emits JSON; accepted before the command only";
