@@ -1,0 +1,71 @@
+schema = "temper.scenario.v1"
+name = "target-ux-e2e"
+status = "active"
+intent = "Prove the target-era operator UX across init, check, apply, serve, worker pools, workflow formats, and trigger selection."
+introduced_by = "#192"
+owner_area = "deployment-ux"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/basic-delivery"
+
+[runner]
+uses = "manifest"
+
+[target_ux]
+contracts = [
+  "init writes a local standalone bundle from a JSON workflow and check reports pre-apply token gaps",
+  "apply/provisioning uses the generated workflow and webhook inputs before check succeeds",
+  "distributed worker bundles validate offline and with fake-online Forge auth",
+  "worker pool selection enforces role auth, capacity policy, and agent profile credentials",
+  "YAML and JSON workflow paths load through the same workflow validation path",
+  "trigger-forgejo is the selected trigger surface while serve trigger stays rejected",
+]
+files = [
+  "README.md",
+  "config/standalone-json/config.toml",
+  "config/standalone-json/credentials.toml",
+  "config/standalone-json/workflow.json",
+  "config/standalone-json/webhook-secret",
+  "config/distributed-yaml/config.toml",
+  "config/distributed-yaml/credentials.toml",
+  "config/distributed-yaml/workflow.yaml",
+  "config/distributed-yaml/webhook-secret",
+  "config/trigger/forgejo-issue-webhook.json",
+  "config/trigger/webhook-secret",
+]
+
+[target_ux.shapes.standalone]
+config_path = "config/standalone-json/config.toml"
+credentials_path = "config/standalone-json/credentials.toml"
+workflow_path = "config/standalone-json/workflow.json"
+expected_topology = "standalone"
+serve_contract = "temper serve standalone accepts --id; worker-only flags are rejected before startup"
+
+[target_ux.shapes.distributed]
+config_path = "config/distributed-yaml/config.toml"
+credentials_path = "config/distributed-yaml/credentials.toml"
+workflow_path = "config/distributed-yaml/workflow.yaml"
+expected_topology = "distributed"
+serve_contract = "temper serve worker requires --pool when pools are configured and enforces pool capacity"
+
+[target_ux.trigger]
+payload_path = "config/trigger/forgejo-issue-webhook.json"
+webhook_secret_path = "config/trigger/webhook-secret"
+selected_command = "temper trigger-forgejo"
+rejected_command = "temper serve trigger"
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify target UX documentation without weakening the covered command contracts.",
+  "Update fake fixture tokens or local URLs when parser wording changes.",
+]
+requires_new_scenario_or_major_update = [
+  "Replacing trigger-forgejo as the selected trigger surface.",
+  "Removing standalone or distributed target-era validation coverage.",
+  "Removing worker-pool auth, profile, or capacity coverage.",
+]

@@ -1,0 +1,52 @@
+schema_version = 1
+
+[deployment]
+name = "target-ux-standalone"
+topology = "standalone"
+
+[workflow]
+file = "workflow.json"
+
+[paths]
+state_dir = "state"
+workspace_dir = "workspace"
+
+[forge]
+type = "forgejo"
+url = "http://forge.example.invalid"
+admin = "root"
+ci_user = "bot"
+
+[engine]
+bind = "127.0.0.1:38100"
+repos = ["acme/service"]
+roles = ["architect", "engineer"]
+forge_token = "engine-forge-token"
+webhook_secret = "webhook-secret"
+webhook_secret_file = "webhook-secret"
+
+[worker]
+daemon_url = "http://127.0.0.1:38100"
+max_concurrent_jobs = 4
+
+[[worker.pools]]
+name = "local"
+roles = ["architect", "engineer"]
+repos = ["acme/service"]
+max_concurrent_jobs = 2
+agent_profile = "coding"
+worker_token = "worker-local-token"
+
+[agent]
+provider = "deepseek"
+max_iterations = 200
+enable_subagents = false
+
+[agent.profiles.coding]
+command = ["temper", "agent"]
+provider = "deepseek"
+model = "deepseek-chat"
+provider_url = "https://provider.example.invalid/v1"
+max_iterations = 200
+subagents = true
+credential = "profile-provider-token"
