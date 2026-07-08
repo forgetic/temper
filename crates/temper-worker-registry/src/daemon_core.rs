@@ -14,7 +14,7 @@ use temper_protocol_worker::{
     Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
-use crate::{DispatchCoordinator, WorkItem};
+use crate::{DispatchCoordinator, WorkItem, WorkerPoolPolicies, WorkerPoolPolicy};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueuedJob {
@@ -38,11 +38,19 @@ pub struct InFlightJob {
 pub struct DaemonCore {
     coordinator: DispatchCoordinator,
     job_context: BTreeMap<String, (Artifact, serde_json::Value)>,
+    pool_policies: WorkerPoolPolicies,
 }
 
 impl DaemonCore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_pool_policies(policies: Vec<WorkerPoolPolicy>) -> Self {
+        Self {
+            pool_policies: WorkerPoolPolicies::from(policies),
+            ..Self::default()
+        }
     }
 
     pub fn coordinator(&self) -> &DispatchCoordinator {
@@ -194,7 +202,7 @@ impl DaemonCore {
 
     pub fn handle(&mut self, msg: WorkerProtocolMessage) -> Option<WorkerProtocolMessage> {
         if protocol_version(&msg) != WORKER_PROTOCOL_VERSION {
-            return Some(error(
+            return Some(error_response(
                 ErrorCode::ProtocolVersionMismatch,
                 "unsupported protocol_version",
                 None,
@@ -204,11 +212,13 @@ impl DaemonCore {
         match msg {
             WorkerProtocolMessage::Register(register) => self.handle_register(register),
             WorkerProtocolMessage::Poll(poll) => Some(self.handle_poll(poll)),
-            WorkerProtocolMessage::Assign(_) | WorkerProtocolMessage::Release(_) => Some(error(
-                ErrorCode::MalformedMessage,
-                "daemon-to-worker message received inbound",
-                None,
-            )),
+            WorkerProtocolMessage::Assign(_) | WorkerProtocolMessage::Release(_) => {
+                Some(error_response(
+                    ErrorCode::MalformedMessage,
+                    "daemon-to-worker message received inbound",
+                    None,
+                ))
+            }
             WorkerProtocolMessage::Heartbeat(heartbeat) => self.handle_heartbeat(heartbeat),
             WorkerProtocolMessage::Result(result) => Some(self.handle_result(result)),
             WorkerProtocolMessage::LeaseAck(lease_ack) => self.handle_lease_ack(lease_ack),
@@ -217,23 +227,33 @@ impl DaemonCore {
     }
 
     fn handle_register(&mut self, register: Register) -> Option<WorkerProtocolMessage> {
-        self.coordinator.register(&register);
-        None
+        match self
+            .coordinator
+            .registry_mut()
+            .register_with_policies(&register, &self.pool_policies)
+        {
+            Ok(()) => None,
+            Err(error) => Some(error_response(
+                ErrorCode::RegistrationRejected,
+                &error.to_string(),
+                None,
+            )),
+        }
     }
 
     fn handle_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
         if !self.coordinator.registry().is_healthy(&poll.worker_id) {
-            return error(ErrorCode::UnknownWorker, "unknown worker", None);
+            return error_response(ErrorCode::UnknownWorker, "unknown worker", None);
         }
 
         let Some(assignment) = self.coordinator.dispatch_for_worker(&poll.worker_id) else {
-            return error(ErrorCode::PollTimeout, "no work available", None);
+            return error_response(ErrorCode::PollTimeout, "no work available", None);
         };
 
         let Some((artifact, job_payload)) = self.job_context.get(&assignment.job_id).cloned()
         else {
             let _ = self.coordinator.complete(&assignment.job_id);
-            return error(
+            return error_response(
                 ErrorCode::MalformedMessage,
                 "assigned job missing daemon job context",
                 Some(assignment.job_id),
@@ -257,7 +277,11 @@ impl DaemonCore {
             .heartbeat(&heartbeat.worker_id)
         {
             Ok(()) => None,
-            Err(_) => Some(error(ErrorCode::UnknownWorker, "unknown worker", None)),
+            Err(_) => Some(error_response(
+                ErrorCode::UnknownWorker,
+                "unknown worker",
+                None,
+            )),
         }
     }
 
@@ -324,7 +348,7 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
     }
 }
 
-fn error(code: ErrorCode, message: &str, job_id: Option<String>) -> WorkerProtocolMessage {
+fn error_response(code: ErrorCode, message: &str, job_id: Option<String>) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Error(ProtocolError {
         protocol_version: WORKER_PROTOCOL_VERSION,
         code,

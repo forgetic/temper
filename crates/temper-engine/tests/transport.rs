@@ -38,6 +38,7 @@ fn register(
         capacity: Capacity {
             max_concurrent_jobs,
         },
+        worker_pool: None,
         labels: None,
     })
 }
@@ -62,6 +63,8 @@ fn heartbeat(worker_id: &str) -> WorkerProtocolMessage {
         jobs: Vec::new(),
         free_capacity: Some(1),
         worker_pool: None,
+        max_concurrent_jobs: None,
+        capabilities: Vec::new(),
     })
 }
 
@@ -437,7 +440,24 @@ fn state_snapshot_and_job_routes_serve_live_daemon_state() {
             .send_expect_json("GET", format!("{base}/v1/state"), None, None, "state")
             .await;
         assert_eq!(status, 200);
-        assert_eq!(snapshot["workers"], json!({ "healthy": 1, "total": 1 }));
+        assert_eq!(snapshot["workers"]["healthy"], json!(1));
+        assert_eq!(snapshot["workers"]["total"], json!(1));
+        assert_eq!(
+            snapshot["workers"]["registered"][0]["worker_id"],
+            json!("w-1")
+        );
+        assert_eq!(
+            snapshot["workers"]["registered"][0]["max_concurrent_jobs"],
+            json!(1)
+        );
+        assert_eq!(
+            snapshot["workers"]["registered"][0]["free_capacity"],
+            json!(0)
+        );
+        assert_eq!(
+            snapshot["workers"]["registered"][0]["capabilities"],
+            json!([{ "role": "engineer", "repo": "ai/temper" }])
+        );
         assert_eq!(snapshot["in_flight"][0]["job_id"], json!("job-1"));
         assert_eq!(snapshot["in_flight"][0]["ref"], json!("ai/temper#103"));
 

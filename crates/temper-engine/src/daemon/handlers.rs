@@ -10,7 +10,7 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_protocol_worker::{
-    Artifact, Assign, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
+    Artifact, Assign, JobResult, Poll, PullRequestFreshness, Register, WorkerProtocolMessage,
 };
 
 use crate::InFlightJob;
@@ -18,8 +18,8 @@ use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_
 
 use super::machine::{DaemonMachine, DaemonRequest, PollWaiter};
 use super::protocol::{
-    ResultDisposition, assignment_log_line, is_poll_timeout, protocol_response, result_disposition,
-    result_disposition_log_value, result_received_log_line,
+    ResultDisposition, assignment_log_line, is_poll_timeout, protocol_response, register_log_line,
+    result_disposition, result_disposition_log_value, result_received_log_line,
 };
 use super::state_dto::{DaemonStateSnapshot, JobDto};
 
@@ -102,6 +102,7 @@ impl DaemonMachine {
         };
 
         match msg {
+            WorkerProtocolMessage::Register(register) => self.handle_register(register, responder),
             WorkerProtocolMessage::Poll(poll) => self.handle_poll(poll, responder),
             WorkerProtocolMessage::Result(result) => self.handle_result(result, responder),
             other => {
@@ -112,6 +113,25 @@ impl DaemonMachine {
                 }]
             }
         }
+    }
+
+    fn handle_register(
+        &mut self,
+        register: Register,
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
+        let response = self
+            .core
+            .handle(WorkerProtocolMessage::Register(register.clone()));
+        let mut requests = Vec::new();
+        if response.is_none() {
+            requests.push(DaemonRequest::Log(register_log_line(&register)));
+        }
+        requests.push(DaemonRequest::Respond {
+            responder,
+            response: protocol_response(response),
+        });
+        requests
     }
 
     fn handle_poll(&mut self, poll: Poll, responder: HttpResponder) -> Vec<DaemonRequest> {

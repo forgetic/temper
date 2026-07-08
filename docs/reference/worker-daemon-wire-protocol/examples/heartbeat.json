@@ -8,5 +8,14 @@
       "state": "running",
       "message": "coding"
     }
+  ],
+  "free_capacity": 0,
+  "worker_pool": "builders",
+  "max_concurrent_jobs": 1,
+  "capabilities": [
+    {
+      "role": "coder",
+      "repo": "ai/temper"
+    }
   ]
 }

@@ -138,7 +138,11 @@ async fn run_async(
         &role_tokens,
         lease_ttl,
     );
-    let daemon = Daemon::with_applier(Arc::clone(&spawner), applier);
+    let daemon = Daemon::with_applier_and_worker_pools(
+        Arc::clone(&spawner),
+        applier,
+        daemon_config.worker_pools.clone(),
+    );
 
     spawn_poll_backstop(
         &spawner,

@@ -10,6 +10,7 @@ use std::{
 };
 
 use temper_forge::RepositoryPath;
+use temper_worker_registry::WorkerPoolPolicy;
 use temper_workflow::RoleId;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -46,6 +47,7 @@ pub struct DaemonRunConfig {
     pub lease_ttl: Duration,
     pub webhook_secret_file: Option<PathBuf>,
     pub daemon_id: String,
+    pub worker_pools: Vec<WorkerPoolPolicy>,
 }
 
 /// Result of parsing command-line arguments.
@@ -179,6 +181,7 @@ impl RawArgs {
             lease_ttl,
             webhook_secret_file: self.webhook_secret_file.map(PathBuf::from),
             daemon_id,
+            worker_pools: Vec::new(),
         })
     }
 }
