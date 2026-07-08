@@ -33,9 +33,6 @@ pub(super) fn add_online_findings(
             );
             forge::add_worker_forge_visibility_checks(resolved, options.pool.as_deref(), findings);
         }
-        Component::Trigger => {
-            // The offline scoped finding remains the explicit unsupported contract.
-        }
     }
 }
 

@@ -18,9 +18,8 @@ use temper_config::{EnvMap, ExposeSecret, PathResolver, WorkerSettings};
 use temper_worker::CapabilitySpec;
 
 use super::{
-    DaemonInputs, RuntimeOverrides, SERVE_ENGINE_USAGE, SERVE_STANDALONE_USAGE, SERVE_USAGE,
-    SERVE_WORKER_USAGE, ServeInvocation, Service, load_for, parse_daemon_args,
-    parse_serve_invocation, standalone,
+    DaemonInputs, RuntimeOverrides, SERVE_ENGINE_USAGE, SERVE_WORKER_USAGE, ServeInvocation,
+    Service, load_for, parse_daemon_args, parse_serve_invocation, standalone,
 };
 
 const POISONED_TOKEN: &str = "POISONED-GLOBAL-TOKEN-DO-NOT-USE";
@@ -298,44 +297,6 @@ fn without_explicit_paths_global_is_discovered() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn serve_usage_documents_supported_components() {
-    assert!(
-        SERVE_USAGE.contains("standalone"),
-        "serve help should advertise standalone mode"
-    );
-    assert!(
-        SERVE_USAGE.contains("engine      Run the engine service"),
-        "serve help should advertise engine as supported: {SERVE_USAGE}"
-    );
-    assert!(
-        SERVE_USAGE.contains("worker      Run the worker service"),
-        "serve help should advertise worker as supported: {SERVE_USAGE}"
-    );
-    assert!(
-        SERVE_USAGE.contains("trigger     Not implemented yet"),
-        "serve help should keep trigger explicitly unimplemented"
-    );
-    assert!(
-        SERVE_USAGE.contains("temper --config") && SERVE_USAGE.contains("--secrets"),
-        "serve help should show deployment file flags before `serve`"
-    );
-    assert!(SERVE_STANDALONE_USAGE.contains("serve standalone"));
-    assert!(SERVE_STANDALONE_USAGE.contains("--id <ID>"));
-    assert!(!SERVE_STANDALONE_USAGE.contains("--secrets"));
-    assert!(!SERVE_STANDALONE_USAGE.contains("--config"));
-    assert!(
-        SERVE_STANDALONE_USAGE.contains("temper daemon"),
-        "standalone help should identify the compatibility wrapper"
-    );
-    for flag in ["--id", "--pool", "--capacity", "--engine-url"] {
-        assert!(
-            SERVE_USAGE.contains(flag),
-            "serve help should mention {flag}: {SERVE_USAGE}"
-        );
-    }
 }
 
 #[test]
@@ -632,16 +593,6 @@ fn serve_components_reject_flags_for_wrong_component() {
 }
 
 #[test]
-fn serve_trigger_remains_rejected_with_helpful_message() {
-    let error = parse_serve_invocation(vec!["trigger".to_string()])
-        .expect_err("trigger serve component should remain rejected");
-
-    assert!(error.contains("temper serve trigger"), "{error}");
-    assert!(error.contains("not implemented yet"), "{error}");
-    assert!(error.contains("later workitem"), "{error}");
-}
-
-#[test]
 fn daemon_rejects_local_config_and_secrets_flags() {
     for flag in ["--config", "--secrets", "-c"] {
         let error = parse_daemon_args(vec![flag.to_string(), "deploy/config.toml".to_string()])
@@ -653,3 +604,4 @@ fn daemon_rejects_local_config_and_secrets_flags() {
 }
 
 mod serve_runtime;
+mod serve_trigger_contract;
