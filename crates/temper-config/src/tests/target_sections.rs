@@ -149,6 +149,18 @@ agent-provider = "provider-secret-value"
             .map(|reference| reference.name.as_str()),
         Some("agent-provider")
     );
+    assert_eq!(
+        profile
+            .credential_json
+            .as_ref()
+            .map(|secret| secret.expose_secret()),
+        Some(r#"{"api_key":"provider-secret-value","type":"api-key"}"#)
+    );
+    let rendered = format!("{resolved:?}");
+    assert!(
+        !rendered.contains("provider-secret-value"),
+        "profile credential leaked: {rendered}"
+    );
 
     // Active runtime fields still come from legacy/default settings, not pools/profiles.
     assert_eq!(resolved.worker.max_concurrent_jobs, 3);

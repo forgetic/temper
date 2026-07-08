@@ -411,7 +411,9 @@ fn agent_profile_config_schema() -> Value {
             ),
             (
                 "credential",
-                string_schema("Secret-name reference for future provider credentials."),
+                string_schema(
+                    "Secret-name reference for provider credentials used by this profile.",
+                ),
             ),
         ],
     )
