@@ -13,7 +13,7 @@ use temper_config::{
     build_config, build_credentials, forge_users_from_provisioned, write_config,
 };
 use temper_reference_delivery::{
-    basic_delivery_workflow_json, parse_workflow_spec, reference_delivery_workflow_json,
+    basic_delivery_workflow_json, load_workflow_document, reference_delivery_workflow_json,
 };
 use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
@@ -285,24 +285,18 @@ fn builtin_workflow_artifact(name: &str, json: &str) -> Result<WorkflowArtifact,
 
 fn load_workflow_artifact(path: &str) -> Result<WorkflowArtifact, InitError> {
     let path = Path::new(path);
-    let source = std::fs::read_to_string(path).map_err(|error| {
-        InitError::Path(format!("read workflow file {}: {error}", path.display()))
-    })?;
-    let spec = parse_workflow_spec(path, &source)
-        .map_err(|error| InitError::Unsupported(error.to_string()))?;
-    let validated = spec.validate().map_err(|errors| {
-        InitError::Unsupported(format!(
-            "workflow file {} failed validation:\n{errors}",
-            path.display()
-        ))
-    })?;
-    let yaml = serde_yaml::to_string(&spec).map_err(|error| {
+    let document =
+        load_workflow_document(path).map_err(|error| InitError::Unsupported(error.to_string()))?;
+    let yaml = serde_yaml::to_string(&document.spec).map_err(|error| {
         InitError::Unsupported(format!(
             "workflow file {} could not be rendered as YAML: {error}",
             path.display()
         ))
     })?;
-    Ok(WorkflowArtifact { yaml, validated })
+    Ok(WorkflowArtifact {
+        yaml,
+        validated: document.workflow,
+    })
 }
 
 /// The roles `temper init` drives, derived from the selected workflow's
