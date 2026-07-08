@@ -54,14 +54,14 @@ fn sample_credential_inputs() -> CredentialInputs {
     );
     CredentialInputs {
         forge_users,
-        provider_key: ProviderKeyInput {
+        provider_key: Some(ProviderKeyInput {
             provider: "anthropic".to_string(),
             secret: ProviderSecretInput::OAuth {
                 access: "secret-access".to_string(),
                 refresh: Some("secret-refresh".to_string()),
                 expires: 1781371005373,
             },
-        },
+        }),
     }
 }
 
@@ -128,10 +128,10 @@ fn build_credentials_stores_oauth_secret() {
 fn build_credentials_api_key_shape() {
     let creds = build_credentials(&CredentialInputs {
         forge_users: BTreeMap::new(),
-        provider_key: ProviderKeyInput {
+        provider_key: Some(ProviderKeyInput {
             provider: "deepseek".to_string(),
             secret: ProviderSecretInput::ApiKey("sk-secret".to_string()),
-        },
+        }),
     });
     let deepseek = creds.agent.providers.get("deepseek").expect("provider");
     assert_eq!(deepseek.kind.as_deref(), Some("api-key"));
@@ -140,13 +140,23 @@ fn build_credentials_api_key_shape() {
 }
 
 #[test]
+fn build_credentials_can_omit_provider_credentials() {
+    let creds = build_credentials(&CredentialInputs {
+        forge_users: BTreeMap::new(),
+        provider_key: None,
+    });
+
+    assert!(creds.agent.providers.is_empty());
+}
+
+#[test]
 fn build_credentials_auth_file_shape() {
     let creds = build_credentials(&CredentialInputs {
         forge_users: BTreeMap::new(),
-        provider_key: ProviderKeyInput {
+        provider_key: Some(ProviderKeyInput {
             provider: "chatgpt".to_string(),
             secret: ProviderSecretInput::AuthFile("/home/agent/auth.json".to_string()),
-        },
+        }),
     });
     let chatgpt = creds.agent.providers.get("chatgpt").expect("provider");
     assert_eq!(chatgpt.auth_file.as_deref(), Some("/home/agent/auth.json"));

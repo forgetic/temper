@@ -45,14 +45,8 @@ pub fn register_message_params(params: &crate::config::WorkerParams) -> WorkerPr
     WorkerProtocolMessage::Register(Register {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: params.worker_id.clone(),
-        capabilities: params
-            .capabilities
-            .iter()
-            .map(|capability| Capability {
-                role: capability.role.clone(),
-                repo: capability.repo.clone(),
-            })
-            .collect(),
+        worker_pool: params.worker_pool.clone(),
+        capabilities: protocol_capabilities(params),
         capacity: Capacity {
             max_concurrent_jobs: params.max_concurrent_jobs,
         },
@@ -90,7 +84,20 @@ pub fn heartbeat_message_params(
             .collect(),
         free_capacity: Some(free_capacity),
         worker_pool: params.worker_pool.clone(),
+        max_concurrent_jobs: Some(params.max_concurrent_jobs),
+        capabilities: protocol_capabilities(params),
     })
+}
+
+fn protocol_capabilities(params: &crate::config::WorkerParams) -> Vec<Capability> {
+    params
+        .capabilities
+        .iter()
+        .map(|capability| Capability {
+            role: capability.role.clone(),
+            repo: capability.repo.clone(),
+        })
+        .collect()
 }
 
 fn worker_labels(params: &crate::config::WorkerParams) -> Option<Vec<String>> {
@@ -117,6 +124,7 @@ mod tests {
             daemon_url: "http://127.0.0.1:1234".to_string(),
             worker_id: "worker-1".to_string(),
             worker_pool: Some("builders".to_string()),
+            worker_auth: None,
             capabilities: vec![
                 CapabilitySpec {
                     repo: "ai/temper".to_string(),
@@ -143,6 +151,7 @@ mod tests {
             WorkerProtocolMessage::Register(register) => {
                 assert_eq!(register.protocol_version, WORKER_PROTOCOL_VERSION);
                 assert_eq!(register.worker_id, "worker-1");
+                assert_eq!(register.worker_pool.as_deref(), Some("builders"));
                 assert_eq!(register.labels, Some(vec!["pool:builders".to_string()]));
                 assert_eq!(register.capacity.max_concurrent_jobs, 2);
                 assert_eq!(register.capabilities.len(), 2);
@@ -167,6 +176,8 @@ mod tests {
                 assert_eq!(heartbeat.protocol_version, WORKER_PROTOCOL_VERSION);
                 assert_eq!(heartbeat.worker_id, "worker-1");
                 assert_eq!(heartbeat.worker_pool.as_deref(), Some("builders"));
+                assert_eq!(heartbeat.max_concurrent_jobs, Some(2));
+                assert_eq!(heartbeat.capabilities.len(), 2);
                 assert_eq!(heartbeat.free_capacity, Some(0));
                 assert_eq!(heartbeat.jobs.len(), 2);
                 assert_eq!(heartbeat.jobs[0].job_id, "job-a");

@@ -12,5 +12,7 @@
 mod adapt;
 mod run;
 
-pub use adapt::{agent_tool_config, git_base_url, role_identities, worker_config};
+pub use adapt::{
+    agent_tool_config, git_base_url, role_identities, selected_worker_auth, worker_config,
+};
 pub use run::{run, self_subcommand, sibling_program};

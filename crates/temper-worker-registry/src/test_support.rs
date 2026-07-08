@@ -24,6 +24,7 @@ pub(crate) fn register(
         capacity: Capacity {
             max_concurrent_jobs,
         },
+        worker_pool: None,
         labels: None,
     }
 }
@@ -47,6 +48,7 @@ pub(crate) fn register_multi(
         capacity: Capacity {
             max_concurrent_jobs,
         },
+        worker_pool: None,
         labels: None,
     }
 }
@@ -90,6 +92,8 @@ pub(crate) fn heartbeat(worker_id: &str) -> WorkerProtocolMessage {
         jobs: Vec::new(),
         free_capacity: Some(1),
         worker_pool: None,
+        max_concurrent_jobs: None,
+        capabilities: Vec::new(),
     })
 }
 

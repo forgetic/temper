@@ -6,16 +6,16 @@
 //! writes the on-disk artifacts, and only provisions the forge when explicitly
 //! asked via `--apply`:
 //!
-//! 1. **Collect answers** ([`collect_answers`]) — five questions plus two secret
-//!    prompts (forge URL, workflow, webhook address, admin user + password,
-//!    provider API key). No disk or network I/O.
+//! 1. **Collect answers** ([`collect_answers`]) — forge URL, workflow,
+//!    webhook address, admin user/password, repository/provider selection, and
+//!    any provider secret the selection needs. No disk or network I/O.
 //! 2. **Preflight** ([`preflight_clobber`]) — check *all* target paths up front
 //!    so the flow never writes file I then aborts at file III.
 //! 3. **Write** `config.toml`, `workflow.yaml` (the selected builtin or
 //!    normalized custom workflow YAML), and a freshly generated
 //!    `webhook-secret` (chmod 600).
 //! 4. **Write** a local `credentials.toml` (chmod 600) with the operator-supplied
-//!    admin password and provider key.
+//!    admin password and any provider key.
 //! 5. **Optionally provision** the forge idempotently when `--apply` is set
 //!    (admin user+password → admin REST token → plan →
 //!    `temper_provision::provision`), then update `credentials.toml` with the
@@ -35,6 +35,7 @@
 //! e2e drives [`run_init`] with [`ScriptedPrompter`](temper_cli_common::ScriptedPrompter)
 //! + a real [`ForgejoProvisioner`].
 
+mod answers_file;
 mod apply;
 mod args;
 mod collect;
@@ -47,7 +48,8 @@ use std::process::ExitCode;
 
 use temper_cli_common::{EX_USAGE, EnvLookup, EnvMap, LoadOptions, PathResolver, TerminalPrompter};
 
-use args::parse_init_args;
+use answers_file::{AnswersFile, load_answers_file};
+use args::{ParsedInitArgs, parse_init_args};
 
 pub use apply::{APPLY_USAGE, ApplyOptions, apply_main, apply_main_with_options, run_apply};
 pub use args::{InitOverrides, InitTopology, RepoSelection};
@@ -57,10 +59,9 @@ pub use provisioner::{ForgejoProvisioner, ProvisionOutcome, ProvisionRequest, Pr
 pub use write::{InitArtifacts, build_artifacts, preflight_clobber, write_artifacts};
 
 /// `temper init [OPTIONS]` usage.
-pub const USAGE: &str = "\
-Interactively configure a temper deployment.
+pub const USAGE: &str = r#"Interactively configure a temper deployment.
 
-Walks you through your forge URL, admin credentials, and LLM provider key, then
+Walks you through your forge URL, admin credentials, and LLM provider choice, then
 writes config.toml + workflow.yaml + a webhook secret + credentials.toml.
 Forge-side provisioning (repo/users/labels/webhook registration) only runs when
 --apply is set; --yes skips that apply confirmation.
@@ -72,22 +73,40 @@ Options:
   --apply                       After writing local files, provision the forge
   --yes                         With --apply, skip the provisioning confirmation
   --existing-repo               Provision onto a repo that already exists
-  --topology      <standalone>  Local topology to initialize (only standalone today)
-  --repo          <owner/name>  Managed repository to provision
+  --topology      <standalone|distributed>
+                                Topology to collect for the initialized bundle
+  --repo          <owner/name>  Managed repository to provision (repeatable)
   --workflow      <builtin|PATH>  Builtin workflow name or JSON/YAML workflow file
   --forge         <URL>         Forgejo URL; skips the Forge URL prompt
   --bind          <ADDR>        Daemon bind / webhook advertise address override
   --workspace     <PATH>        Top-level worker workspace root to write
-  --provider      <deepseek>    LLM provider profile (only deepseek today)
+  --provider      <anthropic|chatgpt|deepseek|none>
+                                LLM provider profile to configure
   --provider-url  <URL>         Base URL override for the provider
+  --answers       <FILE>        TOML answers file; implies --non-interactive
   --non-interactive             Run without prompts; all required values must
-                                be supplied via flags or environment variables
+                                be supplied via flags, --answers, or environment
   --admin-user   <VALUE>        Forgejo admin username; skips the admin prompt
   -h, --help                    Print help
 
-Environment variables (only honoured with --non-interactive):
-  TEMPER_INIT_ADMIN_PASSWORD    Forgejo admin password
-  TEMPER_INIT_PROVIDER_KEY      LLM provider API key";
+Environment variables (only honoured with --non-interactive or --answers):
+  TEMPER_INIT_ADMIN_PASSWORD    Forgejo admin password (wins over --answers)
+  TEMPER_INIT_PROVIDER_KEY      DeepSeek provider API key (wins over --answers)
+
+Answers file (TOML, used by --answers and implies --non-interactive):
+  schema_version = 1
+  topology = "standalone"          # or "distributed"
+  forge_url = "http://localhost:3000"
+  workflow = "basic-delivery"      # builtin or JSON/YAML path
+  webhook_addr = "http://127.0.0.1:8314"
+  admin_user = "root"
+  admin_password = "..."           # secret; env TEMPER_INIT_ADMIN_PASSWORD wins
+  provider = "deepseek"            # anthropic|chatgpt|deepseek|none
+  provider_key = "..."             # secret for deepseek; env TEMPER_INIT_PROVIDER_KEY wins
+  provider_url = "http://localhost:9999/v1"
+  repos = ["owner/name", "owner/other"]
+
+The answers file cannot set --apply; pass --apply explicitly to provision."#;
 
 /// Everything `temper init` needs that is *not* gathered interactively: the
 /// resolved file targets, the clobber flag, the workspace root, and whether the
@@ -105,12 +124,12 @@ pub struct InitOptions {
     pub apply: bool,
     /// Skip the confirmation before `--apply` performs forge-side mutations.
     pub yes: bool,
-    /// The topology selected by `--topology` (standalone only today).
+    /// The topology selected by `--topology` / answers file.
     pub topology: InitTopology,
-    /// Init answers selected by local-dev flags.
+    /// Init answers selected by flags, answers file, and non-interactive env secrets.
     pub overrides: InitOverrides,
-    /// Run without prompts; all required values must be supplied via flags or
-    /// environment variables.
+    /// Run without prompts; all required values must be supplied via flags,
+    /// answers file, or environment variables.
     pub non_interactive: bool,
     /// The top-level worker workspace root written into `[worker] workspace`.
     /// `None` lets the daemon's default (`~/.local/state/temper/workspace`)
@@ -198,28 +217,14 @@ pub fn main_with_options(
         return ExitCode::SUCCESS;
     }
 
-    let mut opts = InitOptions {
-        options: parsed.options,
-        force: parsed.force,
-        existing_repo: parsed.existing_repo,
-        apply: parsed.apply,
-        yes: parsed.yes,
-        topology: parsed.topology,
-        overrides: parsed.overrides,
-        non_interactive: parsed.non_interactive,
-        workspace: parsed.workspace,
-        env: env.clone(),
-        paths: paths.clone(),
+    let opts = match init_options_from_parsed(parsed, env, paths) {
+        Ok(opts) => opts,
+        Err(error) => {
+            eprintln!("temper init: {error}\n\n{USAGE}");
+            return ExitCode::from(EX_USAGE);
+        }
     };
 
-    // Resolve env-only secret overrides. They are only honoured when
-    // --non-interactive is set; collect_answers enforces that gate.
-    if let Some(pw) = env.get("TEMPER_INIT_ADMIN_PASSWORD") {
-        opts.overrides.admin_password = Some(pw);
-    }
-    if let Some(key) = env.get("TEMPER_INIT_PROVIDER_KEY") {
-        opts.overrides.provider_key = Some(key);
-    }
     let mut prompter = TerminalPrompter::stdio();
     let mut provisioner = ForgejoProvisioner;
     match run_init(&mut prompter, &mut provisioner, &opts) {
@@ -229,6 +234,107 @@ pub fn main_with_options(
             ExitCode::FAILURE
         }
     }
+}
+
+fn init_options_from_parsed(
+    parsed: ParsedInitArgs,
+    env: &EnvMap,
+    paths: &PathResolver,
+) -> Result<InitOptions, String> {
+    let ParsedInitArgs {
+        help: _,
+        options,
+        force,
+        existing_repo,
+        apply,
+        yes,
+        topology: flag_topology,
+        overrides: flag_overrides,
+        workspace,
+        non_interactive,
+        answers,
+    } = parsed;
+
+    let mut topology = InitTopology::Standalone;
+    let mut overrides = InitOverrides::default();
+    let mut answer_file_seen = false;
+
+    if let Some(path) = answers {
+        let AnswersFile {
+            topology: answer_topology,
+            overrides: answer_overrides,
+        } = load_answers_file(&path)?;
+        answer_file_seen = true;
+        if let Some(answer_topology) = answer_topology {
+            topology = answer_topology;
+        }
+        overrides = answer_overrides;
+    }
+
+    if let Some(flag_topology) = flag_topology {
+        topology = flag_topology;
+    }
+    overlay_overrides(&mut overrides, flag_overrides);
+
+    // Resolve env-only secret overrides after answers and flags so a CI or
+    // shell-provided secret wins without rewriting the reproducible answers file.
+    // They are only consumed by collection when non-interactive is active.
+    if let Some(pw) = env.non_empty("TEMPER_INIT_ADMIN_PASSWORD") {
+        overrides.admin_password = Some(pw);
+    }
+    if let Some(key) = env.non_empty("TEMPER_INIT_PROVIDER_KEY") {
+        overrides.provider_key = Some(key);
+    }
+
+    Ok(InitOptions {
+        options,
+        force,
+        existing_repo,
+        apply,
+        yes,
+        topology,
+        overrides,
+        non_interactive: non_interactive || answer_file_seen,
+        workspace,
+        env: env.clone(),
+        paths: paths.clone(),
+    })
+}
+
+fn overlay_overrides(base: &mut InitOverrides, overlay: InitOverrides) {
+    if let Some(value) = overlay.forge_url {
+        base.forge_url = Some(value);
+    }
+    if let Some(value) = overlay.bind {
+        base.bind = Some(value);
+    }
+    if !overlay.repos.is_empty() {
+        base.repos = overlay.repos;
+    }
+    if let Some(value) = overlay.workflow {
+        base.workflow = Some(value);
+    }
+    if let Some(value) = overlay.provider {
+        base.provider = Some(value);
+    }
+    if let Some(value) = overlay.admin_user {
+        base.admin_user = Some(value);
+    }
+    if let Some(value) = overlay.admin_password {
+        base.admin_password = Some(value);
+    }
+    if let Some(value) = overlay.provider_key {
+        base.provider_key = Some(value);
+    }
+    if let Some(value) = overlay.provider_url {
+        base.provider_url = Some(value);
+    }
+}
+
+fn multiple_repo_apply_error(count: usize) -> InitError {
+    InitError::Unsupported(format!(
+        "--apply currently supports exactly one repository, found {count}; omit --apply or pass a single --repo"
+    ))
 }
 
 /// The testable core of `temper init`: collect answers, preflight, write the
@@ -250,8 +356,15 @@ pub fn run_init(
         ));
     }
 
+    if opts.apply && opts.overrides.repos.len() > 1 {
+        return Err(multiple_repo_apply_error(opts.overrides.repos.len()));
+    }
+
     // 1. Collect answers (prompts only).
     let answers = collect_answers(p, &opts.overrides, opts.non_interactive)?;
+    if opts.apply && answers.repos.len() != 1 {
+        return Err(multiple_repo_apply_error(answers.repos.len()));
+    }
 
     // 2. Build the artifacts (pure) and preflight every local target up front.
     let artifacts = build_artifacts(&answers, opts)?;
@@ -261,8 +374,8 @@ pub fn run_init(
     write_artifacts(&artifacts, opts.force)?;
 
     // 4. Write local credentials before any optional forge mutation. These
-    // contain the operator-supplied secrets (admin password + provider key) so
-    // a later apply can mint and persist forge tokens.
+    // contain the operator-supplied secrets (admin password and any provider
+    // key) so a later apply can mint and persist forge tokens.
     write::write_local_credentials(&answers, &artifacts, opts.force)?;
 
     let mut applied = false;
@@ -339,29 +452,126 @@ pub fn run_init(
     p.note("");
     if applied {
         p.note("Now run `temper serve standalone` to start the engine, worker, and agent.");
-    } else {
+    } else if answers.repos.len() == 1 {
         p.note("Run `temper apply` before starting the engine.");
+    } else {
+        p.note(
+            "Provision each repository before starting the engine; `temper apply` currently supports one repository.",
+        );
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::USAGE;
+    use std::path::PathBuf;
+
+    use temper_cli_common::{EnvMap, LoadOptions, PathResolver};
+
+    use super::{USAGE, init_options_from_parsed};
+    use crate::args::{InitTopology, parse_init_args};
 
     #[test]
-    fn usage_documents_workspace_and_apply_flags() {
+    fn usage_documents_workspace_apply_answers_and_selection_flags() {
         assert!(USAGE.contains("--workspace"), "{USAGE}");
         assert!(USAGE.contains("Top-level worker workspace root"), "{USAGE}");
         assert!(USAGE.contains("--apply"), "{USAGE}");
         assert!(USAGE.contains("--yes"), "{USAGE}");
         assert!(USAGE.contains("--admin-user"), "{USAGE}");
         assert!(USAGE.contains("skips the admin prompt"), "{USAGE}");
+        assert!(USAGE.contains("--answers"), "{USAGE}");
+        assert!(USAGE.contains("schema_version = 1"), "{USAGE}");
+        assert!(USAGE.contains("standalone|distributed"), "{USAGE}");
+        assert!(USAGE.contains("anthropic|chatgpt|deepseek|none"), "{USAGE}");
+        assert!(USAGE.contains("repeatable"), "{USAGE}");
+        assert!(USAGE.contains("cannot set --apply"), "{USAGE}");
         assert!(
             !USAGE.contains("admin username (only non-interactive)"),
             "{USAGE}"
         );
         assert!(!USAGE.contains("  --config"), "{USAGE}");
         assert!(!USAGE.contains("  --secrets"), "{USAGE}");
+    }
+
+    #[test]
+    fn answers_file_implies_non_interactive_and_flags_env_win() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let answers = dir.path().join("answers.toml");
+        std::fs::write(
+            &answers,
+            r#"
+schema_version = 1
+topology = "distributed"
+forge_url = "http://answers-forge.local:3000"
+admin_user = "answers-admin"
+admin_password = "answers-pw"
+provider = "deepseek"
+provider_key = "answers-key"
+repos = ["answers/repo"]
+"#,
+        )
+        .expect("answers file");
+
+        let parsed = parse_init_args(
+            vec![
+                "--answers".to_string(),
+                answers.display().to_string(),
+                "--topology".to_string(),
+                "standalone".to_string(),
+                "--forge".to_string(),
+                "http://flag-forge.local:3000".to_string(),
+                "--repo".to_string(),
+                "flag/repo".to_string(),
+                "--provider".to_string(),
+                "chatgpt".to_string(),
+            ],
+            LoadOptions::default(),
+        )
+        .expect("parse");
+        let mut env = EnvMap::new();
+        env.insert("TEMPER_INIT_ADMIN_PASSWORD", "env-pw");
+        env.insert("TEMPER_INIT_PROVIDER_KEY", "env-provider-key");
+
+        let opts = init_options_from_parsed(parsed, &env, &PathResolver::default())
+            .expect("compose options");
+
+        assert!(opts.non_interactive, "--answers implies non-interactive");
+        assert_eq!(opts.topology, InitTopology::Standalone);
+        assert_eq!(
+            opts.overrides.forge_url.as_deref(),
+            Some("http://flag-forge.local:3000")
+        );
+        assert_eq!(opts.overrides.repos[0].path(), "flag/repo");
+        assert_eq!(opts.overrides.provider.as_deref(), Some("chatgpt"));
+        assert_eq!(opts.overrides.admin_user.as_deref(), Some("answers-admin"));
+        assert_eq!(opts.overrides.admin_password.as_deref(), Some("env-pw"));
+        assert_eq!(
+            opts.overrides.provider_key.as_deref(),
+            Some("env-provider-key")
+        );
+    }
+
+    #[test]
+    fn answers_file_load_error_is_usage_error() {
+        let parsed = parse_init_args(
+            vec!["--answers".to_string(), "missing.toml".to_string()],
+            LoadOptions::default(),
+        )
+        .expect("parse");
+
+        let err = init_options_from_parsed(parsed, &EnvMap::new(), &PathResolver::default())
+            .expect_err("missing answers file rejected");
+
+        assert!(err.contains("read answers file"), "{err}");
+    }
+
+    #[test]
+    fn answers_file_path_is_preserved_as_pathbuf() {
+        let parsed = parse_init_args(
+            vec!["--answers".to_string(), "answers.toml".to_string()],
+            LoadOptions::default(),
+        )
+        .expect("parse");
+        assert_eq!(parsed.answers, Some(PathBuf::from("answers.toml")));
     }
 }

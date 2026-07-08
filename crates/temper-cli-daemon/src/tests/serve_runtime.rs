@@ -136,6 +136,13 @@ fn worker_flags_override_worker_runtime_config() {
 #[test]
 fn worker_pool_derives_capabilities_and_default_capacity() {
     let (dir, mut resolved) = resolved_from_config("worker-pool", worker_pool_config());
+    let pool_policies = temper_engine_service::daemon_run_config(&resolved)
+        .expect("engine runtime config builds")
+        .worker_pools;
+    assert_eq!(pool_policies.len(), 2);
+    assert_eq!(pool_policies[0].name, "builders");
+    assert_eq!(pool_policies[0].max_concurrent_jobs, Some(2));
+    assert_eq!(pool_policies[1].name, "broad");
 
     apply_runtime_overrides(
         &mut resolved,
@@ -170,6 +177,7 @@ fn worker_pool_derives_capabilities_and_default_capacity() {
         WorkerProtocolMessage::Register(register) => register,
         other => panic!("expected register message, got {other:?}"),
     };
+    assert_eq!(register.worker_pool.as_deref(), Some("builders"));
     assert_eq!(register.labels, Some(vec!["pool:builders".to_string()]));
     let mut registry = WorkerRegistry::new();
     registry.register(&register);

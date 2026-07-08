@@ -169,3 +169,51 @@ fn check_json_fails_for_invalid_yaml_workflow_with_format() {
         "{value}"
     );
 }
+
+#[test]
+fn check_json_fails_for_static_workflow_validation_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bundle = write_valid_bundle(dir.path());
+    std::fs::write(
+        bundle.join("invalid-workflow.json"),
+        r#"{
+            "name": "invalid",
+            "roles": [{"id": "engineer", "queues": ["missing_queue"]}]
+        }"#,
+    )
+    .expect("write invalid workflow");
+    std::fs::write(
+        bundle.join("config.toml"),
+        "schema_version = 1\n\
+         [workflow]\n\
+         file = \"invalid-workflow.json\"\n\
+         [paths]\n\
+         state_dir = \"state\"\n\
+         workspace_dir = \"workspace\"\n\
+         [forge]\n\
+         url = \"http://localhost:3000\"\n\
+         admin = \"engineer\"\n\
+         ci_user = \"engineer\"\n\
+         [engine]\n\
+         repos = [\"ai/temper\"]\n\
+         roles = [\"engineer\"]\n",
+    )
+    .expect("rewrite config");
+
+    let bundle_arg = bundle.to_string_lossy();
+    let output = temper(
+        &["--config", &bundle_arg, "--format", "json", "check"],
+        dir.path(),
+    );
+
+    assert!(!output.status.success(), "invalid workflow should fail");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let findings = value["findings"].as_array().expect("findings array");
+    assert!(
+        findings.iter().any(|finding| finding["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("failed validation")
+                && message.contains("undeclared queue `missing_queue`"))),
+        "{value}"
+    );
+}

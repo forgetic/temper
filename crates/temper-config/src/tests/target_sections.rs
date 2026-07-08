@@ -113,6 +113,20 @@ agent-provider = "provider-secret-value"
         Some(true)
     );
 
+    assert_eq!(
+        resolved
+            .worker
+            .worker_pool_tokens
+            .get("engineers")
+            .map(ExposeSecret::expose_secret),
+        Some("worker-secret-value")
+    );
+    let rendered = format!("{resolved:?}");
+    assert!(
+        !rendered.contains("worker-secret-value"),
+        "worker token leaked: {rendered}"
+    );
+
     let profile = resolved
         .agent
         .profiles
@@ -134,6 +148,18 @@ agent-provider = "provider-secret-value"
             .as_ref()
             .map(|reference| reference.name.as_str()),
         Some("agent-provider")
+    );
+    assert_eq!(
+        profile
+            .credential_json
+            .as_ref()
+            .map(|secret| secret.expose_secret()),
+        Some(r#"{"api_key":"provider-secret-value","type":"api-key"}"#)
+    );
+    let rendered = format!("{resolved:?}");
+    assert!(
+        !rendered.contains("provider-secret-value"),
+        "profile credential leaked: {rendered}"
     );
 
     // Active runtime fields still come from legacy/default settings, not pools/profiles.

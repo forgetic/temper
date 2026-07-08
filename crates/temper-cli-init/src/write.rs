@@ -9,22 +9,34 @@ use std::path::{Path, PathBuf};
 
 use temper_cli_common::{FileTargets, resolve_targets, restrict_600, write_new_file};
 use temper_config::{
-    ConfigInputs, CredentialInputs, ProviderKeyInput, ProviderSecretInput, ProvisionedForgeUser,
-    build_config, build_credentials, forge_users_from_provisioned, write_config,
+    AgentProfileConfig, ConfigInputs, CredentialInputs, NamedSecret, NamedSecretEntry,
+    ProviderKeyInput, ProviderSecretInput, ProvisionedForgeUser, WorkerPoolConfig, build_config,
+    build_credentials, forge_users_from_provisioned, write_config,
 };
 use temper_reference_delivery::{
-    basic_delivery_workflow_json, parse_workflow_spec, reference_delivery_workflow_json,
+    basic_delivery_workflow_json, load_workflow_document, reference_delivery_workflow_json,
 };
 use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
-use crate::collect::{WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
-
 use crate::collect::Answers;
+use crate::collect::{PROVIDER_NONE, WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
 use crate::provisioner::ProvisionOutcome;
-use crate::{InitError, InitOptions};
+use crate::{InitError, InitOptions, InitTopology};
 
 /// The file name of the generated webhook secret, written beside `config.toml`.
 const WEBHOOK_SECRET_FILE: &str = "webhook-secret";
+/// The file name of the generated workflow artifact, written beside `config.toml`.
+const WORKFLOW_FILE: &str = "workflow.yaml";
+/// Default config-relative worker workspace directory for generated bundles.
+const WORKSPACE_DIR: &str = "workspace";
+/// Target-era named secret that supplies the engine/default Forge token after apply.
+const FORGE_ENGINE_TOKEN_SECRET: &str = "forge-engine-token";
+/// Target-era named secret that supplies the Forgejo webhook HMAC secret.
+const WEBHOOK_SECRET: &str = "webhook-secret";
+/// Prefix for target-era named secrets for generated local worker tokens.
+const WORKER_TOKEN_SECRET_PREFIX: &str = "worker";
+/// Target-era named secret for the selected provider credential.
+const AGENT_PROVIDER_SECRET: &str = "agent-provider";
 
 /// The built, ready-to-write artifacts plus the resolved target paths.
 #[derive(Debug, Clone)]
@@ -44,13 +56,17 @@ pub struct InitArtifacts {
     pub webhook_secret_path: PathBuf,
     /// The freshly generated webhook secret value.
     pub webhook_secret: String,
+    /// The target-era secret name that stores [`Self::worker_token`].
+    pub worker_token_name: String,
+    /// The freshly generated local worker-token value, stored as a named secret.
+    pub worker_token: String,
 }
 
 /// Builds (pure, no I/O) every artifact `temper init` will write: the config
-/// document, the workflow YAML, and a freshly generated webhook secret.
+/// document, the workflow YAML, and freshly generated local secrets.
 ///
 /// `roles` come from the selected workflow's queue-subscribing roles. The
-/// repo/provider come from defaults or local-dev flag overrides.
+/// repo/provider come from defaults, answers files, or local-dev flag overrides.
 pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArtifacts, InitError> {
     let targets: FileTargets =
         resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
@@ -61,32 +77,43 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let workflow_path = config_dir.join("workflow.yaml");
+    let workflow_path = config_dir.join(WORKFLOW_FILE);
     let webhook_secret_path = config_dir.join(WEBHOOK_SECRET_FILE);
 
     let workflow = workflow_artifact(&answers.workflow)?;
     let roles = workflow_roles(&workflow.validated);
+    let repos = answers.repo_paths();
     let webhook_secret = generate_secret();
+    let worker_token = generate_secret();
+    let worker_token_name = worker_token_secret_name(opts.topology);
+    let workspace = opts
+        .workspace
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| WORKSPACE_DIR.to_string());
 
     let mut config = build_config(&ConfigInputs {
         forge_url: Some(answers.forge_url.clone()),
         forge_kind: Some("forgejo".to_string()),
-        repos: vec![answers.repo_path()],
-        roles,
-        workflow_path: Some(workflow_path.display().to_string()),
+        repos: repos.clone(),
+        roles: roles.clone(),
+        workflow_path: Some(WORKFLOW_FILE.to_string()),
         webhook_addr: Some(bind_addr(&answers.webhook_addr)),
         admin_user: Some(answers.admin_user.clone()),
         ci_user: Some(temper_provision::BOT_USER.to_string()),
-        provider: Some(answers.provider.clone()),
+        provider: active_provider_name(answers),
         provider_url: answers.provider_url.clone(),
-        workspace: opts
-            .workspace
-            .as_ref()
-            .map(|path| path.display().to_string()),
+        workspace: Some(workspace.clone()),
     });
-    // Point the engine at the generated webhook secret file. `build_config` does
-    // not take this (it is `temper init`-specific wiring), so set it here.
-    config.engine.webhook_secret_file = Some(webhook_secret_path.display().to_string());
+    apply_target_shape(
+        &mut config,
+        opts.topology,
+        &roles,
+        &repos,
+        &workspace,
+        &worker_token_name,
+        answers,
+    );
 
     Ok(InitArtifacts {
         config_path: targets.config,
@@ -96,7 +123,75 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         workflow_yaml: workflow.yaml,
         webhook_secret_path,
         webhook_secret,
+        worker_token_name,
+        worker_token,
     })
+}
+
+fn apply_target_shape(
+    config: &mut temper_config::Config,
+    topology: InitTopology,
+    roles: &[String],
+    repos: &[String],
+    workspace: &str,
+    worker_token_name: &str,
+    answers: &Answers,
+) {
+    config.deployment.topology = Some(topology.as_str().to_string());
+
+    // The target workflow field is intentionally bundle-relative. The legacy
+    // field is kept byte-for-byte equal so migration compatibility paths do not
+    // trip the preferred/legacy conflict guard during resolution.
+    config.workflow.file = Some(WORKFLOW_FILE.to_string());
+    config.engine.workflow = Some(WORKFLOW_FILE.to_string());
+
+    // Target path metadata is primary; the legacy worker field remains for
+    // existing adapters until the migration fully cuts over.
+    config.paths.workspace_dir = Some(workspace.to_string());
+    config.worker.workspace = Some(workspace.to_string());
+
+    config.engine.forge_token = Some(FORGE_ENGINE_TOKEN_SECRET.to_string());
+    config.engine.webhook_secret = Some(WEBHOOK_SECRET.to_string());
+    config.engine.webhook_secret_file = Some(WEBHOOK_SECRET_FILE.to_string());
+
+    let pool_name = pool_name(topology).to_string();
+    let provider_enabled = active_provider_name(answers).is_some();
+    let agent_profile = provider_enabled.then(|| pool_name.clone());
+    config.worker.pools = vec![WorkerPoolConfig {
+        name: Some(pool_name.clone()),
+        roles: Some(roles.to_vec()),
+        repos: Some(repos.to_vec()),
+        max_concurrent_jobs: Some(1),
+        agent_profile,
+        worker_token: Some(worker_token_name.to_string()),
+    }];
+
+    if provider_enabled {
+        config.agent.profiles.insert(
+            pool_name,
+            AgentProfileConfig {
+                command: Some(vec!["temper".to_string(), "agent".to_string()]),
+                provider: Some(answers.provider.clone()),
+                provider_url: answers.provider_url.clone(),
+                credential: answers
+                    .provider_key
+                    .as_ref()
+                    .map(|_| AGENT_PROVIDER_SECRET.to_string()),
+                ..AgentProfileConfig::default()
+            },
+        );
+    }
+}
+
+fn pool_name(topology: InitTopology) -> &'static str {
+    match topology {
+        InitTopology::Standalone => "local",
+        InitTopology::Distributed => "default",
+    }
+}
+
+fn worker_token_secret_name(topology: InitTopology) -> String {
+    format!("{WORKER_TOKEN_SECRET_PREFIX}-{}-token", pool_name(topology))
 }
 
 /// Checks that none of the target files already exist (unless `force`), erroring
@@ -143,8 +238,9 @@ pub fn write_artifacts(artifacts: &InitArtifacts, force: bool) -> Result<(), Ini
 
 /// Builds + writes the local `credentials.toml` (chmod 600) before any forge
 /// mutation. It contains only secrets the operator supplied locally: the admin
-/// password (so a later apply can mint a token) and the provider key. Provisioned
-/// role/bot tokens are added only by [`write_provisioned_credentials`].
+/// password (so a later apply can mint a token), the provider key when one is
+/// configured, and local-development named secrets for target-era references.
+/// Provisioned role/bot tokens are added only by [`write_provisioned_credentials`].
 pub fn write_local_credentials(
     answers: &Answers,
     artifacts: &InitArtifacts,
@@ -159,7 +255,8 @@ pub fn write_local_credentials(
 }
 
 /// Builds + writes `credentials.toml` (chmod 600) from the admin identity (Q4),
-/// the minted role/bot identities, and the provider key.
+/// the minted role/bot identities, the provider key when configured, and
+/// local-development named secrets for target-era references.
 pub fn write_provisioned_credentials(
     answers: &Answers,
     artifacts: &InitArtifacts,
@@ -234,16 +331,101 @@ fn write_credentials_with_users(
     forge_users: BTreeMap<String, temper_config::ForgeUser>,
     force: bool,
 ) -> Result<(), InitError> {
-    let credentials = build_credentials(&CredentialInputs {
-        forge_users,
-        provider_key: ProviderKeyInput {
-            provider: answers.provider.clone(),
-            secret: ProviderSecretInput::ApiKey(answers.provider_key.clone()),
-        },
+    let provider_key = answers.provider_key.as_ref().map(|key| ProviderKeyInput {
+        provider: answers.provider.clone(),
+        secret: ProviderSecretInput::ApiKey(key.clone()),
     });
+    let mut credentials = build_credentials(&CredentialInputs {
+        forge_users,
+        provider_key,
+    });
+    add_local_development_named_secrets(&mut credentials, answers, artifacts);
 
     temper_config::write_credentials(&credentials, &artifacts.credentials_path, force)
         .map_err(|error| InitError::Write(error.to_string()))
+}
+
+fn add_local_development_named_secrets(
+    credentials: &mut temper_config::Credentials,
+    answers: &Answers,
+    artifacts: &InitArtifacts,
+) {
+    credentials.secrets.insert(
+        WEBHOOK_SECRET.to_string(),
+        webhook_secret(artifacts.webhook_secret.clone()),
+    );
+    credentials.secrets.insert(
+        artifacts.worker_token_name.clone(),
+        worker_token_secret(artifacts.worker_token.clone()),
+    );
+    if let Some(key) = answers.provider_key.as_ref() {
+        credentials.secrets.insert(
+            AGENT_PROVIDER_SECRET.to_string(),
+            provider_secret(&answers.provider, key),
+        );
+    }
+    if let Some(token) = credentials
+        .forge
+        .users
+        .get(&answers.admin_user)
+        .and_then(|user| user.token.as_ref())
+        .filter(|token| !token.trim().is_empty())
+        .cloned()
+    {
+        add_forge_engine_token_secret(credentials, token);
+    }
+}
+
+pub(crate) fn add_forge_engine_token_secret(
+    credentials: &mut temper_config::Credentials,
+    token: String,
+) {
+    credentials.secrets.insert(
+        FORGE_ENGINE_TOKEN_SECRET.to_string(),
+        forge_token_secret(token),
+    );
+}
+
+fn webhook_secret(secret: String) -> NamedSecret {
+    NamedSecret::Structured(NamedSecretEntry {
+        kind: Some("webhook-secret".to_string()),
+        secret: Some(secret),
+        ..NamedSecretEntry::default()
+    })
+}
+
+fn worker_token_secret(token: String) -> NamedSecret {
+    NamedSecret::Structured(NamedSecretEntry {
+        kind: Some("worker-token".to_string()),
+        token: Some(token),
+        ..NamedSecretEntry::default()
+    })
+}
+
+fn forge_token_secret(token: String) -> NamedSecret {
+    NamedSecret::Structured(NamedSecretEntry {
+        kind: Some("forge-token".to_string()),
+        token: Some(token),
+        ..NamedSecretEntry::default()
+    })
+}
+
+fn provider_secret(provider: &str, key: &str) -> NamedSecret {
+    NamedSecret::Structured(NamedSecretEntry {
+        kind: Some("provider-credentials".to_string()),
+        provider: Some(provider.to_string()),
+        auth: Some("api-key".to_string()),
+        api_key: Some(key.to_string()),
+        ..NamedSecretEntry::default()
+    })
+}
+
+fn active_provider_name(answers: &Answers) -> Option<String> {
+    if answers.provider == PROVIDER_NONE {
+        None
+    } else {
+        Some(answers.provider.clone())
+    }
 }
 
 struct WorkflowArtifact {
@@ -285,24 +467,18 @@ fn builtin_workflow_artifact(name: &str, json: &str) -> Result<WorkflowArtifact,
 
 fn load_workflow_artifact(path: &str) -> Result<WorkflowArtifact, InitError> {
     let path = Path::new(path);
-    let source = std::fs::read_to_string(path).map_err(|error| {
-        InitError::Path(format!("read workflow file {}: {error}", path.display()))
-    })?;
-    let spec = parse_workflow_spec(path, &source)
-        .map_err(|error| InitError::Unsupported(error.to_string()))?;
-    let validated = spec.validate().map_err(|errors| {
-        InitError::Unsupported(format!(
-            "workflow file {} failed validation:\n{errors}",
-            path.display()
-        ))
-    })?;
-    let yaml = serde_yaml::to_string(&spec).map_err(|error| {
+    let document =
+        load_workflow_document(path).map_err(|error| InitError::Unsupported(error.to_string()))?;
+    let yaml = serde_yaml::to_string(&document.spec).map_err(|error| {
         InitError::Unsupported(format!(
             "workflow file {} could not be rendered as YAML: {error}",
             path.display()
         ))
     })?;
-    Ok(WorkflowArtifact { yaml, validated })
+    Ok(WorkflowArtifact {
+        yaml,
+        validated: document.workflow,
+    })
 }
 
 /// The roles `temper init` drives, derived from the selected workflow's

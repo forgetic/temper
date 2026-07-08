@@ -6,13 +6,18 @@
 //! health, and local in-flight capacity, but Forge leases/CAS remain the source
 //! of truth for work ownership.
 
+mod auth;
 pub mod daemon_core;
 pub mod dispatch;
 mod registry;
 
+pub use auth::WorkerPoolAuthConfig;
 pub use daemon_core::{DaemonCore, InFlightJob};
 pub use dispatch::{Assignment, DispatchCoordinator, WorkItem};
-pub use registry::{RegistryError, WorkerRegistry};
+pub use registry::{
+    RegistrationError, RegistryError, WorkerPoolPolicies, WorkerPoolPolicy, WorkerRegistry,
+    WorkerSnapshot,
+};
 
 #[cfg(test)]
 pub(crate) mod test_support;

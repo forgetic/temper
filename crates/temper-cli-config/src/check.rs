@@ -60,8 +60,9 @@ Validate the resolved Temper config and credentials.
 Usage: temper [GLOBAL OPTIONS] check [OPTIONS]
 
 Options:
-      --component <standalone|engine|worker|trigger>
-                           Component scope to validate (default: standalone)
+      --component <standalone|engine|worker>
+                           Component scope to validate (default: standalone;
+                           webhook intake is validated under engine or standalone)
       --pool <NAME>        Worker pool to validate with --component worker
       --strict             Treat notes and warnings as failures
       --online             Also run component-scoped Forge/provider reachability checks

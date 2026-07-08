@@ -176,11 +176,15 @@ pub(crate) fn load_plan_bundle(opts: &PlanOptions) -> Result<PlanBundle, InitErr
     let credentials = Credentials::load(&targets.credentials).map_err(|error| {
         InitError::Path(format!("load {}: {error}", targets.credentials.display()))
     })?;
-    let resolve_options = targets
+    let mut resolve_options = targets
         .config
         .parent()
         .map(ResolveOptions::from_config_base_dir)
         .unwrap_or_default();
+    // Generated init bundles reference the forge token that the first apply
+    // pass mints. Planning/apply must load that pre-apply bundle, while normal
+    // runtime/check paths keep strict secret-reference validation.
+    resolve_options.validate_secret_references = false;
     let resolved =
         temper_config::resolve_with_options(&config, &credentials, &opts.env, &resolve_options)
             .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?;
