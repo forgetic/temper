@@ -220,8 +220,8 @@ pub struct AgentSettings {
     /// boundary. Empty when no tool section is configured or codebase-memory is
     /// `mode = "off"`.
     pub tools: AgentToolSettings,
-    /// Target-era named agent profiles. Resolved for inspection/future pool
-    /// dispatch, but not selected by the active agent runtime yet.
+    /// Target-era named agent profiles. A worker whose selected pool names an
+    /// `agent_profile` uses the matching profile for its spawned agent command.
     pub profiles: BTreeMap<String, AgentProfileSettings>,
 }
 
@@ -290,7 +290,7 @@ impl CodebaseMemoryIndex {
 }
 
 /// A target-era `[agent.profiles.<name>]` execution profile.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct AgentProfileSettings {
     pub command: Vec<String>,
     pub provider: Option<ProviderKind>,
@@ -299,8 +299,13 @@ pub struct AgentProfileSettings {
     pub provider_url: Option<String>,
     pub max_iterations: Option<usize>,
     pub subagents: Option<bool>,
-    /// Secret-name reference only; no secret value is resolved in this model.
+    /// Secret-name reference for inspection output.
     pub credential: Option<SecretReference>,
+    /// Provider credential JSON resolved from [`credential`](Self::credential)
+    /// for the worker→agent process boundary. `SecretString` keeps `Debug`
+    /// redacted and `Resolved` is intentionally not serializable, so the value
+    /// only crosses at the audited spawn-env boundary.
+    pub credential_json: Option<SecretString>,
 }
 
 /// Resolved LLM provider wiring.
