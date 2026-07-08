@@ -12,7 +12,8 @@
 use std::path::PathBuf;
 
 use temper_forge::CreateRepository;
-use temper_provision::Provisioned;
+use temper_provision::{ProvisionPlan, Provisioned};
+use temper_workflow::ValidatedWorkflow;
 
 /// The non-secret + secret inputs the provisioning step needs, distilled from
 /// the collected answers + the resolved artifact paths.
@@ -47,12 +48,58 @@ pub struct ProvisionOutcome {
     pub admin_token: String,
 }
 
-/// The injectable live-forge step. Implementors run the actual provisioning;
-/// the unit test provides a stub.
+/// A deployment apply request: admin authentication plus a pre-rendered plan for
+/// every configured repository.
+pub struct ApplyPlanRequest {
+    /// Forge base URL.
+    pub base_url: String,
+    /// Admin login used only when an admin token must be minted from a password.
+    pub admin_user: Option<String>,
+    /// Admin password used only for legacy init-local bundles that have not yet
+    /// stored an admin REST token. **Secret.**
+    pub admin_password: Option<String>,
+    /// Existing admin REST token from the resolved deployment secret surface.
+    /// **Secret.**
+    pub admin_token: Option<String>,
+    /// Repository plans to execute.
+    pub plans: Vec<ProvisionPlan>,
+}
+
+impl Clone for ApplyPlanRequest {
+    fn clone(&self) -> Self {
+        Self {
+            base_url: self.base_url.clone(),
+            admin_user: self.admin_user.clone(),
+            admin_password: self.admin_password.clone(),
+            admin_token: self.admin_token.clone(),
+            plans: self.plans.clone(),
+        }
+    }
+}
+
+/// Result of executing a deployment apply request.
+pub struct ApplyPlanOutcome {
+    /// One provisioning result per repository plan.
+    pub provisioned: Vec<Provisioned>,
+    /// Admin REST token used for the run. **Secret.**
+    pub admin_token: String,
+}
+
+/// The injectable init-local live-forge step. Implementors run the actual
+/// provisioning; unit tests provide stubs.
 pub trait Provisioner {
     /// Provisions the forge for `request`, returning the minted identities and
     /// the admin token. The `String` error is shown to the operator verbatim.
     fn provision(&mut self, request: &ProvisionRequest) -> Result<ProvisionOutcome, String>;
+}
+
+/// The injectable deployment-apply live-forge step.
+pub trait ApplyProvisioner {
+    /// Executes a pre-rendered deployment plan for all configured repositories.
+    fn provision_apply_plan(
+        &mut self,
+        request: &ApplyPlanRequest,
+    ) -> Result<ApplyPlanOutcome, String>;
 }
 
 /// The production [`Provisioner`]: mints an admin token over Basic auth, then
@@ -78,23 +125,41 @@ const ROLE_TOKEN_SCOPES: &[temper_forge::TokenScope] = &[
 pub(crate) fn build_init_plan(
     request: &ProvisionRequest,
     webhook: temper_forge::WebhookSpec,
-) -> Result<temper_provision::ProvisionPlan, String> {
+) -> Result<ProvisionPlan, String> {
     let workflow = match &request.workflow_path {
         Some(path) => {
             temper_reference_delivery::load_workflow(path).map_err(|error| error.to_string())?
         }
         None => temper_reference_delivery::basic_delivery_workflow(),
     };
+    build_deployment_repo_plan(
+        &workflow,
+        &request.owner,
+        &request.name,
+        Some(webhook),
+        request.existing_repo,
+    )
+}
+
+/// Builds the shared no-seed deployment plan used by init-local apply and by
+/// `temper apply` for every configured repository.
+pub(crate) fn build_deployment_repo_plan(
+    workflow: &ValidatedWorkflow,
+    owner: &str,
+    name: &str,
+    webhook: Option<temper_forge::WebhookSpec>,
+    existing_repo: bool,
+) -> Result<ProvisionPlan, String> {
     let repository = CreateRepository {
-        owner: request.owner.clone(),
-        name: request.name.clone(),
+        owner: owner.to_string(),
+        name: name.to_string(),
         default_branch: "main".to_string(),
         description: None,
     };
-    let config = temper_reference_delivery::runner_config_for(&workflow, repository);
+    let config = temper_reference_delivery::runner_config_for(workflow, repository);
     let default_branch = config.repository.default_branch.clone();
     let plan_options = temper_provision::ProvisionOptions {
-        existing_repo: request.existing_repo,
+        existing_repo,
         repository_auto_init: false,
         roles: config.role_bindings.clone(),
         automation_login: temper_provision::BOT_USER.to_string(),
@@ -102,13 +167,13 @@ pub(crate) fn build_init_plan(
         token_scopes: ROLE_TOKEN_SCOPES.to_vec(),
         labels: Vec::new(),
         seed_commits: Vec::new(),
-        webhook: Some(webhook),
-        // No intake issue seeded by `temper init`.
+        webhook,
+        // No intake issue seeded by `temper init` / `temper apply`.
         intake: None,
     };
-    temper_provision::ProvisionPlan::from_workflow(
-        &workflow,
-        temper_forge::RepositoryPath::new(&request.owner, &request.name),
+    ProvisionPlan::from_workflow(
+        workflow,
+        temper_forge::RepositoryPath::new(owner, name),
         default_branch,
         temper_forge::AccessScope::default(),
         plan_options,
@@ -159,6 +224,58 @@ impl Provisioner for ForgejoProvisioner {
                 .await
                 .map_err(|error| error.to_string())?;
             Ok(ProvisionOutcome {
+                provisioned,
+                admin_token,
+            })
+        })
+    }
+}
+
+impl ApplyProvisioner for ForgejoProvisioner {
+    fn provision_apply_plan(
+        &mut self,
+        request: &ApplyPlanRequest,
+    ) -> Result<ApplyPlanOutcome, String> {
+        if request.plans.is_empty() {
+            return Err("deployment plan contains no repositories".to_string());
+        }
+        let runtime = temper_engine_io::build_runtime()?;
+        let request = request.clone();
+        temper_engine_io::runtime::block_on_runtime_with(&runtime, move |_cx, _handle| async move {
+            let admin_token = match request.admin_token {
+                Some(token) => token,
+                None => {
+                    let admin_user = request.admin_user.as_deref().ok_or_else(|| {
+                        "mint admin token: deployment has no admin user".to_string()
+                    })?;
+                    let admin_password = request.admin_password.as_deref().ok_or_else(|| {
+                        "mint admin token: deployment admin has no password".to_string()
+                    })?;
+                    temper_forge::config::forgejo_admin_token_via_basic_auth(
+                        &request.base_url,
+                        admin_user,
+                        admin_password,
+                    )
+                    .await
+                    .map_err(|error| format!("mint admin token: {error}"))?
+                }
+            };
+
+            let mut provisioned = Vec::with_capacity(request.plans.len());
+            for plan in request.plans {
+                let owner = plan.repo.owner.clone();
+                let name = plan.repo.name.clone();
+                let forge_config =
+                    temper_forge::config::ForgejoConfig::new(&request.base_url, &admin_token)
+                        .with_default_repo(&owner, &name);
+                let forge = temper_forge::factory::new_forgejo_provisioning(forge_config);
+                let repo = temper_provision::provision_with(&plan, forge.as_ref())
+                    .await
+                    .map_err(|error| format!("{owner}/{name}: {error}"))?;
+                provisioned.push(repo);
+            }
+
+            Ok(ApplyPlanOutcome {
                 provisioned,
                 admin_token,
             })
