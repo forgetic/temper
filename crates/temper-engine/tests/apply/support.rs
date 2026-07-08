@@ -137,6 +137,7 @@ pub(crate) fn register(worker_id: &str) -> WorkerProtocolMessage {
         capacity: Capacity {
             max_concurrent_jobs: 1,
         },
+        worker_pool: None,
         labels: None,
     })
 }

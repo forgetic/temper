@@ -78,6 +78,7 @@ mod tests {
             lease_ttl: Duration::from_secs(300),
             webhook_secret_file: None,
             daemon_id: "engine-test".to_string(),
+            worker_pools: Vec::new(),
         };
         let forge = ForgejoConfig::new("https://forge.example", "admin-token");
         let mut role_tokens = BTreeMap::new();

@@ -2,6 +2,7 @@
   "protocol_version": 1,
   "type": "register",
   "worker_id": "worker-1",
+  "worker_pool": "builders",
   "capabilities": [
     {
       "role": "coder",

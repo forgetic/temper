@@ -49,7 +49,7 @@ pub async fn run_async(
     let wake_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Wake);
     let lease_ttl = lease_ttl(&config)?;
 
-    let daemon = Daemon::with_applier(
+    let daemon = Daemon::with_applier_and_worker_pools(
         Arc::clone(&spawner),
         result_applier(
             forge.clone(),
@@ -59,6 +59,7 @@ pub async fn run_async(
             &role_tokens,
             lease_ttl,
         ),
+        config.worker_pools.clone(),
     );
 
     spawn_poll(

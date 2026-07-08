@@ -15,9 +15,9 @@ use temper_engine_io::{EngineTime, Machine};
 use temper_protocol_worker::{
     Artifact, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
 };
-use temper_worker_registry::DaemonCore;
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
+use temper_worker_registry::{DaemonCore, WorkerPoolPolicy};
 
 use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
@@ -148,8 +148,24 @@ pub(super) struct DaemonMachine {
 
 impl DaemonMachine {
     pub(super) fn new(apply_grace: Duration, max_poll_wait_ms: u64) -> Self {
+        Self::with_core(DaemonCore::new(), apply_grace, max_poll_wait_ms)
+    }
+
+    pub(super) fn with_worker_pools(
+        worker_pools: Vec<WorkerPoolPolicy>,
+        apply_grace: Duration,
+        max_poll_wait_ms: u64,
+    ) -> Self {
+        Self::with_core(
+            DaemonCore::with_pool_policies(worker_pools),
+            apply_grace,
+            max_poll_wait_ms,
+        )
+    }
+
+    fn with_core(core: DaemonCore, apply_grace: Duration, max_poll_wait_ms: u64) -> Self {
         Self {
-            core: DaemonCore::new(),
+            core,
             max_poll_wait_ms,
             webhook: None,
             waiters: BTreeMap::new(),
@@ -164,6 +180,17 @@ impl DaemonMachine {
 
     pub(super) fn default_machine(apply_grace: Duration) -> Self {
         Self::new(apply_grace, DEFAULT_MAX_POLL_WAIT_MS)
+    }
+
+    pub(super) fn default_machine_with_worker_pools(
+        apply_grace: Duration,
+        worker_pools: Vec<WorkerPoolPolicy>,
+    ) -> Self {
+        if worker_pools.is_empty() {
+            Self::default_machine(apply_grace)
+        } else {
+            Self::with_worker_pools(worker_pools, apply_grace, DEFAULT_MAX_POLL_WAIT_MS)
+        }
     }
 
     pub(super) fn next_token(&mut self) -> u64 {

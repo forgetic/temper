@@ -18,6 +18,8 @@ pub struct Capacity {
 pub struct Register {
     pub protocol_version: u32,
     pub worker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_pool: Option<String>,
     pub capabilities: Vec<Capability>,
     pub capacity: Capacity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
