@@ -59,7 +59,7 @@ Total: 1,982 test cases across 383 files; 17 are ignored live tests.
 | `temper-reference-delivery` | 13 | 0 | 2 |
 | `temper-cli-common` | 12 | 0 | 2 |
 | `temper-cli` | 11 | 0 | 2 |
-| `temper-trigger-forgejo` | 11 | 0 | 2 |
+| `temper-trigger-forgejo` (legacy/internal wake adapter) | 11 | 0 | 2 |
 | `temper-protocol-agent` | 9 | 0 | 1 |
 | `temper-provision` | 9 | 0 | 2 |
 | `temper-cli-config` | 6 | 0 | 1 |

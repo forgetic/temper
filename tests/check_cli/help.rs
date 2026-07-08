@@ -2,6 +2,8 @@
 
 use crate::support::temper;
 
+const COMPONENT_CHOICES: &str = "standalone|engine|worker";
+
 #[test]
 fn top_level_help_lists_check_and_hides_internal_agent() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -25,8 +27,51 @@ fn check_help_exits_successfully() {
         "{stdout}"
     );
     assert!(stdout.contains("--component"), "{stdout}");
+    assert!(stdout.contains(COMPONENT_CHOICES), "{stdout}");
+    assert!(
+        !stdout.contains(&format!("{COMPONENT_CHOICES}|trigger")),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("--component <trigger"), "{stdout}");
+    assert!(
+        stdout.contains("webhook intake is validated under engine or standalone"),
+        "{stdout}"
+    );
     assert!(stdout.contains("--pool"), "{stdout}");
     assert!(stdout.contains("--strict"), "{stdout}");
+}
+
+#[test]
+fn check_rejects_trigger_component_with_guidance() {
+    for args in [
+        vec!["check", "--component", "trigger"],
+        vec!["check", "--component=trigger"],
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = temper(&args, dir.path());
+
+        assert!(
+            !output.status.success(),
+            "trigger component is a usage error"
+        );
+        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+        assert!(
+            stderr.contains("unsupported --component `trigger`"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("webhook intake is validated"), "{stderr}");
+        assert!(stderr.contains("--component engine"), "{stderr}");
+        assert!(stderr.contains("--component standalone"), "{stderr}");
+        assert!(stderr.contains(COMPONENT_CHOICES), "{stderr}");
+        let legacy_choices = format!("{COMPONENT_CHOICES}|trigger");
+        for forbidden in [
+            "trigger component checks",
+            "not implemented yet",
+            legacy_choices.as_str(),
+        ] {
+            assert!(!stderr.contains(forbidden), "{stderr}");
+        }
+    }
 }
 
 #[test]

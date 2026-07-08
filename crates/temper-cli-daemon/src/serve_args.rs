@@ -12,8 +12,14 @@ Usage: temper [GLOBAL OPTIONS] serve <COMPONENT> [OPTIONS]
 Components:
   standalone  Run all Temper planes in one local process
   engine      Run the engine service and Forgejo webhook endpoint
-  worker      Run one worker process, optionally scoped to a worker pool
-  trigger     No separate process; engine handles webhook hints
+  worker      Run the worker service, optionally scoped to a worker pool
+
+Forgejo webhook intake:
+  There is no separate `temper serve trigger` process. Configure
+  `[engine] webhook_secret` or `[engine] webhook_secret_file` and point
+  HMAC-signed Forgejo webhooks at POST /forgejo/webhook on
+  `temper serve engine` or `temper serve standalone`. Periodic polling remains
+  the correctness backstop.
 
 Options:
   -h, --help  Print help
@@ -35,7 +41,8 @@ pub const SERVE_STANDALONE_USAGE: &str = "\
 Run Temper in standalone mode.
 
 The engine, worker, webhook intake, poll backstops, and agent execution run in
-one local process. Use this for demos and small single-host deployments.
+one local process. Use this for demos and small single-host deployments. Legacy
+`temper daemon` without `--service` maps to this component for compatibility.
 
 Usage: temper [GLOBAL OPTIONS] serve standalone [--id <ID>]
 
@@ -105,9 +112,10 @@ pub(crate) fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocatio
         "engine" => parse_serve_service(Service::Engine, iter.collect()),
         "worker" => parse_serve_service(Service::Worker, iter.collect()),
         "trigger" => Err(
-            "`temper serve trigger` has no separate process; run `temper serve engine` \
-             with a configured webhook secret. Webhooks are wake hints and polling \
-             remains the correctness backstop."
+            "`temper serve trigger` is not a supported separate component; configure \
+             `[engine] webhook_secret` or `[engine] webhook_secret_file` and point HMAC-signed \
+             Forgejo webhooks at POST /forgejo/webhook on `temper serve engine` or \
+             `temper serve standalone`; periodic polling remains the correctness backstop."
                 .to_string(),
         ),
         other => Err(format!(

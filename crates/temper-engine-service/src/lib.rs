@@ -24,7 +24,7 @@ mod applier;
 mod repositories;
 mod runtime;
 
-pub use adapt::{daemon_run_config, engine_config, forgejo_config};
+pub use adapt::{daemon_run_config, engine_config, forgejo_config, worker_pool_auth_config};
 pub use applier::result_applier;
 pub use repositories::{ensure_workflow_labels, resolve_repositories, role_feed_targets};
 pub use runtime::{run, run_async};

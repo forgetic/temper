@@ -67,6 +67,10 @@
      "type": "string",
      "minLength": 1
     },
+    "worker_pool": {
+     "type": "string",
+     "minLength": 1
+    },
     "capabilities": {
      "type": "array",
      "minItems": 1,
@@ -363,6 +367,20 @@
     "free_capacity": {
      "type": "integer",
      "minimum": 0
+    },
+    "worker_pool": {
+     "type": "string",
+     "minLength": 1
+    },
+    "max_concurrent_jobs": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "capabilities": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/capability"
+     }
     }
    }
   },
@@ -566,7 +584,8 @@
       "unknown_worker",
       "capacity_exceeded",
       "heartbeat_missed",
-      "job_timeout"
+      "job_timeout",
+      "registration_rejected"
      ]
     },
     "message": {

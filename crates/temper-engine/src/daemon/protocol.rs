@@ -5,7 +5,7 @@
 
 use temper_engine_io::http::HttpResponseData;
 use temper_protocol_worker::{
-    Assign, ErrorCode, FailureClass, JobResult, ResultStatus, WorkerProtocolMessage,
+    Assign, ErrorCode, FailureClass, JobResult, Register, ResultStatus, WorkerProtocolMessage,
 };
 
 pub(super) fn is_poll_timeout(message: &WorkerProtocolMessage) -> bool {
@@ -42,6 +42,20 @@ pub(super) fn decode_in_process_reply(
             Err(format!("daemon in-process reply HTTP {status}: {body}"))
         }
     }
+}
+
+pub(super) fn register_log_line(register: &Register) -> String {
+    let pool = register.worker_pool.as_deref().unwrap_or("none");
+    let capabilities = register
+        .capabilities
+        .iter()
+        .map(|capability| format!("{}:{}", capability.repo, capability.role))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "engine: registered worker_id={} pool={} capacity={} capabilities=[{}]",
+        register.worker_id, pool, register.capacity.max_concurrent_jobs, capabilities
+    )
 }
 
 pub(super) fn assignment_log_line(assign: &Assign, worker_id: &str) -> String {
@@ -127,7 +141,9 @@ pub(super) fn protocol_response(message: Option<WorkerProtocolMessage>) -> HttpR
 mod tests {
     use super::*;
     use serde_json::json;
-    use temper_protocol_worker::{Artifact, Failure, WORKER_PROTOCOL_VERSION};
+    use temper_protocol_worker::{
+        Artifact, Capability, Capacity, Failure, Register, WORKER_PROTOCOL_VERSION,
+    };
 
     fn result_for_disposition(
         status: ResultStatus,
@@ -152,6 +168,28 @@ mod tests {
         }
     }
 
+    fn register_for_log_line() -> Register {
+        Register {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: "worker-a".to_string(),
+            worker_pool: Some("builders".to_string()),
+            capabilities: vec![
+                Capability {
+                    role: "engineer".to_string(),
+                    repo: "ai/temper".to_string(),
+                },
+                Capability {
+                    role: "reviewer".to_string(),
+                    repo: "acme/widgets".to_string(),
+                },
+            ],
+            capacity: Capacity {
+                max_concurrent_jobs: 2,
+            },
+            labels: None,
+        }
+    }
+
     fn assign_for_log_line() -> Assign {
         Assign {
             protocol_version: WORKER_PROTOCOL_VERSION,
@@ -164,6 +202,14 @@ mod tests {
             },
             job_payload: json!({"safe": "context"}),
         }
+    }
+
+    #[test]
+    fn register_log_line_includes_pool_capacity_and_capabilities() {
+        assert_eq!(
+            register_log_line(&register_for_log_line()),
+            "engine: registered worker_id=worker-a pool=builders capacity=2 capabilities=[ai/temper:engineer,acme/widgets:reviewer]"
+        );
     }
 
     #[test]

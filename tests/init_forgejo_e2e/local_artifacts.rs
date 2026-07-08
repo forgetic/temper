@@ -2,7 +2,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use temper_cli_common::LoadOptions;
-use temper_config::{NoEnv, ProviderCredential, ProviderKind, lint, load_with_env};
+use temper_config::{
+    DeploymentTopology, NoEnv, ProviderCredential, ProviderKind, lint, load_with_env,
+};
 
 use super::{ADMIN_USER, DUMMY_DEEPSEEK_KEY, REPO_NAME, REPO_OWNER};
 
@@ -52,7 +54,34 @@ pub(super) fn assert_local_artifacts(
         "credentials must carry the admin identity"
     );
 
+    assert!(
+        creds_text.contains("[secrets.forge-engine-token]"),
+        "credentials must carry the target forge-token named secret"
+    );
+    assert!(
+        creds_text.contains("[secrets.webhook-secret]"),
+        "credentials must carry the target webhook named secret"
+    );
+    assert!(
+        creds_text.contains("[secrets.worker-local-token]"),
+        "credentials must carry the target worker token named secret"
+    );
+    assert!(
+        creds_text.contains("[secrets.agent-provider]"),
+        "credentials must carry the target provider named secret"
+    );
+
     let resolved = load_isolated(config_path, credentials_path);
+    assert_eq!(
+        resolved.deployment.topology,
+        Some(DeploymentTopology::Standalone),
+        "init should write target deployment topology"
+    );
+    assert_eq!(
+        resolved.paths.workflow_file.as_deref(),
+        Some(workflow_path),
+        "workflow.file should resolve relative to config.toml"
+    );
     assert_eq!(
         resolved.forge.url.as_deref(),
         Some(base_url.trim_end_matches('/')),
@@ -104,9 +133,45 @@ pub(super) fn assert_local_artifacts(
         "worker workspace must be the temp dir we passed via InitOptions"
     );
     assert_eq!(
+        resolved.paths.workspace_dir.as_path(),
+        workspace_root,
+        "target paths.workspace_dir must be the temp dir we passed via InitOptions"
+    );
+    assert_eq!(
+        resolved
+            .engine
+            .webhook_secret
+            .as_ref()
+            .map(|secret| (secret.name.as_str(), secret.available)),
+        Some(("webhook-secret", true)),
+        "target webhook secret reference must be available"
+    );
+    assert_eq!(
+        resolved
+            .engine
+            .forge_token
+            .as_ref()
+            .map(|secret| (secret.name.as_str(), secret.available)),
+        Some(("forge-engine-token", true)),
+        "target forge-token reference must be available"
+    );
+    assert_eq!(
         resolved.engine.webhook_secret_file.as_deref(),
         Some(webhook_secret_path),
-        "engine webhook_secret_file must point at the generated secret"
+        "legacy engine webhook_secret_file must still point at the generated secret"
+    );
+    let pool = resolved.worker.pools.first().expect("target worker pool");
+    assert_eq!(pool.name, "local");
+    assert_eq!(pool.agent_profile.as_deref(), Some("local"));
+    assert_eq!(
+        pool.worker_token
+            .as_ref()
+            .map(|secret| (secret.name.as_str(), secret.available)),
+        Some(("worker-local-token", true))
+    );
+    assert!(
+        resolved.agent.profiles.contains_key("local"),
+        "target agent profile should resolve"
     );
 
     assert_eq!(resolved.agent.provider.kind, ProviderKind::DeepSeek);

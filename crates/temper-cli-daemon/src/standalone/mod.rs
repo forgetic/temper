@@ -34,6 +34,7 @@ use temper_engine::{
 };
 use temper_engine_service::{
     engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
+    worker_pool_auth_config,
 };
 use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
@@ -41,6 +42,7 @@ use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, RoleGitIdentity,
     WorkerConfig, run_worker_with_transport,
 };
+use temper_worker_service::selected_worker_auth;
 use temper_workflow::LeasePolicy;
 use workstream_cleanup::StandaloneWorkstreamCleaner;
 
@@ -138,7 +140,12 @@ async fn run_async(
         &role_tokens,
         lease_ttl,
     );
-    let daemon = Daemon::with_applier(Arc::clone(&spawner), applier);
+    let daemon = Daemon::with_applier_and_worker_pools(
+        Arc::clone(&spawner),
+        applier,
+        daemon_config.worker_pools.clone(),
+    )
+    .with_worker_pool_auth(worker_pool_auth_config(resolved)?);
 
     spawn_poll_backstop(
         &spawner,
@@ -223,7 +230,7 @@ async fn run_async(
         &resolved.worker,
         capabilities,
         temper_worker_service::role_identities(resolved),
-    );
+    )?;
 
     // Per-role concurrency for the §7 `capacity:` line — the standalone worker
     // runs `max_concurrent_jobs` per role, shared across all repos. Captured
@@ -355,19 +362,20 @@ pub(super) fn standalone_worker_config(
     worker: &WorkerSettings,
     capabilities: Vec<CapabilitySpec>,
     role_identities: BTreeMap<String, RoleGitIdentity>,
-) -> WorkerConfig {
-    WorkerConfig {
+) -> Result<WorkerConfig, String> {
+    Ok(WorkerConfig {
         // Unused on the in-process transport, but the struct carries it.
         daemon_url: String::new(),
         worker_id: worker.worker_id.clone(),
         worker_pool: worker.selected_pool.clone(),
+        worker_auth: selected_worker_auth(worker)?,
         capabilities,
         role_identities,
         max_concurrent_jobs: worker.max_concurrent_jobs,
         poll_wait: Duration::from_secs(20),
         heartbeat_interval: Duration::from_secs(10),
         executor: ExecutorSelection::Stub, // not consulted: the executor is built directly
-    }
+    })
 }
 
 /// Builds the §7 forge banner line after a `current_user` connectivity/auth

@@ -8,7 +8,10 @@
 //! single service for a distributed topology, sharing the exact code the slim
 //! `temper-engine` / `temper-worker` binaries run. The older `temper daemon`
 //! forms remain dispatchable for existing scripts but are no longer advertised
-//! as the onboarding/runtime surface.
+//! as the onboarding/runtime surface. Forgejo webhook intake is exposed by the
+//! engine HTTP surface at `POST /forgejo/webhook` (also present in standalone
+//! mode) when the engine webhook secret is configured; there is no separate
+//! `temper serve trigger` process.
 //!
 //! This crate carries the heavy engine/worker/agent wiring; the slimmer
 //! `temper-cli` dispatcher delegates `temper daemon` here and re-exports the
@@ -148,8 +151,10 @@ impl std::error::Error for DaemonError {}
 /// `temper serve standalone` maps to the existing standalone daemon path while
 /// `temper serve engine|worker` dispatch to the same single-service paths as
 /// `temper daemon --service engine|worker`. `temper daemon` stays available as a
-/// compatibility surface, and `temper serve trigger` remains unimplemented until
-/// its topology is specified.
+/// compatibility surface. `temper serve trigger` is intentionally rejected:
+/// Forgejo webhook intake lives on `POST /forgejo/webhook` in `temper serve
+/// engine` and `temper serve standalone` when the engine webhook secret is
+/// configured, while polling remains the correctness backstop.
 pub fn serve_main(args: Vec<String>, env: &dyn EnvLookup, paths: &PathResolver) -> ExitCode {
     serve_main_with_options(args, env, paths, LoadOptions::default())
 }

@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use temper_forge::{
-    AccessScope, CommitFile, Forge, ForgeContent, IssueQuery, RepoPermission, RepositoryId,
-    RepositoryPath, TokenScope, WebhookEvents, WebhookSpec,
+    AccessScope, CommitFile, Forge, ForgeContent, ForgeReadiness, IssueQuery, RepoPermission,
+    RepositoryId, RepositoryPath, TokenScope, WebhookEvents, WebhookSpec,
 };
 use temper_forge_filesystem::FilesystemForge;
 use temper_forge_memory::MemoryForge;
@@ -286,6 +286,20 @@ fn provision_against_memory_backend() {
         label_names.len() >= plan.labels.len(),
         "every plan label upserted"
     );
+
+    let engineer = block_on(forge.get_provisioned_user("engineer"))
+        .expect("inspect engineer")
+        .expect("engineer exists");
+    assert_eq!(engineer.login, "engineer");
+    let webhook_statuses = block_on(forge.list_webhook_statuses(&repo)).expect("inspect hooks");
+    assert!(
+        webhook_statuses.iter().any(|hook| hook.url == WEBHOOK_URL),
+        "read-only webhook inspection should see the registered hook"
+    );
+    assert_eq!(
+        block_on(forge.repository_ci_enabled(&repo)).expect("inspect ci"),
+        Some(true)
+    );
 }
 
 #[test]
@@ -337,6 +351,20 @@ fn provision_against_filesystem_backend() {
     assert!(
         label_names.contains(&"extra-host-label".to_string()),
         "host-supplied label upserted (have {label_names:?})"
+    );
+
+    let engineer = block_on(forge.get_provisioned_user("engineer"))
+        .expect("inspect engineer")
+        .expect("engineer exists");
+    assert_eq!(engineer.login, "engineer");
+    let webhook_statuses = block_on(forge.list_webhook_statuses(&repo)).expect("inspect hooks");
+    assert!(
+        webhook_statuses.iter().any(|hook| hook.url == WEBHOOK_URL),
+        "read-only webhook inspection should see the registered hook"
+    );
+    assert_eq!(
+        block_on(forge.repository_ci_enabled(&repo)).expect("inspect ci"),
+        Some(true)
     );
 }
 

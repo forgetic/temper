@@ -116,7 +116,9 @@ pub struct CredentialInputs {
     /// role name and is referenced by `forge.admin` / `forge.ci_user`).
     pub forge_users: BTreeMap<String, ForgeUser>,
     /// The active provider's name and secret (matching `[agent] provider`).
-    pub provider_key: ProviderKeyInput,
+    /// `None` omits legacy provider credentials, used by init bundles created
+    /// with `--provider none`.
+    pub provider_key: Option<ProviderKeyInput>,
 }
 
 /// The active provider's name plus its secret material.
@@ -193,39 +195,40 @@ pub fn build_config(inputs: &ConfigInputs) -> Config {
 
 /// Builds a [`Credentials`] document from collected answers. Pure: no I/O.
 pub fn build_credentials(inputs: &CredentialInputs) -> Credentials {
-    let provider_credential = match &inputs.provider_key.secret {
-        ProviderSecretInput::OAuth {
-            access,
-            refresh,
-            expires,
-        } => ProviderCredential {
-            kind: Some("oauth".to_string()),
-            access: Some(access.clone()),
-            refresh: refresh.clone(),
-            expires: Some(*expires),
-            key: None,
-            auth_file: None,
-        },
-        ProviderSecretInput::ApiKey(key) => ProviderCredential {
-            kind: Some("api-key".to_string()),
-            access: None,
-            refresh: None,
-            expires: None,
-            key: Some(key.clone()),
-            auth_file: None,
-        },
-        ProviderSecretInput::AuthFile(path) => ProviderCredential {
-            kind: None,
-            access: None,
-            refresh: None,
-            expires: None,
-            key: None,
-            auth_file: Some(path.clone()),
-        },
-    };
-
     let mut providers = BTreeMap::new();
-    providers.insert(inputs.provider_key.provider.clone(), provider_credential);
+    if let Some(provider_key) = &inputs.provider_key {
+        let provider_credential = match &provider_key.secret {
+            ProviderSecretInput::OAuth {
+                access,
+                refresh,
+                expires,
+            } => ProviderCredential {
+                kind: Some("oauth".to_string()),
+                access: Some(access.clone()),
+                refresh: refresh.clone(),
+                expires: Some(*expires),
+                key: None,
+                auth_file: None,
+            },
+            ProviderSecretInput::ApiKey(key) => ProviderCredential {
+                kind: Some("api-key".to_string()),
+                access: None,
+                refresh: None,
+                expires: None,
+                key: Some(key.clone()),
+                auth_file: None,
+            },
+            ProviderSecretInput::AuthFile(path) => ProviderCredential {
+                kind: None,
+                access: None,
+                refresh: None,
+                expires: None,
+                key: None,
+                auth_file: Some(path.clone()),
+            },
+        };
+        providers.insert(provider_key.provider.clone(), provider_credential);
+    }
 
     Credentials {
         schema_version: SCHEMA_VERSION,

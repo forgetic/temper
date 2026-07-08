@@ -45,7 +45,7 @@ the reference pattern).
 |---|---|---|
 | `temper-daemon` | `DaemonMachine`: worker protocol, long-poll waiters, apply windows, webhook verification | HTTP responder, poll-deadline timers, result appliers, wake scans |
 | backstops | `CadenceMachine`: tick → wait cadence → tick | one scan executed per `RunTick` request |
-| `temper-worker` | scan/decision logic in `temper-runner` (already pure) | wake-socket waits, poll timers, subprocess decisions |
+| `temper-worker` | scan/decision logic in `temper-runner` (already pure) | legacy/internal wake-socket waits, poll timers, subprocess decisions |
 | `temper-interaction` | conversation/session logic | one `ProcessCall` per responder turn |
 | forge backends | request building + response interpretation (pure) | one pooled HTTP exchange per `execute` |
 

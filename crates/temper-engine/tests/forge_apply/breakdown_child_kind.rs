@@ -3,6 +3,15 @@
 use crate::assertions::*;
 use crate::support::*;
 
+const PLAN_CENTRIC_WORKFLOW: &str =
+    include_str!("../../../../scenarios/plan-centric-feature-branch/config/workflow.json");
+
+fn plan_centric_workflow() -> ValidatedWorkflow {
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(PLAN_CENTRIC_WORKFLOW).expect("workflow parses");
+    spec.validate().expect("workflow validates")
+}
+
 fn body_with_target_branch(body: &str, target_branch: &str) -> String {
     format!(
         "{body}\n\n{}",
@@ -11,6 +20,43 @@ fn body_with_target_branch(body: &str, target_branch: &str) -> String {
             ..WorkflowMetadata::default()
         })
     )
+}
+
+fn plan_feature_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
+    job_for_context(
+        repo_path,
+        number,
+        "issue",
+        JobContext {
+            role: "architect".to_string(),
+            repo: repo_path.to_string(),
+            queue: "feature_planning".to_string(),
+            artifact_kind: "feature".to_string(),
+            artifact: None,
+            workspace: None,
+            action: Some("plan_feature".to_string()),
+            checkout_capability: Some("read_only".to_string()),
+            allowed_verdicts: vec!["needs_plan".to_string(), "config_only".to_string()],
+            guidance: None,
+            pull_request_freshness: None,
+        },
+    )
+}
+
+async fn create_feature_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemNumber {
+    forge
+        .create_issue(
+            repo,
+            CreateIssue {
+                title: "feature".to_string(),
+                body: "build the feature".to_string(),
+                labels: vec!["feature".to_string()],
+                assignees: Vec::<UserId>::new(),
+            },
+        )
+        .await
+        .expect("feature issue is created")
+        .number
 }
 
 async fn set_issue_body(
@@ -35,6 +81,32 @@ async fn set_issue_body(
         )
         .await
         .expect("issue body is updated");
+}
+
+#[test]
+fn plan_centric_workflow_rejects_feature_direct_code_child() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let issue = create_feature_issue(&forge, &repo).await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
+        let job = plan_feature_in_flight_job("acme/service", issue);
+        let before = issue_body_and_labels(&forge, &repo, issue).await;
+        let mut direct_code = job_child(
+            "direct-code",
+            "Implement directly from feature",
+            "This must be rejected because code children belong under a plan.",
+            &[],
+        );
+        direct_code.kind = Some("code".to_string());
+        let result =
+            verdict_result_with_children("worker-a", &job.job_id, "needs_plan", vec![direct_code]);
+
+        applier.apply(job, result).await;
+
+        assert_eq!(issue_body_and_labels(&forge, &repo, issue).await, before);
+        assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+    })
 }
 
 #[test]

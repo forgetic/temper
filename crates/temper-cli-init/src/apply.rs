@@ -1,45 +1,75 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! `temper apply` — run the forge-side provisioning step for an init bundle.
+//! `temper apply` — run the forge-side provisioning plan for a deployment.
 //!
-//! `temper init` writes a local deployment bundle by default. This module owns
-//! the explicit follow-up mutation path: load that bundle, derive the same
-//! [`ProvisionRequest`](crate::ProvisionRequest) `init --apply` would have used,
-//! run the injected provisioner, and persist the minted forge credentials.
+//! The command loads the configured deployment, builds the same backend-agnostic
+//! [`temper_provision::ProvisionPlan`] shape used by the init-local apply path,
+//! shows that plan to the operator, then executes it for every configured
+//! repository. Local credentials mutation is kept as an explicit compatibility
+//! step after a successful provisioning run; declining or failing the plan leaves
+//! `credentials.toml` untouched.
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use temper_cli_common::{
     EX_USAGE, EnvMap, LoadOptions, PathResolver, Prompter, TerminalPrompter, resolve_targets,
 };
-use temper_config::{Config, Credentials, ResolveOptions};
+use temper_config::{Config, Credentials, ExposeSecret, ResolveOptions};
 
-use crate::provisioner::{ForgejoProvisioner, ProvisionOutcome, ProvisionRequest, Provisioner};
+use crate::plan::non_empty;
+use crate::provisioner::{
+    ApplyPlanOutcome, ApplyPlanRequest, ApplyProvisioner, ForgejoProvisioner, ProvisionOutcome,
+    build_deployment_repo_plan,
+};
 use crate::{InitError, write};
 
 /// `temper apply [OPTIONS]` usage.
 pub const APPLY_USAGE: &str = "\
-Apply a temper deployment bundle to the forge.
+Apply a temper deployment plan to the forge.
 
-Loads config.toml + credentials.toml, provisions the configured Forgejo repo,
-users, labels, and webhook, then updates credentials.toml with minted tokens.
+Loads config.toml + credentials.toml, renders the configured Forgejo repos,
+workflow labels, role users, and webhooks into a shared provisioning plan, shows
+that plan, then applies it after confirmation.
 
 Usage: temper [GLOBAL OPTIONS] apply [OPTIONS]
 
 Options:
-  --existing-repo         Provision onto a repo that already exists
-  --yes                   Skip the provisioning confirmation
+  --yes                   Apply the provisioning plan without confirmation
+  --existing-repo         Legacy compatibility: require every configured repo
+                           to already exist and do not seed repository content
   -h, --help              Print help";
 
-/// Everything `temper apply` needs beyond the loaded bundle.
+/// How `temper apply` handles local credentials after provisioning.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ApplyCredentialMode {
+    /// Do not mutate the selected credentials file after provisioning.
+    SkipLocalCredentials,
+    /// Init-local compatibility: merge minted tokens into `credentials.toml`
+    /// after every repository plan succeeds.
+    UpdateLocalCredentials,
+}
+
+impl Default for ApplyCredentialMode {
+    fn default() -> Self {
+        Self::UpdateLocalCredentials
+    }
+}
+
+/// Everything `temper apply` needs beyond the loaded deployment.
 #[derive(Debug, Clone, Default)]
 pub struct ApplyOptions {
     /// Where to read `config.toml` and read/write `credentials.toml`.
     pub options: LoadOptions,
-    /// Provision onto a repo that must already exist (`--existing-repo`).
+    /// Provision onto repos that must already exist (`--existing-repo`).
     pub existing_repo: bool,
     /// Skip the confirmation before forge-side mutations.
     pub yes: bool,
+    /// Whether to merge minted tokens into the local credentials file after a
+    /// successful apply. This is deliberately explicit so tests and future
+    /// production callers can distinguish provisioning from local secret-file
+    /// mutation.
+    pub credential_mode: ApplyCredentialMode,
     /// Environment snapshot used for path expansion and for systemd
     /// `CREDENTIALS_DIRECTORY` credentials discovery.
     pub env: EnvMap,
@@ -82,6 +112,7 @@ pub fn apply_main_with_options(
         options: parsed.options,
         existing_repo: parsed.existing_repo,
         yes: parsed.yes,
+        credential_mode: ApplyCredentialMode::UpdateLocalCredentials,
         env: env.clone(),
         paths: paths.clone(),
     };
@@ -122,21 +153,22 @@ fn parse_apply_args(args: Vec<String>, options: LoadOptions) -> Result<ParsedApp
     Ok(parsed)
 }
 
-/// Loads an init bundle, provisions the forge, and updates credentials.
+/// Loads a deployment, shows its provisioning plan, applies it, and optionally
+/// updates local credentials after every repository succeeds.
 pub fn run_apply(
     p: &mut dyn Prompter,
-    provisioner: &mut dyn Provisioner,
+    provisioner: &mut dyn ApplyProvisioner,
     opts: &ApplyOptions,
 ) -> Result<(), InitError> {
     let bundle = load_apply_bundle(opts)?;
+    show_apply_plan(p, &bundle);
+
     if !opts.yes
         && !p.confirm(
             &format!(
-                "Provision {}/{} on {} and register {}?",
-                bundle.request.owner,
-                bundle.request.name,
+                "Apply this provisioning plan to {} repo(s) on {}?",
+                bundle.summary.repos.len(),
                 bundle.request.base_url,
-                bundle.request.webhook_url
             ),
             false,
         )?
@@ -146,33 +178,82 @@ pub fn run_apply(
     }
 
     let outcome = provisioner
-        .provision(&bundle.request)
+        .provision_apply_plan(&bundle.request)
         .map_err(InitError::Provision)?;
-    let mut credentials = bundle.credentials;
-    merge_provisioned_credentials(&mut credentials, &bundle.admin_key, &outcome);
-    temper_config::write_credentials(&credentials, &bundle.credentials_path, true)
-        .map_err(|error| InitError::Write(error.to_string()))?;
+    if outcome.provisioned.len() != bundle.request.plans.len() {
+        return Err(InitError::Provision(format!(
+            "provisioner returned {} result(s) for {} repo plan(s)",
+            outcome.provisioned.len(),
+            bundle.request.plans.len()
+        )));
+    }
+
+    if matches!(
+        bundle.credential_mode,
+        ApplyCredentialMode::UpdateLocalCredentials
+    ) {
+        if let Some(admin_key) = bundle.admin_key.as_deref() {
+            let mut credentials = bundle.credentials;
+            merge_provisioned_credentials(&mut credentials, admin_key, &outcome);
+            temper_config::write_credentials(&credentials, &bundle.credentials_path, true)
+                .map_err(|error| InitError::Write(error.to_string()))?;
+            p.note(&format!(
+                "Updated {} (chmod 600)",
+                bundle.credentials_path.display()
+            ));
+        } else {
+            p.note(
+                "Local credentials were not modified because `[forge] admin` is not configured.",
+            );
+        }
+    } else {
+        p.note("Local credentials were not modified.");
+    }
 
     p.note(&format!(
-        "Provisioned {}/{} with {} role(s) and the `{}` automation bot.",
-        outcome.provisioned.owner,
-        outcome.provisioned.name,
-        outcome.provisioned.roles.len(),
-        outcome.provisioned.automation.user,
+        "Provisioned {} repo(s) on {}.",
+        outcome.provisioned.len(),
+        bundle.request.base_url,
     ));
-    p.note(&format!(
-        "Updated {} (chmod 600)",
-        bundle.credentials_path.display()
-    ));
+    for provisioned in &outcome.provisioned {
+        p.note(&format!(
+            "  - {}/{}: {} role(s), automation bot `{}`",
+            provisioned.owner,
+            provisioned.name,
+            provisioned.roles.len(),
+            provisioned.automation.user,
+        ));
+    }
     p.note("Now run `temper serve standalone` to start the engine, worker, and agent.");
     Ok(())
 }
 
 struct ApplyBundle {
-    request: ProvisionRequest,
+    request: ApplyPlanRequest,
     credentials: Credentials,
-    credentials_path: std::path::PathBuf,
-    admin_key: String,
+    credentials_path: PathBuf,
+    admin_key: Option<String>,
+    credential_mode: ApplyCredentialMode,
+    summary: ApplyPlanSummary,
+}
+
+struct ApplyPlanSummary {
+    deployment: Option<String>,
+    topology: Option<String>,
+    workflow_source: String,
+    repos: Vec<ApplyRepoSummary>,
+    worker_pools: usize,
+    agent_profiles: usize,
+}
+
+struct ApplyRepoSummary {
+    owner: String,
+    name: String,
+    default_branch: String,
+    roles: usize,
+    labels: usize,
+    webhook: bool,
+    existing_repo: bool,
 }
 
 fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
@@ -183,62 +264,121 @@ fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
     let credentials = Credentials::load(&targets.credentials).map_err(|error| {
         InitError::Path(format!("load {}: {error}", targets.credentials.display()))
     })?;
-    let resolved = {
-        let mut resolve_options = targets
-            .config
-            .parent()
-            .map(ResolveOptions::from_config_base_dir)
-            .unwrap_or_default();
-        resolve_options.validate_secret_references = true;
+    let config_base = targets
+        .config
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut resolve_options = ResolveOptions::from_config_base_dir(config_base);
+    // Generated init bundles reference the forge token that this apply pass may
+    // mint after provisioning. Load the pre-apply bundle non-strictly here;
+    // runtime/check paths keep strict secret-reference validation.
+    resolve_options.validate_secret_references = false;
+    let resolved =
         temper_config::resolve_with_options(&config, &credentials, &opts.env, &resolve_options)
-            .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?
-    };
-    if let Some(path) = &resolved.engine.workflow_file {
-        temper_reference_delivery::load_workflow(path)
-            .map_err(|error| InitError::Unsupported(error.to_string()))?;
-    }
+            .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?;
 
     let base_url = resolved.forge.url.clone().ok_or_else(|| {
         InitError::Unsupported("temper apply requires `[forge] url` in config.toml".to_string())
     })?;
-    if resolved.engine.repos.len() != 1 {
-        return Err(InitError::Unsupported(format!(
-            "temper apply requires exactly one `[engine] repos` entry, found {}",
-            resolved.engine.repos.len()
-        )));
+    if resolved.engine.repos.is_empty() {
+        return Err(InitError::Unsupported(
+            "temper apply requires at least one `[engine] repos` entry".to_string(),
+        ));
     }
-    let repo = &resolved.engine.repos[0];
-    let webhook_secret_file = resolved.engine.webhook_secret_file.clone().ok_or_else(|| {
-        InitError::Unsupported(
-            "temper apply requires `[engine] webhook_secret_file` in config.toml".to_string(),
+
+    let admin_key = non_empty(config.forge.admin.as_deref());
+    let admin = admin_key
+        .as_ref()
+        .and_then(|key| credentials.forge.users.get(key));
+    let admin_user = admin_key.as_ref().map(|key| {
+        admin
+            .and_then(|user| non_empty(user.user.as_deref()))
+            .unwrap_or_else(|| key.clone())
+    });
+    let admin_password = admin.and_then(|user| non_empty(user.password.as_deref()));
+    let admin_token = resolved
+        .forge
+        .admin_token
+        .as_ref()
+        .map(|token| token.expose_secret().to_string());
+    if admin_token.is_none() && (admin_user.is_none() || admin_password.is_none()) {
+        return Err(InitError::Unsupported(
+            "temper apply requires an admin forge token (for example `[engine] forge_token`) \
+             or a legacy `[forge] admin` user with a password in credentials.toml"
+                .to_string(),
+        ));
+    }
+
+    let (workflow, workflow_source) = match &resolved.engine.workflow_file {
+        Some(path) => (
+            temper_reference_delivery::load_workflow(path).map_err(|error| {
+                InitError::Unsupported(format!("load workflow {}: {error}", path.display()))
+            })?,
+            path.display().to_string(),
+        ),
+        None => (
+            temper_reference_delivery::basic_delivery_workflow(),
+            "built-in basic-delivery".to_string(),
+        ),
+    };
+
+    let webhook_url = format!("http://{}/forgejo/webhook", resolved.engine.bind);
+    let webhook = if let Some(secret) = resolved.engine.webhook_secret_value.as_ref() {
+        Some(temper_forge::WebhookSpec {
+            url: webhook_url,
+            secret: secret.expose_secret().to_string(),
+            events: temper_forge::WebhookEvents::All,
+        })
+    } else {
+        resolved
+            .engine
+            .webhook_secret_file
+            .as_ref()
+            .map(|path| load_webhook(path, &webhook_url))
+            .transpose()?
+    };
+
+    let mut plans = Vec::with_capacity(resolved.engine.repos.len());
+    let mut repo_summaries = Vec::with_capacity(resolved.engine.repos.len());
+    for repo in &resolved.engine.repos {
+        let plan = build_deployment_repo_plan(
+            &workflow,
+            &repo.owner,
+            &repo.name,
+            webhook.clone(),
+            opts.existing_repo,
         )
-    })?;
+        .map_err(InitError::Unsupported)?;
+        repo_summaries.push(ApplyRepoSummary {
+            owner: plan.repo.owner.clone(),
+            name: plan.repo.name.clone(),
+            default_branch: plan.default_branch.clone(),
+            roles: plan.roles.len(),
+            labels: plan.labels.len(),
+            webhook: plan.webhook.is_some(),
+            existing_repo: plan.existing_repo,
+        });
+        plans.push(plan);
+    }
 
-    let admin_key = non_empty(config.forge.admin.as_deref()).ok_or_else(|| {
-        InitError::Unsupported("temper apply requires `[forge] admin` in config.toml".to_string())
-    })?;
-    let admin = credentials.forge.users.get(&admin_key).ok_or_else(|| {
-        InitError::Unsupported(format!(
-            "temper apply requires `[forge.users.{admin_key}]` in credentials.toml"
-        ))
-    })?;
-    let admin_user = non_empty(admin.user.as_deref()).unwrap_or_else(|| admin_key.clone());
-    let admin_password = non_empty(admin.password.as_deref()).ok_or_else(|| {
-        InitError::Unsupported(format!(
-            "temper apply requires a password under `[forge.users.{admin_key}]` in credentials.toml"
-        ))
-    })?;
-
-    let request = ProvisionRequest {
+    let request = ApplyPlanRequest {
         base_url,
         admin_user,
         admin_password,
-        owner: repo.owner.clone(),
-        name: repo.name.clone(),
-        webhook_url: format!("http://{}/forgejo/webhook", resolved.engine.bind),
-        webhook_secret_file,
-        workflow_path: resolved.engine.workflow_file.clone(),
-        existing_repo: opts.existing_repo,
+        admin_token,
+        plans,
+    };
+    let summary = ApplyPlanSummary {
+        deployment: resolved.deployment.name.clone(),
+        topology: resolved
+            .deployment
+            .topology
+            .map(|topology| topology.as_str().to_string()),
+        workflow_source,
+        repos: repo_summaries,
+        worker_pools: resolved.worker.pools.len(),
+        agent_profiles: resolved.agent.profiles.len(),
     };
 
     Ok(ApplyBundle {
@@ -246,16 +386,90 @@ fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
         credentials,
         credentials_path: targets.credentials,
         admin_key,
+        credential_mode: opts.credential_mode,
+        summary,
     })
+}
+
+fn load_webhook(path: &Path, webhook_url: &str) -> Result<temper_forge::WebhookSpec, InitError> {
+    let secret = std::fs::read_to_string(path)
+        .map_err(|error| {
+            InitError::Path(format!("read webhook secret {}: {error}", path.display()))
+        })?
+        .trim()
+        .to_string();
+    Ok(temper_forge::WebhookSpec {
+        url: webhook_url.to_string(),
+        secret,
+        events: temper_forge::WebhookEvents::All,
+    })
+}
+
+fn show_apply_plan(p: &mut dyn Prompter, bundle: &ApplyBundle) {
+    p.note("Apply plan:");
+    p.note(&format!("  forge: {}", bundle.request.base_url));
+    match (&bundle.summary.deployment, &bundle.summary.topology) {
+        (Some(name), Some(topology)) => p.note(&format!("  deployment: {name} ({topology})")),
+        (Some(name), None) => p.note(&format!("  deployment: {name}")),
+        (None, Some(topology)) => p.note(&format!("  topology: {topology}")),
+        (None, None) => {}
+    }
+    p.note(&format!("  workflow: {}", bundle.summary.workflow_source));
+    p.note(&format!(
+        "  repositories: {} repo(s)",
+        bundle.summary.repos.len()
+    ));
+    for repo in &bundle.summary.repos {
+        let mode = if repo.existing_repo {
+            "require existing repository"
+        } else {
+            "create if missing"
+        };
+        let webhook = if repo.webhook { "yes" } else { "no" };
+        p.note(&format!(
+            "  - {}/{}: {mode}, branch {}, {} role(s), {} label(s), webhook {webhook}",
+            repo.owner, repo.name, repo.default_branch, repo.roles, repo.labels,
+        ));
+    }
+    if bundle.summary.repos.iter().any(|repo| repo.existing_repo) {
+        p.note("  --existing-repo compatibility: applies to every configured repository");
+    }
+    if matches!(
+        bundle.credential_mode,
+        ApplyCredentialMode::UpdateLocalCredentials
+    ) {
+        if bundle.admin_key.is_some() {
+            p.note(&format!(
+                "  credentials: update {} after success",
+                bundle.credentials_path.display()
+            ));
+        } else {
+            p.note("  credentials: not modified (`[forge] admin` is not configured)");
+        }
+    } else {
+        p.note("  credentials: not modified");
+    }
+    if bundle.summary.worker_pools > 0 || bundle.summary.agent_profiles > 0 {
+        p.note(&format!(
+            "  metadata: {} worker pool(s), {} agent profile(s)",
+            bundle.summary.worker_pools, bundle.summary.agent_profiles,
+        ));
+    }
 }
 
 fn merge_provisioned_credentials(
     credentials: &mut Credentials,
     admin_key: &str,
-    outcome: &ProvisionOutcome,
+    outcome: &ApplyPlanOutcome,
 ) {
-    for (key, user) in write::provisioned_role_and_bot_users(outcome) {
-        credentials.forge.users.insert(key, user);
+    for provisioned in &outcome.provisioned {
+        let single = ProvisionOutcome {
+            provisioned: provisioned.clone(),
+            admin_token: outcome.admin_token.clone(),
+        };
+        for (key, user) in write::provisioned_role_and_bot_users(&single) {
+            credentials.forge.users.insert(key, user);
+        }
     }
     let admin = credentials
         .forge
@@ -263,298 +477,9 @@ fn merge_provisioned_credentials(
         .entry(admin_key.to_string())
         .or_default();
     admin.token = Some(outcome.admin_token.clone());
-}
-
-fn non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    write::add_forge_engine_token_secret(credentials, outcome.admin_token.clone());
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use temper_cli_common::{LoadOptions, ScriptedPrompter};
-    use temper_forge::RepositoryId;
-    use temper_provision::{Provisioned, RoleIdentity};
-    use temper_workflow::RoleId;
-
-    use super::*;
-
-    struct StubProvisioner {
-        seen: Option<ProvisionRequest>,
-    }
-
-    impl Provisioner for StubProvisioner {
-        fn provision(&mut self, request: &ProvisionRequest) -> Result<ProvisionOutcome, String> {
-            self.seen = Some(request.clone());
-            let identity = |user: &str| RoleIdentity {
-                user: user.to_string(),
-                email: format!("{user}@example.invalid"),
-                token: format!("token-{user}"),
-                password: format!("pw-{user}"),
-            };
-            let mut roles = BTreeMap::new();
-            roles.insert(RoleId::new("architect"), identity("architect"));
-            roles.insert(RoleId::new("engineer"), identity("engineer"));
-            Ok(ProvisionOutcome {
-                provisioned: Provisioned {
-                    owner: request.owner.clone(),
-                    name: request.name.clone(),
-                    repository: RepositoryId::new(format!("{}/{}", request.owner, request.name)),
-                    roles,
-                    automation: identity("bot"),
-                },
-                admin_token: "admin-rest-token".to_string(),
-            })
-        }
-    }
-
-    #[test]
-    fn run_apply_loads_init_bundle_and_updates_credentials() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config_path = dir.path().join("config.toml");
-        let credentials_path = dir.path().join("credentials.toml");
-        let webhook_secret_path = dir.path().join("webhook-secret");
-        std::fs::write(&webhook_secret_path, "secret").expect("webhook secret");
-        std::fs::write(
-            &config_path,
-            format!(
-                "schema_version = 1\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\nci_user = \"bot\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nrepos = [\"acme/service\"]\nroles = [\"architect\", \"engineer\"]\nwebhook_secret_file = \"{}\"\n",
-                webhook_secret_path.display()
-            ),
-        )
-        .expect("config");
-        std::fs::write(
-            &credentials_path,
-            "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n\n[agent.providers.deepseek]\ntype = \"api-key\"\nkey = \"sk-key\"\n",
-        )
-        .expect("credentials");
-
-        let opts = ApplyOptions {
-            options: LoadOptions {
-                config: Some(config_path.clone()),
-                credentials: Some(credentials_path.clone()),
-            },
-            yes: true,
-            ..Default::default()
-        };
-        let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
-        let mut provisioner = StubProvisioner { seen: None };
-
-        run_apply(&mut prompter, &mut provisioner, &opts).expect("apply succeeds");
-
-        let seen = provisioner.seen.expect("provisioner called");
-        assert_eq!(seen.base_url, "http://forge.local:3000");
-        assert_eq!(seen.admin_user, "root");
-        assert_eq!(seen.admin_password, "admin-pass");
-        assert_eq!(seen.owner, "acme");
-        assert_eq!(seen.name, "service");
-        assert_eq!(seen.webhook_url, "http://127.0.0.1:38100/forgejo/webhook");
-        assert_eq!(seen.webhook_secret_file, webhook_secret_path);
-
-        let creds = std::fs::read_to_string(&credentials_path).expect("credentials updated");
-        assert!(creds.contains("admin-rest-token"), "{creds}");
-        assert!(creds.contains("token-architect"), "{creds}");
-        assert!(creds.contains("token-engineer"), "{creds}");
-        assert!(creds.contains("token-bot"), "{creds}");
-        assert!(
-            creds.contains("sk-key"),
-            "provider secret preserved: {creds}"
-        );
-    }
-
-    #[test]
-    fn run_apply_confirmation_can_skip_provisioning() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config_path = dir.path().join("config.toml");
-        let credentials_path = dir.path().join("credentials.toml");
-        let webhook_secret_path = dir.path().join("webhook-secret");
-        std::fs::write(&webhook_secret_path, "secret").expect("webhook secret");
-        std::fs::write(
-            &config_path,
-            format!(
-                "schema_version = 1\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nrepos = [\"acme/service\"]\nroles = [\"architect\"]\nwebhook_secret_file = \"{}\"\n",
-                webhook_secret_path.display()
-            ),
-        )
-        .expect("config");
-        std::fs::write(
-            &credentials_path,
-            "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n",
-        )
-        .expect("credentials");
-
-        let opts = ApplyOptions {
-            options: LoadOptions {
-                config: Some(config_path),
-                credentials: Some(credentials_path.clone()),
-            },
-            yes: false,
-            ..Default::default()
-        };
-        let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
-        prompter.confirmations.push_back(false);
-        let mut provisioner = StubProvisioner { seen: None };
-
-        run_apply(&mut prompter, &mut provisioner, &opts).expect("apply skip succeeds");
-
-        assert!(provisioner.seen.is_none());
-        let creds = std::fs::read_to_string(&credentials_path).expect("credentials unchanged");
-        assert!(!creds.contains("admin-rest-token"), "{creds}");
-        assert!(
-            prompter
-                .notes
-                .iter()
-                .any(|note| note.contains("Skipped forge provisioning")),
-            "notes: {:?}",
-            prompter.notes
-        );
-    }
-
-    #[test]
-    fn run_apply_resolves_relative_workflow_and_secret_against_config_dir() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let bundle = dir.path().join("bundle");
-        std::fs::create_dir_all(bundle.join("flows")).expect("create flows");
-        std::fs::create_dir_all(bundle.join("secrets")).expect("create secrets");
-        let workflow_spec: temper_workflow::RawWorkflowSpec =
-            serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
-                .expect("basic workflow parses");
-        let workflow_yaml = serde_yaml::to_string(&workflow_spec).expect("workflow yaml");
-        std::fs::write(bundle.join("flows/workflow.yaml"), workflow_yaml).expect("workflow");
-        std::fs::write(bundle.join("secrets/webhook-secret"), "secret").expect("webhook secret");
-        std::fs::write(
-            bundle.join("config.toml"),
-            "schema_version = 1\n\
-             [workflow]\n\
-             file = \"flows/workflow.yaml\"\n\
-             [forge]\n\
-             type = \"forgejo\"\n\
-             url = \"http://forge.local:3000\"\n\
-             admin = \"root\"\n\
-             [engine]\n\
-             bind = \"127.0.0.1:38100\"\n\
-             repos = [\"acme/service\"]\n\
-             roles = [\"architect\", \"engineer\"]\n\
-             webhook_secret_file = \"secrets/webhook-secret\"\n",
-        )
-        .expect("config");
-        std::fs::write(
-            bundle.join("credentials.toml"),
-            "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n",
-        )
-        .expect("credentials");
-
-        let opts = ApplyOptions {
-            options: LoadOptions {
-                config: Some(bundle.clone()),
-                credentials: None,
-            },
-            yes: true,
-            ..Default::default()
-        };
-        let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
-        let mut provisioner = StubProvisioner { seen: None };
-
-        run_apply(&mut prompter, &mut provisioner, &opts).expect("apply succeeds");
-
-        let seen = provisioner.seen.expect("provisioner called");
-        assert_eq!(
-            seen.workflow_path.as_deref(),
-            Some(bundle.join("flows/workflow.yaml").as_path())
-        );
-        assert_eq!(
-            seen.webhook_secret_file,
-            bundle.join("secrets/webhook-secret")
-        );
-    }
-
-    #[test]
-    fn run_apply_reports_workflow_static_validation_before_provisioning() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config_path = dir.path().join("config.toml");
-        let credentials_path = dir.path().join("credentials.toml");
-        let workflow_path = dir.path().join("invalid-workflow.json");
-        std::fs::write(
-            &workflow_path,
-            r#"{
-                "name": "invalid",
-                "roles": [{"id": "engineer", "queues": ["missing_queue"]}]
-            }"#,
-        )
-        .expect("workflow");
-        std::fs::write(
-            &config_path,
-            "schema_version = 1\n\
-             [workflow]\n\
-             file = \"invalid-workflow.json\"\n\
-             [forge]\n\
-             type = \"forgejo\"\n\
-             url = \"http://forge.local:3000\"\n\
-             admin = \"root\"\n\
-             [engine]\n\
-             bind = \"127.0.0.1:38100\"\n\
-             repos = [\"acme/service\"]\n\
-             roles = [\"engineer\"]\n\
-             webhook_secret_file = \"webhook-secret\"\n",
-        )
-        .expect("config");
-        std::fs::write(
-            &credentials_path,
-            "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n",
-        )
-        .expect("credentials");
-
-        let opts = ApplyOptions {
-            options: LoadOptions {
-                config: Some(config_path),
-                credentials: Some(credentials_path),
-            },
-            yes: true,
-            ..Default::default()
-        };
-        let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
-        let mut provisioner = StubProvisioner { seen: None };
-
-        let err = run_apply(&mut prompter, &mut provisioner, &opts)
-            .expect_err("invalid workflow should fail before provisioning");
-
-        let message = err.to_string();
-        assert!(message.contains("failed validation"), "{message}");
-        assert!(
-            message.contains("undeclared queue `missing_queue`"),
-            "{message}"
-        );
-        assert!(provisioner.seen.is_none());
-    }
-
-    #[test]
-    fn parse_accepts_yes_existing_repo_and_global_options() {
-        let parsed = parse_apply_args(
-            vec!["--yes".to_string(), "--existing-repo".to_string()],
-            LoadOptions {
-                config: Some("bundle".into()),
-                credentials: None,
-            },
-        )
-        .expect("parse");
-
-        assert_eq!(parsed.options.config, Some("bundle".into()));
-        assert!(parsed.yes);
-        assert!(parsed.existing_repo);
-    }
-
-    #[test]
-    fn parse_rejects_local_config_flag() {
-        let err = parse_apply_args(
-            vec!["--config".to_string(), "bundle".to_string()],
-            LoadOptions::default(),
-        )
-        .expect_err("--config is global-only");
-
-        assert!(err.contains("--config"), "{err}");
-    }
-}
+#[path = "apply_tests.rs"]
+mod tests;

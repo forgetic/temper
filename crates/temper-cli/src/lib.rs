@@ -2,10 +2,10 @@
 
 //! The unified `temper` command line — a thin dispatcher.
 //!
-//! [`run`] dispatches `argv[1]` to the public subcommands — `init`, `apply`,
-//! `check`, `config`, `serve` — plus compatibility/internal entry points such as
-//! `daemon`, `agent`, and the hidden operator/responder tools. Each subcommand
-//! lives in its own crate (`temper-cli-init`, `temper-cli-config`,
+//! [`run`] dispatches `argv[1]` to the public subcommands — `init`, `plan`,
+//! `apply`, `check`, `config`, `serve` — plus compatibility/internal entry
+//! points such as `daemon`, `agent`, and the hidden operator/responder tools.
+//! Each subcommand lives in its own crate (`temper-cli-init`, `temper-cli-config`,
 //! `temper-cli-daemon`, `temper-agent-session`); this crate owns only the
 //! dispatch table and the operator/responder wrappers, so the heavy
 //! engine/worker/agent wiring (under `temper-cli-daemon`) is pulled in only when
@@ -42,8 +42,9 @@ Usage: temper [OPTIONS] [COMMAND]
 
 Commands:
   init    Interactively configure a deployment bundle
-  check   Validate the resolved config, credentials, and runtime targets
+  plan    Preview deployment provisioning/reconciliation without mutation
   apply   Provision a deployment bundle on the forge
+  check   Validate the resolved config, credentials, and runtime targets
   serve   Run a long-lived Temper process (standalone, engine, worker)
   config  Inspect resolved configuration, paths, and schema
 
@@ -165,6 +166,9 @@ pub fn dispatch(
 ) -> ExitCode {
     match command {
         "init" => temper_cli_init::main_with_options(args, env, paths, globals.load),
+        "plan" => {
+            temper_cli_init::plan_main_with_options(args, env, paths, globals.load, globals.format)
+        }
         "apply" => temper_cli_init::apply_main_with_options(args, env, paths, globals.load),
         "serve" => temper_cli_daemon::serve_main_with_options(args, env, paths, globals.load),
         "check" => temper_cli_config::check(temper_cli_config::CheckInputs {
@@ -224,6 +228,7 @@ mod tests {
     #[test]
     fn top_level_usage_lists_public_commands_but_hides_compat_and_internal() {
         assert!(USAGE.contains("\n  init "));
+        assert!(USAGE.contains("\n  plan "));
         assert!(USAGE.contains("\n  apply "));
         assert!(USAGE.contains("\n  check "));
         assert!(USAGE.contains("\n  serve "));
@@ -241,6 +246,23 @@ mod tests {
         assert_eq!(
             dispatch(
                 "check",
+                vec!["--help".to_string()],
+                &env,
+                &paths,
+                GlobalOptions::default()
+            ),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn top_level_plan_help_is_dispatchable() {
+        let env = EnvMap::new();
+        let paths = PathResolver::default();
+
+        assert_eq!(
+            dispatch(
+                "plan",
                 vec!["--help".to_string()],
                 &env,
                 &paths,
