@@ -176,7 +176,7 @@ fn engine_config_schema() -> Value {
             ),
             (
                 "workflow",
-                string_schema("Path to a workflow definition JSON file."),
+                string_schema("Path to a workflow definition JSON/YAML file."),
             ),
             (
                 "repos",

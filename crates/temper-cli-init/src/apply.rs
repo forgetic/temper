@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use temper_cli_common::{
     EX_USAGE, EnvMap, LoadOptions, PathResolver, Prompter, TerminalPrompter, resolve_targets,
 };
-use temper_config::{Config, Credentials};
+use temper_config::{Config, Credentials, ResolveOptions};
 
 use crate::provisioner::{ForgejoProvisioner, ProvisionOutcome, ProvisionRequest, Provisioner};
 use crate::{InitError, write};
@@ -183,8 +183,20 @@ fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
     let credentials = Credentials::load(&targets.credentials).map_err(|error| {
         InitError::Path(format!("load {}: {error}", targets.credentials.display()))
     })?;
-    let resolved = temper_config::resolve(&config, &credentials, &opts.env)
-        .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?;
+    let resolved = {
+        let mut resolve_options = targets
+            .config
+            .parent()
+            .map(ResolveOptions::from_config_base_dir)
+            .unwrap_or_default();
+        resolve_options.validate_secret_references = true;
+        temper_config::resolve_with_options(&config, &credentials, &opts.env, &resolve_options)
+            .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?
+    };
+    if let Some(path) = &resolved.engine.workflow_file {
+        temper_reference_delivery::load_workflow(path)
+            .map_err(|error| InitError::Unsupported(error.to_string()))?;
+    }
 
     let base_url = resolved.forge.url.clone().ok_or_else(|| {
         InitError::Unsupported("temper apply requires `[forge] url` in config.toml".to_string())
@@ -400,6 +412,123 @@ mod tests {
             "notes: {:?}",
             prompter.notes
         );
+    }
+
+    #[test]
+    fn run_apply_resolves_relative_workflow_and_secret_against_config_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bundle = dir.path().join("bundle");
+        std::fs::create_dir_all(bundle.join("flows")).expect("create flows");
+        std::fs::create_dir_all(bundle.join("secrets")).expect("create secrets");
+        let workflow_spec: temper_workflow::RawWorkflowSpec =
+            serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
+                .expect("basic workflow parses");
+        let workflow_yaml = serde_yaml::to_string(&workflow_spec).expect("workflow yaml");
+        std::fs::write(bundle.join("flows/workflow.yaml"), workflow_yaml).expect("workflow");
+        std::fs::write(bundle.join("secrets/webhook-secret"), "secret").expect("webhook secret");
+        std::fs::write(
+            bundle.join("config.toml"),
+            "schema_version = 1\n\
+             [workflow]\n\
+             file = \"flows/workflow.yaml\"\n\
+             [forge]\n\
+             type = \"forgejo\"\n\
+             url = \"http://forge.local:3000\"\n\
+             admin = \"root\"\n\
+             [engine]\n\
+             bind = \"127.0.0.1:38100\"\n\
+             repos = [\"acme/service\"]\n\
+             roles = [\"architect\", \"engineer\"]\n\
+             webhook_secret_file = \"secrets/webhook-secret\"\n",
+        )
+        .expect("config");
+        std::fs::write(
+            bundle.join("credentials.toml"),
+            "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n",
+        )
+        .expect("credentials");
+
+        let opts = ApplyOptions {
+            options: LoadOptions {
+                config: Some(bundle.clone()),
+                credentials: None,
+            },
+            yes: true,
+            ..Default::default()
+        };
+        let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+        let mut provisioner = StubProvisioner { seen: None };
+
+        run_apply(&mut prompter, &mut provisioner, &opts).expect("apply succeeds");
+
+        let seen = provisioner.seen.expect("provisioner called");
+        assert_eq!(
+            seen.workflow_path.as_deref(),
+            Some(bundle.join("flows/workflow.yaml").as_path())
+        );
+        assert_eq!(
+            seen.webhook_secret_file,
+            bundle.join("secrets/webhook-secret")
+        );
+    }
+
+    #[test]
+    fn run_apply_reports_workflow_static_validation_before_provisioning() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+        let credentials_path = dir.path().join("credentials.toml");
+        let workflow_path = dir.path().join("invalid-workflow.json");
+        std::fs::write(
+            &workflow_path,
+            r#"{
+                "name": "invalid",
+                "roles": [{"id": "engineer", "queues": ["missing_queue"]}]
+            }"#,
+        )
+        .expect("workflow");
+        std::fs::write(
+            &config_path,
+            "schema_version = 1\n\
+             [workflow]\n\
+             file = \"invalid-workflow.json\"\n\
+             [forge]\n\
+             type = \"forgejo\"\n\
+             url = \"http://forge.local:3000\"\n\
+             admin = \"root\"\n\
+             [engine]\n\
+             bind = \"127.0.0.1:38100\"\n\
+             repos = [\"acme/service\"]\n\
+             roles = [\"engineer\"]\n\
+             webhook_secret_file = \"webhook-secret\"\n",
+        )
+        .expect("config");
+        std::fs::write(
+            &credentials_path,
+            "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n",
+        )
+        .expect("credentials");
+
+        let opts = ApplyOptions {
+            options: LoadOptions {
+                config: Some(config_path),
+                credentials: Some(credentials_path),
+            },
+            yes: true,
+            ..Default::default()
+        };
+        let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+        let mut provisioner = StubProvisioner { seen: None };
+
+        let err = run_apply(&mut prompter, &mut provisioner, &opts)
+            .expect_err("invalid workflow should fail before provisioning");
+
+        let message = err.to_string();
+        assert!(message.contains("failed validation"), "{message}");
+        assert!(
+            message.contains("undeclared queue `missing_queue`"),
+            "{message}"
+        );
+        assert!(provisioner.seen.is_none());
     }
 
     #[test]
