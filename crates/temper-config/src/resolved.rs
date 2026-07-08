@@ -185,6 +185,11 @@ pub struct WorkerSettings {
     pub capabilities: Vec<Capability>,
     /// Target-era named worker pools available for runtime selection.
     pub pools: Vec<WorkerPoolSettings>,
+    /// Resolved worker-pool bearer token values, keyed by pool name. This map is
+    /// runtime-only; inspection output renders [`WorkerPoolSettings::worker_token`]
+    /// name/status metadata and never these payloads. [`SecretString`] redacts in
+    /// `Debug`.
+    pub worker_pool_tokens: BTreeMap<String, SecretString>,
     /// Pool selected by runtime shaping (`temper serve worker --pool`, or the
     /// standalone local/default pool). `None` preserves legacy worker behavior.
     pub selected_pool: Option<String>,

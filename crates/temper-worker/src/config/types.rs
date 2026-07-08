@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use temper_protocol_worker::WorkerAuth;
+
 use crate::workspace::RoleGitIdentity;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,6 +19,11 @@ pub struct WorkerConfig {
     /// Selected target-era worker pool name, when this worker was shaped from a
     /// `[[worker.pools]]` policy.
     pub worker_pool: Option<String>,
+    /// Selected pool bearer credential, if that pool requires authentication.
+    /// The value's `Debug` output is redacted and it is sent only as transport
+    /// metadata (HTTP `Authorization: Bearer …` or equivalent in-process auth),
+    /// never inside worker-protocol JSON.
+    pub worker_auth: Option<WorkerAuth>,
     pub capabilities: Vec<CapabilitySpec>,
     /// Role id -> git identity (user, email, push token) for the worker's
     /// per-role checkouts/pushes.

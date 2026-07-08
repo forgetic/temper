@@ -79,6 +79,7 @@ pub enum ErrorCode {
     CapacityExceeded,
     HeartbeatMissed,
     JobTimeout,
+    Unauthorized,
     RegistrationRejected,
 }
 

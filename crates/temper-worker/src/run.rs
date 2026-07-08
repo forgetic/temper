@@ -65,6 +65,7 @@ where
         spawner,
         cq_tx,
         transport,
+        config.worker_auth.clone(),
         config.worker_id.clone(),
         executor,
     );

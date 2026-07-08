@@ -6,13 +6,13 @@
 use std::collections::BTreeMap;
 
 use temper_config::provider;
-use temper_config::{ExposeSecret, Resolved};
+use temper_config::{ExposeSecret, Resolved, WorkerSettings};
 use temper_worker::config::{CapabilitySpec, ExecutorSelection, WorkerConfig};
 use temper_worker::workspace::RoleGitIdentity;
 use temper_worker::{
     AgentToolConfig, CodebaseMemoryIndex as ProtocolCodebaseMemoryIndex,
     CodebaseMemoryMode as ProtocolCodebaseMemoryMode,
-    CodebaseMemoryToolConfig as ProtocolCodebaseMemoryToolConfig,
+    CodebaseMemoryToolConfig as ProtocolCodebaseMemoryToolConfig, WorkerAuth,
 };
 
 /// Builds the worker runtime config. The `executor` field is a placeholder
@@ -45,6 +45,7 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
         daemon_url: worker.daemon_url.clone(),
         worker_id: worker.worker_id.clone(),
         worker_pool: worker.selected_pool.clone(),
+        worker_auth: selected_worker_auth(worker)?,
         capabilities,
         role_identities: role_identities(resolved),
         max_concurrent_jobs: worker.max_concurrent_jobs,
@@ -52,6 +53,29 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
         heartbeat_interval: worker.heartbeat_interval,
         executor: ExecutorSelection::Stub,
     })
+}
+
+/// The selected worker pool's bearer credential, if its policy declares a
+/// `worker_token` secret reference.
+pub fn selected_worker_auth(worker: &WorkerSettings) -> Result<Option<WorkerAuth>, String> {
+    let Some(selected_pool) = worker.selected_pool.as_deref() else {
+        return Ok(None);
+    };
+    let pool = worker
+        .pools
+        .iter()
+        .find(|pool| pool.name == selected_pool)
+        .ok_or_else(|| format!("selected worker pool `{selected_pool}` is not configured"))?;
+    let Some(reference) = pool.worker_token.as_ref() else {
+        return Ok(None);
+    };
+    let token = worker.worker_pool_tokens.get(selected_pool).ok_or_else(|| {
+        format!(
+            "worker pool `{}` worker_token references secret `{}` but it has no non-empty text value",
+            pool.name, reference.name
+        )
+    })?;
+    Ok(Some(WorkerAuth::bearer(token.expose_secret().to_string())))
 }
 
 /// The git base URL the agent pushes to: `[worker] git_base_url`, else the forge
@@ -173,7 +197,7 @@ mod tests {
     use super::*;
     use temper_config::{
         AgentConfig as FileAgentConfig, AgentToolsConfig, CodebaseMemoryToolConfig, Config,
-        Credentials, EngineConfig, NoEnv, resolve,
+        Credentials, EngineConfig, NamedSecret, NoEnv, WorkerFileConfig, WorkerPoolConfig, resolve,
     };
     use temper_worker::{CodebaseMemoryIndex, CodebaseMemoryMode};
 
@@ -218,6 +242,40 @@ mod tests {
             ..Default::default()
         }));
         assert!(agent_tool_config(&off).is_none());
+    }
+
+    #[test]
+    fn worker_config_selected_pool_requires_non_empty_worker_token() {
+        let config = Config {
+            engine: EngineConfig {
+                repos: Some(vec!["acme/widgets".to_string()]),
+                roles: Some(vec!["engineer".to_string()]),
+                ..Default::default()
+            },
+            worker: WorkerFileConfig {
+                pools: vec![WorkerPoolConfig {
+                    name: Some("builders".to_string()),
+                    roles: Some(vec!["engineer".to_string()]),
+                    repos: Some(vec!["acme/widgets".to_string()]),
+                    max_concurrent_jobs: Some(1),
+                    worker_token: Some("pool-token".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut credentials = Credentials::default();
+        credentials
+            .secrets
+            .insert("pool-token".to_string(), NamedSecret::Raw(" ".to_string()));
+        let mut resolved = resolve(&config, &credentials, &NoEnv).expect("config resolves");
+        resolved.worker.selected_pool = Some("builders".to_string());
+
+        let error = worker_config(&resolved).expect_err("empty pool token should fail");
+        assert!(error.contains("builders"), "{error}");
+        assert!(error.contains("pool-token"), "{error}");
+        assert!(error.contains("no non-empty text value"), "{error}");
     }
 
     fn resolved_with_codebase_memory(tool: Option<CodebaseMemoryToolConfig>) -> Resolved {

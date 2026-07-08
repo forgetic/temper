@@ -124,6 +124,7 @@ mod tests {
             daemon_url: "http://127.0.0.1:1234".to_string(),
             worker_id: "worker-1".to_string(),
             worker_pool: Some("builders".to_string()),
+            worker_auth: None,
             capabilities: vec![
                 CapabilitySpec {
                     repo: "ai/temper".to_string(),

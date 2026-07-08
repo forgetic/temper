@@ -26,6 +26,7 @@ pub fn worker_config() -> WorkerConfig {
         daemon_url: "http://placeholder".to_string(),
         worker_id: "coding-worker-e2e".to_string(),
         worker_pool: None,
+        worker_auth: None,
         capabilities: vec![CapabilitySpec {
             repo: "acme/service".to_string(),
             role: "engineer".to_string(),

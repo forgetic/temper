@@ -4,14 +4,44 @@ use std::time::Duration;
 use std::time::Instant;
 
 use serde_json::json;
-use temper_engine_io::http::{HttpResponseData, JsonClient};
+use temper_engine_io::http::{
+    HttpCall, HttpResponseData, JsonClient, build_http_client, http_call,
+};
 use temper_protocol_worker::{
     Artifact, Capability, Capacity, ErrorCode, Heartbeat, JobResult, Poll, Register,
-    ReleaseDisposition, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
+    ReleaseDisposition, ResultStatus, WORKER_AUTHORIZATION_HEADER, WORKER_PROTOCOL_VERSION,
+    WorkerAuth, WorkerProtocolMessage,
 };
 
 async fn spawn(handle: &skein::runtime::RuntimeHandle) -> (temper_engine::Daemon, String) {
     let daemon = temper_engine::Daemon::new(std::sync::Arc::new(handle.clone()));
+    let server = temper_engine::serve(
+        handle,
+        &daemon,
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    )
+    .await
+    .expect("bind test server");
+    (daemon, format!("http://{}/v1/message", server.local_addr()))
+}
+
+async fn spawn_with_worker_auth(
+    handle: &skein::runtime::RuntimeHandle,
+) -> (temper_engine::Daemon, String) {
+    let mut auth = temper_engine::WorkerPoolAuthConfig::new();
+    auth.insert_pool("builders", Some(WorkerAuth::bearer("builders-secret")));
+    auth.insert_pool("reviewers", Some(WorkerAuth::bearer("reviewers-secret")));
+    let daemon = temper_engine::Daemon::with_applier_and_worker_pools(
+        std::sync::Arc::new(handle.clone()),
+        std::sync::Arc::new(temper_engine::NoopApplier),
+        vec![temper_engine::WorkerPoolPolicy::new(
+            "builders",
+            vec!["engineer".to_string()],
+            vec!["ai/temper".to_string()],
+            Some(1),
+        )],
+    )
+    .with_worker_pool_auth(auth);
     let server = temper_engine::serve(
         handle,
         &daemon,
@@ -41,6 +71,20 @@ fn register(
         worker_pool: None,
         labels: None,
     })
+}
+
+fn register_pool(
+    worker_id: &str,
+    pool: &str,
+    role: &str,
+    repo: &str,
+    max_concurrent_jobs: u32,
+) -> WorkerProtocolMessage {
+    let mut msg = register(worker_id, role, repo, max_concurrent_jobs);
+    if let WorkerProtocolMessage::Register(register) = &mut msg {
+        register.worker_pool = Some(pool.to_string());
+    }
+    msg
 }
 
 fn poll_with_wait(worker_id: &str, max_wait_ms: u64) -> WorkerProtocolMessage {
@@ -104,6 +148,32 @@ async fn post(client: &JsonClient, url: &str, msg: &WorkerProtocolMessage) -> Ht
         .expect("post message")
 }
 
+async fn post_bearer(
+    url: &str,
+    msg: &WorkerProtocolMessage,
+    token: Option<&str>,
+) -> HttpResponseData {
+    let client = build_http_client();
+    let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+    if let Some(token) = token {
+        headers.push((
+            WORKER_AUTHORIZATION_HEADER.to_string(),
+            WorkerAuth::bearer(token.to_string()).authorization_header_value(),
+        ));
+    }
+    http_call(
+        &client,
+        HttpCall {
+            method: "POST".to_string(),
+            url: url.to_string(),
+            headers,
+            body: serde_json::to_vec(msg).expect("message serializes"),
+        },
+    )
+    .await
+    .expect("post message")
+}
+
 async fn post_json(
     client: &JsonClient,
     url: &str,
@@ -157,6 +227,90 @@ fn register_then_poll_returns_assignment_when_matching_work_exists() {
                 assert_eq!(assign.job_payload, payload);
             }
             other => panic!("expected assign, got {other:?}"),
+        }
+    })
+}
+
+#[test]
+fn worker_protocol_http_auth_rejects_missing_wrong_and_cross_pool_tokens() {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
+        let (daemon, url) = spawn_with_worker_auth(&handle).await;
+
+        assert_eq!(
+            post_bearer(
+                &url,
+                &register_pool("worker-a", "builders", "engineer", "ai/temper", 1),
+                None,
+            )
+            .await
+            .status,
+            401
+        );
+        assert_eq!(
+            post_bearer(
+                &url,
+                &register_pool("worker-a", "builders", "engineer", "ai/temper", 1),
+                Some("wrong-secret"),
+            )
+            .await
+            .status,
+            401
+        );
+        assert_eq!(
+            post_bearer(
+                &url,
+                &register_pool("worker-a", "builders", "engineer", "ai/temper", 1),
+                Some("reviewers-secret"),
+            )
+            .await
+            .status,
+            401
+        );
+        assert_eq!(
+            post_bearer(
+                &url,
+                &register_pool("worker-a", "builders", "engineer", "ai/temper", 1),
+                Some("builders-secret"),
+            )
+            .await
+            .status,
+            204
+        );
+
+        daemon
+            .enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({}))
+            .await;
+        assert_eq!(
+            post_bearer(&url, &poll("worker-a"), Some("reviewers-secret"))
+                .await
+                .status,
+            401
+        );
+        match serde_json::from_slice::<WorkerProtocolMessage>(
+            &post_bearer(&url, &poll("worker-a"), Some("builders-secret"))
+                .await
+                .body,
+        )
+        .expect("assignment response parses")
+        {
+            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+            other => panic!("expected assignment, got {other:?}"),
+        }
+        assert_eq!(
+            post_bearer(&url, &result("worker-a", "job-1"), Some("reviewers-secret"),)
+                .await
+                .status,
+            401
+        );
+        match serde_json::from_slice::<WorkerProtocolMessage>(
+            &post_bearer(&url, &result("worker-a", "job-1"), Some("builders-secret"))
+                .await
+                .body,
+        )
+        .expect("release response parses")
+        {
+            WorkerProtocolMessage::Release(release) => assert_eq!(release.job_id, "job-1"),
+            other => panic!("expected release, got {other:?}"),
         }
     })
 }

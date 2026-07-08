@@ -5,19 +5,27 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use secrecy::SecretString;
+
 use crate::error::ConfigError;
 use crate::resolved::{AgentProfileSettings, ProviderKind, RepoPath, WorkerPoolSettings};
 use crate::schema::{Config, Credentials};
 use crate::secret_refs::resolve_secret_reference;
+
+pub(crate) struct ResolvedWorkerPools {
+    pub pools: Vec<WorkerPoolSettings>,
+    pub token_values: BTreeMap<String, SecretString>,
+}
 
 pub(crate) fn resolve_worker_pools(
     config: &Config,
     agent_profiles: &BTreeMap<String, AgentProfileSettings>,
     credentials: &Credentials,
     validate_secret_references: bool,
-) -> Result<Vec<WorkerPoolSettings>, ConfigError> {
+) -> Result<ResolvedWorkerPools, ConfigError> {
     let mut seen_names = BTreeSet::new();
     let mut pools = Vec::with_capacity(config.worker.pools.len());
+    let mut token_values = BTreeMap::new();
 
     for (index, pool) in config.worker.pools.iter().enumerate() {
         let field = format!("worker.pools[{index}]");
@@ -47,13 +55,18 @@ pub(crate) fn resolve_worker_pools(
             }
         }
 
-        let worker_token = resolve_secret_reference(
+        let resolved_worker_token = resolve_secret_reference(
             &format!("{field}.worker_token"),
             pool.worker_token.as_deref(),
             credentials,
             validate_secret_references,
-        )?
-        .map(|resolved| resolved.reference);
+        )?;
+        let worker_token = resolved_worker_token
+            .as_ref()
+            .map(|resolved| resolved.reference.clone());
+        if let Some(value) = resolved_worker_token.and_then(|resolved| resolved.value) {
+            token_values.insert(name.clone(), value);
+        }
 
         pools.push(WorkerPoolSettings {
             name,
@@ -65,7 +78,10 @@ pub(crate) fn resolve_worker_pools(
         });
     }
 
-    Ok(pools)
+    Ok(ResolvedWorkerPools {
+        pools,
+        token_values,
+    })
 }
 
 pub(crate) fn resolve_agent_profiles(

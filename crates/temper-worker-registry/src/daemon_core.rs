@@ -11,10 +11,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_worker::{
     Artifact, Assign, ErrorCode, Heartbeat, JobResult, LeaseAck, Poll, ProtocolError, Register,
-    Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
+    Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 
-use crate::{DispatchCoordinator, WorkItem, WorkerPoolPolicies, WorkerPoolPolicy};
+use crate::{
+    DispatchCoordinator, WorkItem, WorkerPoolAuthConfig, WorkerPoolPolicies, WorkerPoolPolicy,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueuedJob {
@@ -34,10 +36,29 @@ pub struct InFlightJob {
     pub job_payload: serde_json::Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerAuthError {
+    message: String,
+}
+
+impl WorkerAuthError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DaemonCore {
     coordinator: DispatchCoordinator,
     job_context: BTreeMap<String, (Artifact, serde_json::Value)>,
+    worker_auth: WorkerPoolAuthConfig,
+    authenticated_workers: BTreeMap<String, String>,
     pool_policies: WorkerPoolPolicies,
 }
 
@@ -59,6 +80,15 @@ impl DaemonCore {
 
     pub fn coordinator_mut(&mut self) -> &mut DispatchCoordinator {
         &mut self.coordinator
+    }
+
+    pub fn configure_worker_pool_auth(&mut self, config: WorkerPoolAuthConfig) {
+        self.worker_auth = config;
+        self.authenticated_workers.clear();
+    }
+
+    pub fn worker_pool_auth(&self) -> &WorkerPoolAuthConfig {
+        &self.worker_auth
     }
 
     pub fn enqueue_job(
@@ -201,43 +231,142 @@ impl DaemonCore {
     }
 
     pub fn handle(&mut self, msg: WorkerProtocolMessage) -> Option<WorkerProtocolMessage> {
-        if protocol_version(&msg) != WORKER_PROTOCOL_VERSION {
-            return Some(error_response(
-                ErrorCode::ProtocolVersionMismatch,
-                "unsupported protocol_version",
-                None,
-            ));
-        }
-
-        match msg {
-            WorkerProtocolMessage::Register(register) => self.handle_register(register),
-            WorkerProtocolMessage::Poll(poll) => Some(self.handle_poll(poll)),
-            WorkerProtocolMessage::Assign(_) | WorkerProtocolMessage::Release(_) => {
-                Some(error_response(
-                    ErrorCode::MalformedMessage,
-                    "daemon-to-worker message received inbound",
-                    None,
-                ))
-            }
-            WorkerProtocolMessage::Heartbeat(heartbeat) => self.handle_heartbeat(heartbeat),
-            WorkerProtocolMessage::Result(result) => Some(self.handle_result(result)),
-            WorkerProtocolMessage::LeaseAck(lease_ack) => self.handle_lease_ack(lease_ack),
-            WorkerProtocolMessage::Error(_) => None,
+        match self.handle_authenticated(msg, None) {
+            Ok(response) => response,
+            Err(error) => Some(auth_error(error.message())),
         }
     }
 
-    fn handle_register(&mut self, register: Register) -> Option<WorkerProtocolMessage> {
+    pub fn handle_authenticated(
+        &mut self,
+        msg: WorkerProtocolMessage,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<Option<WorkerProtocolMessage>, WorkerAuthError> {
+        if protocol_version(&msg) != WORKER_PROTOCOL_VERSION {
+            return Ok(Some(error_response(
+                ErrorCode::ProtocolVersionMismatch,
+                "unsupported protocol_version",
+                None,
+            )));
+        }
+
+        match msg {
+            WorkerProtocolMessage::Register(register) => self.handle_register(register, auth),
+            WorkerProtocolMessage::Poll(poll) => {
+                self.authenticate_registered_worker(&poll.worker_id, None, auth)?;
+                Ok(Some(self.handle_poll(poll)))
+            }
+            WorkerProtocolMessage::Assign(_) | WorkerProtocolMessage::Release(_) => {
+                Ok(Some(error_response(
+                    ErrorCode::MalformedMessage,
+                    "daemon-to-worker message received inbound",
+                    None,
+                )))
+            }
+            WorkerProtocolMessage::Heartbeat(heartbeat) => {
+                self.authenticate_registered_worker(
+                    &heartbeat.worker_id,
+                    heartbeat.worker_pool.as_deref(),
+                    auth,
+                )?;
+                Ok(self.handle_heartbeat(heartbeat))
+            }
+            WorkerProtocolMessage::Result(result) => {
+                self.authenticate_registered_worker(&result.worker_id, None, auth)?;
+                Ok(Some(self.handle_result(result)))
+            }
+            WorkerProtocolMessage::LeaseAck(lease_ack) => Ok(self.handle_lease_ack(lease_ack)),
+            WorkerProtocolMessage::Error(_) => Ok(None),
+        }
+    }
+
+    fn handle_register(
+        &mut self,
+        register: Register,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<Option<WorkerProtocolMessage>, WorkerAuthError> {
+        let pool = self.authenticate_register(&register, auth)?;
         match self
             .coordinator
             .registry_mut()
             .register_with_policies(&register, &self.pool_policies)
         {
-            Ok(()) => None,
-            Err(error) => Some(error_response(
+            Ok(()) => {
+                if let Some(pool) = pool {
+                    self.authenticated_workers
+                        .insert(register.worker_id.clone(), pool);
+                }
+                Ok(None)
+            }
+            Err(error) => Ok(Some(error_response(
                 ErrorCode::RegistrationRejected,
                 &error.to_string(),
                 None,
-            )),
+            ))),
+        }
+    }
+
+    fn authenticate_register(
+        &self,
+        register: &Register,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<Option<String>, WorkerAuthError> {
+        if !self.worker_auth.is_enabled() {
+            return Ok(None);
+        }
+        let pool = register_pool(register).ok_or_else(|| {
+            WorkerAuthError::new(
+                "worker pool authentication is configured; register message must declare a worker pool",
+            )
+        })?;
+        self.authenticate_pool_credential(&pool, auth)?;
+        Ok(Some(pool))
+    }
+
+    fn authenticate_registered_worker(
+        &self,
+        worker_id: &str,
+        message_pool: Option<&str>,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<(), WorkerAuthError> {
+        if !self.worker_auth.is_enabled() {
+            return Ok(());
+        }
+        let pool = self.authenticated_workers.get(worker_id).ok_or_else(|| {
+            WorkerAuthError::new(format!(
+                "worker `{worker_id}` is not authenticated to a registered worker pool"
+            ))
+        })?;
+        if let Some(message_pool) = message_pool.map(str::trim).filter(|pool| !pool.is_empty()) {
+            if message_pool != pool {
+                return Err(WorkerAuthError::new(format!(
+                    "worker `{worker_id}` sent worker_pool `{message_pool}` but registered to `{pool}`"
+                )));
+            }
+        }
+        self.authenticate_pool_credential(pool, auth)
+    }
+
+    fn authenticate_pool_credential(
+        &self,
+        pool: &str,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<(), WorkerAuthError> {
+        let expected = self.worker_auth.pool_token(pool).ok_or_else(|| {
+            WorkerAuthError::new(format!("worker pool `{pool}` is not configured"))
+        })?;
+        match (expected.as_ref(), auth) {
+            (Some(expected), Some(presented)) if expected.matches(presented) => Ok(()),
+            (Some(_), None) => Err(WorkerAuthError::new(format!(
+                "worker pool `{pool}` requires worker_token authentication"
+            ))),
+            (Some(_), Some(_)) => Err(WorkerAuthError::new(format!(
+                "worker pool `{pool}` worker_token authentication failed"
+            ))),
+            (None, None) => Ok(()),
+            (None, Some(_)) => Err(WorkerAuthError::new(format!(
+                "worker pool `{pool}` does not accept worker_token authentication"
+            ))),
         }
     }
 
@@ -346,6 +475,29 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,
     }
+}
+
+fn register_pool(register: &Register) -> Option<String> {
+    register
+        .worker_pool
+        .as_deref()
+        .map(str::trim)
+        .filter(|pool| !pool.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            register
+                .labels
+                .as_deref()?
+                .iter()
+                .filter_map(|label| label.trim().strip_prefix("pool:"))
+                .map(str::trim)
+                .find(|pool| !pool.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn auth_error(message: &str) -> WorkerProtocolMessage {
+    error_response(ErrorCode::Unauthorized, message, None)
 }
 
 fn error_response(code: ErrorCode, message: &str, job_id: Option<String>) -> WorkerProtocolMessage {

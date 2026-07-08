@@ -423,7 +423,7 @@ fn resolve_worker(
         None => default_capabilities(engine),
     };
     let capabilities = dedup_by(capabilities, |a, b| a.repo == b.repo && a.role == b.role);
-    let pools = resolve_worker_pools(
+    let resolved_pools = resolve_worker_pools(
         config,
         agent_profiles,
         credentials,
@@ -439,7 +439,8 @@ fn resolve_worker(
         poll_wait,
         heartbeat_interval,
         capabilities,
-        pools,
+        pools: resolved_pools.pools,
+        worker_pool_tokens: resolved_pools.token_values,
         selected_pool: None,
     })
 }

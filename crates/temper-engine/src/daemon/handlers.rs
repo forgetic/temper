@@ -10,7 +10,8 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_protocol_worker::{
-    Artifact, Assign, JobResult, Poll, PullRequestFreshness, Register, WorkerProtocolMessage,
+    Artifact, Assign, JobResult, Poll, PullRequestFreshness, Register, WORKER_AUTHORIZATION_HEADER,
+    WorkerAuth, WorkerProtocolMessage,
 };
 
 use crate::InFlightJob;
@@ -30,7 +31,7 @@ impl DaemonMachine {
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
         match (request.method.as_str(), request.uri.as_str()) {
-            ("POST", "/v1/message") => self.handle_protocol_message(&request.body, responder),
+            ("POST", "/v1/message") => self.handle_protocol_message(&request, responder),
             ("POST", "/v1/pr-freshness") => {
                 self.handle_pull_request_freshness_check(&request.body, responder)
             }
@@ -91,10 +92,19 @@ impl DaemonMachine {
 
     fn handle_protocol_message(
         &mut self,
-        body: &[u8],
+        request: &HttpRequestData,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
-        let Ok(msg) = serde_json::from_slice::<WorkerProtocolMessage>(body) else {
+        let auth = match worker_auth_from_headers(&request.headers) {
+            Ok(auth) => auth,
+            Err(()) => {
+                return vec![DaemonRequest::Respond {
+                    responder,
+                    response: HttpResponseData::status_only(401),
+                }];
+            }
+        };
+        let Ok(msg) = serde_json::from_slice::<WorkerProtocolMessage>(&request.body) else {
             return vec![DaemonRequest::Respond {
                 responder,
                 response: HttpResponseData::status_only(400),
@@ -102,27 +112,42 @@ impl DaemonMachine {
         };
 
         match msg {
-            WorkerProtocolMessage::Register(register) => self.handle_register(register, responder),
-            WorkerProtocolMessage::Poll(poll) => self.handle_poll(poll, responder),
-            WorkerProtocolMessage::Result(result) => self.handle_result(result, responder),
-            other => {
-                let response = self.core.handle(other);
-                vec![DaemonRequest::Respond {
+            WorkerProtocolMessage::Register(register) => {
+                self.handle_register(register, auth, responder)
+            }
+            WorkerProtocolMessage::Poll(poll) => self.handle_poll(poll, auth, responder),
+            WorkerProtocolMessage::Result(result) => self.handle_result(result, auth, responder),
+            other => match self.core.handle_authenticated(other, auth.as_ref()) {
+                Ok(response) => vec![DaemonRequest::Respond {
                     responder,
                     response: protocol_response(response),
-                }]
-            }
+                }],
+                Err(_) => vec![DaemonRequest::Respond {
+                    responder,
+                    response: HttpResponseData::status_only(401),
+                }],
+            },
         }
     }
 
     fn handle_register(
         &mut self,
         register: Register,
+        auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
-        let response = self
-            .core
-            .handle(WorkerProtocolMessage::Register(register.clone()));
+        let response = match self.core.handle_authenticated(
+            WorkerProtocolMessage::Register(register.clone()),
+            auth.as_ref(),
+        ) {
+            Ok(response) => response,
+            Err(_) => {
+                return vec![DaemonRequest::Respond {
+                    responder,
+                    response: HttpResponseData::status_only(401),
+                }];
+            }
+        };
         let mut requests = Vec::new();
         if response.is_none() {
             requests.push(DaemonRequest::Log(register_log_line(&register)));
@@ -134,17 +159,37 @@ impl DaemonMachine {
         requests
     }
 
-    fn handle_poll(&mut self, poll: Poll, responder: HttpResponder) -> Vec<DaemonRequest> {
-        let response = self
+    fn handle_poll(
+        &mut self,
+        poll: Poll,
+        auth: Option<WorkerAuth>,
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
+        let response = match self
             .core
-            .handle(WorkerProtocolMessage::Poll(poll.clone()))
-            .expect("poll messages produce a response");
+            .handle_authenticated(WorkerProtocolMessage::Poll(poll.clone()), auth.as_ref())
+        {
+            Ok(response) => response.expect("poll messages produce a response"),
+            Err(_) => {
+                return vec![DaemonRequest::Respond {
+                    responder,
+                    response: HttpResponseData::status_only(401),
+                }];
+            }
+        };
 
         if is_poll_timeout(&response) {
             let requested = poll.max_wait_ms.unwrap_or(self.max_poll_wait_ms);
             let wait_ms = requested.min(self.max_poll_wait_ms);
             let id = self.next_token();
-            self.waiters.insert(id, PollWaiter { poll, responder });
+            self.waiters.insert(
+                id,
+                PollWaiter {
+                    poll,
+                    auth,
+                    responder,
+                },
+            );
             vec![DaemonRequest::StartPollTimer {
                 id,
                 delay: Duration::from_millis(wait_ms),
@@ -179,14 +224,28 @@ impl DaemonMachine {
         }
     }
 
-    fn handle_result(&mut self, result: JobResult, responder: HttpResponder) -> Vec<DaemonRequest> {
+    fn handle_result(
+        &mut self,
+        result: JobResult,
+        auth: Option<WorkerAuth>,
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
         let mut requests = Vec::new();
         // Capture full job context before the core completes and forgets the
         // job.
         let in_flight = self.core.in_flight_job(&result.job_id);
-        let response = self
+        let response = match self
             .core
-            .handle(WorkerProtocolMessage::Result(result.clone()));
+            .handle_authenticated(WorkerProtocolMessage::Result(result.clone()), auth.as_ref())
+        {
+            Ok(response) => response,
+            Err(_) => {
+                return vec![DaemonRequest::Respond {
+                    responder,
+                    response: HttpResponseData::status_only(401),
+                }];
+            }
+        };
 
         // Route only when the core accepted/completed the in-flight job.
         // Unknown, never-assigned, version-mismatched, and double-sent results
@@ -359,10 +418,23 @@ impl DaemonMachine {
                 continue;
             };
 
-            let response = self
-                .core
-                .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
-                .expect("poll messages produce a response");
+            let response = match self.core.handle_authenticated(
+                WorkerProtocolMessage::Poll(waiter.poll.clone()),
+                waiter.auth.as_ref(),
+            ) {
+                Ok(response) => response.expect("poll messages produce a response"),
+                Err(_) => {
+                    let waiter = self
+                        .waiters
+                        .remove(&id)
+                        .expect("waiter exists after auth failure");
+                    requests.push(DaemonRequest::Respond {
+                        responder: waiter.responder,
+                        response: HttpResponseData::status_only(401),
+                    });
+                    continue;
+                }
+            };
 
             if is_poll_timeout(&response) {
                 continue;
@@ -380,6 +452,18 @@ impl DaemonMachine {
         }
         requests
     }
+}
+
+fn worker_auth_from_headers(headers: &[(String, String)]) -> Result<Option<WorkerAuth>, ()> {
+    let Some((_, value)) = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(WORKER_AUTHORIZATION_HEADER))
+    else {
+        return Ok(None);
+    };
+    WorkerAuth::from_authorization_header(value)
+        .map(Some)
+        .ok_or(())
 }
 
 fn in_flight_job_from_assign(assign: &Assign) -> InFlightJob {
