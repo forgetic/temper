@@ -40,10 +40,18 @@ Both trigger sources feed the *same* reaction path: pull fresh state → classif
 → plan → execute → reconcile, which already lives in `temper-workflow`. The
 trigger source is pluggable; the reaction is the one real thing.
 
+Operationally, the supported Forgejo webhook runtime is the engine HTTP surface:
+Forgejo posts HMAC-signed webhooks to `POST /forgejo/webhook` on `temper serve
+engine` or `temper serve standalone` when `[engine] webhook_secret` or
+`webhook_secret_file` is configured. There is intentionally no separate
+`temper serve trigger` process. `trigger` remains the logging/service plane name
+for inbound facts and wake hints, not a runnable `serve` component.
+
 ### Layering
 
 ```
-Forgejo HTTP POST ─► forgejo webhook adapter   (provider-specific: HTTP, verify HMAC, parse)
+Forgejo HTTP POST ─► engine/standalone HTTP adapter (`POST /forgejo/webhook`)
+                       (provider-specific: verify HMAC, parse)
                        │  emits a normalized ChangeHint
                        ▼
                     trigger scheduler / runner ◄── periodic resync timer (backstop)
@@ -59,8 +67,10 @@ Three separable concerns, only one of which is even a candidate for a portable
 type:
 
 1. **Receipt / verify / parse** (HTTP server, HMAC, payload schema): entirely
-   Forgejo-specific; lives in the dedicated `temper-trigger-forgejo` webhook
-   adapter. Never in core.
+   Forgejo-specific; the supported operator path is the engine/standalone HTTP
+   route at `POST /forgejo/webhook`. The `temper-trigger-forgejo` crate remains
+   legacy/internal adapter code for older wake-socket fixtures and is not a
+   `temper serve` process.
 2. **Normalizing a payload into a small `ChangeHint`**
    (`{ repo, artifact kind, item number, change kind }`): may become a portable
    type so the scheduler stays backend-agnostic, but it does **not** belong on
@@ -87,6 +97,9 @@ runner exists and the need is concrete.
   at worst trigger a redundant scan that finds nothing to do.
 - The periodic poll is mandatory, not optional: it is the correctness/liveness
   guarantee. Webhooks only lower latency.
+- Operators run webhook intake through `temper serve engine` or `temper serve
+  standalone`; a separate `temper serve trigger` component would add topology
+  ambiguity without changing correctness.
 - Treat a payload as a **signal**, not data: use it to decide *that* (and at
   most *which* queue) to scan; pull the actual state fresh. Keeps a single
   source of truth.

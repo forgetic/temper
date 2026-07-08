@@ -26,6 +26,7 @@ fn register(worker_id: &str, role: &str, repo: &str) -> WorkerProtocolMessage {
         capacity: Capacity {
             max_concurrent_jobs: 1,
         },
+        worker_pool: None,
         labels: None,
     })
 }
@@ -48,7 +49,7 @@ fn in_process_transport_registers_polls_and_assigns() {
 
         // Register the worker in-process.
         let registered = transport
-            .send(cx.clone(), register("w1", "engineer", "acme/service"))
+            .send(cx.clone(), register("w1", "engineer", "acme/service"), None)
             .await;
         assert!(
             registered.is_ok(),
@@ -72,7 +73,7 @@ fn in_process_transport_registers_polls_and_assigns() {
         // Poll: the enqueued job comes back as an Assign over the in-process
         // carrier — exactly as it would over HTTP.
         let reply = transport
-            .send(cx.clone(), poll("w1"))
+            .send(cx.clone(), poll("w1"), None)
             .await
             .expect("poll succeeds in-process");
         let job_id = match reply {
@@ -110,6 +111,7 @@ fn in_process_transport_registers_polls_and_assigns() {
                     summary: Some("done".to_string()),
                     details: None,
                 }),
+                None,
             )
             .await;
         assert!(

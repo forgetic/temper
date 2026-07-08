@@ -13,9 +13,11 @@ use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
 use temper_forge::{Forge, RepositoryId};
 use temper_protocol_worker::{
-    Artifact, PullRequestFreshness, PullRequestFreshnessResponse, WorkerProtocolMessage,
+    Artifact, PullRequestFreshness, PullRequestFreshnessResponse, WORKER_AUTHORIZATION_HEADER,
+    WorkerAuth, WorkerProtocolMessage,
 };
 use temper_runner::WorkItem;
+use temper_worker_registry::{WorkerPoolAuthConfig, WorkerPoolPolicy};
 use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
 
 use crate::APPLY_GRACE;
@@ -37,7 +39,15 @@ impl Daemon {
     }
 
     pub fn with_applier(spawner: Arc<dyn Spawner>, applier: Arc<dyn ResultApplier>) -> Self {
-        Self::with_applier_and_apply_grace(spawner, applier, APPLY_GRACE)
+        Self::with_applier_and_worker_pools(spawner, applier, Vec::new())
+    }
+
+    pub fn with_applier_and_worker_pools(
+        spawner: Arc<dyn Spawner>,
+        applier: Arc<dyn ResultApplier>,
+        worker_pools: Vec<WorkerPoolPolicy>,
+    ) -> Self {
+        Self::with_applier_worker_pools_and_apply_grace(spawner, applier, worker_pools, APPLY_GRACE)
     }
 
     pub fn with_apply_grace(self, apply_grace: Duration) -> Self {
@@ -47,9 +57,17 @@ impl Daemon {
         self
     }
 
-    fn with_applier_and_apply_grace(
+    pub fn with_worker_pool_auth(self, config: WorkerPoolAuthConfig) -> Self {
+        let _ = self
+            .cq
+            .send(DaemonCompletion::ConfigureWorkerPoolAuth { config });
+        self
+    }
+
+    fn with_applier_worker_pools_and_apply_grace(
         spawner: Arc<dyn Spawner>,
         applier: Arc<dyn ResultApplier>,
+        worker_pools: Vec<WorkerPoolPolicy>,
         apply_grace: Duration,
     ) -> Self {
         let (cq_tx, cq_rx) = channel();
@@ -61,7 +79,7 @@ impl Daemon {
             applier,
             scanner_slot: Arc::clone(&scanner_slot),
         };
-        let machine = DaemonMachine::default_machine(apply_grace);
+        let machine = DaemonMachine::default_machine_with_worker_pools(apply_grace, worker_pools);
         spawner.spawn_with_cx(move |cx| async move {
             let _ = drive(cx, machine, &executor, cq_rx).await;
         });
@@ -122,11 +140,28 @@ impl Daemon {
         &self,
         message: WorkerProtocolMessage,
     ) -> Result<Option<WorkerProtocolMessage>, String> {
+        self.deliver_protocol_message_with_auth(message, None).await
+    }
+
+    /// Deliver one worker-protocol message in-process with the same auth
+    /// metadata the split HTTP carrier would put in `Authorization: Bearer …`.
+    pub async fn deliver_protocol_message_with_auth(
+        &self,
+        message: WorkerProtocolMessage,
+        auth: Option<WorkerAuth>,
+    ) -> Result<Option<WorkerProtocolMessage>, String> {
         let (reply_tx, reply_rx) = temper_engine_io::oneshot::<HttpResponseData>();
+        let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
+        if let Some(auth) = auth {
+            headers.push((
+                WORKER_AUTHORIZATION_HEADER.to_string(),
+                auth.authorization_header_value(),
+            ));
+        }
         let request = HttpRequestData {
             method: "POST".to_string(),
             uri: "/v1/message".to_string(),
-            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            headers,
             body: serde_json::to_vec(&message)
                 .map_err(|error| format!("serialize worker-protocol message: {error}"))?,
         };

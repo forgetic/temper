@@ -14,10 +14,11 @@ use temper_worker_registry::DaemonCore;
 
 use super::{ArtifactDto, DaemonStateSnapshot, JobDto};
 
-fn register(worker_id: &str, role: &str, repo: &str) -> Register {
+fn register_with_pool(worker_id: &str, role: &str, repo: &str, pool: Option<&str>) -> Register {
     Register {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
+        worker_pool: pool.map(str::to_string),
         capabilities: vec![Capability {
             role: role.to_string(),
             repo: repo.to_string(),
@@ -27,6 +28,10 @@ fn register(worker_id: &str, role: &str, repo: &str) -> Register {
         },
         labels: None,
     }
+}
+
+fn register(worker_id: &str, role: &str, repo: &str) -> Register {
+    register_with_pool(worker_id, role, repo, None)
 }
 
 fn issue(number: u64) -> Artifact {
@@ -47,8 +52,12 @@ fn pull_request(number: u64) -> Artifact {
 /// behind the busy role, exercising every snapshot section.
 fn representative_core() -> DaemonCore {
     let mut core = DaemonCore::new();
-    core.coordinator_mut()
-        .register(&register("w-code-1", "code", "acme/widgets"));
+    core.coordinator_mut().register(&register_with_pool(
+        "w-code-1",
+        "code",
+        "acme/widgets",
+        Some("builders"),
+    ));
     core.coordinator_mut()
         .register(&register("w-review-1", "review", "acme/api"));
 
@@ -82,8 +91,31 @@ fn snapshot_has_the_expected_wire_shape() {
         vec!["in_flight", "queued", "role_saturation", "workers"]
     );
 
-    // workers tile: matches the fixture's {healthy, total} shape exactly.
-    assert_eq!(value["workers"], json!({ "healthy": 2, "total": 2 }));
+    // workers tile keeps aggregate counts and exposes registered worker details.
+    assert_eq!(
+        value["workers"],
+        json!({
+            "healthy": 2,
+            "total": 2,
+            "registered": [
+                {
+                    "worker_id": "w-code-1",
+                    "pool": "builders",
+                    "healthy": true,
+                    "max_concurrent_jobs": 1,
+                    "free_capacity": 0,
+                    "capabilities": [{ "role": "code", "repo": "acme/widgets" }]
+                },
+                {
+                    "worker_id": "w-review-1",
+                    "healthy": true,
+                    "max_concurrent_jobs": 1,
+                    "free_capacity": 1,
+                    "capabilities": [{ "role": "review", "repo": "acme/api" }]
+                }
+            ]
+        })
+    );
 
     // in-flight job carries the board card's join key + role.
     let in_flight = value["in_flight"].as_array().expect("in_flight array");
@@ -132,6 +164,24 @@ fn snapshot_field_names_match_board_card_projection_keys() {
     let workers = &value["workers"];
     assert!(workers.get("healthy").is_some());
     assert!(workers.get("total").is_some());
+    assert!(
+        workers["registered"][0].get("worker_id").is_some(),
+        "worker identity is visible"
+    );
+    assert!(
+        workers["registered"][0].get("pool").is_some(),
+        "worker pool is visible"
+    );
+    assert!(
+        workers["registered"][0]
+            .get("max_concurrent_jobs")
+            .is_some(),
+        "worker capacity is visible"
+    );
+    assert!(
+        workers["registered"][0].get("capabilities").is_some(),
+        "worker capabilities are visible"
+    );
 }
 
 #[test]

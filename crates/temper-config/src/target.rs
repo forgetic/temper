@@ -5,19 +5,28 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use secrecy::{ExposeSecret, SecretString};
+use serde_json::Value;
+
 use crate::error::ConfigError;
 use crate::resolved::{AgentProfileSettings, ProviderKind, RepoPath, WorkerPoolSettings};
 use crate::schema::{Config, Credentials};
-use crate::secret_refs::resolve_secret_reference;
+use crate::secret_refs::{require_secret_payload, resolve_secret_reference};
+
+pub(crate) struct ResolvedWorkerPools {
+    pub pools: Vec<WorkerPoolSettings>,
+    pub token_values: BTreeMap<String, SecretString>,
+}
 
 pub(crate) fn resolve_worker_pools(
     config: &Config,
     agent_profiles: &BTreeMap<String, AgentProfileSettings>,
     credentials: &Credentials,
     validate_secret_references: bool,
-) -> Result<Vec<WorkerPoolSettings>, ConfigError> {
+) -> Result<ResolvedWorkerPools, ConfigError> {
     let mut seen_names = BTreeSet::new();
     let mut pools = Vec::with_capacity(config.worker.pools.len());
+    let mut token_values = BTreeMap::new();
 
     for (index, pool) in config.worker.pools.iter().enumerate() {
         let field = format!("worker.pools[{index}]");
@@ -47,13 +56,18 @@ pub(crate) fn resolve_worker_pools(
             }
         }
 
-        let worker_token = resolve_secret_reference(
+        let resolved_worker_token = resolve_secret_reference(
             &format!("{field}.worker_token"),
             pool.worker_token.as_deref(),
             credentials,
             validate_secret_references,
-        )?
-        .map(|resolved| resolved.reference);
+        )?;
+        let worker_token = resolved_worker_token
+            .as_ref()
+            .map(|resolved| resolved.reference.clone());
+        if let Some(value) = resolved_worker_token.and_then(|resolved| resolved.value) {
+            token_values.insert(name.clone(), value);
+        }
 
         pools.push(WorkerPoolSettings {
             name,
@@ -65,7 +79,10 @@ pub(crate) fn resolve_worker_pools(
         });
     }
 
-    Ok(pools)
+    Ok(ResolvedWorkerPools {
+        pools,
+        token_values,
+    })
 }
 
 pub(crate) fn resolve_agent_profiles(
@@ -115,8 +132,15 @@ pub(crate) fn resolve_agent_profiles(
             profile.credential.as_deref(),
             credentials,
             validate_secret_references,
-        )?
-        .map(|resolved| resolved.reference);
+        )?;
+        let credential_json = credential
+            .as_ref()
+            .filter(|resolved| resolved.reference.available)
+            .map(|resolved| {
+                let secret = require_secret_payload(&format!("{field}.credential"), resolved)?;
+                provider_credential_json_from_secret(&format!("{field}.credential"), &secret)
+            })
+            .transpose()?;
 
         profiles.insert(
             name,
@@ -128,12 +152,96 @@ pub(crate) fn resolve_agent_profiles(
                 provider_url: trimmed(profile.provider_url.as_deref()),
                 max_iterations: profile.max_iterations,
                 subagents: profile.subagents,
-                credential,
+                credential: credential.map(|resolved| resolved.reference),
+                credential_json,
             },
         );
     }
 
     Ok(profiles)
+}
+
+fn provider_credential_json_from_secret(
+    field: &str,
+    secret: &SecretString,
+) -> Result<SecretString, ConfigError> {
+    let raw = secret.expose_secret().trim();
+    if raw.is_empty() {
+        return Err(ConfigError::invalid(format!(
+            "{field} references a secret with an empty provider credential payload"
+        )));
+    }
+
+    let json = if raw.starts_with('{') {
+        validate_provider_credential_json(field, raw)?
+    } else {
+        serde_json::to_string(&serde_json::json!({
+            "type": "api-key",
+            "api_key": raw,
+        }))
+        .map_err(|error| {
+            ConfigError::invalid(format!("{field} provider credential JSON error: {error}"))
+        })?
+    };
+    Ok(SecretString::from(json))
+}
+
+fn validate_provider_credential_json(field: &str, raw: &str) -> Result<String, ConfigError> {
+    let value: Value = serde_json::from_str(raw).map_err(|error| {
+        ConfigError::invalid(format!(
+            "{field} provider credential JSON is invalid: {error}"
+        ))
+    })?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("api-key") => {
+            let api_key = value.get("api_key").and_then(Value::as_str).unwrap_or("");
+            if api_key.trim().is_empty() {
+                return Err(ConfigError::invalid(format!(
+                    "{field} provider credential JSON api_key must not be empty"
+                )));
+            }
+        }
+        Some("oauth") => {
+            let access = value
+                .get("access_token")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if access.trim().is_empty() {
+                return Err(ConfigError::invalid(format!(
+                    "{field} provider credential JSON access_token must not be empty"
+                )));
+            }
+            if value
+                .get("expires_at_unix_seconds")
+                .and_then(Value::as_i64)
+                .is_none()
+            {
+                return Err(ConfigError::invalid(format!(
+                    "{field} provider credential JSON expires_at_unix_seconds must be an integer"
+                )));
+            }
+            if let Some(refresh) = value.get("refresh_token") {
+                if !(refresh.is_null() || refresh.is_string()) {
+                    return Err(ConfigError::invalid(format!(
+                        "{field} provider credential JSON refresh_token must be a string when set"
+                    )));
+                }
+            }
+        }
+        Some(other) => {
+            return Err(ConfigError::invalid(format!(
+                "{field} provider credential JSON type `{other}` is unsupported (expected api-key or oauth)"
+            )));
+        }
+        None => {
+            return Err(ConfigError::invalid(format!(
+                "{field} provider credential JSON must include a type"
+            )));
+        }
+    }
+    serde_json::to_string(&value).map_err(|error| {
+        ConfigError::invalid(format!("{field} provider credential JSON error: {error}"))
+    })
 }
 
 fn resolve_pool_roles(raw_roles: &[String], field: &str) -> Result<Vec<String>, ConfigError> {

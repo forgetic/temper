@@ -17,6 +17,7 @@ use temper_cli_common::{
 };
 use temper_config::{Config, Credentials, ExposeSecret, ResolveOptions};
 
+use crate::plan::non_empty;
 use crate::provisioner::{
     ApplyPlanOutcome, ApplyPlanRequest, ApplyProvisioner, ForgejoProvisioner, ProvisionOutcome,
     build_deployment_repo_plan,
@@ -268,13 +269,14 @@ fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let resolved = temper_config::resolve_with_options(
-        &config,
-        &credentials,
-        &opts.env,
-        &ResolveOptions::from_config_base_dir(config_base),
-    )
-    .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?;
+    let mut resolve_options = ResolveOptions::from_config_base_dir(config_base);
+    // Generated init bundles reference the forge token that this apply pass may
+    // mint after provisioning. Load the pre-apply bundle non-strictly here;
+    // runtime/check paths keep strict secret-reference validation.
+    resolve_options.validate_secret_references = false;
+    let resolved =
+        temper_config::resolve_with_options(&config, &credentials, &opts.env, &resolve_options)
+            .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?;
 
     let base_url = resolved.forge.url.clone().ok_or_else(|| {
         InitError::Unsupported("temper apply requires `[forge] url` in config.toml".to_string())
@@ -475,13 +477,7 @@ fn merge_provisioned_credentials(
         .entry(admin_key.to_string())
         .or_default();
     admin.token = Some(outcome.admin_token.clone());
-}
-
-fn non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    write::add_forge_engine_token_secret(credentials, outcome.admin_token.clone());
 }
 
 #[cfg(test)]

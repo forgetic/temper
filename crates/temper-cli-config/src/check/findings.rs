@@ -19,9 +19,6 @@ pub(super) fn scoped_findings(resolved: &Resolved, options: &CheckOptions) -> Ve
         }
         Component::Engine => add_engine_findings(resolved, &mut findings),
         Component::Worker => add_worker_findings(resolved, options.pool.as_deref(), &mut findings),
-        Component::Trigger => findings.push(error_finding(
-            "trigger component checks are not implemented yet",
-        )),
     }
     findings
 }
@@ -246,7 +243,6 @@ fn add_path_findings(resolved: &Resolved, component: Component, findings: &mut V
         }
         Component::Engine => add_engine_path_findings(resolved, findings),
         Component::Worker => add_worker_path_findings(resolved, findings),
-        Component::Trigger => {}
     }
 }
 

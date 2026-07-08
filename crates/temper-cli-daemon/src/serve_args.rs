@@ -13,7 +13,13 @@ Components:
   standalone  Run all Temper planes in one local process
   engine      Run the engine service (`temper daemon --service engine`)
   worker      Run the worker service (`temper daemon --service worker`)
-  trigger     Not implemented yet for `temper serve`
+
+Forgejo webhook intake:
+  There is no separate `temper serve trigger` process. Configure
+  `[engine] webhook_secret` or `[engine] webhook_secret_file` and point
+  HMAC-signed Forgejo webhooks at POST /forgejo/webhook on
+  `temper serve engine` or `temper serve standalone`. Periodic polling remains
+  the correctness backstop.
 
 Options:
   -h, --help  Print help
@@ -101,7 +107,7 @@ pub(crate) fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocatio
         "engine" => parse_serve_service(Service::Engine, iter.collect()),
         "worker" => parse_serve_service(Service::Worker, iter.collect()),
         "trigger" => Err(
-            "`temper serve trigger` is not implemented yet; trigger support remains a later workitem"
+            "`temper serve trigger` is not a supported separate component; configure `[engine] webhook_secret` or `[engine] webhook_secret_file` and point HMAC-signed Forgejo webhooks at POST /forgejo/webhook on `temper serve engine` or `temper serve standalone`; periodic polling remains the correctness backstop"
                 .to_string(),
         ),
         other => Err(format!(

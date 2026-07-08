@@ -35,13 +35,13 @@ Two ignored tests; each owns the live world for one scenario:
   └────────────────────────────────────────────────────────────┘
      ▲ API (daemon only)   │ webhooks        ▲ git push       ▲ runs CI
      │                     ▼                 │ (role token)   │
-  ┌──┴──────────────────────────┐   ┌────────┴───────────┐ ┌──┴─────────────┐
-  │ temper-daemon binary        │   │ temper-testing-    │ │ forgejo-runner │
-  │ (webhook route, poll +      │◄──┤ daemon-worker      │ │ (host mode)    │
-  │  mechanical backstops,      │   │ (wire-protocol     │ └────────────────┘
-  │  lease-gated role-routed    │   │  client + real git │
-  │  appliers)                  │   │  push)             │
-  └─────────────────────────────┘   └────────────────────┘
+  ┌──┴────────────────────────────┐   ┌────────┴───────────┐ ┌──┴─────────────┐
+  │ temper-daemon / serve engine  │   │ temper-testing-    │ │ forgejo-runner │
+  │ or standalone binary          │   │ daemon-worker      │ │ (host mode)    │
+  │ (engine webhook route,        │◄──┤ (wire-protocol     │ └────────────────┘
+  │  poll + mechanical backstops, │   │  client + real git │
+  │  lease-gated appliers)        │   │  push)             │
+  └───────────────────────────────┘   └────────────────────┘
 ```
 
 - **Server and runner** come from the shared `bench-forgejo` fixture
@@ -64,7 +64,9 @@ Two ignored tests; each owns the live world for one scenario:
   hermetic fake-daemon contract tests.
 - **Webhook**: the repo webhook posts directly to the daemon's
   `/forgejo/webhook` route (HMAC-verified); every verified delivery triggers a
-  wake scan of the configured repo/role feeds.
+  wake scan of the configured repo/role feeds. This engine/standalone HTTP route
+  is the supported trigger runtime contract; there is no separate `temper serve
+  trigger` process.
 
 ## Scenario workflow
 
@@ -139,12 +141,15 @@ This suite replaced the per-role `temper-testing-worker` fleet topology
 (webhook trigger process + Unix wake sockets + one OS process per role) and
 its e2e targets (`forgejo_multiprocess`, `forgejo_webhook_wakeup`,
 `forgejo_multi_repo_webhook`, `forgejo_worker`, `multiprocess`,
-`multi_repo_multiprocess`). The workflow logic those scenarios exercised is
-covered hermetically (`crates/temper-daemon/tests/`, the launcher-static
-tests, and `basic_delivery_fakes`); the topology they exercised is obsolete
-after the daemon/worker consolidation. The topology-agnostic fixture proofs
-(`forgejo_server`, `forgejo_runner`, `forgejo_provision`, `forgejo_pr_prep`,
-`forgejo_ci_web_ui`, `forgejo_workspace_pr`, `forgejo_parallel`) remain.
+`multi_repo_multiprocess`). Those `temper-trigger-forgejo` and wake-socket paths
+are legacy/internal fixtures now; supported operator webhook intake is the
+engine/standalone `/forgejo/webhook` route. The workflow logic those scenarios
+exercised is covered hermetically (`crates/temper-daemon/tests/`, the
+launcher-static tests, and `basic_delivery_fakes`); the topology they exercised
+is obsolete after the daemon/worker consolidation. The topology-agnostic fixture
+proofs (`forgejo_server`, `forgejo_runner`, `forgejo_provision`,
+`forgejo_pr_prep`, `forgejo_ci_web_ui`, `forgejo_workspace_pr`,
+`forgejo_parallel`) remain.
 
 ## Why it stays `#[ignore]`d
 

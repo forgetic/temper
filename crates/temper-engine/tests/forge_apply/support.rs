@@ -186,6 +186,7 @@ pub(crate) fn register(worker_id: &str, role: &str, repo: &str) -> WorkerProtoco
         capacity: Capacity {
             max_concurrent_jobs: 1,
         },
+        worker_pool: None,
         labels: None,
     })
 }

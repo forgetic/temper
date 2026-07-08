@@ -296,6 +296,90 @@ fn run_apply_uses_configured_admin_token_without_local_credential_mutation() {
 }
 
 #[test]
+fn run_apply_loads_target_init_bundle_and_mints_named_forge_secret() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let workflow_path = dir.path().join("workflow.yaml");
+    let workflow_spec: RawWorkflowSpec =
+        serde_json::from_str(temper_reference_delivery::basic_delivery_workflow_json())
+            .expect("basic workflow parses");
+    let workflow_yaml = serde_yaml::to_string(&workflow_spec).expect("workflow yaml");
+    std::fs::write(&workflow_path, workflow_yaml).expect("workflow");
+    std::fs::write(
+        &config_path,
+        "schema_version = 1\n\n[deployment]\ntopology = \"standalone\"\n\n[workflow]\nfile = \"workflow.yaml\"\n\n[paths]\nworkspace_dir = \"workspace\"\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\nci_user = \"bot\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nworkflow = \"workflow.yaml\"\nrepos = [\"acme/service\"]\nroles = [\"architect\", \"engineer\"]\nforge_token = \"forge-engine-token\"\nwebhook_secret = \"webhook-secret\"\nwebhook_secret_file = \"webhook-secret\"\n\n[worker]\nworkspace = \"workspace\"\n\n[[worker.pools]]\nname = \"local\"\nroles = [\"architect\", \"engineer\"]\nrepos = [\"acme/service\"]\nmax_concurrent_jobs = 1\nworker_token = \"worker-local-token\"\n",
+    )
+    .expect("config");
+    std::fs::write(
+        &credentials_path,
+        "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n\n[secrets.webhook-secret]\nkind = \"webhook-secret\"\nsecret = \"secret\"\n\n[secrets.worker-local-token]\nkind = \"worker-token\"\ntoken = \"worker-secret\"\n",
+    )
+    .expect("credentials");
+    let opts = apply_options(config_path, credentials_path.clone(), true);
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let mut provisioner = StubApplyProvisioner {
+        seen: None,
+        fail_repo: None,
+    };
+
+    run_apply(&mut prompter, &mut provisioner, &opts).expect("target apply succeeds");
+
+    let seen = provisioner.seen.expect("provisioner called");
+    assert_eq!(seen.admin_user.as_deref(), Some("root"));
+    assert_eq!(seen.admin_password.as_deref(), Some("admin-pass"));
+    assert_eq!(seen.admin_token, None);
+    assert_eq!(seen.plans.len(), 1);
+    assert_eq!(seen.plans[0].repo.owner, "acme");
+    assert_eq!(seen.plans[0].repo.name, "service");
+    let webhook = seen.plans[0].webhook.as_ref().expect("webhook planned");
+    assert_eq!(webhook.secret, "secret");
+    let creds = std::fs::read_to_string(&credentials_path).expect("credentials updated");
+    assert!(creds.contains("[secrets.forge-engine-token]"), "{creds}");
+    assert!(creds.contains("token = \"admin-rest-token\""), "{creds}");
+}
+
+#[test]
+fn run_apply_reports_workflow_static_validation_before_provisioning() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let workflow_path = dir.path().join("invalid-workflow.json");
+    std::fs::write(
+        &workflow_path,
+        r#"{
+            "name": "invalid",
+            "roles": [{"id": "engineer", "queues": ["missing_queue"]}]
+        }"#,
+    )
+    .expect("workflow");
+    std::fs::write(
+        &config_path,
+        "schema_version = 1\n\n[workflow]\nfile = \"invalid-workflow.json\"\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nrepos = [\"acme/service\"]\nroles = [\"engineer\"]\nwebhook_secret_file = \"webhook-secret\"\n",
+    )
+    .expect("config");
+    std::fs::write(
+        &credentials_path,
+        "schema_version = 1\n\n[forge.users.root]\npassword = \"admin-pass\"\n",
+    )
+    .expect("credentials");
+    let opts = apply_options(config_path, credentials_path, true);
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let mut provisioner = StubApplyProvisioner {
+        seen: None,
+        fail_repo: None,
+    };
+
+    let err = run_apply(&mut prompter, &mut provisioner, &opts)
+        .expect_err("invalid workflow should stop apply before provisioning");
+
+    assert!(provisioner.seen.is_none());
+    let message = err.to_string();
+    assert!(message.contains("invalid-workflow.json"), "{message}");
+    assert!(message.contains("missing_queue"), "{message}");
+}
+
+#[test]
 fn parse_accepts_yes_existing_repo_and_global_options() {
     let parsed = parse_apply_args(
         vec!["--yes".to_string(), "--existing-repo".to_string()],

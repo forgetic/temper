@@ -28,9 +28,9 @@
     },
     {
       "id": "engineer",
-      "charter": "Claim ready code issues, implement them on their inherited feature branch, open implementation PRs into that feature branch, and repair CI failures before landing.",
+      "charter": "Claim ready code issues, implement them on their inherited feature branch, open implementation PRs into that feature branch, and repair CI or merge-conflict failures before landing.",
       "prompt": {
-        "guidance": "Use open_pr for ready code issues. The checkout base branch is the code issue target_branch metadata inherited from its plan; implementation PRs must target that feature branch rather than main. Use CI failure repair queues to push fixes to the writable PR head."
+        "guidance": "Use open_pr for ready code issues. The checkout base branch is the code issue target_branch metadata inherited from its plan; implementation PRs must target that feature branch rather than main. Use CI failure repair queues to push fixes to the writable PR head. Use merge-conflict repair queues to rebase or merge the target branch, resolve conflicts in the PR head, and push a scoped repair so fresh CI can re-enter landing."
       },
       "external_tools": [
         {
@@ -48,7 +48,9 @@
       "queues": [
         "code_ready",
         "implementation_pr_ci_failed",
-        "feature_landing_pr_ci_failed"
+        "implementation_pr_merge_conflict",
+        "feature_landing_pr_ci_failed",
+        "feature_landing_pr_merge_conflict"
       ]
     },
     {
@@ -98,7 +100,8 @@
     { "id": "config-only", "description": "feature was classified as config-only and does not require code PRs" },
     { "id": "implementation", "description": "identifies an implementation pull request" },
     { "id": "feature-landing", "description": "identifies an aggregate feature branch landing pull request" },
-    { "id": "landing", "description": "PR is ready for mechanical landing once gates pass" }
+    { "id": "landing", "description": "PR is ready for mechanical landing once gates pass" },
+    { "id": "merge-conflict", "description": "mechanical landing found a merge conflict; engineer must update the PR head" }
   ],
   "artifact_kinds": [
     {
@@ -176,7 +179,8 @@
       "id": "pr_routing",
       "exclusive": false,
       "states": [
-        { "id": "landing", "label": "landing", "artifacts": ["implementation_pr", "feature_landing_pr"] }
+        { "id": "landing", "label": "landing", "artifacts": ["implementation_pr", "feature_landing_pr"] },
+        { "id": "merge_conflict", "label": "merge-conflict", "artifacts": ["implementation_pr", "feature_landing_pr"] }
       ]
     }
   ],
@@ -215,17 +219,31 @@
     {
       "id": "implementation_pr_ci_failed",
       "artifact": "implementation_pr",
+      "excluded_labels": ["merge-conflict"],
       "condition": { "kind": "ci_failed" },
       "actions": [
         { "role": "engineer", "action": "address_implementation_ci_failure", "checkout": "pull_request_writable" }
       ]
     },
     {
+      "id": "implementation_pr_merge_conflict",
+      "artifact": "implementation_pr",
+      "labels": ["merge-conflict"],
+      "actions": [
+        { "role": "engineer", "action": "resolve_implementation_merge_conflict", "checkout": "pull_request_writable" }
+      ]
+    },
+    {
       "id": "implementation_landing",
       "artifact": "implementation_pr",
       "labels": ["landing"],
+      "excluded_labels": ["merge-conflict"],
       "condition": { "kind": "ci_passed" },
-      "automation": { "actor": "mechanical", "transition": "land_implementation_pr" }
+      "automation": {
+        "actor": "mechanical",
+        "transition": "land_implementation_pr",
+        "outcomes": { "merge_conflict": "route_implementation_merge_conflict" }
+      }
     },
     {
       "id": "plan_dependencies_resolved",
@@ -245,17 +263,31 @@
     {
       "id": "feature_landing_pr_ci_failed",
       "artifact": "feature_landing_pr",
+      "excluded_labels": ["merge-conflict"],
       "condition": { "kind": "ci_failed" },
       "actions": [
         { "role": "engineer", "action": "address_feature_landing_ci_failure", "checkout": "pull_request_writable" }
       ]
     },
     {
+      "id": "feature_landing_pr_merge_conflict",
+      "artifact": "feature_landing_pr",
+      "labels": ["merge-conflict"],
+      "actions": [
+        { "role": "engineer", "action": "resolve_feature_landing_merge_conflict", "checkout": "pull_request_writable" }
+      ]
+    },
+    {
       "id": "feature_landing",
       "artifact": "feature_landing_pr",
       "labels": ["landing"],
+      "excluded_labels": ["merge-conflict"],
       "condition": { "kind": "ci_passed" },
-      "automation": { "actor": "mechanical", "transition": "land_feature_pr" }
+      "automation": {
+        "actor": "mechanical",
+        "transition": "land_feature_pr",
+        "outcomes": { "merge_conflict": "route_feature_landing_merge_conflict" }
+      }
     }
   ],
   "transitions": [
@@ -364,6 +396,23 @@
       ]
     },
     {
+      "id": "resolve_implementation_merge_conflict",
+      "artifact": "implementation_pr",
+      "roles": ["engineer"],
+      "effects": [
+        { "kind": "remove_label", "label": "merge-conflict" }
+      ]
+    },
+    {
+      "id": "route_implementation_merge_conflict",
+      "artifact": "implementation_pr",
+      "roles": ["mechanical"],
+      "effects": [
+        { "kind": "add_label", "label": "merge-conflict" },
+        { "kind": "create_comment", "body": "Mechanical landing found a merge conflict before merging this implementation PR into the feature branch. Engineer: rebase or merge the target branch into the PR head, resolve conflicts, keep the repair scoped, and push; after fresh CI passes, Temper will retry landing." }
+      ]
+    },
+    {
       "id": "land_implementation_pr",
       "artifact": "implementation_pr",
       "roles": ["mechanical"],
@@ -424,6 +473,23 @@
       "roles": ["engineer"],
       "effects": [
         { "kind": "create_comment", "body": "CI failed before final feature landing. Engineer: repair the feature branch through the writable landing PR head; Temper will retry once fresh CI passes." }
+      ]
+    },
+    {
+      "id": "resolve_feature_landing_merge_conflict",
+      "artifact": "feature_landing_pr",
+      "roles": ["engineer"],
+      "effects": [
+        { "kind": "remove_label", "label": "merge-conflict" }
+      ]
+    },
+    {
+      "id": "route_feature_landing_merge_conflict",
+      "artifact": "feature_landing_pr",
+      "roles": ["mechanical"],
+      "effects": [
+        { "kind": "add_label", "label": "merge-conflict" },
+        { "kind": "create_comment", "body": "Mechanical final landing found a merge conflict between the feature branch and main. Engineer: update the feature branch through the writable landing PR head, resolve conflicts, keep the repair scoped, and push; after fresh CI passes, Temper will retry final landing." }
       ]
     },
     {

@@ -18,7 +18,9 @@ use std::time::Duration;
 use serde_json::json;
 use skein::cx::Cx;
 use temper_engine::Daemon;
-use temper_protocol_worker::{Artifact, ReleaseDisposition, ResultStatus, WorkerProtocolMessage};
+use temper_protocol_worker::{
+    Artifact, ReleaseDisposition, ResultStatus, WorkerAuth, WorkerProtocolMessage,
+};
 use temper_worker::{
     CapabilitySpec, ExecutorSelection, StubExecutor, Transport, WorkerConfig,
     run_worker_with_transport,
@@ -59,6 +61,7 @@ impl RealWorkerProfile {
             daemon_url: "in-process://temper-sim".to_string(),
             worker_id: self.worker_id.clone(),
             worker_pool: None,
+            worker_auth: None,
             capabilities: vec![CapabilitySpec {
                 repo: self.repo.clone(),
                 role: self.role.clone(),
@@ -190,12 +193,13 @@ impl Transport for ObservedInProcessTransport {
         &self,
         cx: Cx,
         message: WorkerProtocolMessage,
+        auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
         let inner = self.inner.clone();
         let probe = self.probe.clone();
         let model = self.model.clone();
         async move {
-            let reply = Transport::send(&inner, cx, message.clone()).await;
+            let reply = Transport::send(&inner, cx, message.clone(), auth).await;
             probe.record_exchange(&message, &reply, model.as_ref());
             reply
         }

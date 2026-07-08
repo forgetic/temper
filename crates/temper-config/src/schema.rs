@@ -310,8 +310,8 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, AgentProviderConfig>,
     /// Target-era agent profiles, keyed by profile name and declared as
-    /// `[agent.profiles.<name>]`. Parsed and validated for inspection/future
-    /// pool dispatch, but not selected by the active runtime yet.
+    /// `[agent.profiles.<name>]`. A worker whose selected pool names an
+    /// `agent_profile` uses the matching profile for its spawned agent command.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, AgentProfileConfig>,
 }
@@ -398,7 +398,7 @@ pub struct AgentProfileConfig {
     /// Enable the in-workspace investigate sub-agent tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagents: Option<bool>,
-    /// Secret-name reference for future provider credentials.
+    /// Secret-name reference for provider credentials used by this profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
 }

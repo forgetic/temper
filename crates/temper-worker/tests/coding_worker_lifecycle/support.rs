@@ -239,6 +239,7 @@ pub fn worker_config() -> WorkerConfig {
         daemon_url: "http://placeholder".to_string(),
         worker_id: "lifecycle-worker".to_string(),
         worker_pool: None,
+        worker_auth: None,
         capabilities: vec![CapabilitySpec {
             repo: REPO.to_string(),
             role: ENGINEER.to_string(),

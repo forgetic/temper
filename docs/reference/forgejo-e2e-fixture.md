@@ -108,10 +108,14 @@ Scenario fixtures set `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` so web-UI CI fallback
 reads are counted. Worker summaries include tick counts, scanned repository
 counts/paths, and CI read log lines. Timeout panics print worker logs, runner log
 tail, trigger URL, stalled assertion text, and per-repo CI diagnostics.
+The trigger URL / wake-socket details here describe legacy/internal fixture
+paths; supported operator webhook intake is the engine/standalone
+`/forgejo/webhook` route.
 
 The server config must allow loopback webhook targets:
 `[webhook] ALLOWED_HOST_LIST = 127.0.0.1,localhost`. If hooks register but no
-trigger request arrives, check that before debugging signatures or wake sockets.
+trigger request arrives, check that before debugging signatures or legacy wake
+sockets.
 
 Binary resolution and readiness polling use the fixture crate's blocking HTTP
 client; backend exercise happens in async tests (on the asupersync engine

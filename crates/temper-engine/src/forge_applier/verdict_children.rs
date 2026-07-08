@@ -18,6 +18,9 @@ use crate::forge_applier::ForgeApplier;
 use crate::forge_applier::verdict::{
     VerdictChildrenBinding, create_issues_effect_index, parse_child_target_repo,
 };
+use crate::forge_applier::verdict_child_relations::{
+    source_parent_kinds_after_transition, validate_child_parent_relation,
+};
 use crate::workflow_meta::artifact_kind_child_create_labels;
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
@@ -58,6 +61,14 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             }
         };
 
+        let source_kind = ArtifactKindId::new(binding.artifact_kind);
+        let source_parent_kinds = source_parent_kinds_after_transition(
+            self.workflow.as_ref(),
+            &source_kind,
+            binding.source_labels,
+            binding.routed,
+        );
+
         let mut mapped = Vec::with_capacity(binding.children.len());
         for child in binding.children {
             let Some(mapped_child) = self
@@ -66,6 +77,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     binding.repository_id,
                     binding.number,
                     source_target_branch.as_deref(),
+                    &source_parent_kinds,
                     child,
                 )
                 .await
@@ -97,6 +109,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         source_repo: &RepositoryId,
         number: ItemNumber,
         source_target_branch: Option<&str>,
+        source_parent_kinds: &std::collections::BTreeSet<ArtifactKindId>,
         child: JobChild,
     ) -> Option<CreateIssuesChild> {
         let metadata = match parse_metadata_block(&child.body) {
@@ -139,6 +152,16 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 child_target = %kind.target,
                 "forge applier dropped verdict apply with non-issue child artifact kind"
             );
+            return None;
+        }
+        if !validate_child_parent_relation(
+            self.workflow.as_ref(),
+            job,
+            number,
+            &child,
+            &child_kind,
+            source_parent_kinds,
+        ) {
             return None;
         }
 
