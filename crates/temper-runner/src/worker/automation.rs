@@ -166,6 +166,9 @@ pub(crate) async fn execute_automated_items<F: Forge + ?Sized>(
                 if record_expected_precondition(&context, &item, &error, &mut counts) {
                     continue;
                 }
+                if record_continuable_item_error(&context, &item, &error, &mut counts) {
+                    continue;
+                }
 
                 counts.errors = counts.errors.saturating_add(1);
                 let failure_class = execution_error_failure_class(&error);
@@ -363,6 +366,30 @@ async fn route_verdict<F: Forge + ?Sized>(
             Err(fallback_error.into())
         }
     }
+}
+
+fn record_continuable_item_error(
+    context: &AutomationContext<'_>,
+    item: &AutomatedWorkItem,
+    error: &ExecutionError,
+    counts: &mut AutomationCounts,
+) -> bool {
+    if !matches!(error, ExecutionError::MergeConflict { .. }) {
+        return false;
+    }
+    counts.errors = counts.errors.saturating_add(1);
+    let failure_class = execution_error_failure_class(error);
+    let diagnostics = execution_error_diagnostic_classes(error);
+    log_automation_item(
+        context.worker,
+        context.repo,
+        context.workflow_id,
+        item,
+        "error",
+        Some(&failure_class),
+        diagnostics,
+    );
+    true
 }
 
 fn record_expected_precondition(
@@ -623,8 +650,12 @@ fn log_automation_item(
         failure_class,
         diagnostic_classes = diagnostic_classes.join(",").as_str(),
         outcome,
-        "automation: {} {outcome}",
+        "automation: {artifact_type}#{} {} {outcome}{}",
+        artifact_number.get(),
         item.transition,
+        failure_class
+            .map(|class| format!(" ({class})"))
+            .unwrap_or_default(),
     );
 }
 
