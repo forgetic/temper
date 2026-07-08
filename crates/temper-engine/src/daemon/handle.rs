@@ -13,9 +13,11 @@ use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
 use temper_forge::{Forge, RepositoryId};
 use temper_protocol_worker::{
-    Artifact, PullRequestFreshness, PullRequestFreshnessResponse, WorkerProtocolMessage,
+    Artifact, PullRequestFreshness, PullRequestFreshnessResponse, WORKER_AUTHORIZATION_HEADER,
+    WorkerAuth, WorkerProtocolMessage,
 };
 use temper_runner::WorkItem;
+use temper_worker_registry::WorkerPoolAuthConfig;
 use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
 
 use crate::APPLY_GRACE;
@@ -44,6 +46,13 @@ impl Daemon {
         let _ = self
             .cq
             .send(DaemonCompletion::SetApplyGrace { apply_grace });
+        self
+    }
+
+    pub fn with_worker_pool_auth(self, config: WorkerPoolAuthConfig) -> Self {
+        let _ = self
+            .cq
+            .send(DaemonCompletion::ConfigureWorkerPoolAuth { config });
         self
     }
 
@@ -122,11 +131,28 @@ impl Daemon {
         &self,
         message: WorkerProtocolMessage,
     ) -> Result<Option<WorkerProtocolMessage>, String> {
+        self.deliver_protocol_message_with_auth(message, None).await
+    }
+
+    /// Deliver one worker-protocol message in-process with the same auth
+    /// metadata the split HTTP carrier would put in `Authorization: Bearer …`.
+    pub async fn deliver_protocol_message_with_auth(
+        &self,
+        message: WorkerProtocolMessage,
+        auth: Option<WorkerAuth>,
+    ) -> Result<Option<WorkerProtocolMessage>, String> {
         let (reply_tx, reply_rx) = temper_engine_io::oneshot::<HttpResponseData>();
+        let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
+        if let Some(auth) = auth {
+            headers.push((
+                WORKER_AUTHORIZATION_HEADER.to_string(),
+                auth.authorization_header_value(),
+            ));
+        }
         let request = HttpRequestData {
             method: "POST".to_string(),
             uri: "/v1/message".to_string(),
-            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            headers,
             body: serde_json::to_vec(&message)
                 .map_err(|error| format!("serialize worker-protocol message: {error}"))?,
         };

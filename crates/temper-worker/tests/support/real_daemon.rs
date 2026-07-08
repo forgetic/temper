@@ -19,7 +19,7 @@ use std::sync::Arc;
 use skein::cx::Cx;
 use temper_daemon_transport::InProcessTransport as DaemonInProcessTransport;
 use temper_engine::{Daemon, ResultApplier};
-use temper_protocol_worker::{Assign, JobResult, WorkerProtocolMessage};
+use temper_protocol_worker::{Assign, JobResult, WorkerAuth, WorkerProtocolMessage};
 use temper_worker::Transport;
 
 /// In-process transport wrapper: delegates worker→daemon delivery to the
@@ -34,6 +34,7 @@ impl Transport for ResultTappingTransport {
         &self,
         cx: Cx,
         message: WorkerProtocolMessage,
+        auth: Option<WorkerAuth>,
     ) -> impl std::future::Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send
     {
         let inner = self.inner.clone();
@@ -42,7 +43,7 @@ impl Transport for ResultTappingTransport {
             if let WorkerProtocolMessage::Result(result) = &message {
                 let _ = result_tx.send(result.clone());
             }
-            inner.send(cx, message).await
+            inner.send(cx, message, auth).await
         }
     }
 }
@@ -58,6 +59,16 @@ impl DaemonHarness {
     /// Build a real daemon on the given runtime handle.
     pub fn start(handle: &skein::runtime::RuntimeHandle) -> Self {
         Self::start_with_daemon(Arc::new(Daemon::new(Arc::new(handle.clone()))))
+    }
+
+    /// Build a real daemon with worker-pool authentication configured.
+    pub fn start_with_worker_auth(
+        handle: &skein::runtime::RuntimeHandle,
+        auth: temper_engine::WorkerPoolAuthConfig,
+    ) -> Self {
+        Self::start_with_daemon(Arc::new(
+            Daemon::new(Arc::new(handle.clone())).with_worker_pool_auth(auth),
+        ))
     }
 
     /// Build a real daemon with a caller-provided result applier.

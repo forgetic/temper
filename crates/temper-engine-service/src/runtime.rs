@@ -15,6 +15,7 @@ use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
     engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
+    worker_pool_auth_config,
 };
 
 /// Runs the engine on the skein runtime until SIGINT/SIGTERM, then drains.
@@ -59,7 +60,8 @@ pub async fn run_async(
             &role_tokens,
             lease_ttl,
         ),
-    );
+    )
+    .with_worker_pool_auth(worker_pool_auth_config(resolved)?);
 
     spawn_poll(
         &spawner,

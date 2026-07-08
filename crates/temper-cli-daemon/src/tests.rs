@@ -85,6 +85,7 @@ fn worker_settings_with_capacity(max_concurrent_jobs: u32) -> WorkerSettings {
         heartbeat_interval: Duration::from_secs(98),
         capabilities: Vec::new(),
         pools: Vec::new(),
+        worker_pool_tokens: BTreeMap::new(),
         selected_pool: None,
     }
 }
@@ -114,7 +115,8 @@ fn standalone_worker_config_uses_resolved_capacity() {
             repo: "ai/temper".to_string(),
         }],
         BTreeMap::new(),
-    );
+    )
+    .expect("standalone worker config builds");
 
     assert_eq!(config.max_concurrent_jobs, 2);
     assert_eq!(config.worker_id, "standalone-worker");

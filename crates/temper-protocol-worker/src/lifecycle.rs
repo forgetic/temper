@@ -73,6 +73,7 @@ pub enum ErrorCode {
     CapacityExceeded,
     HeartbeatMissed,
     JobTimeout,
+    Unauthorized,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

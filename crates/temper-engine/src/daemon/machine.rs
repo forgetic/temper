@@ -13,11 +13,11 @@ use std::{
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
 use temper_protocol_worker::{
-    Artifact, JobResult, Poll, PullRequestFreshness, WorkerProtocolMessage,
+    Artifact, JobResult, Poll, PullRequestFreshness, WorkerAuth, WorkerProtocolMessage,
 };
-use temper_worker_registry::DaemonCore;
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
+use temper_worker_registry::{DaemonCore, WorkerPoolAuthConfig};
 
 use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
@@ -62,6 +62,8 @@ pub(super) enum DaemonCompletion {
     SetApplyGrace { apply_grace: Duration },
     /// Enable webhook intake with the given verification config.
     ConfigureWebhook { config: WebhookConfig },
+    /// Enable worker-pool authentication with the given pool/token policy.
+    ConfigureWorkerPoolAuth { config: WorkerPoolAuthConfig },
     #[cfg(test)]
     QueuedJobs {
         reply: temper_engine_io::OneshotSender<Vec<QueuedJob>>,
@@ -124,6 +126,7 @@ pub(super) enum DaemonRequest {
 
 pub(super) struct PollWaiter {
     pub(super) poll: Poll,
+    pub(super) auth: Option<WorkerAuth>,
     pub(super) responder: HttpResponder,
 }
 
@@ -189,10 +192,18 @@ impl Machine for DaemonMachine {
                 let Some(waiter) = self.waiters.remove(&id) else {
                     return Vec::new();
                 };
-                let response = self
-                    .core
-                    .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
-                    .expect("poll messages produce a response");
+                let response = match self.core.handle_authenticated(
+                    WorkerProtocolMessage::Poll(waiter.poll.clone()),
+                    waiter.auth.as_ref(),
+                ) {
+                    Ok(response) => response.expect("poll messages produce a response"),
+                    Err(_) => {
+                        return vec![DaemonRequest::Respond {
+                            responder: waiter.responder,
+                            response: HttpResponseData::status_only(401),
+                        }];
+                    }
+                };
                 self.poll_response_requests(response, &waiter.poll.worker_id, waiter.responder)
             }
             DaemonCompletion::ApplyFinished { job_id } => {
@@ -240,6 +251,10 @@ impl Machine for DaemonMachine {
             }
             DaemonCompletion::ConfigureWebhook { config } => {
                 self.webhook = Some(config);
+                Vec::new()
+            }
+            DaemonCompletion::ConfigureWorkerPoolAuth { config } => {
+                self.core.configure_worker_pool_auth(config);
                 Vec::new()
             }
             #[cfg(test)]

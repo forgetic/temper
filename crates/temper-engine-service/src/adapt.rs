@@ -6,7 +6,7 @@
 //! reuse the exact same translation the slim `temper-engine` binary uses.
 
 use temper_config::{ExposeSecret, Resolved};
-use temper_engine::{DaemonRunConfig, EngineConfig};
+use temper_engine::{DaemonRunConfig, EngineConfig, WorkerAuth, WorkerPoolAuthConfig};
 use temper_forge::RepositoryPath;
 use temper_forge::config::ForgejoConfig;
 use temper_workflow::RoleId;
@@ -77,6 +77,29 @@ pub fn engine_config(resolved: &Resolved) -> Result<EngineConfig, String> {
     let daemon = daemon_run_config(resolved)?;
     let role_tokens = resolved.forge.role_tokens.clone();
     Ok(EngineConfig::new(daemon, forge, role_tokens))
+}
+
+/// Builds the daemon's worker-pool authentication policy from resolved pools.
+/// Pools without `worker_token` remain known but unauthenticated; pools with a
+/// token require the resolved non-empty secret payload.
+pub fn worker_pool_auth_config(resolved: &Resolved) -> Result<WorkerPoolAuthConfig, String> {
+    let mut config = WorkerPoolAuthConfig::new();
+    for pool in &resolved.worker.pools {
+        let token = match pool.worker_token.as_ref() {
+            Some(reference) => {
+                let value = resolved.worker.worker_pool_tokens.get(&pool.name).ok_or_else(|| {
+                    format!(
+                        "worker pool `{}` worker_token references secret `{}` but it has no non-empty text value",
+                        pool.name, reference.name
+                    )
+                })?;
+                Some(WorkerAuth::bearer(value.expose_secret().to_string()))
+            }
+            None => None,
+        };
+        config.insert_pool(pool.name.clone(), token);
+    }
+    Ok(config)
 }
 
 #[cfg(test)]
