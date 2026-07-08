@@ -16,8 +16,9 @@ not migrate, deduplicate, or replace an example.
 `temper-scenario run` exposes one public runner:
 
 - `manifest` — live-only validation-grade e2e runner. The checked-in
-  `basic-delivery`, `implementation-pr-handoff`, `codebase-memory-agent`, and
-  `plan-centric-feature-branch` scenarios select this runner with
+  `basic-delivery`, `implementation-pr-handoff`, `codebase-memory-agent`,
+  `plan-centric-feature-branch`, and `target-ux-e2e` scenarios select this
+  runner with
   `runner.uses = "manifest"` and boot real Forgejo, real `forgejo-runner` CI, a
   real standalone `temper` process, and Jig fake LLM agents.
   Hermetic/MemoryForge/in-process substitutes are rejected, and no scenario-name

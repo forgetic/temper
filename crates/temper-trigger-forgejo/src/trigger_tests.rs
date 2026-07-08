@@ -29,6 +29,29 @@ fn verifies_signature_and_parses_pull_request_hint() {
 }
 
 #[test]
+fn selected_forgejo_contract_accepts_forgejo_headers_and_sha256_prefix() {
+    let body = br#"{"repository":{"full_name":"acme/service"},"issue":{"number":192}}"#;
+    let mut headers = BTreeMap::new();
+    headers.insert("x-forgejo-event".into(), "issues".into());
+    headers.insert(
+        "x-forgejo-signature".into(),
+        format!("sha256={}", signature_hex(b"secret", body)),
+    );
+    let request = HttpRequest {
+        method: "POST".into(),
+        path: "/forgejo/webhook".into(),
+        headers,
+        body: body.to_vec(),
+    };
+
+    let hint = accept_webhook(&request, "secret").expect("Forgejo webhook contract is accepted");
+
+    assert_eq!(hint.repo, RepositoryPath::new("acme", "service"));
+    assert_eq!(hint.item, Some(ItemNumber::new(192)));
+    assert_eq!(hint.kind, ChangeKind::Issue);
+}
+
+#[test]
 fn rejects_bad_signature() {
     let body = br#"{"repository":{"full_name":"acme/service"}}"#;
     let mut request = request(body, "secret", "issues");

@@ -1,0 +1,28 @@
+name: target-ux-yaml
+labels:
+  - id: ready
+  - id: needs-review
+artifact_kinds:
+  - id: code
+    target: issue
+    identifying_labels:
+      - ready
+    initial_labels:
+      - needs-review
+queues:
+  - id: code_ready
+    artifact: code
+    labels:
+      - ready
+roles:
+  - id: engineer
+    queues:
+      - code_ready
+transitions:
+  - id: claim
+    artifact: code
+    roles:
+      - engineer
+    effects:
+      - kind: remove_label
+        label: ready
