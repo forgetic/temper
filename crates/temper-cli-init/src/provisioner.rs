@@ -75,7 +75,7 @@ const ROLE_TOKEN_SCOPES: &[temper_forge::TokenScope] = &[
 /// webhook secret has been read. This intentionally requests no seed commits:
 /// first-run initialization must not install CI workflows, sentinels, or any
 /// other project content in the user's repository.
-fn build_init_plan(
+pub(crate) fn build_init_plan(
     request: &ProvisionRequest,
     webhook: temper_forge::WebhookSpec,
 ) -> Result<temper_provision::ProvisionPlan, String> {

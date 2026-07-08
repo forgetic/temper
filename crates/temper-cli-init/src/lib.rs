@@ -39,6 +39,7 @@ mod answers_file;
 mod apply;
 mod args;
 mod collect;
+mod plan;
 mod provisioner;
 mod write;
 
@@ -53,6 +54,7 @@ use args::{ParsedInitArgs, parse_init_args};
 pub use apply::{APPLY_USAGE, ApplyOptions, apply_main, apply_main_with_options, run_apply};
 pub use args::{InitOverrides, InitTopology, RepoSelection};
 pub use collect::{Answers, collect_answers};
+pub use plan::{PLAN_USAGE, PlanOptions, plan_main_with_options, run_plan};
 pub use provisioner::{ForgejoProvisioner, ProvisionOutcome, ProvisionRequest, Provisioner};
 pub use write::{InitArtifacts, build_artifacts, preflight_clobber, write_artifacts};
 

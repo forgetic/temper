@@ -13,8 +13,8 @@ use crate::util::validate_create_repository;
 use async_trait::async_trait;
 use temper_forge_model::{
     AccessGrant, AccessScope, ChangeKind, CommitFile, CreateBranch, CreateRepository,
-    EnsureRepository, ForgeContent, ForgeResult, NewUser, RepositoryId, RepositoryPath, TokenScope,
-    WebhookSpec,
+    EnsureRepository, ForgeContent, ForgeReadiness, ForgeResult, NewUser, ProvisionedUserStatus,
+    RepositoryId, RepositoryPath, TokenScope, WebhookSpec, WebhookStatus,
 };
 
 #[async_trait]
@@ -132,5 +132,42 @@ impl temper_forge_model::ForgeAdmin for MemoryForge {
         inner.state.require_repository(repo)?;
         inner.state.enable_ci(repo);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ForgeReadiness for MemoryForge {
+    async fn get_provisioned_user(
+        &self,
+        login: &str,
+    ) -> ForgeResult<Option<ProvisionedUserStatus>> {
+        Ok(self
+            .provisioned_users()
+            .into_iter()
+            .find(|user| user.login == login)
+            .map(|user| ProvisionedUserStatus {
+                login: user.login,
+                email: Some(user.email),
+            }))
+    }
+
+    async fn list_webhook_statuses(&self, repo: &RepositoryId) -> ForgeResult<Vec<WebhookStatus>> {
+        let inner = self.lock();
+        inner.state.require_repository(repo)?;
+        Ok(inner
+            .state
+            .webhooks(repo)
+            .into_iter()
+            .map(|webhook| WebhookStatus {
+                url: webhook.url,
+                events: webhook.events,
+            })
+            .collect())
+    }
+
+    async fn repository_ci_enabled(&self, repo: &RepositoryId) -> ForgeResult<Option<bool>> {
+        let inner = self.lock();
+        inner.state.require_repository(repo)?;
+        Ok(Some(inner.state.ci_enabled(repo)))
     }
 }
