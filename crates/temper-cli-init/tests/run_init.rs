@@ -22,6 +22,7 @@ use temper_cli_init::{
     InitOptions, InitOverrides, InitTopology, ProvisionOutcome, ProvisionRequest, Provisioner,
     RepoSelection, run_init,
 };
+use temper_config::{DeploymentTopology, NoEnv, ResolveOptions, lint, load_with_env};
 use temper_forge::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
 use temper_workflow::{RawWorkflowSpec, RoleId};
@@ -81,6 +82,34 @@ fn assert_workflow_yaml_matches(path: &Path, expected_spec: &RawWorkflowSpec) {
     );
 }
 
+fn load_generated_bundle(config_path: &Path, credentials_path: &Path) -> temper_config::Resolved {
+    load_with_env(
+        &LoadOptions {
+            config: Some(config_path.to_path_buf()),
+            credentials: Some(credentials_path.to_path_buf()),
+        },
+        &NoEnv,
+    )
+    .expect("generated bundle parses and resolves")
+    .0
+}
+
+fn resolve_generated_bundle_non_strict(
+    config_path: &Path,
+    credentials_path: &Path,
+) -> temper_config::Resolved {
+    let config = temper_config::Config::load(config_path).expect("config parses");
+    let credentials =
+        temper_config::Credentials::load(credentials_path).expect("credentials parse");
+    let mut options = config_path
+        .parent()
+        .map(ResolveOptions::from_config_base_dir)
+        .unwrap_or_default();
+    options.validate_secret_references = false;
+    temper_config::resolve_with_options(&config, &credentials, &NoEnv, &options)
+        .expect("generated bundle resolves non-strictly")
+}
+
 #[test]
 fn run_init_collects_writes_and_provisions_offline() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -130,12 +159,26 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert!(config.contains("engineer"), "{config}");
     // Webhook bind address scheme-stripped to host:port.
     assert!(config.contains("bind = \"127.0.0.1:8314\""), "{config}");
-    // Provider profile + webhook secret + workflow file wired.
+    // Provider profile + target sections + workflow file wired.
+    assert!(config.contains("[deployment]"), "{config}");
+    assert!(config.contains("topology = \"standalone\""), "{config}");
+    assert!(config.contains("[workflow]"), "{config}");
+    assert!(config.contains("file = \"workflow.yaml\""), "{config}");
+    assert!(config.contains("[paths]"), "{config}");
+    assert!(config.contains("workspace_dir = \"workspace\""), "{config}");
+    assert!(config.contains("[[worker.pools]]"), "{config}");
+    assert!(config.contains("name = \"local\""), "{config}");
+    assert!(config.contains("[agent.profiles.local]"), "{config}");
     assert!(config.contains("provider = \"deepseek\""), "{config}");
     assert!(config.contains("workflow.yaml"), "{config}");
-    assert!(config.contains("webhook-secret"), "{config}");
-    // No explicit workspace is written unless requested; runtime defaults apply.
-    assert!(!config.contains("workspace ="), "{config}");
+    assert!(
+        config.contains("webhook_secret = \"webhook-secret\""),
+        "{config}"
+    );
+    assert!(
+        config.contains("forge_token = \"forge-engine-token\""),
+        "{config}"
+    );
 
     // ── workflow.yaml ─────────────────────────────────────────────────────────
     let workflow_path = dir.path().join("workflow.yaml");
@@ -151,9 +194,60 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert!(creds.contains("token-engineer"), "{creds}");
     // Automation bot identity.
     assert!(creds.contains("token-bot"), "{creds}");
-    // Provider key under [agent.providers.deepseek] as an api-key.
+    // Provider key under both legacy [agent.providers.deepseek] and target-era
+    // structured local-development named secrets.
     assert!(creds.contains("sk-deepseek-xyz"), "{creds}");
     assert!(creds.contains("api-key"), "{creds}");
+    assert!(creds.contains("[secrets.forge-engine-token]"), "{creds}");
+    assert!(creds.contains("[secrets.webhook-secret]"), "{creds}");
+    assert!(creds.contains("[secrets.worker-local-token]"), "{creds}");
+    assert!(creds.contains("[secrets.agent-provider]"), "{creds}");
+    assert!(creds.contains("provider = \"deepseek\""), "{creds}");
+    assert!(creds.contains("api_key = \"sk-deepseek-xyz\""), "{creds}");
+
+    let resolved = load_generated_bundle(&config_path, &credentials_path);
+    assert_eq!(
+        resolved.deployment.topology,
+        Some(DeploymentTopology::Standalone)
+    );
+    assert_eq!(
+        resolved.paths.workflow_file.as_deref(),
+        Some(workflow_path.as_path())
+    );
+    assert_eq!(
+        resolved.paths.workspace_dir.as_path(),
+        dir.path().join("workspace")
+    );
+    assert_eq!(
+        resolved
+            .engine
+            .forge_token
+            .as_ref()
+            .map(|reference| (reference.name.as_str(), reference.available)),
+        Some(("forge-engine-token", true))
+    );
+    assert_eq!(
+        resolved
+            .engine
+            .webhook_secret
+            .as_ref()
+            .map(|reference| (reference.name.as_str(), reference.available)),
+        Some(("webhook-secret", true))
+    );
+    let pool = resolved.worker.pools.first().expect("target pool resolves");
+    assert_eq!(pool.name, "local");
+    assert_eq!(pool.repos[0].display(), "acme/service");
+    assert_eq!(pool.agent_profile.as_deref(), Some("local"));
+    assert_eq!(pool.max_concurrent_jobs, Some(1));
+    assert!(resolved.agent.profiles.contains_key("local"));
+    let errors: Vec<_> = lint(&resolved)
+        .into_iter()
+        .filter(|finding| finding.error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "generated applied bundle lint errors: {errors:?}"
+    );
 
     // ── 0600 on the two secret files ─────────────────────────────────────────
     #[cfg(unix)]
@@ -329,6 +423,103 @@ fn run_init_without_apply_writes_local_artifacts_and_skips_provisioning() {
         "summary should say provisioning was skipped: {:?}",
         prompter.notes
     );
+}
+
+#[test]
+fn non_interactive_distributed_provider_none_writes_target_bundle_without_provider_credentials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+        topology: InitTopology::Distributed,
+        non_interactive: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pass".to_string()),
+            provider: Some("none".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut provisioner = StubProvisioner { seen: None };
+
+    run_init(&mut prompter, &mut provisioner, &opts).expect("provider-none init succeeds");
+
+    assert!(provisioner.seen.is_none());
+    let config = std::fs::read_to_string(&config_path).expect("config");
+    assert!(config.contains("topology = \"distributed\""), "{config}");
+    assert!(config.contains("name = \"default\""), "{config}");
+    assert!(!config.contains("[agent.providers."), "{config}");
+    assert!(!config.contains("[agent.profiles."), "{config}");
+    let creds = std::fs::read_to_string(&credentials_path).expect("credentials");
+    assert!(!creds.contains("[agent.providers."), "{creds}");
+    assert!(!creds.contains("agent-provider"), "{creds}");
+    assert!(creds.contains("[secrets.webhook-secret]"), "{creds}");
+    assert!(creds.contains("[secrets.worker-default-token]"), "{creds}");
+
+    let resolved = resolve_generated_bundle_non_strict(&config_path, &credentials_path);
+    assert_eq!(
+        resolved.deployment.topology,
+        Some(DeploymentTopology::Distributed)
+    );
+    let pool = resolved.worker.pools.first().expect("pool resolves");
+    assert_eq!(pool.name, "default");
+    assert_eq!(pool.agent_profile, None);
+}
+
+#[test]
+fn non_interactive_repeated_repos_are_written_to_engine_and_pool() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+        non_interactive: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            repo: Some(RepoSelection {
+                owner: "acme".to_string(),
+                name: "service".to_string(),
+            }),
+            extra_repos: vec![RepoSelection {
+                owner: "acme".to_string(),
+                name: "docs".to_string(),
+            }],
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pass".to_string()),
+            provider: Some("none".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut provisioner = StubProvisioner { seen: None };
+
+    run_init(&mut prompter, &mut provisioner, &opts).expect("multi-repo local init succeeds");
+
+    let resolved = resolve_generated_bundle_non_strict(&config_path, &credentials_path);
+    let repos: Vec<_> = resolved
+        .engine
+        .repos
+        .iter()
+        .map(|repo| repo.display())
+        .collect();
+    assert_eq!(repos, vec!["acme/service", "acme/docs"]);
+    let pool_repos: Vec<_> = resolved.worker.pools[0]
+        .repos
+        .iter()
+        .map(|repo| repo.display())
+        .collect();
+    assert_eq!(pool_repos, vec!["acme/service", "acme/docs"]);
 }
 
 #[test]
@@ -512,6 +703,7 @@ fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
             provider_url: None,
             workflow: None,
             bind: None,
+            extra_repos: Vec::new(),
         },
         ..Default::default()
     };
@@ -654,6 +846,7 @@ fn non_interactive_with_provider_url_writes_providers_table() {
             provider_url: Some("http://localhost:9999/v1".to_string()),
             workflow: None,
             bind: None,
+            extra_repos: Vec::new(),
         },
         ..Default::default()
     };

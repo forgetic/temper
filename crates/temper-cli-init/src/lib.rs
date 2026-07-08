@@ -6,16 +6,16 @@
 //! writes the on-disk artifacts, and only provisions the forge when explicitly
 //! asked via `--apply`:
 //!
-//! 1. **Collect answers** ([`collect_answers`]) — five questions plus two secret
-//!    prompts (forge URL, workflow, webhook address, admin user + password,
-//!    provider API key). No disk or network I/O.
+//! 1. **Collect answers** ([`collect_answers`]) — forge URL, workflow, webhook
+//!    address, admin user + password, and (unless `--provider none`) a provider
+//!    API key. No disk or network I/O.
 //! 2. **Preflight** ([`preflight_clobber`]) — check *all* target paths up front
 //!    so the flow never writes file I then aborts at file III.
 //! 3. **Write** `config.toml`, `workflow.yaml` (the selected builtin or
 //!    normalized custom workflow YAML), and a freshly generated
 //!    `webhook-secret` (chmod 600).
 //! 4. **Write** a local `credentials.toml` (chmod 600) with the operator-supplied
-//!    admin password and provider key.
+//!    admin password, provider key when configured, and target-era named secrets.
 //! 5. **Optionally provision** the forge idempotently when `--apply` is set
 //!    (admin user+password → admin REST token → plan →
 //!    `temper_provision::provision`), then update `credentials.toml` with the
@@ -70,13 +70,13 @@ Options:
   --apply                       After writing local files, provision the forge
   --yes                         With --apply, skip the provisioning confirmation
   --existing-repo               Provision onto a repo that already exists
-  --topology      <standalone>  Local topology to initialize (only standalone today)
-  --repo          <owner/name>  Managed repository to provision
+  --topology      <standalone|distributed>  Deployment topology to initialize
+  --repo          <owner/name>  Managed repository to provision (repeatable for local bundles)
   --workflow      <builtin|PATH>  Builtin workflow name or JSON/YAML workflow file
   --forge         <URL>         Forgejo URL; skips the Forge URL prompt
   --bind          <ADDR>        Daemon bind / webhook advertise address override
   --workspace     <PATH>        Top-level worker workspace root to write
-  --provider      <deepseek>    LLM provider profile (only deepseek today)
+  --provider      <deepseek|none>  LLM provider profile or none for forge-only local bundles
   --provider-url  <URL>         Base URL override for the provider
   --non-interactive             Run without prompts; all required values must
                                 be supplied via flags or environment variables
@@ -103,16 +103,16 @@ pub struct InitOptions {
     pub apply: bool,
     /// Skip the confirmation before `--apply` performs forge-side mutations.
     pub yes: bool,
-    /// The topology selected by `--topology` (standalone only today).
+    /// The topology selected by `--topology`.
     pub topology: InitTopology,
     /// Init answers selected by local-dev flags.
     pub overrides: InitOverrides,
     /// Run without prompts; all required values must be supplied via flags or
     /// environment variables.
     pub non_interactive: bool,
-    /// The top-level worker workspace root written into `[worker] workspace`.
-    /// `None` lets the daemon's default (`~/.local/state/temper/workspace`)
-    /// apply by omitting the key; workers create per-job scoped roots below it.
+    /// The top-level worker workspace root written into `[paths] workspace_dir`
+    /// and legacy `[worker] workspace`. `None` writes a config-relative
+    /// `workspace` directory so the generated bundle is self-contained.
     pub workspace: Option<PathBuf>,
     /// The injected environment snapshot used to resolve default file targets
     /// (the snapshot `src/bin` captured; no `std::env` is read here).
@@ -250,6 +250,12 @@ pub fn run_init(
 
     // 1. Collect answers (prompts only).
     let answers = collect_answers(p, &opts.overrides, opts.non_interactive)?;
+    let repo_count = answers.repo_paths().len();
+    if opts.apply && repo_count != 1 {
+        return Err(InitError::Unsupported(format!(
+            "temper init --apply requires exactly one --repo selection, found {repo_count}"
+        )));
+    }
 
     // 2. Build the artifacts (pure) and preflight every local target up front.
     let artifacts = build_artifacts(&answers, opts)?;
@@ -336,7 +342,16 @@ pub fn run_init(
     }
     p.note("");
     if applied {
-        p.note("Now run `temper serve standalone` to start the engine, worker, and agent.");
+        match opts.topology {
+            InitTopology::Standalone => {
+                p.note("Now run `temper serve standalone` to start the engine, worker, and agent.");
+            }
+            InitTopology::Distributed => {
+                p.note(
+                    "Now run `temper serve engine` and `temper serve worker --pool default` for the distributed topology.",
+                );
+            }
+        }
     } else {
         p.note("Run `temper apply` before starting the engine.");
     }

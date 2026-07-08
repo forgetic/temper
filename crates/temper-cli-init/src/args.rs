@@ -6,28 +6,35 @@ use std::path::PathBuf;
 
 use temper_cli_common::{LoadOptions, next_value};
 
-use crate::collect::PROVIDER_DEEPSEEK;
+use crate::collect::{PROVIDER_DEEPSEEK, PROVIDER_NONE};
 
-/// The local topology shape `temper init` can prepare today.
+/// The deployment topology shape `temper init` can prepare.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub enum InitTopology {
     /// A single local process hosts the engine, worker, and agent.
     #[default]
     Standalone,
+    /// Engine and worker are run as separate services.
+    Distributed,
 }
 
 impl InitTopology {
-    /// Parses the `--topology` flag. Distributed deployments are intentionally
-    /// out of scope for the first-run local developer path.
+    /// Parses the `--topology` flag.
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "standalone" => Ok(Self::Standalone),
-            "distributed" => Err("distributed topology is not implemented yet; \
-                 use `--topology standalone` for local developer onboarding"
-                .to_string()),
+            "distributed" => Ok(Self::Distributed),
             other => Err(format!(
-                "unknown topology `{other}`; only `standalone` is supported"
+                "unknown topology `{other}`; expected `standalone` or `distributed`"
             )),
+        }
+    }
+
+    /// The config-file spelling written to `[deployment] topology`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standalone => "standalone",
+            Self::Distributed => "distributed",
         }
     }
 }
@@ -73,11 +80,13 @@ pub struct InitOverrides {
     /// Daemon bind / webhook advertise address supplied by `--bind`, skipping
     /// the webhook prompt.
     pub bind: Option<String>,
-    /// Managed repository supplied by `--repo`.
+    /// Primary managed repository supplied by `--repo`.
     pub repo: Option<RepoSelection>,
+    /// Additional managed repositories supplied by repeated `--repo` flags.
+    pub extra_repos: Vec<RepoSelection>,
     /// Workflow supplied by `--workflow`: a builtin name or a JSON/YAML file path.
     pub workflow: Option<String>,
-    /// Provider supplied by `--provider` (only `deepseek` is accepted today).
+    /// Provider supplied by `--provider` (`deepseek` or `none`).
     pub provider: Option<String>,
     /// Forgejo admin username supplied by `--admin-user`, skipping the admin prompt.
     pub admin_user: Option<String>,
@@ -135,7 +144,12 @@ pub(crate) fn parse_init_args(
             }
             "--repo" => {
                 let repo = init_value(&mut rest, "--repo")?;
-                parsed.overrides.repo = Some(RepoSelection::parse(&repo)?);
+                let repo = RepoSelection::parse(&repo)?;
+                if parsed.overrides.repo.is_none() {
+                    parsed.overrides.repo = Some(repo);
+                } else {
+                    parsed.overrides.extra_repos.push(repo);
+                }
             }
             "--workflow" => {
                 parsed.overrides.workflow = Some(init_value(&mut rest, "--workflow")?);
@@ -151,9 +165,9 @@ pub(crate) fn parse_init_args(
             }
             "--provider" => {
                 let provider = init_value(&mut rest, "--provider")?;
-                if provider != PROVIDER_DEEPSEEK {
+                if provider != PROVIDER_DEEPSEEK && provider != PROVIDER_NONE {
                     return Err(format!(
-                        "unsupported provider `{provider}`; only `{PROVIDER_DEEPSEEK}` is supported"
+                        "unsupported provider `{provider}`; expected `{PROVIDER_DEEPSEEK}` or `{PROVIDER_NONE}`"
                     ));
                 }
                 parsed.overrides.provider = Some(provider);
@@ -309,12 +323,39 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_distributed_topology_for_now() {
-        let err = parse(vec!["--topology".to_string(), "distributed".to_string()])
-            .expect_err("distributed is out of scope");
-        assert!(
-            err.contains("distributed topology is not implemented yet"),
-            "{err}"
+    fn parse_accepts_distributed_topology() {
+        let parsed = parse(vec!["--topology".to_string(), "distributed".to_string()])
+            .expect("distributed topology parses");
+
+        assert_eq!(parsed.topology, InitTopology::Distributed);
+    }
+
+    #[test]
+    fn parse_accepts_repeated_repos_and_provider_none() {
+        let parsed = parse(vec![
+            "--repo".to_string(),
+            "acme/service".to_string(),
+            "--repo".to_string(),
+            "acme/docs".to_string(),
+            "--provider".to_string(),
+            "none".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(parsed.overrides.provider.as_deref(), Some("none"));
+        assert_eq!(
+            parsed.overrides.repo,
+            Some(RepoSelection {
+                owner: "acme".to_string(),
+                name: "service".to_string(),
+            })
+        );
+        assert_eq!(
+            parsed.overrides.extra_repos,
+            vec![RepoSelection {
+                owner: "acme".to_string(),
+                name: "docs".to_string(),
+            }]
         );
     }
 
