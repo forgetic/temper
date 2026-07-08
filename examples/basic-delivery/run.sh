@@ -307,6 +307,14 @@ run_temper_init() {
     log "temper init --apply wrote config/credentials and registered $WEBHOOK_URL"
 }
 
+run_temper_check() {
+    log 'running temper check for the generated standalone bundle ...'
+    : >"$LOG_DIR/check.log"
+    "$RUN_BIN" --config "$RUN_DIR" check --component standalone \
+        >"$LOG_DIR/check.log" 2>&1 || die 'temper check failed (see logs/check.log)'
+    printf 'repo=%s check=standalone status=ok\n' "$REPO" >>"$LOG_DIR/provision.log"
+}
+
 percent_encode() {
     python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
 }
@@ -441,6 +449,7 @@ cmd_start() {
     boot_jig
     bootstrap_admin
     run_temper_init
+    run_temper_check
     populate_repo
     boot_run
     seed_intake

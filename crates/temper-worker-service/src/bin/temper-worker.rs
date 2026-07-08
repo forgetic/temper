@@ -13,8 +13,9 @@ temper-worker — run only the orchestration-worker service
 usage: temper-worker [--config <PATH>] [--secrets <PATH>]
 
 Long-polls the engine for coding jobs and runs each by spawning the out-of-process
-`temper-agent`. Reads the same config + credentials files as the unified
-`temper daemon`. Equivalent to `temper daemon --service worker`.";
+`temper-agent`. Reads the same config + credentials files as
+`temper serve worker`. Equivalent to the public runtime surface
+`temper serve worker`.";
 
 fn main() -> ExitCode {
     // Install the global tracing subscriber before arg parsing or the runtime

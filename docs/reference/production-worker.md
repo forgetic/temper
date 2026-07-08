@@ -1,13 +1,14 @@
 # Production worker runtime
 
-In the consolidated two-tier deployment, one `temper-daemon` (see
-`deploy/README.md`) replaces the per-role worker, mechanical worker, and webhook
-trigger processes with webhook intake, poll backstops, and queue dispatch.
-Forgejo webhooks are posted to the engine/standalone HTTP surface at
-`POST /forgejo/webhook` when `[engine] webhook_secret` or `webhook_secret_file`
-is configured; there is no separate `temper serve trigger` process. Workers
-long-poll the daemon for work; the per-process model below remains valid for
-legacy or standalone operation.
+In the current two-tier deployment, `temper serve engine` owns webhook intake,
+poll backstops, and queue scheduling while one or more `temper serve worker`
+processes long-poll it for jobs. Forgejo webhooks are posted to the
+engine/standalone HTTP surface at `POST /forgejo/webhook` when `[engine]
+webhook_secret` or `webhook_secret_file` is configured; there is no separate
+`temper serve trigger` process. The older per-role worker, mechanical worker,
+and standalone daemon wording below remains useful for legacy or test-only
+operation, but operator-facing docs should prefer `serve engine` / `serve
+worker`.
 
 This page records the operator-visible knobs on the Forgejo `temper-worker`
 binary. The deployable entrypoint lives in the root `temper` package and

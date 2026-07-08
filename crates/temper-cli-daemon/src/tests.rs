@@ -308,7 +308,7 @@ fn serve_service_help_documents_implemented_target_flags() {
         "{SERVE_ENGINE_USAGE}"
     );
     assert!(
-        SERVE_ENGINE_USAGE.contains("temper daemon --service engine"),
+        SERVE_ENGINE_USAGE.contains("/forgejo/webhook"),
         "{SERVE_ENGINE_USAGE}"
     );
     assert!(
@@ -333,7 +333,7 @@ fn serve_service_help_documents_implemented_target_flags() {
         "{SERVE_WORKER_USAGE}"
     );
     assert!(
-        SERVE_WORKER_USAGE.contains("temper daemon --service worker"),
+        SERVE_WORKER_USAGE.contains("[[worker.pools]]"),
         "{SERVE_WORKER_USAGE}"
     );
     assert!(

@@ -11,9 +11,10 @@ reviewer-gated one-repo `temper serve standalone` demo.
 
 This is the richer counterpart to [`examples/basic-delivery/`](../basic-delivery/):
 the optional single-repo path uses the same long-term UX commands (`temper
---config ... init --apply --yes` and `temper --config ... serve standalone`) but
-selects `config/workflow.json`, whose happy path adds a reviewer approval gate
-between the engineer PR and bot landing.
+--config ... init --apply --yes`, `temper --config ... check --component
+standalone`, and `temper --config ... serve standalone`) but selects
+`config/workflow.json`, whose happy path adds a reviewer approval gate between
+the engineer PR and bot landing.
 
 ## What the default demo demonstrates
 
@@ -82,7 +83,8 @@ short and auditable. The checked-in default is the two-repository fan-out path.
 `./run.sh stop` removes the throwaway Forgejo state and run-local credentials,
 but logs are retained. For the default cross-repo path inspect
 `logs/provision.log`, `logs/worker-*.log`, and `logs/runner.log`. For the
-optional single-repo path inspect `logs/provision.log` and `logs/run.log`.
+optional single-repo path inspect `logs/provision.log`, `logs/check.log`, and
+`logs/run.log`.
 
 If a run is force-killed, clean up possible orphans:
 

@@ -4,7 +4,7 @@
 //! jobs by spawning the out-of-process agent.
 //!
 //! [`run`] is shared by the slim `temper-worker` binary and the unified binary's
-//! `temper daemon --service worker`. The worker links **no** agent/LLM code: the
+//! `temper serve worker` path. The worker links **no** agent/LLM code: the
 //! coding agent runs as a separate process (the `temper-agent` binary, or
 //! `temper agent`), and the provider/identity wiring is injected into that
 //! process's environment from the resolved config.
