@@ -28,15 +28,15 @@ and freely restartable. Four planes:
 │  Temper runner / controller         │   │ disposable agents  │
 │  • holds Compiled/ValidatedWorkflow  │──▶│ (LLM or human)     │
 │  • trigger loop (poll + webhook)     │   │ • role prompt      │
-│  • classify → plan → dispatch        │   │ • role tools only  │
+│  • `POST /forgejo/webhook` intake    │   │ • role tools only  │
 │  • Executor + recover::Applier       │   │ • git workspace    │
 │  • Reconciler (leases / repairs)     │   │ • lease heartbeat  │
 └──────────────────────────────────────┘   └────────────────────┘
         ▲ ChangeHints
-┌─ Signal plane ───────────────────────────────────────────────┐
-│  Forgejo webhooks (edge, lossy)  +  poll timer (level, truth) │
-│  +  CI conclusions read from list_ci_jobs                     │
-└───────────────────────────────────────────────────────────────┘
+┌─ Signal plane ─────────────────────────────────────────────────────────┐
+│  Forgejo webhooks -> engine/standalone POST /forgejo/webhook (edge)   │
+│  + poll timer (level, truth) + CI conclusions read from list_ci_jobs   │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 The three conceptual layers map onto this directly: `temper-forge` is the Forge
@@ -57,12 +57,19 @@ as shared durable truth.
 ## Where each piece runs
 
 - **Forgejo**: the existing server. Labels are provisioned once from the
-  compiled `LabelManifest`; the workflow's bot users are registered; webhooks
-  point at the runner.
-- **The runner**: one long-lived service is enough to start. It holds the loaded
-  `ValidatedWorkflow`/`CompiledWorkflow`, a `temper-forge-forgejo` client, the
-  trigger loop, and instances of `Executor`, `Reconciler`, and
-  `recover::Applier`. Stateless, so restart/scale-out is safe.
+  compiled `LabelManifest`; the workflow's bot users are registered; HMAC-signed
+  webhooks point at `POST /forgejo/webhook` on `temper serve engine` or
+  `temper serve standalone`.
+- **The runner**: one long-lived service is enough to start. In the deployable
+  surface this is the engine service (`temper serve engine`) or the all-in-one
+  standalone process (`temper serve standalone`), both of which expose
+  `POST /forgejo/webhook` when `[engine] webhook_secret` or
+  `webhook_secret_file` is configured. There is no separate `temper serve
+  trigger` runtime; `trigger` is the logging/service plane for inbound facts.
+  The service holds the loaded `ValidatedWorkflow`/`CompiledWorkflow`, a
+  `temper-forge-forgejo` client, the trigger loop, and instances of `Executor`,
+  `Reconciler`, and `recover::Applier`. Stateless, so restart/scale-out is
+  safe.
 - **Agent workers**: ephemeral, one per claimed work item (or a small per-role
   pool sized by the role's `concurrency` hint — `engineer: 3`, `reviewer: 2` in
   the reference fixture). Each needs model/API access, a git workspace if the
@@ -118,13 +125,15 @@ to a live deployment, in dependency order:
    `MechanicalWorker` can tick the controller's reconcile → apply loop,
    `FixpointDriver` composes deterministic tests, `PollLoop` drives one worker
    on a cadence, and `MultiProcessStage` rehearses distinct filesystem handles.
-   The next additive step is thin per-worker filesystem binaries; webhook wakeups
-   remain a later latency optimization over the poll backstop.
+   The deployable engine/standalone HTTP surface is the supported Forgejo
+   webhook intake; polling remains the correctness backstop while webhooks only
+   lower latency.
 3. **Agent-provider adapter** — wire a compiled `PromptManifest` to a model and
    map model tool calls onto the production `RoleTools` facade.
-4. **Webhook adapter + `ChangeHint`** — the ADR 0009 follow-up: Forgejo-specific
-   receipt/verify/parse normalized into a hint the runner coalesces; stays off
-   the `Forge` trait.
+4. **Webhook hint refinements + `ChangeHint`** — continue normalizing
+   Forgejo-specific receipt/verify/parse into hints the runner coalesces. This
+   stays off the `Forge` trait and stays on the engine/standalone HTTP surface,
+   not a standalone `serve trigger` process.
 5. **Deployment config** — `ExecutionContext` role→user bindings, per-worker
    credentials/identities, and the target repo.
 

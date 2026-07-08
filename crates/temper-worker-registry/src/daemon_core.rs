@@ -511,5 +511,9 @@ fn error_response(code: ErrorCode, message: &str, job_id: Option<String>) -> Wor
 }
 
 #[cfg(test)]
+#[path = "daemon_core_auth_tests.rs"]
+mod daemon_core_auth_tests;
+
+#[cfg(test)]
 #[path = "daemon_core_tests.rs"]
 mod daemon_core_tests;

@@ -34,14 +34,18 @@ emit site serve all three.
 ## 2. Subsystems (the `service` dimension)
 
 Every event names the plane that produced it. These map 1:1 onto the standalone
-daemon's assembly (engine + worker + agent on one loop) plus the inbound trigger.
+daemon's assembly (engine + worker + agent on one loop) plus inbound trigger
+facts. `trigger` is a logging/service plane for facts received from outside
+Temper, not a separate `temper serve trigger` process; in the supported
+operator topology those facts arrive on the engine/standalone
+`POST /forgejo/webhook` route when the engine webhook secret is configured.
 
 | `service` | tracing `target` | Responsibility | Example events |
 | --- | --- | --- | --- |
 | `engine`  | `temper::engine`  | Orchestrator: applied transitions, label diffs, queue moves, gate evaluation, merges, resolution. The authoritative state-change log. | `transition.applied`, `gate.evaluated`, `pr.merged`, `item.resolved` |
 | `worker`  | `temper::worker`  | Lease lifecycle and "what each role is doing right now": claims, saturation/queue-behind, releases. The concurrency view. | `lease.claimed`, `role.saturated`, `lease.released` |
 | `agent`   | `temper::agent`   | The LLM workspace runs (triage, coding): start/finish with duration and a one-line result. The slow, opaque steps. | `agent.started`, `agent.finished` |
-| `trigger` | `temper::trigger` | The Forgejo webhook/wake receiver: inbound facts from the outside world. The only lines cross-checkable against Forgejo directly. | `issue.opened`, `wake.received`, `ci.completed` |
+| `trigger` | `temper::trigger` | Inbound Forgejo webhook/wake facts emitted by the engine/standalone HTTP surface (and legacy/internal wake adapters). The only lines cross-checkable against Forgejo directly. | `issue.opened`, `wake.received`, `ci.completed` |
 
 The human line is prefixed with the service, padded so the second column aligns:
 `engine:  …`, `worker:  …`, `agent:   …`, `trigger: …`.
@@ -240,7 +244,7 @@ $ journalctl -u temper -o short-iso
 2026-06-16T09:00:01+0000 temper[4821]: engine:  repo acme/widgets: labels verified (untriaged,code,ready,in-progress,implementation)
 2026-06-16T09:00:01+0000 temper[4821]: engine:  repo acme/api:     labels verified (untriaged,code,ready,in-progress,implementation)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  planes up: engine + worker + agent on one loop
-2026-06-16T09:00:02+0000 temper[4821]: trigger: webhook listener up on :8080/forgejo/webhook (issue, PR, CI events)
+2026-06-16T09:00:02+0000 temper[4821]: trigger: webhook listener up on :8080/forgejo/webhook (engine/standalone intake; issue, PR, CI events)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  poll backstop every 60s (architect, engineer feeds across 2 repos)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  mechanical backstop every 30s (raw_intake, landing across 2 repos)
 2026-06-16T09:00:02+0000 temper[4821]: worker:  capacity: architect=1 engineer=1 mechanical=1 (per-role, shared across all repos)

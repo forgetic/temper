@@ -24,7 +24,6 @@ pub(super) enum Component {
     Standalone,
     Engine,
     Worker,
-    Trigger,
 }
 
 impl Component {
@@ -33,9 +32,12 @@ impl Component {
             "standalone" => Ok(Self::Standalone),
             "engine" => Ok(Self::Engine),
             "worker" => Ok(Self::Worker),
-            "trigger" => Ok(Self::Trigger),
+            "trigger" => Err(
+                "unsupported --component `trigger`; webhook intake is validated under --component engine or --component standalone"
+                    .to_string(),
+            ),
             other => Err(format!(
-                "invalid --component `{other}` (expected standalone, engine, worker, or trigger)"
+                "invalid --component `{other}` (expected standalone, engine, or worker)"
             )),
         }
     }
@@ -45,7 +47,6 @@ impl Component {
             Self::Standalone => "standalone",
             Self::Engine => "engine",
             Self::Worker => "worker",
-            Self::Trigger => "trigger",
         }
     }
 }
