@@ -13,7 +13,7 @@ use std::future::Future;
 
 use skein::cx::Cx;
 use temper_engine::Daemon;
-use temper_protocol_worker::WorkerProtocolMessage;
+use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
 use temper_worker::Transport;
 
 /// In-process worker→daemon transport.
@@ -39,8 +39,13 @@ impl Transport for InProcessTransport {
         &self,
         _cx: Cx,
         message: WorkerProtocolMessage,
+        auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
         let daemon = self.daemon.clone();
-        async move { daemon.deliver_protocol_message(message).await }
+        async move {
+            daemon
+                .deliver_protocol_message_with_auth(message, auth)
+                .await
+        }
     }
 }

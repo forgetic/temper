@@ -6,6 +6,7 @@
 
 use temper_cli_common::Prompter;
 
+use crate::args::parse_provider_choice;
 use crate::{InitError, InitOverrides, RepoSelection};
 
 /// The default webhook bind/advertise address written into `[engine] bind` and
@@ -23,11 +24,8 @@ pub const WORKFLOW_REFERENCE_DELIVERY: &str = "reference-delivery";
 /// reference-delivery repo input so the embedded workflow's roles line up.
 pub const DEFAULT_REPO: &str = "acme/service";
 
-/// Provider name and auth shape for the default first-run flow.
-pub const PROVIDER_DEEPSEEK: &str = "deepseek";
-
-/// Provider selection for bundles that intentionally omit agent credentials.
-pub const PROVIDER_NONE: &str = "none";
+/// Provider choices accepted by the first-run flow.
+pub use crate::args::{PROVIDER_ANTHROPIC, PROVIDER_CHATGPT, PROVIDER_DEEPSEEK, PROVIDER_NONE};
 
 /// The collected, non-secret + secret answers from the interactive flow.
 ///
@@ -46,37 +44,30 @@ pub struct Answers {
     pub admin_user: String,
     /// Forge admin password (used to mint the admin REST token). **Secret.**
     pub admin_password: String,
-    /// LLM provider profile (`deepseek`, or `none` to omit provider credentials).
+    /// LLM provider profile (`anthropic`, `chatgpt`, `deepseek`, or `none`).
     pub provider: String,
-    /// DeepSeek API key. **Secret.** Omitted when `provider = "none"`.
+    /// Provider API key when the selected provider needs one. **Secret.**
     pub provider_key: Option<String>,
     /// LLM provider base URL override (for `[agent.providers.<name>].url`).
     /// Only set via `--provider-url`; the interactive flow never prompts for it.
     pub provider_url: Option<String>,
-    /// Repository owner (derived from [`DEFAULT_REPO`] or `--repo`).
+    /// Repository selections (derived from [`DEFAULT_REPO`] or repeatable `--repo`).
+    pub repos: Vec<RepoSelection>,
+    /// Primary repository owner (the first entry in [`repos`](Self::repos)).
     pub repo_owner: String,
-    /// Repository name (derived from [`DEFAULT_REPO`] or `--repo`).
+    /// Primary repository name (the first entry in [`repos`](Self::repos)).
     pub repo_name: String,
-    /// Additional repository selections from repeated `--repo` flags.
-    pub extra_repos: Vec<RepoSelection>,
 }
 
 impl Answers {
-    /// The `owner/name` the deployment drives.
+    /// The primary `owner/name` the deployment drives.
     pub fn repo_path(&self) -> String {
         format!("{}/{}", self.repo_owner, self.repo_name)
     }
 
-    /// Every `owner/name` path the generated deployment should drive.
+    /// Every selected `owner/name` path, preserving CLI / answers-file order.
     pub fn repo_paths(&self) -> Vec<String> {
-        std::iter::once(self.repo_path())
-            .chain(self.extra_repos.iter().map(RepoSelection::path))
-            .collect()
-    }
-
-    /// True when init should write provider/runtime credential wiring.
-    pub fn provider_enabled(&self) -> bool {
-        self.provider != PROVIDER_NONE
+        self.repos.iter().map(RepoSelection::path).collect()
     }
 
     /// The webhook URL the daemon registers (the bind address + the engine's
@@ -92,11 +83,11 @@ impl Answers {
     }
 }
 
-/// Asks the operator for any missing non-secret answers plus required secret
-/// prompts (admin password and, unless `--provider none`, provider key),
-/// validating the forge URL and rejecting hosted GitHub (unsupported today).
-/// Prompt-overriding flags such as `--forge` and `--admin-user` skip only their
-/// matching prompt; the rest of the provisioning flow stays intact.
+/// Asks the operator for any missing non-secret answers plus the secret prompts
+/// needed by the selected provider, validating the forge URL and rejecting
+/// hosted GitHub (unsupported today). Prompt-overriding flags such as `--forge`
+/// and `--admin-user` skip only their matching prompt; the rest of the
+/// provisioning flow stays intact.
 ///
 /// When `non_interactive` is true, prompts are skipped entirely and all values
 /// are taken from the overrides (or errors when required values are missing).
@@ -145,23 +136,12 @@ pub fn collect_answers(
     }
     let admin_password = p.ask_secret("Forge admin password")?;
 
-    // Q5 — Provider key. `--provider none` intentionally skips provider
-    // credential collection for bundles that only need forge/runtime wiring.
     let provider = provider_from_override(overrides.provider.as_deref())?;
-    if provider == PROVIDER_NONE && overrides.provider_url.is_some() {
-        return Err(InitError::Unsupported(
-            "--provider-url requires an active provider; omit it with --provider none".to_string(),
-        ));
-    }
-    let provider_key = if provider == PROVIDER_NONE {
-        None
-    } else {
-        Some(p.ask_secret("DeepSeek API key")?)
-    };
+    validate_provider_url(&provider, overrides.provider_url.as_deref())?;
+    let provider_key = collect_provider_key(p, &provider)?;
+    let repos = selected_repos(overrides);
 
-    let (repo, extra_repos) = selected_repos(overrides);
-
-    Ok(Answers {
+    Ok(answers_from_parts(
         forge_url,
         workflow,
         webhook_addr,
@@ -169,11 +149,9 @@ pub fn collect_answers(
         admin_password,
         provider,
         provider_key,
-        provider_url: overrides.provider_url.clone(),
-        repo_owner: repo.owner,
-        repo_name: repo.name,
-        extra_repos,
-    })
+        overrides.provider_url.clone(),
+        repos,
+    ))
 }
 
 /// Non-interactive path: all values come from overrides, or an error is
@@ -207,25 +185,11 @@ fn collect_non_interactive(overrides: &InitOverrides) -> Result<Answers, InitErr
     })?;
 
     let provider = provider_from_override(overrides.provider.as_deref())?;
-    if provider == PROVIDER_NONE && overrides.provider_url.is_some() {
-        return Err(InitError::Unsupported(
-            "--provider-url requires an active provider; omit it with --provider none".to_string(),
-        ));
-    }
-    let provider_key = if provider == PROVIDER_NONE {
-        None
-    } else {
-        Some(overrides.provider_key.clone().ok_or_else(|| {
-            InitError::Unsupported(
-                "--non-interactive: provider key is required; set TEMPER_INIT_PROVIDER_KEY"
-                    .to_string(),
-            )
-        })?)
-    };
+    validate_provider_url(&provider, overrides.provider_url.as_deref())?;
+    let provider_key = non_interactive_provider_key(overrides, &provider)?;
+    let repos = selected_repos(overrides);
 
-    let (repo, extra_repos) = selected_repos(overrides);
-
-    Ok(Answers {
+    Ok(answers_from_parts(
         forge_url,
         workflow,
         webhook_addr,
@@ -233,11 +197,9 @@ fn collect_non_interactive(overrides: &InitOverrides) -> Result<Answers, InitErr
         admin_password,
         provider,
         provider_key,
-        provider_url: overrides.provider_url.clone(),
-        repo_owner: repo.owner,
-        repo_name: repo.name,
-        extra_repos,
-    })
+        overrides.provider_url.clone(),
+        repos,
+    ))
 }
 
 fn validate_workflow_selection(workflow: &str) -> Result<(), InitError> {
@@ -271,20 +233,83 @@ fn validate_forge_url(forge_url: &str) -> Result<(), InitError> {
 }
 
 fn provider_from_override(provider: Option<&str>) -> Result<String, InitError> {
-    match provider.unwrap_or(PROVIDER_DEEPSEEK) {
-        PROVIDER_DEEPSEEK => Ok(PROVIDER_DEEPSEEK.to_string()),
-        PROVIDER_NONE => Ok(PROVIDER_NONE.to_string()),
+    parse_provider_choice(provider.unwrap_or(PROVIDER_DEEPSEEK)).map_err(InitError::Unsupported)
+}
+
+fn validate_provider_url(provider: &str, provider_url: Option<&str>) -> Result<(), InitError> {
+    if provider == PROVIDER_NONE && provider_url.is_some() {
+        return Err(InitError::Unsupported(
+            "--provider-url requires an active provider; `--provider none` disables provider wiring"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn collect_provider_key(p: &mut dyn Prompter, provider: &str) -> Result<Option<String>, InitError> {
+    match provider {
+        PROVIDER_DEEPSEEK => Ok(Some(p.ask_secret("DeepSeek API key")?)),
+        PROVIDER_ANTHROPIC | PROVIDER_CHATGPT | PROVIDER_NONE => Ok(None),
+        // provider_from_override gates this; keep the fallback defensive for
+        // direct unit calls during refactors.
         other => Err(InitError::Unsupported(format!(
-            "unsupported provider `{other}`; expected `{PROVIDER_DEEPSEEK}` or `{PROVIDER_NONE}`"
+            "unsupported provider `{other}`"
         ))),
     }
 }
 
-fn selected_repos(overrides: &InitOverrides) -> (RepoSelection, Vec<RepoSelection>) {
-    (
-        overrides.repo.clone().unwrap_or_else(default_repo),
-        overrides.extra_repos.clone(),
-    )
+fn non_interactive_provider_key(
+    overrides: &InitOverrides,
+    provider: &str,
+) -> Result<Option<String>, InitError> {
+    match provider {
+        PROVIDER_DEEPSEEK => overrides.provider_key.clone().map(Some).ok_or_else(|| {
+            InitError::Unsupported(
+                "--non-interactive: provider key is required for deepseek; set TEMPER_INIT_PROVIDER_KEY or answers provider_key"
+                    .to_string(),
+            )
+        }),
+        PROVIDER_ANTHROPIC | PROVIDER_CHATGPT | PROVIDER_NONE => Ok(None),
+        other => Err(InitError::Unsupported(format!(
+            "unsupported provider `{other}`"
+        ))),
+    }
+}
+
+fn selected_repos(overrides: &InitOverrides) -> Vec<RepoSelection> {
+    if overrides.repos.is_empty() {
+        vec![default_repo()]
+    } else {
+        overrides.repos.clone()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn answers_from_parts(
+    forge_url: String,
+    workflow: String,
+    webhook_addr: String,
+    admin_user: String,
+    admin_password: String,
+    provider: String,
+    provider_key: Option<String>,
+    provider_url: Option<String>,
+    repos: Vec<RepoSelection>,
+) -> Answers {
+    let primary = repos.first().cloned().unwrap_or_else(default_repo);
+    Answers {
+        forge_url,
+        workflow,
+        webhook_addr,
+        admin_user,
+        admin_password,
+        provider,
+        provider_key,
+        provider_url,
+        repos,
+        repo_owner: primary.owner,
+        repo_name: primary.name,
+    }
 }
 
 fn default_repo() -> RepoSelection {
@@ -465,27 +490,87 @@ mod tests {
     }
 
     #[test]
-    fn provider_none_skips_provider_secret_prompt() {
+    fn non_deepseek_provider_skips_provider_key_prompt() {
         let mut p = ScriptedPrompter::new([
-            "http://localhost:3000".to_string(),
-            "".to_string(),
-            "".to_string(),
-            "root".to_string(),
-            "admin-pw".to_string(),
+            "http://localhost:3000".to_string(), // forge URL
+            "".to_string(),                      // workflow (default)
+            "".to_string(),                      // webhook (default)
+            "root".to_string(),                  // admin user
+            "admin-pw".to_string(),              // admin password (secret)
         ]);
         let overrides = InitOverrides {
-            provider: Some(PROVIDER_NONE.to_string()),
+            provider: Some(PROVIDER_ANTHROPIC.to_string()),
             ..Default::default()
         };
 
         let a = collect_answers(&mut p, &overrides, false).expect("collect");
 
-        assert_eq!(a.provider, PROVIDER_NONE);
+        assert_eq!(a.provider, PROVIDER_ANTHROPIC);
         assert_eq!(a.provider_key, None);
-        assert!(
-            p.answers.is_empty(),
-            "provider key prompt should be skipped"
-        );
+        assert!(p.answers.is_empty(), "no provider key prompt should fire");
+    }
+
+    #[test]
+    fn non_interactive_chatgpt_does_not_require_provider_key() {
+        let mut p = ScriptedPrompter::new(Vec::<String>::new());
+        let overrides = InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pw".to_string()),
+            provider: Some(PROVIDER_CHATGPT.to_string()),
+            ..Default::default()
+        };
+
+        let a = collect_answers(&mut p, &overrides, true).expect("collect");
+
+        assert_eq!(a.provider, PROVIDER_CHATGPT);
+        assert_eq!(a.provider_key, None);
+        assert!(p.answers.is_empty(), "non-interactive should not prompt");
+    }
+
+    #[test]
+    fn provider_none_rejects_provider_url() {
+        let mut p = ScriptedPrompter::new(Vec::<String>::new());
+        let overrides = InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pw".to_string()),
+            provider: Some(PROVIDER_NONE.to_string()),
+            provider_url: Some("http://provider.local".to_string()),
+            ..Default::default()
+        };
+
+        let err = collect_answers(&mut p, &overrides, true)
+            .expect_err("provider URL without provider rejected");
+
+        assert!(err.to_string().contains("--provider-url"), "{err}");
+    }
+
+    #[test]
+    fn repeatable_repo_overrides_are_preserved() {
+        let mut p = ScriptedPrompter::new(Vec::<String>::new());
+        let overrides = InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pw".to_string()),
+            provider_key: Some("sk-deepseek".to_string()),
+            repos: vec![
+                RepoSelection {
+                    owner: "acme".to_string(),
+                    name: "service".to_string(),
+                },
+                RepoSelection {
+                    owner: "acme".to_string(),
+                    name: "docs".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let a = collect_answers(&mut p, &overrides, true).expect("collect");
+
+        assert_eq!(a.repo_path(), "acme/service");
+        assert_eq!(a.repo_paths(), vec!["acme/service", "acme/docs"]);
     }
 
     #[test]

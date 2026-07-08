@@ -14,13 +14,12 @@ use temper_config::{
     build_credentials, forge_users_from_provisioned, write_config,
 };
 use temper_reference_delivery::{
-    basic_delivery_workflow_json, parse_workflow_spec, reference_delivery_workflow_json,
+    basic_delivery_workflow_json, load_workflow_document, reference_delivery_workflow_json,
 };
 use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
-use crate::collect::{WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
-
 use crate::collect::Answers;
+use crate::collect::{PROVIDER_NONE, WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
 use crate::provisioner::ProvisionOutcome;
 use crate::{InitError, InitOptions, InitTopology};
 
@@ -64,10 +63,10 @@ pub struct InitArtifacts {
 }
 
 /// Builds (pure, no I/O) every artifact `temper init` will write: the config
-/// document, the workflow YAML, and a freshly generated webhook secret.
+/// document, the workflow YAML, and freshly generated local secrets.
 ///
 /// `roles` come from the selected workflow's queue-subscribing roles. The
-/// repo/provider come from defaults or local-dev flag overrides.
+/// repo/provider come from defaults, answers files, or local-dev flag overrides.
 pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArtifacts, InitError> {
     let targets: FileTargets =
         resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
@@ -92,7 +91,6 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| WORKSPACE_DIR.to_string());
-    let provider = answers.provider_enabled().then(|| answers.provider.clone());
 
     let mut config = build_config(&ConfigInputs {
         forge_url: Some(answers.forge_url.clone()),
@@ -103,7 +101,7 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         webhook_addr: Some(bind_addr(&answers.webhook_addr)),
         admin_user: Some(answers.admin_user.clone()),
         ci_user: Some(temper_provision::BOT_USER.to_string()),
-        provider,
+        provider: active_provider_name(answers),
         provider_url: answers.provider_url.clone(),
         workspace: Some(workspace.clone()),
     });
@@ -157,7 +155,8 @@ fn apply_target_shape(
     config.engine.webhook_secret_file = Some(WEBHOOK_SECRET_FILE.to_string());
 
     let pool_name = pool_name(topology).to_string();
-    let agent_profile = answers.provider_enabled().then(|| pool_name.clone());
+    let provider_enabled = active_provider_name(answers).is_some();
+    let agent_profile = provider_enabled.then(|| pool_name.clone());
     config.worker.pools = vec![WorkerPoolConfig {
         name: Some(pool_name.clone()),
         roles: Some(roles.to_vec()),
@@ -167,14 +166,17 @@ fn apply_target_shape(
         worker_token: Some(worker_token_name.to_string()),
     }];
 
-    if answers.provider_enabled() {
+    if provider_enabled {
         config.agent.profiles.insert(
             pool_name,
             AgentProfileConfig {
                 command: Some(vec!["temper".to_string(), "agent".to_string()]),
                 provider: Some(answers.provider.clone()),
                 provider_url: answers.provider_url.clone(),
-                credential: Some(AGENT_PROVIDER_SECRET.to_string()),
+                credential: answers
+                    .provider_key
+                    .as_ref()
+                    .map(|_| AGENT_PROVIDER_SECRET.to_string()),
                 ..AgentProfileConfig::default()
             },
         );
@@ -418,6 +420,14 @@ fn provider_secret(provider: &str, key: &str) -> NamedSecret {
     })
 }
 
+fn active_provider_name(answers: &Answers) -> Option<String> {
+    if answers.provider == PROVIDER_NONE {
+        None
+    } else {
+        Some(answers.provider.clone())
+    }
+}
+
 struct WorkflowArtifact {
     yaml: String,
     validated: ValidatedWorkflow,
@@ -457,24 +467,18 @@ fn builtin_workflow_artifact(name: &str, json: &str) -> Result<WorkflowArtifact,
 
 fn load_workflow_artifact(path: &str) -> Result<WorkflowArtifact, InitError> {
     let path = Path::new(path);
-    let source = std::fs::read_to_string(path).map_err(|error| {
-        InitError::Path(format!("read workflow file {}: {error}", path.display()))
-    })?;
-    let spec = parse_workflow_spec(path, &source)
-        .map_err(|error| InitError::Unsupported(error.to_string()))?;
-    let validated = spec.validate().map_err(|errors| {
-        InitError::Unsupported(format!(
-            "workflow file {} failed validation:\n{errors}",
-            path.display()
-        ))
-    })?;
-    let yaml = serde_yaml::to_string(&spec).map_err(|error| {
+    let document =
+        load_workflow_document(path).map_err(|error| InitError::Unsupported(error.to_string()))?;
+    let yaml = serde_yaml::to_string(&document.spec).map_err(|error| {
         InitError::Unsupported(format!(
             "workflow file {} could not be rendered as YAML: {error}",
             path.display()
         ))
     })?;
-    Ok(WorkflowArtifact { yaml, validated })
+    Ok(WorkflowArtifact {
+        yaml,
+        validated: document.workflow,
+    })
 }
 
 /// The roles `temper init` drives, derived from the selected workflow's

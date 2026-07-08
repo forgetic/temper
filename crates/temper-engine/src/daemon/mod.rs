@@ -26,7 +26,10 @@ use change_source_wiring::ChangeSourceListener;
 use machine::DaemonCompletion;
 
 pub use handle::{h1_handler, serve};
-pub use state_dto::{ArtifactDto, DaemonStateSnapshot, JobDto, RoleSaturationDto, WorkersDto};
+pub use state_dto::{
+    ArtifactDto, DaemonStateSnapshot, JobDto, RoleSaturationDto, WorkerCapabilityDto, WorkerDto,
+    WorkersDto,
+};
 
 /// Worker-protocol + webhook transport handle for one daemon process. See the
 /// module docs for the machine/executor split.

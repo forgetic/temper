@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde_json::json;
 use temper_protocol_worker::{
     Artifact, Assign, Branch, FailureClass, JobResult, RepoOutcome, ResultStatus,
-    WORKER_PROTOCOL_VERSION,
+    WORKER_PROTOCOL_VERSION, WorkerAuth,
 };
 use temper_worker::config::CapabilitySpec;
 use temper_worker::{
@@ -35,6 +35,7 @@ fn worker_config_with_capacity(max_concurrent_jobs: u32) -> WorkerConfig {
         daemon_url: "in-process".to_string(),
         worker_id: "worker-1".to_string(),
         worker_pool: None,
+        worker_auth: None,
         capabilities: vec![CapabilitySpec {
             repo: "ai/smith".to_string(),
             role: "engineer".to_string(),
@@ -214,6 +215,35 @@ fn daemon_transport_success_stub_registers_polls_runs_and_posts_result() {
     assert_eq!(result.status, ResultStatus::Success);
     assert_eq!(result.repos.len(), 1);
     assert_eq!(result.failure, None);
+}
+
+#[test]
+fn daemon_transport_in_process_worker_carries_pool_auth_metadata() {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
+        let mut auth = temper_engine::WorkerPoolAuthConfig::new();
+        auth.insert_pool("builders", Some(WorkerAuth::bearer("builders-secret")));
+        let mut harness = DaemonHarness::start_with_worker_auth(&handle, auth);
+        let mut config = worker_config();
+        config.worker_pool = Some("builders".to_string());
+        config.worker_auth = Some(WorkerAuth::bearer("builders-secret"));
+        harness.enqueue(&assign_for(&config)).await;
+
+        let transport = harness.transport();
+        let worker_handle = handle.clone();
+        handle.spawn(async move {
+            let _ = run_worker_with_transport(
+                worker_handle,
+                config,
+                StubExecutor::success().into(),
+                transport,
+            )
+            .await;
+        });
+
+        let result = harness.await_result().await;
+        assert_eq!(result.job_id, "job-123");
+        assert_eq!(result.status, ResultStatus::Success);
+    });
 }
 
 #[test]

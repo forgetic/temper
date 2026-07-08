@@ -12,9 +12,11 @@
 //! The field set here is sufficient for that projection; the mapping to the
 //! board's cold-start contract fixture
 //! (`crates/temper-web/ui/fixtures/state-snapshot.json`,
-//! `{ workers:{healthy,total}, cards:{ id:{id,lane,ref,role,title,...} } }`) is:
+//! `{ workers:{healthy,total,registered?}, cards:{ id:{id,lane,ref,role,title,...} } }`) is:
 //!
-//! - `workers.healthy` / `workers.total` -> the fixture's `workers` tile (1:1).
+//! - `workers.healthy` / `workers.total` -> the fixture's `workers` tile (1:1),
+//!   with `workers.registered` carrying the raw worker id, pool, capacity, and
+//!   capabilities for operator/debug views.
 //! - each queued/in-flight job -> one board card, keyed by `artifact_ref`
 //!   (the `ref` join key, e.g. `acme/widgets#42` / `acme/widgets PR#8`), which
 //!   is the same `artifact.ref` the board joins log deltas onto (UX Appendix
@@ -29,15 +31,60 @@
 
 use serde::Serialize;
 use temper_log::{WorkItemRef, strip_provider_scheme};
-use temper_protocol_worker::Artifact;
+use temper_protocol_worker::{Artifact, Capability};
 use temper_worker_registry::daemon_core::QueuedJob;
-use temper_worker_registry::{DaemonCore, InFlightJob};
+use temper_worker_registry::{DaemonCore, InFlightJob, WorkerSnapshot};
 
-/// Healthy / total worker tile of the snapshot.
+/// Healthy / total worker tile plus raw registered-worker details.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkersDto {
     pub healthy: usize,
     pub total: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registered: Vec<WorkerDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkerCapabilityDto {
+    pub role: String,
+    pub repo: String,
+}
+
+impl From<&Capability> for WorkerCapabilityDto {
+    fn from(capability: &Capability) -> Self {
+        Self {
+            role: capability.role.clone(),
+            repo: capability.repo.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkerDto {
+    pub worker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    pub healthy: bool,
+    pub max_concurrent_jobs: u32,
+    pub free_capacity: u32,
+    pub capabilities: Vec<WorkerCapabilityDto>,
+}
+
+impl From<&WorkerSnapshot> for WorkerDto {
+    fn from(worker: &WorkerSnapshot) -> Self {
+        Self {
+            worker_id: worker.worker_id.clone(),
+            pool: worker.worker_pool.clone(),
+            healthy: worker.healthy,
+            max_concurrent_jobs: worker.max_concurrent_jobs,
+            free_capacity: worker.free_capacity,
+            capabilities: worker
+                .capabilities
+                .iter()
+                .map(WorkerCapabilityDto::from)
+                .collect(),
+        }
+    }
 }
 
 /// The artifact an issue/PR job coordinates, as wire JSON.
@@ -127,6 +174,7 @@ impl DaemonStateSnapshot {
     /// single-threaded daemon core — no locking, no I/O.
     pub fn from_core(core: &DaemonCore) -> Self {
         let registry = core.coordinator().registry();
+        let worker_snapshots = registry.worker_snapshots();
         let queued_jobs = core.queued_jobs();
         let queued: Vec<JobDto> = queued_jobs.iter().map(JobDto::from).collect();
         let in_flight: Vec<JobDto> = core
@@ -141,6 +189,7 @@ impl DaemonStateSnapshot {
             workers: WorkersDto {
                 healthy: registry.healthy_worker_count(),
                 total: registry.worker_count(),
+                registered: worker_snapshots.iter().map(WorkerDto::from).collect(),
             },
             queued,
             in_flight,

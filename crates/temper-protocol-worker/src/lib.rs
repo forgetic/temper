@@ -20,6 +20,7 @@
 //! the degenerate manifest of one writable primary repo.
 
 mod assignment;
+mod auth;
 mod job;
 mod lifecycle;
 mod message;
@@ -27,6 +28,7 @@ mod result;
 mod workspace;
 
 pub use assignment::{Artifact, Assign, Capability, Capacity, Poll, Register};
+pub use auth::{WORKER_AUTHORIZATION_HEADER, WORKER_AUTHORIZATION_SCHEME, WorkerAuth};
 pub use job::{
     JobArtifactSnapshot, JobContext, PullRequestFreshness, PullRequestFreshnessResponse,
     PullRequestFreshnessStatus,

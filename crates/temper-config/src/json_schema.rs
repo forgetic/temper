@@ -176,7 +176,7 @@ fn engine_config_schema() -> Value {
             ),
             (
                 "workflow",
-                string_schema("Path to a workflow definition JSON file."),
+                string_schema("Path to a workflow definition JSON/YAML file."),
             ),
             (
                 "repos",
@@ -411,7 +411,9 @@ fn agent_profile_config_schema() -> Value {
             ),
             (
                 "credential",
-                string_schema("Secret-name reference for future provider credentials."),
+                string_schema(
+                    "Secret-name reference for provider credentials used by this profile.",
+                ),
             ),
         ],
     )

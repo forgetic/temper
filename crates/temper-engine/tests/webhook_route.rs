@@ -155,6 +155,7 @@ fn register(worker_id: &str, role: &str, repo: &str) -> WorkerProtocolMessage {
         capacity: Capacity {
             max_concurrent_jobs: 1,
         },
+        worker_pool: None,
         labels: None,
     })
 }

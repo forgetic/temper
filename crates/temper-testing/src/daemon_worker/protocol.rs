@@ -27,6 +27,7 @@ pub async fn run(
         capacity: Capacity {
             max_concurrent_jobs: 1,
         },
+        worker_pool: None,
         labels: None,
     });
     match send(&client, &endpoint, &register).await? {

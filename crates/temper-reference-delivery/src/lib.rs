@@ -19,7 +19,8 @@ pub use forgejo_demo::{
     ci_sentinel_commit,
 };
 pub use temper_workflow::{
-    WorkflowLoadError, load_workflow, load_workflow_spec, parse_workflow_spec,
+    WorkflowDocument, WorkflowLoadError, load_workflow, load_workflow_document, load_workflow_spec,
+    parse_workflow_document, parse_workflow_spec,
 };
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");

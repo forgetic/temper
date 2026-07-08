@@ -112,6 +112,17 @@ fn workflow() -> temper_workflow::ValidatedWorkflow {
     spec.validate().expect("workflow validates")
 }
 
+fn workflow_without_conflict_route() -> temper_workflow::ValidatedWorkflow {
+    let mut raw: serde_json::Value =
+        serde_json::from_str(AUTOMATED_CONFLICT_WORKFLOW).expect("workflow parses");
+    raw["queues"][0]["automation"]
+        .as_object_mut()
+        .expect("automation is an object")
+        .remove("on_merge_conflict");
+    let spec: RawWorkflowSpec = serde_json::from_value(raw).expect("workflow value parses");
+    spec.validate().expect("workflow validates")
+}
+
 fn lease_policy() -> LeasePolicy {
     LeasePolicy::new(Duration::minutes(30))
 }
@@ -359,6 +370,40 @@ fn unrelated_landing_pr_continues_after_another_pr_routes_to_conflict() {
         PullRequestState::Merged
     );
     assert!(pull_request_labels(&forge, &repo, ready).contains(&"landed".to_string()));
+}
+
+#[test]
+fn unhandled_merge_conflict_does_not_starve_later_landing_candidates() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let conflicted = create_pull_request(&forge, &repo, &["implementation", "landing", "approved"]);
+    let ready = create_pull_request(&forge, &repo, &["implementation", "landing", "approved"]);
+    seed_successful_ci(&forge, &repo, &[conflicted, ready]);
+    let counted = CountingForge::new(forge.clone());
+    counted.reject_merge_for(
+        pull_request_id(&forge, &repo, conflicted),
+        "simulated content conflict without workflow fallback",
+    );
+    let workflow = workflow_without_conflict_route();
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("tick continues"),
+        Progress {
+            changed: true,
+            actions: 1,
+        }
+    );
+    assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 2);
+    assert_eq!(
+        pull_request_state(&forge, &repo, conflicted),
+        PullRequestState::Open
+    );
+    assert_eq!(
+        pull_request_state(&forge, &repo, ready),
+        PullRequestState::Merged
+    );
 }
 
 #[test]

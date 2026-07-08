@@ -263,6 +263,7 @@ impl HermeticRealStackBuilder {
             daemon_url: "in-process".to_string(),
             worker_id: primary_worker_role.worker_id.clone(),
             worker_pool: None,
+            worker_auth: None,
             capabilities: self
                 .worker_roles
                 .iter()

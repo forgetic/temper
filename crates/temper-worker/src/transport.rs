@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use skein::cx::Cx;
 use skein::http::h1::http_client::HttpClient;
-use temper_protocol_worker::WorkerProtocolMessage;
+use temper_protocol_worker::{WORKER_AUTHORIZATION_HEADER, WorkerAuth, WorkerProtocolMessage};
 use temper_worker_io::{HttpCall, HttpResponseData, build_http_client, http_call};
 
 /// Delivers worker→daemon protocol messages and yields the daemon's replies.
@@ -30,6 +30,7 @@ pub trait Transport: Send + Sync + 'static {
         &self,
         cx: Cx,
         message: WorkerProtocolMessage,
+        auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send;
 }
 
@@ -56,12 +57,20 @@ impl Transport for HttpTransport {
         &self,
         cx: Cx,
         message: WorkerProtocolMessage,
+        auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
         let http = Arc::clone(&self.http);
+        let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+        if let Some(auth) = auth {
+            headers.push((
+                WORKER_AUTHORIZATION_HEADER.to_string(),
+                auth.authorization_header_value(),
+            ));
+        }
         let call = HttpCall {
             method: "POST".to_string(),
             url: self.endpoint.clone(),
-            headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+            headers,
             body: serde_json::to_vec(&message).unwrap_or_default(),
         };
         async move {

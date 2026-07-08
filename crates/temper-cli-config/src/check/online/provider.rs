@@ -113,8 +113,8 @@ fn add_active_provider_check(
 
 fn add_profile_provider_check(
     resolved: &Resolved,
-    env: &EnvMap,
-    paths: &PathResolver,
+    _env: &EnvMap,
+    _paths: &PathResolver,
     name: &str,
     profile: &AgentProfileSettings,
     checked: &mut BTreeSet<String>,
@@ -132,20 +132,6 @@ fn add_profile_provider_check(
     let scope = format!("profile:{name}");
     validate_provider_url(kind, url, &label, &scope, findings);
     validate_profile_credential(name, profile.credential.as_ref(), &scope, findings);
-    // Profile credentials are target-era named secrets only; the resolved model
-    // deliberately exposes availability, not the payload. When a profile omits
-    // a credential, it inherits the active credential path, so validate that too.
-    if profile.credential.is_none() {
-        validate_provider_credential(
-            kind,
-            &resolved.agent.provider.credential,
-            env,
-            paths,
-            &label,
-            &scope,
-            findings,
-        );
-    }
 }
 
 fn validate_provider_url(

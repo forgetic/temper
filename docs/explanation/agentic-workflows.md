@@ -132,10 +132,15 @@ Kubernetes-controller pattern:
   lossy and must be treated as a signal to pull, never as a source of truth.
 
 Both feed the same reaction path (pull → classify → plan → execute → reconcile).
-Webhook receipt, verification, and payload parsing are provider-specific and
-live in the backend/runner layer. The portable `ChangeHint` and `ChangeSource`
-companion types carry push-style wakeups without adding notification methods to
-the `Forge` trait. See ADR 0009 for the decision.
+For Forgejo, the supported webhook intake runtime is the engine HTTP surface:
+configure `[engine] webhook_secret` or `webhook_secret_file` and point
+HMAC-signed deliveries at `POST /forgejo/webhook` on `temper serve engine` or
+`temper serve standalone`. There is no separate `temper serve trigger` process;
+`trigger` remains the logging/service plane for inbound facts. Webhook receipt,
+verification, and payload parsing are provider-specific and live in the
+backend/runner layer. The portable `ChangeHint` and `ChangeSource` companion
+types carry push-style wakeups without adding notification methods to the
+`Forge` trait. See ADR 0009 for the decision.
 
 ## Rust's role
 
