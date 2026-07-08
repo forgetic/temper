@@ -224,14 +224,56 @@ fn drive_codebase_memory_convergence(
     timeout: Duration,
 ) -> Result<FinalStateEvidence, String> {
     let deadline = Instant::now() + timeout;
-    poll_until(deadline, standalone, || {
-        super::process::engine_block_on(assert_pr_open_with_memory_diff(forge, repository, issue))
-    })?;
-    poll_until(deadline, standalone, || {
-        super::process::engine_block_on(assert_codebase_memory_converged(
+    match poll_until(deadline, standalone, || {
+        super::process::engine_block_on(assert_codebase_memory_checkpoint(
             forge, repository, issue, admin_user,
         ))
-    })
+    })? {
+        CodebaseMemoryCheckpoint::OpenPr => poll_until(deadline, standalone, || {
+            super::process::engine_block_on(assert_codebase_memory_converged(
+                forge, repository, issue, admin_user,
+            ))
+        }),
+        CodebaseMemoryCheckpoint::Converged(final_state) => Ok(final_state),
+    }
+}
+
+enum CodebaseMemoryCheckpoint {
+    OpenPr,
+    Converged(FinalStateEvidence),
+}
+
+async fn assert_codebase_memory_checkpoint(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+    admin_user: &str,
+) -> Result<CodebaseMemoryCheckpoint, String> {
+    let mut errors = Vec::new();
+
+    match assert_pr_open_with_memory_diff(forge, repository, issue).await {
+        Ok(()) => return Ok(CodebaseMemoryCheckpoint::OpenPr),
+        Err(error) => errors.push(("open implementation PR with memory diff", error)),
+    }
+
+    match assert_codebase_memory_converged(forge, repository, issue, admin_user).await {
+        Ok(final_state) => Ok(CodebaseMemoryCheckpoint::Converged(final_state)),
+        Err(error) => {
+            errors.push(("final convergence", error));
+            Err(format_codebase_memory_checkpoint_errors(&errors))
+        }
+    }
+}
+
+fn format_codebase_memory_checkpoint_errors(errors: &[(&'static str, String)]) -> String {
+    let details = errors
+        .iter()
+        .map(|(phase, error)| format!("{phase}: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "codebase-memory workflow has not reached open implementation PR with memory diff or final convergence yet ({details})"
+    )
 }
 
 async fn assert_pr_open_with_memory_diff(
@@ -248,6 +290,11 @@ async fn assert_pr_open_with_memory_diff(
         ));
     }
     require_labels(&pr.labels, &["implementation", "landing"])?;
+    assert_pr_body_contains_engineer_summary(&pr)?;
+    Ok(())
+}
+
+fn assert_pr_body_contains_engineer_summary(pr: &PullRequest) -> Result<(), String> {
     if !pr.body.contains(ENGINEER_SUMMARY) {
         return Err(format!(
             "implementation PR body does not contain engineer summary {:?}:\n{}",
