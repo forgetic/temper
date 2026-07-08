@@ -58,6 +58,7 @@ pub use run::{run_worker, run_worker_with_transport};
 pub use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
 };
+pub use temper_protocol_worker::WorkerAuth;
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 pub use workspace::{

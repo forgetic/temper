@@ -11,8 +11,130 @@ pub enum RegistryError {
     DuplicateJob(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistrationError {
+    EmptyWorkerId,
+    EmptyPoolName,
+    UnknownPool(String),
+    PoolMissingCapacity(String),
+    CapacityExceeded {
+        pool: String,
+        requested: u32,
+        max: u32,
+    },
+    CapabilityOutsidePool {
+        pool: String,
+        role: String,
+        repo: String,
+    },
+}
+
+impl std::fmt::Display for RegistrationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegistrationError::EmptyWorkerId => write!(f, "worker_id must not be empty"),
+            RegistrationError::EmptyPoolName => write!(f, "worker_pool must not be empty"),
+            RegistrationError::UnknownPool(pool) => write!(f, "unknown worker pool `{pool}`"),
+            RegistrationError::PoolMissingCapacity(pool) => write!(
+                f,
+                "worker pool `{pool}` must set max_concurrent_jobs before workers can register to it"
+            ),
+            RegistrationError::CapacityExceeded {
+                pool,
+                requested,
+                max,
+            } => write!(
+                f,
+                "worker capacity {requested} exceeds worker pool `{pool}` max_concurrent_jobs {max}"
+            ),
+            RegistrationError::CapabilityOutsidePool { pool, role, repo } => write!(
+                f,
+                "worker capability `{repo}:{role}` is outside worker pool `{pool}` policy"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RegistrationError {}
+
+/// One resolved `[[worker.pools]]` registration policy as seen by the daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerPoolPolicy {
+    pub name: String,
+    pub roles: Vec<String>,
+    pub repos: Vec<String>,
+    pub max_concurrent_jobs: Option<u32>,
+}
+
+impl WorkerPoolPolicy {
+    pub fn new(
+        name: impl Into<String>,
+        roles: Vec<String>,
+        repos: Vec<String>,
+        max_concurrent_jobs: Option<u32>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            roles,
+            repos,
+            max_concurrent_jobs,
+        }
+    }
+
+    fn permits(&self, capability: &Capability) -> bool {
+        self.roles.iter().any(|role| role == &capability.role)
+            && self.repos.iter().any(|repo| repo == &capability.repo)
+    }
+}
+
+/// Name-indexed pool registration policies. Empty means only legacy no-pool
+/// workers can register; a worker that names a pool must match a policy here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkerPoolPolicies {
+    pools: BTreeMap<String, WorkerPoolPolicy>,
+}
+
+impl WorkerPoolPolicies {
+    pub fn new(policies: Vec<WorkerPoolPolicy>) -> Self {
+        let pools = policies
+            .into_iter()
+            .map(|policy| (policy.name.clone(), policy))
+            .collect();
+        Self { pools }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pools.is_empty()
+    }
+
+    pub fn get(&self, name: &str) -> Option<&WorkerPoolPolicy> {
+        self.pools.get(name)
+    }
+
+    pub fn policies(&self) -> impl Iterator<Item = &WorkerPoolPolicy> {
+        self.pools.values()
+    }
+}
+
+impl From<Vec<WorkerPoolPolicy>> for WorkerPoolPolicies {
+    fn from(policies: Vec<WorkerPoolPolicy>) -> Self {
+        Self::new(policies)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkerSnapshot {
+    pub worker_id: String,
+    pub worker_pool: Option<String>,
+    pub capabilities: Vec<Capability>,
+    pub max_concurrent_jobs: u32,
+    pub free_capacity: u32,
+    pub healthy: bool,
+}
+
 #[derive(Debug, Clone)]
 struct WorkerEntry {
+    worker_pool: Option<String>,
     capabilities: Vec<Capability>,
     max_concurrent_jobs: u32,
     in_flight: BTreeSet<String>,
@@ -33,16 +155,28 @@ impl WorkerRegistry {
         self.workers
             .entry(msg.worker_id.clone())
             .and_modify(|entry| {
+                entry.worker_pool = msg.worker_pool.clone();
                 entry.capabilities = msg.capabilities.clone();
                 entry.max_concurrent_jobs = msg.capacity.max_concurrent_jobs;
                 entry.healthy = true;
             })
             .or_insert_with(|| WorkerEntry {
+                worker_pool: msg.worker_pool.clone(),
                 capabilities: msg.capabilities.clone(),
                 max_concurrent_jobs: msg.capacity.max_concurrent_jobs,
                 in_flight: BTreeSet::new(),
                 healthy: true,
             });
+    }
+
+    pub fn register_with_policies(
+        &mut self,
+        msg: &Register,
+        policies: &WorkerPoolPolicies,
+    ) -> Result<(), RegistrationError> {
+        validate_registration(msg, policies)?;
+        self.register(msg);
+        Ok(())
     }
 
     pub fn assign_candidate(&self, role: &str, repo: &str) -> Option<String> {
@@ -145,6 +279,20 @@ impl WorkerRegistry {
             .is_some_and(|entry| entry.healthy)
     }
 
+    pub fn worker_snapshots(&self) -> Vec<WorkerSnapshot> {
+        self.workers
+            .iter()
+            .map(|(worker_id, entry)| WorkerSnapshot {
+                worker_id: worker_id.clone(),
+                worker_pool: entry.worker_pool.clone(),
+                capabilities: entry.capabilities.clone(),
+                max_concurrent_jobs: entry.max_concurrent_jobs,
+                free_capacity: entry.free_capacity(),
+                healthy: entry.healthy,
+            })
+            .collect()
+    }
+
     /// Total registered workers, healthy or not. The `total` of the §4
     /// `{healthy, total}` worker tile.
     pub fn worker_count(&self) -> usize {
@@ -156,6 +304,48 @@ impl WorkerRegistry {
     pub fn healthy_worker_count(&self) -> usize {
         self.workers.values().filter(|entry| entry.healthy).count()
     }
+}
+
+fn validate_registration(
+    msg: &Register,
+    policies: &WorkerPoolPolicies,
+) -> Result<(), RegistrationError> {
+    if msg.worker_id.trim().is_empty() {
+        return Err(RegistrationError::EmptyWorkerId);
+    }
+
+    let Some(pool_name) = msg.worker_pool.as_deref() else {
+        return Ok(());
+    };
+    if pool_name.trim().is_empty() {
+        return Err(RegistrationError::EmptyPoolName);
+    }
+
+    let policy = policies
+        .get(pool_name)
+        .ok_or_else(|| RegistrationError::UnknownPool(pool_name.to_string()))?;
+    let max = policy
+        .max_concurrent_jobs
+        .ok_or_else(|| RegistrationError::PoolMissingCapacity(pool_name.to_string()))?;
+    if msg.capacity.max_concurrent_jobs > max {
+        return Err(RegistrationError::CapacityExceeded {
+            pool: pool_name.to_string(),
+            requested: msg.capacity.max_concurrent_jobs,
+            max,
+        });
+    }
+
+    for capability in &msg.capabilities {
+        if !policy.permits(capability) {
+            return Err(RegistrationError::CapabilityOutsidePool {
+                pool: pool_name.to_string(),
+                role: capability.role.clone(),
+                repo: capability.repo.clone(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 impl WorkerEntry {

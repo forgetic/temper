@@ -113,6 +113,20 @@ agent-provider = "provider-secret-value"
         Some(true)
     );
 
+    assert_eq!(
+        resolved
+            .worker
+            .worker_pool_tokens
+            .get("engineers")
+            .map(ExposeSecret::expose_secret),
+        Some("worker-secret-value")
+    );
+    let rendered = format!("{resolved:?}");
+    assert!(
+        !rendered.contains("worker-secret-value"),
+        "worker token leaked: {rendered}"
+    );
+
     let profile = resolved
         .agent
         .profiles

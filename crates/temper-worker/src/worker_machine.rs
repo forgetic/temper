@@ -202,7 +202,8 @@ impl Machine for WorkerMachine {
                     crate::observability::registered_worker_line(
                         &self.params.worker_id,
                         self.params.worker_pool.as_deref(),
-                        self.params.capabilities.len(),
+                        self.params.max_concurrent_jobs,
+                        &self.params.capabilities,
                     ),
                 )];
                 requests.extend(self.poll_or_backoff());

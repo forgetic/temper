@@ -17,7 +17,7 @@ use temper_reference_delivery::{
 };
 use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
-use crate::collect::{WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
+use crate::collect::{PROVIDER_NONE, WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
 
 use crate::collect::Answers;
 use crate::provisioner::ProvisionOutcome;
@@ -71,13 +71,13 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
     let mut config = build_config(&ConfigInputs {
         forge_url: Some(answers.forge_url.clone()),
         forge_kind: Some("forgejo".to_string()),
-        repos: vec![answers.repo_path()],
+        repos: answers.repo_paths(),
         roles,
         workflow_path: Some(workflow_path.display().to_string()),
         webhook_addr: Some(bind_addr(&answers.webhook_addr)),
         admin_user: Some(answers.admin_user.clone()),
         ci_user: Some(temper_provision::BOT_USER.to_string()),
-        provider: Some(answers.provider.clone()),
+        provider: active_provider_name(answers),
         provider_url: answers.provider_url.clone(),
         workspace: opts
             .workspace
@@ -143,7 +143,7 @@ pub fn write_artifacts(artifacts: &InitArtifacts, force: bool) -> Result<(), Ini
 
 /// Builds + writes the local `credentials.toml` (chmod 600) before any forge
 /// mutation. It contains only secrets the operator supplied locally: the admin
-/// password (so a later apply can mint a token) and the provider key. Provisioned
+/// password (so a later apply can mint a token) and any provider key. Provisioned
 /// role/bot tokens are added only by [`write_provisioned_credentials`].
 pub fn write_local_credentials(
     answers: &Answers,
@@ -159,7 +159,7 @@ pub fn write_local_credentials(
 }
 
 /// Builds + writes `credentials.toml` (chmod 600) from the admin identity (Q4),
-/// the minted role/bot identities, and the provider key.
+/// the minted role/bot identities, and any provider key.
 pub fn write_provisioned_credentials(
     answers: &Answers,
     artifacts: &InitArtifacts,
@@ -234,16 +234,32 @@ fn write_credentials_with_users(
     forge_users: BTreeMap<String, temper_config::ForgeUser>,
     force: bool,
 ) -> Result<(), InitError> {
-    let credentials = build_credentials(&CredentialInputs {
-        forge_users,
-        provider_key: ProviderKeyInput {
-            provider: answers.provider.clone(),
-            secret: ProviderSecretInput::ApiKey(answers.provider_key.clone()),
-        },
-    });
+    let credentials = if let Some(provider_key) = &answers.provider_key {
+        build_credentials(&CredentialInputs {
+            forge_users,
+            provider_key: ProviderKeyInput {
+                provider: answers.provider.clone(),
+                secret: ProviderSecretInput::ApiKey(provider_key.clone()),
+            },
+        })
+    } else {
+        temper_config::Credentials {
+            schema_version: temper_config::SCHEMA_VERSION,
+            forge: temper_config::ForgeCredentials { users: forge_users },
+            ..Default::default()
+        }
+    };
 
     temper_config::write_credentials(&credentials, &artifacts.credentials_path, force)
         .map_err(|error| InitError::Write(error.to_string()))
+}
+
+fn active_provider_name(answers: &Answers) -> Option<String> {
+    if answers.provider == PROVIDER_NONE {
+        None
+    } else {
+        Some(answers.provider.clone())
+    }
 }
 
 struct WorkflowArtifact {

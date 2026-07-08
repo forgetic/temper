@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
-use temper_protocol_worker::WorkerProtocolMessage;
+use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
 use temper_worker_io::{CqSender, Spawner, arm_timer};
 
 use crate::executor::{JobExecutor, job_result};
@@ -28,6 +28,7 @@ pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner 
     spawner: S,
     cq: CqSender<WorkerCompletion>,
     transport: Arc<T>,
+    worker_auth: Option<WorkerAuth>,
     worker_id: String,
     executor: Arc<E>,
 }
@@ -47,6 +48,7 @@ impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, Runti
             handle,
             cq,
             Arc::new(HttpTransport::new(daemon_url)),
+            None,
             worker_id,
             executor,
         )
@@ -60,6 +62,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
         spawner: S,
         cq: CqSender<WorkerCompletion>,
         transport: Arc<T>,
+        worker_auth: Option<WorkerAuth>,
         worker_id: String,
         executor: Arc<E>,
     ) -> Self {
@@ -67,6 +70,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
             spawner,
             cq,
             transport,
+            worker_auth,
             worker_id,
             executor,
         }
@@ -82,8 +86,9 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
     {
         let transport = Arc::clone(&self.transport);
         let cq = self.cq.clone();
+        let auth = self.worker_auth.clone();
         self.spawner.spawn_task_with_cx(move |cx| async move {
-            let decoded = transport.send(cx, message).await;
+            let decoded = transport.send(cx, message, auth).await;
             let _ = cq.send(to_completion(decoded));
         });
     }
