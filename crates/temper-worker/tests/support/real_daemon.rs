@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use skein::cx::Cx;
 use temper_daemon_transport::InProcessTransport as DaemonInProcessTransport;
-use temper_engine::{Daemon, ResultApplier};
+use temper_engine::{Daemon, NoopApplier, ResultApplier, WorkerPoolPolicy};
 use temper_protocol_worker::{Assign, JobResult, WorkerAuth, WorkerProtocolMessage};
 use temper_worker::Transport;
 
@@ -66,9 +66,18 @@ impl DaemonHarness {
         handle: &skein::runtime::RuntimeHandle,
         auth: temper_engine::WorkerPoolAuthConfig,
     ) -> Self {
-        Self::start_with_daemon(Arc::new(
-            Daemon::new(Arc::new(handle.clone())).with_worker_pool_auth(auth),
-        ))
+        let daemon = Daemon::with_applier_and_worker_pools(
+            Arc::new(handle.clone()),
+            Arc::new(NoopApplier),
+            vec![WorkerPoolPolicy::new(
+                "builders",
+                vec!["engineer".to_string()],
+                vec!["ai/smith".to_string()],
+                Some(1),
+            )],
+        )
+        .with_worker_pool_auth(auth);
+        Self::start_with_daemon(Arc::new(daemon))
     }
 
     /// Build a real daemon with a caller-provided result applier.

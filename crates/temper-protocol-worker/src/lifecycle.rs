@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::assignment::Capability;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeartbeatState {
@@ -26,6 +28,10 @@ pub struct Heartbeat {
     pub free_capacity: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_pool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_jobs: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<Capability>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +80,7 @@ pub enum ErrorCode {
     HeartbeatMissed,
     JobTimeout,
     Unauthorized,
+    RegistrationRejected,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

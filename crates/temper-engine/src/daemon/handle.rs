@@ -17,7 +17,7 @@ use temper_protocol_worker::{
     WorkerAuth, WorkerProtocolMessage,
 };
 use temper_runner::WorkItem;
-use temper_worker_registry::WorkerPoolAuthConfig;
+use temper_worker_registry::{WorkerPoolAuthConfig, WorkerPoolPolicy};
 use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
 
 use crate::APPLY_GRACE;
@@ -39,7 +39,15 @@ impl Daemon {
     }
 
     pub fn with_applier(spawner: Arc<dyn Spawner>, applier: Arc<dyn ResultApplier>) -> Self {
-        Self::with_applier_and_apply_grace(spawner, applier, APPLY_GRACE)
+        Self::with_applier_and_worker_pools(spawner, applier, Vec::new())
+    }
+
+    pub fn with_applier_and_worker_pools(
+        spawner: Arc<dyn Spawner>,
+        applier: Arc<dyn ResultApplier>,
+        worker_pools: Vec<WorkerPoolPolicy>,
+    ) -> Self {
+        Self::with_applier_worker_pools_and_apply_grace(spawner, applier, worker_pools, APPLY_GRACE)
     }
 
     pub fn with_apply_grace(self, apply_grace: Duration) -> Self {
@@ -56,9 +64,10 @@ impl Daemon {
         self
     }
 
-    fn with_applier_and_apply_grace(
+    fn with_applier_worker_pools_and_apply_grace(
         spawner: Arc<dyn Spawner>,
         applier: Arc<dyn ResultApplier>,
+        worker_pools: Vec<WorkerPoolPolicy>,
         apply_grace: Duration,
     ) -> Self {
         let (cq_tx, cq_rx) = channel();
@@ -70,7 +79,7 @@ impl Daemon {
             applier,
             scanner_slot: Arc::clone(&scanner_slot),
         };
-        let machine = DaemonMachine::default_machine(apply_grace);
+        let machine = DaemonMachine::default_machine_with_worker_pools(apply_grace, worker_pools);
         spawner.spawn_with_cx(move |cx| async move {
             let _ = drive(cx, machine, &executor, cq_rx).await;
         });

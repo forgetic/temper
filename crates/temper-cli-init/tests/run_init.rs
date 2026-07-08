@@ -16,11 +16,12 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::process::ExitCode;
 
-use temper_cli_common::{LoadOptions, ScriptedPrompter};
+use temper_cli_common::{EnvMap, LoadOptions, PathResolver, ScriptedPrompter};
 use temper_cli_init::{
     InitOptions, InitOverrides, InitTopology, ProvisionOutcome, ProvisionRequest, Provisioner,
-    RepoSelection, run_init,
+    RepoSelection, main_with_options, run_init,
 };
 use temper_forge::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
@@ -224,10 +225,10 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
         yes: true,
         overrides: InitOverrides {
             forge_url: Some("http://forge.local:3000".to_string()),
-            repo: Some(RepoSelection {
+            repos: vec![RepoSelection {
                 owner: "widgets".to_string(),
                 name: "service".to_string(),
-            }),
+            }],
             admin_user: Some("flag-admin".to_string()),
             provider: Some("deepseek".to_string()),
             bind: Some("127.0.0.1:38100".to_string()),
@@ -501,10 +502,10 @@ fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
         yes: true,
         overrides: InitOverrides {
             forge_url: Some("http://forge.local:3000".to_string()),
-            repo: Some(RepoSelection {
+            repos: vec![RepoSelection {
                 owner: "widgets".to_string(),
                 name: "svc".to_string(),
-            }),
+            }],
             admin_user: Some("root".to_string()),
             admin_password: Some("admin-pass".to_string()),
             provider_key: Some("sk-key".to_string()),
@@ -643,10 +644,10 @@ fn non_interactive_with_provider_url_writes_providers_table() {
         non_interactive: true,
         overrides: InitOverrides {
             forge_url: Some("http://forge.local:3000".to_string()),
-            repo: Some(RepoSelection {
+            repos: vec![RepoSelection {
                 owner: "widgets".to_string(),
                 name: "svc".to_string(),
-            }),
+            }],
             admin_user: Some("root".to_string()),
             admin_password: Some("admin-pass".to_string()),
             provider_key: Some("sk-key".to_string()),
@@ -679,4 +680,155 @@ fn non_interactive_with_provider_url_writes_providers_table() {
 
     // Round-trip: the written config must parse through Config::parse.
     temper_config::Config::load(&config_path).expect("config parses");
+}
+
+#[test]
+fn non_interactive_chatgpt_writes_no_provider_secret() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+        non_interactive: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pass".to_string()),
+            provider: Some("chatgpt".to_string()),
+            // Env/answers may carry a DeepSeek key, but a non-DeepSeek provider
+            // must not leak that secret into credentials.
+            provider_key: Some("sk-should-not-be-written".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut provisioner = StubProvisioner { seen: None };
+
+    run_init(&mut prompter, &mut provisioner, &opts).expect("chatgpt init succeeds");
+
+    let config = std::fs::read_to_string(&config_path).expect("config.toml written");
+    assert!(config.contains("provider = \"chatgpt\""), "{config}");
+    let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
+    assert!(creds.contains("password = \"admin-pass\""), "{creds}");
+    assert!(!creds.contains("sk-should-not-be-written"), "{creds}");
+    assert!(!creds.contains("[agent.providers.chatgpt]"), "{creds}");
+}
+
+#[test]
+fn repeatable_repos_write_all_local_repos_but_apply_requires_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let overrides = InitOverrides {
+        forge_url: Some("http://forge.local:3000".to_string()),
+        admin_user: Some("root".to_string()),
+        admin_password: Some("admin-pass".to_string()),
+        provider_key: Some("sk-key".to_string()),
+        repos: vec![
+            RepoSelection {
+                owner: "acme".to_string(),
+                name: "service".to_string(),
+            },
+            RepoSelection {
+                owner: "acme".to_string(),
+                name: "docs".to_string(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let mut provisioner = StubProvisioner { seen: None };
+    let local_opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path),
+        },
+        non_interactive: true,
+        overrides: overrides.clone(),
+        ..Default::default()
+    };
+    run_init(&mut prompter, &mut provisioner, &local_opts).expect("local multi-repo init");
+    assert!(provisioner.seen.is_none());
+    let config = std::fs::read_to_string(&config_path).expect("config.toml written");
+    assert!(config.contains("acme/service"), "{config}");
+    assert!(config.contains("acme/docs"), "{config}");
+
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let mut provisioner = StubProvisioner { seen: None };
+    let apply_opts = InitOptions {
+        options: LoadOptions {
+            config: Some(dir.path().join("apply-config.toml")),
+            credentials: Some(dir.path().join("apply-credentials.toml")),
+        },
+        non_interactive: true,
+        apply: true,
+        yes: true,
+        overrides,
+        ..Default::default()
+    };
+    let err = run_init(&mut prompter, &mut provisioner, &apply_opts)
+        .expect_err("multi-repo apply should be explicit future work");
+    assert!(err.to_string().contains("exactly one repository"), "{err}");
+    assert!(provisioner.seen.is_none());
+}
+
+#[test]
+fn answers_file_drives_non_interactive_main_without_apply_and_env_secrets_win() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    let answers_path = dir.path().join("answers.toml");
+    std::fs::write(
+        &answers_path,
+        r#"
+schema_version = 1
+topology = "distributed"
+forge_url = "http://answers-forge.local:3000"
+workflow = "basic-delivery"
+webhook_addr = "http://127.0.0.1:38100"
+admin_user = "answers-admin"
+admin_password = "answers-pw"
+provider = "deepseek"
+provider_key = "answers-key"
+repos = ["answers/repo"]
+"#,
+    )
+    .expect("answers file");
+    let mut env = EnvMap::new();
+    env.insert("TEMPER_INIT_ADMIN_PASSWORD", "env-admin-pw");
+    env.insert("TEMPER_INIT_PROVIDER_KEY", "env-provider-key");
+
+    let code = main_with_options(
+        vec![
+            "--answers".to_string(),
+            answers_path.display().to_string(),
+            "--repo".to_string(),
+            "flags/repo".to_string(),
+        ],
+        &env,
+        &PathResolver::default(),
+        LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+    );
+
+    assert_eq!(code, ExitCode::SUCCESS);
+    let config = std::fs::read_to_string(&config_path).expect("config.toml written");
+    assert!(
+        config.contains("url = \"http://answers-forge.local:3000\""),
+        "{config}"
+    );
+    assert!(config.contains("flags/repo"), "{config}");
+    assert!(!config.contains("answers/repo"), "{config}");
+    let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
+    assert!(creds.contains("env-admin-pw"), "{creds}");
+    assert!(creds.contains("env-provider-key"), "{creds}");
+    assert!(!creds.contains("answers-pw"), "{creds}");
+    assert!(!creds.contains("answers-key"), "{creds}");
 }

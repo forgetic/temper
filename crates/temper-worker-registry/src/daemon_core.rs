@@ -14,7 +14,9 @@ use temper_protocol_worker::{
     Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 
-use crate::{DispatchCoordinator, WorkItem, WorkerPoolAuthConfig};
+use crate::{
+    DispatchCoordinator, WorkItem, WorkerPoolAuthConfig, WorkerPoolPolicies, WorkerPoolPolicy,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueuedJob {
@@ -57,11 +59,19 @@ pub struct DaemonCore {
     job_context: BTreeMap<String, (Artifact, serde_json::Value)>,
     worker_auth: WorkerPoolAuthConfig,
     authenticated_workers: BTreeMap<String, String>,
+    pool_policies: WorkerPoolPolicies,
 }
 
 impl DaemonCore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_pool_policies(policies: Vec<WorkerPoolPolicy>) -> Self {
+        Self {
+            pool_policies: WorkerPoolPolicies::from(policies),
+            ..Self::default()
+        }
     }
 
     pub fn coordinator(&self) -> &DispatchCoordinator {
@@ -233,7 +243,7 @@ impl DaemonCore {
         auth: Option<&WorkerAuth>,
     ) -> Result<Option<WorkerProtocolMessage>, WorkerAuthError> {
         if protocol_version(&msg) != WORKER_PROTOCOL_VERSION {
-            return Ok(Some(error(
+            return Ok(Some(error_response(
                 ErrorCode::ProtocolVersionMismatch,
                 "unsupported protocol_version",
                 None,
@@ -247,7 +257,7 @@ impl DaemonCore {
                 Ok(Some(self.handle_poll(poll)))
             }
             WorkerProtocolMessage::Assign(_) | WorkerProtocolMessage::Release(_) => {
-                Ok(Some(error(
+                Ok(Some(error_response(
                     ErrorCode::MalformedMessage,
                     "daemon-to-worker message received inbound",
                     None,
@@ -276,12 +286,24 @@ impl DaemonCore {
         auth: Option<&WorkerAuth>,
     ) -> Result<Option<WorkerProtocolMessage>, WorkerAuthError> {
         let pool = self.authenticate_register(&register, auth)?;
-        self.coordinator.register(&register);
-        if let Some(pool) = pool {
-            self.authenticated_workers
-                .insert(register.worker_id.clone(), pool);
+        match self
+            .coordinator
+            .registry_mut()
+            .register_with_policies(&register, &self.pool_policies)
+        {
+            Ok(()) => {
+                if let Some(pool) = pool {
+                    self.authenticated_workers
+                        .insert(register.worker_id.clone(), pool);
+                }
+                Ok(None)
+            }
+            Err(error) => Ok(Some(error_response(
+                ErrorCode::RegistrationRejected,
+                &error.to_string(),
+                None,
+            ))),
         }
-        Ok(None)
     }
 
     fn authenticate_register(
@@ -350,17 +372,17 @@ impl DaemonCore {
 
     fn handle_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
         if !self.coordinator.registry().is_healthy(&poll.worker_id) {
-            return error(ErrorCode::UnknownWorker, "unknown worker", None);
+            return error_response(ErrorCode::UnknownWorker, "unknown worker", None);
         }
 
         let Some(assignment) = self.coordinator.dispatch_for_worker(&poll.worker_id) else {
-            return error(ErrorCode::PollTimeout, "no work available", None);
+            return error_response(ErrorCode::PollTimeout, "no work available", None);
         };
 
         let Some((artifact, job_payload)) = self.job_context.get(&assignment.job_id).cloned()
         else {
             let _ = self.coordinator.complete(&assignment.job_id);
-            return error(
+            return error_response(
                 ErrorCode::MalformedMessage,
                 "assigned job missing daemon job context",
                 Some(assignment.job_id),
@@ -384,7 +406,11 @@ impl DaemonCore {
             .heartbeat(&heartbeat.worker_id)
         {
             Ok(()) => None,
-            Err(_) => Some(error(ErrorCode::UnknownWorker, "unknown worker", None)),
+            Err(_) => Some(error_response(
+                ErrorCode::UnknownWorker,
+                "unknown worker",
+                None,
+            )),
         }
     }
 
@@ -453,20 +479,28 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
 
 fn register_pool(register: &Register) -> Option<String> {
     register
-        .labels
-        .as_deref()?
-        .iter()
-        .filter_map(|label| label.trim().strip_prefix("pool:"))
+        .worker_pool
+        .as_deref()
         .map(str::trim)
-        .find(|pool| !pool.is_empty())
+        .filter(|pool| !pool.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            register
+                .labels
+                .as_deref()?
+                .iter()
+                .filter_map(|label| label.trim().strip_prefix("pool:"))
+                .map(str::trim)
+                .find(|pool| !pool.is_empty())
+                .map(str::to_string)
+        })
 }
 
 fn auth_error(message: &str) -> WorkerProtocolMessage {
-    error(ErrorCode::Unauthorized, message, None)
+    error_response(ErrorCode::Unauthorized, message, None)
 }
 
-fn error(code: ErrorCode, message: &str, job_id: Option<String>) -> WorkerProtocolMessage {
+fn error_response(code: ErrorCode, message: &str, job_id: Option<String>) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Error(ProtocolError {
         protocol_version: WORKER_PROTOCOL_VERSION,
         code,

@@ -66,6 +66,7 @@ fn register_message(worker_id: &str) -> WorkerProtocolMessage {
         capacity: Capacity {
             max_concurrent_jobs: 1,
         },
+        worker_pool: None,
         labels: None,
     })
 }

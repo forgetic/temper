@@ -5,8 +5,10 @@
 //! These are pure (no I/O) and `pub` so the unified binary's standalone mode can
 //! reuse the exact same translation the slim `temper-engine` binary uses.
 
-use temper_config::{ExposeSecret, Resolved};
-use temper_engine::{DaemonRunConfig, EngineConfig, WorkerAuth, WorkerPoolAuthConfig};
+use temper_config::{ExposeSecret, Resolved, WorkerPoolSettings};
+use temper_engine::{
+    DaemonRunConfig, EngineConfig, WorkerAuth, WorkerPoolAuthConfig, WorkerPoolPolicy,
+};
 use temper_forge::RepositoryPath;
 use temper_forge::config::ForgejoConfig;
 use temper_workflow::RoleId;
@@ -62,7 +64,22 @@ pub fn daemon_run_config(resolved: &Resolved) -> Result<DaemonRunConfig, String>
         lease_ttl: engine.lease_ttl,
         webhook_secret_file: engine.webhook_secret_file.clone(),
         daemon_id: engine.daemon_id.clone(),
+        worker_pools: worker_pool_policies(&resolved.worker.pools),
     })
+}
+
+fn worker_pool_policies(pools: &[WorkerPoolSettings]) -> Vec<WorkerPoolPolicy> {
+    pools
+        .iter()
+        .map(|pool| {
+            WorkerPoolPolicy::new(
+                pool.name.clone(),
+                pool.roles.clone(),
+                pool.repos.iter().map(|repo| repo.display()).collect(),
+                pool.max_concurrent_jobs,
+            )
+        })
+        .collect()
 }
 
 /// Builds the engine's per-subsystem config object from a resolved deployment.
@@ -127,6 +144,7 @@ mod tests {
             lease_ttl: Duration::from_secs(300),
             webhook_secret_file: None,
             daemon_id: "engine-test".to_string(),
+            worker_pools: Vec::new(),
         };
         let forge = ForgejoConfig::new("https://forge.example", "admin-token");
         let mut role_tokens = BTreeMap::new();

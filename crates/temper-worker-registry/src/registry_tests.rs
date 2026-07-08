@@ -1,7 +1,119 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::test_support::{register, register_multi};
-use crate::{RegistryError, WorkerRegistry};
+use crate::{
+    RegistrationError, RegistryError, WorkerPoolPolicies, WorkerPoolPolicy, WorkerRegistry,
+};
+
+fn builders_policy() -> WorkerPoolPolicies {
+    WorkerPoolPolicies::from(vec![WorkerPoolPolicy::new(
+        "builders",
+        vec!["engineer".to_string(), "reviewer".to_string()],
+        vec!["ai/temper".to_string(), "acme/widgets".to_string()],
+        Some(2),
+    )])
+}
+
+#[test]
+fn register_with_pool_policy_records_pool_capacity_and_capabilities() {
+    let mut registry = WorkerRegistry::new();
+    let mut msg = register("worker-a", "engineer", "ai/temper", 2);
+    msg.worker_pool = Some("builders".to_string());
+
+    registry
+        .register_with_policies(&msg, &builders_policy())
+        .expect("pool registration accepted");
+
+    assert_eq!(
+        registry.assign_candidate("engineer", "ai/temper"),
+        Some("worker-a".to_string())
+    );
+    let workers = registry.worker_snapshots();
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0].worker_id, "worker-a");
+    assert_eq!(workers[0].worker_pool.as_deref(), Some("builders"));
+    assert_eq!(workers[0].max_concurrent_jobs, 2);
+    assert_eq!(workers[0].free_capacity, 2);
+    assert_eq!(workers[0].capabilities.len(), 1);
+}
+
+#[test]
+fn pool_policy_rejects_unknown_pool_capacity_and_capability_mismatches() {
+    let policies = builders_policy();
+    let mut registry = WorkerRegistry::new();
+
+    let mut unknown = register("worker-a", "engineer", "ai/temper", 1);
+    unknown.worker_pool = Some("missing".to_string());
+    assert_eq!(
+        registry.register_with_policies(&unknown, &policies),
+        Err(RegistrationError::UnknownPool("missing".to_string()))
+    );
+
+    let mut too_large = register("worker-a", "engineer", "ai/temper", 3);
+    too_large.worker_pool = Some("builders".to_string());
+    assert_eq!(
+        registry.register_with_policies(&too_large, &policies),
+        Err(RegistrationError::CapacityExceeded {
+            pool: "builders".to_string(),
+            requested: 3,
+            max: 2,
+        })
+    );
+
+    let mut wrong_capability = register("worker-a", "architect", "ai/temper", 1);
+    wrong_capability.worker_pool = Some("builders".to_string());
+    assert_eq!(
+        registry.register_with_policies(&wrong_capability, &policies),
+        Err(RegistrationError::CapabilityOutsidePool {
+            pool: "builders".to_string(),
+            role: "architect".to_string(),
+            repo: "ai/temper".to_string(),
+        })
+    );
+
+    assert_eq!(registry.worker_count(), 0);
+}
+
+#[test]
+fn pool_policy_rejects_missing_capacity_and_empty_worker_identity() {
+    let policies = WorkerPoolPolicies::from(vec![WorkerPoolPolicy::new(
+        "capacityless",
+        vec!["engineer".to_string()],
+        vec!["ai/temper".to_string()],
+        None,
+    )]);
+    let mut registry = WorkerRegistry::new();
+
+    let mut msg = register("worker-a", "engineer", "ai/temper", 1);
+    msg.worker_pool = Some("capacityless".to_string());
+    assert_eq!(
+        registry.register_with_policies(&msg, &policies),
+        Err(RegistrationError::PoolMissingCapacity(
+            "capacityless".to_string()
+        ))
+    );
+
+    let empty_id = register(" ", "engineer", "ai/temper", 1);
+    assert_eq!(
+        registry.register_with_policies(&empty_id, &WorkerPoolPolicies::default()),
+        Err(RegistrationError::EmptyWorkerId)
+    );
+}
+
+#[test]
+fn no_pool_registration_preserves_legacy_capabilities_even_with_policies() {
+    let mut registry = WorkerRegistry::new();
+    let msg = register("worker-a", "legacy", "legacy/repo", 1);
+
+    registry
+        .register_with_policies(&msg, &builders_policy())
+        .expect("legacy no-pool registration remains allowed");
+
+    assert_eq!(
+        registry.assign_candidate("legacy", "legacy/repo"),
+        Some("worker-a".to_string())
+    );
+}
 
 #[test]
 fn register_then_assign_matches_capability() {

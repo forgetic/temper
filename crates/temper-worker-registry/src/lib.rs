@@ -14,7 +14,10 @@ mod registry;
 pub use auth::WorkerPoolAuthConfig;
 pub use daemon_core::{DaemonCore, InFlightJob};
 pub use dispatch::{Assignment, DispatchCoordinator, WorkItem};
-pub use registry::{RegistryError, WorkerRegistry};
+pub use registry::{
+    RegistrationError, RegistryError, WorkerPoolPolicies, WorkerPoolPolicy, WorkerRegistry,
+    WorkerSnapshot,
+};
 
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -31,8 +31,17 @@ async fn spawn_with_worker_auth(
     let mut auth = temper_engine::WorkerPoolAuthConfig::new();
     auth.insert_pool("builders", Some(WorkerAuth::bearer("builders-secret")));
     auth.insert_pool("reviewers", Some(WorkerAuth::bearer("reviewers-secret")));
-    let daemon =
-        temper_engine::Daemon::new(std::sync::Arc::new(handle.clone())).with_worker_pool_auth(auth);
+    let daemon = temper_engine::Daemon::with_applier_and_worker_pools(
+        std::sync::Arc::new(handle.clone()),
+        std::sync::Arc::new(temper_engine::NoopApplier),
+        vec![temper_engine::WorkerPoolPolicy::new(
+            "builders",
+            vec!["engineer".to_string()],
+            vec!["ai/temper".to_string()],
+            Some(1),
+        )],
+    )
+    .with_worker_pool_auth(auth);
     let server = temper_engine::serve(
         handle,
         &daemon,
@@ -59,6 +68,7 @@ fn register(
         capacity: Capacity {
             max_concurrent_jobs,
         },
+        worker_pool: None,
         labels: None,
     })
 }
@@ -72,7 +82,7 @@ fn register_pool(
 ) -> WorkerProtocolMessage {
     let mut msg = register(worker_id, role, repo, max_concurrent_jobs);
     if let WorkerProtocolMessage::Register(register) = &mut msg {
-        register.labels = Some(vec![format!("pool:{pool}")]);
+        register.worker_pool = Some(pool.to_string());
     }
     msg
 }
@@ -97,6 +107,8 @@ fn heartbeat(worker_id: &str) -> WorkerProtocolMessage {
         jobs: Vec::new(),
         free_capacity: Some(1),
         worker_pool: None,
+        max_concurrent_jobs: None,
+        capabilities: Vec::new(),
     })
 }
 
@@ -582,7 +594,24 @@ fn state_snapshot_and_job_routes_serve_live_daemon_state() {
             .send_expect_json("GET", format!("{base}/v1/state"), None, None, "state")
             .await;
         assert_eq!(status, 200);
-        assert_eq!(snapshot["workers"], json!({ "healthy": 1, "total": 1 }));
+        assert_eq!(snapshot["workers"]["healthy"], json!(1));
+        assert_eq!(snapshot["workers"]["total"], json!(1));
+        assert_eq!(
+            snapshot["workers"]["registered"][0]["worker_id"],
+            json!("w-1")
+        );
+        assert_eq!(
+            snapshot["workers"]["registered"][0]["max_concurrent_jobs"],
+            json!(1)
+        );
+        assert_eq!(
+            snapshot["workers"]["registered"][0]["free_capacity"],
+            json!(0)
+        );
+        assert_eq!(
+            snapshot["workers"]["registered"][0]["capabilities"],
+            json!([{ "role": "engineer", "repo": "ai/temper" }])
+        );
         assert_eq!(snapshot["in_flight"][0]["job_id"], json!("job-1"));
         assert_eq!(snapshot["in_flight"][0]["ref"], json!("ai/temper#103"));
 
