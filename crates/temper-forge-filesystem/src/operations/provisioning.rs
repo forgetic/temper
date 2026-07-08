@@ -16,8 +16,8 @@ use crate::validation::validate_create_repository;
 use async_trait::async_trait;
 use temper_forge_model::{
     AccessGrant, AccessScope, ChangeKind, CommitFile, CreateBranch, CreateRepository,
-    EnsureRepository, ForgeContent, ForgeError, ForgeResult, NewUser, RepositoryId, RepositoryPath,
-    TokenScope, WebhookSpec,
+    EnsureRepository, ForgeContent, ForgeError, ForgeReadiness, ForgeResult, NewUser,
+    ProvisionedUserStatus, RepositoryId, RepositoryPath, TokenScope, WebhookSpec, WebhookStatus,
 };
 
 #[async_trait]
@@ -163,5 +163,36 @@ impl temper_forge_model::ForgeAdmin for FilesystemForge {
         let _guard = self.write_lock()?;
         self.require_repository(repo)?;
         self.write_ci_enabled(repo)
+    }
+}
+
+#[async_trait]
+impl ForgeReadiness for FilesystemForge {
+    async fn get_provisioned_user(
+        &self,
+        login: &str,
+    ) -> ForgeResult<Option<ProvisionedUserStatus>> {
+        let users = self.read_users()?;
+        Ok(users.get(login).cloned().map(|user| ProvisionedUserStatus {
+            login: user.login,
+            email: Some(user.email),
+        }))
+    }
+
+    async fn list_webhook_statuses(&self, repo: &RepositoryId) -> ForgeResult<Vec<WebhookStatus>> {
+        self.require_repository(repo)?;
+        Ok(self
+            .read_webhooks(repo)?
+            .into_iter()
+            .map(|webhook| WebhookStatus {
+                url: webhook.url,
+                events: webhook.events,
+            })
+            .collect())
+    }
+
+    async fn repository_ci_enabled(&self, repo: &RepositoryId) -> ForgeResult<Option<bool>> {
+        self.require_repository(repo)?;
+        Ok(Some(self.read_ci_enabled(repo)?))
     }
 }

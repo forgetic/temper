@@ -9,10 +9,8 @@
 
 use std::process::ExitCode;
 
-use temper_cli_common::{
-    EX_USAGE, EnvMap, LoadOptions, PathResolver, Prompter, TerminalPrompter, resolve_targets,
-};
-use temper_config::{Config, Credentials};
+use temper_cli_common::{EX_USAGE, EnvMap, LoadOptions, PathResolver, Prompter, TerminalPrompter};
+use temper_config::Credentials;
 
 use crate::provisioner::{ForgejoProvisioner, ProvisionOutcome, ProvisionRequest, Provisioner};
 use crate::{InitError, write};
@@ -176,64 +174,22 @@ struct ApplyBundle {
 }
 
 fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
-    let targets =
-        resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
-    let config = Config::load(&targets.config)
-        .map_err(|error| InitError::Path(format!("load {}: {error}", targets.config.display())))?;
-    let credentials = Credentials::load(&targets.credentials).map_err(|error| {
-        InitError::Path(format!("load {}: {error}", targets.credentials.display()))
-    })?;
-    let resolved = temper_config::resolve(&config, &credentials, &opts.env)
-        .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?;
-
-    let base_url = resolved.forge.url.clone().ok_or_else(|| {
-        InitError::Unsupported("temper apply requires `[forge] url` in config.toml".to_string())
-    })?;
-    if resolved.engine.repos.len() != 1 {
-        return Err(InitError::Unsupported(format!(
-            "temper apply requires exactly one `[engine] repos` entry, found {}",
-            resolved.engine.repos.len()
-        )));
-    }
-    let repo = &resolved.engine.repos[0];
-    let webhook_secret_file = resolved.engine.webhook_secret_file.clone().ok_or_else(|| {
-        InitError::Unsupported(
-            "temper apply requires `[engine] webhook_secret_file` in config.toml".to_string(),
-        )
-    })?;
-
-    let admin_key = non_empty(config.forge.admin.as_deref()).ok_or_else(|| {
-        InitError::Unsupported("temper apply requires `[forge] admin` in config.toml".to_string())
-    })?;
-    let admin = credentials.forge.users.get(&admin_key).ok_or_else(|| {
-        InitError::Unsupported(format!(
-            "temper apply requires `[forge.users.{admin_key}]` in credentials.toml"
-        ))
-    })?;
-    let admin_user = non_empty(admin.user.as_deref()).unwrap_or_else(|| admin_key.clone());
-    let admin_password = non_empty(admin.password.as_deref()).ok_or_else(|| {
-        InitError::Unsupported(format!(
-            "temper apply requires a password under `[forge.users.{admin_key}]` in credentials.toml"
-        ))
-    })?;
-
-    let request = ProvisionRequest {
-        base_url,
-        admin_user,
-        admin_password,
-        owner: repo.owner.clone(),
-        name: repo.name.clone(),
-        webhook_url: format!("http://{}/forgejo/webhook", resolved.engine.bind),
-        webhook_secret_file,
-        workflow_path: resolved.engine.workflow_file.clone(),
+    let bundle = crate::plan::load_plan_bundle(&crate::plan::PlanOptions {
+        options: opts.options.clone(),
         existing_repo: opts.existing_repo,
-    };
+        format: temper_cli_common::OutputFormat::Human,
+        env: opts.env.clone(),
+        paths: opts.paths.clone(),
+    })?;
+    let credentials_path = bundle.loaded.credentials.clone().ok_or_else(|| {
+        InitError::Path("temper apply requires a writable credentials.toml".to_string())
+    })?;
 
     Ok(ApplyBundle {
-        request,
-        credentials,
-        credentials_path: targets.credentials,
-        admin_key,
+        request: bundle.request,
+        credentials: bundle.credentials,
+        credentials_path,
+        admin_key: bundle.admin_key,
     })
 }
 
@@ -251,13 +207,6 @@ fn merge_provisioned_credentials(
         .entry(admin_key.to_string())
         .or_default();
     admin.token = Some(outcome.admin_token.clone());
-}
-
-fn non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
 }
 
 #[cfg(test)]
