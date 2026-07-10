@@ -135,7 +135,7 @@ pub use load::{
     parse_workflow_document, parse_workflow_spec,
 };
 pub use metadata::{
-    Lease, METADATA_BEGIN, METADATA_END, MetadataError, WorkflowMetadata,
+    Lease, METADATA_BEGIN, METADATA_END, MetadataError, WorkflowMetadata, WorkflowMetadataKey,
     global_child_correlation_key, parse_metadata_block, render_metadata_block,
     replace_metadata_block,
 };

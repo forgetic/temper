@@ -291,11 +291,13 @@ fn build_effect(effect: &RawEffect) -> Effect {
             record_parent_dependencies,
             min_children,
             max_children,
+            required_child_metadata,
         } => Effect::CreateIssues {
             correlation_key: correlation_key.clone(),
             record_parent_dependencies: *record_parent_dependencies,
             min_children: *min_children,
             max_children: *max_children,
+            required_child_metadata: required_child_metadata.clone(),
         },
         RawEffect::MergePullRequest => Effect::MergePullRequest,
         RawEffect::CloseParentIssues => Effect::CloseParentIssues,

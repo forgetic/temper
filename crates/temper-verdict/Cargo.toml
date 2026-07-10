@@ -8,6 +8,7 @@ description = "Shared workflow-derived verdict output contracts and pure result 
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

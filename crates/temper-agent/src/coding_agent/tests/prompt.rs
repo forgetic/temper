@@ -93,6 +93,7 @@ fn system_prompt_renders_exact_workflow_product_contract() {
                 min_children: 1,
                 max_children: Some(1),
                 allowed_child_kinds: vec!["plan".to_string()],
+                required_child_metadata: vec!["target_branch".to_string()],
                 ..Default::default()
             },
         ),
@@ -113,6 +114,10 @@ fn system_prompt_renders_exact_workflow_product_contract() {
             .contains("Verdict `needs_plan` requires exactly 1 child product(s) of kind(s): plan")
     );
     assert!(prompt.contains("non-blank `slug`, `title`, and `body`"));
+    assert!(
+        prompt.contains("Each child body must contain non-blank workflow metadata `target_branch`")
+    );
+    assert!(prompt.contains("`<!-- temper:workflow ... -->` JSON block"));
     assert!(prompt.contains("requires a non-blank pull-request `title`"));
     assert!(prompt.contains("requires a non-blank pull-request `body`"));
     assert!(prompt.contains("workflow metadata `target_branch`"));

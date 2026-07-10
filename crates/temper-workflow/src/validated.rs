@@ -11,6 +11,7 @@ use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
     TransitionId, ValidationBindingId, VerdictId,
 };
+use crate::metadata::WorkflowMetadataKey;
 use crate::relation::RelationKind;
 use chrono::Duration;
 use std::collections::BTreeMap;
@@ -368,6 +369,8 @@ pub enum Effect {
         min_children: usize,
         #[serde(default)]
         max_children: Option<usize>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        required_child_metadata: Vec<WorkflowMetadataKey>,
     },
     MergePullRequest,
     /// Close parent issues of a pull request. See [`crate::spec::RawEffect::CloseParentIssues`].

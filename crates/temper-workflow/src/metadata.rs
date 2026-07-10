@@ -59,6 +59,24 @@ pub const METADATA_BEGIN: &str = "<!-- temper:workflow";
 /// Marker that closes a workflow metadata block.
 pub const METADATA_END: &str = "-->";
 
+/// Metadata keys that a workflow effect may require from an authored product.
+///
+/// Keeping this vocabulary typed prevents a workflow from advertising a
+/// contract that the authoritative metadata parser cannot enforce.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowMetadataKey {
+    TargetBranch,
+}
+
+impl WorkflowMetadataKey {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TargetBranch => "target_branch",
+        }
+    }
+}
+
 /// Machine-readable workflow metadata embedded in a Forge artifact body.
 ///
 /// Every field is optional so a partially populated block still parses. An

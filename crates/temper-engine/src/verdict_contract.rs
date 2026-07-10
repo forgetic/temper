@@ -32,6 +32,7 @@ pub(crate) fn derive_verdict_contracts(
                     Effect::CreateIssues {
                         min_children,
                         max_children,
+                        required_child_metadata,
                         ..
                     } => {
                         if !has_create_issues {
@@ -44,6 +45,9 @@ pub(crate) fn derive_verdict_contracts(
                                 .max_children
                                 .zip(*max_children)
                                 .map(|(left, right)| left + right);
+                        }
+                        for key in required_child_metadata {
+                            push_unique(&mut contract.required_child_metadata, key.as_str());
                         }
                         for relation in workflow.relations().iter().filter(|relation| {
                             relation.kind == RelationKind::Parent
@@ -127,6 +131,7 @@ mod tests {
         assert_eq!(needs_plan.min_children, 1);
         assert_eq!(needs_plan.max_children, Some(1));
         assert_eq!(needs_plan.allowed_child_kinds, vec!["plan"]);
+        assert_eq!(needs_plan.required_child_metadata, vec!["target_branch"]);
         assert_eq!(contracts["config_only"].max_children, Some(0));
 
         let tester = compiled

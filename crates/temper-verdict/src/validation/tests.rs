@@ -106,6 +106,60 @@ fn rejects_wrong_count_kind_and_blank_fields() {
 }
 
 #[test]
+fn validates_required_child_workflow_metadata() {
+    let contract = VerdictContract {
+        min_children: 1,
+        max_children: Some(1),
+        allowed_child_kinds: vec!["plan".to_string()],
+        required_child_metadata: vec!["target_branch".to_string()],
+        ..VerdictContract::default()
+    };
+    let mut child = Child::valid("plan", "plan");
+    let mut result = ResultView {
+        verdict: Some("needs_plan".to_string()),
+        title: None,
+        body: None,
+        children: vec![child],
+    };
+    let error = validate_verdict_result(
+        &result,
+        &contracts(contract.clone()),
+        &SourceMetadata::new(),
+    )
+    .expect_err("missing child metadata is rejected")
+    .to_string();
+    assert!(error.contains("child `plan` requires non-blank workflow metadata `target_branch`"));
+
+    child = result.children.pop().expect("child");
+    child.body = "Body\n\n<!-- temper:workflow\n{\"target_branch\":\"  \"}\n-->".to_string();
+    result.children.push(child);
+    assert!(
+        validate_verdict_result(
+            &result,
+            &contracts(contract.clone()),
+            &SourceMetadata::new(),
+        )
+        .is_err()
+    );
+
+    result.children[0].body = "Body\n\n<!-- temper:workflow\n{".to_string();
+    let error = validate_verdict_result(
+        &result,
+        &contracts(contract.clone()),
+        &SourceMetadata::new(),
+    )
+    .expect_err("malformed child metadata is rejected")
+    .to_string();
+    assert!(error.contains("malformed workflow metadata"));
+
+    result.children[0].body =
+        "Body\n\n<!-- temper:workflow\n{\"target_branch\":\"feature/207-webhook\"}\n-->"
+            .to_string();
+    validate_verdict_result(&result, &contracts(contract), &SourceMetadata::new())
+        .expect("non-blank child metadata is valid");
+}
+
+#[test]
 fn rejects_duplicate_unknown_self_and_cyclic_dependencies() {
     let contract = VerdictContract {
         min_children: 1,
