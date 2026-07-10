@@ -141,6 +141,33 @@ fn worker_rejects_agent_result_that_violates_verdict_contract() {
 }
 
 #[test]
+fn worker_rejects_child_missing_required_workflow_metadata() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReadOnlyBreakdownVerdict.runner(), true);
+        let mut context = read_only_job_context("agent/metadata-7", "metadata-7");
+        context.allowed_verdicts = vec!["needs_breakdown".to_string()];
+        context.verdict_contracts.insert(
+            "needs_breakdown".to_string(),
+            temper_verdict::VerdictContract {
+                min_children: 1,
+                allowed_child_kinds: vec!["code".to_string()],
+                required_child_metadata: vec!["target_branch".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let outcome = executor
+            .execute(assign_with_context("metadata-7", context))
+            .await;
+
+        let message = expect_failure_class(outcome, FailureClass::Protocol);
+        assert!(message.contains("workflow metadata `target_branch`"));
+        assert_no_origin_branch(&fixture, "agent/metadata-7");
+    });
+}
+
+#[test]
 fn read_only_job_without_verdict_is_permanent() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

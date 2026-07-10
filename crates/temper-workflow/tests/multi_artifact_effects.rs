@@ -17,7 +17,7 @@ use temper_workflow::{
     ArtifactRef, ArtifactSource, CreateIssuesChild, DefaultRecoveryPolicy, Effect,
     ExecutionContext, ExecutionError, InMemoryJournal, RawEffect, RawWorkflowSpec,
     ReconcileFinding, RecoveryAction, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
-    WorkflowMetadata, global_child_correlation_key, parse_metadata_block,
+    WorkflowMetadata, WorkflowMetadataKey, global_child_correlation_key, parse_metadata_block,
 };
 
 const CREATE_ISSUES_WORKFLOW: &str = r#"{
@@ -228,7 +228,8 @@ fn create_issues_deserializes_with_and_without_parent_dependency_recording() {
             record_parent_dependencies: false,
             min_children: 1,
             max_children: None,
-        } if k == "k1"
+            required_child_metadata: ref metadata,
+        } if k == "k1" && metadata.is_empty()
     ));
 
     let with_parent_deps: RawEffect = serde_json::from_str(
@@ -252,7 +253,20 @@ fn create_issues_deserializes_with_and_without_parent_dependency_recording() {
             record_parent_dependencies: false,
             min_children: 1,
             max_children: None,
-        }
+            required_child_metadata: ref metadata,
+        } if metadata.is_empty()
+    ));
+
+    let with_metadata: RawEffect = serde_json::from_str(
+        r#"{"kind":"create_issues","required_child_metadata":["target_branch"]}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        with_metadata,
+        RawEffect::CreateIssues {
+            required_child_metadata: ref metadata,
+            ..
+        } if metadata == &[WorkflowMetadataKey::TargetBranch]
     ));
 
     let exactly_one: RawEffect =

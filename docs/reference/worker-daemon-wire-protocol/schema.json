@@ -320,6 +320,10 @@
      "type": "array",
      "items": { "type": "string" }
     },
+    "required_child_metadata": {
+     "type": "array",
+     "items": { "type": "string" }
+    },
     "requires_pr_title": { "type": "boolean" },
     "requires_pr_body": { "type": "boolean" },
     "requires_body": { "type": "boolean" },

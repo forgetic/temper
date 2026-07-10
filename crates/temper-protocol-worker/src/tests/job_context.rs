@@ -29,6 +29,7 @@ fn full_job_context_round_trips_without_loss() {
                 min_children: 1,
                 max_children: Some(1),
                 allowed_child_kinds: vec!["plan".to_string()],
+                required_child_metadata: vec!["target_branch".to_string()],
                 ..VerdictContract::default()
             },
         )]),

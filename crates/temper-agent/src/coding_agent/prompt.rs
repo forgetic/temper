@@ -180,6 +180,11 @@ fn render_verdict_contracts(
                 "Each child must include non-blank `slug`, `title`, and `body`; sibling slugs must be unique and `depends_on` must be acyclic.\n",
             );
         }
+        for key in &contract.required_child_metadata {
+            prompt.push_str(&format!(
+                "Each child body must contain non-blank workflow metadata `{key}` inside a `<!-- temper:workflow ... -->` JSON block.\n"
+            ));
+        }
         if contract.requires_pr_title {
             prompt.push_str("It requires a non-blank pull-request `title`.\n");
         }

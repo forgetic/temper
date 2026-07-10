@@ -6,7 +6,7 @@ use crate::support::*;
 const PLAN_CENTRIC_WORKFLOW: &str =
     include_str!("../../../../scenarios/plan-centric-feature-branch/config/workflow.json");
 
-fn plan_centric_workflow() -> ValidatedWorkflow {
+pub(crate) fn plan_centric_workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec =
         serde_json::from_str(PLAN_CENTRIC_WORKFLOW).expect("workflow parses");
     spec.validate().expect("workflow validates")
@@ -22,7 +22,7 @@ fn body_with_target_branch(body: &str, target_branch: &str) -> String {
     )
 }
 
-fn plan_feature_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
+pub(crate) fn plan_feature_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
     job_for_context(
         repo_path,
         number,
@@ -45,7 +45,7 @@ fn plan_feature_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJo
     )
 }
 
-async fn create_feature_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemNumber {
+pub(crate) async fn create_feature_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemNumber {
     forge
         .create_issue(
             repo,

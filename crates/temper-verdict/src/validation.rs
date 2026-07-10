@@ -165,6 +165,7 @@ fn validate_children<C: VerdictChildView>(
             ));
         }
         validate_child_kind(child, index, contract, problems);
+        validate_child_metadata(child, index, contract, problems);
     }
     validate_dependencies(children, &slugs, problems);
 }
@@ -193,6 +194,53 @@ fn validate_child_kind<C: VerdictChildView>(
             contract.allowed_child_kinds.join(", ")
         ));
     }
+}
+
+fn validate_child_metadata<C: VerdictChildView>(
+    child: &C,
+    index: usize,
+    contract: &crate::VerdictContract,
+    problems: &mut Vec<String>,
+) {
+    if contract.required_child_metadata.is_empty() {
+        return;
+    }
+    let metadata = match parse_workflow_metadata(child.body()) {
+        Ok(metadata) => metadata,
+        Err(reason) => {
+            problems.push(format!(
+                "child `{}` has malformed workflow metadata: {reason}",
+                display_slug(child, index)
+            ));
+            return;
+        }
+    };
+    for key in &contract.required_child_metadata {
+        if metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            problems.push(format!(
+                "child `{}` requires non-blank workflow metadata `{key}` in its body",
+                display_slug(child, index)
+            ));
+        }
+    }
+}
+
+fn parse_workflow_metadata(body: &str) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    const BEGIN: &str = "<!-- temper:workflow";
+    const END: &str = "-->";
+    let Some(start) = body.find(BEGIN) else {
+        return Ok(BTreeMap::new());
+    };
+    let json_and_after = &body[start + BEGIN.len()..];
+    let Some(end) = json_and_after.find(END) else {
+        return Err("block was not terminated with `-->`".to_string());
+    };
+    serde_json::from_str(json_and_after[..end].trim())
+        .map_err(|error| format!("block contained invalid JSON: {error}"))
 }
 
 fn validate_dependencies<C: VerdictChildView>(

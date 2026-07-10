@@ -22,6 +22,9 @@ pub struct VerdictContract {
     pub max_children: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_child_kinds: Vec<String>,
+    /// Non-blank workflow metadata keys required in every authored child body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_child_metadata: Vec<String>,
     #[serde(default)]
     pub requires_pr_title: bool,
     #[serde(default)]

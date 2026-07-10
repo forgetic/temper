@@ -143,6 +143,7 @@ fn validate_workflow_verdict_contract_rejects_missing_and_malformed_children() {
             min_children: 1,
             max_children: Some(1),
             allowed_child_kinds: vec!["plan".to_string()],
+            required_child_metadata: vec!["target_branch".to_string()],
             ..Default::default()
         },
     )]);
@@ -180,6 +181,26 @@ fn validate_workflow_verdict_contract_rejects_missing_and_malformed_children() {
     assert!(error.contains("blank title"));
     assert!(error.contains("blank body"));
     assert!(error.contains("allowed kinds: plan"));
+
+    let missing_metadata = WorkspaceResult {
+        verdict: Some("needs_plan".to_string()),
+        children: vec![WorkspaceResultChild {
+            slug: "plan".to_string(),
+            title: "Plan the feature".to_string(),
+            body: "A prose-only plan.".to_string(),
+            kind: Some("plan".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let error = crate::coding_agent::result::validate_verdict_contract(
+        &missing_metadata,
+        &contracts,
+        &Default::default(),
+    )
+    .expect_err("missing child metadata is rejected")
+    .to_string();
+    assert!(error.contains("workflow metadata `target_branch`"));
 }
 
 #[test]

@@ -8,6 +8,8 @@
 use serde::{Deserialize, Serialize};
 use temper_forge::ReviewDecision;
 
+use crate::metadata::WorkflowMetadataKey;
+
 /// A raw transition effect.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -106,6 +108,11 @@ pub enum RawEffect {
         /// Optional upper bound for workflows that require a fixed-size fan-out.
         #[serde(default)]
         max_children: Option<usize>,
+        /// Non-blank workflow metadata every authored child body must carry.
+        /// The typed vocabulary prevents declarations the metadata parser cannot
+        /// enforce. Empty preserves existing workflow behavior.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        required_child_metadata: Vec<WorkflowMetadataKey>,
     },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,

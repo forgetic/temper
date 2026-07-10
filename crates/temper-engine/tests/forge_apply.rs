@@ -24,3 +24,5 @@ mod target_branch;
 mod triage;
 #[path = "forge_apply/trivial.rs"]
 mod trivial;
+#[path = "forge_apply/verdict_child_metadata.rs"]
+mod verdict_child_metadata;

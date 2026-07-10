@@ -316,7 +316,7 @@
       "artifact": "feature",
       "roles": ["architect"],
       "effects": [
-        { "kind": "create_issues", "correlation_key": "feature-plan", "record_parent_dependencies": true, "min_children": 1, "max_children": 1 },
+        { "kind": "create_issues", "correlation_key": "feature-plan", "record_parent_dependencies": true, "min_children": 1, "max_children": 1, "required_child_metadata": ["target_branch"] },
         { "kind": "add_label", "label": "planned" },
         { "kind": "set_assignee", "role": "architect" }
       ]

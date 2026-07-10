@@ -80,10 +80,14 @@ feature-branch landing PR without requiring a worker-produced diff.
 A `create_issues` effect creates one or more child issues from the workspace
 result. It accepts `min_children` (default `1`) and optional `max_children` to
 declare product cardinality; `max_children: 1` expresses an exact one-child
-handoff. Validation rejects a zero minimum or a maximum below the minimum. It
-also accepts an optional `correlation_key` for idempotent child creation and an
-optional `record_parent_dependencies` boolean. The default `false`
-preserves legacy same-repository fan-out behavior. When set to `true`, the
+handoff. Validation rejects a zero minimum or a maximum below the minimum.
+`required_child_metadata` optionally lists non-blank workflow metadata that
+every authored child body must carry; the currently supported key is
+`target_branch`. This requirement is included in the worker/agent verdict
+contract and revalidated by the engine before any child or normal workflow
+state is mutated. The effect also accepts an optional `correlation_key` for
+idempotent child creation and an optional `record_parent_dependencies` boolean.
+The default `false` preserves legacy same-repository fan-out behavior. When set to `true`, the
 executor records every created child as dependency metadata on the source issue
 after all children exist and sibling dependency slugs have been linked. Use this
 for plan-completion issues whose `dependencies_resolved` gate should remain
