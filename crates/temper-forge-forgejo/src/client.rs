@@ -31,6 +31,12 @@ impl HttpMethod {
     }
 }
 
+impl std::fmt::Display for HttpMethod {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// A backend-prepared HTTP request.
 ///
 /// `path` is the request path relative to the Forgejo host, including the
@@ -82,6 +88,9 @@ impl HttpResponse {
 pub enum HttpError {
     #[error("transport failure: {0}")]
     Transport(String),
+    /// A non-GET request was stopped by a read-only client boundary.
+    #[error("read-only Forgejo client rejected {0} request")]
+    ReadOnlyMethod(HttpMethod),
 }
 
 /// Async HTTP seam used by the Forgejo backend.

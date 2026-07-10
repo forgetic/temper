@@ -28,6 +28,7 @@ mod items;
 mod map;
 mod provision;
 mod pulls;
+mod read_only_basic;
 mod repos;
 mod request;
 mod types;
@@ -36,6 +37,7 @@ mod version;
 pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
 pub use config::{CasMode, DEFAULT_PAGE_LIMIT, ForgejoConfig, WebUiCredentials};
 pub use provision::{ROLE_PASSWORD, admin_token_via_basic_auth};
+pub use read_only_basic::ReadOnlyBasicAuthClient;
 
 use std::sync::Arc;
 use version::VersionCache;
@@ -61,6 +63,42 @@ impl ForgejoForge<EngineHttpClient> {
     pub fn new(config: ForgejoConfig) -> Self {
         let client = EngineHttpClient::new(config.base_url.clone());
         Self::with_client(config, client)
+    }
+}
+
+impl ForgejoForge<ReadOnlyBasicAuthClient<EngineHttpClient>> {
+    /// Builds a mutation-proof backend for pre-apply inspection over HTTP Basic
+    /// authentication.
+    pub fn new_read_only_basic(
+        base_url: impl Into<String>,
+        login: impl AsRef<str>,
+        password: impl AsRef<str>,
+    ) -> Self {
+        let base_url = base_url.into();
+        let client = EngineHttpClient::new(base_url.clone());
+        Self::with_read_only_basic_client(base_url, login, password, client)
+    }
+}
+
+impl<C: HttpClient> ForgejoForge<ReadOnlyBasicAuthClient<C>> {
+    /// Builds a mutation-proof Basic-auth backend over an explicit HTTP seam.
+    ///
+    /// Production uses [`Self::new_read_only_basic`]; recording tests inject a
+    /// client here to verify authentication and local mutation rejection.
+    pub fn with_read_only_basic_client(
+        base_url: impl Into<String>,
+        login: impl AsRef<str>,
+        password: impl AsRef<str>,
+        client: C,
+    ) -> Self {
+        // The regular request builder requires a token-shaped configuration.
+        // This non-secret sentinel is always removed by the client boundary
+        // before a GET reaches the transport.
+        let config = ForgejoConfig::new(base_url, "read-only-basic-auth");
+        Self::with_client(
+            config,
+            ReadOnlyBasicAuthClient::new(client, login, password),
+        )
     }
 }
 
