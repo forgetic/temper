@@ -18,11 +18,13 @@ Define a workflow as a state machine. Temper executes it.
 
 ## Operator command flow
 
-The public runtime UX is centered on a small command set:
+The public operator lifecycle is explicit:
+`temper init -> temper check -> temper plan -> temper apply -> temper serve`.
 
 ```sh
 temper --config ./deploy init        # write a local deployment bundle
 temper --config ./deploy check       # validate config, credentials, pools, secrets
+temper --config ./deploy plan        # preview Forge reconciliation without mutation
 temper --config ./deploy apply       # provision the Forgejo repo/users/labels/webhook
 temper --config ./deploy serve standalone
 # or split runtime services:
@@ -31,10 +33,10 @@ temper --config ./deploy serve worker --pool engineers
 ```
 
 `temper init --apply` combines the local write and provisioning steps for demos.
-For production, review the generated config/workflow and the provisioning-plan
-inputs before `apply`; `temper check --component engine` and
-`temper check --component worker --pool <name>` validate the same bundle without
-starting services. Use top-level `temper check` for validation —
+For production, review the generated config/workflow, run the offline checks,
+and inspect `temper plan` before `temper apply`; `temper check --component engine`
+and `temper check --component worker --pool <name>` validate the same bundle
+without starting services. Use top-level `temper check` for validation —
 `temper config validate` remains only a compatibility path.
 
 `temper serve` is the documented long-lived runtime surface. Legacy
