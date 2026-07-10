@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use temper_cli_common::{FileTargets, resolve_targets, restrict_600, write_new_file};
 use temper_config::{
-    AgentProfileConfig, ConfigInputs, CredentialInputs, NamedSecret, NamedSecretEntry,
-    ProviderKeyInput, ProviderSecretInput, ProvisionedForgeUser, WorkerPoolConfig, build_config,
-    build_credentials, forge_users_from_provisioned, write_config,
+    AgentProfileConfig, ConfigInputs, CredentialInputs, ExposeSecret, NamedSecret,
+    NamedSecretEntry, ProviderKeyInput, ProviderSecretInput, ProvisionedForgeUser,
+    WorkerPoolConfig, build_config, build_credentials, forge_users_from_provisioned, write_config,
 };
 use temper_reference_delivery::{
     basic_delivery_workflow_json, load_workflow_document, reference_delivery_workflow_json,
@@ -283,7 +283,7 @@ pub fn provisioned_forge_users(
             None,
             None,
             Some(answers.admin_password.clone()),
-            Some(outcome.admin_token.clone()),
+            Some(outcome.admin_token.expose_secret().to_string()),
         ),
     );
     forge_users

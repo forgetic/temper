@@ -1,11 +1,15 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use temper_cli_common::{LoadOptions, ScriptedPrompter};
+use temper_config::{ExposeSecret, Secret};
 use temper_forge::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
 use temper_workflow::{RawWorkflowSpec, RoleId};
 
 use super::*;
+use crate::apply::args::parse_apply_args;
+use crate::provisioner::{ApplyPlanOutcome, ApplyPlanRequest, ApplyProvisioner};
 
 struct StubApplyProvisioner {
     seen: Option<ApplyPlanRequest>,
@@ -44,7 +48,7 @@ impl ApplyProvisioner for StubApplyProvisioner {
         }
         Ok(ApplyPlanOutcome {
             provisioned,
-            admin_token: "admin-rest-token".to_string(),
+            admin_token: Secret::from("admin-rest-token"),
         })
     }
 }
@@ -124,7 +128,12 @@ fn run_apply_loads_deployment_plan_for_all_repos_and_updates_credentials() {
     let seen = provisioner.seen.expect("provisioner called");
     assert_eq!(seen.base_url, "http://forge.local:3000");
     assert_eq!(seen.admin_user.as_deref(), Some("root"));
-    assert_eq!(seen.admin_password.as_deref(), Some("admin-pass"));
+    assert_eq!(
+        seen.admin_password
+            .as_ref()
+            .map(ExposeSecret::expose_secret),
+        Some("admin-pass")
+    );
     assert_eq!(seen.plans.len(), 2);
     assert_eq!(seen.plans[0].repo.owner, "acme");
     assert_eq!(seen.plans[0].repo.name, "service");
@@ -264,10 +273,169 @@ fn run_apply_can_skip_local_credential_mutation_after_success() {
 }
 
 #[test]
-fn run_apply_uses_configured_admin_token_without_local_credential_mutation() {
+fn programmatic_no_write_mode_uses_ambient_named_credentials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (config_path, sibling_credentials) = write_token_apply_bundle(dir.path());
+    let credentials_dir = dir.path().join("ambient-credentials");
+    std::fs::create_dir_all(&credentials_dir).expect("credentials dir");
+    std::fs::write(credentials_dir.join("forge-admin"), "ambient-admin-token\n")
+        .expect("admin token");
+    std::fs::write(
+        credentials_dir.join("forge-webhook"),
+        "ambient-webhook-secret\n",
+    )
+    .expect("webhook secret");
+    let before = std::fs::read_to_string(&sibling_credentials).expect("sibling before");
+    let mut env = temper_config::EnvMap::new();
+    env.insert(
+        "CREDENTIALS_DIRECTORY",
+        credentials_dir.to_string_lossy().into_owned(),
+    );
+    let opts = ApplyOptions {
+        options: LoadOptions {
+            config: Some(config_path),
+            credentials: None,
+        },
+        yes: true,
+        credential_mode: ApplyCredentialMode::SkipLocalCredentials,
+        env,
+        ..Default::default()
+    };
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let mut provisioner = StubApplyProvisioner {
+        seen: None,
+        fail_repo: None,
+    };
+
+    run_apply(&mut prompter, &mut provisioner, &opts).expect("ambient no-write apply");
+
+    let seen = provisioner.seen.expect("provisioner called");
+    assert_eq!(
+        seen.admin_token.as_ref().map(ExposeSecret::expose_secret),
+        Some("ambient-admin-token")
+    );
+    assert_eq!(
+        seen.plans[0]
+            .webhook
+            .as_ref()
+            .map(|webhook| webhook.secret.as_str()),
+        Some("ambient-webhook-secret")
+    );
+    assert_eq!(
+        std::fs::read_to_string(sibling_credentials).expect("sibling after"),
+        before
+    );
+}
+
+#[test]
+fn ambient_credentials_are_rejected_before_provisioning_in_update_mode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (config_path, _sibling_credentials) = write_token_apply_bundle(dir.path());
+    let credentials_dir = dir.path().join("ambient-credentials");
+    std::fs::create_dir_all(&credentials_dir).expect("credentials dir");
+    std::fs::write(credentials_dir.join("forge-admin"), "ambient-admin-token\n")
+        .expect("admin token");
+    std::fs::write(
+        credentials_dir.join("forge-webhook"),
+        "ambient-webhook-secret\n",
+    )
+    .expect("webhook secret");
+    let mut env = temper_config::EnvMap::new();
+    env.insert(
+        "CREDENTIALS_DIRECTORY",
+        credentials_dir.to_string_lossy().into_owned(),
+    );
+    let opts = ApplyOptions {
+        options: LoadOptions {
+            config: Some(config_path),
+            credentials: None,
+        },
+        yes: true,
+        env,
+        ..Default::default()
+    };
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let mut provisioner = StubApplyProvisioner {
+        seen: None,
+        fail_repo: None,
+    };
+
+    let error = run_apply(&mut prompter, &mut provisioner, &opts)
+        .expect_err("ambient update target must be rejected");
+
+    assert!(provisioner.seen.is_none(), "must reject before mutation");
+    let message = error.to_string();
+    assert!(message.contains("CREDENTIALS_DIRECTORY"), "{message}");
+    assert!(message.contains("--secrets"), "{message}");
+}
+
+#[test]
+fn explicit_credentials_directory_updates_toml_and_preserves_named_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (config_path, source_credentials) = write_apply_bundle(dir.path(), &["acme/service"]);
+    let credentials_dir = dir.path().join("explicit-credentials");
+    std::fs::create_dir_all(&credentials_dir).expect("credentials dir");
+    let credentials_path = credentials_dir.join("credentials.toml");
+    std::fs::copy(&source_credentials, &credentials_path).expect("copy credentials");
+    let named_path = credentials_dir.join("provider-mounted-secret");
+    std::fs::write(&named_path, "leave-this-file-alone\n").expect("named file");
+    let opts = apply_options(config_path, credentials_dir, true);
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let mut provisioner = StubApplyProvisioner {
+        seen: None,
+        fail_repo: None,
+    };
+
+    run_apply(&mut prompter, &mut provisioner, &opts).expect("directory apply");
+
+    let credentials = std::fs::read_to_string(&credentials_path).expect("updated credentials");
+    assert!(credentials.contains("admin-rest-token"), "{credentials}");
+    assert!(credentials.contains("token-engineer"), "{credentials}");
+    assert!(credentials.contains("sk-key"), "{credentials}");
+    assert_eq!(
+        std::fs::read_to_string(named_path).expect("named file preserved"),
+        "leave-this-file-alone\n"
+    );
+}
+
+#[test]
+fn explicit_named_only_directory_creates_durable_credentials_toml() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (config_path, _sibling_credentials) = write_token_apply_bundle(dir.path());
+    let credentials_dir = dir.path().join("explicit-named-credentials");
+    std::fs::create_dir_all(&credentials_dir).expect("credentials dir");
+    let admin_path = credentials_dir.join("forge-admin");
+    let webhook_path = credentials_dir.join("forge-webhook");
+    std::fs::write(&admin_path, "explicit-admin-token\n").expect("admin token");
+    std::fs::write(&webhook_path, "explicit-webhook-secret\n").expect("webhook secret");
+    let opts = apply_options(config_path, credentials_dir.clone(), true);
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let mut provisioner = StubApplyProvisioner {
+        seen: None,
+        fail_repo: None,
+    };
+
+    run_apply(&mut prompter, &mut provisioner, &opts).expect("named directory apply");
+
+    let credentials_path = credentials_dir.join("credentials.toml");
+    let credentials = std::fs::read_to_string(credentials_path).expect("created credentials");
+    assert!(credentials.contains("schema_version = 1"), "{credentials}");
+    assert!(credentials.contains("admin-rest-token"), "{credentials}");
+    assert!(credentials.contains("token-engineer"), "{credentials}");
+    assert_eq!(
+        std::fs::read_to_string(admin_path).expect("admin named file"),
+        "explicit-admin-token\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(webhook_path).expect("webhook named file"),
+        "explicit-webhook-secret\n"
+    );
+}
+
+#[test]
+fn run_apply_uses_configured_admin_token_and_updates_selected_credentials() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (config_path, credentials_path) = write_token_apply_bundle(dir.path());
-    let before = std::fs::read_to_string(&credentials_path).expect("credentials before");
     let opts = apply_options(config_path, credentials_path.clone(), true);
     let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
     let mut provisioner = StubApplyProvisioner {
@@ -278,18 +446,23 @@ fn run_apply_uses_configured_admin_token_without_local_credential_mutation() {
     run_apply(&mut prompter, &mut provisioner, &opts).expect("apply succeeds");
 
     let seen = provisioner.seen.expect("provisioner called");
-    assert_eq!(seen.admin_token.as_deref(), Some("admin-token-from-secret"));
+    assert_eq!(
+        seen.admin_token.as_ref().map(ExposeSecret::expose_secret),
+        Some("admin-token-from-secret")
+    );
     assert_eq!(seen.admin_user, None);
-    assert_eq!(seen.admin_password, None);
+    assert!(seen.admin_password.is_none());
     let webhook = seen.plans[0].webhook.as_ref().expect("webhook planned");
     assert_eq!(webhook.secret, "webhook-secret-from-secret");
-    let after = std::fs::read_to_string(&credentials_path).expect("credentials unchanged");
-    assert_eq!(after, before);
+    let after = std::fs::read_to_string(&credentials_path).expect("credentials updated");
+    assert!(after.contains("admin-token-from-secret"), "{after}");
+    assert!(after.contains("admin-rest-token"), "{after}");
+    assert!(after.contains("token-engineer"), "{after}");
     assert!(
         prompter
             .notes
             .iter()
-            .any(|note| note.contains("[forge] admin") && note.contains("not configured")),
+            .any(|note| note.contains("Updated") && note.contains("credentials.toml")),
         "notes: {:?}",
         prompter.notes
     );
@@ -327,8 +500,13 @@ fn run_apply_loads_target_init_bundle_and_mints_named_forge_secret() {
 
     let seen = provisioner.seen.expect("provisioner called");
     assert_eq!(seen.admin_user.as_deref(), Some("root"));
-    assert_eq!(seen.admin_password.as_deref(), Some("admin-pass"));
-    assert_eq!(seen.admin_token, None);
+    assert_eq!(
+        seen.admin_password
+            .as_ref()
+            .map(ExposeSecret::expose_secret),
+        Some("admin-pass")
+    );
+    assert!(seen.admin_token.is_none());
     assert_eq!(seen.plans.len(), 1);
     assert_eq!(seen.plans[0].repo.owner, "acme");
     assert_eq!(seen.plans[0].repo.name, "service");

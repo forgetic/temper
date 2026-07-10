@@ -8,7 +8,7 @@ struct RecordingInspector {
 }
 
 impl DeploymentInspector for RecordingInspector {
-    fn inspect(&mut self, _bundle: &PlanBundle) -> Result<ForgeInspection, String> {
+    fn inspect(&mut self, _bundle: &DeploymentBundle) -> Result<ForgeInspection, String> {
         self.calls += 1;
         Ok(self.inspection.clone())
     }
@@ -25,15 +25,16 @@ fn plan_json_redacts_secret_values_and_uses_inspector_snapshot() {
         },
         ..Default::default()
     };
-    let bundle = load_plan_bundle(&opts).expect("bundle loads");
+    let bundle = load_deployment(&opts.options, &opts.env, &opts.paths, opts.existing_repo)
+        .expect("bundle loads");
     let mut inspector = RecordingInspector {
         inspection: ForgeInspection {
             inspected: true,
             repository: Some(repository()),
             labels: vec!["queued".to_string()],
             webhooks: vec![WebhookStatus {
-                url: bundle.request.webhook_url.clone(),
-                events: WebhookEvents::All,
+                url: bundle.webhook.as_ref().expect("webhook").url.clone(),
+                events: temper_forge::WebhookEvents::All,
             }],
             users: desired_users(&bundle)
                 .into_iter()
@@ -68,7 +69,8 @@ fn existing_repo_missing_is_an_error_without_mutating() {
         existing_repo: true,
         ..Default::default()
     };
-    let bundle = load_plan_bundle(&opts).expect("bundle loads");
+    let bundle = load_deployment(&opts.options, &opts.env, &opts.paths, opts.existing_repo)
+        .expect("bundle loads");
     let mut inspector = RecordingInspector {
         inspection: ForgeInspection {
             inspected: true,
