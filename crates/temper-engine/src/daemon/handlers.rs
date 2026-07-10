@@ -336,9 +336,14 @@ impl DaemonMachine {
         self.recently_applied.retain(|_, deadline| *deadline > now);
         self.retry_backoff_until
             .retain(|_, deadline| *deadline > now);
-        if self.applying.contains(&job_id) {
+        // Result application can create and then finish wiring new artifacts
+        // across several Forge calls. Suppress every enqueue until all active
+        // applies finish so a webhook or poll scan cannot dispatch a partially
+        // created child before its dependency links and blocked label exist.
+        if !self.applying.is_empty() {
             requests.push(DaemonRequest::Log(format!(
-                "engine: skipped enqueue for job in apply window job_id={job_id}"
+                "engine: skipped enqueue during result apply window job_id={job_id} active_applies={}",
+                self.applying.len()
             )));
             return requests;
         }

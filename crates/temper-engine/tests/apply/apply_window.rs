@@ -103,7 +103,7 @@ fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
 }
 
 #[test]
-fn apply_block_and_grace_are_per_job_id() {
+fn apply_block_is_global_but_post_apply_grace_is_per_job_id() {
     temper_engine_io::block_on_with(move |cx, handle| async move {
         let (record_tx, mut rx) = temper_engine_io::channel();
         let (release_tx, release_rx) = temper_engine_io::oneshot();
@@ -116,7 +116,6 @@ fn apply_block_and_grace_are_per_job_id() {
         let client = temper_engine_io::http::JsonClient::new();
         assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
         assert_eq!(post(&client, &url, &register("worker-b")).await.status, 204);
-        assert_eq!(post(&client, &url, &register("worker-c")).await.status, 204);
 
         enqueue_standard_job(&daemon, "job-blocked").await;
         assert_assigned(
@@ -139,22 +138,24 @@ fn apply_block_and_grace_are_per_job_id() {
         assert_eq!(job.job_id, "job-blocked");
         assert_eq!(recorded_result.job_id, result.job_id);
 
+        // A distinct job can be a child that the active result apply has only
+        // partially created. It must not dispatch until that apply has finished
+        // wiring dependency metadata and lifecycle labels.
         enqueue_standard_job(&daemon, "job-blocked").await;
-        enqueue_standard_job(&daemon, "job-independent-apply").await;
-        assert_assigned(
-            post_json(&client, &url, &poll("worker-b")).await,
-            "job-independent-apply",
-        );
+        enqueue_standard_job(&daemon, "job-created-during-apply").await;
+        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-b", 25)).await);
 
         release_tx.send(());
         temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(25)).await;
         assert!(rx.try_recv().is_none());
 
+        // The originating job remains under its per-id grace period, while an
+        // independent job is dispatchable once the global apply window closes.
         enqueue_standard_job(&daemon, "job-blocked").await;
-        enqueue_standard_job(&daemon, "job-independent-grace").await;
+        enqueue_standard_job(&daemon, "job-after-apply").await;
         assert_assigned(
-            post_json(&client, &url, &poll("worker-c")).await,
-            "job-independent-grace",
+            post_json(&client, &url, &poll("worker-b")).await,
+            "job-after-apply",
         );
     })
 }
