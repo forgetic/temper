@@ -259,6 +259,8 @@ mod tests {
             correlation_key: "x".to_string(),
             checkout: Some(checkout.to_string()),
             allowed_verdicts: Vec::new(),
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
             guidance: Default::default(),
             pull_request_freshness: None,
             agent_session: None,

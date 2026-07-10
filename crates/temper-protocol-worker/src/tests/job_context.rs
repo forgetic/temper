@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::{JobArtifactSnapshot, JobContext, WorkspaceManifest};
+use temper_verdict::{VerdictContract, VerdictContracts};
 
 use super::sample_manifest;
 
@@ -22,6 +23,18 @@ fn full_job_context_round_trips_without_loss() {
         action: Some("open_pr".to_string()),
         checkout_capability: Some("writable".to_string()),
         allowed_verdicts: vec!["needs_architect".to_string(), "needs_human".to_string()],
+        verdict_contracts: VerdictContracts::from([(
+            "needs_architect".to_string(),
+            VerdictContract {
+                min_children: 1,
+                max_children: Some(1),
+                allowed_child_kinds: vec!["plan".to_string()],
+                ..VerdictContract::default()
+            },
+        )]),
+        source_metadata: [("target_branch".to_string(), "feature/x".to_string())]
+            .into_iter()
+            .collect(),
         guidance: Some("fix CI".to_string()),
         pull_request_freshness: None,
     };
@@ -56,6 +69,8 @@ fn job_context_omits_empty_optional_fields() {
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: None,
         pull_request_freshness: None,
     };
@@ -64,6 +79,8 @@ fn job_context_omits_empty_optional_fields() {
     assert_eq!(value.get("action"), None);
     assert_eq!(value.get("checkout_capability"), None);
     assert_eq!(value.get("allowed_verdicts"), None);
+    assert_eq!(value.get("verdict_contracts"), None);
+    assert_eq!(value.get("source_metadata"), None);
     assert_eq!(value.get("guidance"), None);
     assert_eq!(value.get("pull_request_freshness"), None);
 }
@@ -82,6 +99,8 @@ fn thin_pre_enrichment_job_context_omits_artifact_and_workspace() {
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: None,
         pull_request_freshness: None,
     };
@@ -123,5 +142,7 @@ fn job_context_unknown_fields_are_ignored() {
     .expect("unknown job context fields must be accepted");
 
     assert_eq!(context.role, "engineer");
+    assert!(context.verdict_contracts.is_empty());
+    assert!(context.source_metadata.is_empty());
     assert_eq!(context.workspace.expect("workspace present").repos.len(), 1);
 }

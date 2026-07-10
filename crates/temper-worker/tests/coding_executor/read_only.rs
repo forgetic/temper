@@ -115,6 +115,32 @@ fn read_only_breakdown_verdict_passes_children_through() {
 }
 
 #[test]
+fn worker_rejects_agent_result_that_violates_verdict_contract() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReadOnlyVerdict.runner(), true);
+        let mut context = read_only_job_context("agent/contract-7", "contract-7");
+        context.verdict_contracts.insert(
+            "ready_code".to_string(),
+            temper_verdict::VerdictContract {
+                min_children: 1,
+                allowed_child_kinds: vec!["code".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let outcome = executor
+            .execute(assign_with_context("contract-7", context))
+            .await;
+
+        let message = expect_failure_class(outcome, FailureClass::Protocol);
+        assert!(message.contains("violates its workflow verdict contract"));
+        assert!(message.contains("requires at least 1 child product(s), received 0"));
+        assert_no_origin_branch(&fixture, "agent/contract-7");
+    });
+}
+
+#[test]
 fn read_only_job_without_verdict_is_permanent() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

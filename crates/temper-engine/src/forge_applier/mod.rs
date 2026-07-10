@@ -39,10 +39,10 @@ use temper_forge::Forge;
 /// Forge-backed applier for daemon-accepted worker results. See the module docs
 /// for the application semantics.
 pub struct ForgeApplier<F: Forge + ?Sized> {
-    forge: Arc<F>,
-    workflow: Arc<ValidatedWorkflow>,
-    compiled: CompiledWorkflow,
-    attention_labels: Vec<String>,
+    pub(crate) forge: Arc<F>,
+    pub(crate) workflow: Arc<ValidatedWorkflow>,
+    pub(crate) compiled: CompiledWorkflow,
+    pub(crate) attention_labels: Vec<String>,
 }
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
@@ -62,11 +62,14 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .map(|label| label.trim().to_string())
             .filter(|label| !label.is_empty())
             .collect::<Vec<_>>();
-        self.attention_labels = if labels.is_empty() {
-            vec!["needs-human".to_string()]
-        } else {
-            labels
-        };
+        self.attention_labels = labels;
+        if !self
+            .attention_labels
+            .iter()
+            .any(|label| label == "needs-human")
+        {
+            self.attention_labels.push("needs-human".to_string());
+        }
         self
     }
 }

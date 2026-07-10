@@ -524,8 +524,6 @@ fn coordinated_result_opens_one_pull_request_per_writable_repo() {
 
         applier.apply(job, result).await;
 
-        // The primary repo's PR links back to the coordinating issue with a
-        // bare same-repo ref, and carries the shared coordination key.
         let primary_pulls = forge
             .list_pull_requests(&primary, PullRequestQuery::default())
             .await
@@ -636,6 +634,8 @@ fn pr_freshness_issue_job(
             action: Some("open_pr".to_string()),
             checkout_capability: Some("pull_request_writable".to_string()),
             allowed_verdicts: Vec::new(),
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
             guidance: None,
             pull_request_freshness: Some(freshness),
         },

@@ -119,10 +119,23 @@ fn plan_validation_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             action: Some("validate_plan".to_string()),
             checkout_capability: Some("read_only".to_string()),
             allowed_verdicts: vec!["passed".to_string()],
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
             guidance: None,
             pull_request_freshness: None,
         },
     )
+}
+
+fn passing_landing_result(job: &InFlightJob) -> JobResult {
+    let mut result = verdict_result(
+        "worker-a",
+        &job.job_id,
+        "passed",
+        Some("# Validation report\n\nFeature branch validation passed."),
+    );
+    result.title = Some("Land validated feature branch".to_string());
+    result
 }
 
 #[test]
@@ -134,13 +147,7 @@ fn verdict_transition_creates_feature_landing_pr_from_plan_metadata() {
         let workflow = Arc::new(landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
-        let mut result = verdict_result(
-            "worker-a",
-            &job.job_id,
-            "passed",
-            Some("# Validation report\n\nFeature branch validation passed."),
-        );
-        result.title = Some("Land validated feature branch".to_string());
+        let result = passing_landing_result(&job);
 
         applier.apply(job, result).await;
 
@@ -199,7 +206,7 @@ fn verdict_transition_carries_source_parents_into_feature_landing_pr_metadata() 
         let workflow = Arc::new(landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
-        let result = verdict_result("worker-a", &job.job_id, "passed", None);
+        let result = passing_landing_result(&job);
 
         applier.apply(job, result).await;
 
@@ -236,7 +243,7 @@ fn verdict_transition_deduplicates_source_parent_refs_in_landing_pr_metadata() {
         let workflow = Arc::new(landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
-        let result = verdict_result("worker-a", &job.job_id, "passed", None);
+        let result = passing_landing_result(&job);
 
         applier.apply(job, result).await;
 
@@ -263,7 +270,7 @@ fn verdict_feature_landing_pr_replay_is_idempotent() {
         let workflow = Arc::new(landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
-        let result = verdict_result("worker-a", &job.job_id, "passed", None);
+        let result = passing_landing_result(&job);
 
         applier.apply(job.clone(), result.clone()).await;
         wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
@@ -282,13 +289,23 @@ fn verdict_feature_landing_pr_requires_plan_target_branch_before_mutation() {
         let workflow = Arc::new(landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
-        let result = verdict_result("worker-a", &job.job_id, "passed", None);
+        let result = passing_landing_result(&job);
 
         applier.apply(job, result).await;
 
         assert_pull_request_count_stays(&cx, &forge, &repo, 0).await;
         let labels = issue_labels(&forge, &repo, issue).await;
-        assert_eq!(labels, vec!["plan".to_string(), "ready".to_string()]);
+        assert_eq!(
+            labels,
+            vec![
+                "needs-human".to_string(),
+                "plan".to_string(),
+                "ready".to_string()
+            ]
+        );
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("source metadata `target_branch`"));
     })
 }
 

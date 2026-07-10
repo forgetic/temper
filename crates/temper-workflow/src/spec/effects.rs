@@ -99,6 +99,13 @@ pub enum RawEffect {
         correlation_key: Option<String>,
         #[serde(default)]
         record_parent_dependencies: bool,
+        /// Minimum authored child count. `create_issues` always requires at
+        /// least one product; the default preserves existing workflows.
+        #[serde(default = "default_min_children")]
+        min_children: usize,
+        /// Optional upper bound for workflows that require a fixed-size fan-out.
+        #[serde(default)]
+        max_children: Option<usize>,
     },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,
@@ -108,6 +115,10 @@ pub enum RawEffect {
     /// `in-progress` label if present. Already-closed parents are idempotent
     /// no-ops; absent/missing parent metadata is not an error.
     CloseParentIssues,
+}
+
+fn default_min_children() -> usize {
+    1
 }
 
 /// A portable condition that can satisfy a gate without a workflow transition.

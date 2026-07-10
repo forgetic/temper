@@ -66,6 +66,12 @@ fn scanned_architect_triage_item_carries_verdict_job_enrichment() {
         assert_eq!(context.action.as_deref(), Some("triage_intake"));
         assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
         assert_eq!(context.allowed_verdicts, vec!["ready_code".to_string()]);
+        let contract = context
+            .verdict_contracts
+            .get("ready_code")
+            .expect("workflow-derived verdict contract is assigned");
+        assert_eq!(contract.max_children, Some(0));
+        assert!(contract.requires_body);
         let primary = context
             .workspace
             .as_ref()

@@ -5,6 +5,7 @@ use temper_protocol_worker::{
     JobArtifactSnapshot, PullRequestFreshness as WorkerPullRequestFreshness, RepoAccess,
     WorkspaceManifest,
 };
+use temper_verdict::{SourceMetadata, VerdictContracts};
 
 /// Assembles the typed [`WorkspaceContext`] the agent turn receives, listing
 /// every manifest repo with its sibling dir and access (ADR 0023).
@@ -25,6 +26,8 @@ pub(super) fn build_workspace_context(
     artifact_wire_kind: &str,
     checkout: &str,
     allowed_verdicts: &[String],
+    verdict_contracts: &VerdictContracts,
+    source_metadata: &SourceMetadata,
     guidance: Option<&str>,
     pull_request_freshness: Option<&WorkerPullRequestFreshness>,
 ) -> WorkspaceContext {
@@ -95,6 +98,8 @@ pub(super) fn build_workspace_context(
         correlation_key: manifest.coordination_key.clone(),
         checkout: Some(checkout.to_string()),
         allowed_verdicts: allowed_verdicts.to_vec(),
+        verdict_contracts: verdict_contracts.clone(),
+        source_metadata: source_metadata.clone(),
         guidance: WorkspaceGuidance {
             role_guidance: guidance.map(str::to_string),
             ..WorkspaceGuidance::default()

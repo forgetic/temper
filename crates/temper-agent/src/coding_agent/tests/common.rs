@@ -68,6 +68,8 @@ pub(super) fn context_with_writable_dir(dir: &str) -> WorkspaceContext {
         correlation_key: "x".to_string(),
         checkout: Some("writable".to_string()),
         allowed_verdicts: Vec::new(),
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: WorkspaceGuidance::default(),
         pull_request_freshness: None,
         agent_session: None,

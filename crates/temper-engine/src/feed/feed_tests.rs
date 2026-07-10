@@ -25,6 +25,8 @@ const REFERENCE_DELIVERY_FIXTURE: &str =
 
 #[path = "feed_tests/action_assignment.rs"]
 mod action_assignment;
+#[path = "feed_tests/attention.rs"]
+mod attention;
 #[path = "feed_tests/reconciliation.rs"]
 mod reconciliation;
 #[path = "feed_tests/target_branch.rs"]
@@ -188,6 +190,8 @@ fn maps_issue_work_item_to_daemon_job() {
             action: None,
             checkout_capability: None,
             allowed_verdicts: Vec::new(),
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
             guidance: None,
             pull_request_freshness: None,
         }

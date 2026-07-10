@@ -119,12 +119,11 @@ fn review_verdict_escalate_adds_needs_architect_label() {
 }
 
 #[test]
-fn undeclared_review_verdict_does_not_mutate_pull_request() {
+fn undeclared_review_verdict_quarantines_pull_request() {
     temper_engine_io::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let pull_request = create_pull_request_needing_review(&forge, &repo).await;
-        let before = pull_request_labels_and_reviews(&forge, &repo, pull_request).await;
         let (client, url, assignment) =
             assign_review_job(&handle, forge.clone(), &repo, pull_request).await;
 
@@ -135,7 +134,14 @@ fn undeclared_review_verdict_does_not_mutate_pull_request() {
             &assignment.job_id,
         );
 
-        assert_pull_request_state_stays(&cx, &forge, &repo, pull_request, before.0, before.1.len())
+        let (labels, reviews) =
+            wait_for_review_apply(&cx, &forge, &repo, pull_request, |labels, reviews| {
+                has_label(labels, "needs-human") && reviews.is_empty()
+            })
             .await;
+        assert!(has_label(&labels, "implementation"));
+        assert!(has_label(&labels, "needs-reviewer"));
+        assert!(has_label(&labels, "needs-human"));
+        assert!(reviews.is_empty());
     })
 }

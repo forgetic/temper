@@ -67,6 +67,8 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: None,
         pull_request_freshness: None,
     };
@@ -103,6 +105,12 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     let Some(artifact) = terminal_checked_snapshot(forge, repo, item.target).await? else {
         return Ok(EnrichOutcome::SkipTerminalArtifact);
     };
+    // Deterministic failures are durably parked with this engine-owned
+    // attention label. Exclude it before any custom queue/action can dispatch
+    // the unchanged artifact again.
+    if artifact.labels.iter().any(|label| label == "needs-human") {
+        return Ok(EnrichOutcome::SkipAttentionArtifact);
+    }
 
     // Assemble the job's workspace manifest: the primary (writable) repo, plus
     // any additional repos the coordinating issue declares in a `temper:workspace`
@@ -125,6 +133,7 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     )
     .await?;
 
+    let source_metadata = crate::verdict_contract::source_metadata_from_snapshot(Some(&artifact));
     let mut context = JobContext {
         role: job.role.clone(),
         repo: job.repo.clone(),
@@ -135,10 +144,12 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
+        verdict_contracts: Default::default(),
+        source_metadata,
         guidance: None,
         pull_request_freshness: None,
     };
-    enrich_job_context_from_workflow(item, compiled, &mut context)?;
+    enrich_job_context_from_workflow(item, workflow, compiled, &mut context)?;
 
     // A pull-request writable job is an in-place PR-head fix: the worker checks
     // out the PR's real head branch and pushes the agent's fix back to that same
@@ -165,6 +176,7 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
 pub(crate) enum EnrichOutcome {
     Enriched,
     SkipTerminalArtifact,
+    SkipAttentionArtifact,
     SkipExistingPullRequest,
 }
 
@@ -233,6 +245,7 @@ pub(crate) fn skip_log_reason(outcome: EnrichOutcome) -> &'static str {
     match outcome {
         EnrichOutcome::Enriched => "",
         EnrichOutcome::SkipTerminalArtifact => "terminal",
+        EnrichOutcome::SkipAttentionArtifact => "attention",
         EnrichOutcome::SkipExistingPullRequest => "existing-pr",
     }
 }
@@ -312,22 +325,12 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
                     .await;
                 enqueued += 1;
             }
-            Ok(EnrichOutcome::SkipTerminalArtifact) => {
-                tracing::debug!(
-                    "{}",
-                    skip_log_line(&repo_label, role, item, EnrichOutcome::SkipTerminalArtifact)
-                );
-            }
-            Ok(EnrichOutcome::SkipExistingPullRequest) => {
-                tracing::debug!(
-                    "{}",
-                    skip_log_line(
-                        &repo_label,
-                        role,
-                        item,
-                        EnrichOutcome::SkipExistingPullRequest
-                    )
-                );
+            Ok(
+                outcome @ (EnrichOutcome::SkipTerminalArtifact
+                | EnrichOutcome::SkipAttentionArtifact
+                | EnrichOutcome::SkipExistingPullRequest),
+            ) => {
+                tracing::debug!("{}", skip_log_line(&repo_label, role, item, outcome));
             }
             Err(error) => tracing::debug!(
                 "{}",

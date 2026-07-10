@@ -33,8 +33,9 @@ struct RecordingApplier {
 
 #[async_trait::async_trait]
 impl ResultApplier for RecordingApplier {
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> temper_engine::ApplyOutcome {
         let _ = self.tx.send((job, result));
+        temper_engine::ApplyOutcome::Applied
     }
 }
 
@@ -106,6 +107,8 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
             action: Some("open_pr".to_string()),
             checkout_capability: Some("writable".to_string()),
             allowed_verdicts: Vec::new(),
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
             guidance: None,
             pull_request_freshness: None,
         };

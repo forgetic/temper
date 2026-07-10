@@ -183,6 +183,8 @@ pub(super) fn workspace_context(cwd: &Path, repos: &[(&str, &str, &str)]) -> Wor
         correlation_key: "pr-for-code-25".to_string(),
         checkout: Some("writable".to_string()),
         allowed_verdicts: vec!["needs_architect".to_string()],
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: WorkspaceGuidance::default(),
         pull_request_freshness: None,
         agent_session: None,

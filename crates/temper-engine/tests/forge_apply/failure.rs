@@ -60,7 +60,7 @@ fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
 }
 
 #[test]
-fn success_without_branch_does_not_create_pull_request_or_mark_issue() {
+fn successful_result_without_any_product_is_quarantined() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
@@ -74,7 +74,11 @@ fn success_without_branch_does_not_create_pull_request_or_mark_issue() {
             .await;
 
         assert_no_pull_requests(&forge, &repo).await;
-        assert_no_attention_mark(&forge, &repo, issue).await;
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert!(has_label(&labels, "needs-human"));
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("neither a verdict nor repository products"));
     })
 }
 
@@ -126,7 +130,7 @@ fn failure_marking_applies_for_human_audit_classes() {
                 "protocol",
                 "protocol worker failure",
             ),
-            (None, "unknown", "missing failure details"),
+            (None, "protocol", "missing failure details"),
         ] {
             let forge = Arc::new(MemoryForge::new());
             let repo = new_repo(&forge, "stable").await;
@@ -323,7 +327,7 @@ fn permanent_failure_replay_dedupes_by_comment_marker_when_label_is_missing() {
 
         assert_no_pull_requests(&forge, &repo).await;
         assert!(
-            !issue_labels(&forge, &repo, issue)
+            issue_labels(&forge, &repo, issue)
                 .await
                 .iter()
                 .any(|label| label == "needs-human")

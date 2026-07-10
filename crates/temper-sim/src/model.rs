@@ -130,7 +130,7 @@ pub struct ModelApplier {
 
 #[async_trait::async_trait]
 impl ResultApplier for ModelApplier {
-    async fn apply(&self, job: InFlightJob, _result: JobResult) {
+    async fn apply(&self, job: InFlightJob, _result: JobResult) -> temper_engine::ApplyOutcome {
         if !self.apply_time.is_zero() {
             // `apply` runs on a task whose Cx lives in the executor's spawn
             // closure; borrow a timer through a helper task's own Cx instead.
@@ -143,5 +143,6 @@ impl ResultApplier for ModelApplier {
             let _ = rx.recv().await;
         }
         self.model.record_apply(&job.job_id);
+        temper_engine::ApplyOutcome::Applied
     }
 }

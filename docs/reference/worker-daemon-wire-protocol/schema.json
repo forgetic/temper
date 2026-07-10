@@ -270,6 +270,18 @@
        "items": {
         "type": "string"
        }
+      },
+      "verdict_contracts": {
+       "type": "object",
+       "additionalProperties": {
+        "$ref": "#/$defs/verdictContract"
+       }
+      },
+      "source_metadata": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "string"
+       }
       }
      }
     }
@@ -296,6 +308,24 @@
     },
     "message": {
      "type": "string"
+    }
+   }
+  },
+  "verdictContract": {
+   "type": "object",
+   "properties": {
+    "min_children": { "type": "integer", "minimum": 0 },
+    "max_children": { "type": "integer", "minimum": 0 },
+    "allowed_child_kinds": {
+     "type": "array",
+     "items": { "type": "string" }
+    },
+    "requires_pr_title": { "type": "boolean" },
+    "requires_pr_body": { "type": "boolean" },
+    "requires_body": { "type": "boolean" },
+    "required_source_metadata": {
+     "type": "array",
+     "items": { "type": "string" }
     }
    }
   },

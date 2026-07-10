@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
+use temper_verdict::{SourceMetadata, VerdictContracts};
 use tongs::model::ContentBlock;
 
 use super::{Capability, CodingAgentError};
@@ -90,6 +91,16 @@ pub(crate) fn validate_verdict_vocabulary(
             allowed: allowed_verdicts.to_vec(),
         })
     }
+}
+
+/// Enforces the workflow-derived product shape before the agent reports success.
+pub(crate) fn validate_verdict_contract(
+    result: &WorkspaceResult,
+    contracts: &VerdictContracts,
+    source_metadata: &SourceMetadata,
+) -> Result<(), CodingAgentError> {
+    temper_verdict::validate_verdict_result(result, contracts, source_metadata)
+        .map_err(|error| CodingAgentError::InvalidVerdictResult(error.to_string()))
 }
 
 /// Enforces the role contract that temper relies on: an engineer (writable)

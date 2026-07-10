@@ -27,8 +27,9 @@ pub(crate) struct RecordingApplier {
 
 #[async_trait::async_trait]
 impl temper_engine::ResultApplier for RecordingApplier {
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> temper_engine::ApplyOutcome {
         let _ = self.tx.send((job, result));
+        temper_engine::ApplyOutcome::Applied
     }
 }
 

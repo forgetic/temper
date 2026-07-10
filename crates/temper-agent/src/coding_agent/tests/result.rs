@@ -136,6 +136,53 @@ fn parse_result_keeps_children_object_intact() {
 }
 
 #[test]
+fn validate_workflow_verdict_contract_rejects_missing_and_malformed_children() {
+    let contracts = temper_verdict::VerdictContracts::from([(
+        "needs_plan".to_string(),
+        temper_verdict::VerdictContract {
+            min_children: 1,
+            max_children: Some(1),
+            allowed_child_kinds: vec!["plan".to_string()],
+            ..Default::default()
+        },
+    )]);
+    let missing = WorkspaceResult {
+        verdict: Some("needs_plan".to_string()),
+        ..Default::default()
+    };
+    let error = crate::coding_agent::result::validate_verdict_contract(
+        &missing,
+        &contracts,
+        &Default::default(),
+    )
+    .expect_err("missing child is rejected");
+    assert!(matches!(error, CodingAgentError::InvalidVerdictResult(_)));
+
+    let malformed = WorkspaceResult {
+        verdict: Some("needs_plan".to_string()),
+        children: vec![WorkspaceResultChild {
+            slug: " ".to_string(),
+            title: "".to_string(),
+            body: "".to_string(),
+            kind: Some("code".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let error = crate::coding_agent::result::validate_verdict_contract(
+        &malformed,
+        &contracts,
+        &Default::default(),
+    )
+    .expect_err("malformed child is rejected")
+    .to_string();
+    assert!(error.contains("blank slug"));
+    assert!(error.contains("blank title"));
+    assert!(error.contains("blank body"));
+    assert!(error.contains("allowed kinds: plan"));
+}
+
+#[test]
 fn validate_contract_engineer_requires_diff_or_verdict() {
     // No diff, no verdict ⇒ NoProduct. Use a temp dir that is not a git repo so
     // `git status` fails and `working_tree_has_changes` returns false.

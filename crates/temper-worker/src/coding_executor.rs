@@ -105,6 +105,8 @@ async fn execute<R: AgentRunner>(
         action,
         checkout_capability,
         allowed_verdicts,
+        verdict_contracts,
+        source_metadata,
         guidance,
         pull_request_freshness,
     } = context;
@@ -185,6 +187,8 @@ async fn execute<R: AgentRunner>(
         assign.artifact.kind.as_str(),
         &checkout,
         &allowed_verdicts,
+        &verdict_contracts,
+        &source_metadata,
         guidance.as_deref(),
         pull_request_freshness.as_ref(),
     );
@@ -213,6 +217,15 @@ async fn execute<R: AgentRunner>(
             return failure(class, message);
         }
     };
+
+    if let Err(error) =
+        temper_verdict::validate_verdict_result(&result, &verdict_contracts, &source_metadata)
+    {
+        return failure(
+            FailureClass::Protocol,
+            format!("agent returned a result that violates its workflow verdict contract: {error}"),
+        );
+    }
 
     let latest_self_pushed_sha = None;
 

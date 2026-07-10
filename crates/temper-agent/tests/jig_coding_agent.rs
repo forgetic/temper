@@ -248,6 +248,8 @@ fn workspace_context() -> WorkspaceContext {
         correlation_key: "pr-for-code-25".to_string(),
         checkout: Some("writable".to_string()),
         allowed_verdicts: vec!["needs_architect".to_string()],
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: WorkspaceGuidance {
             role_guidance: Some(
                 "Make a real product diff by creating NOTES.md. Do not create .temper-only bookkeeping diffs."
@@ -384,6 +386,8 @@ fn multi_repo_context() -> WorkspaceContext {
         correlation_key: "coord-for-code-7".to_string(),
         checkout: Some("writable".to_string()),
         allowed_verdicts: vec!["needs_architect".to_string()],
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: WorkspaceGuidance {
             role_guidance: Some(
                 "Make a real product diff in each writable repo by creating NOTES.md.".to_string(),

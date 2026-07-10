@@ -307,6 +307,12 @@ pub enum Diagnostic {
         artifact_kind: String,
         target: String,
     },
+    /// A `create_issues` effect declared an empty or inverted cardinality.
+    InvalidCreateIssuesCardinality {
+        transition: String,
+        min_children: usize,
+        max_children: Option<usize>,
+    },
     /// More than one artifact kind for the same Forge target declares no
     /// identifying labels. A target may have at most one default (catch-all)
     /// kind, so the engine cannot decide which one admits an unlabeled artifact.
@@ -336,6 +342,7 @@ impl Diagnostic {
             | Diagnostic::TransitionOutcomeUnauthorized { .. }
             | Diagnostic::TransitionOutcomeArtifactMismatch { .. }
             | Diagnostic::CreatePullRequestArtifactKindTargetMismatch { .. }
+            | Diagnostic::InvalidCreateIssuesCardinality { .. }
             | Diagnostic::MultipleDefaultArtifactKinds { .. } => Severity::Error,
         }
     }
@@ -485,6 +492,14 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 formatter,
                 "transition `{transition}` create_pull_request effect names artifact kind `{artifact_kind}`, but that kind targets `{target}` instead of `pull_request`"
+            ),
+            Diagnostic::InvalidCreateIssuesCardinality {
+                transition,
+                min_children,
+                max_children,
+            } => write!(
+                formatter,
+                "transition `{transition}` create_issues cardinality must require at least one child and max_children must be >= min_children (min={min_children}, max={max_children:?})"
             ),
             Diagnostic::MultipleDefaultArtifactKinds { target, kinds } => write!(
                 formatter,

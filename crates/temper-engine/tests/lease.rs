@@ -22,7 +22,7 @@ struct RecordingApplier {
 
 #[async_trait::async_trait]
 impl ResultApplier for RecordingApplier {
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> temper_engine::ApplyOutcome {
         if let (Some(forge), Some(repo), Some(issue), Some(lease_tx)) =
             (&self.forge, &self.repo, self.issue, &self.lease_tx)
         {
@@ -39,6 +39,7 @@ impl ResultApplier for RecordingApplier {
         }
 
         let _ = self.tx.send((job, result));
+        temper_engine::ApplyOutcome::Applied
     }
 }
 

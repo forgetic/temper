@@ -12,6 +12,7 @@ use temper_workflow::{
 
 pub(super) fn enrich_job_context_from_workflow(
     item: &WorkItem,
+    workflow: &temper_workflow::ValidatedWorkflow,
     compiled: &CompiledWorkflow,
     context: &mut JobContext,
 ) -> Result<(), ScanError> {
@@ -20,6 +21,8 @@ pub(super) fn enrich_job_context_from_workflow(
 
     context.action = Some(selected.tool.name.clone());
     context.allowed_verdicts = allowed_verdicts(selected.tool);
+    context.verdict_contracts =
+        crate::verdict_contract::derive_verdict_contracts(workflow, selected.tool);
     context.checkout_capability = Some(checkout);
     context.guidance = selected.guidance;
     Ok(())

@@ -84,6 +84,41 @@ fn system_prompt_constrains_to_allowed_verdicts() {
 }
 
 #[test]
+fn system_prompt_renders_exact_workflow_product_contract() {
+    let allowed = vec!["needs_plan".to_string(), "validated".to_string()];
+    let contracts = temper_verdict::VerdictContracts::from([
+        (
+            "needs_plan".to_string(),
+            temper_verdict::VerdictContract {
+                min_children: 1,
+                max_children: Some(1),
+                allowed_child_kinds: vec!["plan".to_string()],
+                ..Default::default()
+            },
+        ),
+        (
+            "validated".to_string(),
+            temper_verdict::VerdictContract {
+                max_children: Some(0),
+                requires_pr_title: true,
+                requires_pr_body: true,
+                required_source_metadata: vec!["target_branch".to_string()],
+                ..Default::default()
+            },
+        ),
+    ]);
+    let prompt = system_prompt_with_contracts(Capability::TriageWorkspace, &allowed, &contracts);
+    assert!(
+        prompt
+            .contains("Verdict `needs_plan` requires exactly 1 child product(s) of kind(s): plan")
+    );
+    assert!(prompt.contains("non-blank `slug`, `title`, and `body`"));
+    assert!(prompt.contains("requires a non-blank pull-request `title`"));
+    assert!(prompt.contains("requires a non-blank pull-request `body`"));
+    assert!(prompt.contains("workflow metadata `target_branch`"));
+}
+
+#[test]
 fn system_prompt_single_outcome_collapses_to_one_choice() {
     // The basic-delivery architect: a single declared outcome ⇒ exactly one
     // choice. This is the deterministic single-outcome triage the example relies

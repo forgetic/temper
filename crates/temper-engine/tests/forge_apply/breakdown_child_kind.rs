@@ -37,6 +37,8 @@ fn plan_feature_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJo
             action: Some("plan_feature".to_string()),
             checkout_capability: Some("read_only".to_string()),
             allowed_verdicts: vec!["needs_plan".to_string(), "config_only".to_string()],
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
             guidance: None,
             pull_request_freshness: None,
         },
@@ -104,8 +106,86 @@ fn plan_centric_workflow_rejects_feature_direct_code_child() {
 
         applier.apply(job, result).await;
 
-        assert_eq!(issue_body_and_labels(&forge, &repo, issue).await, before);
+        let after = issue_body_and_labels(&forge, &repo, issue).await;
+        assert_eq!(after.0, before.0);
+        assert!(has_label(&after.1, "feature"));
+        assert!(has_label(&after.1, "needs-human"));
         assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("allowed kinds: plan"));
+    })
+}
+
+#[test]
+fn needs_plan_without_child_is_quarantined_once_and_never_mutates_workflow_state() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let issue = create_feature_issue(&forge, &repo).await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
+        let job = plan_feature_in_flight_job("acme/service", issue);
+        let result = verdict_result("worker-a", &job.job_id, "needs_plan", None);
+
+        applier.apply(job.clone(), result.clone()).await;
+        applier.apply(job, result).await;
+
+        let (body, labels) = issue_body_and_labels(&forge, &repo, issue).await;
+        assert_eq!(body, "build the feature");
+        assert!(has_label(&labels, "feature"));
+        assert!(has_label(&labels, "needs-human"));
+        assert!(!has_label(&labels, "planned"));
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|label| *label == "needs-human")
+                .count(),
+            1
+        );
+        assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("requires exactly 1 child product(s), received 0"));
+        assert!(comments[0].contains("action `plan_feature`"));
+        assert!(comments[0].contains("routed transition `feature_to_plan`"));
+    })
+}
+
+#[test]
+fn needs_plan_with_exact_plan_child_applies() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let issue = create_feature_issue(&forge, &repo).await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
+        let job = plan_feature_in_flight_job("acme/service", issue);
+        let plan_body = body_with_target_branch(
+            "Implement the feature through a dedicated branch.",
+            "feature/208-verdict-contracts",
+        );
+        let mut plan = job_child("feature-plan", "Plan the feature", &plan_body, &[]);
+        plan.kind = Some("plan".to_string());
+        let result =
+            verdict_result_with_children("worker-a", &job.job_id, "needs_plan", vec![plan]);
+
+        applier.apply(job, result).await;
+
+        let (_, labels) = issue_body_and_labels(&forge, &repo, issue).await;
+        assert!(has_label(&labels, "planned"));
+        assert!(!has_label(&labels, "needs-human"));
+        let issues = list_issues(&forge, &repo).await;
+        assert_eq!(issues.len(), 2);
+        let plan = issue_by_slug(&issues, "feature-plan");
+        assert!(has_label(&plan.labels, "plan"));
+        assert!(has_label(&plan.labels, "ready"));
+        let metadata = parse_metadata_block(&plan.body)
+            .expect("plan metadata parses")
+            .expect("plan metadata exists");
+        assert_eq!(metadata.kind, Some(ArtifactKindId::new("plan")));
+        assert_eq!(
+            metadata.target_branch.as_deref(),
+            Some("feature/208-verdict-contracts")
+        );
     })
 }
 
@@ -335,7 +415,7 @@ fn child_metadata_target_branch_is_preserved_while_kind_is_stamped_or_kept() {
 }
 
 #[test]
-fn malformed_source_metadata_aborts_without_children_or_label_effects() {
+fn malformed_source_metadata_is_quarantined_without_child_or_workflow_mutation() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
@@ -364,8 +444,14 @@ fn malformed_source_metadata_aborts_without_children_or_label_effects() {
 
         applier.apply(job, result).await;
 
-        assert_eq!(issue_body_and_labels(&forge, &repo, issue).await, before);
+        let after = issue_body_and_labels(&forge, &repo, issue).await;
+        assert_eq!(after.0, before.0);
+        assert!(has_label(&after.1, "untriaged"));
+        assert!(has_label(&after.1, "needs-human"));
         assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("source workflow metadata is malformed"));
     })
 }
 
@@ -469,7 +555,10 @@ fn unknown_or_malformed_child_kind_drops_verdict_apply_without_partial_children(
 
         applier.apply(job.clone(), result).await;
 
-        assert_eq!(issue_body_and_labels(&forge, &repo, issue).await, before);
+        let after = issue_body_and_labels(&forge, &repo, issue).await;
+        assert_eq!(after.0, before.0);
+        assert!(has_label(&after.1, "untriaged"));
+        assert!(has_label(&after.1, "needs-human"));
         assert_eq!(list_issues(&forge, &repo).await.len(), 1);
 
         let mut malformed = job_child(
@@ -496,7 +585,11 @@ fn unknown_or_malformed_child_kind_drops_verdict_apply_without_partial_children(
 
         applier.apply(job, result).await;
 
-        assert_eq!(issue_body_and_labels(&forge, &repo, issue).await, before);
+        let after = issue_body_and_labels(&forge, &repo, issue).await;
+        assert_eq!(after.0, before.0);
+        assert!(has_label(&after.1, "untriaged"));
+        assert!(has_label(&after.1, "needs-human"));
         assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+        assert_eq!(issue_comment_bodies(&forge, &repo, issue).await.len(), 1);
     })
 }

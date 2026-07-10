@@ -232,7 +232,7 @@ fn breakdown_verdict_replay_is_idempotent() {
 }
 
 #[test]
-fn children_without_create_issues_effect_are_ignored() {
+fn children_without_create_issues_effect_are_quarantined() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
@@ -255,11 +255,15 @@ fn children_without_create_issues_effect_are_ignored() {
         applier.apply(job, result).await;
 
         let (body, labels) = issue_body_and_labels(&forge, &repo, issue).await;
-        assert_eq!(body, "rewritten spec");
-        assert!(!has_label(&labels, "untriaged"));
-        assert!(has_label(&labels, "code"));
-        assert!(has_label(&labels, "ready"));
+        assert_eq!(body, "rough user request");
+        assert_eq!(
+            labels,
+            vec!["needs-human".to_string(), "untriaged".to_string()]
+        );
         assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("requires exactly 0 child product(s)"));
     })
 }
 
@@ -286,7 +290,10 @@ fn unresolvable_child_target_repo_drops_apply() {
 
         let (body, labels) = issue_body_and_labels(&forge, &repo_a, issue).await;
         assert_eq!(body, "rough user request");
-        assert_eq!(labels, vec!["untriaged".to_string()]);
+        assert_eq!(
+            labels,
+            vec!["needs-human".to_string(), "untriaged".to_string()]
+        );
         assert_eq!(list_issues(&forge, &repo_a).await.len(), 1);
         assert!(list_issues(&forge, &repo_b).await.is_empty());
     })
@@ -311,7 +318,12 @@ fn undeclared_verdict_does_not_mutate_issue() {
             .await;
 
         let after = issue_body_and_labels(&forge, &repo, issue).await;
-        assert_eq!(after, before);
+        assert_eq!(after.0, before.0);
+        assert!(has_label(&after.1, "untriaged"));
+        assert!(has_label(&after.1, "needs-human"));
         assert_no_pull_requests(&forge, &repo).await;
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("does not declare verdict `nonsense`"));
     })
 }

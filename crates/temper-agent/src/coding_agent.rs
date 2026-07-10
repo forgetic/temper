@@ -58,7 +58,7 @@ mod tools;
 // `super::*` in the test module) see one flat `coding_agent` surface.
 pub use capability::Capability;
 pub use error::CodingAgentError;
-pub use prompt::{system_prompt, user_context};
+pub use prompt::{system_prompt, system_prompt_with_contracts, user_context};
 pub use run::{
     run_coding_agent_native, run_coding_agent_native_with_options,
     run_coding_agent_native_with_options_and_submit_for_pr,

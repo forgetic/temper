@@ -1,0 +1,13 @@
+[package]
+name = "temper-verdict"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared workflow-derived verdict output contracts and pure result validation."
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

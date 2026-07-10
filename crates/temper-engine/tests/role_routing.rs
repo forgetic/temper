@@ -23,10 +23,11 @@ impl RecordingApplier {
 
 #[async_trait::async_trait]
 impl ResultApplier for RecordingApplier {
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> temper_engine::ApplyOutcome {
         self.tx
             .send((self.name, job.role, result.job_id))
             .expect("recording receiver is open");
+        temper_engine::ApplyOutcome::Applied
     }
 }
 

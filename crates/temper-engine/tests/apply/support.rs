@@ -36,7 +36,7 @@ impl GatedApplier {
 
 #[async_trait::async_trait]
 impl temper_engine::ResultApplier for GatedApplier {
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> temper_engine::ApplyOutcome {
         let release = {
             let mut releases = self
                 .releases
@@ -50,13 +50,15 @@ impl temper_engine::ResultApplier for GatedApplier {
         };
         let _ = self.tx.send((job, result));
         let _ = release.recv().await;
+        temper_engine::ApplyOutcome::Applied
     }
 }
 
 #[async_trait::async_trait]
 impl temper_engine::ResultApplier for RecordingApplier {
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> temper_engine::ApplyOutcome {
         let _ = self.tx.send((job, result));
+        temper_engine::ApplyOutcome::Applied
     }
 }
 

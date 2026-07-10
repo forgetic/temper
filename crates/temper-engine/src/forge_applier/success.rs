@@ -21,6 +21,7 @@ use temper_runner::{
 };
 
 use crate::InFlightJob;
+use crate::applier::ApplyOutcome;
 use crate::forge_applier::ForgeApplier;
 use crate::forge_applier::coordinated::{
     CoordinatedSet, coordinated_landing_order, coordinated_pr_pull_request_input,
@@ -29,10 +30,9 @@ use crate::forge_applier::coordinated::{
 use crate::workflow_meta::{implementation_pr_create_labels, implementation_pr_labels};
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
-    pub(super) async fn apply_success(&self, job: InFlightJob, result: JobResult) {
+    pub(super) async fn apply_success(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
         if result.verdict.is_some() {
-            self.apply_verdict(job, result).await;
-            return;
+            return self.apply_verdict(job, result).await;
         }
 
         if result.repos.is_empty() {
@@ -44,7 +44,11 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 artifact_item = %job.artifact.item,
                 "forge applier ignored success result with no repo outcomes"
             );
-            return;
+            return ApplyOutcome::Rejected {
+                class: temper_protocol_worker::FailureClass::Protocol,
+                reason: "successful result has neither a verdict nor repository products"
+                    .to_string(),
+            };
         }
 
         // A pull-request job (e.g. a CI-failure fix) pushes its diff straight to
@@ -67,13 +71,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     .unwrap_or("-"),
                 "forge applier pushed pull-request fix to head and refreshed PR handoff; awaiting fresh CI"
             );
-            return;
+            return ApplyOutcome::Applied;
         }
 
         // The coordinating issue lives in the primary repo; every PR in the set
         // links back to it with a repo-qualified ref (ADR 0023).
         let Some((primary_repository, issue)) = self.resolve_issue(&job).await else {
-            return;
+            return ApplyOutcome::Stale;
         };
         let number = issue.number;
 
@@ -88,7 +92,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     %error,
                     "forge applier could not parse JobContext"
                 );
-                return;
+                return ApplyOutcome::Rejected {
+                    class: temper_protocol_worker::FailureClass::Protocol,
+                    reason: format!("invalid in-flight JobContext: {error}"),
+                };
             }
         };
         self.apply_source_action_claim(&job).await;
@@ -139,6 +146,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         if !opened.is_empty() {
             self.clear_source_action_working_labels(&job).await;
         }
+        ApplyOutcome::Applied
     }
 
     /// Opens (or ensures) the coordinated PR for one repo outcome, recording the

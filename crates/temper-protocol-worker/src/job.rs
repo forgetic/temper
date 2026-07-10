@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+use temper_verdict::VerdictContracts;
 
 use crate::WorkspaceManifest;
 
@@ -120,6 +123,14 @@ pub struct JobContext {
     /// keys). Empty for a plain coding job.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_verdicts: Vec<String>,
+
+    /// Workflow-derived terminal product requirements keyed by verdict.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub verdict_contracts: VerdictContracts,
+
+    /// Assignment-time source metadata needed by routed effects.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_metadata: BTreeMap<String, String>,
 
     /// Extra free-text guidance surfaced to the agent's prompt for this job,
     /// e.g. the concrete CI failure to fix on a `pull_request_writable` job.

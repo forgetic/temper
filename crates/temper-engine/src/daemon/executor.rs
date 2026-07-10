@@ -36,8 +36,8 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 let cq = self.cq.clone();
                 let job_id = job.job_id.clone();
                 self.spawner.spawn_with_cx(move |_cx| async move {
-                    applier.apply(job, result).await;
-                    let _ = cq.send(DaemonCompletion::ApplyFinished { job_id });
+                    let outcome = applier.apply(job, result).await;
+                    let _ = cq.send(DaemonCompletion::ApplyFinished { job_id, outcome });
                 });
             }
             DaemonRequest::RunApplyAndRespond {
@@ -50,8 +50,8 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 let cq = self.cq.clone();
                 let job_id = job.job_id.clone();
                 self.spawner.spawn_with_cx(move |_cx| async move {
-                    applier.apply(job, result).await;
-                    let _ = cq.send(DaemonCompletion::ApplyFinished { job_id });
+                    let outcome = applier.apply(job, result).await;
+                    let _ = cq.send(DaemonCompletion::ApplyFinished { job_id, outcome });
                     responder.respond(response);
                 });
             }

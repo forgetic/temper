@@ -212,6 +212,8 @@ fn ctx(owner: &str, name: &str, kind: &str, target: &str) -> WorkspaceContext {
         correlation_key: "k".to_string(),
         checkout: None,
         allowed_verdicts: Vec::new(),
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: Default::default(),
         pull_request_freshness: None,
         agent_session: None,
