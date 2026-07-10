@@ -36,8 +36,8 @@ Usage: temper [GLOBAL OPTIONS] apply [OPTIONS]
 
 Options:
   --yes                   Apply the provisioning plan without confirmation
-  --existing-repo         Legacy compatibility: require every configured repo
-                           to already exist and do not seed repository content
+  --existing-repo         Supported compatibility behavior: require every
+                          configured repo to already exist and do not seed content
   -h, --help              Print help";
 
 /// How `temper apply` handles local credentials after provisioning.

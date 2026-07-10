@@ -41,7 +41,8 @@ state with read-only calls. Secret values are never printed.
 Usage: temper [GLOBAL OPTIONS] plan [OPTIONS]
 
 Options:
-  --existing-repo         Plan onto a repo that must already exist
+  --existing-repo         Supported compatibility behavior: require every
+                          configured repo to already exist
   -h, --help              Print help
 
 Global options:

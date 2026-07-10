@@ -1,0 +1,38 @@
+name: systemd-operator-example
+labels:
+  - id: ready
+  - id: in-progress
+artifact_kinds:
+  - id: code
+    target: issue
+    identifying_labels:
+      - ready
+    initial_labels:
+      - in-progress
+queues:
+  - id: code_ready
+    artifact: code
+    labels:
+      - ready
+roles:
+  - id: architect
+    queues:
+      - code_ready
+  - id: engineer
+    queues:
+      - code_ready
+  - id: reviewer
+    queues:
+      - code_ready
+transitions:
+  - id: claim
+    artifact: code
+    roles:
+      - architect
+      - engineer
+      - reviewer
+    effects:
+      - kind: remove_label
+        label: ready
+      - kind: add_label
+        label: in-progress

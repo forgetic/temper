@@ -77,7 +77,8 @@ Options:
   --force                       Overwrite existing local files
   --apply                       After writing local files, provision the forge
   --yes                         With --apply, skip the provisioning confirmation
-  --existing-repo               Provision onto a repo that already exists
+  --existing-repo               Supported compatibility behavior: require the
+                                repo to already exist when provisioning
   --topology      <standalone|distributed>
                                 Topology to collect for the initialized bundle
   --repo          <owner/name>  Managed repository to provision (repeatable)

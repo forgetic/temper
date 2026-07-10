@@ -104,8 +104,8 @@ Options:
   --force     (compat init) overwrite existing files
   -h, --help  Print help
 
-Onboarding flow: `temper init`, `temper check`, optional review of the generated
-provisioning plan inputs, `temper apply`, then `temper serve`.
+Onboarding flow: `temper init` -> `temper check` -> `temper plan` ->
+`temper apply` -> `temper serve`.
 
 Global options:
   --format <human|json>  `temper check` and `config paths` output format; schema always emits JSON; accepted before the command only";
