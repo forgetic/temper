@@ -296,41 +296,32 @@ pub struct MetadataInspection {
 }
 
 struct ForgePlanInspector {
-    forge: Option<std::sync::Arc<dyn temper_forge::ProvisioningForge>>,
-    unavailable_reason: Option<String>,
+    forge: std::sync::Arc<dyn temper_forge::InspectionForge>,
 }
 
 impl ForgePlanInspector {
     fn from_bundle(bundle: &PlanBundle) -> Self {
-        let Some(token) = &bundle.resolved.forge.admin_token else {
-            return Self {
-                forge: None,
-                unavailable_reason: Some(
-                    "admin token is missing; read-only forge inspection was skipped".to_string(),
-                ),
-            };
+        let forge = if let Some(token) = &bundle.resolved.forge.admin_token {
+            let config = temper_forge::config::ForgejoConfig::new(
+                &bundle.request.base_url,
+                token.expose_secret(),
+            )
+            .with_default_repo(&bundle.request.owner, &bundle.request.name);
+            temper_forge::factory::new_forgejo_inspection(config)
+        } else {
+            temper_forge::factory::new_forgejo_read_only_basic(
+                &bundle.request.base_url,
+                &bundle.request.admin_user,
+                &bundle.request.admin_password,
+            )
         };
-        let config = temper_forge::config::ForgejoConfig::new(
-            &bundle.request.base_url,
-            token.expose_secret(),
-        )
-        .with_default_repo(&bundle.request.owner, &bundle.request.name);
-        Self {
-            forge: Some(temper_forge::factory::new_forgejo_provisioning(config)),
-            unavailable_reason: None,
-        }
+        Self { forge }
     }
 }
 
 impl DeploymentInspector for ForgePlanInspector {
     fn inspect(&mut self, bundle: &PlanBundle) -> Result<ForgeInspection, String> {
-        let Some(forge) = self.forge.clone() else {
-            return Ok(ForgeInspection {
-                inspected: false,
-                unavailable_reason: self.unavailable_reason.clone(),
-                ..ForgeInspection::default()
-            });
-        };
+        let forge = self.forge.clone();
         let request = bundle.request.clone();
         let desired_users = desired_users(bundle);
         let declared_kinds: BTreeSet<String> = bundle
@@ -349,7 +340,7 @@ impl DeploymentInspector for ForgePlanInspector {
 }
 
 async fn inspect_forge(
-    forge: &dyn temper_forge::ProvisioningForge,
+    forge: &dyn temper_forge::InspectionForge,
     request: &ProvisionRequest,
     desired_users: &[String],
     declared_kinds: &BTreeSet<String>,
