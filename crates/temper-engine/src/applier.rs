@@ -9,9 +9,20 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use temper_protocol_worker::{JobResult, PullRequestFreshness, PullRequestFreshnessResponse};
+use temper_protocol_worker::{
+    FailureClass, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
+};
 
 use crate::InFlightJob;
+
+/// Typed result of applying an accepted worker result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ApplyOutcome {
+    Applied,
+    Stale,
+    Retryable { reason: String },
+    Rejected { class: FailureClass, reason: String },
+}
 
 /// Pluggable seam invoked when the daemon assigns work and accepts worker
 /// results.
@@ -29,7 +40,7 @@ pub trait ResultApplier: Send + Sync {
         let _ = job;
     }
 
-    async fn apply(&self, job: InFlightJob, result: JobResult);
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome;
 
     /// Validates whether a PR-targeted in-flight job may still publish work.
     async fn check_pull_request_freshness(
@@ -47,7 +58,9 @@ pub struct NoopApplier;
 
 #[async_trait::async_trait]
 impl ResultApplier for NoopApplier {
-    async fn apply(&self, _job: InFlightJob, _result: JobResult) {}
+    async fn apply(&self, _job: InFlightJob, _result: JobResult) -> ApplyOutcome {
+        ApplyOutcome::Applied
+    }
 }
 
 /// Routes each applied result to the applier registered for the job's role,
@@ -80,7 +93,7 @@ impl ResultApplier for RoleRoutingApplier {
         }
     }
 
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
         match self.routes.get(&job.role) {
             Some(applier) => applier.apply(job, result).await,
             None => self.default.apply(job, result).await,

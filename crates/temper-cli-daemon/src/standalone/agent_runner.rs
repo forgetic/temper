@@ -295,9 +295,9 @@ fn classify_coding_agent_error(error: CodingAgentError) -> AgentRunError {
         | CodingAgentError::ModelUnavailable { .. }
         | CodingAgentError::CodebaseMemory(_)
         | CodingAgentError::Parse { .. } => AgentRunError::transient(error.to_string()),
-        CodingAgentError::NoProduct | CodingAgentError::UndeclaredVerdict { .. } => {
-            AgentRunError::permanent(error.to_string())
-        }
+        CodingAgentError::NoProduct
+        | CodingAgentError::UndeclaredVerdict { .. }
+        | CodingAgentError::InvalidVerdictResult(_) => AgentRunError::permanent(error.to_string()),
     }
 }
 

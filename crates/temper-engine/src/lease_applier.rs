@@ -17,7 +17,7 @@ use temper_workflow::{ArtifactSource, LeaseError, LeaseManager, LeasePolicy, Rol
 use tracing::Instrument;
 
 use crate::InFlightJob;
-use crate::applier::ResultApplier;
+use crate::applier::{ApplyOutcome, ResultApplier};
 
 /// Wall-clock capability for daemon code needing calendar timestamps (lease
 /// acquisition, scan feeds). Always injected — production passes
@@ -79,7 +79,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         self.inner.check_pull_request_freshness(check).await
     }
 
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
         let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
             tracing::warn!(
                 target: "temper_daemon",
@@ -89,7 +89,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                 artifact_item = %job.artifact.item,
                 "lease applier could not resolve target"
             );
-            return;
+            return ApplyOutcome::Stale;
         };
 
         // §7 work-item ref for the lease lifecycle lines; the bare owner/repo is
@@ -135,7 +135,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                         role: &job.role,
                         reason: "contended by peer owner",
                     });
-                    return;
+                    return ApplyOutcome::Stale;
                 }
                 Err(error) => {
                     emit_lease_lost(LeaseLost {
@@ -152,11 +152,13 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                         %error,
                         "lease applier could not acquire lease"
                     );
-                    return;
+                    return ApplyOutcome::Retryable {
+                        reason: format!("could not acquire result-application lease: {error}"),
+                    };
                 }
             }
 
-            self.inner.apply(job.clone(), result).await;
+            let outcome = self.inner.apply(job.clone(), result).await;
 
             if let Err(error) = manager.release(&repo_id, target, &self.owner).await {
                 tracing::error!(
@@ -173,9 +175,10 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                 item: &item,
                 role: &job.role,
             });
+            outcome
         }
         .instrument(span)
-        .await;
+        .await
     }
 }
 

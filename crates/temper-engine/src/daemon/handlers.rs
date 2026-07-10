@@ -334,6 +334,8 @@ impl DaemonMachine {
         let mut requests = Vec::new();
         let now = self.now;
         self.recently_applied.retain(|_, deadline| *deadline > now);
+        self.retry_backoff_until
+            .retain(|_, deadline| *deadline > now);
         if self.applying.contains(&job_id) {
             requests.push(DaemonRequest::Log(format!(
                 "engine: skipped enqueue for job in apply window job_id={job_id}"
@@ -347,6 +349,17 @@ impl DaemonMachine {
         {
             requests.push(DaemonRequest::Log(format!(
                 "engine: skipped enqueue for recently applied job job_id={job_id}"
+            )));
+            return requests;
+        }
+        if self
+            .retry_backoff_until
+            .get(&job_id)
+            .is_some_and(|deadline| *deadline > now)
+        {
+            let attempt = self.retry_attempts.get(&job_id).copied().unwrap_or(1);
+            requests.push(DaemonRequest::Log(format!(
+                "engine: skipped enqueue during retry backoff job_id={job_id} attempt={attempt}"
             )));
             return requests;
         }

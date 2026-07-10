@@ -192,6 +192,8 @@ pub struct TestJobContext {
     pub action: Option<String>,
     checkout_capability: Option<String>,
     pub allowed_verdicts: Vec<String>,
+    pub verdict_contracts: temper_verdict::VerdictContracts,
+    pub source_metadata: temper_verdict::SourceMetadata,
     pub pull_request_freshness: Option<Value>,
 }
 
@@ -223,6 +225,8 @@ impl TestJobContext {
             "action": self.action,
             "checkout_capability": self.checkout_capability,
             "allowed_verdicts": self.allowed_verdicts,
+            "verdict_contracts": self.verdict_contracts,
+            "source_metadata": self.source_metadata,
             "pull_request_freshness": self.pull_request_freshness,
             "workspace": {
                 "coordination_key": self.correlation_key,
@@ -259,6 +263,8 @@ pub fn job_context(branch_hint: &str, correlation_key: &str) -> TestJobContext {
         action: Some("open_pr".to_string()),
         checkout_capability: Some("writable".to_string()),
         allowed_verdicts: vec![],
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         pull_request_freshness: None,
     }
 }

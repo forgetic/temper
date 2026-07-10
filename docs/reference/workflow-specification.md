@@ -78,8 +78,11 @@ verdict-driven runtimes to derive labels and metadata for PR artifacts such as a
 feature-branch landing PR without requiring a worker-produced diff.
 
 A `create_issues` effect creates one or more child issues from the workspace
-result. It accepts an optional `correlation_key` for idempotent child creation
-and an optional `record_parent_dependencies` boolean. The default `false`
+result. It accepts `min_children` (default `1`) and optional `max_children` to
+declare product cardinality; `max_children: 1` expresses an exact one-child
+handoff. Validation rejects a zero minimum or a maximum below the minimum. It
+also accepts an optional `correlation_key` for idempotent child creation and an
+optional `record_parent_dependencies` boolean. The default `false`
 preserves legacy same-repository fan-out behavior. When set to `true`, the
 executor records every created child as dependency metadata on the source issue
 after all children exist and sibling dependency slugs have been linked. Use this

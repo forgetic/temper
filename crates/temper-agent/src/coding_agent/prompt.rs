@@ -2,6 +2,7 @@
 
 use super::Capability;
 use temper_protocol_agent::WorkspaceContext;
+use temper_verdict::{VerdictContract, VerdictContracts};
 
 /// Builds the role system prompt for a capability.
 ///
@@ -14,6 +15,15 @@ use temper_protocol_agent::WorkspaceContext;
 /// falls back to its built-in per-role verdict menu (back-compat with an older
 /// temper that does not surface the vocabulary).
 pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> String {
+    system_prompt_with_contracts(capability, allowed_verdicts, &VerdictContracts::new())
+}
+
+/// Builds the role prompt with exact workflow-derived product requirements.
+pub fn system_prompt_with_contracts(
+    capability: Capability,
+    allowed_verdicts: &[String],
+    verdict_contracts: &VerdictContracts,
+) -> String {
     let mut prompt = String::from(
         "You are Anvil, an autonomous software engineering agent running one \
          workspace turn inside a Temper workflow. You operate on a real Git \
@@ -114,6 +124,7 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
         }
         prompt.push('\n');
     }
+    render_verdict_contracts(&mut prompt, allowed_verdicts, verdict_contracts);
 
     prompt.push_str(
         "\nEFFICIENCY:\n\
@@ -149,6 +160,70 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
     );
 
     prompt
+}
+
+fn render_verdict_contracts(
+    prompt: &mut String,
+    allowed_verdicts: &[String],
+    contracts: &VerdictContracts,
+) {
+    for verdict in allowed_verdicts {
+        let Some(contract) = contracts.get(verdict) else {
+            continue;
+        };
+        prompt.push_str(&format!(
+            "\nVerdict `{verdict}` {}.\n",
+            child_requirement(contract)
+        ));
+        if contract.min_children > 0 {
+            prompt.push_str(
+                "Each child must include non-blank `slug`, `title`, and `body`; sibling slugs must be unique and `depends_on` must be acyclic.\n",
+            );
+        }
+        if contract.requires_pr_title {
+            prompt.push_str("It requires a non-blank pull-request `title`.\n");
+        }
+        if contract.requires_pr_body {
+            prompt.push_str("It requires a non-blank pull-request `body`.\n");
+        } else if contract.requires_body {
+            prompt.push_str("It requires a non-blank authored `body` (or `review_body`).\n");
+        }
+        for key in &contract.required_source_metadata {
+            prompt.push_str(&format!(
+                "The source artifact must contain non-blank workflow metadata `{key}`.\n"
+            ));
+        }
+    }
+}
+
+fn child_requirement(contract: &VerdictContract) -> String {
+    let count = match contract.max_children {
+        Some(max) if max == contract.min_children => {
+            format!(
+                "requires exactly {} child product(s)",
+                contract.min_children
+            )
+        }
+        Some(max) => format!(
+            "requires {}..={max} child product(s)",
+            contract.min_children
+        ),
+        None if contract.min_children > 0 => {
+            format!(
+                "requires at least {} child product(s)",
+                contract.min_children
+            )
+        }
+        None => "allows any number of child products".to_string(),
+    };
+    if contract.allowed_child_kinds.is_empty() || contract.max_children == Some(0) {
+        count
+    } else {
+        format!(
+            "{count} of kind(s): {}",
+            contract.allowed_child_kinds.join(", ")
+        )
+    }
 }
 
 /// Builds the user-turn context describing the concrete work item.

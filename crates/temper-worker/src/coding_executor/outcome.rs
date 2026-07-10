@@ -1,6 +1,6 @@
 use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 use temper_protocol_worker::{
-    Branch, FailureClass, PullRequestFreshness as WorkerPullRequestFreshness, RepoOutcome,
+    Branch, FailureClass, JobChild, PullRequestFreshness as WorkerPullRequestFreshness, RepoOutcome,
 };
 
 use crate::agent_runner::AcceptedSubmitProof;
@@ -148,6 +148,19 @@ async fn writable_verdict_outcome(
             return workspace_failure("discard verdict workspace changes", error);
         }
     }
+    let children = result
+        .children
+        .into_iter()
+        .map(|child| JobChild {
+            slug: child.slug,
+            title: child.title,
+            body: child.body,
+            kind: child.kind,
+            labels: child.labels,
+            depends_on: child.depends_on,
+            target_repo: child.target_repo,
+        })
+        .collect();
     JobOutcome::Verdict {
         verdict,
         title: result.title,
@@ -155,7 +168,7 @@ async fn writable_verdict_outcome(
         summary: result
             .summary
             .or_else(|| Some(format!("implemented {coordination_key}"))),
-        children: Vec::new(),
+        children,
     }
 }
 

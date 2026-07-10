@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use temper_verdict::{VerdictChildView, VerdictResultView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,4 +99,46 @@ pub struct JobResult {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+}
+
+impl VerdictResultView for JobResult {
+    type Child = JobChild;
+
+    fn verdict(&self) -> Option<&str> {
+        self.verdict.as_deref()
+    }
+
+    fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    fn body(&self) -> Option<&str> {
+        self.body.as_deref()
+    }
+
+    fn children(&self) -> &[Self::Child] {
+        &self.children
+    }
+}
+
+impl VerdictChildView for JobChild {
+    fn slug(&self) -> &str {
+        &self.slug
+    }
+
+    fn title(&self) -> &str {
+        &self.title
+    }
+
+    fn body(&self) -> &str {
+        &self.body
+    }
+
+    fn kind(&self) -> Option<&str> {
+        self.kind.as_deref()
+    }
+
+    fn depends_on(&self) -> &[String] {
+        &self.depends_on
+    }
 }

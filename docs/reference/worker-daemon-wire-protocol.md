@@ -31,7 +31,8 @@ connections to workers or pushes unsolicited jobs to them.
 JSON keeps v1 easy to inspect and fixture-test while preserving message
 semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.action`, `JobContext.checkout_capability`,
-`JobContext.allowed_verdicts`, `JobResult.verdict`, `JobResult.body`,
+`JobContext.allowed_verdicts`, `JobContext.verdict_contracts`,
+`JobContext.source_metadata`, `JobResult.verdict`, `JobResult.body`,
 `JobResult.children`, and `JobResult.children[].kind` are all optional, and the
 protocol version remains `1`.
 
@@ -136,11 +137,13 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `action` | string | no | Workflow action (intent-level tool / transition id) this job services, for example `open_pr` or `triage_intake`. |
 | `checkout_capability` | string | no | Checkout capability the worker should prepare: `writable`, `read_only`, `pull_request_read_only`, or `pull_request_writable`. Absent means writable, preserving v1's original behavior. |
 | `allowed_verdicts` | array of strings | no | Verdict vocabulary declared by `action`'s `outcomes` keys, in deterministic order. Empty or absent for a plain coding job. |
+| `verdict_contracts` | object | no | Workflow-derived result requirements keyed by verdict: child cardinality/kinds, required PR text or authored body, and source metadata preconditions. |
+| `source_metadata` | object | no | Parsed assignment-time source metadata used by worker/agent preflight validation. The engine re-reads current Forge state before mutation. |
 
 For compatibility, old minimal payloads containing only `role`, `repo`, `queue`,
 and `artifact_kind` remain valid; the enrichment fields are optional. The
-`action`, `checkout_capability`, and `allowed_verdicts` additions are also
-optional, and adding them does not change the protocol version: it remains `1`.
+`action`, `checkout_capability`, `allowed_verdicts`, `verdict_contracts`, and
+`source_metadata` additions are also optional, and adding them does not change the protocol version: it remains `1`.
 Readers must ignore unknown fields in the standard payload just as they do for
 protocol messages.
 

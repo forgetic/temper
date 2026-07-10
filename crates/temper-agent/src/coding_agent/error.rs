@@ -32,6 +32,8 @@ pub enum CodingAgentError {
         emitted: String,
         allowed: Vec<String>,
     },
+    /// A parseable terminal result violated the workflow-derived product shape.
+    InvalidVerdictResult(String),
 }
 
 impl std::fmt::Display for CodingAgentError {
@@ -59,6 +61,9 @@ impl std::fmt::Display for CodingAgentError {
             CodingAgentError::NoProduct => formatter.write_str(
                 "engineer run produced no product diff and emitted no verdict; nothing to land",
             ),
+            CodingAgentError::InvalidVerdictResult(message) => {
+                write!(formatter, "invalid WorkspaceResult: {message}")
+            }
             CodingAgentError::UndeclaredVerdict { emitted, allowed } => write!(
                 formatter,
                 "agent emitted undeclared verdict `{emitted}`; this workflow step allows only: {}",

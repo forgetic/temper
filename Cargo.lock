@@ -1269,6 +1269,7 @@ dependencies = [
  "temper-agent-io",
  "temper-protocol-agent",
  "temper-protocol-interaction",
+ "temper-verdict",
  "tempfile",
  "tongs",
  "tracing",
@@ -1450,6 +1451,7 @@ dependencies = [
  "temper-log",
  "temper-protocol-worker",
  "temper-runner",
+ "temper-verdict",
  "temper-worker-registry",
  "temper-workflow",
  "tracing",
@@ -1604,6 +1606,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "temper-verdict",
 ]
 
 [[package]]
@@ -1621,6 +1624,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "temper-verdict",
  "thiserror",
 ]
 
@@ -1799,6 +1803,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-verdict"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "temper-wake"
 version = "0.1.0"
 dependencies = [
@@ -1838,6 +1849,7 @@ dependencies = [
  "temper-forge-memory",
  "temper-protocol-agent",
  "temper-protocol-worker",
+ "temper-verdict",
  "temper-worker-io",
  "temper-workflow",
  "tempfile",

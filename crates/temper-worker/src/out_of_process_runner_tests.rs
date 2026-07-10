@@ -252,6 +252,8 @@ fn test_context_for_role(role: &str) -> WorkspaceContext {
         correlation_key: "pr-for-code-7".to_string(),
         checkout: Some("writable".to_string()),
         allowed_verdicts: Vec::new(),
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
         guidance: Default::default(),
         pull_request_freshness: None,
         agent_session: None,

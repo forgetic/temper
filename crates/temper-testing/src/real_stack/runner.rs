@@ -104,9 +104,9 @@ impl PrFreshnessGuard for DaemonPrFreshnessGuard {
 
 fn agent_error(error: CodingAgentError) -> AgentRunError {
     match error {
-        CodingAgentError::NoProduct | CodingAgentError::UndeclaredVerdict { .. } => {
-            AgentRunError::permanent(error.to_string())
-        }
+        CodingAgentError::NoProduct
+        | CodingAgentError::UndeclaredVerdict { .. }
+        | CodingAgentError::InvalidVerdictResult(_) => AgentRunError::permanent(error.to_string()),
         CodingAgentError::Provider(_)
         | CodingAgentError::Run(_)
         | CodingAgentError::AgentStopped(_)

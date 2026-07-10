@@ -9,11 +9,14 @@ use crate::usage::RunTotals;
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext, WorkspaceResult};
 
 use super::codebase_memory::prepare_codebase_memory_tools;
-use super::result::{collect_text, parse_result, validate_contract, validate_verdict_vocabulary};
+use super::result::{
+    collect_text, parse_result, validate_contract, validate_verdict_contract,
+    validate_verdict_vocabulary,
+};
 use super::tools::{SUBAGENT_GUIDANCE, add_subagents, tool_registry_for_context};
 use super::{
     Capability, CodingAgentError, SubmitForPrCallback, SubmitForPrHost, bind_submit_for_pr_host,
-    default_submit_for_pr_host, system_prompt, user_context,
+    default_submit_for_pr_host, system_prompt_with_contracts, user_context,
 };
 
 /// Runs one capability/role-aware coding-workspace turn on anvil's native
@@ -266,7 +269,11 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
         prepare_codebase_memory_tools(tool_config, &context.work_item.role, context, cwd).await?;
     let provider = provider_config.build_provider()?;
 
-    let mut role_prompt = system_prompt(capability, &context.allowed_verdicts);
+    let mut role_prompt = system_prompt_with_contracts(
+        capability,
+        &context.allowed_verdicts,
+        &context.verdict_contracts,
+    );
     if let Some(section) = &codebase_memory.prompt_section {
         role_prompt.push_str(section);
     }
@@ -361,6 +368,11 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
         );
     })?;
     validate_verdict_vocabulary(&result, &context.allowed_verdicts)?;
+    validate_verdict_contract(
+        &result,
+        &context.verdict_contracts,
+        &context.source_metadata,
+    )?;
     validate_contract(capability, &result, cwd, context)?;
     Ok((result, run_totals))
 }

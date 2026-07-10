@@ -19,6 +19,7 @@ use temper_log::emit::{
 use temper_runner::{artifact_ref, labels_delta, queue_after_transition, workspace_content_key};
 
 use crate::InFlightJob;
+use crate::applier::ApplyOutcome;
 use crate::forge_applier::ForgeApplier;
 use crate::forge_applier::verdict_pr::VerdictPullRequestBinding;
 
@@ -51,9 +52,9 @@ pub(super) struct VerdictChildrenBinding<'a> {
 }
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
-    pub(super) async fn apply_verdict(&self, job: InFlightJob, result: JobResult) {
+    pub(super) async fn apply_verdict(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
         let Some(verdict) = result.verdict.clone() else {
-            return;
+            return rejected("successful verdict path omitted its verdict");
         };
 
         let job_context = match serde_json::from_value::<temper_protocol_worker::JobContext>(
@@ -70,7 +71,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     %error,
                     "forge applier could not parse JobContext"
                 );
-                return;
+                return rejected(format!("invalid in-flight JobContext: {error}"));
             }
         };
         let Some(action) = job_context.action.as_deref() else {
@@ -84,7 +85,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 verdict = %verdict,
                 "forge applier could not route verdict: missing action in JobContext"
             );
-            return;
+            return rejected("in-flight JobContext has no workflow action");
         };
 
         let role_id = RoleId::new(job.role.as_str());
@@ -101,7 +102,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 verdict = %verdict,
                 "forge applier could not route verdict: role not found in compiled workflow"
             );
-            return;
+            return rejected(format!("workflow has no role `{}`", job.role));
         };
         let Some(tool) = role.tools.iter().find(|tool| tool.name == action) else {
             tracing::warn!(
@@ -115,7 +116,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 verdict = %verdict,
                 "forge applier could not route verdict: action not found in compiled workflow"
             );
-            return;
+            return rejected(format!(
+                "workflow role `{}` has no action `{action}`",
+                job.role
+            ));
         };
         let Some(routed) = tool.outcomes.get(&verdict_id).cloned() else {
             tracing::warn!(
@@ -129,7 +133,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 verdict = %verdict,
                 "forge applier could not route verdict: verdict is not declared for action"
             );
-            return;
+            return rejected(format!(
+                "action `{action}` does not declare verdict `{verdict}`"
+            ));
         };
 
         match job.artifact.kind.as_str() {
@@ -143,7 +149,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     &routed,
                     result,
                 )
-                .await;
+                .await
             }
             "pull_request" => {
                 self.apply_pull_request_verdict(
@@ -155,7 +161,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     &routed,
                     result,
                 )
-                .await;
+                .await
             }
             _ => {
                 tracing::warn!(
@@ -166,6 +172,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     artifact_item = %job.artifact.item,
                     "forge applier ignored unsupported verdict job"
                 );
+                rejected(format!(
+                    "unsupported verdict source artifact kind `{}`",
+                    job.artifact.kind
+                ))
             }
         }
     }
@@ -180,9 +190,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         verdict: &str,
         routed: &TransitionId,
         result: JobResult,
-    ) {
+    ) -> ApplyOutcome {
         let Some((repository, issue)) = self.resolve_issue(job).await else {
-            return;
+            return ApplyOutcome::Stale;
         };
         let number = issue.number;
         let source_kind = ArtifactKindId::new(job_context.artifact_kind.as_str());
@@ -194,7 +204,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             Classifier::new(self.workflow.as_ref()).classify_issue(&issue),
             Ok(classified) if classified.kind != source_kind
         ) {
-            return;
+            return ApplyOutcome::Stale;
         }
 
         let result_title = result.title.clone();
@@ -225,7 +235,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 })
                 .await
         {
-            return;
+            return rejected("could not bind authored child products");
         }
         if !self.bind_metadata_pull_request_creates(VerdictPullRequestBinding {
             job,
@@ -238,7 +248,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             body: result_body.as_deref(),
             context: &mut context,
         }) {
-            return;
+            return rejected("could not bind routed pull-request product inputs");
         }
 
         self.execute_routed_verdict(RoutedVerdictApply {
@@ -253,7 +263,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             number,
             context,
         })
-        .await;
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -266,9 +276,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         verdict: &str,
         routed: &TransitionId,
         result: JobResult,
-    ) {
+    ) -> ApplyOutcome {
         let Some((repository, pull_request)) = self.resolve_pull_request(job).await else {
-            return;
+            return ApplyOutcome::Stale;
         };
         let number = pull_request.number;
         let source_kind = ArtifactKindId::new(job_context.artifact_kind.as_str());
@@ -280,7 +290,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             Classifier::new(self.workflow.as_ref()).classify_pull_request(&pull_request),
             Ok(classified) if classified.kind != source_kind
         ) {
-            return;
+            return ApplyOutcome::Stale;
         }
 
         let context = verdict_execution_context(
@@ -306,10 +316,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             number,
             context,
         })
-        .await;
+        .await
     }
 
-    pub(super) async fn execute_routed_verdict(&self, apply: RoutedVerdictApply<'_>) {
+    pub(super) async fn execute_routed_verdict(
+        &self,
+        apply: RoutedVerdictApply<'_>,
+    ) -> ApplyOutcome {
         // Capture the coordinates the observability emit needs before the
         // execution context is moved into the executor below.
         let repository_id = apply.repository_id;
@@ -320,8 +333,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         {
             Ok(report) => {
                 self.emit_routed_verdict_observability(repository_id, source, &report);
+                ApplyOutcome::Applied
             }
-            Err(error) if is_stale(&error) => {}
+            Err(error) if is_stale(&error) => ApplyOutcome::Stale,
             Err(error) => {
                 tracing::error!(
                     target: "temper_daemon",
@@ -336,6 +350,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     %error,
                     "forge applier could not apply routed verdict transition"
                 );
+                match error {
+                    ExecutionError::Backend { .. } => ApplyOutcome::Retryable {
+                        reason: error.to_string(),
+                    },
+                    _ => rejected(error.to_string()),
+                }
             }
         }
     }
@@ -432,6 +452,13 @@ async fn verdict_execution_context<F: Forge + ?Sized>(
         context.set_attach_review_correlation_key_at(routed.clone(), 0, content_key);
     }
     context
+}
+
+fn rejected(reason: impl Into<String>) -> ApplyOutcome {
+    ApplyOutcome::Rejected {
+        class: temper_protocol_worker::FailureClass::Protocol,
+        reason: reason.into(),
+    }
 }
 
 fn is_stale(error: &ExecutionError) -> bool {

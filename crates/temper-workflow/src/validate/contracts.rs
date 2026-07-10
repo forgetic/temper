@@ -311,6 +311,32 @@ pub(super) fn check_create_pull_request_artifact_kind_targets(
     }
 }
 
+/// Checks that every child-producing effect has a useful, ordered cardinality.
+pub(super) fn check_create_issues_cardinality(
+    spec: &RawWorkflowSpec,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for transition in &spec.transitions {
+        for effect in &transition.effects {
+            let RawEffect::CreateIssues {
+                min_children,
+                max_children,
+                ..
+            } = effect
+            else {
+                continue;
+            };
+            if *min_children == 0 || max_children.is_some_and(|max| max < *min_children) {
+                diagnostics.push(Diagnostic::InvalidCreateIssuesCardinality {
+                    transition: transition.id.clone(),
+                    min_children: *min_children,
+                    max_children: *max_children,
+                });
+            }
+        }
+    }
+}
+
 /// Checks semantic consistency of per-transition outcome routing (the
 /// workspace-verdict path for assigned actions).
 pub(super) fn check_transition_outcome_contract(

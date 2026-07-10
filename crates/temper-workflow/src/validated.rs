@@ -364,10 +364,18 @@ pub enum Effect {
         correlation_key: Option<String>,
         #[serde(default)]
         record_parent_dependencies: bool,
+        #[serde(default = "default_min_children")]
+        min_children: usize,
+        #[serde(default)]
+        max_children: Option<usize>,
     },
     MergePullRequest,
     /// Close parent issues of a pull request. See [`crate::spec::RawEffect::CloseParentIssues`].
     CloseParentIssues,
+}
+
+fn default_min_children() -> usize {
+    1
 }
 
 /// A validated transition with typed references.

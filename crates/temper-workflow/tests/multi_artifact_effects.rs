@@ -226,6 +226,8 @@ fn create_issues_deserializes_with_and_without_parent_dependency_recording() {
         RawEffect::CreateIssues {
             correlation_key: Some(ref k),
             record_parent_dependencies: false,
+            min_children: 1,
+            max_children: None,
         } if k == "k1"
     ));
 
@@ -238,6 +240,7 @@ fn create_issues_deserializes_with_and_without_parent_dependency_recording() {
         RawEffect::CreateIssues {
             correlation_key: Some(ref k),
             record_parent_dependencies: true,
+            ..
         } if k == "k2"
     ));
 
@@ -247,6 +250,20 @@ fn create_issues_deserializes_with_and_without_parent_dependency_recording() {
         RawEffect::CreateIssues {
             correlation_key: None,
             record_parent_dependencies: false,
+            min_children: 1,
+            max_children: None,
+        }
+    ));
+
+    let exactly_one: RawEffect =
+        serde_json::from_str(r#"{"kind":"create_issues","min_children":1,"max_children":1}"#)
+            .unwrap();
+    assert!(matches!(
+        exactly_one,
+        RawEffect::CreateIssues {
+            min_children: 1,
+            max_children: Some(1),
+            ..
         }
     ));
 }
@@ -266,6 +283,7 @@ fn create_issues_validates_and_compiles_into_a_tool_manifest() {
         Effect::CreateIssues {
             correlation_key: Some(key),
             record_parent_dependencies: false,
+            ..
         } if key == "plan-epic-1"
     )));
 
@@ -282,6 +300,7 @@ fn create_issues_validates_and_compiles_into_a_tool_manifest() {
         Effect::CreateIssues {
             correlation_key: Some(key),
             record_parent_dependencies: true,
+            ..
         } if key == "plan-epic-1"
     )));
 }

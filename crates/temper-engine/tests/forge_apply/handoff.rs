@@ -195,6 +195,8 @@ fn pr_repair_in_flight_job(repo_path: &str, number: ItemNumber, branch: &str) ->
             action: Some("address_ci_failure".to_string()),
             checkout_capability: Some("pull_request_writable".to_string()),
             allowed_verdicts: Vec::new(),
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
             guidance: None,
             pull_request_freshness: None,
         },

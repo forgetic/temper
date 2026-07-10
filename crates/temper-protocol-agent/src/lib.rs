@@ -24,7 +24,10 @@
 //! - **Outbound result (agent → worker), terminal:** a [`WorkspaceResult`]
 //!   written to the file named by the agent's `--result` flag.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+use temper_verdict::{VerdictChildView, VerdictContracts, VerdictResultView};
 
 mod submit;
 pub use submit::{
@@ -280,6 +283,13 @@ pub struct WorkspaceContext {
     /// action has no verdict branch and should produce a branch/diff result.
     #[serde(default)]
     pub allowed_verdicts: Vec<String>,
+    /// Workflow-derived terminal product requirements keyed by verdict. Empty
+    /// keeps contexts from older workers backward compatible.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub verdict_contracts: VerdictContracts,
+    /// Assignment-time source metadata used for pre-mutation product checks.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_metadata: BTreeMap<String, String>,
     #[serde(default)]
     pub guidance: WorkspaceGuidance,
     /// Freshness guard facts for PR-head writable jobs. The worker revalidates
@@ -389,6 +399,48 @@ pub struct WorkspaceResultChild {
     /// Target repository as an `owner/name` path. `None` = the parent's repo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
+}
+
+impl VerdictResultView for WorkspaceResult {
+    type Child = WorkspaceResultChild;
+
+    fn verdict(&self) -> Option<&str> {
+        self.verdict.as_deref()
+    }
+
+    fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    fn body(&self) -> Option<&str> {
+        self.body.as_deref().or(self.review_body.as_deref())
+    }
+
+    fn children(&self) -> &[Self::Child] {
+        &self.children
+    }
+}
+
+impl VerdictChildView for WorkspaceResultChild {
+    fn slug(&self) -> &str {
+        &self.slug
+    }
+
+    fn title(&self) -> &str {
+        &self.title
+    }
+
+    fn body(&self) -> &str {
+        &self.body
+    }
+
+    fn kind(&self) -> Option<&str> {
+        self.kind.as_deref()
+    }
+
+    fn depends_on(&self) -> &[String] {
+        &self.depends_on
+    }
 }
 
 #[cfg(test)]
@@ -558,6 +610,8 @@ mod tests {
         assert_eq!(context.action, "open_pr");
         assert_eq!(context.correlation_key, "pr-for-code-7");
         assert_eq!(context.allowed_verdicts, Vec::<String>::new());
+        assert!(context.verdict_contracts.is_empty());
+        assert!(context.source_metadata.is_empty());
         assert_eq!(context.checkout, None);
         let primary = context.primary().expect("primary repo present");
         assert_eq!(primary.dir, "svc");

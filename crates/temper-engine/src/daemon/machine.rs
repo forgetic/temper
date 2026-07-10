@@ -21,6 +21,7 @@ use temper_worker_registry::{DaemonCore, WorkerPoolAuthConfig, WorkerPoolPolicy}
 
 use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
+use crate::applier::ApplyOutcome;
 use crate::webhook::WebhookConfig;
 
 /// `<io-event-completion>`s observed by the daemon machine.
@@ -33,7 +34,10 @@ pub(super) enum DaemonCompletion {
     /// A long-poll waiter's max-wait deadline elapsed.
     PollDeadline { id: u64 },
     /// A result applier finished off-loop.
-    ApplyFinished { job_id: String },
+    ApplyFinished {
+        job_id: String,
+        outcome: ApplyOutcome,
+    },
     /// Daemon API: enqueue one job (scans, backstops, tests).
     Enqueue {
         job_id: String,
@@ -142,6 +146,8 @@ pub(super) struct DaemonMachine {
     pub(super) webhook_waiters: BTreeMap<u64, HttpResponder>,
     pub(super) applying: BTreeSet<String>,
     pub(super) recently_applied: BTreeMap<String, EngineTime>,
+    pub(super) retry_attempts: BTreeMap<String, u32>,
+    pub(super) retry_backoff_until: BTreeMap<String, EngineTime>,
     pub(super) apply_grace: Duration,
     /// The engine's once-per-delivery clock snapshot; updated as the first
     /// act of every transition, before any handler logic runs.
@@ -175,6 +181,8 @@ impl DaemonMachine {
             webhook_waiters: BTreeMap::new(),
             applying: BTreeSet::new(),
             recently_applied: BTreeMap::new(),
+            retry_attempts: BTreeMap::new(),
+            retry_backoff_until: BTreeMap::new(),
             apply_grace,
             now: EngineTime::ZERO,
             next_id: 0,
@@ -201,6 +209,12 @@ impl DaemonMachine {
         self.next_id = self.next_id.wrapping_add(1);
         id
     }
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    const MAX_BACKOFF_SECS: u64 = 300;
+    let exponent = attempt.saturating_sub(1).min(8);
+    Duration::from_secs((2_u64.saturating_pow(exponent)).min(MAX_BACKOFF_SECS))
 }
 
 impl Machine for DaemonMachine {
@@ -233,11 +247,29 @@ impl Machine for DaemonMachine {
                 };
                 self.poll_response_requests(response, &waiter.poll.worker_id, waiter.responder)
             }
-            DaemonCompletion::ApplyFinished { job_id } => {
+            DaemonCompletion::ApplyFinished { job_id, outcome } => {
                 self.applying.remove(&job_id);
-                self.recently_applied
-                    .insert(job_id, self.now + self.apply_grace);
-                Vec::new()
+                match outcome {
+                    ApplyOutcome::Retryable { reason } => {
+                        let attempt = self.retry_attempts.entry(job_id.clone()).or_insert(0);
+                        *attempt = attempt.saturating_add(1);
+                        let delay = retry_delay(*attempt);
+                        self.retry_backoff_until
+                            .insert(job_id.clone(), self.now + delay);
+                        vec![DaemonRequest::Log(format!(
+                            "engine: result apply retry scheduled job_id={job_id} attempt={} backoff_ms={} reason={reason}",
+                            *attempt,
+                            delay.as_millis()
+                        ))]
+                    }
+                    ApplyOutcome::Applied | ApplyOutcome::Stale | ApplyOutcome::Rejected { .. } => {
+                        self.retry_attempts.remove(&job_id);
+                        self.retry_backoff_until.remove(&job_id);
+                        self.recently_applied
+                            .insert(job_id, self.now + self.apply_grace);
+                        Vec::new()
+                    }
+                }
             }
             DaemonCompletion::Enqueue {
                 job_id,
@@ -292,5 +324,57 @@ impl Machine for DaemonMachine {
                 )]
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use serde_json::json;
+    use temper_protocol_worker::Artifact;
+
+    #[test]
+    fn retryable_apply_uses_observable_bounded_exponential_backoff() {
+        assert_eq!(retry_delay(1), Duration::from_secs(1));
+        assert_eq!(retry_delay(2), Duration::from_secs(2));
+        assert_eq!(retry_delay(20), Duration::from_secs(256));
+
+        let mut machine = DaemonMachine::default_machine(Duration::ZERO);
+        let requests = machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::ApplyFinished {
+                job_id: "job-1".to_string(),
+                outcome: ApplyOutcome::Retryable {
+                    reason: "temporary Forge outage".to_string(),
+                },
+            },
+        );
+        assert_eq!(machine.retry_attempts.get("job-1"), Some(&1));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            DaemonRequest::Log(line)
+                if line.contains("attempt=1")
+                    && line.contains("backoff_ms=1000")
+                    && line.contains("temporary Forge outage")
+        )));
+
+        let requests = machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::Enqueue {
+                job_id: "job-1".to_string(),
+                role: "engineer".to_string(),
+                repo: "ai/temper".to_string(),
+                artifact: Artifact {
+                    item: json!(1),
+                    kind: "issue".to_string(),
+                },
+                job_payload: json!({}),
+            },
+        );
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            DaemonRequest::Log(line) if line.contains("retry backoff")
+        )));
+        assert!(machine.core.queued_jobs().is_empty());
     }
 }

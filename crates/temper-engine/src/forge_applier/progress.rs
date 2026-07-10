@@ -7,8 +7,9 @@ use temper_protocol_worker::{
 };
 
 use crate::InFlightJob;
-use crate::applier::ResultApplier;
+use crate::applier::{ApplyOutcome, ResultApplier};
 use crate::forge_applier::ForgeApplier;
+use crate::verdict_validation::VerdictCheck;
 
 #[async_trait::async_trait]
 impl<F: temper_forge::Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
@@ -16,7 +17,7 @@ impl<F: temper_forge::Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F
         self.apply_source_action_claim(&job).await;
     }
 
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
+    async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
         let self_pushed_head = result
             .repos
             .iter()
@@ -27,10 +28,34 @@ impl<F: temper_forge::Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F
             .drop_stale_pr_job(&job, self_pushed_head.as_deref())
             .await
         {
-            return;
+            return ApplyOutcome::Stale;
         }
         match result.status {
-            ResultStatus::Success => self.apply_success(job, result).await,
+            ResultStatus::Success => {
+                if result.verdict.is_some() {
+                    match self.validate_successful_verdict(&job, &result).await {
+                        VerdictCheck::Valid => {}
+                        VerdictCheck::Stale => return ApplyOutcome::Stale,
+                        VerdictCheck::Retryable(reason) => {
+                            self.release_source_action_claim_for_retry(&job).await;
+                            return ApplyOutcome::Retryable { reason };
+                        }
+                        VerdictCheck::Rejected(reason) => {
+                            return self.reject_success(job, result, reason).await;
+                        }
+                    }
+                }
+                match self.apply_success(job.clone(), result.clone()).await {
+                    ApplyOutcome::Rejected { reason, .. } => {
+                        self.reject_success(job, result, reason).await
+                    }
+                    ApplyOutcome::Retryable { reason } => {
+                        self.release_source_action_claim_for_retry(&job).await;
+                        ApplyOutcome::Retryable { reason }
+                    }
+                    outcome => outcome,
+                }
+            }
             ResultStatus::Failure => self.apply_failure(job, result).await,
         }
     }

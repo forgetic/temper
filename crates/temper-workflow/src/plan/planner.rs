@@ -405,6 +405,7 @@ fn to_effect(effect: &Effect) -> WorkflowEffect {
         Effect::CreateIssues {
             correlation_key,
             record_parent_dependencies,
+            ..
         } => WorkflowEffect::CreateIssues {
             correlation_key: correlation_key.clone(),
             record_parent_dependencies: *record_parent_dependencies,

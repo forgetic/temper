@@ -38,6 +38,8 @@ pub mod forge_applier;
 pub mod lease_applier;
 pub mod mechanical;
 pub mod pr_freshness;
+mod verdict_contract;
+mod verdict_validation;
 mod webhook;
 mod workflow_meta;
 
@@ -47,7 +49,7 @@ pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
 /// re-feed of the just-applied job.
 pub(crate) const APPLY_GRACE: Duration = Duration::from_secs(10);
 
-pub use applier::{NoopApplier, ResultApplier, RoleRoutingApplier};
+pub use applier::{ApplyOutcome, NoopApplier, ResultApplier, RoleRoutingApplier};
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
 pub use engine_config::EngineConfig;

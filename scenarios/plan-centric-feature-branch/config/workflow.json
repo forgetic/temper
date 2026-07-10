@@ -101,7 +101,8 @@
     { "id": "implementation", "description": "identifies an implementation pull request" },
     { "id": "feature-landing", "description": "identifies an aggregate feature branch landing pull request" },
     { "id": "landing", "description": "PR is ready for mechanical landing once gates pass" },
-    { "id": "merge-conflict", "description": "mechanical landing found a merge conflict; engineer must update the PR head" }
+    { "id": "merge-conflict", "description": "mechanical landing found a merge conflict; engineer must update the PR head" },
+    { "id": "needs-human", "description": "deterministic worker/result failure requires operator attention" }
   ],
   "artifact_kinds": [
     {
@@ -188,7 +189,7 @@
     {
       "id": "feature_planning",
       "artifact": "feature",
-      "excluded_labels": ["planned", "config-only"],
+      "excluded_labels": ["planned", "config-only", "needs-human"],
       "actions": [
         { "role": "architect", "action": "plan_feature" }
       ]
@@ -197,6 +198,7 @@
       "id": "plan_ready",
       "artifact": "plan",
       "labels": ["ready"],
+      "excluded_labels": ["needs-human"],
       "actions": [
         { "role": "architect", "action": "decompose_plan" }
       ]
@@ -205,6 +207,7 @@
       "id": "blocked_code_unblock",
       "artifact": "code",
       "labels": ["blocked"],
+      "excluded_labels": ["needs-human"],
       "condition": { "kind": "dependencies_resolved" },
       "automation": { "actor": "mechanical", "transition": "mark_code_ready" }
     },
@@ -212,6 +215,7 @@
       "id": "code_ready",
       "artifact": "code",
       "labels": ["ready"],
+      "excluded_labels": ["needs-human"],
       "actions": [
         { "role": "engineer", "action": "open_pr" }
       ]
@@ -219,7 +223,7 @@
     {
       "id": "implementation_pr_ci_failed",
       "artifact": "implementation_pr",
-      "excluded_labels": ["merge-conflict"],
+      "excluded_labels": ["merge-conflict", "needs-human"],
       "condition": { "kind": "ci_failed" },
       "actions": [
         { "role": "engineer", "action": "address_implementation_ci_failure", "checkout": "pull_request_writable" }
@@ -229,6 +233,7 @@
       "id": "implementation_pr_merge_conflict",
       "artifact": "implementation_pr",
       "labels": ["merge-conflict"],
+      "excluded_labels": ["needs-human"],
       "actions": [
         { "role": "engineer", "action": "resolve_implementation_merge_conflict", "checkout": "pull_request_writable" }
       ]
@@ -237,7 +242,7 @@
       "id": "implementation_landing",
       "artifact": "implementation_pr",
       "labels": ["landing"],
-      "excluded_labels": ["merge-conflict"],
+      "excluded_labels": ["merge-conflict", "needs-human"],
       "condition": { "kind": "ci_passed" },
       "automation": {
         "actor": "mechanical",
@@ -249,6 +254,7 @@
       "id": "plan_dependencies_resolved",
       "artifact": "plan",
       "labels": ["in-progress"],
+      "excluded_labels": ["needs-human"],
       "condition": { "kind": "dependencies_resolved" },
       "automation": { "actor": "mechanical", "transition": "mark_plan_needs_validation" }
     },
@@ -256,6 +262,7 @@
       "id": "plan_needs_validation",
       "artifact": "plan",
       "labels": ["needs-validation"],
+      "excluded_labels": ["needs-human"],
       "actions": [
         { "role": "tester", "action": "validate_plan" }
       ]
@@ -263,7 +270,7 @@
     {
       "id": "feature_landing_pr_ci_failed",
       "artifact": "feature_landing_pr",
-      "excluded_labels": ["merge-conflict"],
+      "excluded_labels": ["merge-conflict", "needs-human"],
       "condition": { "kind": "ci_failed" },
       "actions": [
         { "role": "engineer", "action": "address_feature_landing_ci_failure", "checkout": "pull_request_writable" }
@@ -273,6 +280,7 @@
       "id": "feature_landing_pr_merge_conflict",
       "artifact": "feature_landing_pr",
       "labels": ["merge-conflict"],
+      "excluded_labels": ["needs-human"],
       "actions": [
         { "role": "engineer", "action": "resolve_feature_landing_merge_conflict", "checkout": "pull_request_writable" }
       ]
@@ -281,7 +289,7 @@
       "id": "feature_landing",
       "artifact": "feature_landing_pr",
       "labels": ["landing"],
-      "excluded_labels": ["merge-conflict"],
+      "excluded_labels": ["merge-conflict", "needs-human"],
       "condition": { "kind": "ci_passed" },
       "automation": {
         "actor": "mechanical",
@@ -308,7 +316,7 @@
       "artifact": "feature",
       "roles": ["architect"],
       "effects": [
-        { "kind": "create_issues", "correlation_key": "feature-plan", "record_parent_dependencies": true },
+        { "kind": "create_issues", "correlation_key": "feature-plan", "record_parent_dependencies": true, "min_children": 1, "max_children": 1 },
         { "kind": "add_label", "label": "planned" },
         { "kind": "set_assignee", "role": "architect" }
       ]
