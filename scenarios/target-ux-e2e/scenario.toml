@@ -20,7 +20,7 @@ contracts = [
   "distributed worker bundles validate offline and with fake-online Forge auth",
   "worker pool selection enforces role auth, capacity policy, and agent profile credentials",
   "YAML and JSON workflow paths load through the same workflow validation path",
-  "trigger-forgejo is the selected trigger surface while serve trigger stays rejected",
+  "engine and standalone serve runtimes expose POST /forgejo/webhook while serve trigger stays rejected",
 ]
 files = [
   "README.md",
@@ -53,7 +53,9 @@ serve_contract = "temper serve worker requires --pool when pools are configured 
 [target_ux.trigger]
 payload_path = "config/trigger/forgejo-issue-webhook.json"
 webhook_secret_path = "config/trigger/webhook-secret"
-selected_command = "temper trigger-forgejo"
+selected_surfaces = ["temper serve engine", "temper serve standalone"]
+endpoint = "POST /forgejo/webhook"
+legacy_internal_adapter_command = "temper trigger-forgejo"
 rejected_command = "temper serve trigger"
 
 [change_policy]
@@ -65,7 +67,7 @@ compatible_changes = [
   "Update fake fixture tokens or local URLs when parser wording changes.",
 ]
 requires_new_scenario_or_major_update = [
-  "Replacing trigger-forgejo as the selected trigger surface.",
+  "Replacing the engine/standalone POST /forgejo/webhook trigger contract.",
   "Removing standalone or distributed target-era validation coverage.",
   "Removing worker-pool auth, profile, or capacity coverage.",
 ]
