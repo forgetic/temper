@@ -1,9 +1,11 @@
 name: ci
 
 on:
+  # Plan-centric delivery opens implementation PRs into per-feature branches
+  # before opening the aggregate landing PR into main. Validate both shapes;
+  # restricting this trigger to main leaves feature-branch PRs permanently
+  # waiting for CI and prevents mechanical landing.
   pull_request:
-    branches:
-      - main
     types:
       - opened
       - synchronize
