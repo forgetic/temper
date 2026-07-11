@@ -29,6 +29,7 @@ fn full_metadata() -> WorkflowMetadata {
             expires_at: ts("2026-05-29T00:30:00Z"),
         }),
         assignment: None,
+        ..WorkflowMetadata::default()
     }
 }
 

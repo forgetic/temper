@@ -132,6 +132,18 @@ async fn run_async(
     let lease_ttl = chrono::Duration::from_std(daemon_config.lease_ttl)
         .map_err(|error| format!("invalid lease ttl: {error}"))?;
 
+    // Startup recovery is a hard barrier: finish every durable create intent
+    // before the daemon, worker, webhook, or polling scans can dispatch work.
+    let recovery_executor = workflow.executor(forge.as_ref());
+    for repo_id in &repo_ids {
+        recovery_executor
+            .recover_create_issue_intents(repo_id)
+            .await
+            .map_err(|error| {
+                format!("failed to recover durable child-create intents in `{repo_id}`: {error}")
+            })?;
+    }
+
     // --- Daemon (orchestrator) on this loop, with per-role token routing ---
     let applier = result_applier(
         forge.clone(),

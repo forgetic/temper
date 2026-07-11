@@ -52,6 +52,11 @@ pub async fn run_async(
     let wake_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Wake);
     let lease_ttl = lease_ttl(&config)?;
 
+    // Complete durable child-create intents before constructing the daemon or
+    // spawning either dispatch backstop. This is the startup recovery barrier:
+    // no role scan can observe a partially-wired child while recovery runs.
+    recover_child_create_intents(forge.as_ref(), workflow.as_ref(), &repo_ids).await?;
+
     let daemon = split_daemon(
         Arc::clone(&spawner),
         result_applier(
@@ -137,6 +142,23 @@ async fn resolve_repo_targets(
 fn lease_ttl(config: &DaemonRunConfig) -> Result<chrono::Duration, String> {
     chrono::Duration::from_std(config.lease_ttl)
         .map_err(|error| format!("invalid lease ttl: {error}"))
+}
+
+async fn recover_child_create_intents(
+    forge: &dyn Forge,
+    workflow: &ValidatedWorkflow,
+    repo_ids: &[RepositoryId],
+) -> Result<(), String> {
+    let executor = workflow.executor(forge);
+    for repo_id in repo_ids {
+        executor
+            .recover_create_issue_intents(repo_id)
+            .await
+            .map_err(|error| {
+                format!("failed to recover durable child-create intents in `{repo_id}`: {error}")
+            })?;
+    }
+    Ok(())
 }
 
 fn spawn_poll(

@@ -237,6 +237,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                     })?;
                 validate_child_dependencies(&plan.transition, effect_index, &children)?;
                 prepared.issue_creates.push(PreparedCreateIssues {
+                    transition: plan.transition.clone(),
+                    effect_index,
                     base_correlation_key,
                     children,
                     record_parent_dependencies: *record_parent_dependencies,
