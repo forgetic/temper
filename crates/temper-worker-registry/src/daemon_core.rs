@@ -53,6 +53,14 @@ impl WorkerAuthError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoleSaturation {
+    /// The configured finite concurrency limit that is currently saturated.
+    pub concurrency: u32,
+    /// Pending `(repo, Artifact)` entries for the role in queue order.
+    pub pending: Vec<(String, Artifact)>,
+}
+
 #[derive(Debug, Default)]
 pub struct DaemonCore {
     coordinator: DispatchCoordinator,
@@ -63,15 +71,45 @@ pub struct DaemonCore {
 }
 
 impl DaemonCore {
+    /// Construct a core with no finite role limits or worker-pool policies.
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn with_pool_policies(policies: Vec<WorkerPoolPolicy>) -> Self {
+    /// Construct a core with authoritative finite per-role limits.
+    pub fn with_role_limits(role_limits: BTreeMap<String, u32>) -> Self {
         Self {
+            coordinator: DispatchCoordinator::with_role_limits(role_limits),
+            ..Self::default()
+        }
+    }
+
+    /// Construct a core with worker-pool policies and unlimited roles.
+    pub fn with_pool_policies(policies: Vec<WorkerPoolPolicy>) -> Self {
+        Self::with_pool_policies_and_role_limits(policies, BTreeMap::new())
+    }
+
+    /// Construct a core with both worker-pool policies and authoritative finite
+    /// per-role limits.
+    pub fn with_pool_policies_and_role_limits(
+        policies: Vec<WorkerPoolPolicy>,
+        role_limits: BTreeMap<String, u32>,
+    ) -> Self {
+        Self {
+            coordinator: DispatchCoordinator::with_role_limits(role_limits),
             pool_policies: WorkerPoolPolicies::from(policies),
             ..Self::default()
         }
+    }
+
+    /// All configured finite role limits. An absent role is unlimited.
+    pub fn configured_role_limits(&self) -> &BTreeMap<String, u32> {
+        self.coordinator.configured_role_limits()
+    }
+
+    /// The configured finite limit for `role`, or `None` when it is unlimited.
+    pub fn configured_role_limit(&self, role: &str) -> Option<u32> {
+        self.coordinator.configured_role_limit(role)
     }
 
     pub fn coordinator(&self) -> &DispatchCoordinator {
@@ -156,28 +194,27 @@ impl DaemonCore {
         job_ids
     }
 
-    /// Reports whether a role is saturated and, if so, what is queued behind it.
+    /// Reports finite configured saturation for `role` and the work waiting
+    /// behind that limit.
     ///
-    /// A role is *saturated* when it has at least one in-flight (assigned) job
-    /// and at least one job still pending in the same role's queue — i.e. work
-    /// is waiting because the role's worker(s) are busy. The returned vector
-    /// holds the `(repo, artifact)` coordinates of the pending same-role jobs in
-    /// queue order, which the observability layer renders into the §7
-    /// `role.saturated` wait list. An empty result means the role is not
-    /// saturated (idle, or pending work but no in-flight holder).
-    ///
-    /// This is a pure read over the dispatch coordinator's pending/assigned
-    /// sets; the caller owns the structured-event emission (this crate has no
-    /// logging dependency).
-    pub fn role_saturation(&self, role: &str) -> Vec<(String, Artifact)> {
-        let coordinator = &self.coordinator;
-        let role_busy = coordinator
+    /// Saturation exists only when the role has a configured finite limit, its
+    /// assigned count is at least that limit, and same-role work remains
+    /// pending. This definition intentionally handles a zero limit with no
+    /// in-flight holder and never infers saturation for unlimited roles from
+    /// worker exhaustion.
+    pub fn role_saturation(&self, role: &str) -> Option<RoleSaturation> {
+        let concurrency = self.configured_role_limit(role)?;
+        let assigned = self
+            .coordinator
             .assigned_work_items()
-            .any(|item| item.role == role);
-        if !role_busy {
-            return Vec::new();
+            .filter(|item| item.role == role)
+            .count();
+        if assigned < concurrency as usize {
+            return None;
         }
-        coordinator
+
+        let pending = self
+            .coordinator
             .pending()
             .iter()
             .filter(|item| item.role == role)
@@ -185,14 +222,17 @@ impl DaemonCore {
                 let (artifact, _payload) = self.job_context.get(&item.job_id)?;
                 Some((item.repo.clone(), artifact.clone()))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        (!pending.is_empty()).then_some(RoleSaturation {
+            concurrency,
+            pending,
+        })
     }
 
     /// Number of in-flight (assigned, not yet completed) jobs for a role.
     ///
-    /// For the single-slot standalone roles this is the role's effective
-    /// concurrency limit while it is busy (the `(concurrency=N)` figure of the
-    /// §7 `role.saturated` line).
+    /// This is an observed count only; configured concurrency is exposed by
+    /// [`Self::configured_role_limit`] and must not be inferred from this value.
     pub fn in_flight_role_count(&self, role: &str) -> usize {
         self.coordinator
             .assigned_work_items()

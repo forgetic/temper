@@ -111,8 +111,8 @@ pub(super) enum DaemonRequest {
         token: u64,
         hint: temper_runner::ChangeHint,
     },
-    /// A role is at its concurrency limit with same-role work queued behind it.
-    /// Carries the per-role concurrency figure and the `artifact.ref` strings of
+    /// A role is at its configured concurrency limit with same-role work
+    /// pending. Carries the configured figure and the `artifact.ref` strings of
     /// the waiting items, ready for the §7 `worker` / `role.saturated` line.
     RoleSaturated {
         role: String,
@@ -160,13 +160,39 @@ impl DaemonMachine {
         Self::with_core(DaemonCore::new(), apply_grace, max_poll_wait_ms)
     }
 
+    pub(super) fn with_role_limits(
+        role_limits: BTreeMap<String, u32>,
+        apply_grace: Duration,
+        max_poll_wait_ms: u64,
+    ) -> Self {
+        Self::with_core(
+            DaemonCore::with_role_limits(role_limits),
+            apply_grace,
+            max_poll_wait_ms,
+        )
+    }
+
     pub(super) fn with_worker_pools(
         worker_pools: Vec<WorkerPoolPolicy>,
         apply_grace: Duration,
         max_poll_wait_ms: u64,
     ) -> Self {
+        Self::with_worker_pools_and_role_limits(
+            worker_pools,
+            BTreeMap::new(),
+            apply_grace,
+            max_poll_wait_ms,
+        )
+    }
+
+    pub(super) fn with_worker_pools_and_role_limits(
+        worker_pools: Vec<WorkerPoolPolicy>,
+        role_limits: BTreeMap<String, u32>,
+        apply_grace: Duration,
+        max_poll_wait_ms: u64,
+    ) -> Self {
         Self::with_core(
-            DaemonCore::with_pool_policies(worker_pools),
+            DaemonCore::with_pool_policies_and_role_limits(worker_pools, role_limits),
             apply_grace,
             max_poll_wait_ms,
         )
@@ -193,6 +219,17 @@ impl DaemonMachine {
         Self::new(apply_grace, DEFAULT_MAX_POLL_WAIT_MS)
     }
 
+    pub(super) fn default_machine_with_role_limits(
+        apply_grace: Duration,
+        role_limits: BTreeMap<String, u32>,
+    ) -> Self {
+        if role_limits.is_empty() {
+            Self::default_machine(apply_grace)
+        } else {
+            Self::with_role_limits(role_limits, apply_grace, DEFAULT_MAX_POLL_WAIT_MS)
+        }
+    }
+
     pub(super) fn default_machine_with_worker_pools(
         apply_grace: Duration,
         worker_pools: Vec<WorkerPoolPolicy>,
@@ -202,6 +239,25 @@ impl DaemonMachine {
         } else {
             Self::with_worker_pools(worker_pools, apply_grace, DEFAULT_MAX_POLL_WAIT_MS)
         }
+    }
+
+    pub(super) fn default_machine_with_worker_pools_and_role_limits(
+        apply_grace: Duration,
+        worker_pools: Vec<WorkerPoolPolicy>,
+        role_limits: BTreeMap<String, u32>,
+    ) -> Self {
+        if worker_pools.is_empty() {
+            return Self::default_machine_with_role_limits(apply_grace, role_limits);
+        }
+        if role_limits.is_empty() {
+            return Self::default_machine_with_worker_pools(apply_grace, worker_pools);
+        }
+        Self::with_worker_pools_and_role_limits(
+            worker_pools,
+            role_limits,
+            apply_grace,
+            DEFAULT_MAX_POLL_WAIT_MS,
+        )
     }
 
     pub(super) fn next_token(&mut self) -> u64 {
