@@ -71,7 +71,7 @@ pub mod factory {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use temper_forge_model::{ChangeSource, Forge, ProvisioningForge};
+    use temper_forge_model::{ChangeSource, Forge, InspectionForge, ProvisioningForge};
 
     /// Abstract forge plus an optional-backend companion change source.
     ///
@@ -90,6 +90,30 @@ pub mod factory {
     /// `with_*` builders (default repo, web-UI CI credentials, …).
     pub fn new_forgejo(config: ForgejoConfig) -> Arc<dyn Forge> {
         Arc::new(temper_forge_forgejo::ForgejoForge::new(config))
+    }
+
+    /// Build a token-authenticated Forgejo backend for read-only planning.
+    ///
+    /// Unlike [`new_forgejo_provisioning`], the returned facade exposes only
+    /// ordinary Forge operations and readiness inspection; it has no content or
+    /// admin adapter.
+    pub fn new_forgejo_inspection(config: ForgejoConfig) -> Arc<dyn InspectionForge> {
+        Arc::new(temper_forge_forgejo::ForgejoForge::new(config))
+    }
+
+    /// Build a mutation-proof Forgejo inspection backend using HTTP Basic auth.
+    ///
+    /// This is for generated pre-apply bundles that have the configured admin
+    /// login/password but no token yet. The concrete backend remains hidden,
+    /// and its HTTP boundary rejects every non-GET request locally.
+    pub fn new_forgejo_read_only_basic(
+        base_url: impl Into<String>,
+        login: impl AsRef<str>,
+        password: impl AsRef<str>,
+    ) -> Arc<dyn InspectionForge> {
+        Arc::new(temper_forge_forgejo::ForgejoForge::new_read_only_basic(
+            base_url, login, password,
+        ))
     }
 
     /// Build a Forgejo-backed forge exposing the full provisioning surface

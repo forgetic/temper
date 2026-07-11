@@ -142,7 +142,7 @@ fn parse_plan_args(args: Vec<String>, options: LoadOptions) -> Result<ParsedPlan
 pub fn run_plan(opts: &PlanOptions) -> Result<DeploymentPlanReport, String> {
     let bundle = load_deployment(&opts.options, &opts.env, &opts.paths, opts.existing_repo)
         .map_err(|error| error.to_string())?;
-    let mut inspector = ForgePlanInspector::from_bundle(&bundle);
+    let mut inspector = ForgePlanInspector::from_bundle(&bundle)?;
     build_report(&bundle, &mut inspector)
 }
 
@@ -173,40 +173,41 @@ pub struct MetadataInspection {
 }
 
 struct ForgePlanInspector {
-    forge: Option<std::sync::Arc<dyn temper_forge::ProvisioningForge>>,
-    unavailable_reason: Option<String>,
+    forge: std::sync::Arc<dyn temper_forge::InspectionForge>,
 }
 
 impl ForgePlanInspector {
-    fn from_bundle(bundle: &DeploymentBundle) -> Self {
-        let Some(token) = &bundle.forge.admin_token else {
-            return Self {
-                forge: None,
-                unavailable_reason: Some(
-                    "admin token is missing; read-only forge inspection was skipped".to_string(),
-                ),
-            };
-        };
+    fn from_bundle(bundle: &DeploymentBundle) -> Result<Self, String> {
         let repository = &bundle.repositories[0].plan.repo;
-        let config =
-            temper_forge::config::ForgejoConfig::new(&bundle.forge.base_url, token.expose_secret())
-                .with_default_repo(&repository.owner, &repository.name);
-        Self {
-            forge: Some(temper_forge::factory::new_forgejo_provisioning(config)),
-            unavailable_reason: None,
-        }
+        let forge = if let Some(token) = &bundle.forge.admin_token {
+            let config = temper_forge::config::ForgejoConfig::new(
+                &bundle.forge.base_url,
+                token.expose_secret(),
+            )
+            .with_default_repo(&repository.owner, &repository.name);
+            temper_forge::factory::new_forgejo_inspection(config)
+        } else {
+            let admin_user = bundle.forge.admin_user.as_deref().ok_or_else(|| {
+                "deployment plan requires an admin forge user when no token is configured"
+                    .to_string()
+            })?;
+            let admin_password = bundle.forge.admin_password.as_ref().ok_or_else(|| {
+                "deployment plan requires an admin forge password when no token is configured"
+                    .to_string()
+            })?;
+            temper_forge::factory::new_forgejo_read_only_basic(
+                &bundle.forge.base_url,
+                admin_user,
+                admin_password.expose_secret(),
+            )
+        };
+        Ok(Self { forge })
     }
 }
 
 impl DeploymentInspector for ForgePlanInspector {
     fn inspect(&mut self, bundle: &DeploymentBundle) -> Result<ForgeInspection, String> {
-        let Some(forge) = self.forge.clone() else {
-            return Ok(ForgeInspection {
-                inspected: false,
-                unavailable_reason: self.unavailable_reason.clone(),
-                ..ForgeInspection::default()
-            });
-        };
+        let forge = self.forge.clone();
         let repository = bundle.repositories[0].plan.repo.clone();
         let desired_users = desired_users(bundle);
         let declared_kinds: BTreeSet<String> = bundle
@@ -231,7 +232,7 @@ impl DeploymentInspector for ForgePlanInspector {
 }
 
 async fn inspect_forge(
-    forge: &dyn temper_forge::ProvisioningForge,
+    forge: &dyn temper_forge::InspectionForge,
     owner: &str,
     name: &str,
     desired_users: &[String],
