@@ -29,12 +29,14 @@ use std::time::Duration;
 use skein::runtime::RuntimeHandle;
 use temper_config::{ExposeSecret, Resolved, WorkerSettings};
 use temper_engine::{
-    Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, PollBackstopConfig,
-    RoleFeedMode, WebhookConfig, spawn_mechanical_backstop, spawn_poll_backstop,
+    Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, MechanicalScope,
+    PollBackstopConfig, RoleFeedMode, WebhookConfig, spawn_mechanical_backstop,
+    spawn_poll_backstop,
 };
 use temper_engine_service::{
-    engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
-    worker_pool_auth_config, workflow_role_limits,
+    converge_startup_orphans, engine_config, ensure_workflow_labels, resolve_repositories,
+    result_applier, role_feed_targets, stage_startup_assignments, worker_pool_auth_config,
+    workflow_role_limits,
 };
 use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
@@ -159,7 +161,31 @@ async fn run_async(
         daemon_config.worker_pools.clone(),
         role_limits,
     )
-    .with_worker_pool_auth(worker_pool_auth_config(resolved)?);
+    .with_worker_pool_auth(worker_pool_auth_config(resolved)?)
+    .begin_startup_recovery();
+
+    // The prior in-process worker died with this standalone process, so there
+    // is no live prior worker to reattach. Inventory still runs through the
+    // shared deterministic reconstruction path, then converges every staged
+    // claim before any new in-process worker or feed starts.
+    let recovered = stage_startup_assignments(
+        &daemon,
+        forge.as_ref(),
+        &repo_ids,
+        workflow.as_ref(),
+        compiled.as_ref(),
+        LeasePolicy::new(lease_ttl),
+        (temper_engine::system_clock())(),
+    )
+    .await?;
+    let orphaned = daemon.finish_startup_recovery().await;
+    converge_startup_orphans(
+        forge.as_ref(),
+        LeasePolicy::new(lease_ttl),
+        &recovered,
+        &orphaned,
+    )
+    .await?;
 
     spawn_poll_backstop(
         &spawner,
@@ -214,6 +240,7 @@ async fn run_async(
             },
             temper_engine::system_clock(),
         );
+        trigger.run(MechanicalScope::All).await;
         mechanical_trigger = Some(Arc::new(trigger));
 
         // §7 mechanical-backstop line: cadence and the repo span it covers.
@@ -372,6 +399,7 @@ async fn run_async(
         }
     })
     .await;
+    daemon.release_assignments_for_shutdown().await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
 }

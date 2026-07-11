@@ -70,6 +70,12 @@ pub trait ResultApplier: Send + Sync {
         let _ = (job, context);
     }
 
+    /// Reattaches and refreshes a recovered assignment after the recorded worker
+    /// proves ownership by reporting the exact job id in a heartbeat.
+    async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
+        let _ = (job, context);
+    }
+
     async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome;
 
     /// Validates whether a PR-targeted in-flight job may still publish work.
@@ -134,6 +140,13 @@ impl ResultApplier for RoleRoutingApplier {
         match self.routes.get(&job.role) {
             Some(applier) => applier.release_claim(job, context).await,
             None => self.default.release_claim(job, context).await,
+        }
+    }
+
+    async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
+        match self.routes.get(&job.role) {
+            Some(applier) => applier.heartbeat(job, context).await,
+            None => self.default.heartbeat(job, context).await,
         }
     }
 

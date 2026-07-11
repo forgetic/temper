@@ -142,6 +142,31 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         self.inner.check_pull_request_freshness(check).await
     }
 
+    async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
+        let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
+            return;
+        };
+        let expected = durable_assignment(&job, &context);
+        let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
+        match manager
+            .heartbeat_assignment(&repo_id, target, &expected, (self.clock)())
+            .await
+        {
+            Ok(_) => {
+                self.claims
+                    .lock()
+                    .expect("assignment claim lock")
+                    .insert(job.job_id, context);
+            }
+            Err(error) => tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                %error,
+                "recovered assignment heartbeat did not match durable claim"
+            ),
+        }
+    }
+
     async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
         let Some(claim_context) = self
             .claims

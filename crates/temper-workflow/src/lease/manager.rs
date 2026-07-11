@@ -380,6 +380,109 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         .await
     }
 
+    /// Conditionally refreshes the lease for an exact durable assignment.
+    ///
+    /// This is the restart-reattachment path. The job, worker, and prior daemon
+    /// boot identity must still match fresh Forge metadata; a heartbeat for an
+    /// unknown, superseded, or mismatched job therefore cannot extend a claim.
+    pub async fn heartbeat_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+        now: DateTime<Utc>,
+    ) -> Result<DurableAssignment, LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: expected.job_id.clone().unwrap_or_default(),
+            });
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+        let lease =
+            loaded
+                .metadata()
+                .lease
+                .as_ref()
+                .ok_or_else(|| LeaseError::MalformedMetadata {
+                    reason: "durable assignment is missing its lease".to_string(),
+                })?;
+        let refreshed = self.planner.heartbeat(Some(lease), &lease.worker, now)?;
+        let mut assignment = current.clone();
+        assignment.expires_at = Some(refreshed.expires_at);
+        self.write_assignment(
+            &loaded,
+            Some(assignment.clone()),
+            Some(refreshed),
+            AssignmentMutation::default(),
+            target,
+        )
+        .await?;
+        Ok(assignment)
+    }
+
+    /// Clears an impossible durable claim and leaves one idempotent attention
+    /// marker instead of guessing a ready/blocked state.
+    pub async fn quarantine_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+    ) -> Result<(), LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Ok(());
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+        let pre_assignees = current
+            .pre_claim_assignees
+            .iter()
+            .map(|user| UserId::new(user.clone()))
+            .collect::<Vec<_>>();
+        let add_labels = (!loaded.labels().iter().any(|label| label == "needs-human"))
+            .then(|| "needs-human".to_string())
+            .into_iter()
+            .collect();
+        let remove_labels = loaded
+            .labels()
+            .iter()
+            .filter(|label| label.as_str() == "in-progress")
+            .cloned()
+            .collect();
+        let add_assignees = pre_assignees
+            .iter()
+            .filter(|user| !loaded.assignees().contains(user))
+            .cloned()
+            .collect();
+        let remove_assignees = loaded
+            .assignees()
+            .iter()
+            .filter(|user| !pre_assignees.contains(user))
+            .cloned()
+            .collect();
+        self.write_assignment(
+            &loaded,
+            None,
+            None,
+            AssignmentMutation {
+                add_labels,
+                remove_labels,
+                add_assignees,
+                remove_assignees,
+            },
+            target,
+        )
+        .await
+    }
+
     /// Extends `worker`'s lease on `target` with a fresh heartbeat and expiry.
     pub async fn heartbeat(
         &self,

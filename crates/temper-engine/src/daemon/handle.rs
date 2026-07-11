@@ -100,6 +100,72 @@ impl Daemon {
         self
     }
 
+    /// Closes the startup barrier. Completions are FIFO, so calling this on a
+    /// newly constructed daemon guarantees subsequent enqueue/poll work cannot
+    /// dispatch until [`finish_startup_recovery`](Self::finish_startup_recovery).
+    pub fn begin_startup_recovery(self) -> Self {
+        let _ = self.cq.send(DaemonCompletion::BeginStartupRecovery);
+        self
+    }
+
+    /// Adds one deterministic job context reconstructed from durable metadata.
+    pub async fn stage_recovered_job(
+        &self,
+        job: temper_worker_registry::RecoveredJob,
+        prior_daemon_boot_id: impl Into<String>,
+    ) -> Result<(), temper_worker_registry::RegistryError> {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::StageRecoveredJob {
+                job,
+                daemon_boot_id: prior_daemon_boot_id.into(),
+                reply,
+            })
+            .is_err()
+        {
+            return Err(temper_worker_registry::RegistryError::UnknownWorker(
+                "daemon stopped during startup recovery".to_string(),
+            ));
+        }
+        rx.recv().await.unwrap_or_else(|| {
+            Err(temper_worker_registry::RegistryError::UnknownWorker(
+                "daemon stopped during startup recovery".to_string(),
+            ))
+        })
+    }
+
+    /// Waits for the injected runtime timer while the startup barrier remains
+    /// closed, giving prior workers a bounded heartbeat reattachment window.
+    pub async fn wait_startup_recovery_grace(&self, delay: Duration) {
+        if delay.is_zero() {
+            return;
+        }
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::ArmStartupRecoveryGrace { delay, reply })
+            .is_ok()
+        {
+            let _ = rx.recv().await;
+        }
+    }
+
+    /// Opens dispatch after startup recovery and returns staged claims that did
+    /// not receive a matching heartbeat. Callers must converge these orphans in
+    /// Forge before starting normal role feeds.
+    pub async fn finish_startup_recovery(&self) -> Vec<temper_worker_registry::RecoveredJob> {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::FinishStartupRecovery { reply })
+            .is_err()
+        {
+            return Vec::new();
+        }
+        rx.recv().await.unwrap_or_default()
+    }
+
     fn with_applier_worker_pools_role_limits_and_apply_grace(
         spawner: Arc<dyn Spawner>,
         applier: Arc<dyn ResultApplier>,
@@ -129,6 +195,20 @@ impl Daemon {
             cq: cq_tx,
             scanner_slot,
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Signals clean shutdown by releasing every assignment still owned by this
+    /// daemon boot. Crash recovery remains independent because this is only a
+    /// best-effort fast path through the same conditional claim rollback.
+    pub async fn release_assignments_for_shutdown(&self) {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::ReleaseAssignmentsForShutdown { reply })
+            .is_ok()
+        {
+            let _ = rx.recv().await;
         }
     }
 

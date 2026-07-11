@@ -5,14 +5,21 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use chrono::Utc;
 use temper_config::{ExposeSecret, Resolved};
 use temper_engine::{
     Daemon, DaemonRunConfig, EngineConfig, HintedMechanical, MechanicalBackstopConfig,
-    PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget, WebhookConfig,
-    spawn_mechanical_backstop, spawn_poll_backstop,
+    MechanicalScope, PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget,
+    WebhookConfig, spawn_mechanical_backstop, spawn_poll_backstop,
 };
-use temper_forge::{Forge, RepositoryId, RepositoryPath};
-use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
+use temper_forge::{
+    Forge, ForgeError, ForgeResult, IssueQuery, IssueState, PullRequest, PullRequestQuery,
+    PullRequestState, RepositoryId, RepositoryPath,
+};
+use temper_workflow::{
+    ArtifactSource, CompiledWorkflow, DurableAssignment, LeaseManager, LeasePolicy, METADATA_BEGIN,
+    ValidatedWorkflow, parse_metadata_block,
+};
 
 use crate::{
     engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
@@ -70,17 +77,38 @@ pub async fn run_async(
         config.worker_pools.clone(),
         role_limits,
     )
-    .with_worker_pool_auth(worker_pool_auth_config(resolved)?);
+    .with_worker_pool_auth(worker_pool_auth_config(resolved)?)
+    .begin_startup_recovery();
 
-    spawn_poll(
-        &spawner,
-        daemon.clone(),
-        forge.clone(),
-        workflow.clone(),
-        compiled.clone(),
-        normal_targets,
-        config.poll_cadence,
-    );
+    // Inventory durable claims before opening any feed. The worker protocol
+    // listener is intentionally available during the bounded grace so external
+    // workers can register and prove prior ownership with `Heartbeat.jobs`.
+    let recovered = stage_startup_assignments(
+        &daemon,
+        forge.as_ref(),
+        &repo_ids,
+        workflow.as_ref(),
+        compiled.as_ref(),
+        LeasePolicy::new(lease_ttl),
+        (temper_engine::system_clock())(),
+    )
+    .await?;
+    let server = temper_engine::serve(&handle, &daemon, config.bind)
+        .await
+        .map_err(|error| format!("serve failed: {error}"))?;
+    if !recovered.is_empty() {
+        daemon
+            .wait_startup_recovery_grace(std::time::Duration::from_secs(10))
+            .await;
+    }
+    let orphaned = daemon.finish_startup_recovery().await;
+    converge_startup_orphans(
+        forge.as_ref(),
+        LeasePolicy::new(lease_ttl),
+        &recovered,
+        &orphaned,
+    )
+    .await?;
 
     let mechanical_trigger = spawn_mechanical(
         &spawner,
@@ -92,6 +120,16 @@ pub async fn run_async(
         lease_ttl,
     )
     .await?;
+
+    spawn_poll(
+        &spawner,
+        daemon.clone(),
+        forge.clone(),
+        workflow.clone(),
+        compiled.clone(),
+        normal_targets,
+        config.poll_cadence,
+    );
     let daemon = attach_webhook(
         daemon,
         forge,
@@ -103,7 +141,7 @@ pub async fn run_async(
         mechanical_trigger,
     )?;
 
-    drain_after_signal(&handle, &daemon, config.bind).await
+    drain_after_signal(&daemon, server).await
 }
 
 fn load_workflow(
@@ -213,6 +251,9 @@ async fn spawn_mechanical(
         mechanical_config,
         temper_engine::system_clock(),
     );
+    // Run the first reconciliation pass to completion before normal role feeds
+    // are opened; the cadence loop remains the bounded convergence backstop.
+    trigger.run(MechanicalScope::All).await;
     Ok(Some(Arc::new(trigger)))
 }
 
@@ -256,19 +297,233 @@ fn attach_webhook(
     ))
 }
 
-async fn drain_after_signal(
-    handle: &skein::runtime::RuntimeHandle,
+#[derive(Clone)]
+pub struct RecoveredClaim {
+    repo: RepositoryId,
+    target: ArtifactSource,
+    assignment: DurableAssignment,
+}
+
+pub async fn stage_startup_assignments(
     daemon: &Daemon,
-    bind: std::net::SocketAddr,
+    forge: &dyn Forge,
+    repos: &[RepositoryId],
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    policy: LeasePolicy,
+    now: chrono::DateTime<Utc>,
+) -> Result<BTreeMap<String, RecoveredClaim>, String> {
+    const MAX_RECOVERY_CANDIDATES: usize = 1_000;
+    let mut candidates = Vec::new();
+    for repo in repos {
+        let issues = forge
+            .list_issues(
+                repo,
+                IssueQuery {
+                    state: Some(IssueState::Open),
+                    body_contains: Some(METADATA_BEGIN.to_string()),
+                    ..IssueQuery::default()
+                },
+            )
+            .await
+            .map_err(|error| format!("startup issue inventory failed for {repo}: {error}"))?;
+        candidates.extend(issues.into_iter().map(|issue| {
+            (
+                repo.clone(),
+                ArtifactSource::Issue {
+                    number: issue.number,
+                },
+                issue.body,
+            )
+        }));
+        let pull_requests = forge
+            .list_pull_requests(
+                repo,
+                PullRequestQuery {
+                    state: Some(PullRequestState::Open),
+                    body_contains: Some(METADATA_BEGIN.to_string()),
+                    ..PullRequestQuery::default()
+                },
+            )
+            .await;
+        let pull_requests = startup_pull_inventory(repo, pull_requests)?;
+        candidates.extend(pull_requests.into_iter().map(|pull_request| {
+            (
+                repo.clone(),
+                ArtifactSource::PullRequest {
+                    number: pull_request.number,
+                },
+                pull_request.body,
+            )
+        }));
+        if candidates.len() > MAX_RECOVERY_CANDIDATES {
+            return Err(format!(
+                "startup recovery candidate limit exceeded ({MAX_RECOVERY_CANDIDATES})"
+            ));
+        }
+    }
+    candidates.sort_by_key(|(repo, target, _)| {
+        let (kind, number) = match target {
+            ArtifactSource::Issue { number } => (0_u8, number.get()),
+            ArtifactSource::PullRequest { number } => (1_u8, number.get()),
+        };
+        (repo.clone(), kind, number)
+    });
+
+    let mut staged = BTreeMap::new();
+    for (repo, target, body) in candidates {
+        let Some(metadata) = parse_metadata_block(&body)
+            .map_err(|error| format!("invalid workflow metadata on {repo} {target:?}: {error}"))?
+        else {
+            continue;
+        };
+        let Some(assignment) = metadata.assignment else {
+            continue;
+        };
+        let Some(job_id) = assignment
+            .job_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            quarantine_invalid_assignment(forge, policy, &repo, target, &assignment).await?;
+            continue;
+        };
+        let Some(worker_id) = assignment
+            .worker_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            quarantine_invalid_assignment(forge, policy, &repo, target, &assignment).await?;
+            continue;
+        };
+        let Some(prior_boot) = assignment
+            .daemon_boot_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            quarantine_invalid_assignment(forge, policy, &repo, target, &assignment).await?;
+            continue;
+        };
+        let Some(expires_at) = assignment
+            .expires_at
+            .or_else(|| metadata.lease.as_ref().map(|lease| lease.expires_at))
+        else {
+            quarantine_invalid_assignment(forge, policy, &repo, target, &assignment).await?;
+            continue;
+        };
+        let claim = RecoveredClaim {
+            repo: repo.clone(),
+            target,
+            assignment: assignment.clone(),
+        };
+        if expires_at <= now {
+            LeaseManager::new(forge, policy)
+                .rollback_assignment(&repo, target, &assignment)
+                .await
+                .map_err(|error| format!("could not recover expired claim {job_id}: {error}"))?;
+            continue;
+        }
+        let job = match temper_engine::recovered_job_from_assignment(
+            forge,
+            &repo,
+            target,
+            &assignment,
+            workflow,
+            compiled,
+        )
+        .await
+        {
+            Ok(job) => job,
+            Err(reason) => {
+                tracing::warn!(job_id = %job_id, %reason, "quarantining impossible durable assignment");
+                quarantine_invalid_assignment(forge, policy, &repo, target, &assignment).await?;
+                continue;
+            }
+        };
+        daemon
+            .stage_recovered_job(
+                temper_engine::RecoveredJob {
+                    job_id: job.job_id,
+                    worker_id,
+                    role: job.role,
+                    repo: job.repo,
+                    artifact: job.artifact,
+                    job_payload: job.job_payload,
+                },
+                prior_boot,
+            )
+            .await
+            .map_err(|error| format!("could not stage recovered claim {job_id}: {error:?}"))?;
+        staged.insert(job_id, claim);
+    }
+    Ok(staged)
+}
+
+fn startup_pull_inventory(
+    repo: &RepositoryId,
+    result: ForgeResult<Vec<PullRequest>>,
+) -> Result<Vec<PullRequest>, String> {
+    match result {
+        Ok(pull_requests) => Ok(pull_requests),
+        // Forgejo reports its /pulls collection as 404 until a repository has
+        // a Git history. The issue inventory immediately before this call
+        // succeeded, so the repository itself is known to exist and an absent
+        // PR collection is equivalent to an empty recovery inventory.
+        Err(ForgeError::NotFound(error)) => {
+            tracing::debug!(%repo, %error, "startup PR collection is not available yet");
+            Ok(Vec::new())
+        }
+        Err(error) => Err(format!("startup PR inventory failed for {repo}: {error}")),
+    }
+}
+
+async fn quarantine_invalid_assignment(
+    forge: &dyn Forge,
+    policy: LeasePolicy,
+    repo: &RepositoryId,
+    target: ArtifactSource,
+    assignment: &DurableAssignment,
+) -> Result<(), String> {
+    LeaseManager::new(forge, policy)
+        .quarantine_assignment(repo, target, assignment)
+        .await
+        .map_err(|error| format!("could not quarantine impossible claim on {repo}: {error}"))
+}
+
+pub async fn converge_startup_orphans(
+    forge: &dyn Forge,
+    policy: LeasePolicy,
+    recovered: &BTreeMap<String, RecoveredClaim>,
+    orphaned: &[temper_engine::RecoveredJob],
+) -> Result<(), String> {
+    for orphan in orphaned {
+        let claim = recovered.get(&orphan.job_id).ok_or_else(|| {
+            format!(
+                "startup recovery lost durable context for {}",
+                orphan.job_id
+            )
+        })?;
+        LeaseManager::new(forge, policy)
+            .rollback_assignment(&claim.repo, claim.target, &claim.assignment)
+            .await
+            .map_err(|error| {
+                format!(
+                    "could not converge orphaned claim {}: {error}",
+                    orphan.job_id
+                )
+            })?;
+    }
+    Ok(())
+}
+
+async fn drain_after_signal(
+    daemon_guard: &Daemon,
+    server: temper_engine_io::http::EngineHttpServer,
 ) -> Result<(), String> {
     let mut sigint = skein::signal::sigint()
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
     let mut sigterm = skein::signal::sigterm()
         .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
-
-    let server = temper_engine::serve(handle, daemon, bind)
-        .await
-        .map_err(|error| format!("serve failed: {error}"))?;
 
     std::future::poll_fn(|task_cx| {
         if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
@@ -278,6 +533,7 @@ async fn drain_after_signal(
         }
     })
     .await;
+    daemon_guard.release_assignments_for_shutdown().await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
 }
@@ -290,6 +546,20 @@ mod tests {
         Artifact, Capability, Capacity, Poll, Register, WORKER_PROTOCOL_VERSION,
         WorkerProtocolMessage,
     };
+
+    #[test]
+    fn missing_pull_collection_is_empty_during_startup_inventory() {
+        let repo = RepositoryId::new("forgejo:acme/empty");
+        let result = startup_pull_inventory(
+            &repo,
+            Err(ForgeError::NotFound(
+                "pull collection unavailable".to_string(),
+            )),
+        )
+        .expect("an absent PR collection is empty for an existing repository");
+
+        assert!(result.is_empty());
+    }
 
     #[test]
     fn split_daemon_preserves_distinct_workflow_role_limits() {

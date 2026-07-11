@@ -88,6 +88,80 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
     }
 }
 
+pub async fn recovered_job_from_assignment<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    target: ArtifactSource,
+    assignment: &temper_workflow::DurableAssignment,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+) -> Result<WorkItemJob, String> {
+    let role = assignment
+        .role
+        .clone()
+        .ok_or_else(|| "durable assignment is missing role".to_string())?;
+    let queue = assignment
+        .queue
+        .clone()
+        .filter(|queue| !queue.trim().is_empty())
+        .ok_or_else(|| "durable assignment is missing queue".to_string())?;
+    let body = match target {
+        ArtifactSource::Issue { number } => forge
+            .get_issue_by_number(repo, number)
+            .await
+            .map_err(|error| error.to_string())?
+            .map(|issue| issue.body),
+        ArtifactSource::PullRequest { number } => forge
+            .get_pull_request_by_number(repo, number)
+            .await
+            .map_err(|error| error.to_string())?
+            .map(|pull_request| pull_request.body),
+    }
+    .ok_or_else(|| "durable assignment target no longer exists".to_string())?;
+    let kind = parse_metadata_block(&body)
+        .map_err(|error| error.to_string())?
+        .and_then(|metadata| metadata.kind)
+        .ok_or_else(|| "durable assignment target is missing workflow kind".to_string())?;
+    let item = WorkItem {
+        queue: temper_workflow::QueueId::new(queue),
+        role,
+        target,
+        kind,
+    };
+    let repo_label = repo_label(forge, repo)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut job = job_from_work_item(&repo_label, &item);
+    match enrich_work_item_job_inner(forge, repo, &item, &mut job, workflow, compiled, true)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        EnrichOutcome::Enriched => {}
+        outcome => {
+            return Err(format!(
+                "recovered target is no longer dispatchable: {outcome:?}"
+            ));
+        }
+    }
+    if assignment.job_id.as_deref() != Some(job.job_id.as_str()) {
+        return Err("durable assignment job id does not match current target".to_string());
+    }
+    let context: JobContext = serde_json::from_value(job.job_payload.clone())
+        .map_err(|error| format!("recovered job context is invalid: {error}"))?;
+    if assignment.action.as_deref() != context.action.as_deref() {
+        return Err("durable assignment action no longer matches workflow".to_string());
+    }
+    if assignment.coordination_key.as_deref()
+        != context
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.coordination_key.as_str())
+    {
+        return Err("durable assignment coordination key no longer matches target".to_string());
+    }
+    Ok(job)
+}
+
 /// Enrich a mapped job's payload with the workspace context the worker-side
 /// coding agent needs. Forge reads happen here so `job_from_work_item` stays
 /// pure.
@@ -98,6 +172,18 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     job: &mut WorkItemJob,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
+) -> Result<EnrichOutcome, ScanError> {
+    enrich_work_item_job_inner(forge, repo, item, job, workflow, compiled, false).await
+}
+
+async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    item: &WorkItem,
+    job: &mut WorkItemJob,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    recovering_assignment: bool,
 ) -> Result<EnrichOutcome, ScanError> {
     let repository = forge
         .get_repository(repo)
@@ -163,7 +249,8 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
         enrich_pull_request_writable_job(forge, repo, item, compiled, &mut context).await?;
     }
 
-    if is_writable_issue_job(item, &context)
+    if !recovering_assignment
+        && is_writable_issue_job(item, &context)
         && implementation_pull_request_exists_for_correlation(forge, repo, workflow, &context)
             .await?
     {

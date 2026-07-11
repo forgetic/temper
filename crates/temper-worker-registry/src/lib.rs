@@ -12,7 +12,7 @@ pub mod dispatch;
 mod registry;
 
 pub use auth::WorkerPoolAuthConfig;
-pub use daemon_core::{DaemonCore, InFlightJob, RoleSaturation};
+pub use daemon_core::{DaemonCore, HeartbeatRecovery, InFlightJob, RecoveredJob, RoleSaturation};
 pub use dispatch::{Assignment, DispatchCoordinator, WorkItem};
 pub use registry::{
     RegistrationError, RegistryError, WorkerPoolPolicies, WorkerPoolPolicy, WorkerRegistry,

@@ -5,7 +5,61 @@ use std::collections::{BTreeMap, BTreeSet};
 use temper_protocol_worker::Capability;
 
 use crate::test_support::{coordinated, coordinated_workstream, register, register_multi, work};
-use crate::{Assignment, DispatchCoordinator};
+use crate::{Assignment, DispatchCoordinator, RegistryError};
+
+#[test]
+fn recovered_assignment_restores_exact_worker_and_enforces_global_limits() {
+    let mut coordinator =
+        DispatchCoordinator::with_role_limits(BTreeMap::from([("engineer".to_string(), 1)]));
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 2));
+    coordinator.register(&register("worker-b", "engineer", "ai/temper", 2));
+
+    let recovered = work("job-1", "engineer", "ai/temper");
+    assert_eq!(
+        coordinator.restore_assignment("worker-a", recovered.clone()),
+        Ok(Assignment {
+            job_id: "job-1".to_string(),
+            worker_id: "worker-a".to_string(),
+            role: "engineer".to_string(),
+            repo: "ai/temper".to_string(),
+        })
+    );
+    assert!(
+        coordinator
+            .restore_assignment("worker-a", recovered)
+            .is_ok()
+    );
+    assert_eq!(
+        coordinator.restore_assignment("worker-b", work("job-2", "engineer", "ai/temper")),
+        Err(RegistryError::RoleCapacity("engineer".to_string()))
+    );
+    assert_eq!(coordinator.registry().free_capacity("worker-a"), Some(1));
+}
+
+#[test]
+fn recovered_assignment_rejects_wrong_capability_and_workstream_overlap() {
+    let mut coordinator = DispatchCoordinator::new();
+    coordinator.register(&register("engineer", "engineer", "ai/temper", 2));
+    coordinator.register(&register("reviewer", "reviewer", "ai/temper", 2));
+
+    assert_eq!(
+        coordinator.restore_assignment("reviewer", work("wrong-role", "engineer", "ai/temper")),
+        Err(RegistryError::IneligibleWorker("reviewer".to_string()))
+    );
+    coordinator
+        .restore_assignment(
+            "engineer",
+            coordinated_workstream("job-1", "engineer", "ai/temper", "stream-1"),
+        )
+        .unwrap();
+    assert_eq!(
+        coordinator.restore_assignment(
+            "engineer",
+            coordinated_workstream("job-2", "engineer", "ai/temper", "stream-1"),
+        ),
+        Err(RegistryError::WorkstreamConflict("job-2".to_string()))
+    );
+}
 
 #[test]
 fn enqueue_then_dispatch_assigns_to_capable_worker() {

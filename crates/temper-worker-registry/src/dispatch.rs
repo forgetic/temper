@@ -222,6 +222,62 @@ impl DispatchCoordinator {
         true
     }
 
+    /// Reconstitutes an assignment discovered in durable Forge metadata.
+    ///
+    /// Unlike normal dispatch this never selects another worker: the recorded
+    /// worker must be registered, capable, healthy, and have capacity. Global
+    /// role concurrency and `(role, coordination_key)` exclusion are enforced
+    /// before any in-memory state is changed. Repeating the same restoration is
+    /// an idempotent success; every other duplicate is rejected.
+    pub fn restore_assignment(
+        &mut self,
+        worker_id: &str,
+        item: WorkItem,
+    ) -> Result<Assignment, RegistryError> {
+        if let Some((assigned_worker, assigned_item)) = self.assigned.get(&item.job_id) {
+            if assigned_worker == worker_id && assigned_item == &item {
+                return Ok(Assignment {
+                    job_id: item.job_id,
+                    worker_id: worker_id.to_string(),
+                    role: item.role,
+                    repo: item.repo,
+                });
+            }
+            return Err(RegistryError::DuplicateJob(item.job_id));
+        }
+        if self.reserved.contains_key(&item.job_id)
+            || self
+                .pending
+                .iter()
+                .any(|pending| pending.job_id == item.job_id)
+        {
+            return Err(RegistryError::DuplicateJob(item.job_id));
+        }
+        if self.role_limit_reached(&item.role) {
+            return Err(RegistryError::RoleCapacity(item.role));
+        }
+        if self.in_flight_workstream_conflicts(&item) {
+            return Err(RegistryError::WorkstreamConflict(item.job_id));
+        }
+        if !self
+            .registry
+            .can_handle_all(worker_id, &item.role, &item.repos)
+        {
+            return Err(RegistryError::IneligibleWorker(worker_id.to_string()));
+        }
+        self.registry.restore_assignment(worker_id, &item.job_id)?;
+
+        let assignment = Assignment {
+            job_id: item.job_id.clone(),
+            worker_id: worker_id.to_string(),
+            role: item.role.clone(),
+            repo: item.repo.clone(),
+        };
+        self.assigned
+            .insert(item.job_id.clone(), (worker_id.to_string(), item));
+        Ok(assignment)
+    }
+
     pub fn dispatch_ready(&mut self) -> Vec<Assignment> {
         let mut assignments = Vec::new();
         while let Some(assignment) = self.dispatch_next() {
