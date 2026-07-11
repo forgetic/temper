@@ -30,8 +30,8 @@ use skein::runtime::RuntimeHandle;
 use temper_config::{ExposeSecret, Resolved, WorkerSettings};
 use temper_engine::{
     Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, MechanicalScope,
-    PollBackstopConfig, RoleFeedMode, WebhookConfig, spawn_mechanical_backstop,
-    spawn_poll_backstop,
+    PollBackstopConfig, RoleFeedMode, WebhookConfig, run_mechanical_backstop_tick,
+    spawn_mechanical_backstop, spawn_poll_backstop,
 };
 use temper_engine_service::{
     converge_startup_orphans, engine_config, ensure_workflow_labels, resolve_repositories,
@@ -45,7 +45,7 @@ use temper_worker::{
     WorkerConfig, run_worker_with_transport,
 };
 use temper_worker_service::selected_worker_auth;
-use temper_workflow::LeasePolicy;
+use temper_workflow::{InMemoryJournal, LeasePolicy};
 use workstream_cleanup::StandaloneWorkstreamCleaner;
 
 /// Runs the standalone daemon on the skein runtime until SIGINT/SIGTERM.
@@ -178,14 +178,74 @@ async fn run_async(
         (temper_engine::system_clock())(),
     )
     .await?;
-    let orphaned = daemon.finish_startup_recovery().await;
+    let orphaned = daemon.collect_startup_orphans().await;
     converge_startup_orphans(
         forge.as_ref(),
         LeasePolicy::new(lease_ttl),
+        workflow.as_ref(),
         &recovered,
         &orphaned,
     )
     .await?;
+
+    ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
+
+    // §7 per-repo label-verification lines, hooked to the existing
+    // `ensure_workflow_labels` bootstrap. The labels come from the compiled
+    // workflow (the exact set just upserted on every repo).
+    let label_names: Vec<String> = compiled
+        .labels()
+        .labels()
+        .iter()
+        .map(|label| label.id.to_string())
+        .collect();
+    for repo in &repo_paths {
+        emit_engine_status(banner::repo_labels(repo, &label_names));
+    }
+
+    let startup_mechanical_config = MechanicalBackstopConfig {
+        repositories: repositories.clone(),
+        cadence: daemon_config
+            .mechanical_cadence
+            .unwrap_or(Duration::from_secs(1)),
+        lease_policy: LeasePolicy::new(lease_ttl),
+        pull_request_merge_observer: Some(Arc::new(StandaloneWorkstreamCleaner::new(
+            daemon.clone(),
+            resolved.worker.workspace_root.clone(),
+        ))),
+    };
+    let startup_journals = (0..repositories.repositories().len())
+        .map(|_| InMemoryJournal::new())
+        .collect::<Vec<_>>();
+    run_mechanical_backstop_tick(
+        forge.as_ref(),
+        workflow.as_ref(),
+        (temper_engine::system_clock())(),
+        &startup_mechanical_config,
+        &startup_journals,
+        &MechanicalScope::All,
+    )
+    .await
+    .map_err(|error| format!("startup mechanical reconciliation failed: {error}"))?;
+
+    daemon.complete_startup_recovery().await;
+    let mut mechanical_trigger: Option<Arc<dyn HintedMechanical>> = None;
+    if let Some(cadence) = daemon_config.mechanical_cadence {
+        let trigger = spawn_mechanical_backstop(
+            &spawner,
+            forge.clone(),
+            workflow.clone(),
+            MechanicalBackstopConfig {
+                cadence,
+                ..startup_mechanical_config
+            },
+            temper_engine::system_clock(),
+        );
+        mechanical_trigger = Some(Arc::new(trigger));
+
+        // §7 mechanical-backstop line: cadence and the repo span it covers.
+        emit_engine_status(banner::mechanical_backstop(cadence, repo_paths.len()));
+    }
 
     spawn_poll_backstop(
         &spawner,
@@ -200,52 +260,13 @@ async fn run_async(
         temper_engine::system_clock(),
     );
 
-    // §7 poll-backstop line: cadence, the roles whose feeds it scans (the
-    // configured roles drive the normal-mode poll backstop), and the repo span.
+    // §7 poll-backstop line is emitted only after assignment convergence and
+    // the first bounded mechanical pass have both completed.
     emit_engine_status(banner::poll_backstop(
         daemon_config.poll_cadence,
         &role_names,
         repo_ids.len(),
     ));
-
-    let mut mechanical_trigger: Option<Arc<dyn HintedMechanical>> = None;
-    if let Some(cadence) = daemon_config.mechanical_cadence {
-        ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
-
-        // §7 per-repo label-verification lines, hooked to the existing
-        // `ensure_workflow_labels` bootstrap. The labels come from the compiled
-        // workflow (the exact set just upserted on every repo).
-        let label_names: Vec<String> = compiled
-            .labels()
-            .labels()
-            .iter()
-            .map(|label| label.id.to_string())
-            .collect();
-        for repo in &repo_paths {
-            emit_engine_status(banner::repo_labels(repo, &label_names));
-        }
-
-        let trigger = spawn_mechanical_backstop(
-            &spawner,
-            forge.clone(),
-            workflow.clone(),
-            MechanicalBackstopConfig {
-                repositories,
-                cadence,
-                lease_policy: LeasePolicy::new(lease_ttl),
-                pull_request_merge_observer: Some(Arc::new(StandaloneWorkstreamCleaner::new(
-                    daemon.clone(),
-                    resolved.worker.workspace_root.clone(),
-                ))),
-            },
-            temper_engine::system_clock(),
-        );
-        trigger.run(MechanicalScope::All).await;
-        mechanical_trigger = Some(Arc::new(trigger));
-
-        // §7 mechanical-backstop line: cadence and the repo span it covers.
-        emit_engine_status(banner::mechanical_backstop(cadence, repo_paths.len()));
-    }
 
     // --- In-process worker + agent on the same loop ---
     let provider = crate::provider::build_provider(

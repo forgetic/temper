@@ -57,7 +57,8 @@ pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
 pub use engine_config::EngineConfig;
 pub use feed::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, WorkItemJob, job_from_work_item,
-    recovered_job_from_assignment, run_poll_backstop_tick, spawn_poll_backstop,
+    recover_advanced_pull_request_assignment_from_durable, recovered_job_from_assignment,
+    run_poll_backstop_tick, spawn_poll_backstop,
 };
 pub use forge_applier::ForgeApplier;
 pub use lease_applier::{LeaseApplier, WallClock, system_clock};
