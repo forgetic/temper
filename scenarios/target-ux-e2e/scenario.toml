@@ -1,7 +1,7 @@
 schema = "temper.scenario.v1"
 name = "target-ux-e2e"
 status = "active"
-intent = "Prove the target-era operator UX across init, check, apply, serve, worker pools, workflow formats, and trigger selection."
+intent = "Prove the complete target-era operator lifecycle across init, check, plan, deployment-wide apply confirmation, serve startup, worker pools/profiles, workflow formats, docs/systemd, and webhook selection without cloning focused runtime suites."
 introduced_by = "#192"
 owner_area = "deployment-ux"
 stability = "provisional"
@@ -15,15 +15,18 @@ uses = "manifest"
 
 [target_ux]
 contracts = [
+  "top-level and subcommand help promote init -> check -> plan -> apply -> serve while compatibility/internal commands remain dispatchable but unpromoted",
   "init writes a local standalone bundle from a JSON workflow and check reports pre-apply token gaps",
-  "apply/provisioning uses the generated workflow and webhook inputs before check succeeds",
-  "distributed worker bundles validate offline and with fake-online Forge auth",
-  "worker pool selection enforces role auth, capacity policy, and agent profile credentials",
-  "YAML and JSON workflow paths load through the same workflow validation path",
-  "engine and standalone serve runtimes expose POST /forgejo/webhook while serve trigger stays rejected",
+  "checked-in JSON and YAML bundles pass equivalent static validation through check, plan, apply, and the serve-startup loading seam",
+  "config-relative paths and explicit/systemd secret precedence are deterministic and human/JSON output stays redacted",
+  "plan and apply carry every configured repository; confirmation decline performs no provisioning and --yes sends one deployment-wide request",
+  "generated standalone and distributed pool/profile configuration reaches existing runtime adaptation seams",
+  "engine and standalone expose POST /forgejo/webhook, polling remains the correctness backstop, serve trigger is rejected, and the legacy adapter remains dispatchable",
+  "operator documentation, systemd examples, and the audit matrix describe the same public and compatibility contracts",
 ]
 files = [
   "README.md",
+  "scenario.toml",
   "config/standalone-json/config.toml",
   "config/standalone-json/credentials.toml",
   "config/standalone-json/workflow.json",
@@ -34,6 +37,20 @@ files = [
   "config/distributed-yaml/webhook-secret",
   "config/trigger/forgejo-issue-webhook.json",
   "config/trigger/webhook-secret",
+]
+test_modules = [
+  "support",
+  "onboarding",
+  "deployment",
+  "runtime",
+  "webhook",
+  "compatibility",
+]
+external_contract_artifacts = [
+  "tests/target_ux_e2e.rs and tests/target_ux/*.rs",
+  "docs/reference/target-era-operator-contract-matrix.md",
+  "docs/how-to/deploy-with-systemd.md",
+  "examples/systemd config, credentials, workflow, engine unit, and worker unit",
 ]
 
 [target_ux.shapes.standalone]
@@ -48,7 +65,17 @@ config_path = "config/distributed-yaml/config.toml"
 credentials_path = "config/distributed-yaml/credentials.toml"
 workflow_path = "config/distributed-yaml/workflow.yaml"
 expected_topology = "distributed"
-serve_contract = "temper serve worker requires --pool when pools are configured and enforces pool capacity"
+serve_contract = "temper serve worker requires --pool when pools are configured and enforces pool capacity/profile adaptation"
+
+[target_ux.plan_apply]
+plan_contract = "read-only report contains every configured repository in human and JSON output"
+confirmation_contract = "decline makes no provisioning call or credential mutation; --yes sends one deployment-wide request"
+compatibility_projection = "single-repository JSON retains historical singular fields"
+
+[target_ux.documentation]
+operator_guide = "docs/how-to/deploy-with-systemd.md"
+systemd_examples = "examples/systemd"
+audit_matrix = "docs/reference/target-era-operator-contract-matrix.md"
 
 [target_ux.trigger]
 payload_path = "config/trigger/forgejo-issue-webhook.json"
@@ -69,5 +96,6 @@ compatible_changes = [
 requires_new_scenario_or_major_update = [
   "Replacing the engine/standalone POST /forgejo/webhook trigger contract.",
   "Removing standalone or distributed target-era validation coverage.",
+  "Removing multi-repository plan/apply or confirmation coverage.",
   "Removing worker-pool auth, profile, or capacity coverage.",
 ]
