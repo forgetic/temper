@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+use temper_protocol_worker::Capability;
 
 use crate::test_support::{coordinated, coordinated_workstream, register, register_multi, work};
 use crate::{Assignment, DispatchCoordinator};
@@ -354,6 +356,127 @@ fn enqueue_is_idempotent_for_a_known_job_id() {
     coordinator.enqueue(work("job-1", "engineer", "ai/temper"));
     assert_eq!(coordinator.pending_len(), 0);
     assert_eq!(coordinator.in_flight_len(), 1);
+}
+
+#[test]
+fn finite_role_limit_one_serializes_distinct_workstreams_despite_worker_capacity() {
+    let mut coordinator =
+        DispatchCoordinator::with_role_limits(BTreeMap::from([("engineer".to_string(), 1)]));
+    assert_eq!(coordinator.configured_role_limit("engineer"), Some(1));
+    assert_eq!(coordinator.configured_role_limit("reviewer"), None);
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 4));
+    coordinator.enqueue(coordinated_workstream(
+        "job-1",
+        "engineer",
+        "ai/temper",
+        "stream-1",
+    ));
+    coordinator.enqueue(coordinated_workstream(
+        "job-2",
+        "engineer",
+        "ai/temper",
+        "stream-2",
+    ));
+
+    assert_eq!(coordinator.dispatch_next().unwrap().job_id, "job-1");
+    assert_eq!(coordinator.dispatch_next(), None);
+    assert_eq!(coordinator.pending_len(), 1);
+}
+
+#[test]
+fn finite_role_limit_two_assigns_two_and_leaves_third_pending() {
+    let mut coordinator =
+        DispatchCoordinator::with_role_limits(BTreeMap::from([("engineer".to_string(), 2)]));
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 4));
+    for job_id in ["job-1", "job-2", "job-3"] {
+        coordinator.enqueue(work(job_id, "engineer", "ai/temper"));
+    }
+
+    assert_eq!(coordinator.dispatch_ready().len(), 2);
+    assert_eq!(coordinator.pending_len(), 1);
+}
+
+#[test]
+fn finite_role_limit_is_shared_across_workers_and_repositories() {
+    let mut coordinator =
+        DispatchCoordinator::with_role_limits(BTreeMap::from([("engineer".to_string(), 1)]));
+    coordinator.register(&register_multi(
+        "worker-a",
+        "engineer",
+        &["ai/temper", "ai/smith"],
+        2,
+    ));
+    coordinator.register(&register_multi(
+        "worker-b",
+        "engineer",
+        &["ai/temper", "ai/smith"],
+        2,
+    ));
+    coordinator.enqueue(work("temper-job", "engineer", "ai/temper"));
+    coordinator.enqueue(work("smith-job", "engineer", "ai/smith"));
+
+    assert!(coordinator.dispatch_next().is_some());
+    assert_eq!(coordinator.dispatch_next(), None);
+    assert_eq!(coordinator.pending_len(), 1);
+}
+
+#[test]
+fn roles_without_limits_use_all_advertised_worker_capacity() {
+    let mut coordinator =
+        DispatchCoordinator::with_role_limits(BTreeMap::from([("reviewer".to_string(), 1)]));
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 4));
+    for job_id in ["job-1", "job-2", "job-3", "job-4", "job-5"] {
+        coordinator.enqueue(work(job_id, "engineer", "ai/temper"));
+    }
+
+    assert_eq!(coordinator.dispatch_ready().len(), 4);
+    assert_eq!(coordinator.pending_len(), 1);
+}
+
+#[test]
+fn push_and_pull_dispatch_skip_saturated_roles_without_blocking_other_roles() {
+    let limits = BTreeMap::from([("engineer".to_string(), 1)]);
+    let mut push = DispatchCoordinator::with_role_limits(limits.clone());
+    push.register(&register("engineer", "engineer", "ai/temper", 4));
+    push.register(&register("architect", "architect", "ai/temper", 1));
+    push.enqueue(work("eng-1", "engineer", "ai/temper"));
+    push.enqueue(work("eng-2", "engineer", "ai/temper"));
+    push.enqueue(work("arch-1", "architect", "ai/temper"));
+    assert_eq!(push.dispatch_next().unwrap().job_id, "eng-1");
+    assert_eq!(push.dispatch_next().unwrap().job_id, "arch-1");
+
+    let mut pull = DispatchCoordinator::with_role_limits(limits);
+    let mut worker = register("worker", "engineer", "ai/temper", 4);
+    worker.capabilities.push(Capability {
+        role: "architect".to_string(),
+        repo: "ai/temper".to_string(),
+    });
+    pull.register(&worker);
+    pull.enqueue(work("eng-1", "engineer", "ai/temper"));
+    pull.enqueue(work("eng-2", "engineer", "ai/temper"));
+    pull.enqueue(work("arch-1", "architect", "ai/temper"));
+    assert_eq!(pull.dispatch_for_worker("worker").unwrap().job_id, "eng-1");
+    assert_eq!(pull.dispatch_for_worker("worker").unwrap().job_id, "arch-1");
+}
+
+#[test]
+fn completion_and_reclamation_reopen_finite_role_capacity() {
+    let limits = BTreeMap::from([("engineer".to_string(), 1)]);
+    let mut coordinator = DispatchCoordinator::with_role_limits(limits);
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 2));
+    coordinator.register(&register("worker-b", "engineer", "ai/temper", 2));
+    coordinator.enqueue(work("job-1", "engineer", "ai/temper"));
+    coordinator.enqueue(work("job-2", "engineer", "ai/temper"));
+    coordinator.enqueue(work("job-3", "engineer", "ai/temper"));
+
+    let first = coordinator.dispatch_next().unwrap();
+    coordinator.complete(&first.job_id).unwrap();
+    let second = coordinator.dispatch_next().unwrap();
+    assert_eq!(second.job_id, "job-2");
+
+    coordinator.reclaim_worker(&second.worker_id);
+    let replacement = coordinator.dispatch_next().unwrap();
+    assert_eq!(replacement.job_id, "job-2");
 }
 
 #[test]

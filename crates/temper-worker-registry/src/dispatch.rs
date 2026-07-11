@@ -61,11 +61,34 @@ pub struct DispatchCoordinator {
     registry: WorkerRegistry,
     pending: VecDeque<WorkItem>,
     assigned: BTreeMap<String, (String, WorkItem)>,
+    /// Configured finite limits by role. A missing role is unlimited; zero
+    /// deliberately prevents every assignment for that role.
+    role_limits: BTreeMap<String, u32>,
 }
 
 impl DispatchCoordinator {
+    /// Construct a coordinator with no finite per-role limits.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Construct a coordinator with authoritative finite per-role limits.
+    pub fn with_role_limits(role_limits: BTreeMap<String, u32>) -> Self {
+        Self {
+            role_limits,
+            ..Self::default()
+        }
+    }
+
+    /// All configured finite role limits. Roles absent from this map are
+    /// unlimited.
+    pub fn configured_role_limits(&self) -> &BTreeMap<String, u32> {
+        &self.role_limits
+    }
+
+    /// The configured finite limit for `role`, or `None` when it is unlimited.
+    pub fn configured_role_limit(&self, role: &str) -> Option<u32> {
+        self.role_limits.get(role).copied()
     }
 
     pub fn registry(&self) -> &WorkerRegistry {
@@ -95,12 +118,14 @@ impl DispatchCoordinator {
 
     pub fn dispatch_next(&mut self) -> Option<Assignment> {
         let (index, worker_id) = self.pending.iter().enumerate().find_map(|(index, item)| {
-            if self.in_flight_workstream_conflicts(item) {
+            if !self.candidate_is_eligible(item, None) {
                 return None;
             }
-            self.registry
-                .assign_candidate_all(&item.role, &item.repos)
-                .map(|worker_id| (index, worker_id))
+            let worker_id = self
+                .registry
+                .assign_candidate_all(&item.role, &item.repos)?;
+            self.candidate_is_eligible(item, Some(&worker_id))
+                .then_some((index, worker_id))
         })?;
 
         let item = self
@@ -135,12 +160,10 @@ impl DispatchCoordinator {
             _ => return None,
         }
 
-        let index = self.pending.iter().position(|item| {
-            !self.in_flight_workstream_conflicts(item)
-                && self
-                    .registry
-                    .can_handle_all(worker_id, &item.role, &item.repos)
-        })?;
+        let index = self
+            .pending
+            .iter()
+            .position(|item| self.candidate_is_eligible(item, Some(worker_id)))?;
 
         let item = self
             .pending
@@ -251,6 +274,35 @@ impl DispatchCoordinator {
 
     pub fn in_flight_len(&self) -> usize {
         self.assigned.len()
+    }
+
+    /// Shared eligibility predicate for both push and pull dispatch. Global
+    /// role/workstream constraints are always checked; when a worker is known,
+    /// its health, free capacity, role capability, and repository capabilities
+    /// are checked independently as well.
+    fn candidate_is_eligible(&self, item: &WorkItem, worker_id: Option<&str>) -> bool {
+        if self.role_limit_reached(&item.role) || self.in_flight_workstream_conflicts(item) {
+            return false;
+        }
+
+        let Some(worker_id) = worker_id else {
+            return true;
+        };
+        matches!(self.registry.free_capacity(worker_id), Some(capacity) if capacity > 0)
+            && self.registry.is_healthy(worker_id)
+            && self
+                .registry
+                .can_handle_all(worker_id, &item.role, &item.repos)
+    }
+
+    fn role_limit_reached(&self, role: &str) -> bool {
+        self.configured_role_limit(role).is_some_and(|limit| {
+            self.assigned
+                .values()
+                .filter(|(_worker_id, item)| item.role == role)
+                .count()
+                >= limit as usize
+        })
     }
 
     fn in_flight_workstream_conflicts(&self, item: &WorkItem) -> bool {

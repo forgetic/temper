@@ -2,6 +2,7 @@
 
 //! Engine service runtime wiring.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use temper_config::{ExposeSecret, Resolved};
@@ -15,7 +16,7 @@ use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
     engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
-    worker_pool_auth_config,
+    worker_pool_auth_config, workflow_role_limits,
 };
 
 /// Runs the engine on the skein runtime until SIGINT/SIGTERM, then drains.
@@ -45,12 +46,13 @@ pub async fn run_async(
     let forge = temper_forge::factory::new_forgejo(forge_config);
 
     let (workflow, compiled) = load_workflow(&config)?;
+    let role_limits = workflow_role_limits(&compiled);
     let (repositories, repo_ids) = resolve_repo_targets(forge.as_ref(), &config.repos).await?;
     let normal_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Normal);
     let wake_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Wake);
     let lease_ttl = lease_ttl(&config)?;
 
-    let daemon = Daemon::with_applier_and_worker_pools(
+    let daemon = split_daemon(
         Arc::clone(&spawner),
         result_applier(
             forge.clone(),
@@ -61,6 +63,7 @@ pub async fn run_async(
             lease_ttl,
         ),
         config.worker_pools.clone(),
+        role_limits,
     )
     .with_worker_pool_auth(worker_pool_auth_config(resolved)?);
 
@@ -107,6 +110,15 @@ fn load_workflow(
     );
     let compiled = Arc::new(workflow.compile());
     Ok((workflow, compiled))
+}
+
+fn split_daemon(
+    spawner: Arc<dyn temper_engine_io::Spawner>,
+    applier: Arc<dyn temper_engine::ResultApplier>,
+    worker_pools: Vec<temper_engine::WorkerPoolPolicy>,
+    role_limits: BTreeMap<String, u32>,
+) -> Daemon {
+    Daemon::with_applier_worker_pools_and_role_limits(spawner, applier, worker_pools, role_limits)
 }
 
 async fn resolve_repo_targets(
@@ -246,4 +258,92 @@ async fn drain_after_signal(
     .await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_engine::NoopApplier;
+    use temper_protocol_worker::{
+        Artifact, Capability, Capacity, Poll, Register, WORKER_PROTOCOL_VERSION,
+        WorkerProtocolMessage,
+    };
+
+    #[test]
+    fn split_daemon_preserves_distinct_workflow_role_limits() {
+        temper_engine_io::block_on_with(move |_cx, handle| async move {
+            let daemon = split_daemon(
+                Arc::new(handle),
+                Arc::new(NoopApplier),
+                Vec::new(),
+                BTreeMap::from([("alpha".to_string(), 1), ("beta".to_string(), 2)]),
+            );
+
+            assert_configured_dispatch(&daemon).await;
+        });
+    }
+
+    async fn assert_configured_dispatch(daemon: &Daemon) {
+        let roles = ["alpha", "beta", "gamma"];
+        let register = WorkerProtocolMessage::Register(Register {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: "worker".to_string(),
+            worker_pool: None,
+            capabilities: roles
+                .iter()
+                .map(|role| Capability {
+                    role: (*role).to_string(),
+                    repo: "acme/widgets".to_string(),
+                })
+                .collect(),
+            capacity: Capacity {
+                max_concurrent_jobs: 10,
+            },
+            labels: None,
+        });
+        assert_eq!(daemon.deliver_protocol_message(register).await, Ok(None),);
+
+        for (job_id, role) in [
+            ("alpha-1", "alpha"),
+            ("alpha-2", "alpha"),
+            ("beta-1", "beta"),
+            ("beta-2", "beta"),
+            ("beta-3", "beta"),
+            ("gamma-1", "gamma"),
+            ("gamma-2", "gamma"),
+        ] {
+            daemon
+                .enqueue_job(
+                    job_id,
+                    role,
+                    "acme/widgets",
+                    Artifact {
+                        item: Default::default(),
+                        kind: "issue".to_string(),
+                    },
+                    Default::default(),
+                )
+                .await;
+        }
+
+        let mut assigned_roles = Vec::new();
+        for _ in 0..5 {
+            let response = daemon
+                .deliver_protocol_message(WorkerProtocolMessage::Poll(Poll {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    worker_id: "worker".to_string(),
+                    free_capacity: 10,
+                    max_wait_ms: Some(0),
+                }))
+                .await
+                .expect("poll succeeds")
+                .expect("eligible work remains");
+            let WorkerProtocolMessage::Assign(assign) = response else {
+                panic!("expected assignment, got {response:?}");
+            };
+            assigned_roles.push(assign.role);
+        }
+
+        assert_eq!(assigned_roles, ["alpha", "beta", "beta", "gamma", "gamma"]);
+    }
 }

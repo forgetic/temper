@@ -18,6 +18,9 @@ temper-forge = { path = "../temper-forge" }
 temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 
+[dev-dependencies]
+temper-protocol-worker = { path = "../temper-protocol-worker" }
+
 [[bin]]
 name = "temper-engine"
 path = "src/bin/temper-engine.rs"

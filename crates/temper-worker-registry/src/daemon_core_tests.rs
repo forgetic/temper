@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 use temper_protocol_worker::{
@@ -329,8 +329,8 @@ fn scoped_pending_reconcile_removes_job_context_only_for_pruned_pending_jobs() {
 }
 
 #[test]
-fn role_saturation_names_same_role_pending_behind_a_busy_holder() {
-    let mut core = DaemonCore::new();
+fn role_saturation_uses_configured_limit_and_preserves_pending_order() {
+    let mut core = DaemonCore::with_role_limits(BTreeMap::from([("architect".to_string(), 1)]));
     core.coordinator_mut().register(&register_multi(
         "architect-1",
         "architect",
@@ -349,7 +349,7 @@ fn role_saturation_names_same_role_pending_behind_a_busy_holder() {
     );
 
     // Nothing is in flight yet -> the role is not saturated.
-    assert!(core.role_saturation("architect").is_empty());
+    assert!(core.role_saturation("architect").is_none());
     assert_eq!(core.in_flight_role_count("architect"), 0);
 
     // Claiming the slot for job-a makes the role busy with job-b queued behind.
@@ -358,12 +358,93 @@ fn role_saturation_names_same_role_pending_behind_a_busy_holder() {
         other => panic!("expected assign, got {other:?}"),
     }
     assert_eq!(core.in_flight_role_count("architect"), 1);
-    let waiting = core.role_saturation("architect");
-    assert_eq!(waiting.len(), 1, "only job-b is queued behind");
-    assert_eq!(waiting[0].0, "acme/widgets");
+    let saturation = core
+        .role_saturation("architect")
+        .expect("configured role is saturated");
+    assert_eq!(saturation.concurrency, 1);
+    assert_eq!(saturation.pending.len(), 1, "only job-b is queued behind");
+    assert_eq!(saturation.pending[0].0, "acme/widgets");
 
-    // A different idle role is never reported saturated.
-    assert!(core.role_saturation("engineer").is_empty());
+    // A role without a configured finite limit is never reported saturated.
+    assert!(core.role_saturation("engineer").is_none());
+}
+
+#[test]
+fn zero_limit_saturates_with_ordered_pending_work_and_no_in_flight_holder() {
+    let mut core = DaemonCore::with_role_limits(BTreeMap::from([("engineer".to_string(), 0)]));
+    core.coordinator_mut().register(&register_multi(
+        "worker",
+        "engineer",
+        &["acme/api", "acme/widgets"],
+        4,
+    ));
+    core.enqueue_job(
+        "job-a",
+        "engineer",
+        "acme/api",
+        temper_protocol_worker::Artifact {
+            item: json!(7),
+            kind: "issue".to_string(),
+        },
+        json!({}),
+    );
+    core.enqueue_job(
+        "job-b",
+        "engineer",
+        "acme/widgets",
+        temper_protocol_worker::Artifact {
+            item: json!(8),
+            kind: "pull_request".to_string(),
+        },
+        json!({}),
+    );
+
+    assert_error(
+        core.handle(poll("worker")),
+        ErrorCode::PollTimeout,
+        "no work available",
+    );
+    assert_eq!(core.in_flight_role_count("engineer"), 0);
+    let saturation = core.role_saturation("engineer").unwrap();
+    assert_eq!(saturation.concurrency, 0);
+    assert_eq!(
+        saturation
+            .pending
+            .iter()
+            .map(|(repo, _artifact)| repo.as_str())
+            .collect::<Vec<_>>(),
+        vec!["acme/api", "acme/widgets"]
+    );
+}
+
+#[test]
+fn unlimited_role_never_reports_saturation_from_worker_exhaustion() {
+    let mut core = DaemonCore::new();
+    core.coordinator_mut()
+        .register(&register("worker", "engineer", "ai/temper", 1));
+    core.enqueue_job("job-a", "engineer", "ai/temper", artifact(), json!({}));
+    core.enqueue_job("job-b", "engineer", "ai/temper", artifact(), json!({}));
+    assert!(matches!(
+        core.handle(poll("worker")),
+        Some(WorkerProtocolMessage::Assign(_))
+    ));
+
+    assert!(core.role_saturation("engineer").is_none());
+}
+
+#[test]
+fn combined_constructor_preserves_pool_policies_and_role_limits() {
+    let core = DaemonCore::with_pool_policies_and_role_limits(
+        builders_policy(),
+        BTreeMap::from([("engineer".to_string(), 2)]),
+    );
+
+    assert_eq!(core.configured_role_limit("engineer"), Some(2));
+    assert_eq!(core.configured_role_limit("architect"), None);
+    assert_eq!(
+        core.configured_role_limits(),
+        &BTreeMap::from([("engineer".to_string(), 2)])
+    );
 }
 
 #[test]

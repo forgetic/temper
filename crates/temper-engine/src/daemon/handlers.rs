@@ -399,21 +399,13 @@ impl DaemonMachine {
     }
 
     /// Builds the §7 `role.saturated` request when the just-enqueued role is at
-    /// its concurrency limit with same-role work now queued behind the holder.
-    ///
-    /// The pending wait list and the busy/idle decision come from the pure
-    /// dispatch core ([`DaemonCore::role_saturation`]); the per-role concurrency
-    /// figure is the number of in-flight slots the role currently holds (the
-    /// limit it is hitting — `1` for the standalone single-slot roles). The
-    /// `artifact.ref` strings are built here from each waiting job's repo and
-    /// artifact coordinates. Returns `None` when the role is not saturated.
+    /// its configured finite concurrency limit with same-role work queued.
+    /// The concurrency figure and ordered pending entries both come from the
+    /// dispatch core's structured saturation result.
     fn role_saturation_request(&self, role: &str) -> Option<DaemonRequest> {
-        let waiting_jobs = self.core.role_saturation(role);
-        if waiting_jobs.is_empty() {
-            return None;
-        }
-        let concurrency = self.core.in_flight_role_count(role).max(1);
-        let waiting = waiting_jobs
+        let saturation = self.core.role_saturation(role)?;
+        let waiting = saturation
+            .pending
             .iter()
             .filter_map(|(repo, artifact)| artifact_ref_string(repo, artifact))
             .collect::<Vec<_>>();
@@ -422,7 +414,7 @@ impl DaemonMachine {
         }
         Some(DaemonRequest::RoleSaturated {
             role: role.to_string(),
-            concurrency: u64::try_from(concurrency).unwrap_or(1),
+            concurrency: u64::from(saturation.concurrency),
             waiting,
         })
     }
@@ -513,119 +505,5 @@ fn artifact_ref_string(repo: &str, artifact: &Artifact) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::webhook::webhook_signature;
-    use crate::{RoleFeedMode, RoleFeedTarget, WebhookConfig};
-    use temper_forge::{ChangeKind, ItemNumber, RepositoryId, RepositoryPath};
-    use temper_workflow::RoleId;
-
-    #[test]
-    fn verified_webhook_acks_before_wake_scan_finishes() {
-        let secret = "secret";
-        let body = br#"{"repository":{"full_name":"ai/temper"}}"#.to_vec();
-        let signature = webhook_signature(secret, &body);
-        let mut machine = DaemonMachine::new(Duration::from_secs(10), 30_000);
-        machine.webhook = Some(WebhookConfig {
-            secret: secret.to_string(),
-            targets: vec![RoleFeedTarget {
-                repo: RepositoryId::new("forgejo:ai/temper"),
-                role: RoleId::new("engineer"),
-                mode: RoleFeedMode::Wake,
-            }],
-        });
-        let (reply, _response) = temper_engine_io::oneshot();
-
-        let requests = machine.handle_http(
-            HttpRequestData {
-                method: "POST".to_string(),
-                uri: "/forgejo/webhook".to_string(),
-                headers: vec![
-                    ("x-forgejo-event".to_string(), "push".to_string()),
-                    ("x-forgejo-signature".to_string(), signature),
-                ],
-                body,
-            },
-            HttpResponder::from_oneshot(reply),
-        );
-
-        assert_eq!(requests.len(), 3);
-        assert!(
-            matches!(&requests[0], DaemonRequest::Log(line) if line.contains("webhook accepted"))
-        );
-        assert!(matches!(
-            &requests[1],
-            DaemonRequest::Respond { response, .. }
-                if response.status == 202 && response.body.is_empty()
-        ));
-        assert!(matches!(&requests[2], DaemonRequest::RunWakeScan { .. }));
-        assert!(
-            machine.webhook_waiters.is_empty(),
-            "webhook response must not be held behind wake-scan completion"
-        );
-    }
-
-    #[test]
-    fn forgejo_action_run_success_webhook_is_accepted() {
-        let secret = "secret";
-        let event_payload = serde_json::json!({
-            "pull_request": { "number": 23 }
-        })
-        .to_string();
-        let body = serde_json::to_vec(&serde_json::json!({
-            "action": "success",
-            "run": {
-                "id": 706,
-                "status": "success",
-                "started": "2026-06-29T16:48:49+01:00",
-                "stopped": "2026-06-29T16:51:00+01:00",
-                "repository": { "full_name": "ai/temper" },
-                "event_payload": event_payload
-            },
-            "prior_status": "running"
-        }))
-        .expect("body serializes");
-        let signature = webhook_signature(secret, &body);
-        let mut machine = DaemonMachine::new(Duration::from_secs(10), 30_000);
-        machine.webhook = Some(WebhookConfig {
-            secret: secret.to_string(),
-            targets: vec![RoleFeedTarget {
-                repo: RepositoryId::new("forgejo:ai/temper"),
-                role: RoleId::new("engineer"),
-                mode: RoleFeedMode::Wake,
-            }],
-        });
-        let (reply, _response) = temper_engine_io::oneshot();
-
-        let requests = machine.handle_http(
-            HttpRequestData {
-                method: "POST".to_string(),
-                uri: "/forgejo/webhook".to_string(),
-                headers: vec![
-                    (
-                        "x-forgejo-event".to_string(),
-                        "action_run_success".to_string(),
-                    ),
-                    ("x-forgejo-signature".to_string(), signature),
-                ],
-                body,
-            },
-            HttpResponder::from_oneshot(reply),
-        );
-
-        assert_eq!(requests.len(), 3);
-        assert!(matches!(
-            &requests[1],
-            DaemonRequest::Respond { response, .. }
-                if response.status == 202 && response.body.is_empty()
-        ));
-        match &requests[2] {
-            DaemonRequest::RunWakeScan { hint, .. } => {
-                assert_eq!(hint.repo, RepositoryPath::new("ai", "temper"));
-                assert_eq!(hint.item, Some(ItemNumber::new(23)));
-                assert_eq!(hint.kind, ChangeKind::Ci);
-            }
-            _ => panic!("expected wake scan"),
-        }
-    }
-}
+#[path = "handlers_tests.rs"]
+mod tests;

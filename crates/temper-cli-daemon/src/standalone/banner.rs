@@ -4,9 +4,10 @@
 //!
 //! These are the boot-block lines from the logging design's reference output
 //! (`docs/explanation/logging-and-observability.md`, §7): the `engine: …`
-//! readiness lines, the `worker: capacity:` line, and the `trigger: webhook
-//! listener up …` line. They are emitted through `temper-log`'s service-status
-//! helpers ([`temper_log::emit::emit_engine_status`] and friends), which set the
+//! readiness lines, the `worker: capacity:` line for compiled workflow role
+//! limits, and the `trigger: webhook listener up …` line. They are emitted
+//! through `temper-log`'s service-status helpers
+//! ([`temper_log::emit::emit_engine_status`] and friends), which set the
 //! `service=` machine field; the bodies built here carry **no** service prefix
 //! (the prefix is the human projection's concern — see
 //! [`temper_log::Service::human_prefix`]).
@@ -90,14 +91,20 @@ pub(crate) fn mechanical_backstop(cadence: Duration, repo_count: usize) -> Strin
     )
 }
 
-/// Renders the `capacity: <role>=<n> … (per-role, shared across all repos)` line.
-///
-/// `per_role` is the per-role concurrency limit (the standalone worker runs one
-/// job per role across all repos).
-pub(crate) fn capacity(roles: &[String], per_role: u64) -> String {
+/// Renders each compiled workflow role's global concurrency limit in declaration
+/// order. `None` is explicit rather than replaced with worker-advertised local
+/// capacity, because an unlimited role is still bounded by available workers.
+pub(crate) fn capacity(roles: &[(String, Option<u32>)]) -> String {
     let mut line = "capacity: ".to_string();
-    for role in roles {
-        let _ = write!(line, "{role}={per_role} ");
+    for (role, concurrency) in roles {
+        match concurrency {
+            Some(limit) => {
+                let _ = write!(line, "{role}={limit} ");
+            }
+            None => {
+                let _ = write!(line, "{role}=unlimited ");
+            }
+        }
     }
     line.push_str("(per-role, shared across all repos)");
     line
@@ -129,11 +136,11 @@ mod tests {
         vec!["acme/widgets".to_string(), "acme/api".to_string()]
     }
 
-    fn roles() -> Vec<String> {
+    fn role_capacities() -> Vec<(String, Option<u32>)> {
         vec![
-            "architect".to_string(),
-            "engineer".to_string(),
-            "mechanical".to_string(),
+            ("architect".to_string(), Some(2)),
+            ("engineer".to_string(), None),
+            ("mechanical".to_string(), Some(1)),
         ]
     }
 
@@ -165,7 +172,15 @@ mod tests {
     #[test]
     fn workflow_line_joins_roles_and_counts_queues() {
         assert_eq!(
-            workflow("basic-delivery", &roles(), 5),
+            workflow(
+                "basic-delivery",
+                &[
+                    "architect".to_string(),
+                    "engineer".to_string(),
+                    "mechanical".to_string(),
+                ],
+                5,
+            ),
             "workflow: basic-delivery | roles=architect,engineer,mechanical | queues=5"
         );
     }
@@ -226,15 +241,20 @@ mod tests {
     }
 
     #[test]
-    fn capacity_line_states_per_role_concurrency() {
+    fn capacity_line_states_compiled_limits_and_unlimited_roles() {
         assert_eq!(
-            capacity(&roles(), 1),
-            "capacity: architect=1 engineer=1 mechanical=1 (per-role, shared across all repos)"
+            capacity(&role_capacities()),
+            "capacity: architect=2 engineer=unlimited mechanical=1 (per-role, shared across all repos)"
         );
-        assert_eq!(
-            capacity(&roles(), 2),
-            "capacity: architect=2 engineer=2 mechanical=2 (per-role, shared across all repos)"
-        );
+    }
+
+    #[test]
+    fn worker_capacity_does_not_control_workflow_capacity_line() {
+        let worker_max_concurrent_jobs = 99_u32;
+        let line = capacity(&role_capacities());
+
+        assert!(!line.contains(&format!("={worker_max_concurrent_jobs}")));
+        assert!(line.contains("engineer=unlimited"));
     }
 
     #[test]

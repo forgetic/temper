@@ -8,6 +8,8 @@
 //! (`crates/temper-web/ui/fixtures/state-snapshot.json`): each job carries the
 //! `ref` join key + `role` the board card model needs, plus `workers`.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 use temper_protocol_worker::{Artifact, Capability, Capacity, Register, WORKER_PROTOCOL_VERSION};
 use temper_worker_registry::DaemonCore;
@@ -51,7 +53,7 @@ fn pull_request(number: u64) -> Artifact {
 /// Two workers (one in-flight, one idle), one in-flight job, one queued job
 /// behind the busy role, exercising every snapshot section.
 fn representative_core() -> DaemonCore {
-    let mut core = DaemonCore::new();
+    let mut core = DaemonCore::with_role_limits(BTreeMap::from([("code".to_string(), 1)]));
     core.coordinator_mut().register(&register_with_pool(
         "w-code-1",
         "code",
@@ -215,6 +217,36 @@ fn empty_core_yields_an_empty_but_well_formed_snapshot() {
             "role_saturation": [],
         })
     );
+}
+
+#[test]
+fn zero_limit_state_uses_configured_value_and_preserves_waiting_order() {
+    let mut core = DaemonCore::with_role_limits(BTreeMap::from([("code".to_string(), 0)]));
+    core.enqueue_job("job-2", "code", "acme/widgets", issue(2), json!({}));
+    core.enqueue_job("job-3", "code", "acme/api", pull_request(3), json!({}));
+
+    let value = DaemonStateSnapshot::from_core(&core).to_json();
+    assert_eq!(
+        value["role_saturation"],
+        json!([{
+            "role": "code",
+            "concurrency": 0,
+            "waiting": ["acme/widgets#2", "acme/api PR#3"]
+        }])
+    );
+}
+
+#[test]
+fn unlimited_role_exhaustion_does_not_appear_as_role_saturation() {
+    let mut core = DaemonCore::new();
+    core.coordinator_mut()
+        .register(&register("worker", "code", "acme/widgets"));
+    core.enqueue_job("job-1", "code", "acme/widgets", issue(1), json!({}));
+    core.coordinator_mut().dispatch_next().unwrap();
+    core.enqueue_job("job-2", "code", "acme/widgets", issue(2), json!({}));
+
+    let value = DaemonStateSnapshot::from_core(&core).to_json();
+    assert_eq!(value["role_saturation"], json!([]));
 }
 
 #[test]
