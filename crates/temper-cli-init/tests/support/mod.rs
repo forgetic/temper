@@ -4,43 +4,80 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use temper_cli_common::LoadOptions;
-use temper_cli_init::{ProvisionOutcome, ProvisionRequest, Provisioner};
+use temper_cli_init::{ApplyPlanOutcome, ApplyPlanRequest, ApplyProvisioner};
 use temper_config::{NoEnv, ResolveOptions, Secret};
 use temper_forge::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
-use temper_workflow::RoleId;
 
-/// Returns a canned `Provisioned` with two role identities (architect,
-/// engineer) + a `bot` automation identity, and records the request it was
-/// handed so tests can assert the wiring.
+#[derive(Default)]
 pub struct StubProvisioner {
-    pub seen: Option<ProvisionRequest>,
+    pub seen: Option<ApplyPlanRequest>,
 }
 
-impl Provisioner for StubProvisioner {
-    fn provision(&mut self, request: &ProvisionRequest) -> Result<ProvisionOutcome, String> {
+impl ApplyProvisioner for StubProvisioner {
+    fn provision_apply_plan(
+        &mut self,
+        request: &ApplyPlanRequest,
+    ) -> Result<ApplyPlanOutcome, String> {
         self.seen = Some(request.clone());
-        let identity = |user: &str| RoleIdentity {
-            user: user.to_string(),
-            email: format!("{user}@example.invalid"),
-            token: format!("token-{user}"),
-            password: format!("pw-{user}"),
-        };
-        let mut roles = BTreeMap::new();
-        roles.insert(RoleId::new("architect"), identity("architect"));
-        roles.insert(RoleId::new("engineer"), identity("engineer"));
-        let provisioned = Provisioned {
-            owner: request.owner.clone(),
-            name: request.name.clone(),
-            repository: RepositoryId::new(format!("{}/{}", request.owner, request.name)),
-            roles,
-            automation: identity("bot"),
-        };
-        Ok(ProvisionOutcome {
-            provisioned,
-            admin_token: Secret::from("admin-rest-token"),
-        })
+        successful_outcome(request)
     }
+}
+
+#[derive(Default)]
+pub struct RecordingProvisioner {
+    pub calls: Vec<ApplyPlanRequest>,
+    pub fail_repo: Option<String>,
+}
+
+impl ApplyProvisioner for RecordingProvisioner {
+    fn provision_apply_plan(
+        &mut self,
+        request: &ApplyPlanRequest,
+    ) -> Result<ApplyPlanOutcome, String> {
+        self.calls.push(request.clone());
+        if let Some(failed) = &self.fail_repo {
+            // Walk in plan order so this models a later repository failing after
+            // an earlier Forge mutation, while returning no partial outcome.
+            for plan in &request.plans {
+                let path = format!("{}/{}", plan.repo.owner, plan.repo.name);
+                if &path == failed {
+                    return Err(format!("{path}: simulated failure"));
+                }
+            }
+        }
+        successful_outcome(request)
+    }
+}
+
+fn successful_outcome(request: &ApplyPlanRequest) -> Result<ApplyPlanOutcome, String> {
+    let identity = |user: &str| RoleIdentity {
+        user: user.to_string(),
+        email: format!("{user}@example.invalid"),
+        token: format!("token-{user}"),
+        password: format!("pw-{user}"),
+    };
+    let provisioned = request
+        .plans
+        .iter()
+        .map(|plan| {
+            let mut roles = BTreeMap::new();
+            for binding in &plan.roles {
+                roles.insert(binding.role.clone(), identity(&binding.user.handle));
+            }
+            Provisioned {
+                owner: plan.repo.owner.clone(),
+                name: plan.repo.name.clone(),
+                repository: RepositoryId::new(format!("{}/{}", plan.repo.owner, plan.repo.name)),
+                roles,
+                automation: identity(&plan.automation_login),
+            }
+        })
+        .collect();
+    Ok(ApplyPlanOutcome {
+        provisioned,
+        admin_token: Secret::from("admin-rest-token"),
+    })
 }
 
 #[allow(dead_code)]
