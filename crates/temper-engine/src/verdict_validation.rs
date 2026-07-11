@@ -235,12 +235,36 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     child.slug
                 )));
             }
+            if !self.child_kind_has_reachable_queue(&kind) {
+                return Err(VerdictCheck::Rejected(format!(
+                    "child `{}` kind `{kind}` has no reachable workflow queue/action",
+                    child.slug
+                )));
+            }
             if let Some(target) = child.target_repo.as_deref() {
                 self.validate_child_target_repo(job, &child.slug, target)
                     .await?;
             }
         }
         Ok(())
+    }
+
+    fn child_kind_has_reachable_queue(&self, kind: &ArtifactKindId) -> bool {
+        self.workflow.queues().iter().any(|queue| {
+            queue.artifacts.contains(kind)
+                && (queue.automation.is_some()
+                    || queue.actions.iter().any(|action| {
+                        action
+                            .artifact
+                            .as_ref()
+                            .is_none_or(|artifact| artifact == kind)
+                    })
+                    || self
+                        .workflow
+                        .roles()
+                        .iter()
+                        .any(|role| role.queues.contains(&queue.id)))
+        })
     }
 
     async fn validate_child_target_repo(

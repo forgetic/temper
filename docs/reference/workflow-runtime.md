@@ -79,8 +79,10 @@ point, while retries can still finish the state projection.
 - `ensure_issue`, `ensure_issue_with_parent`, and `ensure_pull_request` stamp a
   correlation key into workflow metadata before creating, search explicit states
   with bounded summary queries, and parse exact metadata before returning an
-  existing artifact. `create_issues` derives one stable key per child, validates
-  sibling dependency slugs before mutation, preserves explicit child workflow
+  existing artifact. Before a verdict-backed `create_issues` mutates Forge, the
+  daemon rejects child kinds with no serviceable queue/action in the active
+  workflow. `create_issues` derives one stable key per child, validates sibling
+  dependency slugs before mutation, preserves explicit child workflow
   metadata such as `target_branch`, inherits the source issue's non-empty
   `target_branch` for child issues that omit it, creates/ensures every child
   before linking dependencies, and can record the child set on the source issue
