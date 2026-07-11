@@ -31,7 +31,21 @@ use crate::resolved::Resolved;
 use crate::schema::{
     Config, Credentials, NamedFileSecret, file_name_secret_name, trim_secret_file_payload,
 };
-use crate::{LoadedPaths, paths};
+use crate::{CredentialSource, CredentialSourceKind, LoadedPaths, paths};
+
+/// Parsed source documents together with their resolved deployment view.
+///
+/// This is the canonical additive loader result. It deliberately does not
+/// implement `Serialize`: callers get the exact parsed documents for audited
+/// updates while runtime consumers use the secret-redacting [`Resolved`].
+#[derive(Debug, Clone)]
+pub struct LoadedDocuments {
+    pub config: Config,
+    pub credentials: Credentials,
+    pub resolved: Resolved,
+    pub loaded: LoadedPaths,
+    pub credential_source: Option<CredentialSource>,
+}
 
 /// The base directories used to derive default file locations.
 ///
@@ -119,7 +133,13 @@ pub struct LoadInputs<'a> {
 /// sibling credentials can load — nothing is discovered from the real
 /// environment.
 pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), ConfigError> {
-    load_explicit_with_secret_validation(inputs, true)
+    let documents = load_documents_explicit(inputs)?;
+    Ok((documents.resolved, documents.loaded))
+}
+
+/// Loads the parsed documents and their resolved deployment view.
+pub fn load_documents_explicit(inputs: &LoadInputs) -> Result<LoadedDocuments, ConfigError> {
+    load_documents_explicit_with_secret_validation(inputs, true)
 }
 
 /// Loads + resolves like [`load_explicit`], with control over missing
@@ -133,6 +153,28 @@ pub fn load_explicit_with_secret_validation(
     inputs: &LoadInputs,
     validate_secret_references: bool,
 ) -> Result<(Resolved, LoadedPaths), ConfigError> {
+    let documents =
+        load_documents_explicit_with_secret_validation(inputs, validate_secret_references)?;
+    Ok((documents.resolved, documents.loaded))
+}
+
+/// Canonical document loader with control over named-secret validation.
+///
+/// Any explicit config or credential path suppresses unrelated XDG/HOME
+/// discovery. `CREDENTIALS_DIRECTORY` remains an injected, higher-priority
+/// credential source, and an explicit config may still select its sibling.
+pub fn load_documents_explicit_with_secret_validation(
+    inputs: &LoadInputs,
+    validate_secret_references: bool,
+) -> Result<LoadedDocuments, ConfigError> {
+    let suppress_defaults =
+        inputs.explicit_config.is_some() || inputs.explicit_credentials.is_some();
+    let empty_paths = PathResolver::default();
+    let discovery_paths = if suppress_defaults {
+        &empty_paths
+    } else {
+        inputs.paths
+    };
     let explicit_config = inputs
         .explicit_config
         .clone()
@@ -141,18 +183,18 @@ pub fn load_explicit_with_secret_validation(
         .as_ref()
         .map(|location| LocatedFile::required(location.path.clone()))
         .or_else(|| {
-            paths::config_dir(inputs.paths)
+            paths::config_dir(discovery_paths)
                 .map(|dir| LocatedFile::optional(dir.join(paths::CONFIG_FILE_NAME)))
         });
-    let credentials_source = paths::paired_secret_source_location(
+    let credential_source = paths::credential_source(
         inputs.explicit_credentials.clone(),
         inputs.explicit_config.clone(),
-        inputs.paths,
+        discovery_paths,
         inputs.env,
-    )
-    .map(|source| match source {
-        paths::SecretSourceLocation::File(path) => LocatedCredentials::file(path, false),
-        paths::SecretSourceLocation::Directory(path) => LocatedCredentials::directory(path, true),
+    );
+    let credentials_source = credential_source.as_ref().map(|source| match source.kind {
+        CredentialSourceKind::File => LocatedCredentials::file(source.path.clone(), false),
+        CredentialSourceKind::Directory => LocatedCredentials::directory(source.path.clone(), true),
     });
     let credentials_source = mark_selected_credentials_required(
         credentials_source,
@@ -171,13 +213,16 @@ pub fn load_explicit_with_secret_validation(
     resolve_options.validate_secret_references = validate_secret_references;
     let resolved =
         resolve::resolve_with_options(&config, &credentials, &inputs.env, &resolve_options)?;
-    Ok((
+    Ok(LoadedDocuments {
+        config,
+        credentials,
         resolved,
-        LoadedPaths {
+        loaded: LoadedPaths {
             config: config_file,
             credentials: credentials_file,
         },
-    ))
+        credential_source,
+    })
 }
 
 fn config_base_dir(path: &Path) -> Option<PathBuf> {
@@ -349,5 +394,7 @@ fn load_optional<T: Default>(
 
 #[cfg(test)]
 mod credential_directory_tests;
+#[cfg(test)]
+mod loaded_document_tests;
 #[cfg(test)]
 mod tests;

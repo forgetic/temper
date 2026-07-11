@@ -5,7 +5,7 @@ use std::path::Path;
 
 use temper_cli_common::LoadOptions;
 use temper_cli_init::{ProvisionOutcome, ProvisionRequest, Provisioner};
-use temper_config::{NoEnv, ResolveOptions};
+use temper_config::{NoEnv, ResolveOptions, Secret};
 use temper_forge::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
 use temper_workflow::RoleId;
@@ -38,7 +38,7 @@ impl Provisioner for StubProvisioner {
         };
         Ok(ProvisionOutcome {
             provisioned,
-            admin_token: "admin-rest-token".to_string(),
+            admin_token: Secret::from("admin-rest-token"),
         })
     }
 }

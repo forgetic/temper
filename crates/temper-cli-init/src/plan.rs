@@ -13,19 +13,14 @@ mod report;
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::ExitCode;
 
-use temper_cli_common::{
-    EX_USAGE, EnvMap, LoadOptions, OutputFormat, PathResolver, resolve_targets,
-};
-use temper_config::{Config, Credentials, ExposeSecret, LoadedPaths, ResolveOptions, Resolved};
+use temper_cli_common::{EX_USAGE, EnvMap, LoadOptions, OutputFormat, PathResolver};
+use temper_config::ExposeSecret;
 use temper_forge::{
-    Forge, IssueQuery, ItemListDetails, PullRequestQuery, Repository, RepositoryPath,
-    WebhookEvents, WebhookStatus,
+    Forge, IssueQuery, ItemListDetails, PullRequestQuery, Repository, RepositoryPath, WebhookStatus,
 };
-use temper_provision::ProvisionPlan;
-use temper_workflow::{ValidatedWorkflow, parse_metadata_block};
+use temper_workflow::parse_metadata_block;
 
-use crate::InitError;
-use crate::provisioner::{ProvisionRequest, build_init_plan};
+use crate::deployment::{DeploymentBundle, load_deployment};
 
 pub use report::DeploymentPlanReport;
 use report::{build_report, print_report};
@@ -145,8 +140,9 @@ fn parse_plan_args(args: Vec<String>, options: LoadOptions) -> Result<ParsedPlan
 
 /// Builds a deployment plan report using the production read-only Forge adapter.
 pub fn run_plan(opts: &PlanOptions) -> Result<DeploymentPlanReport, String> {
-    let bundle = load_plan_bundle(opts).map_err(|error| error.to_string())?;
-    let mut inspector = ForgePlanInspector::from_bundle(&bundle);
+    let bundle = load_deployment(&opts.options, &opts.env, &opts.paths, opts.existing_repo)
+        .map_err(|error| error.to_string())?;
+    let mut inspector = ForgePlanInspector::from_bundle(&bundle)?;
     build_report(&bundle, &mut inspector)
 }
 
@@ -154,126 +150,7 @@ pub fn run_plan(opts: &PlanOptions) -> Result<DeploymentPlanReport, String> {
 pub trait DeploymentInspector {
     /// Reads forge state and returns a snapshot. Implementations must not mutate
     /// the backend.
-    fn inspect(&mut self, bundle: &PlanBundle) -> Result<ForgeInspection, String>;
-}
-
-/// Loaded, validated deployment inputs plus the shared provisioning model.
-pub struct PlanBundle {
-    pub loaded: LoadedPaths,
-    pub resolved: Resolved,
-    pub credentials: Credentials,
-    pub admin_key: String,
-    pub admin_user: String,
-    pub request: ProvisionRequest,
-    pub workflow: ValidatedWorkflow,
-    pub provision_plan: ProvisionPlan,
-}
-
-pub(crate) fn load_plan_bundle(opts: &PlanOptions) -> Result<PlanBundle, InitError> {
-    let targets =
-        resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
-    let config = Config::load(&targets.config)
-        .map_err(|error| InitError::Path(format!("load {}: {error}", targets.config.display())))?;
-    let credentials = Credentials::load(&targets.credentials).map_err(|error| {
-        InitError::Path(format!("load {}: {error}", targets.credentials.display()))
-    })?;
-    let mut resolve_options = targets
-        .config
-        .parent()
-        .map(ResolveOptions::from_config_base_dir)
-        .unwrap_or_default();
-    // Generated init bundles reference the forge token that the first apply
-    // pass mints. Planning/apply must load that pre-apply bundle, while normal
-    // runtime/check paths keep strict secret-reference validation.
-    resolve_options.validate_secret_references = false;
-    let resolved =
-        temper_config::resolve_with_options(&config, &credentials, &opts.env, &resolve_options)
-            .map_err(|error| InitError::Path(format!("resolve deployment: {error}")))?;
-
-    let base_url = resolved.forge.url.clone().ok_or_else(|| {
-        InitError::Unsupported("deployment plan requires `[forge] url` in config.toml".to_string())
-    })?;
-    if resolved.engine.repos.len() != 1 {
-        return Err(InitError::Unsupported(format!(
-            "deployment plan requires exactly one `[engine] repos` entry, found {}",
-            resolved.engine.repos.len()
-        )));
-    }
-    let repo = &resolved.engine.repos[0];
-    let webhook_secret_file = resolved.engine.webhook_secret_file.clone().ok_or_else(|| {
-        InitError::Unsupported(
-            "deployment plan requires `[engine] webhook_secret_file` in config.toml".to_string(),
-        )
-    })?;
-
-    let admin_key = non_empty(config.forge.admin.as_deref()).ok_or_else(|| {
-        InitError::Unsupported(
-            "deployment plan requires `[forge] admin` in config.toml".to_string(),
-        )
-    })?;
-    let admin = credentials.forge.users.get(&admin_key).ok_or_else(|| {
-        InitError::Unsupported(format!(
-            "deployment plan requires `[forge.users.{admin_key}]` in credentials.toml"
-        ))
-    })?;
-    let admin_user = non_empty(admin.user.as_deref()).unwrap_or_else(|| admin_key.clone());
-    let admin_password = non_empty(admin.password.as_deref()).ok_or_else(|| {
-        InitError::Unsupported(format!(
-            "deployment plan requires a password under `[forge.users.{admin_key}]` in credentials.toml"
-        ))
-    })?;
-
-    let request = ProvisionRequest {
-        base_url,
-        admin_user: admin_user.clone(),
-        admin_password,
-        owner: repo.owner.clone(),
-        name: repo.name.clone(),
-        webhook_url: format!("http://{}/forgejo/webhook", resolved.engine.bind),
-        webhook_secret_file,
-        workflow_path: resolved.engine.workflow_file.clone(),
-        existing_repo: opts.existing_repo,
-    };
-    let workflow = match &request.workflow_path {
-        Some(path) => temper_reference_delivery::load_workflow(path)
-            .map_err(|error| InitError::Unsupported(error.to_string()))?,
-        None => temper_reference_delivery::basic_delivery_workflow(),
-    };
-    let webhook = temper_forge::WebhookSpec {
-        url: request.webhook_url.clone(),
-        secret: read_webhook_secret(&request.webhook_secret_file)?,
-        events: WebhookEvents::All,
-    };
-    let provision_plan = build_init_plan(&request, webhook).map_err(InitError::Unsupported)?;
-
-    Ok(PlanBundle {
-        loaded: LoadedPaths {
-            config: Some(targets.config),
-            credentials: Some(targets.credentials),
-        },
-        resolved,
-        credentials,
-        admin_key,
-        admin_user,
-        request,
-        workflow,
-        provision_plan,
-    })
-}
-
-fn read_webhook_secret(path: &std::path::Path) -> Result<String, InitError> {
-    std::fs::read_to_string(path)
-        .map_err(|error| {
-            InitError::Path(format!("read webhook secret {}: {error}", path.display()))
-        })
-        .map(|secret| secret.trim().to_string())
-}
-
-pub(super) fn non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    fn inspect(&mut self, bundle: &DeploymentBundle) -> Result<ForgeInspection, String>;
 }
 
 /// Read-only snapshot returned by a deployment inspector.
@@ -300,29 +177,38 @@ struct ForgePlanInspector {
 }
 
 impl ForgePlanInspector {
-    fn from_bundle(bundle: &PlanBundle) -> Self {
-        let forge = if let Some(token) = &bundle.resolved.forge.admin_token {
+    fn from_bundle(bundle: &DeploymentBundle) -> Result<Self, String> {
+        let repository = &bundle.repositories[0].plan.repo;
+        let forge = if let Some(token) = &bundle.forge.admin_token {
             let config = temper_forge::config::ForgejoConfig::new(
-                &bundle.request.base_url,
+                &bundle.forge.base_url,
                 token.expose_secret(),
             )
-            .with_default_repo(&bundle.request.owner, &bundle.request.name);
+            .with_default_repo(&repository.owner, &repository.name);
             temper_forge::factory::new_forgejo_inspection(config)
         } else {
+            let admin_user = bundle.forge.admin_user.as_deref().ok_or_else(|| {
+                "deployment plan requires an admin forge user when no token is configured"
+                    .to_string()
+            })?;
+            let admin_password = bundle.forge.admin_password.as_ref().ok_or_else(|| {
+                "deployment plan requires an admin forge password when no token is configured"
+                    .to_string()
+            })?;
             temper_forge::factory::new_forgejo_read_only_basic(
-                &bundle.request.base_url,
-                &bundle.request.admin_user,
-                &bundle.request.admin_password,
+                &bundle.forge.base_url,
+                admin_user,
+                admin_password.expose_secret(),
             )
         };
-        Self { forge }
+        Ok(Self { forge })
     }
 }
 
 impl DeploymentInspector for ForgePlanInspector {
-    fn inspect(&mut self, bundle: &PlanBundle) -> Result<ForgeInspection, String> {
+    fn inspect(&mut self, bundle: &DeploymentBundle) -> Result<ForgeInspection, String> {
         let forge = self.forge.clone();
-        let request = bundle.request.clone();
+        let repository = bundle.repositories[0].plan.repo.clone();
         let desired_users = desired_users(bundle);
         let declared_kinds: BTreeSet<String> = bundle
             .workflow
@@ -332,20 +218,27 @@ impl DeploymentInspector for ForgePlanInspector {
             .collect();
         let runtime = temper_engine_io::build_runtime()?;
         temper_engine_io::runtime::block_on_runtime_with(&runtime, move |_cx, _handle| async move {
-            inspect_forge(forge.as_ref(), &request, &desired_users, &declared_kinds)
-                .await
-                .map_err(|error| error.to_string())
+            inspect_forge(
+                forge.as_ref(),
+                &repository.owner,
+                &repository.name,
+                &desired_users,
+                &declared_kinds,
+            )
+            .await
+            .map_err(|error| error.to_string())
         })
     }
 }
 
 async fn inspect_forge(
     forge: &dyn temper_forge::InspectionForge,
-    request: &ProvisionRequest,
+    owner: &str,
+    name: &str,
     desired_users: &[String],
     declared_kinds: &BTreeSet<String>,
 ) -> temper_forge::ForgeResult<ForgeInspection> {
-    let path = RepositoryPath::new(&request.owner, &request.name);
+    let path = RepositoryPath::new(owner, name);
     let repository = forge.as_forge().get_repository_by_path(&path).await?;
     let Some(repository) = repository else {
         let mut users = BTreeMap::new();
@@ -464,12 +357,16 @@ fn inspect_body_metadata(
     }
 }
 
-pub(super) fn desired_users(bundle: &PlanBundle) -> Vec<String> {
+pub(super) fn desired_users(bundle: &DeploymentBundle) -> Vec<String> {
     let mut users = BTreeSet::new();
-    users.insert(bundle.admin_user.clone());
-    users.insert(bundle.provision_plan.automation_login.clone());
-    for binding in &bundle.provision_plan.roles {
-        users.insert(binding.user.handle.clone());
+    if let Some(admin_user) = &bundle.forge.admin_user {
+        users.insert(admin_user.clone());
+    }
+    for repository in &bundle.repositories {
+        users.insert(repository.plan.automation_login.clone());
+        for binding in &repository.plan.roles {
+            users.insert(binding.user.handle.clone());
+        }
     }
     users.into_iter().collect()
 }

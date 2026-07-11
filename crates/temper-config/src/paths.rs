@@ -41,12 +41,54 @@ pub(crate) struct ConfigLocation {
     pub root: PathBuf,
 }
 
-/// A resolved secret source.
+/// The shape of the selected credential source.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CredentialSourceKind {
+    /// A TOML credentials document.
+    File,
+    /// A directory containing an optional `credentials.toml` plus named files.
+    Directory,
+}
+
+/// Why a credential source was selected.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CredentialSourceOrigin {
+    /// The operator supplied `--secrets`.
+    Explicit,
+    /// The injected environment supplied `CREDENTIALS_DIRECTORY`.
+    CredentialsDirectory,
+    /// An explicit config selected its sibling `credentials.toml`.
+    ConfigSibling,
+    /// XDG/HOME default discovery selected `credentials.toml`.
+    Default,
+}
+
+/// The selected credential source, including its shape and discovery origin.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CredentialSource {
+    pub path: PathBuf,
+    pub kind: CredentialSourceKind,
+    pub origin: CredentialSourceOrigin,
+}
+
+impl CredentialSource {
+    /// The durable TOML path represented by this source.
+    ///
+    /// Directory sources use their `credentials.toml`; callers must still
+    /// enforce origin-specific write policy (notably, ambient systemd
+    /// credential directories are read-only).
+    pub fn credentials_file(&self) -> PathBuf {
+        match self.kind {
+            CredentialSourceKind::File => self.path.clone(),
+            CredentialSourceKind::Directory => self.path.join(CREDENTIALS_FILE_NAME),
+        }
+    }
+}
+
+/// A resolved secret source used internally by the loader.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum SecretSourceLocation {
-    /// A credentials TOML file.
     File(PathBuf),
-    /// A directory whose regular files are named secrets.
     Directory(PathBuf),
 }
 
@@ -183,19 +225,61 @@ pub(crate) fn paired_secret_source_location(
     paths: &PathResolver,
     env: &dyn EnvLookup,
 ) -> Option<SecretSourceLocation> {
-    explicit_credentials
-        .map(explicit_secret_source_location)
-        .or_else(|| credentials_directory_source_location(env))
-        .or_else(|| {
-            explicit_config
-                .map(explicit_config_location)
-                .map(|location| {
-                    SecretSourceLocation::File(location.root.join(CREDENTIALS_FILE_NAME))
-                })
-        })
-        .or_else(|| {
-            config_dir(paths).map(|dir| SecretSourceLocation::File(dir.join(CREDENTIALS_FILE_NAME)))
-        })
+    credential_source(explicit_credentials, explicit_config, paths, env).map(|source| match source
+        .kind
+    {
+        CredentialSourceKind::File => SecretSourceLocation::File(source.path),
+        CredentialSourceKind::Directory => SecretSourceLocation::Directory(source.path),
+    })
+}
+
+/// Selects the credential source in canonical precedence order and records why
+/// it won: explicit flag, injected systemd directory, config sibling, default.
+pub fn credential_source(
+    explicit_credentials: Option<PathBuf>,
+    explicit_config: Option<PathBuf>,
+    paths: &PathResolver,
+    env: &dyn EnvLookup,
+) -> Option<CredentialSource> {
+    if let Some(location) = explicit_credentials.map(explicit_secret_source_location) {
+        return Some(describe_source(location, CredentialSourceOrigin::Explicit));
+    }
+    if let Some(location) = credentials_directory_source_location(env) {
+        return Some(describe_source(
+            location,
+            CredentialSourceOrigin::CredentialsDirectory,
+        ));
+    }
+    if let Some(location) = explicit_config.map(explicit_config_location) {
+        return Some(CredentialSource {
+            path: location.root.join(CREDENTIALS_FILE_NAME),
+            kind: CredentialSourceKind::File,
+            origin: CredentialSourceOrigin::ConfigSibling,
+        });
+    }
+    config_dir(paths).map(|dir| CredentialSource {
+        path: dir.join(CREDENTIALS_FILE_NAME),
+        kind: CredentialSourceKind::File,
+        origin: CredentialSourceOrigin::Default,
+    })
+}
+
+fn describe_source(
+    location: SecretSourceLocation,
+    origin: CredentialSourceOrigin,
+) -> CredentialSource {
+    match location {
+        SecretSourceLocation::File(path) => CredentialSource {
+            path,
+            kind: CredentialSourceKind::File,
+            origin,
+        },
+        SecretSourceLocation::Directory(path) => CredentialSource {
+            path,
+            kind: CredentialSourceKind::Directory,
+            origin,
+        },
+    }
 }
 
 fn is_directory_source(path: &Path) -> bool {

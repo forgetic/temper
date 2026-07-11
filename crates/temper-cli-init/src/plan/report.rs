@@ -5,7 +5,9 @@ use temper_cli_common::OutputFormat;
 use temper_forge::WebhookEvents;
 use temper_provision::BOT_USER;
 
-use super::{DeploymentInspector, ForgeInspection, PlanBundle, desired_users, non_empty};
+use crate::deployment::DeploymentBundle;
+
+use super::{DeploymentInspector, ForgeInspection, desired_users};
 
 /// Top-level JSON/human report for `temper plan`.
 #[derive(Clone, Debug, Serialize)]
@@ -141,7 +143,7 @@ pub struct PlanFinding {
 }
 
 pub(super) fn build_report(
-    bundle: &PlanBundle,
+    bundle: &DeploymentBundle,
     inspector: &mut dyn DeploymentInspector,
 ) -> Result<DeploymentPlanReport, String> {
     let inspection = match inspector.inspect(bundle) {
@@ -157,9 +159,9 @@ pub(super) fn build_report(
         findings.push(note("forge", reason));
     }
 
+    let provision_plan = &bundle.repositories[0].plan;
     let present_labels: BTreeSet<String> = inspection.labels.iter().cloned().collect();
-    let labels = bundle
-        .provision_plan
+    let labels = provision_plan
         .labels
         .iter()
         .map(|label| {
@@ -179,24 +181,23 @@ pub(super) fn build_report(
         })
         .collect::<Vec<_>>();
 
-    let repository_action = match (inspection.repository.as_ref(), bundle.request.existing_repo) {
+    let repository_action = match (inspection.repository.as_ref(), provision_plan.existing_repo) {
         (Some(_), _) => "none",
         (None, true) if inspection.inspected => "require_existing",
         (None, false) if inspection.inspected => "create",
         (None, _) => "unknown",
     };
-    if inspection.inspected && inspection.repository.is_none() && bundle.request.existing_repo {
+    if inspection.inspected && inspection.repository.is_none() && provision_plan.existing_repo {
         findings.push(error(
             "repository",
             format!(
                 "repository {}/{} is required by --existing-repo but was not found",
-                bundle.request.owner, bundle.request.name
+                provision_plan.repo.owner, provision_plan.repo.name
             ),
         ));
     }
 
     let desired_webhook = bundle
-        .provision_plan
         .webhook
         .as_ref()
         .ok_or_else(|| "deployment plan did not contain a webhook".to_string())?;
@@ -257,13 +258,13 @@ pub(super) fn build_report(
         },
         forge: ForgeReport {
             kind: "forgejo".to_string(),
-            url: bundle.request.base_url.clone(),
+            url: bundle.forge.base_url.clone(),
             inspected: inspection.inspected,
             inspection_note: inspection.unavailable_reason.clone(),
         },
         repository: RepositoryReport {
-            path: format!("{}/{}", bundle.request.owner, bundle.request.name),
-            existing_repo_required: bundle.request.existing_repo,
+            path: format!("{}/{}", provision_plan.repo.owner, provision_plan.repo.name),
+            existing_repo_required: provision_plan.existing_repo,
             exists: if inspection.inspected {
                 Some(inspection.repository.is_some())
             } else {
@@ -273,7 +274,7 @@ pub(super) fn build_report(
                 .repository
                 .as_ref()
                 .map(|repository| repository.id.as_str().to_string()),
-            default_branch: bundle.provision_plan.default_branch.clone(),
+            default_branch: provision_plan.default_branch.clone(),
             ci_enabled: inspection.ci_enabled,
             action: repository_action.to_string(),
         },
@@ -290,13 +291,14 @@ pub(super) fn build_report(
     })
 }
 
-fn workflow_report(bundle: &PlanBundle) -> WorkflowReport {
+fn workflow_report(bundle: &DeploymentBundle) -> WorkflowReport {
     let compiled = bundle.workflow.compile();
     WorkflowReport {
         name: bundle.workflow.name().to_string(),
         path: bundle
-            .request
-            .workflow_path
+            .resolved
+            .engine
+            .workflow_file
             .as_ref()
             .map(|path| path.display().to_string()),
         roles: bundle
@@ -322,11 +324,12 @@ fn workflow_report(bundle: &PlanBundle) -> WorkflowReport {
     }
 }
 
-fn identity_report(bundle: &PlanBundle, inspection: &ForgeInspection) -> IdentityReport {
-    let admin_user = bundle.credentials.forge.users.get(&bundle.admin_key);
+fn identity_report(bundle: &DeploymentBundle, inspection: &ForgeInspection) -> IdentityReport {
+    let admin_key = bundle.admin_key.as_deref().unwrap_or("<none>");
+    let admin_user = bundle.credentials.forge.users.get(admin_key);
     let role_tokens = &bundle.resolved.forge.role_tokens;
-    let roles = bundle
-        .provision_plan
+    let roles = bundle.repositories[0]
+        .plan
         .roles
         .iter()
         .map(|binding| RoleIdentityReport {
@@ -366,11 +369,15 @@ fn identity_report(bundle: &PlanBundle, inspection: &ForgeInspection) -> Identit
         .collect();
     IdentityReport {
         admin: AdminIdentityReport {
-            key: bundle.admin_key.clone(),
-            user: bundle.admin_user.clone(),
+            key: admin_key.to_string(),
+            user: bundle
+                .forge
+                .admin_user
+                .clone()
+                .unwrap_or_else(|| "<none>".to_string()),
             password: if admin_user
-                .and_then(|user| non_empty(user.password.as_deref()))
-                .is_some()
+                .and_then(|user| user.password.as_deref())
+                .is_some_and(|password| !password.trim().is_empty())
             {
                 "set"
             } else {
@@ -385,10 +392,10 @@ fn identity_report(bundle: &PlanBundle, inspection: &ForgeInspection) -> Identit
             .to_string(),
         },
         automation: AutomationIdentityReport {
-            user: if bundle.provision_plan.automation_login.is_empty() {
+            user: if bundle.repositories[0].plan.automation_login.is_empty() {
                 BOT_USER.to_string()
             } else {
-                bundle.provision_plan.automation_login.clone()
+                bundle.repositories[0].plan.automation_login.clone()
             },
             token: "will_mint".to_string(),
         },

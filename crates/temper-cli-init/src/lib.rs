@@ -39,6 +39,7 @@ mod answers_file;
 mod apply;
 mod args;
 mod collect;
+mod deployment;
 mod plan;
 mod provisioner;
 mod write;
@@ -56,6 +57,10 @@ pub use apply::{
 };
 pub use args::{InitOverrides, InitTopology, RepoSelection};
 pub use collect::{Answers, collect_answers};
+pub use deployment::{
+    DeploymentBundle, DeploymentMetadata, DesiredRepository, DesiredWebhook, ForgeAuthentication,
+    durable_credentials_path, load_deployment,
+};
 pub use plan::{PLAN_USAGE, PlanOptions, plan_main_with_options, run_plan};
 pub use provisioner::{
     ApplyPlanOutcome, ApplyPlanRequest, ApplyProvisioner, ForgejoProvisioner, ProvisionOutcome,
@@ -406,7 +411,7 @@ pub fn run_init(
             let request = ProvisionRequest {
                 base_url: answers.forge_url.clone(),
                 admin_user: answers.admin_user.clone(),
-                admin_password: answers.admin_password.clone(),
+                admin_password: temper_config::Secret::from(answers.admin_password.clone()),
                 owner: answers.repo_owner.clone(),
                 name: answers.repo_name.clone(),
                 webhook_url: answers.webhook_url(),
@@ -461,9 +466,7 @@ pub fn run_init(
     } else if answers.repos.len() == 1 {
         p.note("Run `temper apply` before starting the engine.");
     } else {
-        p.note(
-            "Provision each repository before starting the engine; `temper apply` currently supports one repository.",
-        );
+        p.note("Run `temper apply` to provision all configured repositories before starting the engine.");
     }
     Ok(())
 }

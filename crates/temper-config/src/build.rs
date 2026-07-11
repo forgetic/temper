@@ -341,14 +341,44 @@ fn write_atomic(
             "file already exists (pass force to overwrite)",
         )));
     }
-    if let Some(parent) = path
+    let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent).map_err(write_err)?;
-    }
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(write_err)?;
 
-    write_file(text, path, secret).map_err(write_err)
+    // Write a complete, validated sibling and rename it into place. Readers
+    // observe either the old bytes or the complete new document; a failed
+    // serialize/write never truncates the durable credential target.
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("temper-document");
+    let mut attempt = 0_u32;
+    let temp_path = loop {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let candidate = parent.join(format!(
+            ".{file_name}.tmp-{}-{nonce}-{attempt}",
+            std::process::id()
+        ));
+        if !candidate.exists() {
+            break candidate;
+        }
+        attempt = attempt.saturating_add(1);
+    };
+
+    if let Err(source) = write_file(text, &temp_path, secret) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(write_err(source));
+    }
+    if let Err(source) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(write_err(source));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -357,14 +387,14 @@ fn write_file(text: &str, path: &Path, secret: bool) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     if secret {
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
     file.write_all(text.as_bytes())?;
-    // An existing file keeps its old mode through `OpenOptions`, so re-assert
-    // `0600` on overwrite to guarantee the invariant regardless of prior perms.
+    // Re-assert `0600` after writing so the invariant does not depend on the
+    // process umask or platform-specific create-mode handling.
     if secret {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
@@ -374,7 +404,13 @@ fn write_file(text: &str, path: &Path, secret: bool) -> std::io::Result<()> {
 
 #[cfg(not(unix))]
 fn write_file(text: &str, path: &Path, _secret: bool) -> std::io::Result<()> {
-    std::fs::write(path, text)
+    use std::io::Write;
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(text.as_bytes())
 }
 
 #[cfg(test)]

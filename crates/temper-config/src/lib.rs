@@ -58,11 +58,16 @@ pub use build::{
 pub use cli::{CommonArgs, parse_common_args};
 pub use env::{EnvLookup, EnvMap, NoEnv, SystemEnv};
 pub use error::{ConfigError, FileKind};
-pub use inputs::{LoadInputs, PathResolver, load_explicit, load_explicit_with_secret_validation};
+pub use inputs::{
+    LoadInputs, LoadedDocuments, PathResolver, load_documents_explicit,
+    load_documents_explicit_with_secret_validation, load_explicit,
+    load_explicit_with_secret_validation,
+};
 pub use json_schema::config_json_schema;
 pub use paths::{
-    config_dir, config_path, credentials_path, default_workspace_root,
-    paired_credentials_file_path, paired_credentials_path, state_dir,
+    CredentialSource, CredentialSourceKind, CredentialSourceOrigin, config_dir, config_path,
+    credential_source, credentials_path, default_workspace_root, paired_credentials_file_path,
+    paired_credentials_path, state_dir,
 };
 pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
@@ -97,7 +102,7 @@ pub struct LoadOptions {
 /// The sources that actually fed a [`load`], for diagnostics (`None` = absent,
 /// so defaults + environment supplied everything). `credentials` is the
 /// selected secret source, which may be a directory.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct LoadedPaths {
     pub config: Option<PathBuf>,
     pub credentials: Option<PathBuf>,
@@ -119,7 +124,17 @@ pub fn load_with_env(
     options: &LoadOptions,
     env: &impl EnvLookup,
 ) -> Result<(Resolved, LoadedPaths), ConfigError> {
-    load_explicit(&LoadInputs {
+    let documents = load_documents_with_env(options, env)?;
+    Ok((documents.resolved, documents.loaded))
+}
+
+/// Loads parsed config/credentials documents plus their resolved view using an
+/// injected environment for default discovery.
+pub fn load_documents_with_env(
+    options: &LoadOptions,
+    env: &impl EnvLookup,
+) -> Result<LoadedDocuments, ConfigError> {
+    load_documents_explicit(&LoadInputs {
         explicit_config: options.config.clone(),
         explicit_credentials: options.credentials.clone(),
         env,

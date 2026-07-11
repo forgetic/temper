@@ -21,7 +21,7 @@ use temper_cli_common::{EnvMap, LoadOptions, PathResolver, ScriptedPrompter};
 use temper_cli_init::{
     InitOptions, InitOverrides, InitTopology, RepoSelection, main_with_options, run_init,
 };
-use temper_config::{DeploymentTopology, lint};
+use temper_config::{DeploymentTopology, ExposeSecret, lint};
 use temper_workflow::RawWorkflowSpec;
 
 mod support;
@@ -206,7 +206,7 @@ fn run_init_collects_writes_and_provisions_offline() {
     let seen = provisioner.seen.expect("provisioner was called");
     assert_eq!(seen.base_url, "http://localhost:3000");
     assert_eq!(seen.admin_user, "root");
-    assert_eq!(seen.admin_password, "admin-pass");
+    assert_eq!(seen.admin_password.expose_secret(), "admin-pass");
     assert_eq!(seen.owner, "acme");
     assert_eq!(seen.name, "service");
     assert_eq!(seen.webhook_url, "http://127.0.0.1:8314/forgejo/webhook");
@@ -301,7 +301,7 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     assert_eq!(seen.owner, "widgets");
     assert_eq!(seen.name, "service");
     assert_eq!(seen.admin_user, "flag-admin");
-    assert_eq!(seen.admin_password, "admin-pass");
+    assert_eq!(seen.admin_password.expose_secret(), "admin-pass");
     assert_eq!(seen.webhook_url, "http://127.0.0.1:38100/forgejo/webhook");
     assert!(
         prompter.answers.is_empty(),
@@ -561,7 +561,7 @@ fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
     // Assert: provisioner was called with the right data.
     let seen = provisioner.seen.expect("provisioner called");
     assert_eq!(seen.admin_user, "root");
-    assert_eq!(seen.admin_password, "admin-pass");
+    assert_eq!(seen.admin_password.expose_secret(), "admin-pass");
 
     // Assert: credentials file contains the provider key.
     let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml");
@@ -649,7 +649,7 @@ fn non_interactive_flag_off_ignores_secret_env_overrides() {
     // Assert: the INTERACTIVE values were used, not the env overrides.
     let seen = provisioner.seen.expect("provisioner called");
     assert_eq!(seen.admin_user, "interactive-admin");
-    assert_eq!(seen.admin_password, "interactive-pw");
+    assert_eq!(seen.admin_password.expose_secret(), "interactive-pw");
 
     let creds =
         std::fs::read_to_string(dir.path().join("credentials.toml")).expect("credentials.toml");

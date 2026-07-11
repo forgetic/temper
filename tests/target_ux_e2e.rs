@@ -14,6 +14,7 @@ use temper_cli_common::{LoadOptions, ScriptedPrompter};
 use temper_cli_init::{
     ApplyOptions, ApplyPlanOutcome, ApplyPlanRequest, ApplyProvisioner, run_apply,
 };
+use temper_config::{ExposeSecret, Secret};
 use temper_forge::{CreateRepository, Forge, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_provision::{Provisioned, RoleIdentity};
@@ -54,7 +55,7 @@ impl ApplyProvisioner for RecordingProvisioner {
         }
         Ok(ApplyPlanOutcome {
             provisioned,
-            admin_token: "token-root".to_string(),
+            admin_token: Secret::from("token-root"),
         })
     }
 }
@@ -136,7 +137,10 @@ fn target_ux_init_check_apply_flow_uses_json_input_and_yaml_bundle() {
     assert_eq!(request.base_url, "http://forge.example.invalid");
     assert_eq!(request.admin_user.as_deref(), Some("root"));
     assert_eq!(
-        request.admin_password.as_deref(),
+        request
+            .admin_password
+            .as_ref()
+            .map(ExposeSecret::expose_secret),
         Some("fixture-root-password")
     );
     assert_eq!(request.plans.len(), 1);
