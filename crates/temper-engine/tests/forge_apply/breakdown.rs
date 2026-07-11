@@ -119,7 +119,8 @@ fn breakdown_verdict_creates_children_across_repos() {
 
         assert_eq!(
             web_child.labels,
-            vec!["code".to_string(), "ready".to_string()]
+            vec!["blocked".to_string(), "code".to_string()],
+            "dependency-bearing child activates in the workflow's blocked lifecycle state"
         );
         let web_metadata = parse_metadata_block(&web_child.body)
             .expect("web child metadata parses")

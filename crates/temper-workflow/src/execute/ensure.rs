@@ -175,7 +175,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     }
 
     /// Finds an issue whose metadata block carries the correlation key.
-    async fn find_issue_by_correlation(
+    pub(super) async fn find_issue_by_correlation(
         &self,
         repo_id: &RepositoryId,
         correlation_key: &str,
@@ -196,7 +196,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .find(|issue| metadata_has_correlation_key(&issue.body, correlation_key)))
     }
 
-    async fn ensure_issue_parent(
+    pub(super) async fn ensure_issue_parent(
         &self,
         issue: Issue,
         parent: Option<ArtifactRef>,
