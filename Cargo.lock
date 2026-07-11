@@ -1478,6 +1478,7 @@ dependencies = [
  "temper-engine-io",
  "temper-forge",
  "temper-log",
+ "temper-protocol-worker",
  "temper-reference-delivery",
  "temper-workflow",
  "tracing",
