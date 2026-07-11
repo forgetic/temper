@@ -117,8 +117,8 @@ pub use compile::{
 pub use context::{CreateIssuesChild, ExecutionContext};
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
 pub use execute::{
-    CorrelationLookupPlan, EnsureOutcome, ExecutionError, ExecutionReport, Executor,
-    find_pull_request_by_correlation,
+    ChildIssueCheckpoint, ChildIssueLifecycleHook, CorrelationLookupPlan, EnsureOutcome,
+    ExecutionError, ExecutionReport, Executor, find_pull_request_by_correlation,
 };
 pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,

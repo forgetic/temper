@@ -1,5 +1,5 @@
 use chrono::Duration;
-use temper_forge_model::Forge;
+use temper_forge_model::{Forge, IssueQuery};
 use temper_protocol_worker::ResultStatus;
 use temper_testing::real_stack::{
     FakeModelResponse, HermeticIssueSpec, HermeticRealStackBuilder, HermeticRepoSpec, PauseHooks,
@@ -104,6 +104,181 @@ fn crash_after_claim_commit_converges_orphan_before_redispatch() {
             .expect("orphan is redispatched through recreated components");
         assert_eq!(run.job_result.status, ResultStatus::Success);
         assert_eq!(run.pull_requests.len(), 1);
+        stack.crash_worker().await;
+    });
+}
+
+#[test]
+fn daemon_loss_after_child_create_replays_wiring_and_activation_once() {
+    temper_engine_io::block_on_with(|cx, handle| async move {
+        let mut stack = HermeticRealStackBuilder::new()
+            .issue(HermeticIssueSpec::untriaged_intake(
+                "Restart-safe breakdown",
+                "Break this intake into an ordered implementation plan.\n\n<!-- temper:workflow\n{\"kind\":\"intake\"}\n-->",
+            ))
+            .worker_role(temper_testing::real_stack::WorkerRoleSpec::architect())
+            .fake_model_script(jig_core::Script::rule(|_| {
+                jig_core::Reply::text(
+                    serde_json::json!({
+                        "verdict": "needs_breakdown",
+                        "summary": "Created an ordered two-child plan.",
+                        "children": [
+                            {
+                                "slug": "foundation",
+                                "title": "Build foundation",
+                                "body": "Implement the shared foundation.",
+                                "labels": ["code", "ready"]
+                            },
+                            {
+                                "slug": "dependent",
+                                "title": "Build dependent",
+                                "body": "Implement the dependent component.",
+                                "labels": ["code", "ready"],
+                                "depends_on": ["foundation"]
+                            }
+                        ]
+                    })
+                    .to_string(),
+                )
+            }))
+            .build(&handle)
+            .await
+            .expect("durable child world builds");
+
+        assert_eq!(
+            stack
+                .enqueue_scanned_role_work_for_role("architect", stack.clock().now())
+                .await
+                .expect("architect work enqueues"),
+            1
+        );
+        let created_pause = stack.pause_hooks().arm(PausePoint::ChildCreated);
+        stack.start_worker(&handle);
+        let created = created_pause.arrived().await;
+
+        let staged = stack
+            .forge()
+            .list_issues(stack.primary_repo_id(), IssueQuery::default())
+            .await
+            .expect("staged child inventory");
+        assert_eq!(staged.len(), 2, "only the parent and first child exist");
+        let child = staged
+            .iter()
+            .find(|issue| issue.number != stack.issue_number())
+            .expect("first child exists");
+        let child_metadata = parse_metadata_block(&child.body)
+            .expect("staged child metadata parses")
+            .expect("staged child metadata exists");
+        assert!(child_metadata.staged, "created child is not dispatchable");
+        assert!(child.labels.is_empty(), "staged child has no queue labels");
+
+        // Stop both replaceable components while the old result application is
+        // still parked immediately after its committed child create. The new
+        // daemon reuses the same Forge intent and the new worker replays the
+        // same verdict; the parked incarnation is released only after replay.
+        stack.daemon().crash().await;
+        let interrupted = stack
+            .await_worker_result(&cx, std::time::Duration::from_secs(2))
+            .await
+            .expect("interrupted incarnation reports its unpublished result");
+        assert_eq!(interrupted.status, ResultStatus::Success);
+        stack.crash_worker().await;
+        stack.replace_daemon(&handle).await;
+        assert_eq!(stack.open_recovery_barrier().await.len(), 1);
+        assert_eq!(
+            stack
+                .enqueue_scanned_role_work_for_role("architect", stack.clock().now())
+                .await
+                .expect("orphaned architect work re-enqueues"),
+            1
+        );
+        let wired_pause = stack.pause_hooks().arm(PausePoint::ChildWired);
+        let activated_pause = stack.pause_hooks().arm(PausePoint::ChildActivated);
+        stack.start_worker(&handle);
+
+        let wired = wired_pause.arrived().await;
+        let wired_inventory = stack
+            .forge()
+            .list_issues(stack.primary_repo_id(), IssueQuery::default())
+            .await
+            .expect("wired child inventory");
+        assert_eq!(wired_inventory.len(), 3);
+        assert!(
+            wired_inventory
+                .iter()
+                .filter(|issue| issue.number != stack.issue_number())
+                .all(|issue| {
+                    issue.labels.is_empty()
+                        && parse_metadata_block(&issue.body)
+                            .expect("wired child metadata parses")
+                            .expect("wired child metadata exists")
+                            .staged
+                }),
+            "no child is dispatchable while dependency wiring is incomplete"
+        );
+        wired.release();
+
+        let activated = activated_pause.arrived().await;
+        let activation_inventory = stack
+            .forge()
+            .list_issues(stack.primary_repo_id(), IssueQuery::default())
+            .await
+            .expect("activation child inventory");
+        let foundation = activation_inventory
+            .iter()
+            .find(|issue| issue.title == "Build foundation")
+            .expect("foundation child exists");
+        assert_eq!(foundation.labels, vec!["code", "ready"]);
+        assert!(
+            !parse_metadata_block(&foundation.body)
+                .expect("foundation metadata parses")
+                .expect("foundation metadata exists")
+                .staged
+        );
+        let dependent_staged = activation_inventory
+            .iter()
+            .find(|issue| issue.title == "Build dependent")
+            .expect("dependent child exists");
+        assert!(dependent_staged.labels.is_empty());
+        assert!(
+            parse_metadata_block(&dependent_staged.body)
+                .expect("dependent staged metadata parses")
+                .expect("dependent staged metadata exists")
+                .staged
+        );
+        let dependent_activated_pause = stack.pause_hooks().arm(PausePoint::ChildActivated);
+        activated.release();
+        let dependent_activated = dependent_activated_pause.arrived().await;
+        dependent_activated.release();
+
+        let replay = stack
+            .await_worker_result(&cx, std::time::Duration::from_secs(10))
+            .await
+            .expect("replacement components finish child intent");
+        assert_eq!(replay.status, ResultStatus::Success);
+
+        let issues = stack
+            .forge()
+            .list_issues(stack.primary_repo_id(), IssueQuery::default())
+            .await
+            .expect("completed child inventory");
+        assert_eq!(issues.len(), 3, "replay creates no duplicate child");
+        let mut children = issues
+            .iter()
+            .filter(|issue| issue.number != stack.issue_number())
+            .collect::<Vec<_>>();
+        children.sort_by_key(|issue| issue.number);
+        assert_eq!(children[0].title, "Build foundation");
+        assert_eq!(children[0].labels, vec!["code", "ready"]);
+        assert_eq!(children[1].title, "Build dependent");
+        assert_eq!(children[1].labels, vec!["blocked", "code"]);
+        let dependent = parse_metadata_block(&children[1].body)
+            .expect("dependent metadata parses")
+            .expect("dependent metadata exists");
+        assert_eq!(dependent.dependencies.len(), 1);
+        assert!(!dependent.staged);
+
+        created.release();
         stack.crash_worker().await;
     });
 }

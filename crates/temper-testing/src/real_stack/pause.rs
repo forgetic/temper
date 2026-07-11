@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use temper_engine_io::{OneshotReceiver, OneshotSender, oneshot};
+use temper_workflow::{ChildIssueCheckpoint, ChildIssueLifecycleHook};
 
 /// Stable synchronization points used by restart convergence scenarios.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -54,6 +55,18 @@ impl PauseHooks {
             armed.arrived.send(());
             let _ = armed.release.recv().await;
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl ChildIssueLifecycleHook for PauseHooks {
+    async fn reached(&self, checkpoint: ChildIssueCheckpoint) {
+        let point = match checkpoint {
+            ChildIssueCheckpoint::Created => PausePoint::ChildCreated,
+            ChildIssueCheckpoint::Wired => PausePoint::ChildWired,
+            ChildIssueCheckpoint::Activated => PausePoint::ChildActivated,
+        };
+        self.reach(point).await;
     }
 }
 
