@@ -316,33 +316,39 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
     );
 }
 
+fn ci_job(
+    name: &str,
+    commit_sha: &str,
+    status: CiJobStatus,
+    conclusion: Option<CiJobConclusion>,
+) -> CiJob {
+    CiJob {
+        id: CiJobId::new(format!("ci-{name}-{commit_sha}")),
+        repo_id: "repo-1".into(),
+        pull_request_id: None,
+        commit_sha: commit_sha.into(),
+        name: name.into(),
+        status,
+        conclusion,
+        url: None,
+        created_at: ts(),
+        started_at: None,
+        completed_at: None,
+        updated_at: ts(),
+    }
+}
+
 #[test]
 fn ci_status_distinguishes_pending_passed_and_failed_jobs() {
-    fn job(name: &str, status: CiJobStatus, conclusion: Option<CiJobConclusion>) -> CiJob {
-        CiJob {
-            id: CiJobId::new(format!("ci-{name}")),
-            repo_id: "repo-1".into(),
-            pull_request_id: None,
-            commit_sha: "sha".into(),
-            name: name.into(),
-            status,
-            conclusion,
-            url: None,
-            created_at: ts(),
-            started_at: None,
-            completed_at: None,
-            updated_at: ts(),
-        }
-    }
-
     assert_eq!(CiStatus::from_jobs(&[]).state(), CiState::Pending);
     assert_eq!(
-        CiStatus::from_jobs(&[job("ci", CiJobStatus::Running, None)]).state(),
+        CiStatus::from_jobs(&[ci_job("ci", "sha", CiJobStatus::Running, None)]).state(),
         CiState::Pending
     );
     assert_eq!(
-        CiStatus::from_jobs(&[job(
+        CiStatus::from_jobs(&[ci_job(
             "ci",
+            "sha",
             CiJobStatus::Completed,
             Some(CiJobConclusion::Success),
         )])
@@ -350,13 +356,106 @@ fn ci_status_distinguishes_pending_passed_and_failed_jobs() {
         CiState::Passed
     );
     assert_eq!(
-        CiStatus::from_jobs(&[job(
+        CiStatus::from_jobs(&[ci_job(
             "ci",
+            "sha",
             CiJobStatus::Completed,
             Some(CiJobConclusion::Failure),
         )])
         .state(),
         CiState::Failed
+    );
+}
+
+#[test]
+fn ci_status_for_head_accepts_only_safe_sha_ownership_evidence() {
+    let head = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    let success = |sha| {
+        ci_job(
+            "ci",
+            sha,
+            CiJobStatus::Completed,
+            Some(CiJobConclusion::Success),
+        )
+    };
+
+    assert_eq!(
+        CiStatus::from_jobs_for_head(
+            &[success("1111111111111111111111111111111111111111")],
+            Some(head)
+        )
+        .state(),
+        CiState::Pending,
+        "success owned only by an old head is not current-head evidence"
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[success("abcdef0")], Some(head)).state(),
+        CiState::Passed,
+        "a safe case-insensitive job abbreviation identifies the full head"
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[success(head)], Some("abcdef0")).state(),
+        CiState::Passed,
+        "a safe abbreviated provider head identifies a full job SHA"
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[success("abcdef")], Some(head)).state(),
+        CiState::Pending,
+        "a prefix shorter than seven characters is unsafe"
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[success("")], Some(head)).state(),
+        CiState::Pending,
+        "an empty job SHA is not ownership evidence"
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[success("SHA")], Some("sha")).state(),
+        CiState::Passed,
+        "an exact case-insensitive match is accepted at any length"
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[success("old-head")], Some("")).state(),
+        CiState::Passed,
+        "an empty provider head preserves unscoped aggregation"
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[success("old-head")], None).state(),
+        CiState::Passed,
+        "an absent provider head preserves unscoped aggregation"
+    );
+}
+
+#[test]
+fn ci_status_filters_to_current_head_before_latest_job_aggregation() {
+    let head = "abcdef0123456789abcdef0123456789abcdef01";
+    let old_success = ci_job(
+        "validate",
+        "1111111111111111111111111111111111111111",
+        CiJobStatus::Completed,
+        Some(CiJobConclusion::Success),
+    );
+    let current_queued = ci_job("validate", head, CiJobStatus::Queued, None);
+
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[old_success.clone()], Some(head)).state(),
+        CiState::Pending
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[old_success.clone(), current_queued], Some(head)).state(),
+        CiState::Pending,
+        "queued current-head work remains pending despite old success"
+    );
+
+    let current_success = ci_job(
+        "validate",
+        head,
+        CiJobStatus::Completed,
+        Some(CiJobConclusion::Success),
+    );
+    assert_eq!(
+        CiStatus::from_jobs_for_head(&[current_success, old_success], Some(head)).state(),
+        CiState::Passed,
+        "completed successful current-head work is not replaced by a stale job"
     );
 }
 

@@ -161,6 +161,10 @@ pub struct CiJobSort {
 }
 
 /// CI job listing query.
+///
+/// Every populated filter is conjunctive. In particular, setting both
+/// `pull_request_id` and `commit_sha` returns only jobs that satisfy both
+/// constraints; a backend must not treat either filter as an alternative.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CiJobQuery {
     pub pull_request_id: Option<PullRequestId>,
@@ -337,7 +341,8 @@ pub trait Forge: Send + Sync {
         input: MergePullRequest,
     ) -> ForgeResult<MergeRecord>;
 
-    /// Lists CI jobs in a repository.
+    /// Lists CI jobs in a repository. Populated query filters compose
+    /// conjunctively, including pull-request ID plus commit SHA.
     async fn list_ci_jobs(
         &self,
         repo_id: &RepositoryId,
