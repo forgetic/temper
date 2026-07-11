@@ -197,6 +197,38 @@ fn seed_successful_ci(forge: &MemoryForge, repo: &RepositoryId, numbers: &[ItemN
     forge.seed_ci_jobs(repo, jobs);
 }
 
+fn seed_ci_for_head(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    commit_sha: String,
+    index: usize,
+    status: CiJobStatus,
+    conclusion: Option<CiJobConclusion>,
+) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    let mut jobs = block_on(forge.list_ci_jobs(repo, Default::default())).expect("CI jobs list");
+    let offset = Duration::seconds(index as i64);
+    jobs.push(CiJob {
+        id: CiJobId::new(format!("ci-{}-{}-{index}", repo.as_str(), number.get())),
+        repo_id: repo.clone(),
+        pull_request_id: Some(pull_request.id),
+        commit_sha,
+        name: "ci".into(),
+        status,
+        conclusion,
+        url: None,
+        created_at: ts("2026-05-29T00:00:00Z") + offset,
+        started_at: (status != CiJobStatus::Queued).then_some(ts("2026-05-29T00:00:30Z") + offset),
+        completed_at: (status == CiJobStatus::Completed)
+            .then_some(ts("2026-05-29T00:01:00Z") + offset),
+        updated_at: ts("2026-05-29T00:01:00Z") + offset,
+    });
+    forge.seed_ci_jobs(repo, jobs);
+}
+
 fn seed_successful_ci_for_head(
     forge: &MemoryForge,
     repo: &RepositoryId,
@@ -204,25 +236,15 @@ fn seed_successful_ci_for_head(
     commit_sha: String,
     index: usize,
 ) {
-    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
-        .expect("lookup succeeds")
-        .expect("pull request exists");
-    let mut jobs = block_on(forge.list_ci_jobs(repo, Default::default())).expect("CI jobs list");
-    jobs.push(CiJob {
-        id: CiJobId::new(format!("ci-{}-{}-{index}", repo.as_str(), number.get())),
-        repo_id: repo.clone(),
-        pull_request_id: Some(pull_request.id),
+    seed_ci_for_head(
+        forge,
+        repo,
+        number,
         commit_sha,
-        name: "ci".into(),
-        status: CiJobStatus::Completed,
-        conclusion: Some(CiJobConclusion::Success),
-        url: None,
-        created_at: ts("2026-05-29T00:00:00Z") + Duration::seconds(index as i64),
-        started_at: Some(ts("2026-05-29T00:00:30Z") + Duration::seconds(index as i64)),
-        completed_at: Some(ts("2026-05-29T00:01:00Z") + Duration::seconds(index as i64)),
-        updated_at: ts("2026-05-29T00:01:00Z") + Duration::seconds(index as i64),
-    });
-    forge.seed_ci_jobs(repo, jobs);
+        index,
+        CiJobStatus::Completed,
+        Some(CiJobConclusion::Success),
+    );
 }
 
 fn approve_as_requested_reviewer(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) {
@@ -460,9 +482,59 @@ fn reference_conflict_resolution_requires_fresh_ci_but_no_second_review() {
         Progress::unchanged()
     );
     assert_eq!(
+        pull_request_state(&forge, &repo, number),
+        PullRequestState::Open
+    );
+    assert_eq!(
         counted.count(CountedForgeOp::MergePullRequest),
         1,
-        "old green CI must not satisfy the new head"
+        "old green CI must not satisfy the repaired head"
+    );
+
+    seed_ci_for_head(
+        &forge,
+        &repo,
+        number,
+        new_head.clone(),
+        2,
+        CiJobStatus::Queued,
+        None,
+    );
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:02:00Z"))).expect("queued CI is not enough"),
+        Progress::unchanged()
+    );
+    assert_eq!(
+        pull_request_state(&forge, &repo, number),
+        PullRequestState::Open
+    );
+    assert_eq!(
+        counted.count(CountedForgeOp::MergePullRequest),
+        1,
+        "queued repaired-head CI must not trigger another merge"
+    );
+
+    seed_ci_for_head(
+        &forge,
+        &repo,
+        number,
+        new_head.clone(),
+        3,
+        CiJobStatus::Running,
+        None,
+    );
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:03:00Z"))).expect("running CI is not enough"),
+        Progress::unchanged()
+    );
+    assert_eq!(
+        pull_request_state(&forge, &repo, number),
+        PullRequestState::Open
+    );
+    assert_eq!(
+        counted.count(CountedForgeOp::MergePullRequest),
+        1,
+        "running repaired-head CI must not trigger another merge"
     );
     let reviews = block_on(forge.list_pull_request_reviews(&pr_id)).expect("reviews list");
     assert_eq!(
@@ -471,9 +543,9 @@ fn reference_conflict_resolution_requires_fresh_ci_but_no_second_review() {
         "conflict resolution keeps the existing approval"
     );
 
-    seed_successful_ci_for_head(&forge, &repo, number, new_head, 2);
+    seed_successful_ci_for_head(&forge, &repo, number, new_head, 4);
     assert_eq!(
-        block_on(worker.tick(ts("2026-05-29T00:02:00Z"))).expect("new green CI lands"),
+        block_on(worker.tick(ts("2026-05-29T00:04:00Z"))).expect("new green CI lands"),
         Progress {
             changed: true,
             actions: 1,
@@ -483,12 +555,25 @@ fn reference_conflict_resolution_requires_fresh_ci_but_no_second_review() {
         pull_request_state(&forge, &repo, number),
         PullRequestState::Merged
     );
+    assert_eq!(
+        pull_request_labels(&forge, &repo, number),
+        vec![
+            "alignment".to_string(),
+            "implementation".to_string(),
+            "landed".to_string(),
+        ]
+    );
     assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 2);
+    assert_eq!(
+        counted.count(CountedForgeOp::RequestPullRequestReviewers),
+        0,
+        "conflict repair and mechanical landing do not request another review"
+    );
     let reviews = block_on(forge.list_pull_request_reviews(&pr_id)).expect("reviews list");
     assert_eq!(
         reviews.len(),
         1,
-        "mechanical landing did not request a second review"
+        "mechanical landing did not record a second review"
     );
 }
 
