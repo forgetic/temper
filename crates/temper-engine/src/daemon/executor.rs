@@ -45,6 +45,11 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     DaemonCompletion::PollDeadline { id }
                 });
             }
+            DaemonRequest::StartStartupRecoveryGrace { delay, reply } => {
+                arm_timer(&*self.spawner, &self.cq, delay, move || {
+                    DaemonCompletion::StartupRecoveryGraceElapsed { reply }
+                });
+            }
             DaemonRequest::RunApply { job, result } => {
                 let applier = Arc::clone(&self.applier);
                 let cq = self.cq.clone();
@@ -100,6 +105,28 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 let applier = Arc::clone(&self.applier);
                 self.spawner.spawn_with_cx(move |_cx| async move {
                     applier.release_claim(job, context).await;
+                });
+            }
+            DaemonRequest::RunHeartbeatsAndRespond {
+                assignments,
+                responder,
+                response,
+            } => {
+                let applier = Arc::clone(&self.applier);
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    for (job, context) in assignments {
+                        applier.heartbeat(job, context).await;
+                    }
+                    responder.respond(response);
+                });
+            }
+            DaemonRequest::RunShutdownRelease { assignments, reply } => {
+                let applier = Arc::clone(&self.applier);
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    for (job, context) in assignments {
+                        applier.release_claim(job, context).await;
+                    }
+                    reply.send(());
                 });
             }
             DaemonRequest::RunPullRequestFreshnessCheck { check, responder } => {

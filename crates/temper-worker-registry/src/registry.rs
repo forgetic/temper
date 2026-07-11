@@ -9,6 +9,9 @@ pub enum RegistryError {
     UnknownWorker(String),
     NoCapacity(String),
     DuplicateJob(String),
+    IneligibleWorker(String),
+    RoleCapacity(String),
+    WorkstreamConflict(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +233,35 @@ impl WorkerRegistry {
 
         if entry.in_flight.contains(job_id) {
             return Err(RegistryError::DuplicateJob(job_id.to_string()));
+        }
+
+        if entry.free_capacity() == 0 {
+            return Err(RegistryError::NoCapacity(worker_id.to_string()));
+        }
+
+        entry.in_flight.insert(job_id.to_string());
+        Ok(())
+    }
+
+    /// Reconstitutes one durable in-flight assignment for its recorded worker.
+    ///
+    /// Recovery deliberately uses the same health and capacity checks as normal
+    /// dispatch. It is idempotent for an already-restored `(worker, job)` pair,
+    /// which lets repeated startup inventories and matching heartbeats converge
+    /// without consuming a second slot.
+    pub fn restore_assignment(
+        &mut self,
+        worker_id: &str,
+        job_id: &str,
+    ) -> Result<(), RegistryError> {
+        let entry = self
+            .workers
+            .get_mut(worker_id)
+            .filter(|entry| entry.healthy)
+            .ok_or_else(|| RegistryError::UnknownWorker(worker_id.to_string()))?;
+
+        if entry.in_flight.contains(job_id) {
+            return Ok(());
         }
 
         if entry.free_capacity() == 0 {

@@ -6,6 +6,22 @@ crates/temper-testing/src/live_basic_delivery/codebase_memory.rs
 # production observability at one registration boundary; split with next MCP bridge refactor.
 crates/temper-agent/src/codebase_memory.rs
 
+# Startup assignment recovery keeps staged prior-boot ownership, exact heartbeat
+# reattachment, and protocol dispatch state together at the daemon core boundary.
+crates/temper-worker-registry/src/daemon_core.rs
+
+# Recovery protocol coverage shares the daemon-core fixtures needed to prove
+# mismatched, repeated, and orphaned heartbeat behavior.
+crates/temper-worker-registry/src/daemon_core_tests.rs
+
+# Durable assignment claim, refresh, rollback, and quarantine all share one
+# conditional Forge write boundary so recovery CAS semantics remain auditable.
+crates/temper-workflow/src/lease/manager.rs
+
+# The daemon machine owns the startup barrier alongside poll waiters and claim
+# transitions; keeping these states together prevents dispatch bypass paths.
+crates/temper-engine/src/daemon/machine.rs
+
 # Workspace recovery is one atomic preservation/replay/quarantine protocol;
 # keeping its phases together makes destructive-operation ordering auditable.
 crates/temper-worker/src/workspace/recovery.rs

@@ -29,4 +29,6 @@ pub use adapt::{
 };
 pub use applier::result_applier;
 pub use repositories::{ensure_workflow_labels, resolve_repositories, role_feed_targets};
-pub use runtime::{run, run_async};
+pub use runtime::{
+    RecoveredClaim, converge_startup_orphans, run, run_async, stage_startup_assignments,
+};

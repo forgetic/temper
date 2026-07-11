@@ -18,7 +18,9 @@ use temper_protocol_worker::{
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
-use temper_worker_registry::{DaemonCore, WorkerPoolAuthConfig, WorkerPoolPolicy};
+use temper_worker_registry::{
+    DaemonCore, RecoveredJob, RegistryError, WorkerPoolAuthConfig, WorkerPoolPolicy,
+};
 
 use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
@@ -49,6 +51,28 @@ pub(super) enum DaemonCompletion {
     ApplyFinished {
         job_id: String,
         outcome: ApplyOutcome,
+    },
+    /// Close the dispatch barrier before startup inventory begins.
+    BeginStartupRecovery,
+    /// Stage one durable prior-boot assignment for heartbeat reattachment.
+    StageRecoveredJob {
+        job: RecoveredJob,
+        daemon_boot_id: String,
+        reply: temper_engine_io::OneshotSender<Result<(), RegistryError>>,
+    },
+    /// Open the barrier and return claims that received no matching heartbeat.
+    FinishStartupRecovery {
+        reply: temper_engine_io::OneshotSender<Vec<RecoveredJob>>,
+    },
+    ArmStartupRecoveryGrace {
+        delay: Duration,
+        reply: temper_engine_io::OneshotSender<()>,
+    },
+    StartupRecoveryGraceElapsed {
+        reply: temper_engine_io::OneshotSender<()>,
+    },
+    ReleaseAssignmentsForShutdown {
+        reply: temper_engine_io::OneshotSender<()>,
     },
     /// Daemon API: enqueue one job (scans, backstops, tests).
     Enqueue {
@@ -102,6 +126,10 @@ pub(super) enum DaemonRequest {
         id: u64,
         delay: Duration,
     },
+    StartStartupRecoveryGrace {
+        delay: Duration,
+        reply: temper_engine_io::OneshotSender<()>,
+    },
     RunApply {
         job: InFlightJob,
         result: JobResult,
@@ -126,6 +154,16 @@ pub(super) enum DaemonRequest {
     RunClaimRollback {
         job: InFlightJob,
         context: crate::applier::ClaimContext,
+    },
+    /// Refresh exact recovered assignments before acknowledging their heartbeat.
+    RunHeartbeatsAndRespond {
+        assignments: Vec<(InFlightJob, crate::applier::ClaimContext)>,
+        responder: HttpResponder,
+        response: HttpResponseData,
+    },
+    RunShutdownRelease {
+        assignments: Vec<(InFlightJob, crate::applier::ClaimContext)>,
+        reply: temper_engine_io::OneshotSender<()>,
     },
     RunPullRequestFreshnessCheck {
         check: PullRequestFreshness,
@@ -158,6 +196,14 @@ pub(super) struct PollWaiter {
     pub(super) responder: HttpResponder,
 }
 
+pub(super) struct DeferredEnqueue {
+    pub(super) job_id: String,
+    pub(super) role: String,
+    pub(super) repo: String,
+    pub(super) artifact: Artifact,
+    pub(super) job_payload: serde_json::Value,
+}
+
 /// The daemon's functional core: deterministic worker-protocol, long-poll,
 /// apply-window, and webhook-verification logic. No I/O, no clocks — time
 /// arrives as data on completions; everything it wants done leaves as
@@ -177,6 +223,11 @@ pub(super) struct DaemonMachine {
     /// act of every transition, before any handler logic runs.
     pub(super) now: EngineTime,
     pub(super) daemon_boot_id: String,
+    /// Closed while durable assignments are inventoried and offered a bounded
+    /// heartbeat reattachment grace period.
+    pub(super) startup_recovery: bool,
+    pub(super) deferred_enqueues: Vec<DeferredEnqueue>,
+    pub(super) assignment_contexts: BTreeMap<String, crate::applier::ClaimContext>,
     pub(super) next_id: u64,
 }
 
@@ -237,6 +288,9 @@ impl DaemonMachine {
             apply_grace,
             now: EngineTime::ZERO,
             daemon_boot_id: new_daemon_boot_id(),
+            startup_recovery: false,
+            deferred_enqueues: Vec::new(),
+            assignment_contexts: BTreeMap::new(),
             next_id: 0,
         }
     }
@@ -352,6 +406,9 @@ impl Machine for DaemonMachine {
         match completion {
             DaemonCompletion::Http { request, responder } => self.handle_http(request, responder),
             DaemonCompletion::PollDeadline { id } => {
+                if self.startup_recovery {
+                    return Vec::new();
+                }
                 let Some(waiter) = self.waiters.remove(&id) else {
                     return Vec::new();
                 };
@@ -389,6 +446,8 @@ impl Machine for DaemonMachine {
                 match outcome {
                     ClaimOutcome::Claimed => {
                         if self.core.commit_assignment(&assign.job_id).is_ok() {
+                            self.assignment_contexts
+                                .insert(assign.job_id.clone(), context.clone());
                             vec![
                                 DaemonRequest::Log(super::protocol::assignment_log_line(
                                     &assign, &worker_id,
@@ -420,6 +479,7 @@ impl Machine for DaemonMachine {
                 }
             }
             DaemonCompletion::AssignmentDeliveryFailed { job, context } => {
+                self.assignment_contexts.remove(&job.job_id);
                 self.core.rollback_committed_assignment(&job.job_id);
                 vec![DaemonRequest::RunClaimRollback { job, context }]
             }
@@ -446,6 +506,75 @@ impl Machine for DaemonMachine {
                         Vec::new()
                     }
                 }
+            }
+            DaemonCompletion::BeginStartupRecovery => {
+                self.startup_recovery = true;
+                Vec::new()
+            }
+            DaemonCompletion::StageRecoveredJob {
+                job,
+                daemon_boot_id,
+                reply,
+            } => {
+                let job_id = job.job_id.clone();
+                let worker_id = job.worker_id.clone();
+                let outcome = self.core.stage_recovered_job(job);
+                if outcome.is_ok() {
+                    self.assignment_contexts.insert(
+                        job_id,
+                        crate::applier::ClaimContext {
+                            worker_id,
+                            daemon_boot_id,
+                        },
+                    );
+                }
+                reply.send(outcome);
+                Vec::new()
+            }
+            DaemonCompletion::FinishStartupRecovery { reply } => {
+                let orphaned = self.core.take_unreattached_recovered_jobs();
+                for job in &orphaned {
+                    self.assignment_contexts.remove(&job.job_id);
+                }
+                self.startup_recovery = false;
+                let deferred = std::mem::take(&mut self.deferred_enqueues);
+                let mut requests = Vec::new();
+                for enqueue in deferred {
+                    requests.extend(self.handle_enqueue(
+                        enqueue.job_id,
+                        enqueue.role,
+                        enqueue.repo,
+                        enqueue.artifact,
+                        enqueue.job_payload,
+                    ));
+                }
+                requests.extend(self.fulfil_waiters());
+                for id in self.waiters.keys().copied() {
+                    requests.push(DaemonRequest::StartPollTimer {
+                        id,
+                        delay: Duration::from_millis(self.max_poll_wait_ms),
+                    });
+                }
+                reply.send(orphaned);
+                requests
+            }
+            DaemonCompletion::ArmStartupRecoveryGrace { delay, reply } => {
+                vec![DaemonRequest::StartStartupRecoveryGrace { delay, reply }]
+            }
+            DaemonCompletion::StartupRecoveryGraceElapsed { reply } => {
+                reply.send(());
+                Vec::new()
+            }
+            DaemonCompletion::ReleaseAssignmentsForShutdown { reply } => {
+                let jobs = self.core.in_flight_jobs();
+                let mut assignments = Vec::new();
+                for job in jobs {
+                    if let Some(context) = self.assignment_contexts.remove(&job.job_id) {
+                        self.core.coordinator_mut().complete(&job.job_id).ok();
+                        assignments.push((job, context));
+                    }
+                }
+                vec![DaemonRequest::RunShutdownRelease { assignments, reply }]
             }
             DaemonCompletion::Enqueue {
                 job_id,
@@ -508,6 +637,37 @@ mod retry_tests {
     use super::*;
     use serde_json::json;
     use temper_protocol_worker::Artifact;
+
+    #[test]
+    fn startup_recovery_barrier_defers_enqueue_until_orphans_are_collected() {
+        let mut machine = DaemonMachine::default_machine(Duration::ZERO);
+        machine.on_completion(EngineTime::ZERO, DaemonCompletion::BeginStartupRecovery);
+        let requests = machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::Enqueue {
+                job_id: "job-after-recovery".to_string(),
+                role: "engineer".to_string(),
+                repo: "ai/temper".to_string(),
+                artifact: Artifact {
+                    item: json!(258),
+                    kind: "issue".to_string(),
+                },
+                job_payload: json!({}),
+            },
+        );
+        assert!(requests.is_empty());
+        assert!(machine.core.queued_jobs().is_empty());
+        assert_eq!(machine.deferred_enqueues.len(), 1);
+
+        let (reply, _rx) = temper_engine_io::oneshot();
+        machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::FinishStartupRecovery { reply },
+        );
+        assert!(!machine.startup_recovery);
+        assert!(machine.deferred_enqueues.is_empty());
+        assert_eq!(machine.core.queued_jobs().len(), 1);
+    }
 
     #[test]
     fn retryable_apply_uses_observable_bounded_exponential_backoff() {

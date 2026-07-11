@@ -419,3 +419,102 @@ fn assignment_claim_atomically_persists_identity_and_lifecycle() {
     assert!(metadata.assignment.is_none());
     assert!(metadata.lease.is_none());
 }
+
+#[test]
+fn impossible_assignment_is_cleared_to_one_attention_marker() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let repo = new_repo(&forge);
+    let number = create_issue(&forge, &repo, &["code", "ready"], "Ambiguous claim.");
+    let target = ArtifactSource::Issue { number };
+    let manager = LeaseManager::new(&forge, policy());
+    let expected = DurableAssignment {
+        job_id: Some("job-impossible".to_string()),
+        role: Some(RoleId::new("engineer")),
+        worker_id: Some("worker-a".to_string()),
+        daemon_boot_id: Some("old-boot".to_string()),
+        ..DurableAssignment::default()
+    };
+    block_on(manager.claim_assignment(
+        &repo,
+        target,
+        AssignmentClaimRequest {
+            assignment: expected.clone(),
+            mutation: AssignmentMutation {
+                add_labels: vec!["in-progress".to_string()],
+                remove_labels: vec!["ready".to_string()],
+                ..AssignmentMutation::default()
+            },
+        },
+        ts("2026-05-29T00:00:00Z"),
+    ))
+    .unwrap();
+
+    block_on(manager.quarantine_assignment(&repo, target, &expected)).unwrap();
+    block_on(manager.quarantine_assignment(&repo, target, &expected)).unwrap();
+    let issue = block_on(forge.get_issue_by_number(&repo, number))
+        .unwrap()
+        .unwrap();
+    assert_eq!(issue.labels, vec!["code", "needs-human"]);
+    let metadata = parse_metadata_block(&issue.body).unwrap().unwrap();
+    assert!(metadata.assignment.is_none());
+    assert!(metadata.lease.is_none());
+}
+
+#[test]
+fn assignment_heartbeat_refreshes_only_the_exact_prior_boot_identity() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let repo = new_repo(&forge);
+    let number = create_issue(&forge, &repo, &["code", "ready"], "Recover me.");
+    let target = ArtifactSource::Issue { number };
+    let manager = LeaseManager::new(&forge, policy());
+    let expected = DurableAssignment {
+        job_id: Some("job-258".to_string()),
+        role: Some(RoleId::new("engineer")),
+        worker_id: Some("worker-a".to_string()),
+        daemon_boot_id: Some("prior-boot".to_string()),
+        ..DurableAssignment::default()
+    };
+    block_on(manager.claim_assignment(
+        &repo,
+        target,
+        AssignmentClaimRequest {
+            assignment: expected.clone(),
+            mutation: AssignmentMutation::default(),
+        },
+        ts("2026-05-29T00:00:00Z"),
+    ))
+    .unwrap();
+
+    let mismatch = DurableAssignment {
+        worker_id: Some("worker-b".to_string()),
+        ..expected.clone()
+    };
+    assert!(matches!(
+        block_on(manager.heartbeat_assignment(
+            &repo,
+            target,
+            &mismatch,
+            ts("2026-05-29T00:05:00Z")
+        )),
+        Err(LeaseError::AssignmentConflict { .. })
+    ));
+
+    let refreshed = block_on(manager.heartbeat_assignment(
+        &repo,
+        target,
+        &expected,
+        ts("2026-05-29T00:10:00Z"),
+    ))
+    .expect("matching heartbeat refreshes the assignment");
+    assert_eq!(refreshed.expires_at, Some(ts("2026-05-29T00:40:00Z")));
+    let metadata = parse_metadata_block(&issue_body(&forge, &repo, number))
+        .unwrap()
+        .unwrap();
+    assert_eq!(metadata.assignment, Some(refreshed));
+    assert_eq!(
+        metadata.lease.unwrap().heartbeat_at,
+        ts("2026-05-29T00:10:00Z")
+    );
+}

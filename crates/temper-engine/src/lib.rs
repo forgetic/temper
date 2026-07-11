@@ -57,7 +57,7 @@ pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
 pub use engine_config::EngineConfig;
 pub use feed::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, WorkItemJob, job_from_work_item,
-    run_poll_backstop_tick, spawn_poll_backstop,
+    recovered_job_from_assignment, run_poll_backstop_tick, spawn_poll_backstop,
 };
 pub use forge_applier::ForgeApplier;
 pub use lease_applier::{LeaseApplier, WallClock, system_clock};
@@ -71,6 +71,7 @@ pub use pr_freshness::check_pull_request_freshness;
 pub use temper_protocol_worker::{JobArtifactSnapshot, JobContext, RepoOutcome, WorkerAuth};
 pub use temper_runner::{PullRequestMergeObserver, RepositorySet, RepositoryTarget};
 pub use temper_worker_registry::{
-    InFlightJob, WorkerPoolAuthConfig, WorkerPoolPolicies, WorkerPoolPolicy,
+    InFlightJob, RecoveredJob, RegistryError, WorkerPoolAuthConfig, WorkerPoolPolicies,
+    WorkerPoolPolicy,
 };
 pub use webhook::*;
