@@ -339,3 +339,11 @@ fn poll_transport_error_backs_off_and_logs() {
         "expected a backoff timer after a transport error, got {requests:?}"
     );
 }
+
+#[test]
+fn shutdown_stops_the_worker_without_emitting_cleanup_requests() {
+    let mut machine = WorkerMachine::new(params());
+    let requests = machine.on_completion(EngineTime::ZERO, WorkerCompletion::Shutdown);
+    assert!(requests.is_empty());
+    assert!(machine.is_stopped());
+}

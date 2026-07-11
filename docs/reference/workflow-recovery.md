@@ -10,6 +10,17 @@ A claim is a lease stored in workflow metadata, not permanent ownership.
 `metadata::Lease` records role, worker id, claim time, heartbeat time, and
 expiration time. A lease is expired when `now >= expires_at`.
 
+The adjacent `assignment` record is the durable dispatch identity. It is
+committed in the same conditional body update as the claim, before `Assign` is
+published, and records `job_id`, role, queue/action, worker id, coordination key,
+daemon boot id, assignment PR head, pre-claim labels/assignees, and assignment
+and expiry timestamps. A daemon restart inventories these records while its
+recovery barrier is closed. Only a heartbeat from the recorded worker naming the
+exact job can reattach and refresh it; unknown jobs, another worker, or another
+boot identity cannot extend the lease. At the end of the bounded grace period,
+unattached records are orphans and are rolled back to their pre-claim projection.
+Malformed or impossible records are quarantined once rather than guessed.
+
 `LeasePlanner` is pure. It:
 
 - grants acquisition when no lease exists or the existing lease expired;
@@ -22,6 +33,34 @@ expiration time. A lease is expired when `now >= expires_at`.
 conditional body update. It captures the load-time `Version`, so reference
 backends enforce compare-and-swap lease acquisition. Clearing another worker's
 lease is a reconciler authority path, not a peer release.
+
+## Startup recovery barrier
+
+Startup closes dispatch before inventory. Recovery first completes durable
+child-create intents, then stages valid assignments for heartbeat reattachment,
+converges expired/impossible/orphaned claims, and only then opens normal role
+feeds. Enqueues observed during inventory are deferred. This ordering prevents a
+partially wired child or a second session for an assigned source from escaping
+the restart window.
+
+Child fan-out persists a normalized intent on the parent before creating any
+child. New children carry `staged: true`; recovery idempotently creates missing
+siblings by correlation key, writes all child and parent dependency edges, and
+activates children only after the graph is complete. A retry therefore neither
+duplicates a child nor dispatches a staged child.
+
+## Workspace and repaired-PR convergence
+
+A reusable writable checkout is inspected before reset or fetch. Local commits,
+tracked edits, and untracked files are preserved under deterministic recovery
+refs/stashes and replayed over the current remote target. If replay cannot be
+proved safe, the checkout is moved to one actionable quarantine with a manifest
+and recovery commands; retries reuse that quarantine instead of overwriting it.
+
+PR repair records `repaired_head` when the repaired branch is published. Landing
+continues to require CI for that exact head: missing, queued, running, or stale
+pre-repair CI cannot land it. Once current-head CI succeeds, the normal
+mechanical path converges without requesting a repeated repair.
 
 ## Command journal
 

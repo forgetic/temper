@@ -198,6 +198,16 @@ impl Daemon {
         }
     }
 
+    /// Stops and joins the daemon machine without releasing its assignments.
+    /// This is the abrupt-loss primitive used by deterministic restart tests;
+    /// production shutdown should use [`release_assignments_for_shutdown`](Self::release_assignments_for_shutdown).
+    pub async fn crash(&self) {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self.cq.send(DaemonCompletion::Crash { reply }).is_ok() {
+            let _ = rx.recv().await;
+        }
+    }
+
     /// Signals clean shutdown by releasing every assignment still owned by this
     /// daemon boot. Crash recovery remains independent because this is only a
     /// best-effort fast path through the same conditional claim rollback.

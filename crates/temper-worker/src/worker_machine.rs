@@ -44,6 +44,9 @@ pub enum WorkerCompletion {
     PollTimer,
     /// The heartbeat cadence timer fired: time to heartbeat (if work in flight).
     HeartbeatTimer,
+    /// Stop the component loop without reporting or releasing in-flight work.
+    /// Test restart harnesses use this to model a process crash deterministically.
+    Shutdown,
 }
 
 /// An I/O request the shell must perform.
@@ -80,6 +83,7 @@ pub struct WorkerMachine {
     in_flight: BTreeSet<String>,
     /// Set once the worker has registered; gates the first poll.
     registered: bool,
+    stopped: bool,
 }
 
 impl WorkerMachine {
@@ -90,6 +94,7 @@ impl WorkerMachine {
             free_capacity,
             in_flight: BTreeSet::new(),
             registered: false,
+            stopped: false,
         }
     }
 
@@ -274,7 +279,15 @@ impl Machine for WorkerMachine {
                 ))]
             }
             WorkerCompletion::HeartbeatDelivered(Ok(())) => Vec::new(),
+            WorkerCompletion::Shutdown => {
+                self.stopped = true;
+                Vec::new()
+            }
         }
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped
     }
 }
 

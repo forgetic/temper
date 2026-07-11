@@ -13,14 +13,14 @@
 use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
-use temper_worker_io::{Spawner, channel, drive};
+use temper_worker_io::{CqSender, OneshotReceiver, Spawner, channel, drive, oneshot};
 
 use crate::client::WorkerError;
 use crate::config::{WorkerConfig, WorkerParams};
 use crate::executor::JobExecutor;
 use crate::transport::{HttpTransport, Transport};
-use crate::worker_machine::WorkerMachine;
-use crate::worker_shell::WorkerShell;
+use crate::worker_machine::{WorkerCompletion, WorkerMachine};
+use crate::worker_shell::{WorkerCancellation, WorkerShell};
 
 /// Run the worker to (effective) completion over the **HTTP** transport (the
 /// split deployment): register, then poll/dispatch/report/heartbeat forever,
@@ -58,23 +58,76 @@ where
     T: Transport,
     S: Spawner,
 {
+    start_worker_with_transport(spawner, config, executor, transport)
+        .join()
+        .await;
+    Ok(())
+}
+
+/// Control for a worker component started by [`start_worker_with_transport`].
+///
+/// `crash` closes the machine loop without publishing or releasing its current
+/// jobs, then joins that loop. This is intentionally distinct from graceful
+/// workflow cleanup so restart tests can retain durable assignment state.
+pub struct WorkerComponentHandle {
+    completions: CqSender<WorkerCompletion>,
+    joined: OneshotReceiver<()>,
+    cancellation: WorkerCancellation,
+}
+
+impl WorkerComponentHandle {
+    /// Stops and joins the worker machine, modeling abrupt process loss.
+    pub async fn crash(self) {
+        self.cancellation.cancel();
+        let _ = self.completions.send(WorkerCompletion::Shutdown);
+        let _ = self.joined.recv().await;
+    }
+
+    /// Waits until the worker exits without requesting shutdown.
+    pub async fn join(self) {
+        let _ = self.joined.recv().await;
+    }
+}
+
+/// Starts the production worker machine and returns explicit crash/join
+/// controls. The durable workspace and transport are caller-owned, so a new
+/// component may be created against the same state after this handle joins.
+pub fn start_worker_with_transport<E, T, S>(
+    spawner: S,
+    config: WorkerConfig,
+    executor: Arc<E>,
+    transport: Arc<T>,
+) -> WorkerComponentHandle
+where
+    E: JobExecutor + Send + Sync + 'static,
+    T: Transport,
+    S: Spawner,
+{
     let params = WorkerParams::from_config(&config);
     let (cq_tx, cq_rx) = channel();
 
-    let shell = WorkerShell::with_transport(
-        spawner,
-        cq_tx,
+    let cancellation = WorkerCancellation::default();
+    let shell = WorkerShell::with_transport_controlled(
+        spawner.clone(),
+        cq_tx.clone(),
         transport,
         config.worker_auth.clone(),
         config.worker_id.clone(),
         executor,
+        cancellation.clone(),
     );
     let machine = WorkerMachine::new(params);
+    let (joined_tx, joined) = oneshot();
+    spawner.spawn_task(async move {
+        let _ = drive(machine, &shell, cq_rx).await;
+        joined_tx.send(());
+    });
 
-    // drive() owns the loop; it returns when the machine stops or the queue
-    // closes. In steady state it never returns.
-    let _ = drive(machine, &shell, cq_rx).await;
-    Ok(())
+    WorkerComponentHandle {
+        completions: cq_tx,
+        joined,
+        cancellation,
+    }
 }
 
 #[cfg(test)]
