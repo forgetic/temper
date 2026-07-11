@@ -13,7 +13,25 @@ use temper_protocol_worker::{
     FailureClass, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
 };
 
+use temper_workflow::AssignmentMutation;
+
 use crate::InFlightJob;
+
+/// Identity supplied by the daemon for one assignment claim attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimContext {
+    pub worker_id: String,
+    pub daemon_boot_id: String,
+}
+
+/// Typed result of attempting to durably claim work before publication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClaimOutcome {
+    Claimed,
+    Contended { reason: String },
+    Stale { reason: String },
+    Retryable { reason: String },
+}
 
 /// Typed result of applying an accepted worker result.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,8 +54,20 @@ pub trait ResultApplier: Send + Sync {
     /// Applies assignment-time source-artifact claim signals before the worker
     /// receives its `Assign` response. Implementations that do not manage Forge
     /// workflow state can leave the default no-op in place.
-    async fn claim(&self, job: InFlightJob) {
+    async fn claim(&self, job: InFlightJob, context: ClaimContext) -> ClaimOutcome {
+        let _ = (job, context);
+        ClaimOutcome::Claimed
+    }
+
+    /// Computes lifecycle fields that must be committed in the same Forge CAS
+    /// as the durable assignment metadata.
+    async fn assignment_mutation(&self, job: &InFlightJob) -> AssignmentMutation {
         let _ = job;
+        AssignmentMutation::default()
+    }
+
+    async fn release_claim(&self, job: InFlightJob, context: ClaimContext) {
+        let _ = (job, context);
     }
 
     async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome;
@@ -86,10 +116,24 @@ impl RoleRoutingApplier {
 
 #[async_trait::async_trait]
 impl ResultApplier for RoleRoutingApplier {
-    async fn claim(&self, job: InFlightJob) {
+    async fn claim(&self, job: InFlightJob, context: ClaimContext) -> ClaimOutcome {
         match self.routes.get(&job.role) {
-            Some(applier) => applier.claim(job).await,
-            None => self.default.claim(job).await,
+            Some(applier) => applier.claim(job, context).await,
+            None => self.default.claim(job, context).await,
+        }
+    }
+
+    async fn assignment_mutation(&self, job: &InFlightJob) -> AssignmentMutation {
+        match self.routes.get(&job.role) {
+            Some(applier) => applier.assignment_mutation(job).await,
+            None => self.default.assignment_mutation(job).await,
+        }
+    }
+
+    async fn release_claim(&self, job: InFlightJob, context: ClaimContext) {
+        match self.routes.get(&job.role) {
+            Some(applier) => applier.release_claim(job, context).await,
+            None => self.default.release_claim(job, context).await,
         }
     }
 

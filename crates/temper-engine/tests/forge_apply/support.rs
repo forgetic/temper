@@ -14,9 +14,9 @@ pub(crate) use temper_forge::{
 };
 pub(crate) use temper_forge_memory::MemoryForge;
 pub(crate) use temper_protocol_worker::{
-    Artifact, Branch, Capability, Capacity, Failure, FailureClass, JobChild, JobResult, Poll,
-    Register, ReleaseDisposition, RepoAccess, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
-    WorkerProtocolMessage, WorkspaceManifest, WorkspaceRepo,
+    Artifact, Assign, Branch, Capability, Capacity, Failure, FailureClass, JobChild, JobResult,
+    Poll, Register, ReleaseDisposition, RepoAccess, RepoOutcome, ResultStatus,
+    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage, WorkspaceManifest, WorkspaceRepo,
 };
 pub(crate) use temper_worker_registry::InFlightJob;
 pub(crate) use temper_workflow::{
@@ -595,4 +595,30 @@ pub(crate) async fn poll_review_assignment(
         pull_request,
     )
     .await
+}
+
+pub(crate) fn assert_durable_assignment(issue: &Issue, assignment: &Assign) {
+    assert_eq!(
+        issue.labels,
+        vec!["code".to_string(), "in-progress".to_string()]
+    );
+    assert_eq!(issue.assignees, vec![UserId::new("engineer")]);
+    let metadata = parse_metadata_block(&issue.body)
+        .expect("assignment metadata parses")
+        .expect("assignment metadata exists");
+    let durable = metadata
+        .assignment
+        .expect("poll does not return before the durable assignment exists");
+    assert_eq!(durable.job_id.as_deref(), Some(assignment.job_id.as_str()));
+    assert_eq!(durable.worker_id.as_deref(), Some("worker-a"));
+    assert!(durable.daemon_boot_id.is_some());
+    assert!(metadata.lease.is_some());
+}
+
+pub(crate) fn assert_durable_assignment_released(issue: &Issue) {
+    let metadata = parse_metadata_block(&issue.body)
+        .expect("completed metadata parses")
+        .unwrap_or_default();
+    assert!(metadata.assignment.is_none());
+    assert!(metadata.lease.is_none());
 }

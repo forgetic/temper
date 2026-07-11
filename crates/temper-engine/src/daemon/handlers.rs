@@ -19,8 +19,8 @@ use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_
 
 use super::machine::{DaemonMachine, DaemonRequest, PollWaiter};
 use super::protocol::{
-    ResultDisposition, assignment_log_line, is_poll_timeout, protocol_response, register_log_line,
-    result_disposition, result_disposition_log_value, result_received_log_line,
+    ResultDisposition, is_poll_timeout, protocol_response, register_log_line, result_disposition,
+    result_disposition_log_value, result_received_log_line,
 };
 use super::state_dto::{DaemonStateSnapshot, JobDto};
 
@@ -167,9 +167,9 @@ impl DaemonMachine {
     ) -> Vec<DaemonRequest> {
         let response = match self
             .core
-            .handle_authenticated(WorkerProtocolMessage::Poll(poll.clone()), auth.as_ref())
+            .reserve_authenticated_poll(poll.clone(), auth.as_ref())
         {
-            Ok(response) => response.expect("poll messages produce a response"),
+            Ok(response) => response,
             Err(_) => {
                 return vec![DaemonRequest::Respond {
                     responder,
@@ -208,14 +208,13 @@ impl DaemonMachine {
         match response {
             WorkerProtocolMessage::Assign(assign) => {
                 let job = in_flight_job_from_assign(&assign);
-                vec![
-                    DaemonRequest::Log(assignment_log_line(&assign, worker_id)),
-                    DaemonRequest::RunClaimAndRespond {
-                        job,
-                        responder,
-                        response: protocol_response(Some(WorkerProtocolMessage::Assign(assign))),
-                    },
-                ]
+                vec![DaemonRequest::RunClaim {
+                    job,
+                    worker_id: worker_id.to_string(),
+                    daemon_boot_id: self.daemon_boot_id.clone(),
+                    assign,
+                    responder,
+                }]
             }
             response => vec![DaemonRequest::Respond {
                 responder,
@@ -428,11 +427,11 @@ impl DaemonMachine {
                 continue;
             };
 
-            let response = match self.core.handle_authenticated(
-                WorkerProtocolMessage::Poll(waiter.poll.clone()),
-                waiter.auth.as_ref(),
-            ) {
-                Ok(response) => response.expect("poll messages produce a response"),
+            let response = match self
+                .core
+                .reserve_authenticated_poll(waiter.poll.clone(), waiter.auth.as_ref())
+            {
+                Ok(response) => response,
                 Err(_) => {
                     let waiter = self
                         .waiters

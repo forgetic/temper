@@ -49,7 +49,9 @@ pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
 /// re-feed of the just-applied job.
 pub(crate) const APPLY_GRACE: Duration = Duration::from_secs(10);
 
-pub use applier::{ApplyOutcome, NoopApplier, ResultApplier, RoleRoutingApplier};
+pub use applier::{
+    ApplyOutcome, ClaimContext, ClaimOutcome, NoopApplier, ResultApplier, RoleRoutingApplier,
+};
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
 pub use engine_config::EngineConfig;

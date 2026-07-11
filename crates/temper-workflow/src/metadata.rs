@@ -105,6 +105,10 @@ pub struct WorkflowMetadata {
     /// Active claim lease, if the artifact is currently claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<Lease>,
+    /// Durable assignment identity written before an `Assign` message is
+    /// published. Older metadata blocks omit this field and continue to parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<DurableAssignment>,
 }
 
 impl WorkflowMetadata {
@@ -133,6 +137,40 @@ pub fn global_child_correlation_key(
         child_slug.len(),
         child_slug
     )
+}
+
+/// Exact, durable identity of a worker assignment.
+///
+/// Every member is optional so records can be extended independently and old
+/// fixtures remain compatible. Runtime assignment claims populate all fields
+/// available for a job.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DurableAssignment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<RoleId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordination_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_boot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_pr_head: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_claim_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_claim_assignees: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// A claim lease, recording who holds an artifact and until when.

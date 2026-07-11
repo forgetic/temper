@@ -75,9 +75,19 @@ impl std::fmt::Debug for HttpResponder {
 }
 
 impl HttpResponder {
+    /// Whether the connection task is still waiting for this response.
+    pub fn is_open(&self) -> bool {
+        self.0.is_receiver_alive()
+    }
+
     /// Send the response to the waiting connection task.
     pub fn respond(self, response: HttpResponseData) {
-        self.0.send(response);
+        let _ = self.0.send(response);
+    }
+
+    /// Send only if the connection is still waiting, reporting delivery loss.
+    pub fn try_respond(self, response: HttpResponseData) -> bool {
+        self.0.send(response)
     }
 
     /// Build a responder from a raw oneshot, so pure machines can be unit
