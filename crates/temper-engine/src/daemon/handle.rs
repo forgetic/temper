@@ -3,7 +3,7 @@
 //! The public [`Daemon`] handle: construction, job enqueue, in-process delivery,
 //! scanned-role feeding, and the HTTP serving entry points.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,8 +38,21 @@ impl Daemon {
         Self::with_applier(spawner, Arc::new(NoopApplier))
     }
 
+    /// Create a no-op-applier daemon with authoritative finite per-role limits.
+    pub fn with_role_limits(spawner: Arc<dyn Spawner>, role_limits: BTreeMap<String, u32>) -> Self {
+        Self::with_applier_and_role_limits(spawner, Arc::new(NoopApplier), role_limits)
+    }
+
     pub fn with_applier(spawner: Arc<dyn Spawner>, applier: Arc<dyn ResultApplier>) -> Self {
         Self::with_applier_and_worker_pools(spawner, applier, Vec::new())
+    }
+
+    pub fn with_applier_and_role_limits(
+        spawner: Arc<dyn Spawner>,
+        applier: Arc<dyn ResultApplier>,
+        role_limits: BTreeMap<String, u32>,
+    ) -> Self {
+        Self::with_applier_worker_pools_and_role_limits(spawner, applier, Vec::new(), role_limits)
     }
 
     pub fn with_applier_and_worker_pools(
@@ -47,7 +60,30 @@ impl Daemon {
         applier: Arc<dyn ResultApplier>,
         worker_pools: Vec<WorkerPoolPolicy>,
     ) -> Self {
-        Self::with_applier_worker_pools_and_apply_grace(spawner, applier, worker_pools, APPLY_GRACE)
+        Self::with_applier_worker_pools_and_role_limits(
+            spawner,
+            applier,
+            worker_pools,
+            BTreeMap::new(),
+        )
+    }
+
+    /// Create a daemon with both worker-pool policies and authoritative finite
+    /// per-role concurrency limits. Roles absent from `role_limits` remain
+    /// unlimited.
+    pub fn with_applier_worker_pools_and_role_limits(
+        spawner: Arc<dyn Spawner>,
+        applier: Arc<dyn ResultApplier>,
+        worker_pools: Vec<WorkerPoolPolicy>,
+        role_limits: BTreeMap<String, u32>,
+    ) -> Self {
+        Self::with_applier_worker_pools_role_limits_and_apply_grace(
+            spawner,
+            applier,
+            worker_pools,
+            role_limits,
+            APPLY_GRACE,
+        )
     }
 
     pub fn with_apply_grace(self, apply_grace: Duration) -> Self {
@@ -64,10 +100,11 @@ impl Daemon {
         self
     }
 
-    fn with_applier_worker_pools_and_apply_grace(
+    fn with_applier_worker_pools_role_limits_and_apply_grace(
         spawner: Arc<dyn Spawner>,
         applier: Arc<dyn ResultApplier>,
         worker_pools: Vec<WorkerPoolPolicy>,
+        role_limits: BTreeMap<String, u32>,
         apply_grace: Duration,
     ) -> Self {
         let (cq_tx, cq_rx) = channel();
@@ -79,7 +116,11 @@ impl Daemon {
             applier,
             scanner_slot: Arc::clone(&scanner_slot),
         };
-        let machine = DaemonMachine::default_machine_with_worker_pools(apply_grace, worker_pools);
+        let machine = DaemonMachine::default_machine_with_worker_pools_and_role_limits(
+            apply_grace,
+            worker_pools,
+            role_limits,
+        );
         spawner.spawn_with_cx(move |cx| async move {
             let _ = drive(cx, machine, &executor, cq_rx).await;
         });

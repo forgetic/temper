@@ -150,13 +150,13 @@ impl From<&InFlightJob> for JobDto {
     }
 }
 
-/// A saturated role's pending wait list: jobs queued behind a busy role.
+/// A saturated role's pending wait list: jobs queued at its configured limit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RoleSaturationDto {
     pub role: String,
-    /// In-flight (concurrency) slots the role currently holds.
+    /// The role's configured finite concurrency limit.
     pub concurrency: usize,
-    /// `artifact.ref` strings of same-role jobs waiting behind the holder.
+    /// `artifact.ref` strings of same-role jobs waiting at the limit.
     pub waiting: Vec<String>,
 }
 
@@ -203,8 +203,8 @@ impl DaemonStateSnapshot {
     }
 }
 
-/// Builds the saturated-role wait lists, one per distinct role that has pending
-/// same-role work behind a busy holder.
+/// Builds the saturated-role wait lists, one per distinct role with pending
+/// same-role work at its configured finite limit.
 fn role_saturation_dtos(core: &DaemonCore, queued: &[QueuedJob]) -> Vec<RoleSaturationDto> {
     let mut roles: Vec<String> = queued.iter().map(|job| job.role.clone()).collect();
     roles.sort();
@@ -213,8 +213,9 @@ fn role_saturation_dtos(core: &DaemonCore, queued: &[QueuedJob]) -> Vec<RoleSatu
     roles
         .into_iter()
         .filter_map(|role| {
-            let waiting: Vec<String> = core
-                .role_saturation(&role)
+            let saturation = core.role_saturation(&role)?;
+            let waiting: Vec<String> = saturation
+                .pending
                 .iter()
                 .filter_map(|(repo, artifact)| artifact_ref_string(repo, artifact))
                 .collect();
@@ -222,7 +223,7 @@ fn role_saturation_dtos(core: &DaemonCore, queued: &[QueuedJob]) -> Vec<RoleSatu
                 return None;
             }
             Some(RoleSaturationDto {
-                concurrency: core.in_flight_role_count(&role).max(1),
+                concurrency: saturation.concurrency as usize,
                 role,
                 waiting,
             })
