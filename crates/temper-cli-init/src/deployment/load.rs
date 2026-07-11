@@ -63,14 +63,11 @@ pub fn load_deployment(
     let admin_password = admin
         .and_then(|user| non_empty(user.password.as_deref()))
         .map(Secret::from);
+    // Authentication is optional in the canonical desired-state bundle. Plan
+    // can still render every repository with an explicit unavailable
+    // inspection, while apply validates the credentials at its mutating adapter
+    // boundary.
     let admin_token = resolved.forge.admin_token.clone();
-    if admin_token.is_none() && (admin_user.is_none() || admin_password.is_none()) {
-        return Err(InitError::Unsupported(
-            "deployment requires an admin forge token (for example `[engine] forge_token`) \
-             or a legacy `[forge] admin` user with a password in credentials.toml"
-                .to_string(),
-        ));
-    }
 
     let (workflow, workflow_source) = match &resolved.engine.workflow_file {
         Some(path) => (
