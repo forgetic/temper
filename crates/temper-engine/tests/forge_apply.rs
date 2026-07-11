@@ -26,3 +26,5 @@ mod triage;
 mod trivial;
 #[path = "forge_apply/verdict_child_metadata.rs"]
 mod verdict_child_metadata;
+#[path = "forge_apply/verdict_child_reachability.rs"]
+mod verdict_child_reachability;

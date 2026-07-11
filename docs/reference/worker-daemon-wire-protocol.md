@@ -210,9 +210,12 @@ comes from the assignment payload's `allowed_verdicts`. The daemon binds
 effect; a child's
 optional `target_repo` uses the same `owner/name` shape as daemon `--repo` and
 omits to the assignment's repository. Child `kind` defaults to `code`; when set,
-it must name a workflow issue artifact kind. The daemon stamps that kind into the
-child workflow metadata block when the body lacks one, preserving existing
-metadata fields. An explicit non-empty child metadata `target_branch` is kept;
+it must name a workflow issue artifact kind that has at least one serviceable
+queue in the active workflow. A queue is serviceable when it has automation, an
+applicable role action, or a subscribed legacy role. The daemon rejects the
+whole verdict before mutation when a child kind has no reachable queue/action.
+The daemon stamps that kind into the child workflow metadata block when the body
+lacks one, preserving existing metadata fields. An explicit non-empty child metadata `target_branch` is kept;
 otherwise, a non-empty source issue `target_branch` is inherited into the child
 metadata. If the body already carries a metadata
 `kind`, it is preserved. For routed issue verdicts whose transition declares

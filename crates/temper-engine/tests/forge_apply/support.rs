@@ -46,6 +46,28 @@ pub(crate) fn workflow_with_plan_kind() -> ValidatedWorkflow {
         identifying_labels: vec!["plan".to_string()],
         initial_labels: Vec::new(),
     });
+    spec.queues.push(
+        serde_json::from_value(json!({
+            "id": "test_plan_ready",
+            "artifact": "plan",
+            "actions": [{"role": "architect", "action": "handle_test_plan"}]
+        }))
+        .expect("test plan queue parses"),
+    );
+    spec.transitions.push(
+        serde_json::from_value(json!({
+            "id": "handle_test_plan",
+            "artifact": "plan",
+            "roles": ["architect"]
+        }))
+        .expect("test plan transition parses"),
+    );
+    spec.roles
+        .iter_mut()
+        .find(|role| role.id == "architect")
+        .expect("reference workflow has architect")
+        .queues
+        .push("test_plan_ready".to_string());
     spec.validate().expect("workflow with plan validates")
 }
 
