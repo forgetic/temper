@@ -11,7 +11,8 @@ use crate::agent_runner::{AgentRunError, AgentRunOutput, AgentRunner};
 use crate::executor::{JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{
-    RoleGitIdentity, Workspace, WorkspaceError, forgejo_remote_url, scoped_workspace_root,
+    PreparationOutcome, RecoveryContext, RoleGitIdentity, Workspace, WorkspaceError,
+    forgejo_remote_url, scoped_workspace_root,
 };
 
 mod context;
@@ -85,6 +86,7 @@ async fn execute<R: AgentRunner>(
     assign: Assign,
 ) -> JobOutcome {
     let artifact_item = assign.artifact.item.clone();
+    let job_id = assign.job_id.clone();
     let context = match serde_json::from_value::<JobContext>(assign.job_payload) {
         Ok(context) => context,
         Err(error) => {
@@ -170,6 +172,7 @@ async fn execute<R: AgentRunner>(
         artifact_number: artifact.number,
         mode,
         coordination_key: &coordination_key,
+        job_id: &job_id,
     })
     .await
     {
@@ -286,6 +289,7 @@ struct PrepareRequest<'a> {
     artifact_number: u64,
     mode: JobMode,
     coordination_key: &'a str,
+    job_id: &'a str,
 }
 
 async fn prepare_repos(request: PrepareRequest<'_>) -> Result<Vec<PreparedRepo>, JobOutcome> {
@@ -319,7 +323,12 @@ async fn prepare_repo(
         base_branch,
         request.identity.clone(),
         remote_url,
-    );
+    )
+    .with_recovery_context(RecoveryContext {
+        job_id: request.job_id.to_string(),
+        correlation_key: request.coordination_key.to_string(),
+        repository: repo_spec.repo.clone(),
+    });
 
     prepare_workspace(&workspace, request, repo_spec, &default_branch).await?;
     let start_head_sha = workspace
@@ -390,7 +399,21 @@ async fn prepare_workspace(
         // required.
         JobMode::Writable => workspace.prepare_read_only().await,
     };
-    result.map_err(|error| workspace_failure("prepare workspace", error))
+    match result {
+        Ok(PreparationOutcome::Quarantined(manifest)) => Err(failure(
+            FailureClass::Permanent,
+            format!(
+                "workspace {} quarantined during {} at {}; recovery commands: {}",
+                manifest.repository,
+                manifest.failure_phase,
+                manifest.quarantine_path,
+                manifest.recovery_commands.join("; ")
+            ),
+        )),
+        Ok(PreparationOutcome::CleanReuse { .. })
+        | Ok(PreparationOutcome::RecoveredLocalWork { .. }) => Ok(()),
+        Err(error) => Err(workspace_failure("prepare workspace", error)),
+    }
 }
 
 async fn prepare_writable(
@@ -406,10 +429,23 @@ async fn prepare_writable(
             ),
         ));
     };
-    workspace
-        .prepare(&branch_hint)
-        .await
-        .map_err(|error| workspace_failure("prepare workspace", error))?;
+    match workspace.prepare(&branch_hint).await {
+        Ok(PreparationOutcome::Quarantined(manifest)) => {
+            return Err(failure(
+                FailureClass::Permanent,
+                format!(
+                    "workspace {} quarantined during {} at {}; recovery commands: {}",
+                    manifest.repository,
+                    manifest.failure_phase,
+                    manifest.quarantine_path,
+                    manifest.recovery_commands.join("; ")
+                ),
+            ));
+        }
+        Ok(PreparationOutcome::CleanReuse { .. })
+        | Ok(PreparationOutcome::RecoveredLocalWork { .. }) => {}
+        Err(error) => return Err(workspace_failure("prepare workspace", error)),
+    }
     // Persist the role's git author identity + push credential into this
     // writable checkout's local `.git/config`; the worker owns the final branch
     // push after the agent leaves a product diff.
@@ -485,7 +521,15 @@ fn require_enriched_field<T>(field: Option<T>, name: &str) -> Result<T, JobOutco
 }
 
 fn workspace_failure(action: &str, error: WorkspaceError) -> JobOutcome {
-    failure(FailureClass::Transient, format!("{action}: {error}"))
+    let class = if matches!(
+        &error,
+        WorkspaceError::Recovery(_) | WorkspaceError::Quarantined { .. }
+    ) {
+        FailureClass::Permanent
+    } else {
+        FailureClass::Transient
+    };
+    failure(class, format!("{action}: {error}"))
 }
 
 fn failure(class: FailureClass, message: impl Into<String>) -> JobOutcome {

@@ -6,6 +6,14 @@ crates/temper-testing/src/live_basic_delivery/codebase_memory.rs
 # production observability at one registration boundary; split with next MCP bridge refactor.
 crates/temper-agent/src/codebase_memory.rs
 
+# Workspace recovery is one atomic preservation/replay/quarantine protocol;
+# keeping its phases together makes destructive-operation ordering auditable.
+crates/temper-worker/src/workspace/recovery.rs
+
+# Git-backed recovery scenarios share one origin/checkout fixture and recovery
+# assertions; keeping them together documents the end-to-end safety matrix.
+crates/temper-worker/tests/workspace.rs
+
 # Workspace git wrapper keeps checkout, diff probing, and cleanup helpers together;
 # new diff-path observability reuses the same command boundary.
 crates/temper-worker/src/workspace.rs
