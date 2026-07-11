@@ -13,7 +13,8 @@ use temper_engine::{
     WebhookConfig, spawn_mechanical_backstop, spawn_poll_backstop,
 };
 use temper_forge::{
-    Forge, IssueQuery, IssueState, PullRequestQuery, PullRequestState, RepositoryId, RepositoryPath,
+    Forge, ForgeError, ForgeResult, IssueQuery, IssueState, PullRequest, PullRequestQuery,
+    PullRequestState, RepositoryId, RepositoryPath,
 };
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, DurableAssignment, LeaseManager, LeasePolicy, METADATA_BEGIN,
@@ -322,8 +323,8 @@ pub async fn stage_startup_assignments(
                     ..PullRequestQuery::default()
                 },
             )
-            .await
-            .map_err(|error| format!("startup PR inventory failed for {repo}: {error}"))?;
+            .await;
+        let pull_requests = startup_pull_inventory(repo, pull_requests)?;
         candidates.extend(pull_requests.into_iter().map(|pull_request| {
             (
                 repo.clone(),
@@ -436,6 +437,24 @@ pub async fn stage_startup_assignments(
     Ok(staged)
 }
 
+fn startup_pull_inventory(
+    repo: &RepositoryId,
+    result: ForgeResult<Vec<PullRequest>>,
+) -> Result<Vec<PullRequest>, String> {
+    match result {
+        Ok(pull_requests) => Ok(pull_requests),
+        // Forgejo reports its /pulls collection as 404 until a repository has
+        // a Git history. The issue inventory immediately before this call
+        // succeeded, so the repository itself is known to exist and an absent
+        // PR collection is equivalent to an empty recovery inventory.
+        Err(ForgeError::NotFound(error)) => {
+            tracing::debug!(%repo, %error, "startup PR collection is not available yet");
+            Ok(Vec::new())
+        }
+        Err(error) => Err(format!("startup PR inventory failed for {repo}: {error}")),
+    }
+}
+
 async fn quarantine_invalid_assignment(
     forge: &dyn Forge,
     policy: LeasePolicy,
@@ -505,6 +524,20 @@ mod tests {
         Artifact, Capability, Capacity, Poll, Register, WORKER_PROTOCOL_VERSION,
         WorkerProtocolMessage,
     };
+
+    #[test]
+    fn missing_pull_collection_is_empty_during_startup_inventory() {
+        let repo = RepositoryId::new("forgejo:acme/empty");
+        let result = startup_pull_inventory(
+            &repo,
+            Err(ForgeError::NotFound(
+                "pull collection unavailable".to_string(),
+            )),
+        )
+        .expect("an absent PR collection is empty for an existing repository");
+
+        assert!(result.is_empty());
+    }
 
     #[test]
     fn split_daemon_preserves_distinct_workflow_role_limits() {
