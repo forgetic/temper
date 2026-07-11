@@ -110,6 +110,11 @@ pub struct WorkflowMetadata {
     /// published. Older metadata blocks omit this field and continue to parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment: Option<DurableAssignment>,
+    /// PR head produced by the most recently published in-place repair. While
+    /// CI for this exact SHA is absent or pending, stale CI from an earlier head
+    /// must not make the pull request eligible to land.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repaired_head: Option<String>,
     /// True while a newly-created child is deliberately hidden from every
     /// dispatch scan. Activation clears this only after the complete sibling
     /// relation graph has been written.
