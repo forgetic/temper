@@ -86,7 +86,7 @@ pub mod artifact;
 pub mod classify;
 pub mod compile;
 pub mod context;
-mod dependency_state;
+pub mod dependency_state;
 pub mod diagnostics;
 pub mod execute;
 pub mod ids;

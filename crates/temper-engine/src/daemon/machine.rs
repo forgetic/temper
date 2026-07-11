@@ -60,9 +60,14 @@ pub(super) enum DaemonCompletion {
         daemon_boot_id: String,
         reply: temper_engine_io::OneshotSender<Result<(), RegistryError>>,
     },
-    /// Open the barrier and return claims that received no matching heartbeat.
-    FinishStartupRecovery {
+    /// Detach claims that received no matching heartbeat while keeping the
+    /// dispatch barrier closed for Forge convergence.
+    CollectStartupOrphans {
         reply: temper_engine_io::OneshotSender<Vec<RecoveredJob>>,
+    },
+    /// Open the barrier only after every detached claim converged in Forge.
+    CompleteStartupRecovery {
+        reply: temper_engine_io::OneshotSender<()>,
     },
     ArmStartupRecoveryGrace {
         delay: Duration,
@@ -537,11 +542,15 @@ impl Machine for DaemonMachine {
                 reply.send(outcome);
                 Vec::new()
             }
-            DaemonCompletion::FinishStartupRecovery { reply } => {
+            DaemonCompletion::CollectStartupOrphans { reply } => {
                 let orphaned = self.core.take_unreattached_recovered_jobs();
                 for job in &orphaned {
                     self.assignment_contexts.remove(&job.job_id);
                 }
+                reply.send(orphaned);
+                Vec::new()
+            }
+            DaemonCompletion::CompleteStartupRecovery { reply } => {
                 self.startup_recovery = false;
                 let deferred = std::mem::take(&mut self.deferred_enqueues);
                 let mut requests = Vec::new();
@@ -561,7 +570,7 @@ impl Machine for DaemonMachine {
                         delay: Duration::from_millis(self.max_poll_wait_ms),
                     });
                 }
-                reply.send(orphaned);
+                reply.send(());
                 requests
             }
             DaemonCompletion::ArmStartupRecoveryGrace { delay, reply } => {
@@ -677,7 +686,16 @@ mod retry_tests {
         let (reply, _rx) = temper_engine_io::oneshot();
         machine.on_completion(
             EngineTime::ZERO,
-            DaemonCompletion::FinishStartupRecovery { reply },
+            DaemonCompletion::CollectStartupOrphans { reply },
+        );
+        assert!(machine.startup_recovery);
+        assert_eq!(machine.deferred_enqueues.len(), 1);
+        assert!(machine.core.queued_jobs().is_empty());
+
+        let (reply, _rx) = temper_engine_io::oneshot();
+        machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::CompleteStartupRecovery { reply },
         );
         assert!(!machine.startup_recovery);
         assert!(machine.deferred_enqueues.is_empty());

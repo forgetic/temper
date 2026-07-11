@@ -1477,6 +1477,7 @@ dependencies = [
  "temper-engine",
  "temper-engine-io",
  "temper-forge",
+ "temper-forge-memory",
  "temper-log",
  "temper-protocol-worker",
  "temper-reference-delivery",

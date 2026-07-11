@@ -13,7 +13,7 @@ use crate::relation::RelationKind;
 use std::collections::BTreeSet;
 use temper_forge::{Forge, ForgeError, IssueState, PullRequestState, RepositoryId};
 
-pub(crate) async fn status_for_artifact<F: Forge + ?Sized>(
+pub async fn status_for_artifact<F: Forge + ?Sized>(
     forge: &F,
     repo_id: &RepositoryId,
     artifact: &ClassifiedArtifact,
@@ -21,7 +21,7 @@ pub(crate) async fn status_for_artifact<F: Forge + ?Sized>(
     status_for_artifacts(forge, repo_id, std::iter::once(artifact)).await
 }
 
-pub(crate) async fn status_for_artifacts<'a, F: Forge + ?Sized>(
+pub async fn status_for_artifacts<'a, F: Forge + ?Sized>(
     forge: &F,
     repo_id: &RepositoryId,
     artifacts: impl IntoIterator<Item = &'a ClassifiedArtifact>,

@@ -18,8 +18,13 @@ and expiry timestamps. A daemon restart inventories these records while its
 recovery barrier is closed. Only a heartbeat from the recorded worker naming the
 exact job can reattach and refresh it; unknown jobs, another worker, or another
 boot identity cannot extend the lease. At the end of the bounded grace period,
-unattached records are orphans and are rolled back to their pre-claim projection.
-Malformed or impossible records are quarantined once rather than guessed.
+unattached records are detached from the dispatch core while the barrier remains
+closed. Recovery then reloads every artifact from Forge: issues with unresolved
+prerequisites return to `blocked`, otherwise they return to their recorded queue;
+PRs whose head advanced publish the assigned repair transition and
+`repaired_head` atomically instead of restoring the old repair label. Malformed
+or ambiguous records are cleared when parseable, labelled `needs-human`, and
+receive one idempotent audit comment rather than being guessed.
 
 `LeasePlanner` is pure. It:
 
@@ -38,10 +43,12 @@ lease is a reconciler authority path, not a peer release.
 
 Startup closes dispatch before inventory. Recovery first completes durable
 child-create intents, then stages valid assignments for heartbeat reattachment,
-converges expired/impossible/orphaned claims, and only then opens normal role
-feeds. Enqueues observed during inventory are deferred. This ordering prevents a
-partially wired child or a second session for an assigned source from escaping
-the restart window.
+converges expired/impossible/orphaned claims, and runs one bounded mechanical
+reconciliation pass. Only after every Forge mutation succeeds does it release
+deferred enqueues and long-poll waiters and start normal role feeds. A convergence
+failure therefore leaves the barrier closed. This ordering prevents a partially
+wired child or a second session for an assigned source from escaping the restart
+window in either split or standalone wiring.
 
 Child fan-out persists a normalized intent on the parent before creating any
 child. New children carry `staged: true`; recovery idempotently creates missing

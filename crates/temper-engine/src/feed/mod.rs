@@ -379,6 +379,30 @@ async fn recover_advanced_pull_request_assignments<F: Forge + ?Sized>(
     Ok(())
 }
 
+/// Recovers a worker-pushed PR head that became visible before its result was
+/// published. The declared assignment transition is committed atomically with
+/// `repaired_head` and assignment/lease removal, so the old repair action is
+/// never redispatched after restart.
+pub async fn recover_advanced_pull_request_assignment_from_durable<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    target: ArtifactSource,
+    assignment: &temper_workflow::DurableAssignment,
+    kind: temper_workflow::ArtifactKindId,
+    workflow: &ValidatedWorkflow,
+) -> Result<bool, ScanError> {
+    let (Some(queue), Some(role)) = (assignment.queue.as_deref(), assignment.role.clone()) else {
+        return Ok(false);
+    };
+    let item = WorkItem {
+        queue: temper_workflow::QueueId::new(queue),
+        role,
+        target,
+        kind,
+    };
+    recover_advanced_pull_request_assignment(forge, repo, &item, workflow).await
+}
+
 async fn recover_advanced_pull_request_assignment<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
@@ -455,7 +479,9 @@ async fn recover_advanced_pull_request_assignment<F: Forge + ?Sized>(
             match effect {
                 Effect::AddLabel(label) => push_unique_string(&mut add_labels, label.as_str()),
                 Effect::RemoveLabel(label) | Effect::RemoveLabelIfPresent(label) => {
-                    push_unique_string(&mut remove_labels, label.as_str());
+                    if label.as_str() != "landing" {
+                        push_unique_string(&mut remove_labels, label.as_str());
+                    }
                 }
                 Effect::SetAssignee(role) => push_unique_user(
                     &mut add_assignees,

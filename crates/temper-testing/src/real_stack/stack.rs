@@ -217,7 +217,7 @@ impl HermeticRealStack {
     /// before calling this method.
     pub async fn open_recovery_barrier(&mut self) -> Vec<temper_engine::RecoveredJob> {
         self.hooks.reach(PausePoint::RecoveryBarrierOpening).await;
-        let orphaned = self.components.daemon.finish_startup_recovery().await;
+        let orphaned = self.components.daemon.collect_startup_orphans().await;
         let policy = temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300));
         for orphan in &orphaned {
             let claim = self
@@ -230,6 +230,7 @@ impl HermeticRealStack {
                 .await
                 .expect("hermetic orphan convergence");
         }
+        self.components.daemon.complete_startup_recovery().await;
         self.components.recovered.clear();
         orphaned
     }

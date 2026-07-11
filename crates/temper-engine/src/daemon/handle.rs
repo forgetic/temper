@@ -102,7 +102,7 @@ impl Daemon {
 
     /// Closes the startup barrier. Completions are FIFO, so calling this on a
     /// newly constructed daemon guarantees subsequent enqueue/poll work cannot
-    /// dispatch until [`finish_startup_recovery`](Self::finish_startup_recovery).
+    /// dispatch until [`complete_startup_recovery`](Self::complete_startup_recovery).
     pub fn begin_startup_recovery(self) -> Self {
         let _ = self.cq.send(DaemonCompletion::BeginStartupRecovery);
         self
@@ -151,19 +151,33 @@ impl Daemon {
         }
     }
 
-    /// Opens dispatch after startup recovery and returns staged claims that did
-    /// not receive a matching heartbeat. Callers must converge these orphans in
-    /// Forge before starting normal role feeds.
-    pub async fn finish_startup_recovery(&self) -> Vec<temper_worker_registry::RecoveredJob> {
+    /// Detaches and returns staged claims that did not receive a matching
+    /// heartbeat. The startup barrier remains closed so callers can converge
+    /// every returned claim in Forge before releasing dispatch.
+    pub async fn collect_startup_orphans(&self) -> Vec<temper_worker_registry::RecoveredJob> {
         let (reply, rx) = temper_engine_io::oneshot();
         if self
             .cq
-            .send(DaemonCompletion::FinishStartupRecovery { reply })
+            .send(DaemonCompletion::CollectStartupOrphans { reply })
             .is_err()
         {
             return Vec::new();
         }
         rx.recv().await.unwrap_or_default()
+    }
+
+    /// Opens dispatch and releases deferred enqueues and long-poll waiters.
+    /// Call this only after Forge convergence and startup reconciliation have
+    /// completed successfully.
+    pub async fn complete_startup_recovery(&self) {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::CompleteStartupRecovery { reply })
+            .is_ok()
+        {
+            let _ = rx.recv().await;
+        }
     }
 
     fn with_applier_worker_pools_role_limits_and_apply_grace(

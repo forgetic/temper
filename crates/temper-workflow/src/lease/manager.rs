@@ -380,6 +380,96 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         .await
     }
 
+    /// Converges an abandoned issue assignment from fresh Forge state.
+    ///
+    /// Unlike [`rollback_assignment`](Self::rollback_assignment), this does not
+    /// restore an assignment-time label snapshot. It preserves unrelated labels
+    /// added while the worker ran and projects the issue to `blocked` when fresh
+    /// dependency reads remain unresolved, or back to the assignment's queue
+    /// labels when they are resolved. Assignment metadata and lease are cleared
+    /// in the same conditional update.
+    pub async fn converge_issue_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+        queue_labels: &[String],
+        claim_labels: &[String],
+        dependencies_unresolved: bool,
+    ) -> Result<(), LeaseError> {
+        if !matches!(target, ArtifactSource::Issue { .. }) {
+            return self.rollback_assignment(repo_id, target, expected).await;
+        }
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Ok(());
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+
+        let mut add_labels = Vec::new();
+        let mut remove_labels = loaded
+            .labels()
+            .iter()
+            .filter(|label| {
+                label.as_str() == "in-progress" || claim_labels.iter().any(|added| added == *label)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if dependencies_unresolved {
+            if !loaded.labels().iter().any(|label| label == "blocked") {
+                add_labels.push("blocked".to_string());
+            }
+            for label in queue_labels {
+                if loaded.labels().contains(label) && !remove_labels.contains(label) {
+                    remove_labels.push(label.clone());
+                }
+            }
+        } else {
+            if loaded.labels().iter().any(|label| label == "blocked") {
+                remove_labels.push("blocked".to_string());
+            }
+            for label in queue_labels {
+                if !loaded.labels().contains(label) && !add_labels.contains(label) {
+                    add_labels.push(label.clone());
+                }
+            }
+        }
+
+        let pre_assignees = current
+            .pre_claim_assignees
+            .iter()
+            .map(|user| UserId::new(user.clone()))
+            .collect::<Vec<_>>();
+        let add_assignees = pre_assignees
+            .iter()
+            .filter(|user| !loaded.assignees().contains(user))
+            .cloned()
+            .collect();
+        let remove_assignees = loaded
+            .assignees()
+            .iter()
+            .filter(|user| !pre_assignees.contains(user))
+            .cloned()
+            .collect();
+        self.write_assignment(
+            &loaded,
+            None,
+            None,
+            AssignmentMutation {
+                add_labels,
+                remove_labels,
+                add_assignees,
+                remove_assignees,
+            },
+            target,
+        )
+        .await
+    }
+
     /// Conditionally refreshes the lease for an exact durable assignment.
     ///
     /// This is the restart-reattachment path. The job, worker, and prior daemon
