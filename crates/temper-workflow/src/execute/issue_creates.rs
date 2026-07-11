@@ -2,7 +2,7 @@
 
 mod intent;
 
-use super::{ExecutionError, Executor};
+use super::{ChildIssueCheckpoint, ExecutionError, Executor};
 use crate::artifact::ArtifactRef;
 use crate::classify::ArtifactSource;
 use crate::context::CreateIssuesChild;
@@ -155,7 +155,12 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                         annotate_target_repo_error(&child.repository_id, error)
                     }
                 })?;
+            let was_created = matches!(&outcome, super::EnsureOutcome::Created(_));
             intent.children[index].number = Some(outcome.into_artifact().number);
+            if was_created {
+                self.child_issue_checkpoint(ChildIssueCheckpoint::Created)
+                    .await;
+            }
             self.save_create_intent(repo_id, parent_number, key, &intent)
                 .await?;
         }
@@ -203,6 +208,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 self.ensure_issue_dependency_metadata(&child_issue.id, &dependency)
                     .await?;
             }
+            self.child_issue_checkpoint(ChildIssueCheckpoint::Wired)
+                .await;
             intent.children[index].wired = true;
             self.save_create_intent(repo_id, parent_number, key, &intent)
                 .await?;
@@ -240,6 +247,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 &labels,
             )
             .await?;
+            self.child_issue_checkpoint(ChildIssueCheckpoint::Activated)
+                .await;
             intent.children[index].activated = true;
             self.save_create_intent(repo_id, parent_number, key, &intent)
                 .await?;

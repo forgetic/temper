@@ -224,11 +224,15 @@ impl HermeticRealStackBuilder {
                 .parse()
                 .map_err(|error| format!("parse default timestamp: {error}"))?,
         );
+        let hooks = PauseHooks::default();
         let applier = Arc::new(LeaseApplier::new(
             forge.clone(),
             LeasePolicy::new(chrono::Duration::seconds(300)),
             "hermetic-daemon",
-            Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+            Arc::new(
+                ForgeApplier::new(forge.clone(), workflow.clone())
+                    .with_child_issue_hook(Arc::new(hooks.clone())),
+            ),
             clock.capability(),
         ));
         let daemon_handle = Daemon::with_applier(Arc::new(handle.clone()), applier);
@@ -325,7 +329,7 @@ impl HermeticRealStackBuilder {
                 coding_config,
                 runner,
                 clock,
-                hooks: PauseHooks::default(),
+                hooks,
                 router,
                 apply_grace: self.apply_grace,
             },

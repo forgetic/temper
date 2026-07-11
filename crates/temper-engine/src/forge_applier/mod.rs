@@ -33,7 +33,7 @@ mod verdict_pr;
 
 use std::sync::Arc;
 
-use temper_workflow::{CompiledWorkflow, ValidatedWorkflow};
+use temper_workflow::{ChildIssueLifecycleHook, CompiledWorkflow, ValidatedWorkflow};
 
 use temper_forge::Forge;
 
@@ -44,6 +44,7 @@ pub struct ForgeApplier<F: Forge + ?Sized> {
     pub(crate) workflow: Arc<ValidatedWorkflow>,
     pub(crate) compiled: CompiledWorkflow,
     pub(crate) attention_labels: Vec<String>,
+    pub(crate) child_issue_hook: Option<Arc<dyn ChildIssueLifecycleHook>>,
 }
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
@@ -54,7 +55,17 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             workflow,
             compiled,
             attention_labels: vec!["needs-human".to_string()],
+            child_issue_hook: None,
         }
+    }
+
+    /// Observes committed staged-child checkpoints. Intended for deterministic
+    /// process-crash integration tests; ordinary daemon construction leaves it
+    /// unset.
+    #[must_use]
+    pub fn with_child_issue_hook(mut self, hook: Arc<dyn ChildIssueLifecycleHook>) -> Self {
+        self.child_issue_hook = Some(hook);
+        self
     }
 
     pub fn with_attention_labels(mut self, labels: Vec<String>) -> Self {

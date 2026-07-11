@@ -311,10 +311,10 @@ impl HermeticRealStack {
             self.forge.clone(),
             temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300)),
             "hermetic-daemon",
-            Arc::new(temper_engine::ForgeApplier::new(
-                self.forge.clone(),
-                self.workflow.clone(),
-            )),
+            Arc::new(
+                temper_engine::ForgeApplier::new(self.forge.clone(), self.workflow.clone())
+                    .with_child_issue_hook(Arc::new(self.hooks.clone())),
+            ),
             self.clock.capability(),
         ));
         let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);

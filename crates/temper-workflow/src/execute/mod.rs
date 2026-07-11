@@ -109,7 +109,9 @@ use crate::context::ExecutionContext;
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::TransitionPlan;
 use crate::validated::ValidatedWorkflow;
+use async_trait::async_trait;
 use error::classify_plan_error;
+use std::sync::Arc;
 use temper_forge::{
     Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId, Version,
 };
@@ -150,6 +152,29 @@ impl Loaded {
     }
 }
 
+/// Durable checkpoints in the staged child-issue lifecycle.
+///
+/// Hooks run after the Forge mutation has committed but before the parent
+/// create-intent records that checkpoint. This makes them useful for crash
+/// injection: replay must discover the committed mutation and continue without
+/// creating or dispatching a duplicate child.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChildIssueCheckpoint {
+    Created,
+    Wired,
+    Activated,
+}
+
+/// Optional observer for child issue lifecycle checkpoints.
+///
+/// Production executors install no observer. Integration stacks may install a
+/// channel-backed observer to stop exactly between a committed child mutation
+/// and its durable intent progress update.
+#[async_trait]
+pub trait ChildIssueLifecycleHook: Send + Sync {
+    async fn reached(&self, checkpoint: ChildIssueCheckpoint);
+}
+
 /// Applies planned workflow transitions against a [`Forge`] backend.
 ///
 /// Bound to a [`ValidatedWorkflow`] (never a raw spec) and a backend handle.
@@ -159,6 +184,7 @@ pub struct Executor<'a, F: Forge + ?Sized> {
     workflow: &'a ValidatedWorkflow,
     forge: &'a F,
     context: ExecutionContext,
+    child_issue_hook: Option<Arc<dyn ChildIssueLifecycleHook>>,
 }
 
 impl<'a, F: Forge + ?Sized> Executor<'a, F> {
@@ -182,6 +208,20 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             workflow,
             forge,
             context,
+            child_issue_hook: None,
+        }
+    }
+
+    /// Installs an observer for committed child lifecycle checkpoints.
+    #[must_use]
+    pub fn with_child_issue_hook(mut self, hook: Arc<dyn ChildIssueLifecycleHook>) -> Self {
+        self.child_issue_hook = Some(hook);
+        self
+    }
+
+    async fn child_issue_checkpoint(&self, checkpoint: ChildIssueCheckpoint) {
+        if let Some(hook) = &self.child_issue_hook {
+            hook.reached(checkpoint).await;
         }
     }
 
