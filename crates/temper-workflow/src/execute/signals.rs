@@ -105,7 +105,8 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                         ..CiJobQuery::default()
                     };
                     let jobs = self.forge.list_ci_jobs(repo_id, query).await?;
-                    signals = signals.with_ci(CiStatus::from_jobs(&jobs));
+                    signals =
+                        signals.with_ci(CiStatus::from_jobs_for_head(&jobs, head_sha.as_deref()));
                 }
                 if needs.review {
                     let reviews = self.forge.list_pull_request_reviews(id).await?;

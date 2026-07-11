@@ -93,4 +93,6 @@ Required methods:
 
 CI jobs are associated with a repository, a commit SHA, and optionally a pull
 request. Status is `queued`, `running`, or `completed`; completed jobs may carry
-a conclusion such as `success`, `failure`, or `cancelled`.
+a conclusion such as `success`, `failure`, or `cancelled`. Populated
+`CiJobQuery` filters are conjunctive, so a query containing both pull-request ID
+and commit SHA returns only jobs satisfying both constraints.

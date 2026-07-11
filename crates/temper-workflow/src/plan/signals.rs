@@ -128,8 +128,9 @@ impl ValidatedWorkflow {
 /// whether the current CI run settled red. Like the dependency signal, the
 /// verdict is decided by the runtime — never derived inside the pure planner —
 /// and supplied here as a small value the planner only reads. Build it from
-/// fresh [`CiJob`]s with [`CiStatus::from_jobs`], which is the documented place
-/// the aggregation rule lives.
+/// fresh [`CiJob`]s with [`CiStatus::from_jobs_for_head`] when a current head is
+/// known, or [`CiStatus::from_jobs`] when the provider supplies no head; these
+/// are the documented places where the aggregation rule lives.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CiStatus {
     state: CiState,
@@ -202,7 +203,32 @@ impl CiStatus {
     /// non-success conclusion. Otherwise CI is pending/unknown: no jobs, queued
     /// jobs, or running jobs neither pass nor fail. See ADR 0014 and ADR 0017.
     pub fn from_jobs(jobs: &[CiJob]) -> Self {
-        let mut latest: HashMap<&str, &CiJob> = HashMap::new();
+        Self::from_job_iter(jobs.iter())
+    }
+
+    /// Computes the CI verdict from jobs that independently identify `head_sha`.
+    ///
+    /// A non-empty head filters jobs before latest-per-name aggregation, so a
+    /// provider returning results for another commit cannot satisfy the gate.
+    /// Exact SHA matches are accepted at any length. Case-insensitive prefix
+    /// matches are accepted only when the shorter SHA has at least seven
+    /// characters, allowing normal full/abbreviated SHA pairs without treating
+    /// unsafe short prefixes as evidence. Empty job SHAs never identify a head.
+    /// If `head_sha` is absent or empty, this preserves [`Self::from_jobs`]
+    /// behavior for providers that cannot supply a head.
+    pub fn from_jobs_for_head(jobs: &[CiJob], head_sha: Option<&str>) -> Self {
+        let Some(head_sha) = head_sha.map(str::trim).filter(|sha| !sha.is_empty()) else {
+            return Self::from_jobs(jobs);
+        };
+
+        Self::from_job_iter(
+            jobs.iter()
+                .filter(|job| sha_identifies_head(&job.commit_sha, head_sha)),
+        )
+    }
+
+    fn from_job_iter<'a>(jobs: impl IntoIterator<Item = &'a CiJob>) -> Self {
+        let mut latest: HashMap<&'a str, &'a CiJob> = HashMap::new();
         for job in jobs {
             latest
                 .entry(job.name.as_str())
@@ -229,6 +255,26 @@ impl CiStatus {
             Self::failed()
         }
     }
+}
+
+fn sha_identifies_head(job_sha: &str, head_sha: &str) -> bool {
+    let job_sha = job_sha.trim();
+    if job_sha.is_empty() {
+        return false;
+    }
+    if job_sha.eq_ignore_ascii_case(head_sha) {
+        return true;
+    }
+
+    let (shorter, longer) = if job_sha.len() < head_sha.len() {
+        (job_sha, head_sha)
+    } else {
+        (head_sha, job_sha)
+    };
+    shorter.len() >= 7
+        && longer
+            .get(..shorter.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(shorter))
 }
 
 /// Runtime-supplied verdict for a pull request's native review state.
