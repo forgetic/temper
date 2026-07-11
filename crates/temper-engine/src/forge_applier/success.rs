@@ -12,13 +12,9 @@ use temper_forge::{
 };
 use temper_log::emit::{PrHandoffFacts, PrOpened, PrUpdated, emit_pr_opened, emit_pr_updated};
 use temper_protocol_worker::{JobContext, JobResult, RepoOutcome};
-use temper_workflow::{
-    ArtifactKindId, ArtifactSource, Effect, Executor, WorkflowMetadata, parse_metadata_block,
-};
+use temper_workflow::{ArtifactKindId, ArtifactSource, Effect, Executor};
 
-use temper_runner::{
-    artifact_ref, implementation_pr_body_from_report_or_summary, pr_correlation_key,
-};
+use temper_runner::{artifact_ref, pr_correlation_key};
 
 use crate::InFlightJob;
 use crate::applier::ApplyOutcome;
@@ -51,27 +47,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             };
         }
 
-        // A pull-request job (e.g. a CI-failure fix) pushes its diff straight to
-        // the existing PR head branch; that push itself re-triggers CI and the
-        // landing queue takes over once CI is green. Refresh the same PR's
-        // engineer handoff, but do not open a second PR.
+        // A writable pull-request job pushes directly to the existing PR head.
+        // Publishing that repair is itself a workflow transition: the repaired
+        // head marker and transition labels commit atomically before the
+        // human-facing handoff is refreshed.
         if job.artifact.kind == "pull_request" {
-            self.update_pull_request_repair_handoff(&job, &result).await;
-            // §5: a between-cause detail (the push that re-triggers CI), not a
-            // §7 catalog state change — belongs at debug.
-            tracing::debug!(
-                target: "temper_daemon",
-                job_id = %job.job_id,
-                repo = %job.repo,
-                artifact_item = %job.artifact.item,
-                head_branch = %result
-                    .repos
-                    .first()
-                    .map(|repo| repo.branch.name.as_str())
-                    .unwrap_or("-"),
-                "forge applier pushed pull-request fix to head and refreshed PR handoff; awaiting fresh CI"
-            );
-            return ApplyOutcome::Applied;
+            return self.publish_pull_request_repair(&job, &result).await;
         }
 
         // The coordinating issue lives in the primary repo; every PR in the set
@@ -453,41 +434,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         }
     }
 
-    async fn update_pull_request_repair_handoff(&self, job: &InFlightJob, result: &JobResult) {
-        let Some((_, pull_request)) = self.resolve_pull_request(job).await else {
-            return;
-        };
-        let desired_title = result
-            .title
-            .as_deref()
-            .and_then(non_blank)
-            .map(str::to_string)
-            .unwrap_or_else(|| pull_request.title.clone());
-        let metadata = parse_metadata_block(&pull_request.body)
-            .ok()
-            .flatten()
-            .unwrap_or_else(default_implementation_pr_metadata);
-        let fallback_intro = format!(
-            "Workspace-produced update for pull request #{}.",
-            pull_request.number
-        );
-        let desired_body = implementation_pr_body_from_report_or_summary(
-            result.body.as_deref(),
-            &fallback_intro,
-            result.summary.as_deref().unwrap_or_default(),
-            &metadata,
-        );
-        let _ = self
-            .update_implementation_pr_handoff(
-                job,
-                pull_request,
-                &desired_title,
-                &desired_body,
-                "pull request repair",
-            )
-            .await;
-    }
-
     async fn apply_implementation_pr_handoff_if_needed(
         &self,
         job: &InFlightJob,
@@ -648,17 +594,5 @@ fn pr_handoff_facts(
 fn push_unique(values: &mut Vec<String>, value: &str) {
     if !values.iter().any(|candidate| candidate == value) {
         values.push(value.to_string());
-    }
-}
-
-fn non_blank(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
-}
-
-fn default_implementation_pr_metadata() -> WorkflowMetadata {
-    WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("implementation_pr")),
-        ..WorkflowMetadata::default()
     }
 }

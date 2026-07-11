@@ -171,6 +171,30 @@ fn lease_expiry_is_detected() {
 }
 
 #[test]
+fn repaired_head_marker_round_trips_and_legacy_metadata_defaults_to_none() {
+    let legacy = r#"<!-- temper:workflow
+{"kind":"implementation_pr"}
+-->"#;
+    assert!(
+        parse_metadata_block(legacy)
+            .unwrap()
+            .unwrap()
+            .repaired_head
+            .is_none()
+    );
+
+    let metadata = WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("implementation_pr")),
+        repaired_head: Some("repaired-sha".to_string()),
+        ..WorkflowMetadata::default()
+    };
+    let reparsed = parse_metadata_block(&render_metadata_block(&metadata))
+        .unwrap()
+        .unwrap();
+    assert_eq!(reparsed, metadata);
+}
+
+#[test]
 fn legacy_metadata_and_optional_assignment_fields_are_compatible() {
     let legacy = r#"<!-- temper:workflow
 {"kind":"code","lease":{"role":"engineer","worker":"old","claimed_at":"2026-05-29T00:00:00Z","heartbeat_at":"2026-05-29T00:00:00Z","expires_at":"2026-05-29T00:30:00Z"}}
