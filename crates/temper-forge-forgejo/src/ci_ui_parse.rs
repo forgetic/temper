@@ -8,7 +8,7 @@
 //! covered by the unit tests below. No I/O lives here.
 
 use crate::HttpResponse;
-use crate::ci_match::Target;
+use crate::ci_match::{Target, sha_matches};
 use std::collections::BTreeMap;
 
 /// Records any `Set-Cookie` headers from a response into the jar.
@@ -165,44 +165,24 @@ pub(super) fn is_login_redirect(location: &str) -> bool {
     location.contains("/user/login")
 }
 
-/// Whether a run's commit short-SHA satisfies the target's SHA filter.
+/// Whether a run's provider-supplied commit SHA satisfies the target.
 ///
-/// A target with no SHA filter (e.g. PR matched only by number, or an empty
-/// target) accepts every run, since the live view does not expose the PR ref. A
-/// run with no commit info is also kept rather than silently dropping a verdict
-/// the caller asked for.
+/// A non-empty query commit is authoritative and requires safe SHA evidence;
+/// the fetched PR head cannot widen it. For a PR-only query the fetched head is
+/// still useful for the current run, while the caller may separately retain
+/// same-branch historical runs. An empty target accepts any non-empty provider
+/// SHA. Missing provider SHA never proves commit ownership.
 pub(super) fn commit_matches(short_sha: &str, target: &Target) -> bool {
-    let candidates: Vec<&str> = [target.commit_sha.as_deref(), target.pr_head_sha.as_deref()]
-        .into_iter()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .collect();
-    if candidates.is_empty() || short_sha.is_empty() {
-        return true;
+    if short_sha.is_empty() {
+        return false;
     }
-    candidates
-        .iter()
-        .any(|sha| sha_prefix_match(sha, short_sha))
-}
-
-/// Prefix-compares a full SHA against the live view's short SHA.
-fn sha_prefix_match(full: &str, short: &str) -> bool {
-    let full = full.to_ascii_lowercase();
-    let short = short.to_ascii_lowercase();
-    if full == short {
-        return true;
+    if let Some(commit) = target.explicit_commit() {
+        return sha_matches(short_sha, commit);
     }
-    let min = full.len().min(short.len());
-    min >= 7 && full[..min] == short[..min]
-}
-
-/// Returns the first non-empty string from `values`, or an empty string.
-pub(super) fn first_non_empty(values: &[&str]) -> String {
-    values
-        .iter()
-        .find(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .unwrap_or_default()
+    match target.pr_head_sha.as_deref().filter(|sha| !sha.is_empty()) {
+        Some(pr_head) => sha_matches(short_sha, pr_head),
+        None => true,
+    }
 }
 
 #[cfg(test)]
@@ -288,14 +268,18 @@ mod tests {
     }
 
     #[test]
-    fn commit_match_accepts_prefix_and_empty_target() {
+    fn commit_match_accepts_safe_prefix_and_requires_evidence() {
         let mut target = Target::default();
-        assert!(commit_matches("abc123", &target));
+        assert!(commit_matches("abc1234", &target));
+        assert!(!commit_matches("", &target));
         target.pr_head_sha = Some("abcdef1234567890".to_string());
         let _ = PullRequestId::new("forgejo:acme/widgets:pull:7");
         assert!(commit_matches("abcdef1234567", &target));
+        assert!(!commit_matches("abcdef", &target));
         assert!(!commit_matches("ffffff9999999", &target));
-        // A run with no commit info is kept rather than dropped.
-        assert!(commit_matches("", &target));
+
+        target.commit_sha = Some("deadbeef1234567".to_string());
+        assert!(commit_matches("deadbee", &target));
+        assert!(!commit_matches("abcdef1234567", &target));
     }
 }

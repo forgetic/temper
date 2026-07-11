@@ -156,9 +156,20 @@ is best-effort on this backend.
 ### CI is REST-first, web-UI fallback on Forgejo 7.0.x
 
 Newer Forgejo/Gitea Actions REST endpoints are used when available:
-`/actions/runs` plus `/actions/tasks`. Runs are matched to a query by PR ref,
-head SHA, event payload PR data, and PR head branch; tasks are grouped into the
-latest attempt and mapped to portable `CiJob`s.
+`/actions/runs` plus `/actions/tasks`. For PR-only queries, runs are matched by
+PR ref, provider head SHA, event payload PR data, or PR head branch so historical
+same-branch diagnostics remain visible. Tasks are grouped into the latest
+attempt and mapped to portable `CiJob`s.
+
+A non-empty `CiJobQuery.commit_sha` changes this to strict commit ownership,
+including when `pull_request_id` is also present. The run must expose a matching
+provider SHA in its run fields or pull-request event payload; PR numbers, refs,
+branches, and the separately fetched PR head cannot widen the query. Exact SHAs
+and full/abbreviated pairs of at least seven characters match. Missing provider
+SHA evidence is conservative: the run/job is omitted, and the query SHA is never
+copied into a job to manufacture ownership. A matching current run contributes
+queued or running tasks with its provider commit SHA; a registered run with no
+tasks contributes no jobs and therefore remains pending.
 
 Forgejo 7.0.x lacks those REST run/task endpoints. If web-UI credentials are
 configured, the backend logs in with CSRF, scrapes run ids from the Actions page,
@@ -168,7 +179,10 @@ redirects, and is isolated in `ci_ui.rs` / `ci_ui_parse.rs` because the HTML/JSO
 shape is version-sensitive.
 
 The fallback never fabricates a verdict: missing/unreadable CI is a `Backend`
-error unless REST or the web UI can read it. Branch matching is intentional so a
-fail-then-pass PR keeps both verdicts even though they are on different SHAs of
-the same head branch; cancelled superseded runs are dropped. See
+error unless REST or the web UI can read it. It applies the same strict explicit
+commit ownership rule as REST; PR branch and pseudo-ref widening is used only
+when no commit filter was supplied, preserving PR-only fail-then-pass history
+across different heads. Empty and queued/running reads are never eligible for
+terminal cache reuse, and cached ownership uses the same safe SHA comparison.
+Cancelled superseded runs are dropped. See
 [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).

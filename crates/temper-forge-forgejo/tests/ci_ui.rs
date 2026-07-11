@@ -285,6 +285,121 @@ fn web_ui_matches_pr_pseudo_ref_for_fail_then_pass_history() {
 }
 
 #[test]
+fn web_ui_combined_pr_and_commit_returns_only_current_queued_run() {
+    let client = MockHttpClient::new();
+    client.push_result(Ok(pr_detail("bbbbbbb2222222")));
+    client.push_response(404, "{}");
+    client.push_result(Ok(login_page()));
+    client.push_result(Ok(login_success()));
+    client.push_result(Ok(actions_page_many(&[2, 1])));
+    client.push_result(Ok(live_view_on_branch(
+        "queued",
+        &[("build", "queued")],
+        "bbbbbbb2222",
+        "feature",
+    )));
+    client.push_result(Ok(live_view_on_branch(
+        "success",
+        &[("build", "success")],
+        "aaaaaaa1111",
+        "feature",
+    )));
+
+    let jobs = block_on(forge_with_web_ui(client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            commit_sha: Some("bbbbbbb2222222".to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].status, CiJobStatus::Queued);
+    assert_eq!(jobs[0].conclusion, None);
+    assert_eq!(jobs[0].commit_sha, "bbbbbbb2222");
+}
+
+#[test]
+fn web_ui_taskless_current_run_does_not_cache_old_terminal_result() {
+    let client = MockHttpClient::new();
+    // First read: the current run is registered but exposes no tasks yet. The
+    // old same-branch success must not satisfy the explicit current commit.
+    client.push_result(Ok(pr_detail("bbbbbbb2222222")));
+    client.push_response(404, "{}");
+    client.push_result(Ok(login_page()));
+    client.push_result(Ok(login_success()));
+    client.push_result(Ok(actions_page_many(&[2, 1])));
+    client.push_result(Ok(live_view_on_branch(
+        "queued",
+        &[],
+        "bbbbbbb2222",
+        "feature",
+    )));
+    client.push_result(Ok(live_view_on_branch(
+        "success",
+        &[("build", "success")],
+        "aaaaaaa1111",
+        "feature",
+    )));
+
+    // Second read: because the empty read was non-terminal, the UI is scraped
+    // again and the newly visible running task is returned at the current SHA.
+    client.push_result(Ok(pr_detail("bbbbbbb2222222")));
+    client.push_response(404, "{}");
+    client.push_result(Ok(login_page()));
+    client.push_result(Ok(login_success()));
+    client.push_result(Ok(actions_page_many(&[2, 1])));
+    client.push_result(Ok(live_view_on_branch(
+        "running",
+        &[("build", "running")],
+        "bbbbbbb2222",
+        "feature",
+    )));
+    client.push_result(Ok(live_view_on_branch(
+        "success",
+        &[("build", "success")],
+        "aaaaaaa1111",
+        "feature",
+    )));
+
+    let forge = forge_with_web_ui(client.clone());
+    let first = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            commit_sha: Some("bbbbbbb2222222".to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+    assert!(first.is_empty(), "a taskless current run remains pending");
+
+    let second = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            commit_sha: Some("bbbbbbb2222222".to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].status, CiJobStatus::Running);
+    assert_eq!(second[0].commit_sha, "bbbbbbb2222");
+    assert_eq!(
+        client
+            .recorded()
+            .iter()
+            .filter(|request| request.path == "/user/login" && request.method == HttpMethod::Post)
+            .count(),
+        2,
+        "empty/non-terminal reads must not reuse the terminal cache"
+    );
+}
+
+#[test]
 fn re_logs_in_on_login_bounce() {
     let client = MockHttpClient::new();
     client.push_result(Ok(pr_detail("aaaaaaaaaaaa")));

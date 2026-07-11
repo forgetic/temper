@@ -1,7 +1,9 @@
 //! Mapping Forgejo runs/tasks into portable [`CiJob`]s, plus attempt grouping
 //! and the query-driven job sort.
 
-use crate::ci_match::{Target, run_created, run_index, run_pr_number, run_updated};
+use crate::ci_match::{
+    Target, payload_pr_head_sha, run_created, run_index, run_pr_number, run_updated, sha_matches,
+};
 use crate::ids::{CiJobCoord, RepoCoord, format_ci_job_id, format_pull_request_id};
 use crate::types::{ActionRunDto, ActionTaskDto};
 use chrono::{DateTime, Utc};
@@ -70,17 +72,9 @@ pub(super) fn task_to_job(
     task: &ActionTaskDto,
     job_index: u64,
     target: &Target,
-) -> CiJob {
+) -> Option<CiJob> {
     let (status, conclusion) = map_status(&task.status);
-    let commit_sha = first_non_empty(&[
-        &task.commit_sha,
-        &task.head_sha,
-        &run.commit_sha,
-        &run.head_sha,
-    ])
-    .or_else(|| target.pr_head_sha.clone())
-    .or_else(|| target.commit_sha.clone())
-    .unwrap_or_default();
+    let commit_sha = provider_commit_sha(task, run, target)?;
 
     let pull_request_id: Option<PullRequestId> = target.pr_id.clone().or_else(|| {
         run_pr_number(run).map(|number| format_pull_request_id(repo, ItemNumber::new(number)))
@@ -115,7 +109,7 @@ pub(super) fn task_to_job(
         task_id: task.id,
     };
 
-    CiJob {
+    Some(CiJob {
         id: format_ci_job_id(&coord),
         repo_id: repo_id.clone(),
         pull_request_id,
@@ -128,7 +122,34 @@ pub(super) fn task_to_job(
         started_at,
         completed_at,
         updated_at,
+    })
+}
+
+/// Selects provider-supplied commit evidence for a mapped task.
+///
+/// Task fields are preferred for PR-only diagnostics. With an explicit commit,
+/// any task/run/payload SHA may prove ownership, but one must safely match the
+/// query; target values are never copied into a job as synthetic evidence.
+fn provider_commit_sha(
+    task: &ActionTaskDto,
+    run: &ActionRunDto,
+    target: &Target,
+) -> Option<String> {
+    let payload_sha = payload_pr_head_sha(run);
+    let candidates = [
+        task.commit_sha.as_str(),
+        task.head_sha.as_str(),
+        run.commit_sha.as_str(),
+        run.head_sha.as_str(),
+        payload_sha.as_deref().unwrap_or_default(),
+    ];
+    if let Some(commit) = target.explicit_commit() {
+        return candidates
+            .into_iter()
+            .find(|candidate| sha_matches(candidate, commit))
+            .map(str::to_string);
     }
+    first_non_empty(&candidates)
 }
 
 fn first_non_empty(values: &[&str]) -> Option<String> {

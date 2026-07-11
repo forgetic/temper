@@ -198,6 +198,145 @@ fn list_by_pull_request_keeps_prior_push_run_on_same_head_branch() {
 }
 
 #[test]
+fn combined_pr_and_commit_returns_only_current_queued_rest_jobs() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        json!({
+            "number": 7,
+            "state": "open",
+            "user": { "login": "author" },
+            "head": { "ref": "feature", "sha": "bbbbbbb2222222" },
+            "base": { "ref": "main" },
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z"
+        })
+        .to_string(),
+    );
+    client.push_response(
+        200,
+        json!({
+            "workflow_runs": [
+                {
+                    "index_in_repo": 2,
+                    "run_number": 2,
+                    "status": "queued",
+                    "event": "pull_request",
+                    "prettyref": "#7",
+                    "head_branch": "feature",
+                    "head_sha": "bbbbbbb2222222",
+                    "created_at": "2024-01-03T00:00:00Z"
+                },
+                {
+                    "index_in_repo": 1,
+                    "run_number": 1,
+                    "status": "success",
+                    "event": "pull_request",
+                    "prettyref": "#7",
+                    "head_branch": "feature",
+                    "head_sha": "aaaaaaa1111111",
+                    "created_at": "2024-01-02T00:00:00Z"
+                }
+            ]
+        })
+        .to_string(),
+    );
+    client.push_response(
+        200,
+        json!({
+            "workflow_runs": [
+                task_with_head(1, 1, "build", "success", "aaaaaaa1111111"),
+                task_with_head(2, 2, "build", "queued", "bbbbbbb2222222")
+            ]
+        })
+        .to_string(),
+    );
+
+    let jobs = block_on(forge(client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            commit_sha: Some("bbbbbbb2222222".to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].status, CiJobStatus::Queued);
+    assert_eq!(jobs[0].conclusion, None);
+    assert_eq!(jobs[0].commit_sha, "bbbbbbb2222222");
+}
+
+#[test]
+fn combined_pr_and_commit_with_registered_current_run_but_no_tasks_is_empty() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        json!({
+            "number": 7,
+            "state": "open",
+            "user": { "login": "author" },
+            "head": { "ref": "feature", "sha": "bbbbbbb2222222" },
+            "base": { "ref": "main" },
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z"
+        })
+        .to_string(),
+    );
+    client.push_response(
+        200,
+        json!({
+            "workflow_runs": [
+                {
+                    "index_in_repo": 2,
+                    "run_number": 2,
+                    "status": "queued",
+                    "event": "pull_request",
+                    "prettyref": "#7",
+                    "head_branch": "feature",
+                    "head_sha": "bbbbbbb2222222",
+                    "created_at": "2024-01-03T00:00:00Z"
+                },
+                {
+                    "index_in_repo": 1,
+                    "run_number": 1,
+                    "status": "success",
+                    "event": "pull_request",
+                    "prettyref": "#7",
+                    "head_branch": "feature",
+                    "head_sha": "aaaaaaa1111111",
+                    "created_at": "2024-01-02T00:00:00Z"
+                }
+            ]
+        })
+        .to_string(),
+    );
+    // The old run has a terminal task, but the registered current run has none.
+    client.push_response(
+        200,
+        json!({
+            "workflow_runs": [
+                task_with_head(1, 1, "build", "success", "aaaaaaa1111111")
+            ]
+        })
+        .to_string(),
+    );
+
+    let jobs = block_on(forge(client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            commit_sha: Some("bbbbbbb2222222".to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert!(jobs.is_empty(), "a taskless current run remains pending");
+}
+
+#[test]
 fn list_by_commit_filters_status_and_sorts_by_name() {
     let client = MockHttpClient::new();
     // No PR detail call: the query targets a commit only.

@@ -47,11 +47,11 @@ const MAX_RUNS_SCRAPED: usize = 20;
 /// Reads CI jobs for a repository through the web UI, matching to `target`.
 ///
 /// Logs in, discovers run ids from the Actions page, reads each run's live-view
-/// JSON, keeps runs whose commit short-SHA matches the target (or every run when
-/// the target carries no filter), and maps each job to a portable [`CiJob`]. The
-/// run id doubles as the job-page index and the encoded run coordinate. The
-/// returned jobs are unsorted/unfiltered; the caller applies the query's status
-/// filter and sort, exactly as the REST path does.
+/// JSON, keeps runs with provider SHA evidence for an explicit commit (or PR
+/// branch/history matches for PR-only reads), and maps each job to a portable
+/// [`CiJob`]. The run id doubles as the job-page index and the encoded run
+/// coordinate. The returned jobs are unsorted/unfiltered; the caller applies
+/// the query's status filter and sort, exactly as the REST path does.
 pub(crate) async fn read_ci_jobs<C: HttpClient>(
     forge: &ForgejoForge<C>,
     credentials: &WebUiCredentials,
@@ -75,15 +75,17 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
         let Some(live) = client.run_live_view(repo, run, 0).await? else {
             continue;
         };
-        // Keep a run when its commit matches the target head SHA **or** the run
-        // is attached to the target PR. The PR/branch match is essential for the
-        // fail→pass case: the first (failing) run and the fixed (passing) run live
-        // on **different** SHAs of the same pull-request head, so a SHA-only
-        // filter would drop the failing verdict and the engine would never see
-        // "fail then pass".
+        // A caller-supplied commit is mandatory: only provider SHA evidence can
+        // own that query, and PR/branch metadata must not widen it. PR-only
+        // reads retain same-branch history so fail→pass diagnostics still expose
+        // both heads.
         let sha_ok = crate::ci_ui_parse::commit_matches(&live.commit.short_sha, target);
-        let branch_ok = branch_matches(&live.commit.branch.name, target);
-        if !(sha_ok || branch_ok) {
+        let matches = if target.explicit_commit().is_some() {
+            sha_ok
+        } else {
+            sha_ok || branch_matches(&live.commit.branch.name, target)
+        };
+        if !matches {
             continue;
         }
         // Drop superseded (cancelled) runs: when several commits are pushed to a

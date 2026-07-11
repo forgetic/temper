@@ -3,8 +3,9 @@
 //!
 //! Adapts Forgejo Actions runs to a query target (a pull request and/or commit
 //! SHA), mirroring the matching rules, PR-number derivation, and newest-first
-//! sorting of the reference TypeScript tooling: PR-ref match, head-SHA match,
-//! event-payload PR number / head SHA match, and PR head-branch match.
+//! sorting of the reference TypeScript tooling. An explicit query commit is a
+//! mandatory ownership filter; PR metadata remains a widening axis only for
+//! PR-only diagnostic reads.
 
 use crate::types::ActionRunDto;
 use chrono::{DateTime, Utc};
@@ -37,25 +38,19 @@ pub(crate) struct Target {
 }
 
 impl Target {
-    /// Candidate SHAs to match a run against, query commit first.
-    fn candidate_shas(&self) -> Vec<&str> {
-        let mut shas = Vec::new();
-        if let Some(sha) = self.commit_sha.as_deref() {
-            if !sha.is_empty() {
-                shas.push(sha);
-            }
-        }
-        if let Some(sha) = self.pr_head_sha.as_deref() {
-            if !sha.is_empty() {
-                shas.push(sha);
-            }
-        }
-        shas
+    /// The caller-supplied commit filter, when it is non-empty.
+    pub(crate) fn explicit_commit(&self) -> Option<&str> {
+        self.commit_sha.as_deref().filter(|sha| !sha.is_empty())
     }
 
     /// Whether any filter is active; an empty target matches every run.
     pub(crate) fn has_filter(&self) -> bool {
-        self.pr_number.is_some() || !self.candidate_shas().is_empty()
+        self.pr_number.is_some()
+            || self.explicit_commit().is_some()
+            || self
+                .pr_head_sha
+                .as_deref()
+                .is_some_and(|sha| !sha.is_empty())
     }
 }
 
@@ -72,14 +67,27 @@ pub(crate) fn run_index(run: &ActionRunDto) -> u64 {
 
 /// Decides whether a run matches a query target, returning the first reason.
 pub(crate) fn match_run(run: &ActionRunDto, target: &Target) -> Option<MatchReason> {
+    // A query commit is authoritative. PR refs/numbers/branches and the fetched
+    // PR head are useful for PR-only history, but cannot prove that a run owns
+    // this particular commit.
+    if let Some(commit) = target.explicit_commit() {
+        if sha_matches(&run.head_sha, commit) || sha_matches(&run.commit_sha, commit) {
+            return Some(MatchReason::HeadSha);
+        }
+        if payload_pr_head_sha(run).is_some_and(|sha| sha_matches(&sha, commit)) {
+            return Some(MatchReason::EventPayloadHeadSha);
+        }
+        return None;
+    }
+
     if let Some(number) = target.pr_number {
         let tag = format!("#{number}");
         if run.prettyref == tag || run.head_branch == tag {
             return Some(MatchReason::PrRef);
         }
     }
-    for sha in target.candidate_shas() {
-        if sha_match(&run.head_sha, sha) || sha_match(&run.commit_sha, sha) {
+    if let Some(sha) = target.pr_head_sha.as_deref().filter(|sha| !sha.is_empty()) {
+        if sha_matches(&run.head_sha, sha) || sha_matches(&run.commit_sha, sha) {
             return Some(MatchReason::HeadSha);
         }
     }
@@ -88,11 +96,9 @@ pub(crate) fn match_run(run: &ActionRunDto, target: &Target) -> Option<MatchReas
             return Some(MatchReason::EventPayloadNumber);
         }
     }
-    for sha in target.candidate_shas() {
-        if let Some(payload_sha) = payload_pr_head_sha(run) {
-            if sha_match(&payload_sha, sha) {
-                return Some(MatchReason::EventPayloadHeadSha);
-            }
+    if let Some(sha) = target.pr_head_sha.as_deref().filter(|sha| !sha.is_empty()) {
+        if payload_pr_head_sha(run).is_some_and(|payload_sha| sha_matches(&payload_sha, sha)) {
+            return Some(MatchReason::EventPayloadHeadSha);
         }
     }
     if let Some(head_ref) = target.pr_head_ref.as_deref() {
@@ -133,7 +139,7 @@ fn payload_pr_number(run: &ActionRunDto) -> Option<u64> {
     payload.get("number").and_then(Value::as_u64)
 }
 
-fn payload_pr_head_sha(run: &ActionRunDto) -> Option<String> {
+pub(crate) fn payload_pr_head_sha(run: &ActionRunDto) -> Option<String> {
     let payload = event_payload(run)?;
     payload
         .get("pull_request")
@@ -143,8 +149,8 @@ fn payload_pr_head_sha(run: &ActionRunDto) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Compares two SHAs, allowing short/long prefix matches (min 7 chars).
-fn sha_match(left: &str, right: &str) -> bool {
+/// Compares two SHAs, allowing safe short/full prefix matches (min 7 chars).
+pub(crate) fn sha_matches(left: &str, right: &str) -> bool {
     if left.is_empty() || right.is_empty() {
         return false;
     }
@@ -227,6 +233,43 @@ mod tests {
         };
         let run = run("main", "main", "0123456789abcdef", "push");
         assert_eq!(match_run(&run, &target), Some(MatchReason::HeadSha));
+    }
+
+    #[test]
+    fn combined_pr_and_commit_rejects_old_pr_and_branch_runs() {
+        let target = Target {
+            pr_number: Some(7),
+            pr_head_sha: Some("current1234567".to_string()),
+            pr_head_ref: Some("feature".to_string()),
+            commit_sha: Some("current1234567".to_string()),
+            ..Default::default()
+        };
+
+        let old_pr = run("#7", "feature", "oldhead1234567", "pull_request");
+        assert_eq!(match_run(&old_pr, &target), None);
+
+        let mut old_payload = run("main", "feature", "", "pull_request");
+        old_payload.event_payload =
+            r#"{"pull_request":{"number":7,"head":{"sha":"oldhead1234567"}}}"#.to_string();
+        assert_eq!(match_run(&old_payload, &target), None);
+
+        let current_push = run("feature", "feature", "current1234567", "push");
+        assert_eq!(
+            match_run(&current_push, &target),
+            Some(MatchReason::HeadSha)
+        );
+    }
+
+    #[test]
+    fn explicit_commit_requires_provider_sha_evidence() {
+        let target = Target {
+            pr_number: Some(7),
+            pr_head_sha: Some("current1234567".to_string()),
+            commit_sha: Some("current1234567".to_string()),
+            ..Default::default()
+        };
+        let no_sha = run("#7", "feature", "", "pull_request");
+        assert_eq!(match_run(&no_sha, &target), None);
     }
 
     #[test]
