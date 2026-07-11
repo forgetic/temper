@@ -12,8 +12,7 @@ StateDirectory=temper
 WorkingDirectory=/var/lib/temper
 Environment=RUST_LOG=info
 LoadCredential=credentials.toml:/etc/temper/credentials.toml
-LoadCredential=webhook-secret:/etc/temper/webhook-secret
-ExecStart=/usr/local/bin/temper --config /etc/temper/config.toml serve worker --pool %i --id %H-%i --engine-url http://127.0.0.1:4000
+ExecStart=/usr/local/bin/temper --config /etc/temper/config.toml serve worker --pool %i --id %H-%i
 Restart=on-failure
 RestartSec=5s
 

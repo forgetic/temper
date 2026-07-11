@@ -14,7 +14,7 @@ support.
 | Path | Look here for |
 | --- | --- |
 | `src/bin/temper.rs` | The unified `temper` binary composition root. It snapshots argv/env/paths/cwd once and delegates to `temper-cli`. |
-| `crates/temper-cli/` | Thin dispatcher for public `temper init`, `check`, `apply`, `config`, and `serve` commands plus legacy/internal entry points. |
+| `crates/temper-cli/` | Thin dispatcher for the public operator lifecycle `temper init -> temper check -> temper plan -> temper apply -> temper serve`, plus `config` inspection and hidden compatibility/internal entry points. |
 | `crates/temper-cli-common/` | Shared CLI plumbing: prompt abstraction, argv helpers, exit-code wrappers, file target resolution, and terminal-safe file writes. |
 | `crates/temper-cli-config/` | `temper config` inspection helpers: check/validate, show, paths, schema, and starter template output over `temper-config`. |
 | `crates/temper-cli-init/` | Interactive `temper init`, `temper plan`, and explicit `temper apply`: collect operator answers, write config/workflow/credential artifacts, derive/preview provisioning plans, and optionally mutate Forgejo. |

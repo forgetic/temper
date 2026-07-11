@@ -1,10 +1,24 @@
-# Example split-runtime Temper config for systemd.
-# Copy to /etc/temper/config.toml and edit for your forge/workflow.
+# Target-era split-runtime Temper config for systemd.
+# Copy to /etc/temper/config.toml and edit the Forge/repository values.
 schema_version = 1
+
+[deployment]
+name = "acme-production"
+topology = "distributed"
+
+# Relative paths are resolved from the directory containing config.toml.
+[workflow]
+file = "workflow.example.yaml"
+
+[paths]
+state_dir = "/var/lib/temper"
+workspace_dir = "/var/lib/temper/workspace"
 
 [forge]
 type = "forgejo"
 url = "https://forge.example.com"
+# These legacy identity keys remain during migration for provisioning, role Git
+# identities, and the Forgejo web-UI CI fallback.
 admin = "bot"
 ci_user = "bot"
 
@@ -15,35 +29,62 @@ roles = ["architect", "engineer", "reviewer"]
 poll_cadence_secs = 300
 mechanical_cadence_secs = 120
 lease_ttl_secs = 300
-# Named secret resolved from CREDENTIALS_DIRECTORY/webhook-secret.
+forge_token = "engine-forge-token"
 webhook_secret = "webhook-secret"
 
 [worker]
 daemon_url = "http://127.0.0.1:4000"
-workspace = "/var/lib/temper/workspace"
+git_base_url = "https://forge.example.com"
+# Retained as the profile-less/no-pool migration fallback.
+max_concurrent_jobs = 1
 
 [[worker.pools]]
 name = "architects"
 roles = ["architect"]
 repos = ["acme/service"]
 max_concurrent_jobs = 1
+agent_profile = "planning"
+worker_token = "worker-architects-token"
 
 [[worker.pools]]
 name = "engineers"
 roles = ["engineer"]
 repos = ["acme/service"]
 max_concurrent_jobs = 2
+agent_profile = "coding"
+worker_token = "worker-engineers-token"
 
 [[worker.pools]]
 name = "reviewers"
 roles = ["reviewer"]
 repos = ["acme/service"]
 max_concurrent_jobs = 1
+agent_profile = "planning"
+worker_token = "worker-reviewers-token"
 
+# The top-level provider remains the profile-less pool migration fallback.
 [agent]
 provider = "anthropic"
-max_iterations = 250
+max_iterations = 120
 enable_subagents = false
 
 [agent.providers.anthropic]
 models = { main = "claude-opus-4-8", investigate = "claude-haiku-4-5" }
+
+[agent.profiles.planning]
+command = ["temper", "agent"]
+provider = "deepseek"
+model = "deepseek-chat"
+investigate_model = "deepseek-chat"
+max_iterations = 80
+subagents = false
+credential = "planning-provider-credentials"
+
+[agent.profiles.coding]
+command = ["temper", "agent"]
+provider = "deepseek"
+model = "deepseek-chat"
+investigate_model = "deepseek-chat"
+max_iterations = 250
+subagents = true
+credential = "coding-provider-credentials"

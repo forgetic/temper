@@ -7,8 +7,9 @@
 //! [`Forge`] rather than widening it: [`ForgeContent`] (the portable half:
 //! repositories, commits, branches), [`ForgeAdmin`] (the privileged half:
 //! owners, users, tokens, access grants, webhooks, CI), and [`ForgeReadiness`]
-//! (read-only provisioning inspection). A backend that implements all of them is
-//! a [`ProvisioningForge`].
+//! (read-only provisioning inspection). Backends can be exposed through the
+//! read-only [`InspectionForge`] facade or the full [`ProvisioningForge`]
+//! facade.
 
 pub mod admin;
 pub mod content;
@@ -29,6 +30,28 @@ pub use hint::*;
 pub use ids::*;
 pub use inspect::{ForgeReadiness, ProvisionedUserStatus, WebhookStatus};
 pub use model::*;
+
+/// Facade used by planning code that needs ordinary Forge reads plus readiness
+/// inspection, but must not receive the provisioning/admin adapters.
+///
+/// The underlying [`Forge`] interface also contains runtime writes; a concrete
+/// read-only backend must therefore enforce its no-mutation policy below the
+/// trait surface, before transport. This facade deliberately omits
+/// [`ForgeContent`] and [`ForgeAdmin`].
+pub trait InspectionForge: Forge + ForgeReadiness {
+    fn as_forge(&self) -> &dyn Forge;
+    fn as_readiness(&self) -> &dyn ForgeReadiness;
+}
+
+impl<T: Forge + ForgeReadiness> InspectionForge for T {
+    fn as_forge(&self) -> &dyn Forge {
+        self
+    }
+
+    fn as_readiness(&self) -> &dyn ForgeReadiness {
+        self
+    }
+}
 
 /// Convenience marker for backends that provide the full provisioning surface:
 /// [`Forge`] plus both mutating capability traits ([`ForgeContent`] and
