@@ -11,7 +11,9 @@ use temper_workflow::{
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
-use crate::verdict_contract::{derive_verdict_contracts, source_metadata_from_workflow};
+use crate::verdict_contract::{
+    child_kind_has_reachable_queue, derive_verdict_contracts, source_metadata_from_workflow,
+};
 
 pub(crate) enum VerdictCheck {
     Valid,
@@ -235,7 +237,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     child.slug
                 )));
             }
-            if !self.child_kind_has_reachable_queue(&kind) {
+            if !child_kind_has_reachable_queue(self.workflow.as_ref(), &kind) {
                 return Err(VerdictCheck::Rejected(format!(
                     "child `{}` kind `{kind}` has no reachable workflow queue/action",
                     child.slug
@@ -247,24 +249,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             }
         }
         Ok(())
-    }
-
-    fn child_kind_has_reachable_queue(&self, kind: &ArtifactKindId) -> bool {
-        self.workflow.queues().iter().any(|queue| {
-            queue.artifacts.contains(kind)
-                && (queue.automation.is_some()
-                    || queue.actions.iter().any(|action| {
-                        action
-                            .artifact
-                            .as_ref()
-                            .is_none_or(|artifact| artifact == kind)
-                    })
-                    || self
-                        .workflow
-                        .roles()
-                        .iter()
-                        .any(|role| role.queues.contains(&queue.id)))
-        })
     }
 
     async fn validate_child_target_repo(
