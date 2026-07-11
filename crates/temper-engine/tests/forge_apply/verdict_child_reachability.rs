@@ -51,7 +51,7 @@ fn decompose_plan_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
 }
 
 #[test]
-fn child_kind_without_a_serviceable_queue_is_rejected_before_mutation() {
+fn child_kind_without_a_serviceable_queue_is_rejected_by_verdict_contract() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "main").await;
@@ -80,9 +80,8 @@ fn child_kind_without_a_serviceable_queue_is_rejected_before_mutation() {
         let comments = issue_comment_bodies(&forge, &repo, plan).await;
         assert_eq!(comments.len(), 1);
         assert!(
-            comments[0].contains(
-                "child `landing-regression` kind `validation` has no reachable workflow queue/action"
-            ),
+            comments[0]
+                .contains("child `landing-regression` has kind `validation`; allowed kinds: code"),
             "rejection evidence: {}",
             comments[0]
         );

@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 use temper_protocol_worker::JobArtifactSnapshot;
 use temper_verdict::{SourceMetadata, VerdictContract, VerdictContracts};
 use temper_workflow::{
-    Effect, RelationKind, ToolManifest, ValidatedWorkflow, WorkflowMetadata, parse_metadata_block,
+    ArtifactKindId, Effect, RelationKind, ToolManifest, ValidatedWorkflow, WorkflowMetadata,
+    parse_metadata_block,
 };
 
 pub(crate) fn derive_verdict_contracts(
@@ -57,6 +58,7 @@ pub(crate) fn derive_verdict_contracts(
                                     .is_some_and(|kind| {
                                         kind.target == temper_workflow::ArtifactTarget::Issue
                                     })
+                                && child_kind_has_reachable_queue(workflow, &relation.source)
                         }) {
                             child_kinds.insert(relation.source.as_str().to_string());
                         }
@@ -78,6 +80,26 @@ pub(crate) fn derive_verdict_contracts(
             Some((verdict.as_str().to_string(), contract))
         })
         .collect()
+}
+
+pub(crate) fn child_kind_has_reachable_queue(
+    workflow: &ValidatedWorkflow,
+    kind: &ArtifactKindId,
+) -> bool {
+    workflow.queues().iter().any(|queue| {
+        queue.artifacts.contains(kind)
+            && (queue.automation.is_some()
+                || queue.actions.iter().any(|action| {
+                    action
+                        .artifact
+                        .as_ref()
+                        .is_none_or(|artifact| artifact == kind)
+                })
+                || workflow
+                    .roles()
+                    .iter()
+                    .any(|role| role.queues.contains(&queue.id)))
+    })
 }
 
 pub(crate) fn source_metadata_from_snapshot(
@@ -133,6 +155,17 @@ mod tests {
         assert_eq!(needs_plan.allowed_child_kinds, vec!["plan"]);
         assert_eq!(needs_plan.required_child_metadata, vec!["target_branch"]);
         assert_eq!(contracts["config_only"].max_children, Some(0));
+
+        let decompose_plan = architect
+            .tools
+            .iter()
+            .find(|tool| tool.name == "decompose_plan")
+            .expect("decompose plan");
+        let contracts = derive_verdict_contracts(&workflow, decompose_plan);
+        assert_eq!(
+            contracts["children_ready"].allowed_child_kinds,
+            vec!["code"]
+        );
 
         let tester = compiled
             .roles()
