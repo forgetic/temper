@@ -13,7 +13,8 @@ use std::{
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
 use temper_protocol_worker::{
-    Artifact, JobResult, Poll, PullRequestFreshness, WorkerAuth, WorkerProtocolMessage,
+    Artifact, Assign, ErrorCode, JobResult, Poll, ProtocolError, PullRequestFreshness,
+    WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -21,7 +22,7 @@ use temper_worker_registry::{DaemonCore, WorkerPoolAuthConfig, WorkerPoolPolicy}
 
 use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
-use crate::applier::ApplyOutcome;
+use crate::applier::{ApplyOutcome, ClaimOutcome};
 use crate::webhook::WebhookConfig;
 
 /// `<io-event-completion>`s observed by the daemon machine.
@@ -33,6 +34,17 @@ pub(super) enum DaemonCompletion {
     },
     /// A long-poll waiter's max-wait deadline elapsed.
     PollDeadline { id: u64 },
+    /// A durable assignment claim finished off-loop.
+    ClaimFinished {
+        assign: Assign,
+        worker_id: String,
+        responder: HttpResponder,
+        outcome: ClaimOutcome,
+    },
+    AssignmentDeliveryFailed {
+        job: InFlightJob,
+        context: crate::applier::ClaimContext,
+    },
     /// A result applier finished off-loop.
     ApplyFinished {
         job_id: String,
@@ -80,6 +92,12 @@ pub(super) enum DaemonRequest {
         responder: HttpResponder,
         response: HttpResponseData,
     },
+    RespondAssignment {
+        responder: HttpResponder,
+        response: HttpResponseData,
+        job: InFlightJob,
+        context: crate::applier::ClaimContext,
+    },
     StartPollTimer {
         id: u64,
         delay: Duration,
@@ -98,10 +116,16 @@ pub(super) enum DaemonRequest {
     },
     /// Apply an assignment-time source claim before returning the assignment to
     /// the worker that will start the job.
-    RunClaimAndRespond {
+    RunClaim {
         job: InFlightJob,
+        worker_id: String,
+        daemon_boot_id: String,
+        assign: Assign,
         responder: HttpResponder,
-        response: HttpResponseData,
+    },
+    RunClaimRollback {
+        job: InFlightJob,
+        context: crate::applier::ClaimContext,
     },
     RunPullRequestFreshnessCheck {
         check: PullRequestFreshness,
@@ -152,6 +176,7 @@ pub(super) struct DaemonMachine {
     /// The engine's once-per-delivery clock snapshot; updated as the first
     /// act of every transition, before any handler logic runs.
     pub(super) now: EngineTime,
+    pub(super) daemon_boot_id: String,
     pub(super) next_id: u64,
 }
 
@@ -211,6 +236,7 @@ impl DaemonMachine {
             retry_backoff_until: BTreeMap::new(),
             apply_grace,
             now: EngineTime::ZERO,
+            daemon_boot_id: new_daemon_boot_id(),
             next_id: 0,
         }
     }
@@ -267,6 +293,46 @@ impl DaemonMachine {
     }
 }
 
+fn in_flight_job_from_assignment(assign: &Assign) -> InFlightJob {
+    InFlightJob {
+        job_id: assign.job_id.clone(),
+        role: assign.role.clone(),
+        repo: assign.repo.clone(),
+        artifact: assign.artifact.clone(),
+        job_payload: assign.job_payload.clone(),
+    }
+}
+
+fn claim_failure_response(
+    responder: HttpResponder,
+    job_id: String,
+    reason: String,
+) -> DaemonRequest {
+    DaemonRequest::Respond {
+        responder,
+        response: super::protocol::protocol_response(Some(WorkerProtocolMessage::Error(
+            ProtocolError {
+                protocol_version: WORKER_PROTOCOL_VERSION,
+                code: ErrorCode::PollTimeout,
+                message: format!("durable assignment claim failed: {reason}"),
+                retry_after_ms: Some(100),
+                job_id: Some(job_id),
+            },
+        ))),
+    }
+}
+
+fn new_daemon_boot_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_BOOT: AtomicU64 = AtomicU64::new(1);
+    let sequence = NEXT_BOOT.fetch_add(1, Ordering::Relaxed);
+    let epoch_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("daemon-boot-{epoch_nanos:x}-{sequence:x}")
+}
+
 fn retry_delay(attempt: u32) -> Duration {
     const MAX_BACKOFF_SECS: u64 = 300;
     let exponent = attempt.saturating_sub(1).min(8);
@@ -289,11 +355,11 @@ impl Machine for DaemonMachine {
                 let Some(waiter) = self.waiters.remove(&id) else {
                     return Vec::new();
                 };
-                let response = match self.core.handle_authenticated(
-                    WorkerProtocolMessage::Poll(waiter.poll.clone()),
-                    waiter.auth.as_ref(),
-                ) {
-                    Ok(response) => response.expect("poll messages produce a response"),
+                let response = match self
+                    .core
+                    .reserve_authenticated_poll(waiter.poll.clone(), waiter.auth.as_ref())
+                {
+                    Ok(response) => response,
                     Err(_) => {
                         return vec![DaemonRequest::Respond {
                             responder: waiter.responder,
@@ -302,6 +368,60 @@ impl Machine for DaemonMachine {
                     }
                 };
                 self.poll_response_requests(response, &waiter.poll.worker_id, waiter.responder)
+            }
+            DaemonCompletion::ClaimFinished {
+                assign,
+                worker_id,
+                responder,
+                outcome,
+            } => {
+                let context = crate::applier::ClaimContext {
+                    worker_id: worker_id.clone(),
+                    daemon_boot_id: self.daemon_boot_id.clone(),
+                };
+                if !responder.is_open() {
+                    self.core.rollback_assignment(&assign.job_id);
+                    return vec![DaemonRequest::RunClaimRollback {
+                        job: in_flight_job_from_assignment(&assign),
+                        context,
+                    }];
+                }
+                match outcome {
+                    ClaimOutcome::Claimed => {
+                        if self.core.commit_assignment(&assign.job_id).is_ok() {
+                            vec![
+                                DaemonRequest::Log(super::protocol::assignment_log_line(
+                                    &assign, &worker_id,
+                                )),
+                                DaemonRequest::RespondAssignment {
+                                    job: in_flight_job_from_assignment(&assign),
+                                    context,
+                                    responder,
+                                    response: super::protocol::protocol_response(Some(
+                                        WorkerProtocolMessage::Assign(assign),
+                                    )),
+                                },
+                            ]
+                        } else {
+                            self.core.rollback_assignment(&assign.job_id);
+                            vec![claim_failure_response(
+                                responder,
+                                assign.job_id,
+                                "assignment reservation became stale".to_string(),
+                            )]
+                        }
+                    }
+                    ClaimOutcome::Contended { reason }
+                    | ClaimOutcome::Stale { reason }
+                    | ClaimOutcome::Retryable { reason } => {
+                        self.core.rollback_assignment(&assign.job_id);
+                        vec![claim_failure_response(responder, assign.job_id, reason)]
+                    }
+                }
+            }
+            DaemonCompletion::AssignmentDeliveryFailed { job, context } => {
+                self.core.rollback_committed_assignment(&job.job_id);
+                vec![DaemonRequest::RunClaimRollback { job, context }]
             }
             DaemonCompletion::ApplyFinished { job_id, outcome } => {
                 self.applying.remove(&job_id);

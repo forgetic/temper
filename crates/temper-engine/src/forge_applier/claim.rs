@@ -12,12 +12,34 @@
 
 use temper_forge::{Forge, ForgeError, UpdateIssue, UpdatePullRequest, UserId};
 use temper_protocol_worker::JobContext;
-use temper_workflow::{ArtifactKindId, Effect, LabelId, RoleId, ValidatedWorkflow};
+use temper_workflow::{
+    ArtifactKindId, AssignmentMutation, Effect, LabelId, RoleId, ValidatedWorkflow,
+};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
+    pub(super) async fn durable_assignment_mutation(
+        &self,
+        job: &InFlightJob,
+    ) -> AssignmentMutation {
+        let Some(effects) = self.action_effects(job) else {
+            return AssignmentMutation::default();
+        };
+        let include_label_effects = effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CreatePullRequest { .. }));
+        let current_role_user = self.current_role_user(job).await;
+        let mutation = claim_mutation(job, &effects, include_label_effects, current_role_user);
+        AssignmentMutation {
+            add_labels: mutation.add_labels,
+            remove_labels: mutation.remove_labels,
+            add_assignees: mutation.add_assignees,
+            remove_assignees: mutation.remove_assignees,
+        }
+    }
+
     /// Applies the source-artifact claim effects for the assigned workflow
     /// action.
     ///

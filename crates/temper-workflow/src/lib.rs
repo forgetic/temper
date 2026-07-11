@@ -128,15 +128,16 @@ pub use journal::{
     CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,
 };
 pub use lease::{
-    LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy, PreparedAcquire,
+    AssignmentClaimRequest, AssignmentMutation, LeaseConflict, LeaseError, LeaseManager,
+    LeasePlanner, LeasePolicy, PreparedAcquire,
 };
 pub use load::{
     WorkflowDocument, WorkflowLoadError, load_workflow, load_workflow_document, load_workflow_spec,
     parse_workflow_document, parse_workflow_spec,
 };
 pub use metadata::{
-    Lease, METADATA_BEGIN, METADATA_END, MetadataError, WorkflowMetadata, WorkflowMetadataKey,
-    global_child_correlation_key, parse_metadata_block, render_metadata_block,
+    DurableAssignment, Lease, METADATA_BEGIN, METADATA_END, MetadataError, WorkflowMetadata,
+    WorkflowMetadataKey, global_child_correlation_key, parse_metadata_block, render_metadata_block,
     replace_metadata_block,
 };
 pub use plan::{

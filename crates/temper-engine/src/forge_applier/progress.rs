@@ -7,14 +7,19 @@ use temper_protocol_worker::{
 };
 
 use crate::InFlightJob;
-use crate::applier::{ApplyOutcome, ResultApplier};
+use crate::applier::{ApplyOutcome, ClaimContext, ClaimOutcome, ResultApplier};
 use crate::forge_applier::ForgeApplier;
 use crate::verdict_validation::VerdictCheck;
 
 #[async_trait::async_trait]
 impl<F: temper_forge::Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
-    async fn claim(&self, job: InFlightJob) {
+    async fn claim(&self, job: InFlightJob, _context: ClaimContext) -> ClaimOutcome {
         self.apply_source_action_claim(&job).await;
+        ClaimOutcome::Claimed
+    }
+
+    async fn assignment_mutation(&self, job: &InFlightJob) -> temper_workflow::AssignmentMutation {
+        self.durable_assignment_mutation(job).await
     }
 
     async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {

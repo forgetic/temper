@@ -73,11 +73,13 @@ fn review_verdict_changes_attaches_changes_requested_review_with_body() {
             "review body should carry authored text, got `{body}`"
         );
 
-        assert_release(
-            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
-            "worker-a",
-            &assignment.job_id,
-        );
+        match post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await {
+            WorkerProtocolMessage::Error(error) => assert_eq!(
+                error.code,
+                temper_protocol_worker::ErrorCode::MalformedMessage
+            ),
+            other => panic!("expected replay rejection, got {other:?}"),
+        }
 
         let replay_job = review_in_flight_job("acme/service", pull_request);
         let replay_result =

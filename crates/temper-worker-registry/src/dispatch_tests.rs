@@ -509,3 +509,57 @@ fn dispatch_is_deterministic() {
         vec!["job-1", "job-3"]
     );
 }
+
+#[test]
+fn reservation_is_not_visible_in_flight_until_commit() {
+    let mut coordinator = DispatchCoordinator::new();
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));
+    coordinator.enqueue(work("job-1", "engineer", "ai/temper"));
+
+    let reservation = coordinator.reserve_for_worker("worker-a").unwrap();
+    assert_eq!(reservation.job_id, "job-1");
+    assert_eq!(coordinator.reserved_len(), 1);
+    assert_eq!(coordinator.in_flight_len(), 0);
+    assert_eq!(coordinator.registry().free_capacity("worker-a"), Some(1));
+
+    coordinator.commit_reservation("job-1").unwrap();
+    assert_eq!(coordinator.reserved_len(), 0);
+    assert_eq!(coordinator.in_flight_len(), 1);
+    assert_eq!(coordinator.registry().free_capacity("worker-a"), Some(0));
+}
+
+#[test]
+fn rollback_restores_capacity_role_limit_and_fifo_work() {
+    let mut coordinator =
+        DispatchCoordinator::with_role_limits(BTreeMap::from([("engineer".to_string(), 1)]));
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 2));
+    coordinator.enqueue(work("job-1", "engineer", "ai/temper"));
+    coordinator.enqueue(work("job-2", "engineer", "ai/temper"));
+
+    assert_eq!(
+        coordinator.reserve_for_worker("worker-a").unwrap().job_id,
+        "job-1"
+    );
+    assert!(coordinator.reserve_for_worker("worker-a").is_none());
+    assert!(coordinator.rollback_reservation("job-1"));
+    assert_eq!(coordinator.reserved_len(), 0);
+    assert_eq!(coordinator.pending_len(), 2);
+    assert_eq!(
+        coordinator.reserve_for_worker("worker-a").unwrap().job_id,
+        "job-1"
+    );
+}
+
+#[test]
+fn delivery_rollback_retracts_committed_assignment() {
+    let mut coordinator = DispatchCoordinator::new();
+    coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));
+    coordinator.enqueue(work("job-1", "engineer", "ai/temper"));
+    coordinator.reserve_for_worker("worker-a").unwrap();
+    coordinator.commit_reservation("job-1").unwrap();
+
+    assert!(coordinator.rollback_committed("job-1"));
+    assert_eq!(coordinator.in_flight_len(), 0);
+    assert_eq!(coordinator.pending_len(), 1);
+    assert_eq!(coordinator.registry().free_capacity("worker-a"), Some(1));
+}

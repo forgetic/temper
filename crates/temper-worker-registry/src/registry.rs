@@ -269,6 +269,10 @@ impl WorkerRegistry {
         std::mem::take(&mut entry.in_flight).into_iter().collect()
     }
 
+    pub fn worker_ids(&self) -> impl Iterator<Item = &str> {
+        self.workers.keys().map(String::as_str)
+    }
+
     pub fn free_capacity(&self, worker_id: &str) -> Option<u32> {
         self.workers.get(worker_id).map(WorkerEntry::free_capacity)
     }

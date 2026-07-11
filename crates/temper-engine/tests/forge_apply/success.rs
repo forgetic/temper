@@ -128,11 +128,7 @@ fn assignment_claims_source_issue_before_result_and_success_clears_working_label
             .await
             .expect("issue reload succeeds")
             .expect("issue exists");
-        assert_eq!(
-            issue.labels,
-            vec!["code".to_string(), "in-progress".to_string()]
-        );
-        assert_eq!(issue.assignees, vec![UserId::new("engineer")]);
+        assert_durable_assignment(&issue, &assignment);
         assert_no_pull_requests(&root, &repo).await;
 
         let branch_name = format!("agent/pr-for-code-{}", issue_number.get());
@@ -156,6 +152,7 @@ fn assignment_claims_source_issue_before_result_and_success_clears_working_label
             .expect("issue reload succeeds")
             .expect("issue exists");
         assert_eq!(issue.labels, vec!["code".to_string()]);
+        assert_durable_assignment_released(&issue);
     })
 }
 

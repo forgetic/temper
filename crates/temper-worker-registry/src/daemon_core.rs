@@ -15,7 +15,8 @@ use temper_protocol_worker::{
 };
 
 use crate::{
-    DispatchCoordinator, WorkItem, WorkerPoolAuthConfig, WorkerPoolPolicies, WorkerPoolPolicy,
+    Assignment, DispatchCoordinator, RegistryError, WorkItem, WorkerPoolAuthConfig,
+    WorkerPoolPolicies, WorkerPoolPolicy,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,6 +241,35 @@ impl DaemonCore {
             .count()
     }
 
+    /// Reserve one job for a poller without making it externally in-flight.
+    pub fn reserve_authenticated_poll(
+        &mut self,
+        poll: Poll,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<WorkerProtocolMessage, WorkerAuthError> {
+        self.authenticate_registered_worker(&poll.worker_id, None, auth)?;
+        Ok(self.reserve_poll(poll))
+    }
+
+    /// Commit a durable-claim-backed reservation as the visible assignment.
+    pub fn commit_assignment(&mut self, job_id: &str) -> Result<(), RegistryError> {
+        self.coordinator.commit_reservation(job_id).map(|_| ())
+    }
+
+    /// Restore a failed or canceled claim to the front of the pending queue.
+    pub fn rollback_assignment(&mut self, job_id: &str) -> bool {
+        self.coordinator.rollback_reservation(job_id)
+    }
+
+    pub fn rollback_committed_assignment(&mut self, job_id: &str) -> bool {
+        self.coordinator.rollback_committed(job_id)
+    }
+
+    /// Full context for an assignment reservation or committed assignment.
+    pub fn job_context(&self, job_id: &str) -> Option<(Artifact, serde_json::Value)> {
+        self.job_context.get(job_id).cloned()
+    }
+
     /// Full context of a currently in-flight (assigned, not yet completed) job,
     /// recoverable until `handle(Result)` completes it. `None` if the job is
     /// pending (not yet dispatched), unknown, or already completed.
@@ -410,33 +440,40 @@ impl DaemonCore {
         }
     }
 
-    fn handle_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
+    fn reserve_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
         if !self.coordinator.registry().is_healthy(&poll.worker_id) {
             return error_response(ErrorCode::UnknownWorker, "unknown worker", None);
         }
 
-        let Some(assignment) = self.coordinator.dispatch_for_worker(&poll.worker_id) else {
+        let Some(assignment) = self.coordinator.reserve_for_worker(&poll.worker_id) else {
             return error_response(ErrorCode::PollTimeout, "no work available", None);
         };
 
         let Some((artifact, job_payload)) = self.job_context.get(&assignment.job_id).cloned()
         else {
-            let _ = self.coordinator.complete(&assignment.job_id);
+            self.coordinator.rollback_reservation(&assignment.job_id);
             return error_response(
                 ErrorCode::MalformedMessage,
-                "assigned job missing daemon job context",
+                "reserved job missing daemon job context",
                 Some(assignment.job_id),
             );
         };
+        assignment_message(assignment, artifact, job_payload)
+    }
 
-        WorkerProtocolMessage::Assign(Assign {
-            protocol_version: WORKER_PROTOCOL_VERSION,
-            job_id: assignment.job_id,
-            role: assignment.role,
-            repo: assignment.repo,
-            artifact,
-            job_payload,
-        })
+    fn handle_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
+        let response = self.reserve_poll(poll);
+        let WorkerProtocolMessage::Assign(assign) = &response else {
+            return response;
+        };
+        if self.coordinator.commit_reservation(&assign.job_id).is_err() {
+            return error_response(
+                ErrorCode::CapacityExceeded,
+                "assignment reservation could not be committed",
+                Some(assign.job_id.clone()),
+            );
+        }
+        response
     }
 
     fn handle_heartbeat(&mut self, heartbeat: Heartbeat) -> Option<WorkerProtocolMessage> {
@@ -455,6 +492,13 @@ impl DaemonCore {
     }
 
     fn handle_result(&mut self, result: JobResult) -> WorkerProtocolMessage {
+        if self.coordinator.assigned_worker(&result.job_id) != Some(result.worker_id.as_str()) {
+            return error_response(
+                ErrorCode::MalformedMessage,
+                "result does not match the assigned job and worker",
+                Some(result.job_id),
+            );
+        }
         let _ = self.coordinator.complete(&result.job_id);
         self.job_context.remove(&result.job_id);
 
@@ -470,6 +514,21 @@ impl DaemonCore {
     fn handle_lease_ack(&mut self, _lease_ack: LeaseAck) -> Option<WorkerProtocolMessage> {
         None
     }
+}
+
+fn assignment_message(
+    assignment: Assignment,
+    artifact: Artifact,
+    job_payload: serde_json::Value,
+) -> WorkerProtocolMessage {
+    WorkerProtocolMessage::Assign(Assign {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        job_id: assignment.job_id,
+        role: assignment.role,
+        repo: assignment.repo,
+        artifact,
+        job_payload,
+    })
 }
 
 /// Every repository the assigned worker must be capable of: the manifest's

@@ -9,10 +9,11 @@ mod support;
 
 use chrono::Duration;
 use support::{TestRoot, block_on, create_issue, issue_body, new_repo, ts};
-use temper_forge::ItemNumber;
+use temper_forge::{Forge, ItemNumber, UserId};
 use temper_workflow::{
-    ArtifactSource, Lease, LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy,
-    RoleId, parse_metadata_block,
+    ArtifactSource, AssignmentClaimRequest, AssignmentMutation, DurableAssignment, Lease,
+    LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy, RoleId,
+    parse_metadata_block,
 };
 
 fn policy() -> LeasePolicy {
@@ -355,4 +356,66 @@ fn manager_reports_a_missing_target() {
     ))
     .expect_err("a missing artifact cannot be leased");
     assert!(matches!(error, LeaseError::TargetMissing { .. }));
+}
+
+#[test]
+fn assignment_claim_atomically_persists_identity_and_lifecycle() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let repo = new_repo(&forge);
+    let number = create_issue(&forge, &repo, &["code", "ready"], "Implement login.");
+    let target = ArtifactSource::Issue { number };
+    let manager = LeaseManager::new(&forge, policy());
+    let expected = DurableAssignment {
+        job_id: Some("job-257".to_string()),
+        role: Some(RoleId::new("engineer")),
+        queue: Some("code_ready".to_string()),
+        action: Some("open_pr".to_string()),
+        worker_id: Some("worker-a".to_string()),
+        coordination_key: Some("pr-for-code-257".to_string()),
+        daemon_boot_id: Some("boot-a".to_string()),
+        ..DurableAssignment::default()
+    };
+
+    let claimed = block_on(manager.claim_assignment(
+        &repo,
+        target,
+        AssignmentClaimRequest {
+            assignment: expected.clone(),
+            mutation: AssignmentMutation {
+                add_labels: vec!["in-progress".to_string()],
+                remove_labels: vec!["ready".to_string()],
+                add_assignees: vec![UserId::new("engineer")],
+                remove_assignees: Vec::new(),
+            },
+        },
+        ts("2026-05-29T00:00:00Z"),
+    ))
+    .expect("assignment claim succeeds");
+
+    assert_eq!(claimed.pre_claim_labels, vec!["code", "ready"]);
+    assert_eq!(claimed.assigned_at, Some(ts("2026-05-29T00:00:00Z")));
+    let issue = block_on(forge.get_issue_by_number(&repo, number))
+        .expect("issue lookup succeeds")
+        .expect("issue exists");
+    assert_eq!(issue.labels, vec!["code", "in-progress"]);
+    assert_eq!(issue.assignees, vec![UserId::new("engineer")]);
+    let metadata = parse_metadata_block(&issue.body)
+        .expect("metadata parses")
+        .expect("metadata exists");
+    assert_eq!(metadata.assignment, Some(claimed.clone()));
+    assert!(metadata.lease.is_some());
+    assert!(block_on(manager.validate_assignment(&repo, target, &expected)).unwrap());
+
+    block_on(manager.rollback_assignment(&repo, target, &expected)).expect("exact rollback");
+    let issue = block_on(forge.get_issue_by_number(&repo, number))
+        .expect("issue lookup succeeds")
+        .expect("issue exists");
+    assert_eq!(issue.labels, vec!["code", "ready"]);
+    assert!(issue.assignees.is_empty());
+    let metadata = parse_metadata_block(&issue.body)
+        .expect("metadata parses")
+        .expect("metadata remains");
+    assert!(metadata.assignment.is_none());
+    assert!(metadata.lease.is_none());
 }
