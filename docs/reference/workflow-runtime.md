@@ -32,9 +32,12 @@ unreadable target is recorded as a read failure and remains not landed. When a
 reference backend has an issue and pull request with the same number, dependency
 resolution treats the issue as authoritative.
 
-CI status comes from `list_ci_jobs`, scoped to the PR head SHA when the backend
-supplies one. Review status comes from requested reviewers plus native review
-events; the portable review aggregate is not head-SHA-scoped.
+CI status comes from `list_ci_jobs`, queried with both the PR identity and head
+SHA when the backend supplies one. Those filters are conjunctive, and the
+runtime independently verifies each returned job's non-empty commit SHA against
+the head before aggregation so stale provider results cannot satisfy a gate.
+Review status comes from requested reviewers plus native review events; the
+portable review aggregate is not head-SHA-scoped.
 
 ## Supported effects and order
 

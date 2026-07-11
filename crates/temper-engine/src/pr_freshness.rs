@@ -193,7 +193,10 @@ async fn current_ci_status<F: Forge + ?Sized>(
             },
         )
         .await?;
-    Ok(CiStatus::from_jobs(&jobs))
+    Ok(CiStatus::from_jobs_for_head(
+        &jobs,
+        pull_request.head_sha.as_deref(),
+    ))
 }
 
 async fn review_changes_requested_still_holds<F: Forge + ?Sized>(
@@ -370,6 +373,58 @@ mod tests {
 
             assert_eq!(response.status, PullRequestFreshnessStatus::Stale);
             assert!(response.reason.unwrap().contains("not failed"));
+        });
+    }
+
+    #[test]
+    fn stale_success_cannot_make_current_head_ci_passed_fresh() {
+        temper_engine_io::block_on(async {
+            let (forge, repo, pr) = setup().await;
+            forge.seed_ci_jobs(
+                &repo,
+                vec![ci_job_for_sha(
+                    &repo,
+                    &pr,
+                    "old-head",
+                    CiJobStatus::Completed,
+                    Some(CiJobConclusion::Success),
+                )],
+            );
+            let mut check = check(&repo, &pr);
+            check.queue_condition = Some("ci_passed".to_string());
+
+            let response = check_pull_request_freshness(&forge, &check).await;
+
+            assert_eq!(response.status, PullRequestFreshnessStatus::Stale);
+            assert!(response.reason.unwrap().contains("Pending, not passed"));
+        });
+    }
+
+    #[test]
+    fn queued_current_head_ci_remains_pending_despite_stale_success() {
+        temper_engine_io::block_on(async {
+            let (forge, repo, pr) = setup().await;
+            let current_head = pr.head_sha.clone().expect("current head");
+            forge.seed_ci_jobs(
+                &repo,
+                vec![
+                    ci_job_for_sha(
+                        &repo,
+                        &pr,
+                        "old-head",
+                        CiJobStatus::Completed,
+                        Some(CiJobConclusion::Success),
+                    ),
+                    ci_job_for_sha(&repo, &pr, current_head, CiJobStatus::Queued, None),
+                ],
+            );
+            let mut check = check(&repo, &pr);
+            check.queue_condition = Some("ci_passed".to_string());
+
+            let response = check_pull_request_freshness(&forge, &check).await;
+
+            assert_eq!(response.status, PullRequestFreshnessStatus::Stale);
+            assert!(response.reason.unwrap().contains("Pending, not passed"));
         });
     }
 

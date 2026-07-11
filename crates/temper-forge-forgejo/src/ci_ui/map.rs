@@ -2,8 +2,7 @@
 
 use super::dto::LiveRunDto;
 use crate::ci::map_status;
-use crate::ci_match::Target;
-use crate::ci_ui_parse::first_non_empty;
+use crate::ci_match::{Target, sha_matches};
 use crate::ids::{CiJobCoord, RepoCoord, format_ci_job_id};
 use chrono::{DateTime, Utc};
 use temper_forge_model::{CiJob, CiJobStatus, PullRequestId, RepositoryId};
@@ -16,11 +15,14 @@ pub(super) fn live_run_to_jobs(
     live: &LiveRunDto,
     target: &Target,
 ) -> Vec<CiJob> {
-    let commit_sha = first_non_empty(&[
-        live.commit.short_sha.as_str(),
-        target.pr_head_sha.as_deref().unwrap_or_default(),
-        target.commit_sha.as_deref().unwrap_or_default(),
-    ]);
+    let commit_sha = live.commit.short_sha.trim().to_string();
+    if commit_sha.is_empty()
+        || target
+            .explicit_commit()
+            .is_some_and(|commit| !sha_matches(&commit_sha, commit))
+    {
+        return Vec::new();
+    }
     let pull_request_id: Option<PullRequestId> = target.pr_id.clone();
 
     live.jobs

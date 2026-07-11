@@ -55,7 +55,9 @@ deterministic results.
 `IssueQuery` and `PullRequestQuery` support state, conjunctive labels, exact body
 substring, author, assignee, detail level, and sorting by number, creation time,
 or update time. `CiJobQuery` supports pull request, commit SHA, status, and
-sorting by name, creation time, or update time.
+sorting by name, creation time, or update time. All populated `CiJobQuery`
+filters compose conjunctively: when pull request and commit SHA are both set,
+every returned job must belong to that pull request and identify that commit.
 
 ### Body substring filter
 

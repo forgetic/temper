@@ -82,11 +82,15 @@ impl<C: HttpClient> ForgejoForge<C> {
             runs
         };
         if matched.is_empty() {
-            // REST works but found no run for this target; a real run may still
-            // exist that REST does not surface — try the web UI before giving up.
-            return self
-                .list_ci_jobs_via_web_ui(repo_id, &repo, &target, &query)
-                .await;
+            // REST works but found no run with provider evidence for this
+            // target. Try the web UI when configured; otherwise the truthful
+            // result is an empty (still-pending) read, not a backend failure.
+            if self.config().web_ui.is_some() {
+                return self
+                    .list_ci_jobs_via_web_ui(repo_id, &repo, &target, &query)
+                    .await;
+            }
+            return Ok(Vec::new());
         }
         sort_runs(&mut matched);
 
@@ -99,14 +103,9 @@ impl<C: HttpClient> ForgejoForge<C> {
                 .into_iter()
                 .enumerate()
             {
-                jobs.push(task_to_job(
-                    &repo,
-                    repo_id,
-                    run,
-                    &task,
-                    index as u64,
-                    &target,
-                ));
+                if let Some(job) = task_to_job(&repo, repo_id, run, &task, index as u64, &target) {
+                    jobs.push(job);
+                }
             }
         }
 
@@ -226,26 +225,26 @@ impl<C: HttpClient> ForgejoForge<C> {
         // in case the attempt enumeration shifted between calls.
         if let Some(task) = latest.get(coord.job_index as usize) {
             if task.id == coord.task_id {
-                return Ok(Some(task_to_job(
+                return Ok(task_to_job(
                     &coord.repo,
                     &repo_id,
                     &run,
                     task,
                     coord.job_index,
                     &target,
-                )));
+                ));
             }
         }
         for (index, task) in latest.iter().enumerate() {
             if task.id == coord.task_id {
-                return Ok(Some(task_to_job(
+                return Ok(task_to_job(
                     &coord.repo,
                     &repo_id,
                     &run,
                     task,
                     index as u64,
                     &target,
-                )));
+                ));
             }
         }
         Ok(None)

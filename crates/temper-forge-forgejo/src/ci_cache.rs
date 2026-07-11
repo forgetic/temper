@@ -26,7 +26,7 @@ use std::sync::Mutex;
 
 use temper_forge_model::{CiJob, CiJobStatus, RepositoryId};
 
-use crate::ci_match::Target;
+use crate::ci_match::{Target, sha_matches};
 
 /// Identity of a CI read for caching: the resolved target plus its head SHA.
 ///
@@ -55,10 +55,8 @@ impl CiReadKey {
     /// commit SHA.
     pub(crate) fn from_target(repo_id: &RepositoryId, target: &Target) -> Option<Self> {
         let head_sha = target
-            .pr_head_sha
-            .as_deref()
-            .filter(|sha| !sha.is_empty())
-            .or(target.commit_sha.as_deref().filter(|sha| !sha.is_empty()))?;
+            .explicit_commit()
+            .or(target.pr_head_sha.as_deref().filter(|sha| !sha.is_empty()))?;
         let identity = target
             .pr_id
             .as_ref()
@@ -138,16 +136,6 @@ fn is_terminal(jobs: &[CiJob], head_sha: &str) -> bool {
         && jobs
             .iter()
             .any(|job| sha_matches(&job.commit_sha, head_sha))
-}
-
-/// Whether a job's commit SHA identifies the target head SHA, tolerating the
-/// short-vs-full SHA mismatch between the web-UI scrape (short) and the resolved
-/// head (full): a match is a non-empty common prefix of one within the other.
-fn sha_matches(job_sha: &str, head_sha: &str) -> bool {
-    if job_sha.is_empty() || head_sha.is_empty() {
-        return false;
-    }
-    head_sha.starts_with(job_sha) || job_sha.starts_with(head_sha)
 }
 
 #[cfg(test)]
@@ -290,6 +278,35 @@ mod tests {
             cache.get_terminal(&key("new-head")).is_some(),
             "a read containing this head SHA's completed run is terminal"
         );
+    }
+
+    #[test]
+    fn abbreviated_sha_shorter_than_seven_is_not_terminal() {
+        let cache = CiReadCache::default();
+        cache.store(
+            key("abcdef1234567"),
+            vec![job_at(
+                "abcdef",
+                CiJobStatus::Completed,
+                Some(CiJobConclusion::Success),
+            )],
+        );
+        assert!(cache.get_terminal(&key("abcdef1234567")).is_none());
+    }
+
+    #[test]
+    fn explicit_commit_is_the_cache_change_token() {
+        let target = Target {
+            pr_id: Some(temper_forge_model::PullRequestId::new(
+                "forgejo:acme/widgets:pull:7",
+            )),
+            pr_head_sha: Some("oldhead1234567".to_string()),
+            commit_sha: Some("current1234567".to_string()),
+            ..Default::default()
+        };
+        let derived = CiReadKey::from_target(&RepositoryId::new("forgejo:acme/widgets"), &target)
+            .expect("combined target has a cache key");
+        assert_eq!(derived.head_sha, "current1234567");
     }
 
     #[test]
