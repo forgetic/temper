@@ -54,7 +54,9 @@ pub use pre_push::{
     fingerprint_writable_repos_blocking, run_pre_push_checks, submit_for_pr_pre_push_response,
     submit_for_pr_pre_push_response_blocking,
 };
-pub use run::{run_worker, run_worker_with_transport};
+pub use run::{
+    WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
+};
 pub use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
 };

@@ -22,6 +22,14 @@ crates/temper-workflow/src/lease/manager.rs
 # transitions; keeping these states together prevents dispatch bypass paths.
 crates/temper-engine/src/daemon/machine.rs
 
+# Startup recovery inventory and orphan convergence share the service boundary
+# with daemon construction so no feed can bypass durable claim reconstruction.
+crates/temper-engine-service/src/runtime.rs
+
+# Feed enrichment and durable-assignment reconstruction use the same workflow
+# compilation and Forge snapshot rules; keep them co-located for parity audits.
+crates/temper-engine/src/feed/mod.rs
+
 # Workspace recovery is one atomic preservation/replay/quarantine protocol;
 # keeping its phases together makes destructive-operation ordering auditable.
 crates/temper-worker/src/workspace/recovery.rs

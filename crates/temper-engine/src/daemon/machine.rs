@@ -74,6 +74,10 @@ pub(super) enum DaemonCompletion {
     ReleaseAssignmentsForShutdown {
         reply: temper_engine_io::OneshotSender<()>,
     },
+    /// Stop the daemon loop without releasing durable assignments.
+    Crash {
+        reply: temper_engine_io::OneshotSender<()>,
+    },
     /// Daemon API: enqueue one job (scans, backstops, tests).
     Enqueue {
         job_id: String,
@@ -229,6 +233,7 @@ pub(super) struct DaemonMachine {
     pub(super) deferred_enqueues: Vec<DeferredEnqueue>,
     pub(super) assignment_contexts: BTreeMap<String, crate::applier::ClaimContext>,
     pub(super) next_id: u64,
+    pub(super) stopped: bool,
 }
 
 impl DaemonMachine {
@@ -292,6 +297,7 @@ impl DaemonMachine {
             deferred_enqueues: Vec::new(),
             assignment_contexts: BTreeMap::new(),
             next_id: 0,
+            stopped: false,
         }
     }
 
@@ -576,6 +582,11 @@ impl Machine for DaemonMachine {
                 }
                 vec![DaemonRequest::RunShutdownRelease { assignments, reply }]
             }
+            DaemonCompletion::Crash { reply } => {
+                self.stopped = true;
+                reply.send(());
+                Vec::new()
+            }
             DaemonCompletion::Enqueue {
                 job_id,
                 role,
@@ -629,6 +640,10 @@ impl Machine for DaemonMachine {
                 )]
             }
         }
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped
     }
 }
 

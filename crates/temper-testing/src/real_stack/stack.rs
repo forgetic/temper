@@ -1,34 +1,48 @@
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use jig_server::FakeLlm;
 use skein::cx::Cx;
 use skein::runtime::RuntimeHandle;
-use temper_daemon_transport::InProcessTransport;
 use temper_engine::{Daemon, RoleFeedMode};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId};
 use temper_protocol_worker::{JobResult, ResultStatus, WorkerAuth, WorkerProtocolMessage};
-use temper_worker::{CodingExecutor, Transport, WorkerConfig, run_worker_with_transport};
-use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
+use temper_worker::{
+    CodingExecutor, CodingExecutorConfig, Transport, WorkerComponentHandle, WorkerConfig,
+    start_worker_with_transport,
+};
+use temper_workflow::{
+    ArtifactSource, CompiledWorkflow, DurableAssignment, LeaseManager, RoleId, ValidatedWorkflow,
+    parse_metadata_block,
+};
 
 use super::DEFAULT_NOW;
+use super::clock::MutableWallClock;
 use super::git::{git_output_raw, git_output_trim, path_str};
-use super::runner::NativeJigAgentRunner;
+use super::pause::{PauseHooks, PausePoint};
+use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
 
-/// Built hermetic world. Keep the value alive for as long as worker/agent runs;
-/// it owns the temp git remotes/workspaces and the Jig fake LLM server.
+/// Built hermetic stack. Durable state and replaceable process handles are
+/// intentionally different values so tests cannot accidentally rebuild the
+/// world when restarting a component.
 pub struct HermeticRealStack {
+    pub(crate) world: HermeticDurableWorld,
+    pub(crate) components: HermeticComponentHandles,
+}
+
+/// State that survives daemon and worker replacement.
+pub struct HermeticDurableWorld {
     pub(crate) _temp: tempfile::TempDir,
     pub(crate) _fake_llm: FakeLlm,
     pub(crate) forge: Arc<MemoryForge>,
     pub(crate) workflow: Arc<ValidatedWorkflow>,
     pub(crate) compiled: CompiledWorkflow,
-    pub(crate) daemon: Arc<Daemon>,
     pub(crate) result_tx: temper_engine_io::CqSender<JobResult>,
     pub(crate) result_rx: temper_engine_io::CqReceiver<JobResult>,
     pub(crate) origins: BTreeMap<String, PathBuf>,
@@ -39,8 +53,40 @@ pub struct HermeticRealStack {
     pub(crate) issue_number: ItemNumber,
     pub(crate) role: String,
     pub(crate) worker_config: WorkerConfig,
+    pub(crate) coding_config: CodingExecutorConfig,
+    pub(crate) runner: Arc<NativeJigAgentRunner>,
+    pub(crate) clock: MutableWallClock,
+    pub(crate) hooks: PauseHooks,
+    pub(crate) router: Arc<DaemonRouter>,
+    pub(crate) apply_grace: Option<Duration>,
+}
+
+/// Process-local handles that may be stopped and reconstructed over one world.
+pub struct HermeticComponentHandles {
+    pub(crate) daemon: Arc<Daemon>,
     pub(crate) executor: Arc<CodingExecutor<NativeJigAgentRunner>>,
-    pub(crate) worker_started: bool,
+    pub(crate) worker: Option<WorkerComponentHandle>,
+    pub(crate) recovered: BTreeMap<String, HermeticRecoveredClaim>,
+}
+
+pub(crate) struct HermeticRecoveredClaim {
+    repo: RepositoryId,
+    target: ArtifactSource,
+    assignment: DurableAssignment,
+}
+
+impl Deref for HermeticRealStack {
+    type Target = HermeticDurableWorld;
+
+    fn deref(&self) -> &Self::Target {
+        &self.world
+    }
+}
+
+impl DerefMut for HermeticRealStack {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.world
+    }
 }
 
 impl HermeticRealStack {
@@ -110,25 +156,172 @@ impl HermeticRealStack {
         &self.workspace_root
     }
 
-    /// Real daemon handle used by the fixture.
-    pub fn daemon(&self) -> &Daemon {
-        self.daemon.as_ref()
+    /// Mutable wall clock shared by every daemon incarnation.
+    pub fn clock(&self) -> &MutableWallClock {
+        &self.clock
     }
 
-    /// Starts the real worker loop once. The worker runs detached until the
-    /// enclosing skein runtime exits.
+    /// Named, channel-backed pause hooks for deterministic crash placement.
+    pub fn pause_hooks(&self) -> &PauseHooks {
+        &self.hooks
+    }
+
+    /// Real daemon handle used by the current fixture component.
+    pub fn daemon(&self) -> &Daemon {
+        self.components.daemon.as_ref()
+    }
+
+    /// Starts the real worker loop once and retains explicit crash/join control.
     pub fn start_worker(&mut self, handle: &RuntimeHandle) {
-        if self.worker_started {
+        if self.components.worker.is_some() {
             return;
         }
-        self.worker_started = true;
-        let worker_handle = handle.clone();
-        let config = self.worker_config.clone();
-        let executor = self.executor.clone();
         let transport = self.transport();
-        handle.spawn(async move {
-            let _ = run_worker_with_transport(worker_handle, config, executor, transport).await;
-        });
+        self.components.worker = Some(start_worker_with_transport(
+            handle.clone(),
+            self.worker_config.clone(),
+            self.components.executor.clone(),
+            transport,
+        ));
+    }
+
+    /// Abruptly stops and joins the worker machine. Durable workspaces and its
+    /// stable worker identity remain in the world for [`start_worker`](Self::start_worker).
+    pub async fn crash_worker(&mut self) {
+        if let Some(worker) = self.components.worker.take() {
+            worker.crash().await;
+        }
+    }
+
+    /// Abruptly stops the daemon and installs a fresh daemon over the same
+    /// Forge, clock, workflow, journal-facing applier, and in-process endpoint.
+    /// The new daemon starts behind its recovery barrier.
+    pub async fn replace_daemon(&mut self, handle: &RuntimeHandle) {
+        self.components.daemon.crash().await;
+        let daemon = self.build_daemon(handle).begin_startup_recovery();
+        let daemon = Arc::new(daemon);
+        let recovered = self.stage_primary_assignment(daemon.as_ref()).await;
+        self.router.replace(daemon.clone());
+        self.components.daemon = daemon;
+        self.components.recovered = recovered;
+        self.components.executor = Arc::new(
+            CodingExecutor::new(self.coding_config.clone(), self.runner.clone())
+                .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(
+                    self.components.daemon.clone(),
+                ))),
+        );
+    }
+
+    /// Opens the current daemon's startup barrier at a named deterministic
+    /// pause point. Startup inventory can be staged explicitly by a scenario
+    /// before calling this method.
+    pub async fn open_recovery_barrier(&mut self) -> Vec<temper_engine::RecoveredJob> {
+        self.hooks.reach(PausePoint::RecoveryBarrierOpening).await;
+        let orphaned = self.components.daemon.finish_startup_recovery().await;
+        let policy = temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300));
+        for orphan in &orphaned {
+            let claim = self
+                .components
+                .recovered
+                .get(&orphan.job_id)
+                .expect("hermetic orphan has durable context");
+            LeaseManager::new(self.forge.as_ref(), policy)
+                .rollback_assignment(&claim.repo, claim.target, &claim.assignment)
+                .await
+                .expect("hermetic orphan convergence");
+        }
+        self.components.recovered.clear();
+        orphaned
+    }
+
+    async fn stage_primary_assignment(
+        &self,
+        daemon: &Daemon,
+    ) -> BTreeMap<String, HermeticRecoveredClaim> {
+        let mut recovered = BTreeMap::new();
+        let issue = self
+            .forge
+            .get_issue_by_number(&self.primary_repo_id, self.issue_number)
+            .await
+            .expect("hermetic startup issue inventory");
+        let Some(issue) = issue else {
+            return recovered;
+        };
+        let metadata = parse_metadata_block(&issue.body)
+            .expect("hermetic startup metadata parses")
+            .unwrap_or_default();
+        let Some(assignment) = metadata.assignment else {
+            return recovered;
+        };
+        let job_id = assignment
+            .job_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .expect("durable assignment has job id");
+        let worker_id = assignment
+            .worker_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .expect("durable assignment has worker id");
+        let prior_boot = assignment
+            .daemon_boot_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .expect("durable assignment has daemon boot id");
+        let target = ArtifactSource::Issue {
+            number: self.issue_number,
+        };
+        let job = temper_engine::recovered_job_from_assignment(
+            self.forge.as_ref(),
+            &self.primary_repo_id,
+            target,
+            &assignment,
+            self.workflow.as_ref(),
+            &self.compiled,
+        )
+        .await
+        .expect("hermetic durable assignment reconstructs");
+        daemon
+            .stage_recovered_job(
+                temper_engine::RecoveredJob {
+                    job_id: job.job_id,
+                    worker_id,
+                    role: job.role,
+                    repo: job.repo,
+                    artifact: job.artifact,
+                    job_payload: job.job_payload,
+                },
+                prior_boot,
+            )
+            .await
+            .expect("hermetic durable assignment stages");
+        recovered.insert(
+            job_id,
+            HermeticRecoveredClaim {
+                repo: self.primary_repo_id.clone(),
+                target,
+                assignment,
+            },
+        );
+        recovered
+    }
+
+    fn build_daemon(&self, handle: &RuntimeHandle) -> Daemon {
+        let applier = Arc::new(temper_engine::LeaseApplier::new(
+            self.forge.clone(),
+            temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300)),
+            "hermetic-daemon",
+            Arc::new(temper_engine::ForgeApplier::new(
+                self.forge.clone(),
+                self.workflow.clone(),
+            )),
+            self.clock.capability(),
+        ));
+        let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);
+        match self.apply_grace {
+            Some(grace) => daemon.with_apply_grace(grace),
+            None => daemon,
+        }
     }
 
     /// Enqueues the currently seeded issue for the builder's primary worker
@@ -146,7 +339,8 @@ impl HermeticRealStack {
         now: DateTime<Utc>,
     ) -> Result<usize, String> {
         let role = RoleId::new(role.to_string());
-        self.daemon
+        self.components
+            .daemon
             .enqueue_scanned_role_work(
                 self.forge.as_ref(),
                 &self.primary_repo_id,
@@ -284,8 +478,9 @@ impl HermeticRealStack {
 
     fn transport(&self) -> Arc<ResultTappingTransport> {
         Arc::new(ResultTappingTransport {
-            inner: InProcessTransport::new(self.daemon.as_ref().clone()),
+            router: self.router.clone(),
             result_tx: self.result_tx.clone(),
+            hooks: self.hooks.clone(),
         })
     }
 }
@@ -298,29 +493,69 @@ pub struct HermeticRunResult {
     pub pull_requests: Vec<PullRequest>,
 }
 
-/// In-process transport wrapper that delegates to the reusable daemon transport
-/// and records every worker `Result` message for assertions.
+/// Replaceable in-process endpoint. Existing workers resolve the current daemon
+/// on every protocol message, matching an external worker reconnecting to a
+/// restarted daemon at a stable URL.
+pub struct DaemonRouter {
+    daemon: Mutex<Arc<Daemon>>,
+}
+
+impl DaemonRouter {
+    pub(crate) fn new(daemon: Arc<Daemon>) -> Self {
+        Self {
+            daemon: Mutex::new(daemon),
+        }
+    }
+
+    pub(crate) fn replace(&self, daemon: Arc<Daemon>) {
+        *self.daemon.lock().expect("daemon router lock") = daemon;
+    }
+
+    fn current(&self) -> Arc<Daemon> {
+        self.daemon.lock().expect("daemon router lock").clone()
+    }
+}
+
+/// In-process transport wrapper that delegates through the replaceable daemon
+/// endpoint and records every worker `Result` message for assertions.
 pub struct ResultTappingTransport {
-    inner: InProcessTransport,
+    router: Arc<DaemonRouter>,
     result_tx: temper_engine_io::CqSender<JobResult>,
+    hooks: PauseHooks,
 }
 
 impl Transport for ResultTappingTransport {
     fn send(
         &self,
-        cx: Cx,
+        _cx: Cx,
         message: WorkerProtocolMessage,
         auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
-        let inner = self.inner.clone();
+        let daemon = self.router.current();
         let result_tx = self.result_tx.clone();
+        let hooks = self.hooks.clone();
         async move {
             let recorded = match &message {
                 WorkerProtocolMessage::Result(result) => Some(result.clone()),
                 _ => None,
             };
-            let reply = inner.send(cx, message, auth).await;
+            if recorded.is_some() {
+                // A successful coding executor has already committed and pushed
+                // before publishing Result.
+                hooks.reach(PausePoint::WorkerPushCompleted).await;
+                hooks.reach(PausePoint::ResultApplicationStarted).await;
+            }
+            let reply = daemon
+                .deliver_protocol_message_with_auth(message, auth)
+                .await;
+            if matches!(&reply, Ok(Some(WorkerProtocolMessage::Assign(_)))) {
+                // The daemon only emits Assign after the durable claim CAS.
+                hooks.reach(PausePoint::AssignmentClaimCommitted).await;
+            }
             if let Some(result) = recorded {
+                if reply.is_ok() {
+                    hooks.reach(PausePoint::ResultApplicationCompleted).await;
+                }
                 let _ = result_tx.send(result);
             }
             reply

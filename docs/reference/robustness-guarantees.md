@@ -42,6 +42,9 @@ is supplied explicitly, so the suite is reproducible.
 | Mechanical conflict routing preserves `landing`, adds `merge-conflict`, pauses landing automation until PR-targeted repair clears the blocker, and does not block unrelated landable PRs | `mechanical_merge_conflict.rs` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
+| Assignment identity and lifecycle projection are committed before publication; startup admits only exact worker/job heartbeat reattachment and rolls back unmatched orphans before dispatch opens | `claim_is_committed_before_assignment_publication`, `matching_heartbeat_reattaches_staged_assignment_and_rejects_other_ids`, `startup_recovery_barrier_defers_enqueue_until_orphans_are_collected` |
+| Dirty reusable workspaces replay local commits plus tracked/untracked edits over an advanced target, or produce one stable actionable quarantine | `existing_dirty_workspace_replays_local_work_over_advanced_remote`, `conflicting_recovery_is_quarantined_once_with_actionable_manifest` |
+| Multi-child creation is durable and staged: restart resumes create/wire/activate without duplicate children or premature dispatch | `create_intent_recovery.rs`, `staged_children_are_excluded_from_role_scans` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
 | Reconciler actions are applied through the runtime and re-applying a report is a no-op | `recovery.rs` (`requeue_lease_clears_the_lease_through_the_manager`, `repair_realizes_pending_labels_and_reconciles_the_command`, `unblock_realizes_labels_and_journals_a_completed_command`, `re_applying_a_report_is_a_no_op`) |
 | Cross-repo dependency aggregation unblocks a parent only after every child has landed in its own repository; a transient child read failure is not a false unblock | `dependency_aggregation.rs` |
@@ -126,6 +129,32 @@ window, but a wider window can no longer produce a lost-update lease race.
   repository on every scan. A child repo that is temporarily unreadable records
   a dependency read failure and is treated as not landed, so partial outages
   preserve the block instead of producing a false `Unblock`.
+
+## Restart convergence
+
+The hermetic real-stack fixture separates its durable world (MemoryForge state,
+local git origins, workspace root, model script, worker identity, result stream,
+and mutable wall clock) from replaceable daemon, worker, and executor handles.
+Existing workers route through a stable in-process endpoint, so replacing a
+daemon exercises reconnect behavior rather than rebuilding test state.
+Components expose abrupt stop/join controls, and restart scenarios synchronize at
+named one-shot channel barriers: assignment claim commit, worker push, result
+application start/completion, child create/wire/activation, and recovery-barrier
+opening. Lease time uses the supplied mutable wall clock; engine timers are
+advanced through their explicit runtime clock. Correctness assertions therefore
+do not infer progress from arbitrary sleeps.
+
+Recovery ordering is: complete durable child intents; inventory assignments with
+dispatch closed; accept only exact worker/job heartbeat reattachment; converge
+expired, malformed, and unreattached orphans; then open deferred feeds. The
+observable idle condition is no dispatchable artifact, live stale lease, staged
+intent, duplicate session, or unapplied current-head result.
+
+Dirty checkouts preserve local commits and tracked/untracked edits before moving
+to the current target. Successful replay retains the edits; ambiguous replay
+creates one stable quarantine manifest with recovery refs and commands. PR
+repair similarly converges monotonically: `repaired_head` rejects stale CI and
+suppresses repeated repair until current-head CI succeeds.
 
 ## Limitations discovered by the tests
 
