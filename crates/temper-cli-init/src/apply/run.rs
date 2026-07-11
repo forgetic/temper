@@ -19,6 +19,15 @@ pub fn run_apply(
     opts: &ApplyOptions,
 ) -> Result<(), InitError> {
     let bundle = load_deployment(&opts.options, &opts.env, &opts.paths, opts.existing_repo)?;
+    if bundle.forge.admin_token.is_none()
+        && (bundle.forge.admin_user.is_none() || bundle.forge.admin_password.is_none())
+    {
+        return Err(InitError::Unsupported(
+            "deployment requires an admin forge token (for example `[engine] forge_token`) \
+             or a legacy `[forge] admin` user with a password in credentials.toml"
+                .to_string(),
+        ));
+    }
 
     // Enforce read-only ambient credentials before confirmation and, crucially,
     // before constructing or invoking any mutating Forge adapter call.

@@ -24,6 +24,7 @@ Current reference pages:
 - [Production worker runtime](production-worker.md)
 - [Environment variables](environment-variables.md)
 - [Operator compatibility surfaces](operator-compatibility-surfaces.md)
+- [`temper plan` report](plan-report.md)
 - [Cross-repository workflow contracts](cross-repo-workflows.md)
 - [Interactive conversation interface](interactive-conversation-interface.md)
 - [Interaction profile spec](interaction-profile-spec.md)
