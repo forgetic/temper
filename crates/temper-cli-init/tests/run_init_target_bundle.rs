@@ -29,7 +29,7 @@ fn non_interactive_distributed_provider_none_writes_target_bundle_without_provid
         },
         ..Default::default()
     };
-    let mut provisioner = StubProvisioner { seen: None };
+    let mut provisioner = StubProvisioner::default();
 
     run_init(&mut prompter, &mut provisioner, &opts).expect("provider-none init succeeds");
 
@@ -86,7 +86,7 @@ fn non_interactive_repeated_repos_are_written_to_engine_and_pool() {
         },
         ..Default::default()
     };
-    let mut provisioner = StubProvisioner { seen: None };
+    let mut provisioner = StubProvisioner::default();
 
     run_init(&mut prompter, &mut provisioner, &opts).expect("multi-repo local init succeeds");
 
