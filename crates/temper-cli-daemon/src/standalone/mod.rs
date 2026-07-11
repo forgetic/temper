@@ -34,7 +34,7 @@ use temper_engine::{
 };
 use temper_engine_service::{
     engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
-    worker_pool_auth_config,
+    worker_pool_auth_config, workflow_role_limits,
 };
 use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
@@ -97,6 +97,7 @@ async fn run_async(
             .map_err(|error| format!("failed to resolve workflow: {error}"))?,
     );
     let compiled = Arc::new(workflow.compile());
+    let role_limits = workflow_role_limits(&compiled);
 
     // §7 workflow line: name, the configured roles, and the queue count.
     let role_names: Vec<String> = daemon_config
@@ -140,10 +141,11 @@ async fn run_async(
         &role_tokens,
         lease_ttl,
     );
-    let daemon = Daemon::with_applier_and_worker_pools(
+    let daemon = standalone_daemon(
         Arc::clone(&spawner),
         applier,
         daemon_config.worker_pools.clone(),
+        role_limits,
     )
     .with_worker_pool_auth(worker_pool_auth_config(resolved)?);
 
@@ -232,10 +234,14 @@ async fn run_async(
         temper_worker_service::role_identities(resolved),
     )?;
 
-    // Per-role concurrency for the §7 `capacity:` line — the standalone worker
-    // runs `max_concurrent_jobs` per role, shared across all repos. Captured
-    // before `worker_config` is moved into the worker task.
-    let per_role_capacity = worker_config.max_concurrent_jobs as u64;
+    // The startup capacity line reports workflow-global role concurrency,
+    // not this worker's advertised local capacity. Preserve compiled role
+    // declaration order and retain `None` for an explicit `unlimited` token.
+    let workflow_role_capacity: Vec<(String, Option<u32>)> = compiled
+        .roles()
+        .iter()
+        .map(|role| (role.id.as_str().to_string(), role.concurrency))
+        .collect();
 
     let pr_freshness_guard = Arc::new(InProcessPrFreshnessGuard::new(daemon.clone()));
     let runner = Arc::new(
@@ -269,9 +275,9 @@ async fn run_async(
     });
 
     // §7 planes-up line (engine + worker + agent all on this loop) and the
-    // worker capacity line (per-role concurrency, shared across all repos).
+    // workflow's global per-role concurrency limits.
     emit_engine_status(banner::planes_up());
-    emit_worker_status(banner::capacity(&role_names, per_role_capacity));
+    emit_worker_status(banner::capacity(&workflow_role_capacity));
 
     // --- Webhook route (optional) ---
     let webhook_enabled = resolved.engine.webhook_secret_value.is_some()
@@ -356,6 +362,15 @@ async fn run_async(
     .await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
+}
+
+fn standalone_daemon(
+    spawner: Arc<dyn temper_engine_io::Spawner>,
+    applier: Arc<dyn temper_engine::ResultApplier>,
+    worker_pools: Vec<temper_engine::WorkerPoolPolicy>,
+    role_limits: BTreeMap<String, u32>,
+) -> Daemon {
+    Daemon::with_applier_worker_pools_and_role_limits(spawner, applier, worker_pools, role_limits)
 }
 
 pub(super) fn standalone_worker_config(
@@ -447,6 +462,11 @@ fn serving_debug_message(addr: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temper_engine::NoopApplier;
+    use temper_protocol_worker::{
+        Artifact, Capability, Capacity, Poll, Register, WORKER_PROTOCOL_VERSION,
+        WorkerProtocolMessage,
+    };
 
     #[test]
     fn serving_debug_message_uses_padded_engine_prefix() {
@@ -454,5 +474,83 @@ mod tests {
 
         assert_eq!(message, "engine:  serving on 127.0.0.1:8314");
         assert_eq!(&message[.."engine:  ".len()], "engine:  ");
+    }
+
+    #[test]
+    fn standalone_daemon_preserves_distinct_workflow_role_limits() {
+        temper_engine_io::block_on_with(move |_cx, handle| async move {
+            let daemon = standalone_daemon(
+                Arc::new(handle),
+                Arc::new(NoopApplier),
+                Vec::new(),
+                BTreeMap::from([("alpha".to_string(), 1), ("beta".to_string(), 2)]),
+            );
+
+            assert_configured_dispatch(&daemon).await;
+        });
+    }
+
+    async fn assert_configured_dispatch(daemon: &Daemon) {
+        let roles = ["alpha", "beta", "gamma"];
+        let register = WorkerProtocolMessage::Register(Register {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: "worker".to_string(),
+            worker_pool: None,
+            capabilities: roles
+                .iter()
+                .map(|role| Capability {
+                    role: (*role).to_string(),
+                    repo: "acme/widgets".to_string(),
+                })
+                .collect(),
+            capacity: Capacity {
+                max_concurrent_jobs: 10,
+            },
+            labels: None,
+        });
+        assert_eq!(daemon.deliver_protocol_message(register).await, Ok(None),);
+
+        for (job_id, role) in [
+            ("alpha-1", "alpha"),
+            ("alpha-2", "alpha"),
+            ("beta-1", "beta"),
+            ("beta-2", "beta"),
+            ("beta-3", "beta"),
+            ("gamma-1", "gamma"),
+            ("gamma-2", "gamma"),
+        ] {
+            daemon
+                .enqueue_job(
+                    job_id,
+                    role,
+                    "acme/widgets",
+                    Artifact {
+                        item: Default::default(),
+                        kind: "issue".to_string(),
+                    },
+                    Default::default(),
+                )
+                .await;
+        }
+
+        let mut assigned_roles = Vec::new();
+        for _ in 0..5 {
+            let response = daemon
+                .deliver_protocol_message(WorkerProtocolMessage::Poll(Poll {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    worker_id: "worker".to_string(),
+                    free_capacity: 10,
+                    max_wait_ms: Some(0),
+                }))
+                .await
+                .expect("poll succeeds")
+                .expect("eligible work remains");
+            let WorkerProtocolMessage::Assign(assign) = response else {
+                panic!("expected assignment, got {response:?}");
+            };
+            assigned_roles.push(assign.role);
+        }
+
+        assert_eq!(assigned_roles, ["alpha", "beta", "beta", "gamma", "gamma"]);
     }
 }

@@ -11,7 +11,7 @@ use temper_engine::{
 };
 use temper_forge::RepositoryPath;
 use temper_forge::config::ForgejoConfig;
-use temper_workflow::RoleId;
+use temper_workflow::{CompiledWorkflow, RoleId};
 
 /// Builds the Forgejo backend config from the resolved forge settings.
 ///
@@ -66,6 +66,23 @@ pub fn daemon_run_config(resolved: &Resolved) -> Result<DaemonRunConfig, String>
         daemon_id: engine.daemon_id.clone(),
         worker_pools: worker_pool_policies(&resolved.worker.pools),
     })
+}
+
+/// Projects the compiled workflow's finite per-role concurrency limits into
+/// the daemon scheduler's role-limit map. Roles with `None` are deliberately
+/// absent: the daemon interprets an absent role as unlimited and continues to
+/// schedule it according to available worker capacity.
+pub fn workflow_role_limits(
+    compiled: &CompiledWorkflow,
+) -> std::collections::BTreeMap<String, u32> {
+    compiled
+        .roles()
+        .iter()
+        .filter_map(|role| {
+            role.concurrency
+                .map(|limit| (role.id.as_str().to_string(), limit))
+        })
+        .collect()
 }
 
 fn worker_pool_policies(pools: &[WorkerPoolSettings]) -> Vec<WorkerPoolPolicy> {
@@ -132,6 +149,30 @@ mod tests {
 
     use super::*;
     use crate::result_applier;
+
+    fn compiled_workflow_with_mixed_limits() -> CompiledWorkflow {
+        let mut spec = temper_workflow::parse_workflow_spec(
+            "workflow.json",
+            temper_reference_delivery::reference_delivery_workflow_json(),
+        )
+        .expect("reference workflow parses");
+        spec.roles[0].concurrency = Some(2);
+        spec.roles[1].concurrency = None;
+        spec.roles[2].concurrency = Some(5);
+        spec.validate().expect("workflow validates").compile()
+    }
+
+    #[test]
+    fn workflow_role_limits_projects_only_finite_compiled_limits() {
+        let compiled = compiled_workflow_with_mixed_limits();
+
+        let limits = workflow_role_limits(&compiled);
+
+        assert_eq!(limits.get("architect"), Some(&2));
+        assert_eq!(limits.get("reviewer"), Some(&5));
+        assert_eq!(limits.get("engineer"), None);
+        assert_eq!(limits.len(), compiled.roles().len() - 1);
+    }
 
     fn in_memory_engine_config() -> EngineConfig {
         let daemon = DaemonRunConfig {
