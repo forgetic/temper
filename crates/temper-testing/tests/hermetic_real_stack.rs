@@ -178,6 +178,8 @@ fn submit_retry_real_stack_script() -> Script {
 mod basic_delivery;
 #[path = "hermetic_real_stack/multi_repo.rs"]
 mod multi_repo;
+#[path = "hermetic_real_stack/restart_acceptance.rs"]
+mod restart_acceptance;
 #[path = "hermetic_real_stack/restart_recovery.rs"]
 mod restart_recovery;
 

@@ -8,6 +8,13 @@ use temper_workflow::{ChildIssueCheckpoint, ChildIssueLifecycleHook};
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PausePoint {
     AssignmentClaimCommitted,
+    /// The writable checkout and durable agent session are prepared, but the
+    /// native agent has not started its first model request.
+    AgentSessionStarted,
+    /// A heartbeat naming at least one in-flight job is about to be delivered.
+    WorkerHeartbeatReportingJob,
+    /// The daemon has accepted a heartbeat naming at least one in-flight job.
+    WorkerHeartbeatCompleted,
     WorkerPushCompleted,
     ResultApplicationStarted,
     ResultApplicationCompleted,

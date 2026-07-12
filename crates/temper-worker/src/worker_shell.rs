@@ -179,7 +179,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
             }
             WorkerRequest::SendHeartbeat(message) => {
                 self.post(message, |reply| {
-                    WorkerCompletion::HeartbeatDelivered(reply.map(|_| ()))
+                    WorkerCompletion::HeartbeatDelivered(heartbeat_outcome(reply))
                 });
             }
             WorkerRequest::RunJob(assign) => {
@@ -214,5 +214,18 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 tracing::debug!(target: "temper_worker", "{line}");
             }
         }
+    }
+}
+
+fn heartbeat_outcome(reply: Result<Option<WorkerProtocolMessage>, String>) -> Result<(), String> {
+    match reply {
+        Ok(None) => Ok(()),
+        Ok(Some(WorkerProtocolMessage::Error(error))) => {
+            Err(format!("daemon rejected heartbeat: {error:?}"))
+        }
+        Ok(Some(other)) => Err(format!(
+            "daemon returned unexpected heartbeat response: {other:?}"
+        )),
+        Err(error) => Err(error),
     }
 }

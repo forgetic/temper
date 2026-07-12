@@ -15,6 +15,8 @@ use temper_worker::{
     PrFreshnessGuard,
 };
 
+use super::pause::{PauseHooks, PausePoint};
+
 /// In-process native coding-agent runner used by the hermetic real-stack
 /// builder. It keeps the worker's real [`temper_worker::CodingExecutor`] in
 /// place while pointing the native agent at a Jig-backed provider.
@@ -26,6 +28,7 @@ pub struct NativeJigAgentRunner {
     pub(crate) config_dir: Option<PathBuf>,
     pub(crate) enable_subagents: bool,
     pub(crate) submit_for_pr: temper_agent::SubmitForPrHost,
+    pub(crate) hooks: PauseHooks,
 }
 
 impl AgentRunner for NativeJigAgentRunner {
@@ -34,6 +37,11 @@ impl AgentRunner for NativeJigAgentRunner {
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {
+        // CodingExecutor invokes the runner only after checkout recovery and
+        // durable agent-session attachment. This is therefore the stable seam
+        // for restart tests that must mutate or inspect a prepared workspace
+        // without racing the model or relying on a sleep.
+        self.hooks.reach(PausePoint::AgentSessionStarted).await;
         let accepted_submit = AcceptedSubmitProofStore::new();
         let submit_for_pr = self.submit_for_pr.clone();
         let accepted_submit_for_host = accepted_submit.clone();
