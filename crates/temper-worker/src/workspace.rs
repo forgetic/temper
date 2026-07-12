@@ -396,13 +396,17 @@ impl Workspace {
 
     /// Discard all local tracked and untracked working-tree changes.
     pub async fn discard_changes(&self) -> Result<(), WorkspaceError> {
+        self.discard_changes_to_ref("HEAD").await
+    }
+
+    pub(crate) async fn discard_changes_to_ref(&self, target: &str) -> Result<(), WorkspaceError> {
         self.run_workspace_git(
             false,
-            "git reset --hard HEAD".to_string(),
+            format!("git reset --hard {target}"),
             vec![
                 OsString::from("reset"),
                 OsString::from("--hard"),
-                OsString::from("HEAD"),
+                OsString::from(target),
             ],
         )
         .await?;

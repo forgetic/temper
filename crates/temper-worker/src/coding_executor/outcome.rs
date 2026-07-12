@@ -85,7 +85,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
     )
     .await
     {
-        return outcome;
+        return discard_unpublished_work(prepared, outcome).await;
     }
     if let Err(outcome) =
         ensure_accepted_submit_before_pr_push(accepted_submit, workspace_context, workspace_root)
@@ -127,6 +127,19 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
             .or_else(|| Some(format!("implemented {coordination_key}"))),
         details: None,
     }
+}
+
+async fn discard_unpublished_work(prepared: &[PreparedRepo], outcome: JobOutcome) -> JobOutcome {
+    for prepared in prepared {
+        if let Err(error) = prepared
+            .workspace
+            .discard_changes_to_ref(&prepared.start_head_sha)
+            .await
+        {
+            return workspace_failure("discard unpublished workspace changes", error);
+        }
+    }
+    outcome
 }
 
 async fn writable_verdict_outcome(

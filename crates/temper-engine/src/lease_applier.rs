@@ -9,8 +9,10 @@ use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ItemNumber, RepositoryPath};
 use temper_log::emit::{LeaseLost, LeaseReleased, emit_lease_lost, emit_lease_released};
 use temper_log::{WorkItemRef, strip_provider_scheme, work_item_span};
-use temper_protocol_worker::{JobContext, JobResult};
-use temper_protocol_worker::{PullRequestFreshness, PullRequestFreshnessResponse};
+use temper_protocol_worker::{
+    JobContext, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
+    PullRequestFreshnessStatus,
+};
 use temper_workflow::{
     ArtifactSource, AssignmentClaimRequest, DurableAssignment, LeaseError, LeaseManager,
     LeasePolicy, RoleId,
@@ -69,6 +71,9 @@ impl<F: Forge + ?Sized> LeaseApplier<F> {
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     async fn claim(&self, job: InFlightJob, context: ClaimContext) -> ClaimOutcome {
+        if let Some(outcome) = self.validate_claim_freshness(&job).await {
+            return outcome;
+        }
         let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
             return ClaimOutcome::Stale {
                 reason: "assignment target no longer exists".to_string(),
@@ -254,6 +259,23 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         }
         .instrument(span)
         .await
+    }
+}
+
+impl<F: Forge + ?Sized> LeaseApplier<F> {
+    async fn validate_claim_freshness(&self, job: &InFlightJob) -> Option<ClaimOutcome> {
+        let check = serde_json::from_value::<JobContext>(job.job_payload.clone())
+            .ok()?
+            .pull_request_freshness?;
+        let response = self.inner.check_pull_request_freshness(check).await;
+        let reason = response
+            .reason
+            .unwrap_or_else(|| "pull request freshness check gave no reason".to_string());
+        match response.status {
+            PullRequestFreshnessStatus::Fresh => None,
+            PullRequestFreshnessStatus::Stale => Some(ClaimOutcome::Stale { reason }),
+            PullRequestFreshnessStatus::Unavailable => Some(ClaimOutcome::Retryable { reason }),
+        }
     }
 }
 
