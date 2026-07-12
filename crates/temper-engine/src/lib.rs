@@ -30,6 +30,7 @@
 use std::time::Duration;
 
 pub mod applier;
+pub mod artifact_context;
 pub mod config;
 pub mod daemon;
 pub mod engine_config;
@@ -51,6 +52,10 @@ pub(crate) const APPLY_GRACE: Duration = Duration::from_secs(10);
 
 pub use applier::{
     ApplyOutcome, ClaimContext, ClaimOutcome, NoopApplier, ResultApplier, RoleRoutingApplier,
+};
+pub use artifact_context::{
+    ArtifactContextError, ArtifactContextPolicy, ConfiguredRepositoryCatalog,
+    resolve_initial_artifact_context, resolve_initial_artifact_context_with_policy,
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};

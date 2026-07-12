@@ -100,6 +100,16 @@ impl Daemon {
         self
     }
 
+    /// Installs the immutable configured-repository catalog used by all feed
+    /// enrichment paths, including poll and webhook wake scans.
+    pub fn with_artifact_context_catalog(
+        mut self,
+        catalog: crate::ConfiguredRepositoryCatalog,
+    ) -> Self {
+        self.artifact_catalog = Arc::new(catalog);
+        self
+    }
+
     /// Closes the startup barrier. Completions are FIFO, so calling this on a
     /// newly constructed daemon guarantees subsequent enqueue/poll work cannot
     /// dispatch until [`complete_startup_recovery`](Self::complete_startup_recovery).
@@ -209,6 +219,7 @@ impl Daemon {
             cq: cq_tx,
             scanner_slot,
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
+            artifact_catalog: Arc::new(crate::ConfiguredRepositoryCatalog::default()),
         }
     }
 
