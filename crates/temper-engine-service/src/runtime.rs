@@ -52,7 +52,7 @@ pub async fn run_async(
     let (repositories, repo_ids) = resolve_repo_targets(forge.as_ref(), &config.repos).await?;
     let artifact_catalog =
         temper_engine::ConfiguredRepositoryCatalog::from_repository_set(&repositories, forge_url)?;
-    let artifact_context = Arc::new(temper_engine::ArtifactContextService::new(
+    let artifact_context = Arc::new(temper_engine::ArtifactContextBundleService::new(
         forge.clone(),
         workflow.clone(),
         artifact_catalog,

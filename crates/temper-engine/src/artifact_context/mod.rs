@@ -14,6 +14,7 @@ mod extras;
 mod forge;
 mod lineage;
 mod markdown;
+mod retrieval;
 
 #[cfg(test)]
 mod tests;
@@ -29,6 +30,12 @@ use temper_protocol_worker::{
 use temper_workflow::{ArtifactSource, ValidatedWorkflow};
 
 pub use catalog::ConfiguredRepositoryCatalog;
+pub use forge::ArtifactContextForge;
+pub use retrieval::{
+    ArtifactContextService, DEFAULT_RELATED_DEPTH, DEFAULT_RELATED_RESULTS, MAX_COMMENT_BYTES,
+    MAX_FORGE_RESPONSE_BYTES, MAX_ITEM_BODY_BYTES, MAX_ITEM_COMMENTS, MAX_RELATED_DEPTH,
+    MAX_RELATED_RESULTS,
+};
 
 /// Shared startup-constructed resolver used by every dispatch path.
 ///
@@ -36,14 +43,14 @@ pub use catalog::ConfiguredRepositoryCatalog;
 /// parsing policy, and collection bounds together prevents poll, webhook, and
 /// recovery dispatches from drifting into subtly different graph reads.
 #[derive(Clone)]
-pub struct ArtifactContextService {
+pub struct ArtifactContextBundleService {
     forge: Arc<dyn Forge>,
     workflow: Arc<ValidatedWorkflow>,
     catalog: ConfiguredRepositoryCatalog,
     policy: ArtifactContextPolicy,
 }
 
-impl ArtifactContextService {
+impl ArtifactContextBundleService {
     pub fn new(
         forge: Arc<dyn Forge>,
         workflow: Arc<ValidatedWorkflow>,

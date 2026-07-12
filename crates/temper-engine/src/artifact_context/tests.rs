@@ -364,7 +364,7 @@ fn service_selects_mandatory_lineage_and_plan_validation_aggregates() {
             "https://forge.example",
         );
         let forge_handle: Arc<dyn Forge> = forge.clone();
-        let service = ArtifactContextService::new(
+        let service = ArtifactContextBundleService::new(
             forge_handle,
             workflow,
             catalog,

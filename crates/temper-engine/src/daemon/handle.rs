@@ -104,7 +104,7 @@ impl Daemon {
     /// direct scan, and durable-recovery enrichment.
     pub fn with_artifact_context_service(
         mut self,
-        service: Arc<crate::ArtifactContextService>,
+        service: Arc<crate::ArtifactContextBundleService>,
     ) -> Self {
         self.artifact_context = Some(service);
         self
@@ -112,7 +112,7 @@ impl Daemon {
 
     /// Returns the startup-constructed artifact-context service, when this
     /// daemon was configured for graph enrichment.
-    pub fn artifact_context_service(&self) -> Option<Arc<crate::ArtifactContextService>> {
+    pub fn artifact_context_service(&self) -> Option<Arc<crate::ArtifactContextBundleService>> {
         self.artifact_context.clone()
     }
 

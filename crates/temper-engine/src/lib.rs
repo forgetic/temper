@@ -54,9 +54,11 @@ pub use applier::{
     ApplyOutcome, ClaimContext, ClaimOutcome, NoopApplier, ResultApplier, RoleRoutingApplier,
 };
 pub use artifact_context::{
-    ArtifactContextError, ArtifactContextPolicy, ArtifactContextService,
-    ConfiguredRepositoryCatalog, resolve_initial_artifact_context,
-    resolve_initial_artifact_context_for_action_with_policy,
+    ArtifactContextBundleService, ArtifactContextError, ArtifactContextForge,
+    ArtifactContextPolicy, ArtifactContextService, ConfiguredRepositoryCatalog,
+    DEFAULT_RELATED_DEPTH, DEFAULT_RELATED_RESULTS, MAX_COMMENT_BYTES, MAX_FORGE_RESPONSE_BYTES,
+    MAX_ITEM_BODY_BYTES, MAX_ITEM_COMMENTS, MAX_RELATED_DEPTH, MAX_RELATED_RESULTS,
+    resolve_initial_artifact_context, resolve_initial_artifact_context_for_action_with_policy,
     resolve_initial_artifact_context_with_policy,
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};

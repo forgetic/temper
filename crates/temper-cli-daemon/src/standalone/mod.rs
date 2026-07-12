@@ -118,7 +118,7 @@ async fn run_async(
         &repositories,
         forge_base_url.clone(),
     )?;
-    let artifact_context = Arc::new(temper_engine::ArtifactContextService::new(
+    let artifact_context = Arc::new(temper_engine::ArtifactContextBundleService::new(
         forge.clone(),
         workflow.clone(),
         artifact_catalog,

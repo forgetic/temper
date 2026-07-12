@@ -110,7 +110,7 @@ pub async fn recovered_job_from_assignment_with_artifact_context<F: Forge + ?Siz
     assignment: &temper_workflow::DurableAssignment,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
-    artifact_context: &crate::ArtifactContextService,
+    artifact_context: &crate::ArtifactContextBundleService,
 ) -> Result<WorkItemJob, String> {
     recovered_job_from_assignment_inner(
         forge,
@@ -132,7 +132,7 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
     assignment: &temper_workflow::DurableAssignment,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
-    artifact_context: Option<&crate::ArtifactContextService>,
+    artifact_context: Option<&crate::ArtifactContextBundleService>,
 ) -> Result<WorkItemJob, String> {
     let role = assignment
         .role
@@ -233,7 +233,7 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
     recovering_assignment: bool,
-    artifact_context: Option<&crate::ArtifactContextService>,
+    artifact_context: Option<&crate::ArtifactContextBundleService>,
 ) -> Result<EnrichOutcome, ScanError> {
     let repository = forge
         .get_repository(repo)

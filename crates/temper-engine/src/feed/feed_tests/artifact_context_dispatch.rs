@@ -82,7 +82,7 @@ fn configured_service_populates_normal_wake_and_recovered_dispatches_identically
             "https://forge.example",
         );
         let forge_handle: Arc<dyn Forge> = forge.clone();
-        let service = Arc::new(crate::ArtifactContextService::new(
+        let service = Arc::new(crate::ArtifactContextBundleService::new(
             forge_handle,
             workflow.clone(),
             catalog,

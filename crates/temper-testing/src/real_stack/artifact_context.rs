@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
 use temper_engine::{
-    ArtifactContextPolicy, ArtifactContextService, ConfiguredRepositoryCatalog, Daemon,
+    ArtifactContextBundleService, ArtifactContextPolicy, ConfiguredRepositoryCatalog, Daemon,
     RepositoryTarget,
 };
 use temper_forge_memory::MemoryForge;
@@ -36,7 +36,7 @@ impl HermeticRealStack {
     }
 }
 
-pub(super) fn daemon_service(daemon: &Daemon) -> Arc<ArtifactContextService> {
+pub(super) fn daemon_service(daemon: &Daemon) -> Arc<ArtifactContextBundleService> {
     daemon
         .artifact_context_service()
         .expect("hermetic daemon has artifact-context service")
@@ -46,7 +46,7 @@ pub(super) fn service(
     forge: Arc<MemoryForge>,
     workflow: Arc<ValidatedWorkflow>,
     repo_ids: &BTreeMap<String, RepositoryId>,
-) -> Arc<ArtifactContextService> {
+) -> Arc<ArtifactContextBundleService> {
     let catalog = ConfiguredRepositoryCatalog::new(
         repo_ids.iter().map(|(path, id)| {
             let (owner, name) = path
@@ -58,7 +58,7 @@ pub(super) fn service(
     )
     .expect("hermetic repository catalog is valid");
     let forge: Arc<dyn Forge> = forge;
-    Arc::new(ArtifactContextService::new(
+    Arc::new(ArtifactContextBundleService::new(
         forge,
         workflow,
         catalog,
