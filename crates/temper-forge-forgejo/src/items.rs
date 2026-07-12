@@ -85,7 +85,9 @@ impl<C: HttpClient> ForgejoForge<C> {
     ///
     /// `set_labels` replaces the full set (`PUT`), then `remove_labels` are
     /// deleted (`DELETE`, tolerating a missing label), then `add_labels` are
-    /// appended (`POST`).
+    /// appended (`POST`). Artifact update paths coalesce mixed incremental
+    /// changes with [`coalesce_label_update`] so workflow state flips use one
+    /// provider mutation and are never externally visible half-applied.
     ///
     /// Forgejo's issue label endpoints key on the **numeric label id**, not the
     /// name (`PUT`/`POST` reject a name array with `422 cannot unmarshal … into
@@ -196,6 +198,30 @@ impl<C: HttpClient> ForgejoForge<C> {
         .await?;
         Ok(())
     }
+}
+
+/// Coalesces mixed set/add/remove label operations into one replacement set.
+///
+/// Forgejo's separate add and remove endpoints expose intermediate label sets
+/// to concurrent queue scans. Computing the final set from the artifact read by
+/// the update path lets mixed workflow state flips use one `PUT`. Pure adds and
+/// pure removes retain their incremental provider operation so they do not
+/// overwrite unrelated concurrent label changes.
+pub(crate) fn coalesce_label_update(
+    current: &[String],
+    set_labels: Option<Vec<String>>,
+    add_labels: Vec<String>,
+    remove_labels: Vec<String>,
+) -> (Option<Vec<String>>, Vec<String>, Vec<String>) {
+    if set_labels.is_none() && (add_labels.is_empty() || remove_labels.is_empty()) {
+        return (None, add_labels, remove_labels);
+    }
+
+    let remove_labels = sorted_dedup(remove_labels);
+    let mut labels = sorted_dedup(set_labels.unwrap_or_else(|| current.to_vec()));
+    labels.retain(|label| !remove_labels.contains(label));
+    labels.extend(add_labels);
+    (Some(sorted_dedup(labels)), Vec::new(), Vec::new())
 }
 
 fn sorted_dedup(mut values: Vec<String>) -> Vec<String> {

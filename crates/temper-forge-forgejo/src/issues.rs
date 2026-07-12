@@ -11,6 +11,7 @@
 //! `docs/reference/forgejo-backend.md`.
 
 use crate::ids::{RepoCoord, parse_issue_id, parse_repository_id};
+use crate::items::coalesce_label_update;
 use crate::map::map_issue;
 use crate::pulls::response_validator;
 use crate::types::IssueDto;
@@ -218,14 +219,14 @@ impl<C: HttpClient> ForgejoForge<C> {
             .await?;
         }
 
-        self.apply_item_label_update(
-            &repo,
-            number,
-            input.set_labels.clone(),
-            input.add_labels.clone(),
-            input.remove_labels.clone(),
-        )
-        .await?;
+        let (set_labels, add_labels, remove_labels) = coalesce_label_update(
+            &current.labels,
+            input.set_labels,
+            input.add_labels,
+            input.remove_labels,
+        );
+        self.apply_item_label_update(&repo, number, set_labels, add_labels, remove_labels)
+            .await?;
         self.apply_item_assignee_update(
             &repo,
             number,

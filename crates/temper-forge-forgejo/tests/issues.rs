@@ -359,29 +359,32 @@ fn create_issue_without_labels_skips_label_call() {
 }
 
 #[test]
-fn update_issue_patches_then_sequences_labels_and_assignees() {
+fn update_issue_folds_label_changes_into_one_atomic_replacement() {
     let client = MockHttpClient::new();
-    // GET current carries an existing assignee so the replacement set is derived.
+    // GET current carries labels and an existing assignee so both replacement
+    // sets are derived from the same artifact snapshot.
     client.push_response(
         200,
-        issue_json(7, "open", "[]", r#", "assignees": [{"login": "old"}]"#),
+        issue_json(
+            7,
+            "open",
+            r#"[{"id":9,"name":"stale"},{"id":4,"name":"keep"}]"#,
+            r#", "assignees": [{"login": "old"}]"#,
+        ),
     );
     client.push_response(200, "{}"); // PATCH issue (title/state)
-    // One label-id read resolves names for set, remove, and add.
     client.push_response(
         200,
-        r#"[{"id":3,"name":"base"},{"id":9,"name":"stale"},{"id":1,"name":"ready"}]"#,
+        r#"[{"id":4,"name":"keep"},{"id":9,"name":"stale"},{"id":1,"name":"ready"}]"#,
     ); // GET labels (resolve ids)
-    client.push_response(200, "[]"); // PUT set labels (by id)
-    client.push_response(200, "{}"); // DELETE label by id
-    client.push_response(200, "[]"); // POST add labels (by id)
+    client.push_response(200, "[]"); // PUT final labels (by id)
     client.push_response(200, "{}"); // PATCH issue (assignees)
     client.push_response(
         200,
         issue_json(
             7,
             "closed",
-            r#"[{"id":1,"name":"ready"}]"#,
+            r#"[{"id":4,"name":"keep"},{"id":1,"name":"ready"}]"#,
             r#", "assignees": [{"login": "bob"}]"#,
         ),
     ); // GET refetch
@@ -391,7 +394,6 @@ fn update_issue_patches_then_sequences_labels_and_assignees() {
     let input = UpdateIssue {
         title: Some("Renamed".to_string()),
         state: Some(IssueState::Closed),
-        set_labels: Some(vec!["base".to_string()]),
         add_labels: vec!["ready".to_string()],
         remove_labels: vec!["stale".to_string()],
         add_assignees: vec![UserId::new("bob")],
@@ -402,9 +404,9 @@ fn update_issue_patches_then_sequences_labels_and_assignees() {
     assert_eq!(issue.state, IssueState::Closed);
 
     let requests = client.recorded();
-    // GET(current), PATCH(edit), GET(label ids), PUT(set), DELETE(remove),
-    // POST(add), PATCH(assignees), GET(refetch), GET(deps).
-    assert_eq!(requests.len(), 9);
+    // GET(current), PATCH(edit), GET(label ids), PUT(final labels),
+    // PATCH(assignees), GET(refetch), GET(deps).
+    assert_eq!(requests.len(), 7);
 
     assert_eq!(requests[0].method, HttpMethod::Get);
 
@@ -417,41 +419,43 @@ fn update_issue_patches_then_sequences_labels_and_assignees() {
     assert_eq!(edit["title"], "Renamed");
     assert_eq!(edit["state"], "closed");
 
-    // A single label-id read precedes the label writes, which send numeric ids.
+    // The remove/add workflow state flip is one PUT of the final set. There is
+    // no externally visible label-less state for concurrent queue scanners.
     assert_eq!(requests[2].method, HttpMethod::Get);
     assert_eq!(
         requests[2].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/labels")
     );
-
-    // Label sequencing: set (PUT, by id) → remove-by-id (DELETE) → add (POST, by id).
     assert_eq!(requests[3].method, HttpMethod::Put);
     assert_eq!(
         requests[3].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/7/labels")
     );
-    assert_eq!(body_json(&requests[3])["labels"], serde_json::json!([3]));
-
-    assert_eq!(requests[4].method, HttpMethod::Delete);
-    assert_eq!(
-        requests[4].path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/issues/7/labels/9")
+    // coalesce_label_update sorts by name: keep, ready.
+    assert_eq!(body_json(&requests[3])["labels"], serde_json::json!([4, 1]));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.method != HttpMethod::Delete)
     );
-    assert_eq!(requests[5].method, HttpMethod::Post);
-    assert_eq!(body_json(&requests[5])["labels"], serde_json::json!([1]));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.method != HttpMethod::Post)
+    );
 
     // Assignee replacement is `current − remove + add` = {bob}.
-    assert_eq!(requests[6].method, HttpMethod::Patch);
+    assert_eq!(requests[4].method, HttpMethod::Patch);
     assert_eq!(
-        requests[6].path,
+        requests[4].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/7")
     );
     assert_eq!(
-        body_json(&requests[6])["assignees"],
+        body_json(&requests[4])["assignees"],
         serde_json::json!(["bob"])
     );
 
-    assert_eq!(requests[7].method, HttpMethod::Get); // refetch
+    assert_eq!(requests[5].method, HttpMethod::Get); // refetch
 }
 
 #[test]
