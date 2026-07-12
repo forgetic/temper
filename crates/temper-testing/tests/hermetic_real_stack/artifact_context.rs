@@ -24,7 +24,8 @@ fn hermetic_real_stack_delivers_bundle_and_services_repeated_forge_reads() {
                 assert!(prompt.contains("Primary artifact:"));
                 assert!(prompt.contains("Plan lineage boundary marker"));
                 assert!(prompt.contains("Cross-repository architecture parent"));
-                assert!(prompt.contains("relation parent:"));
+                assert!(prompt.contains("Mandatory lineage:"));
+                assert!(prompt.contains("kind=design"));
                 assert!(prompt.contains("Forge context tools:"));
                 observed_bundle_for_script.fetch_add(1, Ordering::SeqCst);
                 tool_call(

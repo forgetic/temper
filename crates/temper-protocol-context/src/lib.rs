@@ -9,7 +9,12 @@ use serde::{Deserialize, Serialize};
 /// Current [`ArtifactContextBundle`] schema version.
 pub const ARTIFACT_CONTEXT_VERSION: u32 = 1;
 
-/// A versioned collection of artifact snapshots and their relationships.
+/// A versioned, explicitly categorized artifact-context bundle.
+///
+/// The coordinating artifact is always identified by [`Self::primary`]. Its
+/// identity must never be inferred from a vector position. Mandatory ancestors
+/// and the two body-omitted summary scopes are separate so consumers do not
+/// need to reverse-engineer semantics from relation direction or ordering.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactContextBundle {
     /// Artifact-context schema version, independent of worker/agent versions.
@@ -18,15 +23,17 @@ pub struct ArtifactContextBundle {
     pub repository: ArtifactRepository,
     /// Type of the coordinating artifact.
     pub artifact_type: ArtifactType,
-    /// Full artifact records selected for prompt context.
+    /// Full snapshot of the coordinating artifact.
+    pub primary: ArtifactSnapshot,
+    /// Mandatory ancestors, ordered root-to-leaf and excluding `primary`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub snapshots: Vec<ArtifactSnapshot>,
-    /// Compact records for discovered artifacts whose full content is omitted.
+    pub lineage: Vec<ArtifactSnapshot>,
+    /// Declared validation dependencies and verified implementation pull requests.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub index: Vec<ArtifactIndexEntry>,
-    /// Directed edges describing how artifacts were discovered.
+    pub validation_scope: Vec<ArtifactSummary>,
+    /// Incidental artifacts discovered from Markdown references only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub relations: Vec<ArtifactRelation>,
+    pub optional_references: Vec<ArtifactSummary>,
     /// Non-fatal collection failures and policy decisions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<ArtifactContextDiagnostic>,
@@ -36,15 +43,16 @@ pub struct ArtifactContextBundle {
 }
 
 impl ArtifactContextBundle {
-    /// Creates an empty, complete v1 bundle for a coordinating artifact.
-    pub fn new(repository: ArtifactRepository, artifact_type: ArtifactType) -> Self {
+    /// Creates a complete v1 bundle around an explicit coordinating artifact.
+    pub fn new(primary: ArtifactSnapshot) -> Self {
         Self {
             version: ARTIFACT_CONTEXT_VERSION,
-            repository,
-            artifact_type,
-            snapshots: Vec::new(),
-            index: Vec::new(),
-            relations: Vec::new(),
+            repository: primary.artifact.repository.clone(),
+            artifact_type: primary.artifact.artifact_type,
+            primary,
+            lineage: Vec::new(),
+            validation_scope: Vec::new(),
+            optional_references: Vec::new(),
             diagnostics: Vec::new(),
             truncation: ArtifactContextTruncation::default(),
         }
@@ -83,9 +91,30 @@ pub struct ArtifactSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     pub state: String,
+    /// Workflow artifact kind when classification succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_kind: Option<String>,
 }
 
-/// Compact index record for graph navigation without full artifact content.
+/// Body-omitted record in one of the bundle's explicit summary scopes.
+///
+/// `source` is the artifact whose metadata or body exposed this relation. The
+/// summary therefore remains self-describing after standalone sorting and
+/// truncation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactSummary {
+    pub artifact: ArtifactReference,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_kind: Option<String>,
+    pub relation_type: ArtifactRelationType,
+    pub source: ArtifactReference,
+}
+
+/// Compact index record for bounded on-demand graph navigation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactIndexEntry {
     pub artifact: ArtifactReference,
@@ -302,6 +331,28 @@ mod tests {
             let golden: serde_json::Value = serde_json::from_str(&json).expect("valid json");
             assert_eq!(round_trip, golden, "fixture {name} is canonical");
         }
+    }
+
+    #[test]
+    fn complete_fixture_has_explicit_primary_and_scopes() {
+        let bundle: ArtifactContextBundle =
+            serde_json::from_str(&fixture("complete.json")).expect("fixture parses");
+        assert_eq!(bundle.primary.artifact.number, 295);
+        assert_eq!(bundle.primary.workflow_kind.as_deref(), Some("code"));
+        assert_eq!(
+            bundle
+                .lineage
+                .iter()
+                .map(|snapshot| snapshot.workflow_kind.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("feature"), Some("plan")]
+        );
+        assert_eq!(bundle.validation_scope[0].labels, ["implementation"]);
+        assert_eq!(bundle.validation_scope[0].source, bundle.primary.artifact);
+        assert_eq!(
+            bundle.optional_references[0].relation_type,
+            ArtifactRelationType::Related
+        );
     }
 
     #[test]

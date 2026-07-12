@@ -182,7 +182,7 @@ fn shared_artifact_renderer_covers_workspace_roles_and_pr_runs() {
                 "version":1,
                 "repository":{"id":"repo-1","path":"acme/service"},
                 "artifact_type": if matches!(role, "reviewer" | "tester") { "pull_request" } else { "issue" },
-                "index":[{"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":if matches!(role, "reviewer" | "tester") { "pull_request" } else { "issue" },"number":9},"title":"Primary summary","state":"open"}],
+                "primary":{"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":if matches!(role, "reviewer" | "tester") { "pull_request" } else { "issue" },"number":9},"title":"Primary","body":"Primary body","labels":["ready"],"state":"open","workflow_kind":"code"},
                 "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":false}
             }))
             .expect("role bundle parses"),
@@ -190,7 +190,7 @@ fn shared_artifact_renderer_covers_workspace_roles_and_pr_runs() {
         let rendered = user_context(&context);
         assert!(rendered.contains(&format!("Role: {role}")));
         assert!(rendered.contains("Primary artifact:"));
-        assert!(rendered.contains("Body omitted from the bounded bundle"));
+        assert!(rendered.contains("Primary body"));
         assert!(rendered.contains("Forge context tools:"));
     }
 }
@@ -202,18 +202,16 @@ fn artifact_bundle_uses_shared_lineage_renderer_instead_of_legacy_json() {
         "version": 1,
         "repository": {"id":"repo-1", "path":"acme/service"},
         "artifact_type": "issue",
-        "snapshots": [
-            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"title":"Primary","body":"primary body","state":"open"},
-            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":3},"title":"Parent","body":"parent body","state":"open"}
+        "primary":
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"title":"Primary","body":"primary body","labels":["code"],"state":"open","workflow_kind":"code"},
+        "lineage": [
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":3},"title":"Parent","body":"parent body","labels":["plan"],"state":"open","workflow_kind":"plan"}
         ],
-        "index": [
-            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"title":"Primary","state":"open","snapshot_index":0},
-            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"pull_request","number":9},"title":"Validation PR","state":"open"},
-            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":11},"title":"Optional reference","state":"open"}
+        "validation_scope": [
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"pull_request","number":9},"title":"Validation PR","labels":["implementation"],"state":"open","workflow_kind":"implementation_pr","relation_type":"related","source":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7}}
         ],
-        "relations": [
-            {"relation_type":"parent","source":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"target":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":3}},
-            {"relation_type":"related","source":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"pull_request","number":9},"target":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":3}}
+        "optional_references": [
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":11},"title":"Optional reference","labels":["docs"],"state":"open","relation_type":"related","source":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":3}}
         ],
         "diagnostics":[{"code":"content_truncated","message":"body bounded"}],
         "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":true}

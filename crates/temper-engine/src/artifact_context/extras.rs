@@ -4,56 +4,25 @@ use std::collections::BTreeMap;
 
 use temper_forge::{ItemListDetails, ItemNumber, PullRequestQuery, RepositoryId};
 use temper_protocol_worker::{
-    ArtifactContextDiagnostic, ArtifactContextDiagnosticCode, ArtifactIndexEntry,
-    ArtifactReference, ArtifactRelation, ArtifactRelationType, ArtifactType,
+    ArtifactContextDiagnostic, ArtifactContextDiagnosticCode, ArtifactReference,
+    ArtifactRelationType, ArtifactSummary, ArtifactType,
 };
 use temper_workflow::{ClassifiedArtifact, RelationKind, ValidatedWorkflow};
 
-use super::ArtifactContextPolicy;
 use super::catalog::ConfiguredRepositoryCatalog;
 use super::forge::ArtifactContextForge;
 use super::lineage::{
-    ArtifactKey, Collection, classify, declared_target, diagnostic, fetch, index, key, reference,
+    ArtifactKey, Collection, classify, declared_target, diagnostic, fetch, key, reference,
 };
 use super::markdown::{ArtifactTypeKey, references};
 
 pub(super) struct Extras {
-    pub index: Vec<ArtifactIndexEntry>,
-    pub relations: Vec<ArtifactRelation>,
+    pub summaries: Vec<ArtifactSummary>,
     pub diagnostics: Vec<ArtifactContextDiagnostic>,
 }
 
-impl Extras {
-    pub(super) fn extend(
-        &mut self,
-        other: Self,
-        policy: ArtifactContextPolicy,
-        collection: &Collection,
-    ) {
-        self.index.extend(other.index);
-        self.relations.extend(other.relations);
-        self.diagnostics.extend(other.diagnostics);
-        let mut candidates = self
-            .index
-            .drain(..)
-            .zip(self.relations.drain(..))
-            .map(|(entry, relation)| Candidate { entry, relation })
-            .collect::<Vec<_>>();
-        normalize_candidates(&mut candidates, &mut self.diagnostics, collection, policy);
-        self.index = candidates
-            .iter()
-            .map(|candidate| candidate.entry.clone())
-            .collect();
-        self.relations = candidates
-            .into_iter()
-            .map(|candidate| candidate.relation)
-            .collect();
-    }
-}
-
 struct Candidate {
-    entry: ArtifactIndexEntry,
-    relation: ArtifactRelation,
+    summary: ArtifactSummary,
 }
 
 pub(super) async fn collect_validation_aggregates<F: ArtifactContextForge + ?Sized>(
@@ -61,59 +30,55 @@ pub(super) async fn collect_validation_aggregates<F: ArtifactContextForge + ?Siz
     catalog: &ConfiguredRepositoryCatalog,
     workflow: &ValidatedWorkflow,
     collection: &Collection,
-    policy: ArtifactContextPolicy,
 ) -> Extras {
     let mut diagnostics = Vec::new();
     let mut candidates =
         validation_candidates(forge, catalog, workflow, collection, &mut diagnostics).await;
-    normalize_candidates(&mut candidates, &mut diagnostics, collection, policy);
+    normalize_candidates(&mut candidates);
     extras(candidates, diagnostics)
 }
 
 pub(super) async fn collect_references<F: ArtifactContextForge + ?Sized>(
     forge: &F,
     catalog: &ConfiguredRepositoryCatalog,
+    workflow: &ValidatedWorkflow,
     collection: &Collection,
-    policy: ArtifactContextPolicy,
 ) -> Extras {
     let mut diagnostics = Vec::new();
-    let mut candidates = reference_candidates(forge, catalog, collection, &mut diagnostics).await;
-    normalize_candidates(&mut candidates, &mut diagnostics, collection, policy);
+    let mut candidates =
+        reference_candidates(forge, catalog, workflow, collection, &mut diagnostics).await;
+    normalize_candidates(&mut candidates);
     extras(candidates, diagnostics)
 }
 
-fn normalize_candidates(
-    candidates: &mut Vec<Candidate>,
-    diagnostics: &mut Vec<ArtifactContextDiagnostic>,
-    collection: &Collection,
-    policy: ArtifactContextPolicy,
-) {
-    candidates.sort_by_key(|candidate| key(&candidate.entry.artifact));
-    candidates.dedup_by_key(|candidate| key(&candidate.entry.artifact));
-    if candidates.len() > policy.summaries {
-        candidates.truncate(policy.summaries);
-        diagnostics.push(diagnostic(
-            ArtifactContextDiagnosticCode::CountExceeded,
-            "aggregate/reference summary limit reached",
-            collection
-                .items
-                .get(&collection.primary)
-                .map(|item| item.snapshot.artifact.clone()),
-        ));
-    }
+fn normalize_candidates(candidates: &mut Vec<Candidate>) {
+    candidates.sort_by_key(|candidate| key(&candidate.summary.artifact));
+    candidates.dedup_by_key(|candidate| key(&candidate.summary.artifact));
 }
 
 fn extras(candidates: Vec<Candidate>, diagnostics: Vec<ArtifactContextDiagnostic>) -> Extras {
     Extras {
-        index: candidates
-            .iter()
-            .map(|candidate| candidate.entry.clone())
-            .collect(),
-        relations: candidates
+        summaries: candidates
             .into_iter()
-            .map(|candidate| candidate.relation)
+            .map(|candidate| candidate.summary)
             .collect(),
         diagnostics,
+    }
+}
+
+fn summary(
+    snapshot: &temper_protocol_worker::ArtifactSnapshot,
+    relation_type: ArtifactRelationType,
+    source: ArtifactReference,
+) -> ArtifactSummary {
+    ArtifactSummary {
+        artifact: snapshot.artifact.clone(),
+        title: snapshot.title.clone(),
+        labels: snapshot.labels.clone(),
+        state: snapshot.state.clone(),
+        workflow_kind: snapshot.workflow_kind.clone(),
+        relation_type,
+        source,
     }
 }
 
@@ -160,17 +125,20 @@ async fn validation_candidates<F: ArtifactContextForge + ?Sized>(
         };
         match fetch(forge, &repository_id, artifact_type, relation.target.number).await {
             Ok(Some(item)) => {
-                let snapshot = item.snapshot(repository);
+                let classified_dependency = classify(workflow, &item);
+                let mut snapshot = item.snapshot(repository, None);
+                if let Ok(dependency) = &classified_dependency {
+                    snapshot.workflow_kind = Some(dependency.kind.to_string());
+                }
                 let dependency_ref = snapshot.artifact.clone();
                 output.push(Candidate {
-                    entry: index(&snapshot, None),
-                    relation: ArtifactRelation {
-                        relation_type: ArtifactRelationType::Dependency,
-                        source: primary.snapshot.artifact.clone(),
-                        target: dependency_ref.clone(),
-                    },
+                    summary: summary(
+                        &snapshot,
+                        ArtifactRelationType::Dependency,
+                        primary.snapshot.artifact.clone(),
+                    ),
                 });
-                match classify(workflow, &item) {
+                match classified_dependency {
                     Ok(dependency) => {
                         output.extend(
                             implementation_prs(
@@ -285,14 +253,13 @@ async fn implementation_prs<F: ArtifactContextForge + ?Sized>(
                     continue;
                 }
                 let snapshot = super::lineage::ForgeItem::PullRequest(Box::new(pull_request))
-                    .snapshot(repository.clone());
+                    .snapshot(repository.clone(), Some(classified.kind.to_string()));
                 output.push(Candidate {
-                    entry: index(&snapshot, None),
-                    relation: ArtifactRelation {
-                        relation_type: ArtifactRelationType::Related,
-                        source: snapshot.artifact.clone(),
-                        target: dependency_ref.clone(),
-                    },
+                    summary: summary(
+                        &snapshot,
+                        ArtifactRelationType::Related,
+                        dependency_ref.clone(),
+                    ),
                 });
             }
         }
@@ -303,6 +270,7 @@ async fn implementation_prs<F: ArtifactContextForge + ?Sized>(
 async fn reference_candidates<F: ArtifactContextForge + ?Sized>(
     forge: &F,
     catalog: &ConfiguredRepositoryCatalog,
+    workflow: &ValidatedWorkflow,
     collection: &Collection,
     diagnostics: &mut Vec<ArtifactContextDiagnostic>,
 ) -> Vec<Candidate> {
@@ -352,14 +320,12 @@ async fn reference_candidates<F: ArtifactContextForge + ?Sized>(
         .await
         {
             Ok(Some(item)) => {
-                let snapshot = item.snapshot(target.repository.clone());
+                let workflow_kind = classify(workflow, &item)
+                    .ok()
+                    .map(|classified| classified.kind.to_string());
+                let snapshot = item.snapshot(target.repository.clone(), workflow_kind);
                 output.push(Candidate {
-                    entry: index(&snapshot, None),
-                    relation: ArtifactRelation {
-                        relation_type: ArtifactRelationType::Related,
-                        source,
-                        target: snapshot.artifact,
-                    },
+                    summary: summary(&snapshot, ArtifactRelationType::Related, source),
                 });
             }
             Ok(None) => diagnostics.push(diagnostic(

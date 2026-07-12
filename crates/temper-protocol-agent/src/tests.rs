@@ -225,7 +225,10 @@ fn artifact_context_embedding_fixture_preserves_work_item_context() {
     let raw: serde_json::Value = serde_json::from_str(json).expect("golden fixture is json");
     let context: WorkspaceContext = serde_json::from_str(json).expect("golden fixture parses");
 
-    assert_eq!(context.artifact_context.as_ref().unwrap().version, 1);
+    let bundle = context.artifact_context.as_ref().unwrap();
+    assert_eq!(bundle.version, 1);
+    assert_eq!(bundle.primary.artifact.number, 279);
+    assert_eq!(bundle.primary.workflow_kind.as_deref(), Some("code"));
     assert_eq!(
         context.work_item.context,
         raw["work_item"]["context"].as_str().unwrap()
