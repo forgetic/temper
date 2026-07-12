@@ -206,6 +206,11 @@ impl DispatchCoordinator {
         true
     }
 
+    /// Drop a stale reservation without returning it to the pending queue.
+    pub fn discard_reservation(&mut self, job_id: &str) -> bool {
+        self.reserved.remove(job_id).is_some()
+    }
+
     /// Pull-model placement retained as a reserve+commit convenience.
     pub fn dispatch_for_worker(&mut self, worker_id: &str) -> Option<Assignment> {
         let reservation = self.reserve_for_worker(worker_id)?;

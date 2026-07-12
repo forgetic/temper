@@ -481,9 +481,11 @@ impl Machine for DaemonMachine {
                             )]
                         }
                     }
-                    ClaimOutcome::Contended { reason }
-                    | ClaimOutcome::Stale { reason }
-                    | ClaimOutcome::Retryable { reason } => {
+                    ClaimOutcome::Stale { reason } => {
+                        self.core.discard_assignment_reservation(&assign.job_id);
+                        vec![claim_failure_response(responder, assign.job_id, reason)]
+                    }
+                    ClaimOutcome::Contended { reason } | ClaimOutcome::Retryable { reason } => {
                         self.core.rollback_assignment(&assign.job_id);
                         vec![claim_failure_response(responder, assign.job_id, reason)]
                     }

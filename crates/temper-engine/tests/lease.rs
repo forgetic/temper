@@ -4,10 +4,14 @@ use std::sync::Arc;
 
 use serde_json::json;
 use temper_engine::{LeaseApplier, ResultApplier};
-use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
+use temper_forge::{
+    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, ItemNumber, RepositoryId,
+    UserId,
+};
 use temper_forge_memory::MemoryForge;
 use temper_protocol_worker::{
-    Artifact, Branch, JobResult, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
+    Artifact, Branch, JobResult, PullRequestFreshness, PullRequestFreshnessResponse, RepoOutcome,
+    ResultStatus, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
 use temper_workflow::{ArtifactSource, LeaseManager, LeasePolicy, RoleId, parse_metadata_block};
@@ -18,6 +22,7 @@ struct RecordingApplier {
     repo: Option<RepositoryId>,
     issue: Option<ItemNumber>,
     lease_tx: Option<temper_engine_io::CqSender<Option<temper_workflow::Lease>>>,
+    freshness_response: Option<PullRequestFreshnessResponse>,
 }
 
 #[async_trait::async_trait]
@@ -40,6 +45,15 @@ impl ResultApplier for RecordingApplier {
 
         let _ = self.tx.send((job, result));
         temper_engine::ApplyOutcome::Applied
+    }
+
+    async fn check_pull_request_freshness(
+        &self,
+        _check: PullRequestFreshness,
+    ) -> PullRequestFreshnessResponse {
+        self.freshness_response.clone().unwrap_or_else(|| {
+            PullRequestFreshnessResponse::unavailable("freshness response not configured")
+        })
     }
 }
 
@@ -89,6 +103,70 @@ fn in_flight_job(number: ItemNumber) -> InFlightJob {
     }
 }
 
+async fn create_repair_pull_request(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    branch: &str,
+) -> temper_forge::PullRequest {
+    let pull_request = forge
+        .create_pull_request(
+            repo,
+            CreatePullRequest {
+                title: "repair conflicted PR".to_string(),
+                body: "repair this PR".to_string(),
+                source: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: branch.to_string(),
+                },
+                target: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: "main".to_string(),
+                },
+                labels: vec!["implementation".to_string(), "merge-conflict".to_string()],
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("pull request is created");
+    forge
+        .set_pull_request_head(&pull_request.id, Some("assigned-head".to_string()))
+        .expect("pull request head is set")
+}
+
+fn repair_job(repo: &RepositoryId, pull_request: &temper_forge::PullRequest) -> InFlightJob {
+    InFlightJob {
+        job_id: format!(
+            "acme/service/pull_request-{}/engineer/pr_merge_conflict",
+            pull_request.number
+        ),
+        role: "engineer".to_string(),
+        repo: "acme/service".to_string(),
+        artifact: Artifact {
+            item: json!(pull_request.number.get()),
+            kind: "pull_request".to_string(),
+        },
+        job_payload: json!({
+            "role": "engineer",
+            "repo": "acme/service",
+            "queue": "pr_merge_conflict",
+            "artifact_kind": "implementation_pr",
+            "action": "resolve_merge_conflict",
+            "checkout_capability": "pull_request_writable",
+            "pull_request_freshness": {
+                "repository_id": repo.as_str(),
+                "repo": "acme/service",
+                "role": "engineer",
+                "queue": "pr_merge_conflict",
+                "action": "resolve_merge_conflict",
+                "number": pull_request.number.get(),
+                "pull_request_id": pull_request.id.as_str(),
+                "head_sha": "assigned-head",
+                "queue_labels": ["merge-conflict"]
+            }
+        }),
+    }
+}
+
 fn job_result(job_id: &str) -> JobResult {
     JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
@@ -113,6 +191,74 @@ fn job_result(job_id: &str) -> JobResult {
 }
 
 #[test]
+fn claim_revalidates_pr_freshness_before_persisting_assignment() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge).await;
+        let cases = [
+            (
+                PullRequestFreshnessResponse::stale("merge-conflict label was removed"),
+                temper_engine::ClaimOutcome::Stale {
+                    reason: "merge-conflict label was removed".to_string(),
+                },
+            ),
+            (
+                PullRequestFreshnessResponse::unavailable("Forge read timed out"),
+                temper_engine::ClaimOutcome::Retryable {
+                    reason: "Forge read timed out".to_string(),
+                },
+            ),
+        ];
+
+        for (index, (freshness_response, expected)) in cases.into_iter().enumerate() {
+            let pull_request =
+                create_repair_pull_request(&forge, &repo, &format!("agent/repair-{index}")).await;
+            let (tx, _rx) = temper_engine_io::channel();
+            let inner = Arc::new(RecordingApplier {
+                tx,
+                forge: None,
+                repo: None,
+                issue: None,
+                lease_tx: None,
+                freshness_response: Some(freshness_response),
+            });
+            let applier = LeaseApplier::new(
+                forge.clone(),
+                policy(),
+                "daemon-1",
+                inner,
+                temper_engine::system_clock(),
+            );
+            let job = repair_job(&repo, &pull_request);
+
+            assert_eq!(
+                applier
+                    .claim(
+                        job,
+                        temper_engine::ClaimContext {
+                            worker_id: "worker-a".to_string(),
+                            daemon_boot_id: "daemon-1".to_string(),
+                        },
+                    )
+                    .await,
+                expected
+            );
+
+            let current = forge
+                .get_pull_request_by_number(&repo, pull_request.number)
+                .await
+                .expect("pull request reload succeeds")
+                .expect("pull request still exists");
+            let metadata = parse_metadata_block(&current.body)
+                .expect("pull request metadata parses")
+                .unwrap_or_default();
+            assert!(metadata.assignment.is_none());
+            assert!(metadata.lease.is_none());
+        }
+    })
+}
+
+#[test]
 fn lease_won_inner_applied_then_lease_released() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
@@ -126,6 +272,7 @@ fn lease_won_inner_applied_then_lease_released() {
             repo: Some(repo.clone()),
             issue: Some(issue),
             lease_tx: Some(lease_tx),
+            freshness_response: None,
         });
         let applier = LeaseApplier::new(
             forge.clone(),
@@ -206,6 +353,7 @@ fn peer_owned_lease_noops_and_preserves_peer_lease() {
             repo: None,
             issue: None,
             lease_tx: None,
+            freshness_response: None,
         });
         let applier = LeaseApplier::new(
             forge.clone(),

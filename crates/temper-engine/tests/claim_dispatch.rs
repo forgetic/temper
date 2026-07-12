@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde_json::json;
 use temper_engine::{ApplyOutcome, ClaimContext, ClaimOutcome, Daemon, InFlightJob, ResultApplier};
@@ -12,6 +12,24 @@ use temper_protocol_worker::{
 
 struct FailFirstClaim {
     failed: AtomicBool,
+}
+
+struct StaleClaim {
+    attempts: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl ResultApplier for StaleClaim {
+    async fn claim(&self, _job: InFlightJob, _context: ClaimContext) -> ClaimOutcome {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        ClaimOutcome::Stale {
+            reason: "queue predicate no longer matches".to_string(),
+        }
+    }
+
+    async fn apply(&self, _job: InFlightJob, _result: JobResult) -> ApplyOutcome {
+        ApplyOutcome::Applied
+    }
 }
 
 #[async_trait::async_trait]
@@ -53,6 +71,42 @@ fn poll() -> WorkerProtocolMessage {
         worker_id: "worker-a".to_string(),
         free_capacity: 1,
         max_wait_ms: Some(0),
+    })
+}
+
+#[test]
+fn stale_durable_claim_is_dropped_instead_of_redispatched() {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
+        let applier = Arc::new(StaleClaim {
+            attempts: AtomicUsize::new(0),
+        });
+        let daemon = Daemon::with_applier(Arc::new(handle), applier.clone());
+        assert_eq!(
+            daemon.deliver_protocol_message(register()).await.unwrap(),
+            None
+        );
+        daemon
+            .enqueue_job(
+                "job-stale-claim",
+                "engineer",
+                "ai/temper",
+                Artifact {
+                    item: json!(291),
+                    kind: "pull_request".to_string(),
+                },
+                json!({}),
+            )
+            .await;
+
+        for _ in 0..2 {
+            match daemon.deliver_protocol_message(poll()).await.unwrap() {
+                Some(WorkerProtocolMessage::Error(error)) => {
+                    assert_eq!(error.code, ErrorCode::PollTimeout)
+                }
+                other => panic!("expected no stale assignment, got {other:?}"),
+            }
+        }
+        assert_eq!(applier.attempts.load(Ordering::SeqCst), 1);
     })
 }
 

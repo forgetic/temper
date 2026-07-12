@@ -362,6 +362,15 @@ impl DaemonCore {
         self.coordinator.rollback_committed(job_id)
     }
 
+    /// Permanently drops a stale reservation and its dispatch payload.
+    pub fn discard_assignment_reservation(&mut self, job_id: &str) -> bool {
+        if !self.coordinator.discard_reservation(job_id) {
+            return false;
+        }
+        self.job_context.remove(job_id);
+        true
+    }
+
     /// Full context for an assignment reservation or committed assignment.
     pub fn job_context(&self, job_id: &str) -> Option<(Artifact, serde_json::Value)> {
         self.job_context.get(job_id).cloned()
