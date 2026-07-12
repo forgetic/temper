@@ -100,7 +100,7 @@ impl<'a, F: ArtifactContextForge + ?Sized> ArtifactContextService<'a, F> {
             operation.artifact_type,
         )
         .await?;
-        let mut item_snapshot = item.snapshot(repository);
+        let mut item_snapshot = item.snapshot(repository, None);
         let mut truncation = ArtifactContextTruncation::default();
         if truncate_utf8(&mut item_snapshot.body, MAX_ITEM_BODY_BYTES) {
             truncation.content_truncated = true;
@@ -157,7 +157,7 @@ impl<'a, F: ArtifactContextForge + ?Sized> ArtifactContextService<'a, F> {
             operation.artifact_type,
         )
         .await?;
-        let root_snapshot = root_item.snapshot(repository);
+        let root_snapshot = root_item.snapshot(repository, None);
         let root_key = key(&root_snapshot.artifact);
         let root = root_snapshot.artifact.clone();
         let requested: BTreeSet<_> = operation.relations.into_iter().collect();
@@ -361,7 +361,7 @@ async fn outbound_typed<F: ArtifactContextForge + ?Sized>(
         else {
             continue;
         };
-        let snapshot = item.snapshot(repository);
+        let snapshot = item.snapshot(repository, None);
         output.push(Discovery {
             edge: ForgeRelatedEdge {
                 relation: relation_type,
@@ -412,7 +412,7 @@ async fn inverse_typed<F: ArtifactContextForge + ?Sized>(
                 let Ok(classified) = classify(workflow, &item) else {
                     continue;
                 };
-                let snapshot = item.snapshot(repository.clone());
+                let snapshot = item.snapshot(repository.clone(), None);
                 if !classified.relations.iter().any(|relation| {
                     relation.kind == relation_kind
                         && relation_targets(
@@ -480,7 +480,7 @@ async fn outbound_references<F: ArtifactContextForge + ?Sized>(
         else {
             continue;
         };
-        let snapshot = item.snapshot(artifact.repository);
+        let snapshot = item.snapshot(artifact.repository, None);
         output.push(Discovery {
             edge: ForgeRelatedEdge {
                 relation: ForgeRelationType::BodyReference,
@@ -518,7 +518,7 @@ async fn inverse_references<F: ArtifactContextForge + ?Sized>(
                 if classify(workflow, &item).is_err() {
                     continue;
                 }
-                let snapshot = item.snapshot(repository.clone());
+                let snapshot = item.snapshot(repository.clone(), None);
                 let verified = references(&snapshot.body, catalog.forge_url())
                     .iter()
                     .filter_map(|found| markdown_target(catalog, &snapshot, found))

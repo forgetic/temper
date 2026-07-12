@@ -10,7 +10,7 @@ fn artifact_context_bundle_is_copied_without_reconstruction() {
             "version":1,
             "repository":{"id":"repo-1","path":"acme/service"},
             "artifact_type":"issue",
-            "index":[{"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"title":"Primary","state":"open"}],
+            "primary":{"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"title":"Primary","body":"Detailed issue body","labels":["code"],"state":"open","workflow_kind":"code"},
             "diagnostics":[{"code":"content_truncated","message":"kept verbatim"}],
             "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":true}
         });

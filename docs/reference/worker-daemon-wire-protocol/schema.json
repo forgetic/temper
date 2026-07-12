@@ -384,14 +384,15 @@
   },
   "artifactContextBundle": {
    "type": "object",
-   "required": ["version", "repository", "artifact_type", "truncation"],
+   "required": ["version", "repository", "artifact_type", "primary", "truncation"],
    "properties": {
     "version": { "const": 1 },
     "repository": { "$ref": "#/$defs/artifactRepository" },
     "artifact_type": { "enum": ["issue", "pull_request"] },
-    "snapshots": { "type": "array", "items": { "$ref": "#/$defs/artifactSnapshot" } },
-    "index": { "type": "array", "items": { "$ref": "#/$defs/artifactIndexEntry" } },
-    "relations": { "type": "array", "items": { "$ref": "#/$defs/artifactRelation" } },
+    "primary": { "$ref": "#/$defs/artifactSnapshot" },
+    "lineage": { "type": "array", "items": { "$ref": "#/$defs/artifactSnapshot" } },
+    "validation_scope": { "type": "array", "items": { "$ref": "#/$defs/artifactSummary" } },
+    "optional_references": { "type": "array", "items": { "$ref": "#/$defs/artifactSummary" } },
     "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/artifactDiagnostic" } },
     "truncation": { "$ref": "#/$defs/contextTruncation" }
    }
@@ -421,7 +422,21 @@
     "title": { "type": "string" },
     "body": { "type": "string" },
     "labels": { "type": "array", "items": { "type": "string" } },
-    "state": { "type": "string" }
+    "state": { "type": "string" },
+    "workflow_kind": { "type": "string", "minLength": 1 }
+   }
+  },
+  "artifactSummary": {
+   "type": "object",
+   "required": ["artifact", "title", "state", "relation_type", "source"],
+   "properties": {
+    "artifact": { "$ref": "#/$defs/artifactReference" },
+    "title": { "type": "string" },
+    "labels": { "type": "array", "items": { "type": "string" } },
+    "state": { "type": "string" },
+    "workflow_kind": { "type": "string", "minLength": 1 },
+    "relation_type": { "enum": ["parent", "dependency", "related"] },
+    "source": { "$ref": "#/$defs/artifactReference" }
    }
   },
   "artifactIndexEntry": {

@@ -160,7 +160,10 @@ fn artifact_context_embedding_fixture_preserves_singular_artifact() {
     let context: JobContext = serde_json::from_str(json).expect("golden fixture parses");
 
     assert_eq!(context.artifact.as_ref().unwrap().number, 279);
-    assert_eq!(context.artifact_context.as_ref().unwrap().version, 1);
+    let bundle = context.artifact_context.as_ref().unwrap();
+    assert_eq!(bundle.version, 1);
+    assert_eq!(bundle.primary.artifact.number, 279);
+    assert_eq!(bundle.primary.workflow_kind.as_deref(), Some("code"));
     assert_eq!(
         serde_json::to_value(context.artifact.as_ref().unwrap()).unwrap(),
         raw["artifact"],

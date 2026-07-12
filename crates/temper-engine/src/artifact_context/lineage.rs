@@ -62,7 +62,8 @@ pub(super) async fn collect_lineage<F: ArtifactContextForge + ?Sized>(
     .ok_or_else(|| ArtifactContextError::Primary("coordinating artifact not found".into()))?;
     let primary_classified = classify(workflow, &primary_item)
         .map_err(|error| ArtifactContextError::Primary(error.to_string()))?;
-    let primary_snapshot = primary_item.snapshot(repository);
+    let primary_snapshot =
+        primary_item.snapshot(repository, Some(primary_classified.kind.to_string()));
     let primary = key(&primary_snapshot.artifact);
     let mut collection = Collection {
         primary: primary.clone(),
@@ -233,7 +234,7 @@ async fn follow_parent<F: ArtifactContextForge + ?Sized>(
             return;
         }
     };
-    let snapshot = item.snapshot(repository);
+    let mut snapshot = item.snapshot(repository, None);
     if item.closed() {
         collection.diagnostics.push(diagnostic(
             ArtifactContextDiagnosticCode::ClosedAncestor,
@@ -242,7 +243,10 @@ async fn follow_parent<F: ArtifactContextForge + ?Sized>(
         ));
     }
     let classified = match classify(workflow, &item) {
-        Ok(classified) if relation.target_kinds.contains(&classified.kind) => Some(classified),
+        Ok(classified) if relation.target_kinds.contains(&classified.kind) => {
+            snapshot.workflow_kind = Some(classified.kind.to_string());
+            Some(classified)
+        }
         Ok(_) => {
             collection.diagnostics.push(diagnostic(
                 ArtifactContextDiagnosticCode::MalformedMetadata,
@@ -280,11 +284,6 @@ async fn follow_parent<F: ArtifactContextForge + ?Sized>(
 }
 
 pub(super) fn ordered_bundle(collection: Collection) -> ArtifactContextBundle {
-    let primary = collection.items[&collection.primary]
-        .snapshot
-        .artifact
-        .clone();
-    let mut bundle = ArtifactContextBundle::new(primary.repository.clone(), primary.artifact_type);
     let mut order = Vec::new();
     let mut visited = BTreeSet::new();
     visit(
@@ -303,13 +302,13 @@ pub(super) fn ordered_bundle(collection: Collection) -> ArtifactContextBundle {
             &mut order,
         );
     }
-    for key in order {
-        let snapshot = collection.items[&key].snapshot.clone();
-        let snapshot_index = bundle.snapshots.len();
-        bundle.index.push(index(&snapshot, Some(snapshot_index)));
-        bundle.snapshots.push(snapshot);
-    }
-    bundle.relations = collection.relations;
+    let primary = collection.items[&collection.primary].snapshot.clone();
+    let mut bundle = ArtifactContextBundle::new(primary);
+    bundle.lineage = order
+        .into_iter()
+        .filter(|key| *key != collection.primary)
+        .map(|key| collection.items[&key].snapshot.clone())
+        .collect();
     bundle.diagnostics = collection.diagnostics;
     bundle
 }
@@ -344,7 +343,11 @@ pub(super) enum ForgeItem {
 }
 
 impl ForgeItem {
-    pub fn snapshot(&self, repository: ArtifactRepository) -> ArtifactSnapshot {
+    pub fn snapshot(
+        &self,
+        repository: ArtifactRepository,
+        workflow_kind: Option<String>,
+    ) -> ArtifactSnapshot {
         match self {
             Self::Issue(issue) => ArtifactSnapshot {
                 artifact: reference(repository, ArtifactType::Issue, issue.number.get()),
@@ -352,6 +355,7 @@ impl ForgeItem {
                 body: issue.body.clone(),
                 labels: sorted_labels(&issue.labels),
                 state: format!("{:?}", issue.state).to_lowercase(),
+                workflow_kind,
             },
             Self::PullRequest(pull_request) => ArtifactSnapshot {
                 artifact: reference(
@@ -363,6 +367,7 @@ impl ForgeItem {
                 body: pull_request.body.clone(),
                 labels: sorted_labels(&pull_request.labels),
                 state: format!("{:?}", pull_request.state).to_lowercase(),
+                workflow_kind,
             },
         }
     }

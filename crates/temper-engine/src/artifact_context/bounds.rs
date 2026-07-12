@@ -5,19 +5,24 @@ use temper_protocol_worker::{
 };
 
 use super::ArtifactContextPolicy;
-use super::lineage::{diagnostic, key};
+use super::lineage::diagnostic;
 
-pub(super) fn enforce_bounds(
-    bundle: &mut ArtifactContextBundle,
-    mandatory_index: usize,
-    policy: ArtifactContextPolicy,
-) {
-    for index in 0..bundle.snapshots.len() {
-        if bundle.snapshots[index].body.len() <= policy.body_bytes {
+pub(super) fn enforce_bounds(bundle: &mut ArtifactContextBundle, policy: ArtifactContextPolicy) {
+    if bundle.primary.body.len() > policy.body_bytes {
+        truncate_utf8(&mut bundle.primary.body, policy.body_bytes);
+        let source = bundle.primary.artifact.clone();
+        note_content_loss(
+            bundle,
+            "artifact body exceeded the per-body byte limit",
+            Some(source),
+        );
+    }
+    for index in 0..bundle.lineage.len() {
+        if bundle.lineage[index].body.len() <= policy.body_bytes {
             continue;
         }
-        truncate_utf8(&mut bundle.snapshots[index].body, policy.body_bytes);
-        let source = bundle.snapshots[index].artifact.clone();
+        truncate_utf8(&mut bundle.lineage[index].body, policy.body_bytes);
+        let source = bundle.lineage[index].artifact.clone();
         note_content_loss(
             bundle,
             "artifact body exceeded the per-body byte limit",
@@ -25,12 +30,14 @@ pub(super) fn enforce_bounds(
         );
     }
 
-    while serialized_len(bundle) > policy.bundle_bytes && bundle.index.len() > mandatory_index {
-        let removed = bundle.index.pop().expect("optional index remains");
-        let removed_key = key(&removed.artifact);
-        bundle.relations.retain(|relation| {
-            key(&relation.source) != removed_key && key(&relation.target) != removed_key
-        });
+    while serialized_len(bundle) > policy.bundle_bytes {
+        let removed = bundle
+            .optional_references
+            .pop()
+            .or_else(|| bundle.validation_scope.pop());
+        let Some(removed) = removed else {
+            break;
+        };
         bundle.truncation.count_exceeded = true;
         bundle.diagnostics.push(diagnostic(
             ArtifactContextDiagnosticCode::CountExceeded,
@@ -39,24 +46,37 @@ pub(super) fn enforce_bounds(
         ));
     }
 
-    while serialized_len(bundle) > policy.bundle_bytes {
-        let Some(index) = bundle
-            .snapshots
+    if serialized_len(bundle) > policy.bundle_bytes {
+        let source = bundle
+            .lineage
             .iter()
-            .rposition(|snapshot| !snapshot.body.is_empty())
-        else {
-            break;
+            .rfind(|snapshot| !snapshot.body.is_empty())
+            .map(|snapshot| snapshot.artifact.clone())
+            .or_else(|| (!bundle.primary.body.is_empty()).then(|| bundle.primary.artifact.clone()));
+        if source.is_some() {
+            note_content_loss(
+                bundle,
+                "artifact body truncated to satisfy serialized bundle limit",
+                source,
+            );
+        }
+    }
+    while serialized_len(bundle) > policy.bundle_bytes {
+        let lineage_index = bundle
+            .lineage
+            .iter()
+            .rposition(|snapshot| !snapshot.body.is_empty());
+        let current = match lineage_index {
+            Some(index) => bundle.lineage[index].body.len(),
+            None if !bundle.primary.body.is_empty() => bundle.primary.body.len(),
+            None => break,
         };
         let excess = serialized_len(bundle).saturating_sub(policy.bundle_bytes);
-        let current = bundle.snapshots[index].body.len();
         let target = current.saturating_sub(excess.max(1));
-        truncate_utf8(&mut bundle.snapshots[index].body, target);
-        let source = bundle.snapshots[index].artifact.clone();
-        note_content_loss(
-            bundle,
-            "artifact body truncated to satisfy serialized bundle limit",
-            Some(source),
-        );
+        match lineage_index {
+            Some(index) => truncate_utf8(&mut bundle.lineage[index].body, target),
+            None => truncate_utf8(&mut bundle.primary.body, target),
+        }
     }
 }
 
@@ -92,7 +112,7 @@ fn serialized_len(bundle: &ArtifactContextBundle) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use temper_protocol_worker::{ArtifactRepository, ArtifactType};
+    use temper_protocol_worker::{ArtifactRepository, ArtifactSnapshot, ArtifactType};
 
     use super::*;
 
@@ -104,14 +124,97 @@ mod tests {
     }
 
     #[test]
-    fn empty_bundle_is_below_default_limit() {
-        let bundle = ArtifactContextBundle::new(
-            ArtifactRepository {
-                id: "1".into(),
-                path: "a/b".into(),
+    fn per_body_bounds_truncate_primary_and_lineage_on_utf8_boundaries() {
+        let repository = ArtifactRepository {
+            id: "1".into(),
+            path: "a/b".into(),
+        };
+        let mut bundle = ArtifactContextBundle::new(ArtifactSnapshot {
+            artifact: ArtifactReference {
+                repository: repository.clone(),
+                artifact_type: ArtifactType::Issue,
+                number: 2,
             },
-            ArtifactType::Issue,
+            title: "primary".into(),
+            body: "🦀".repeat(10),
+            labels: Vec::new(),
+            state: "open".into(),
+            workflow_kind: Some("code".into()),
+        });
+        bundle.lineage.push(ArtifactSnapshot {
+            artifact: ArtifactReference {
+                repository,
+                artifact_type: ArtifactType::Issue,
+                number: 1,
+            },
+            title: "ancestor".into(),
+            body: "🦀".repeat(10),
+            labels: Vec::new(),
+            state: "open".into(),
+            workflow_kind: Some("feature".into()),
+        });
+
+        enforce_bounds(
+            &mut bundle,
+            ArtifactContextPolicy {
+                body_bytes: 5,
+                ..ArtifactContextPolicy::default()
+            },
         );
+
+        assert_eq!(bundle.primary.body, "🦀");
+        assert_eq!(bundle.lineage[0].body, "🦀");
+        assert!(bundle.truncation.content_truncated);
+    }
+
+    #[test]
+    fn serialized_size_bound_truncates_bodies_deterministically() {
+        let mut bundle = ArtifactContextBundle::new(ArtifactSnapshot {
+            artifact: ArtifactReference {
+                repository: ArtifactRepository {
+                    id: "1".into(),
+                    path: "a/b".into(),
+                },
+                artifact_type: ArtifactType::Issue,
+                number: 1,
+            },
+            title: "primary".into(),
+            body: "a".repeat(10_000),
+            labels: Vec::new(),
+            state: "open".into(),
+            workflow_kind: Some("code".into()),
+        });
+
+        enforce_bounds(
+            &mut bundle,
+            ArtifactContextPolicy {
+                body_bytes: 20_000,
+                bundle_bytes: 2_000,
+                ..ArtifactContextPolicy::default()
+            },
+        );
+
+        assert!(serialized_len(&bundle) <= 2_000);
+        assert!(bundle.truncation.content_truncated);
+    }
+
+    #[test]
+    fn minimal_bundle_is_below_default_limit() {
+        let bundle = ArtifactContextBundle::new(ArtifactSnapshot {
+            artifact: ArtifactReference {
+                repository: ArtifactRepository {
+                    id: "1".into(),
+                    path: "a/b".into(),
+                },
+                artifact_type: ArtifactType::Issue,
+                number: 1,
+            },
+            title: "primary".into(),
+            body: String::new(),
+            labels: Vec::new(),
+            state: "open".into(),
+            workflow_kind: None,
+        });
         assert!(serialized_len(&bundle) < ArtifactContextPolicy::default().bundle_bytes);
     }
 }

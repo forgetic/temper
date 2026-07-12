@@ -2,8 +2,8 @@
 
 use super::Capability;
 use temper_protocol_agent::{
-    ArtifactContextBundle, ArtifactIndexEntry, ArtifactReference, ArtifactRelationType,
-    ArtifactSnapshot, ArtifactType, WorkspaceContext,
+    ArtifactContextBundle, ArtifactReference, ArtifactRelationType, ArtifactSnapshot,
+    ArtifactSummary, ArtifactType, WorkspaceContext,
 };
 use temper_verdict::{VerdictContract, VerdictContracts};
 
@@ -304,64 +304,32 @@ fn render_artifact_context(text: &mut String, bundle: &ArtifactContextBundle) {
     ));
 
     text.push_str("\nPrimary artifact:\n");
-    if let Some(primary) = bundle.snapshots.first() {
-        render_snapshot(text, primary);
-    } else if let Some(primary) = bundle.index.first() {
-        render_index(text, primary);
-        text.push_str("  Body omitted from the bounded bundle.\n");
-    } else {
-        text.push_str("- Primary artifact content was not available.\n");
-    }
+    render_snapshot(text, &bundle.primary);
 
     text.push_str("\nMandatory lineage:\n");
-    if bundle.snapshots.len() <= 1 {
-        text.push_str("- No additional full lineage snapshots.\n");
+    if bundle.lineage.is_empty() {
+        text.push_str("- No mandatory ancestors.\n");
     } else {
-        for snapshot in bundle.snapshots.iter().skip(1) {
+        for snapshot in &bundle.lineage {
             render_snapshot(text, snapshot);
         }
     }
-    for relation in bundle
-        .relations
-        .iter()
-        .filter(|relation| relation.relation_type != ArtifactRelationType::Related)
-    {
-        text.push_str(&format!(
-            "- relation {}: {} -> {}\n",
-            relation_name(relation.relation_type),
-            reference_name(&relation.source),
-            reference_name(&relation.target)
-        ));
-    }
-
-    let omitted = bundle
-        .index
-        .iter()
-        .filter(|entry| entry.snapshot_index.is_none())
-        .collect::<Vec<_>>();
-    let (validation, references): (Vec<_>, Vec<_>) = omitted.into_iter().partition(|entry| {
-        entry.artifact.artifact_type == ArtifactType::PullRequest
-            && bundle.relations.iter().any(|relation| {
-                relation.relation_type == ArtifactRelationType::Related
-                    && relation.source == entry.artifact
-            })
-    });
 
     text.push_str("\nValidation summaries:\n");
-    if validation.is_empty() {
-        text.push_str("- No validation implementation summaries were collected.\n");
+    if bundle.validation_scope.is_empty() {
+        text.push_str("- No validation dependencies or implementations were collected.\n");
     } else {
-        for entry in validation {
-            render_index(text, entry);
+        for summary in &bundle.validation_scope {
+            render_summary(text, summary);
         }
     }
 
     text.push_str("\nOptional body-omitted references:\n");
-    if references.is_empty() {
+    if bundle.optional_references.is_empty() {
         text.push_str("- None.\n");
     } else {
-        for entry in references {
-            render_index(text, entry);
+        for summary in &bundle.optional_references {
+            render_summary(text, summary);
         }
     }
 
@@ -401,10 +369,11 @@ fn render_artifact_context(text: &mut String, bundle: &ArtifactContextBundle) {
 
 fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
     text.push_str(&format!(
-        "- {} — {} [{}] labels={}\n  Body:\n{}\n",
+        "- {} — {} [{}] kind={} labels={}\n  Body:\n{}\n",
         reference_name(&snapshot.artifact),
         snapshot.title,
         snapshot.state,
+        snapshot.workflow_kind.as_deref().unwrap_or("(unknown)"),
         if snapshot.labels.is_empty() {
             "(none)".to_string()
         } else {
@@ -414,12 +383,20 @@ fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
     ));
 }
 
-fn render_index(text: &mut String, entry: &ArtifactIndexEntry) {
+fn render_summary(text: &mut String, summary: &ArtifactSummary) {
     text.push_str(&format!(
-        "- {} — {} [{}]\n",
-        reference_name(&entry.artifact),
-        entry.title,
-        entry.state
+        "- {} — {} [{}] kind={} labels={} relation={} exposed_by={}\n",
+        reference_name(&summary.artifact),
+        summary.title,
+        summary.state,
+        summary.workflow_kind.as_deref().unwrap_or("(unknown)"),
+        if summary.labels.is_empty() {
+            "(none)".to_string()
+        } else {
+            summary.labels.join(", ")
+        },
+        relation_name(summary.relation_type),
+        reference_name(&summary.source),
     ));
 }
 

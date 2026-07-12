@@ -20,15 +20,18 @@
     "version": 1,
     "repository": {"id": "repo-1", "path": "ai/temper"},
     "artifact_type": "issue",
-    "index": [{
+    "primary": {
       "artifact": {
         "repository": {"id": "repo-1", "path": "ai/temper"},
         "artifact_type": "issue",
         "number": 279
       },
       "title": "Add artifact context",
-      "state": "open"
-    }],
+      "body": "Define the shared contracts.",
+      "labels": ["code", "ready"],
+      "state": "open",
+      "workflow_kind": "code"
+    },
     "truncation": {
       "depth_exceeded": false,
       "count_exceeded": false,

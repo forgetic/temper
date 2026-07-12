@@ -7,6 +7,7 @@ use temper_forge::{
     UpdateIssue,
 };
 use temper_forge_memory::MemoryForge;
+use temper_protocol_worker::ArtifactRelationType;
 use temper_runner::RepositoryTarget;
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSource, RawWorkflowSpec, WorkflowMetadata,
@@ -130,21 +131,15 @@ fn memory_forge_resolves_cross_repo_closed_lineage_root_first() {
         .await
         .unwrap();
 
+        assert_eq!(bundle.primary.title, "code");
+        assert_eq!(bundle.primary.workflow_kind.as_deref(), Some("code"));
         assert_eq!(
             bundle
-                .snapshots
+                .lineage
                 .iter()
                 .map(|item| item.title.as_str())
                 .collect::<Vec<_>>(),
-            ["epic", "design", "code"]
-        );
-        assert_eq!(
-            bundle
-                .relations
-                .iter()
-                .filter(|relation| relation.relation_type == ArtifactRelationType::Parent)
-                .count(),
-            2
+            ["epic", "design"]
         );
         assert!(
             bundle
@@ -213,17 +208,19 @@ fn memory_forge_keeps_reference_bodies_out_of_bundle() {
         .await
         .unwrap();
 
-        assert_eq!(bundle.snapshots.len(), 1);
+        assert_eq!(bundle.primary.title, "primary");
+        assert!(bundle.lineage.is_empty());
         assert!(
             bundle
-                .index
+                .optional_references
                 .iter()
                 .any(|entry| entry.artifact.number == referenced.number.get())
         );
+        assert!(bundle.validation_scope.is_empty());
         assert!(!serde_json::to_string(&bundle).unwrap().contains("SECRET"));
         assert!(
             !bundle
-                .index
+                .optional_references
                 .iter()
                 .any(|entry| entry.artifact.number == 999)
         );
@@ -289,17 +286,28 @@ fn service_selects_mandatory_lineage_and_plan_validation_aggregates() {
             )
             .await
             .unwrap();
+        let markdown_reference = forge
+            .create_issue(
+                &repository.id,
+                issue("background", "optional context".into(), &["docs"]),
+            )
+            .await
+            .unwrap();
         forge
             .update_issue(
                 &plan.id,
                 UpdateIssue {
-                    body: Some(render_metadata_block(&WorkflowMetadata {
-                        kind: Some(ArtifactKindId::new("plan")),
-                        parents: vec![ArtifactRef::same_repo(feature.number)],
-                        dependencies: vec![ArtifactRef::same_repo(code.number)],
-                        target_branch: Some("feature/1".into()),
-                        ..Default::default()
-                    })),
+                    body: Some(format!(
+                        "See #{}\n{}",
+                        markdown_reference.number.get(),
+                        render_metadata_block(&WorkflowMetadata {
+                            kind: Some(ArtifactKindId::new("plan")),
+                            parents: vec![ArtifactRef::same_repo(feature.number)],
+                            dependencies: vec![ArtifactRef::same_repo(code.number)],
+                            target_branch: Some("feature/1".into()),
+                            ..Default::default()
+                        })
+                    )),
                     ..Default::default()
                 },
             )
@@ -377,49 +385,73 @@ fn service_selects_mandatory_lineage_and_plan_validation_aggregates() {
                     number: feature.number,
                 },
                 "plan_feature",
-                vec!["feature"],
+                vec![],
             ),
             (
                 ArtifactSource::Issue {
                     number: plan.number,
                 },
                 "decompose_plan",
-                vec!["feature", "plan"],
+                vec!["feature"],
             ),
             (
                 ArtifactSource::Issue {
                     number: code.number,
                 },
                 "open_pr",
-                vec!["feature", "plan", "code"],
+                vec!["feature", "plan"],
             ),
             (
                 ArtifactSource::PullRequest {
                     number: implementation.number,
                 },
                 "address_implementation_ci_failure",
-                vec!["feature", "plan", "code", "implementation"],
+                vec!["feature", "plan", "code"],
             ),
             (
                 ArtifactSource::PullRequest {
                     number: landing.number,
                 },
                 "resolve_feature_landing_merge_conflict",
-                vec!["feature", "plan", "landing"],
+                vec!["feature", "plan"],
             ),
         ];
-        for (source, action, expected) in cases {
+        for (source, action, expected_lineage) in cases {
             let bundle = service
                 .resolve(&repository.id, source, action)
                 .await
                 .unwrap();
+            let (expected_primary, expected_number, expected_kind) = match action {
+                "plan_feature" => ("feature", feature.number.get(), "feature"),
+                "decompose_plan" => ("plan", plan.number.get(), "plan"),
+                "open_pr" => ("code", code.number.get(), "code"),
+                "address_implementation_ci_failure" => (
+                    "implementation",
+                    implementation.number.get(),
+                    "implementation_pr",
+                ),
+                "resolve_feature_landing_merge_conflict" => {
+                    ("landing", landing.number.get(), "feature_landing_pr")
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(bundle.primary.title, expected_primary, "action {action}");
+            assert_eq!(
+                bundle.primary.artifact.number, expected_number,
+                "action {action}"
+            );
+            assert_eq!(
+                bundle.primary.workflow_kind.as_deref(),
+                Some(expected_kind),
+                "action {action}"
+            );
             assert_eq!(
                 bundle
-                    .snapshots
+                    .lineage
                     .iter()
                     .map(|snapshot| snapshot.title.as_str())
                     .collect::<Vec<_>>(),
-                expected,
+                expected_lineage,
                 "action {action}"
             );
         }
@@ -434,20 +466,38 @@ fn service_selects_mandatory_lineage_and_plan_validation_aggregates() {
             )
             .await
             .unwrap();
+        assert_eq!(validation.primary.title, "plan");
         assert_eq!(
             validation
-                .snapshots
+                .lineage
                 .iter()
                 .map(|snapshot| snapshot.title.as_str())
                 .collect::<Vec<_>>(),
-            ["feature", "plan"]
+            ["feature"]
         );
         let summaries = validation
-            .index
+            .validation_scope
             .iter()
             .map(|entry| entry.title.as_str())
             .collect::<Vec<_>>();
         assert!(summaries.contains(&"code"));
         assert!(summaries.contains(&"implementation"));
+        assert!(!summaries.contains(&"background"));
+        assert_eq!(
+            validation
+                .optional_references
+                .iter()
+                .map(|entry| entry.title.as_str())
+                .collect::<Vec<_>>(),
+            ["background"]
+        );
+        assert!(validation.validation_scope.iter().all(|summary| {
+            !summary.labels.is_empty()
+                && summary.source.number > 0
+                && matches!(
+                    summary.relation_type,
+                    ArtifactRelationType::Dependency | ArtifactRelationType::Related
+                )
+        }));
     });
 }

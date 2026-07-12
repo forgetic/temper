@@ -52,7 +52,21 @@ Abbreviated current shape:
     "version": 1,
     "repository": {"id": "repo-1", "path": "ai/temper"},
     "artifact_type": "issue",
-    "snapshots": [],
+    "primary": {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 285
+      },
+      "title": "Verify lineage",
+      "body": "Full coordinating artifact body.",
+      "labels": ["code", "ready"],
+      "state": "open",
+      "workflow_kind": "code"
+    },
+    "lineage": [],
+    "validation_scope": [],
+    "optional_references": [],
     "truncation": {
       "depth_exceeded": false,
       "count_exceeded": false,

@@ -24,9 +24,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use temper_forge::{Forge, RepositoryId};
-use temper_protocol_worker::{
-    ArtifactContextBundle, ArtifactContextDiagnosticCode, ArtifactRelationType,
-};
+use temper_protocol_worker::{ArtifactContextBundle, ArtifactContextDiagnosticCode};
 use temper_workflow::{ArtifactSource, ValidatedWorkflow};
 
 pub use catalog::ConfiguredRepositoryCatalog;
@@ -209,27 +207,37 @@ async fn resolve_initial_artifact_context_selected<F: Forge + ?Sized>(
 ) -> Result<ArtifactContextBundle, ArtifactContextError> {
     let collection =
         lineage::collect_lineage(forge, catalog, workflow, repository, source, policy).await?;
-    let mut extras = extras::collect_references(forge, catalog, &collection, policy).await;
-    if include_validation_aggregates {
-        extras.extend(
-            extras::collect_validation_aggregates(forge, catalog, workflow, &collection, policy)
-                .await,
-            policy,
-            &collection,
-        );
-    }
+    let mut references = extras::collect_references(forge, catalog, workflow, &collection).await;
+    let mut validation = if include_validation_aggregates {
+        extras::collect_validation_aggregates(forge, catalog, workflow, &collection).await
+    } else {
+        extras::Extras {
+            summaries: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    };
     let mut bundle = lineage::ordered_bundle(collection);
-    let mandatory_index = bundle.index.len();
-    bundle.index.extend(extras.index);
-    bundle.relations.extend(extras.relations);
-    bundle.diagnostics.extend(extras.diagnostics);
-    bundle.relations.sort_by_key(|relation| {
-        (
-            relation_type_key(relation.relation_type),
-            lineage::key(&relation.source),
-            lineage::key(&relation.target),
-        )
-    });
+    bundle.diagnostics.append(&mut validation.diagnostics);
+    bundle.diagnostics.append(&mut references.diagnostics);
+
+    let total_summaries = validation.summaries.len() + references.summaries.len();
+    if validation.summaries.len() >= policy.summaries {
+        validation.summaries.truncate(policy.summaries);
+        references.summaries.clear();
+    } else {
+        references
+            .summaries
+            .truncate(policy.summaries - validation.summaries.len());
+    }
+    bundle.validation_scope = validation.summaries;
+    bundle.optional_references = references.summaries;
+    if total_summaries > policy.summaries {
+        bundle.diagnostics.push(lineage::diagnostic(
+            ArtifactContextDiagnosticCode::CountExceeded,
+            "validation/reference summary limit reached",
+            Some(bundle.primary.artifact.clone()),
+        ));
+    }
     bundle.truncation.depth_exceeded = bundle
         .diagnostics
         .iter()
@@ -238,14 +246,6 @@ async fn resolve_initial_artifact_context_selected<F: Forge + ?Sized>(
         .diagnostics
         .iter()
         .any(|item| item.code == ArtifactContextDiagnosticCode::CountExceeded);
-    bounds::enforce_bounds(&mut bundle, mandatory_index, policy);
+    bounds::enforce_bounds(&mut bundle, policy);
     Ok(bundle)
-}
-
-fn relation_type_key(relation_type: ArtifactRelationType) -> u8 {
-    match relation_type {
-        ArtifactRelationType::Parent => 0,
-        ArtifactRelationType::Dependency => 1,
-        ArtifactRelationType::Related => 2,
-    }
 }

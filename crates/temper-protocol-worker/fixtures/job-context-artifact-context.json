@@ -14,7 +14,7 @@
     "version": 1,
     "repository": {"id": "repo-1", "path": "ai/temper"},
     "artifact_type": "issue",
-    "snapshots": [{
+    "primary": {
       "artifact": {
         "repository": {"id": "repo-1", "path": "ai/temper"},
         "artifact_type": "issue",
@@ -23,8 +23,9 @@
       "title": "Add artifact context",
       "body": "Preserve this singular artifact shape.",
       "labels": ["code"],
-      "state": "open"
-    }],
+      "state": "open",
+      "workflow_kind": "code"
+    },
     "truncation": {
       "depth_exceeded": false,
       "count_exceeded": false,

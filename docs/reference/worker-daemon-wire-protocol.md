@@ -130,13 +130,14 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `branch_hint` | string | no | Deterministic worker branch suggestion, for example `agent/pr-for-code-42`. |
 | `correlation_key` | string | no | Deterministic PR correlation key, for example `pr-for-code-42`. |
 | `artifact` | object | no | Enqueue-time issue snapshot. Omitted for older minimal payloads and for PR-targeted jobs in v1. |
-| `artifact_context` | object | no | Versioned bounded graph bundle containing the primary snapshot, mandatory ancestry, compact related indexes, diagnostics, and explicit truncation flags. Additive; legacy workers may ignore it. |
+| `artifact_context` | object | no | Versioned bounded graph bundle with explicitly separated primary, mandatory ancestry, validation scope, optional references, diagnostics, and truncation flags. Additive; legacy workers may ignore it. |
 | `artifact_context.version` | integer | yes when `artifact_context` is present | Artifact-context schema version, currently `1` and independent of the worker protocol version. |
 | `artifact_context.repository` | object | yes when `artifact_context` is present | Stable id and configured `owner/name` path of the coordinating repository. |
 | `artifact_context.artifact_type` | string | yes when `artifact_context` is present | `issue` or `pull_request`. |
-| `artifact_context.snapshots` | array | no | Full bounded artifact records. The primary snapshot is first; mandatory lineage follows in deterministic root-first order. |
-| `artifact_context.index` | array | no | Deterministically ordered compact records, with `snapshot_index` when full content is present. |
-| `artifact_context.relations` | array | no | Directed `parent`, `dependency`, or `related` edges. |
+| `artifact_context.primary` | object | yes when `artifact_context` is present | Full coordinating snapshot; primary identity never depends on a vector position. |
+| `artifact_context.lineage` | array | no | Full mandatory ancestor snapshots in deterministic root-to-leaf order, excluding the primary. |
+| `artifact_context.validation_scope` | array | no | Body-omitted declared dependencies and verified implementation PRs. Each summary retains labels, state, optional workflow kind, relation type, and the source artifact that exposed it. |
+| `artifact_context.optional_references` | array | no | Body-omitted Markdown references, with the same self-describing summary metadata. |
 | `artifact_context.diagnostics` | array | no | Non-fatal partial-collection diagnostics. Dispatch continues when only related context is unavailable. |
 | `artifact_context.truncation` | object | yes when `artifact_context` is present | Explicit `depth_exceeded`, `count_exceeded`, and `content_truncated` booleans. |
 | `artifact.number` | integer | yes when `artifact` is present | Repository-scoped issue number. |

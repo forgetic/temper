@@ -2,17 +2,18 @@
   "version": 1,
   "repository": {"id": "repo-1", "path": "ai/temper"},
   "artifact_type": "pull_request",
-  "index": [
-    {
-      "artifact": {
-        "repository": {"id": "repo-1", "path": "ai/temper"},
-        "artifact_type": "pull_request",
-        "number": 42
-      },
-      "title": "Large implementation",
-      "state": "open"
-    }
-  ],
+  "primary": {
+    "artifact": {
+      "repository": {"id": "repo-1", "path": "ai/temper"},
+      "artifact_type": "pull_request",
+      "number": 42
+    },
+    "title": "Large implementation",
+    "body": "bounded",
+    "labels": ["implementation"],
+    "state": "open",
+    "workflow_kind": "implementation_pr"
+  },
   "diagnostics": [
     {
       "code": "content_truncated",

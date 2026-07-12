@@ -2,17 +2,30 @@
   "version": 1,
   "repository": {"id": "repo-1", "path": "ai/temper"},
   "artifact_type": "issue",
-  "snapshots": [
+  "primary": {
+    "artifact": {
+      "repository": {"id": "repo-1", "path": "ai/temper"},
+      "artifact_type": "issue",
+      "number": 295
+    },
+    "title": "Encode explicit artifact context",
+    "body": "Implement the revised contract.",
+    "labels": ["code", "ready"],
+    "state": "open",
+    "workflow_kind": "code"
+  },
+  "lineage": [
     {
       "artifact": {
         "repository": {"id": "repo-1", "path": "ai/temper"},
         "artifact_type": "issue",
-        "number": 279
+        "number": 276
       },
-      "title": "Add artifact context",
-      "body": "Define the shared contracts.",
-      "labels": ["code", "ready"],
-      "state": "open"
+      "title": "Workflow context feature",
+      "body": "Root feature.",
+      "labels": ["feature"],
+      "state": "open",
+      "workflow_kind": "feature"
     },
     {
       "artifact": {
@@ -22,40 +35,42 @@
       },
       "title": "Workflow context plan",
       "body": "Parent planning artifact.",
-      "state": "open"
+      "labels": ["plan"],
+      "state": "open",
+      "workflow_kind": "plan"
     }
   ],
-  "index": [
+  "validation_scope": [
     {
       "artifact": {
         "repository": {"id": "repo-1", "path": "ai/temper"},
-        "artifact_type": "issue",
-        "number": 279
+        "artifact_type": "pull_request",
+        "number": 294
       },
-      "title": "Add artifact context",
+      "title": "Verified implementation",
+      "labels": ["implementation"],
       "state": "open",
-      "snapshot_index": 0
-    },
-    {
-      "artifact": {
-        "repository": {"id": "repo-1", "path": "ai/temper"},
-        "artifact_type": "issue",
-        "number": 277
-      },
-      "title": "Workflow context plan",
-      "state": "open",
-      "snapshot_index": 1
-    }
-  ],
-  "relations": [
-    {
-      "relation_type": "parent",
+      "workflow_kind": "implementation_pr",
+      "relation_type": "related",
       "source": {
         "repository": {"id": "repo-1", "path": "ai/temper"},
         "artifact_type": "issue",
-        "number": 279
+        "number": 295
+      }
+    }
+  ],
+  "optional_references": [
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 250
       },
-      "target": {
+      "title": "Referenced background",
+      "labels": ["docs"],
+      "state": "closed",
+      "relation_type": "related",
+      "source": {
         "repository": {"id": "repo-1", "path": "ai/temper"},
         "artifact_type": "issue",
         "number": 277

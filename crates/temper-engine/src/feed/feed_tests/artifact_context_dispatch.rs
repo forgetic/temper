@@ -173,16 +173,15 @@ fn configured_service_populates_normal_wake_and_recovered_dispatches_identically
         for context in contexts {
             assert_eq!(context.artifact.as_ref().unwrap().title, "code");
             assert_eq!(context.workspace.as_ref().unwrap().repos.len(), 1);
+            let bundle = context.artifact_context.as_ref().unwrap();
+            assert_eq!(bundle.primary.title, "code");
             assert_eq!(
-                context
-                    .artifact_context
-                    .as_ref()
-                    .unwrap()
-                    .snapshots
+                bundle
+                    .lineage
                     .iter()
                     .map(|snapshot| snapshot.title.as_str())
                     .collect::<Vec<_>>(),
-                ["feature", "plan", "code"]
+                ["feature", "plan"]
             );
         }
     })
