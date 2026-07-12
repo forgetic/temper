@@ -5,14 +5,14 @@ use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    CodingAgentError, ProviderConfig, WorkspaceContext,
-    run_coding_agent_native_with_options_and_submit_for_pr,
+    CodingAgentError, ForgeContextHost, ProviderConfig, WorkspaceContext,
+    run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
 use temper_engine::Daemon;
 use temper_protocol_agent::PullRequestFreshness;
 use temper_worker::{
-    AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner, PrFreshnessFailure,
-    PrFreshnessGuard,
+    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
+    PrFreshnessFailure, PrFreshnessGuard,
 };
 
 use super::pause::{PauseHooks, PausePoint};
@@ -28,13 +28,14 @@ pub struct NativeJigAgentRunner {
     pub(crate) config_dir: Option<PathBuf>,
     pub(crate) enable_subagents: bool,
     pub(crate) submit_for_pr: temper_agent::SubmitForPrHost,
+    pub(crate) forge_context: AgentForgeContextHost,
     pub(crate) hooks: PauseHooks,
 }
 
 impl AgentRunner for NativeJigAgentRunner {
     async fn run(
         &self,
-        _job_id: &str,
+        job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {
@@ -56,7 +57,11 @@ impl AgentRunner for NativeJigAgentRunner {
                     cwd,
                 )
             });
-        let result = run_coding_agent_native_with_options_and_submit_for_pr(
+        let forge_host = self.forge_context.clone();
+        let job_id = job_id.to_string();
+        let forge_context: ForgeContextHost =
+            Arc::new(move |operation| forge_host(job_id.clone(), operation));
+        let (result, _totals) = run_coding_agent_native_with_totals_tool_config_and_hosts(
             self.handle.clone(),
             &self.provider,
             context,
@@ -64,7 +69,9 @@ impl AgentRunner for NativeJigAgentRunner {
             self.max_iterations,
             self.config_dir.as_deref(),
             self.enable_subagents,
+            None,
             Some(submit_for_pr),
+            Some(forge_context),
         )
         .await
         .map_err(agent_error)?;

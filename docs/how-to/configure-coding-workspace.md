@@ -122,11 +122,18 @@ the child reads. (For the full flag inventory and defaults, see
 The agent runs **in the prepared coordination-scoped workspace root** (its
 `--workspace`, also its cwd), with each manifest repo checked out below that root
 using its `dir`. It receives the assigned job, work item, user guidance, action,
-allowed verdicts, and branch/base/correlation data as fields of the
-`WorkspaceContext` JSON the worker writes to the `--context` file. The agent does
-**not** receive Forge mutation tools; it completes the assigned action and
+allowed verdicts, branch/base/correlation data, and the optional versioned
+`artifact_context` bundle as fields of the `WorkspaceContext` JSON the worker writes to the
+`--context` file. The legacy singular work-item JSON remains present for older
+agents. When configured, the worker also exposes assignment-bound
+`forge_get_item` and `forge_list_related` tools over a per-run loopback channel;
+the agent supplies only a bounded read operation, while worker/job identity and
+authentication stay on the host side. The agent does
+**not** receive Forge credentials or mutation tools; it completes the assigned action and
 reports a branch/diff, a declared verdict with authored content, or a structured
-failure for the worker to return to Temper.
+failure for the worker to return to Temper. See the
+[Worker/Agent process protocol](../reference/worker-agent-process-protocol.md)
+for exact channel shapes, limits, and errors.
 
 ### Assigned-action checkout capability
 
