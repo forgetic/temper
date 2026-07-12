@@ -34,6 +34,7 @@ pub struct NativeJigAgentRunner {
 impl AgentRunner for NativeJigAgentRunner {
     async fn run(
         &self,
+        _job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {

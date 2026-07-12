@@ -165,4 +165,76 @@ fn user_context_includes_work_item_and_guidance() {
     assert!(rendered.contains("Use docs/product-change.md"));
     assert!(rendered.contains("No .temper-only diffs."));
     assert!(rendered.contains(r#"{"artifact":{"title":"Implement docs"}}"#));
+    assert!(rendered.contains("Work item context (JSON):"));
+}
+
+#[test]
+fn shared_artifact_renderer_covers_workspace_roles_and_pr_runs() {
+    for role in ["architect", "engineer", "reviewer", "tester"] {
+        let mut context = parsed_fixture();
+        context.work_item.role = role.to_string();
+        if matches!(role, "reviewer" | "tester") {
+            context.work_item.target = "PullRequest { number: ItemNumber(9) }".to_string();
+            context.checkout = Some("pull_request_read_only".to_string());
+        }
+        context.artifact_context = Some(
+            serde_json::from_value(serde_json::json!({
+                "version":1,
+                "repository":{"id":"repo-1","path":"acme/service"},
+                "artifact_type": if matches!(role, "reviewer" | "tester") { "pull_request" } else { "issue" },
+                "index":[{"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":if matches!(role, "reviewer" | "tester") { "pull_request" } else { "issue" },"number":9},"title":"Primary summary","state":"open"}],
+                "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":false}
+            }))
+            .expect("role bundle parses"),
+        );
+        let rendered = user_context(&context);
+        assert!(rendered.contains(&format!("Role: {role}")));
+        assert!(rendered.contains("Primary artifact:"));
+        assert!(rendered.contains("Body omitted from the bounded bundle"));
+        assert!(rendered.contains("Forge context tools:"));
+    }
+}
+
+#[test]
+fn artifact_bundle_uses_shared_lineage_renderer_instead_of_legacy_json() {
+    let mut context = parsed_fixture();
+    context.artifact_context = Some(serde_json::from_value(serde_json::json!({
+        "version": 1,
+        "repository": {"id":"repo-1", "path":"acme/service"},
+        "artifact_type": "issue",
+        "snapshots": [
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"title":"Primary","body":"primary body","state":"open"},
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":3},"title":"Parent","body":"parent body","state":"open"}
+        ],
+        "index": [
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"title":"Primary","state":"open","snapshot_index":0},
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"pull_request","number":9},"title":"Validation PR","state":"open"},
+            {"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":11},"title":"Optional reference","state":"open"}
+        ],
+        "relations": [
+            {"relation_type":"parent","source":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"target":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":3}},
+            {"relation_type":"related","source":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"pull_request","number":9},"target":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":3}}
+        ],
+        "diagnostics":[{"code":"content_truncated","message":"body bounded"}],
+        "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":true}
+    })).expect("bundle parses"));
+
+    let rendered = user_context(&context);
+    for heading in [
+        "Primary artifact:",
+        "Mandatory lineage:",
+        "Validation summaries:",
+        "Optional body-omitted references:",
+        "Diagnostics and truncation:",
+        "Forge context tools:",
+    ] {
+        assert!(rendered.contains(heading), "missing {heading}");
+    }
+    assert!(rendered.contains("primary body"));
+    assert!(rendered.contains("parent body"));
+    assert!(rendered.contains("Validation PR"));
+    assert!(rendered.contains("Optional reference"));
+    assert!(rendered.contains("content_truncated"));
+    assert!(rendered.contains("Repeated calls may follow indirect relations"));
+    assert!(!rendered.contains("Work item context (JSON):"));
 }

@@ -19,7 +19,7 @@ impl Capability {
     pub fn for_role(role: &str) -> Self {
         match role {
             "engineer" => Capability::CodingWorkspace,
-            "reviewer" => Capability::ReviewWorkspace,
+            "reviewer" | "tester" => Capability::ReviewWorkspace,
             _ => Capability::TriageWorkspace,
         }
     }

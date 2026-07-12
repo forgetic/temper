@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use temper_agent::{ProviderConfig, SubmitForPrHost};
+use temper_agent::{ForgeContextHost, ProviderConfig, SubmitForPrHost};
 use temper_protocol_agent::AgentToolConfig;
 
 /// Everything the coding-agent session is configured by, in one struct.
@@ -44,6 +44,8 @@ pub struct AgentConfig {
     /// client for the worker-owned local side channel; when absent the
     /// `submit_for_pr` tool is not exposed by this agent process.
     pub submit_for_pr: Option<SubmitForPrHost>,
+    /// Optional asynchronous host channel for bounded read-only Forge context.
+    pub forge_context: Option<ForgeContextHost>,
 }
 
 impl AgentConfig {
@@ -61,6 +63,7 @@ impl AgentConfig {
             config_dir,
             tool_config: None,
             submit_for_pr: None,
+            forge_context: None,
         }
     }
 
@@ -73,6 +76,12 @@ impl AgentConfig {
     /// Installs the host submit callback for this session.
     pub fn with_submit_for_pr(mut self, submit_for_pr: SubmitForPrHost) -> Self {
         self.submit_for_pr = Some(submit_for_pr);
+        self
+    }
+
+    /// Installs the asynchronous Forge context callback for this session.
+    pub fn with_forge_context(mut self, forge_context: ForgeContextHost) -> Self {
+        self.forge_context = Some(forge_context);
         self
     }
 }

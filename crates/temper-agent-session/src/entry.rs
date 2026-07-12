@@ -106,6 +106,10 @@ fn build_config(
         Some(address) => config.with_submit_for_pr(crate::submit_client::host_for_address(address)),
         None => config,
     };
+    let config = match options.forge_context_address {
+        Some(address) => config.with_forge_context(crate::forge_client::host_for_address(address)),
+        None => config,
+    };
     Ok((config, auth_dir))
 }
 

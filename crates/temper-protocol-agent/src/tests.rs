@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn forge_side_channel_rejects_child_selected_identity_and_mutations() {
+    let with_identity = serde_json::json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "worker_id": "attacker-worker",
+        "job_id": "other-job",
+        "operation": {
+            "operation": "forge_get_item",
+            "repo": "ai/temper",
+            "number": 284
+        }
+    });
+    assert!(serde_json::from_value::<ForgeContextRequest>(with_identity).is_err());
+
+    let mutation = serde_json::json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "operation": {
+            "operation": "close_issue",
+            "repo": "ai/temper",
+            "number": 284
+        }
+    });
+    assert!(serde_json::from_value::<ForgeContextRequest>(mutation).is_err());
+}
+
+#[test]
 fn codebase_memory_tool_config_round_trips_and_filters_roles() {
     let json = r#"{
         "codebase_memory": {

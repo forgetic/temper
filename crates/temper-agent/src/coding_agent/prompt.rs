@@ -1,7 +1,10 @@
 //! Role system-prompt and user-turn context construction.
 
 use super::Capability;
-use temper_protocol_agent::WorkspaceContext;
+use temper_protocol_agent::{
+    ArtifactContextBundle, ArtifactIndexEntry, ArtifactReference, ArtifactRelationType,
+    ArtifactSnapshot, ArtifactType, WorkspaceContext,
+};
 use temper_verdict::{VerdictContract, VerdictContracts};
 
 /// Builds the role system prompt for a capability.
@@ -280,9 +283,166 @@ pub fn user_context(context: &WorkspaceContext) -> String {
         }
     }
 
-    text.push_str("\nWork item context (JSON):\n");
-    text.push_str(&context.work_item.context);
-    text.push('\n');
+    match &context.artifact_context {
+        Some(bundle) => render_artifact_context(&mut text, bundle),
+        None => {
+            // Backward compatibility for contexts emitted before artifact bundles:
+            // preserve the historical heading and singular JSON verbatim.
+            text.push_str("\nWork item context (JSON):\n");
+            text.push_str(&context.work_item.context);
+            text.push('\n');
+        }
+    }
 
     text
+}
+
+fn render_artifact_context(text: &mut String, bundle: &ArtifactContextBundle) {
+    text.push_str(&format!(
+        "\nArtifact context bundle (version {}):\nRepository: {} ({})\n",
+        bundle.version, bundle.repository.path, bundle.repository.id
+    ));
+
+    text.push_str("\nPrimary artifact:\n");
+    if let Some(primary) = bundle.snapshots.first() {
+        render_snapshot(text, primary);
+    } else if let Some(primary) = bundle.index.first() {
+        render_index(text, primary);
+        text.push_str("  Body omitted from the bounded bundle.\n");
+    } else {
+        text.push_str("- Primary artifact content was not available.\n");
+    }
+
+    text.push_str("\nMandatory lineage:\n");
+    if bundle.snapshots.len() <= 1 {
+        text.push_str("- No additional full lineage snapshots.\n");
+    } else {
+        for snapshot in bundle.snapshots.iter().skip(1) {
+            render_snapshot(text, snapshot);
+        }
+    }
+    for relation in bundle
+        .relations
+        .iter()
+        .filter(|relation| relation.relation_type != ArtifactRelationType::Related)
+    {
+        text.push_str(&format!(
+            "- relation {}: {} -> {}\n",
+            relation_name(relation.relation_type),
+            reference_name(&relation.source),
+            reference_name(&relation.target)
+        ));
+    }
+
+    let omitted = bundle
+        .index
+        .iter()
+        .filter(|entry| entry.snapshot_index.is_none())
+        .collect::<Vec<_>>();
+    let (validation, references): (Vec<_>, Vec<_>) = omitted.into_iter().partition(|entry| {
+        entry.artifact.artifact_type == ArtifactType::PullRequest
+            && bundle.relations.iter().any(|relation| {
+                relation.relation_type == ArtifactRelationType::Related
+                    && relation.source == entry.artifact
+            })
+    });
+
+    text.push_str("\nValidation summaries:\n");
+    if validation.is_empty() {
+        text.push_str("- No validation implementation summaries were collected.\n");
+    } else {
+        for entry in validation {
+            render_index(text, entry);
+        }
+    }
+
+    text.push_str("\nOptional body-omitted references:\n");
+    if references.is_empty() {
+        text.push_str("- None.\n");
+    } else {
+        for entry in references {
+            render_index(text, entry);
+        }
+    }
+
+    text.push_str("\nDiagnostics and truncation:\n");
+    if bundle.diagnostics.is_empty() {
+        text.push_str("- No collection diagnostics.\n");
+    } else {
+        for diagnostic in &bundle.diagnostics {
+            let code = serde_json::to_value(diagnostic.code)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_else(|| "unknown".to_string());
+            let source = diagnostic
+                .source
+                .as_ref()
+                .map(|source| format!(" ({})", reference_name(source)))
+                .unwrap_or_default();
+            text.push_str(&format!("- {code}{source}: {}\n", diagnostic.message));
+        }
+    }
+    text.push_str(&format!(
+        "- truncation: depth_exceeded={}, count_exceeded={}, content_truncated={}\n",
+        bundle.truncation.depth_exceeded,
+        bundle.truncation.count_exceeded,
+        bundle.truncation.content_truncated
+    ));
+
+    text.push_str(
+        "\nForge context tools:\n\
+         If `forge_get_item` and `forge_list_related` are available, use them for \
+         bounded read-only follow-up when a body is omitted, diagnostics report \
+         missing context, or an indirect relation must be followed. Pass only a \
+         configured owner/name repository and artifact identity; the host binds \
+         assignment credentials. Repeated calls may follow indirect relations.\n",
+    );
+}
+
+fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
+    text.push_str(&format!(
+        "- {} — {} [{}] labels={}\n  Body:\n{}\n",
+        reference_name(&snapshot.artifact),
+        snapshot.title,
+        snapshot.state,
+        if snapshot.labels.is_empty() {
+            "(none)".to_string()
+        } else {
+            snapshot.labels.join(", ")
+        },
+        snapshot.body
+    ));
+}
+
+fn render_index(text: &mut String, entry: &ArtifactIndexEntry) {
+    text.push_str(&format!(
+        "- {} — {} [{}]\n",
+        reference_name(&entry.artifact),
+        entry.title,
+        entry.state
+    ));
+}
+
+fn reference_name(reference: &ArtifactReference) -> String {
+    format!(
+        "{} {}#{}",
+        artifact_type_name(reference.artifact_type),
+        reference.repository.path,
+        reference.number
+    )
+}
+
+fn artifact_type_name(artifact_type: ArtifactType) -> &'static str {
+    match artifact_type {
+        ArtifactType::Issue => "issue",
+        ArtifactType::PullRequest => "pull request",
+    }
+}
+
+fn relation_name(relation: ArtifactRelationType) -> &'static str {
+    match relation {
+        ArtifactRelationType::Parent => "parent",
+        ArtifactRelationType::Dependency => "dependency",
+        ArtifactRelationType::Related => "related",
+    }
 }

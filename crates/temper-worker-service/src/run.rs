@@ -16,12 +16,13 @@ use crate::adapt;
 /// [`self_subcommand`]`("agent")` for the unified binary.
 pub fn run(resolved: &Resolved, agent_program: Vec<String>) -> Result<(), String> {
     let resolved = resolved.clone();
-    temper_worker_io::block_on_with(move |_cx, handle| async move {
-        run_async(handle, &resolved, &agent_program).await
+    temper_worker_io::block_on_with(move |cx, handle| async move {
+        run_async(cx, handle, &resolved, &agent_program).await
     })
 }
 
 async fn run_async(
+    cx: skein::cx::Cx,
     handle: skein::runtime::RuntimeHandle,
     resolved: &Resolved,
     agent_program: &[String],
@@ -31,10 +32,17 @@ async fn run_async(
     let workspace_root = resolved.worker.workspace_root.clone();
 
     let invocation = adapt::agent_invocation(resolved, agent_program)?;
+    let forge_context = temper_worker::forge_context_host(
+        Arc::new(temper_worker::HttpTransport::new(&worker_config.daemon_url)),
+        cx,
+        worker_config.worker_id.clone(),
+        worker_config.worker_auth.clone(),
+    );
     let runner = Arc::new(
         OutOfProcessRunner::new(invocation.command)
             .with_env(invocation.env)
-            .with_tool_config(invocation.tool_config),
+            .with_tool_config(invocation.tool_config)
+            .with_forge_context_host(forge_context),
     );
 
     // The coding executor's identities come from the worker config — the worker

@@ -48,6 +48,7 @@
 mod capability;
 mod codebase_memory;
 mod error;
+mod forge;
 mod prompt;
 mod result;
 mod run;
@@ -58,6 +59,7 @@ mod tools;
 // `super::*` in the test module) see one flat `coding_agent` surface.
 pub use capability::Capability;
 pub use error::CodingAgentError;
+pub use forge::{ForgeContextFuture, ForgeContextHost};
 pub use prompt::{system_prompt, system_prompt_with_contracts, user_context};
 pub use run::{
     run_coding_agent_native, run_coding_agent_native_with_options,
@@ -65,6 +67,7 @@ pub use run::{
     run_coding_agent_native_with_options_tool_config_and_submit_for_pr,
     run_coding_agent_native_with_submit_for_pr, run_coding_agent_native_with_tool_config,
     run_coding_agent_native_with_totals, run_coding_agent_native_with_totals_and_submit_for_pr,
+    run_coding_agent_native_with_totals_tool_config_and_hosts,
     run_coding_agent_native_with_totals_tool_config_and_submit_for_pr,
 };
 pub use submit::{

@@ -96,6 +96,7 @@ impl FakeAgentRunner {
 impl AgentRunner for FakeAgentRunner {
     async fn run(
         &self,
+        _job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {

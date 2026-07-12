@@ -16,13 +16,15 @@ use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    CodingAgentError, ProviderConfig, RunTotals, SubmitForPrHost,
-    run_coding_agent_native_with_totals_tool_config_and_submit_for_pr,
+    CodingAgentError, ForgeContextHost, ProviderConfig, RunTotals, SubmitForPrHost,
+    run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
-use temper_worker::{AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner};
+use temper_worker::{
+    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
+};
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {
@@ -33,6 +35,7 @@ pub struct InProcessAgentRunner {
     enable_subagents: bool,
     tool_config: Option<AgentToolConfig>,
     submit_for_pr: SubmitForPrHost,
+    forge_context: Option<AgentForgeContextHost>,
 }
 
 impl InProcessAgentRunner {
@@ -53,6 +56,7 @@ impl InProcessAgentRunner {
             submit_for_pr: std::sync::Arc::new(|request, context, cwd| {
                 temper_worker::submit_for_pr_pre_push_response_blocking(request, context, cwd)
             }),
+            forge_context: None,
         }
     }
 
@@ -79,11 +83,19 @@ impl InProcessAgentRunner {
         self.submit_for_pr = submit_for_pr;
         self
     }
+
+    /// Installs an asynchronous assignment-bound Forge context host.
+    #[must_use]
+    pub fn with_forge_context_host(mut self, forge_context: AgentForgeContextHost) -> Self {
+        self.forge_context = Some(forge_context);
+        self
+    }
 }
 
 impl AgentRunner for InProcessAgentRunner {
     fn run(
         &self,
+        job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> impl std::future::Future<Output = Result<AgentRunOutput, AgentRunError>> + Send {
@@ -124,11 +136,16 @@ impl AgentRunner for InProcessAgentRunner {
             )
         });
         let submit_for_pr = Some(submit_for_pr);
+        let forge_context: Option<ForgeContextHost> = self.forge_context.clone().map(|host| {
+            let job_id = job_id.to_string();
+            std::sync::Arc::new(move |operation| host(job_id.clone(), operation))
+                as ForgeContextHost
+        });
         let context = context.clone();
         let cwd = cwd.to_path_buf();
 
         async move {
-            let outcome = run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
+            let outcome = run_coding_agent_native_with_totals_tool_config_and_hosts(
                 handle,
                 &provider,
                 &context,
@@ -138,6 +155,7 @@ impl AgentRunner for InProcessAgentRunner {
                 enable_subagents,
                 tool_config.as_ref(),
                 submit_for_pr,
+                forge_context,
             )
             .await
             .map_err(classify_coding_agent_error);
