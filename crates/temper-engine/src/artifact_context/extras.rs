@@ -23,12 +23,40 @@ pub(super) struct Extras {
     pub diagnostics: Vec<ArtifactContextDiagnostic>,
 }
 
+impl Extras {
+    pub(super) fn extend(
+        &mut self,
+        other: Self,
+        policy: ArtifactContextPolicy,
+        collection: &Collection,
+    ) {
+        self.index.extend(other.index);
+        self.relations.extend(other.relations);
+        self.diagnostics.extend(other.diagnostics);
+        let mut candidates = self
+            .index
+            .drain(..)
+            .zip(self.relations.drain(..))
+            .map(|(entry, relation)| Candidate { entry, relation })
+            .collect::<Vec<_>>();
+        normalize_candidates(&mut candidates, &mut self.diagnostics, collection, policy);
+        self.index = candidates
+            .iter()
+            .map(|candidate| candidate.entry.clone())
+            .collect();
+        self.relations = candidates
+            .into_iter()
+            .map(|candidate| candidate.relation)
+            .collect();
+    }
+}
+
 struct Candidate {
     entry: ArtifactIndexEntry,
     relation: ArtifactRelation,
 }
 
-pub(super) async fn collect_extras<F: ArtifactContextForge + ?Sized>(
+pub(super) async fn collect_validation_aggregates<F: ArtifactContextForge + ?Sized>(
     forge: &F,
     catalog: &ConfiguredRepositoryCatalog,
     workflow: &ValidatedWorkflow,
@@ -38,7 +66,28 @@ pub(super) async fn collect_extras<F: ArtifactContextForge + ?Sized>(
     let mut diagnostics = Vec::new();
     let mut candidates =
         validation_candidates(forge, catalog, workflow, collection, &mut diagnostics).await;
-    candidates.extend(reference_candidates(forge, catalog, collection, &mut diagnostics).await);
+    normalize_candidates(&mut candidates, &mut diagnostics, collection, policy);
+    extras(candidates, diagnostics)
+}
+
+pub(super) async fn collect_references<F: ArtifactContextForge + ?Sized>(
+    forge: &F,
+    catalog: &ConfiguredRepositoryCatalog,
+    collection: &Collection,
+    policy: ArtifactContextPolicy,
+) -> Extras {
+    let mut diagnostics = Vec::new();
+    let mut candidates = reference_candidates(forge, catalog, collection, &mut diagnostics).await;
+    normalize_candidates(&mut candidates, &mut diagnostics, collection, policy);
+    extras(candidates, diagnostics)
+}
+
+fn normalize_candidates(
+    candidates: &mut Vec<Candidate>,
+    diagnostics: &mut Vec<ArtifactContextDiagnostic>,
+    collection: &Collection,
+    policy: ArtifactContextPolicy,
+) {
     candidates.sort_by_key(|candidate| key(&candidate.entry.artifact));
     candidates.dedup_by_key(|candidate| key(&candidate.entry.artifact));
     if candidates.len() > policy.summaries {
@@ -52,6 +101,9 @@ pub(super) async fn collect_extras<F: ArtifactContextForge + ?Sized>(
                 .map(|item| item.snapshot.artifact.clone()),
         ));
     }
+}
+
+fn extras(candidates: Vec<Candidate>, diagnostics: Vec<ArtifactContextDiagnostic>) -> Extras {
     Extras {
         index: candidates
             .iter()
@@ -118,18 +170,25 @@ async fn validation_candidates<F: ArtifactContextForge + ?Sized>(
                         target: dependency_ref.clone(),
                     },
                 });
-                if let Ok(dependency) = classify(workflow, &item) {
-                    output.extend(
-                        implementation_prs(
-                            forge,
-                            catalog,
-                            workflow,
-                            &dependency,
-                            &dependency_ref,
-                            diagnostics,
-                        )
-                        .await,
-                    );
+                match classify(workflow, &item) {
+                    Ok(dependency) => {
+                        output.extend(
+                            implementation_prs(
+                                forge,
+                                catalog,
+                                workflow,
+                                &dependency,
+                                &dependency_ref,
+                                diagnostics,
+                            )
+                            .await,
+                        );
+                    }
+                    Err(error) => diagnostics.push(diagnostic(
+                        ArtifactContextDiagnosticCode::MalformedMetadata,
+                        format!("validation dependency classification failed: {error}"),
+                        Some(dependency_ref),
+                    )),
                 }
             }
             Ok(None) => diagnostics.push(diagnostic(
@@ -195,10 +254,21 @@ async fn implementation_prs<F: ArtifactContextForge + ?Sized>(
                 }
             };
             for pull_request in pull_requests {
-                let Ok(classified) =
-                    temper_workflow::Classifier::new(workflow).classify_pull_request(&pull_request)
-                else {
-                    continue;
+                let classified = match temper_workflow::Classifier::new(workflow)
+                    .classify_pull_request(&pull_request)
+                {
+                    Ok(classified) => classified,
+                    Err(error) => {
+                        diagnostics.push(diagnostic(
+                            ArtifactContextDiagnosticCode::MalformedMetadata,
+                            format!(
+                                "implementation PR #{} classification failed: {error}",
+                                pull_request.number
+                            ),
+                            Some(dependency_ref.clone()),
+                        ));
+                        continue;
+                    }
                 };
                 let verified = classified.relations.iter().any(|relation| {
                     relation.kind == RelationKind::ProducedPr

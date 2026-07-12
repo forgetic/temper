@@ -47,6 +47,7 @@
 //! ```
 
 mod acceptance;
+mod artifact_context;
 mod builder;
 mod clock;
 mod git;

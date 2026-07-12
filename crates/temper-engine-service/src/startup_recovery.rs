@@ -38,6 +38,7 @@ pub async fn stage_startup_assignments(
     now: chrono::DateTime<Utc>,
 ) -> Result<BTreeMap<String, RecoveredClaim>, String> {
     const MAX_RECOVERY_CANDIDATES: usize = 1_000;
+    let artifact_context = daemon.artifact_context_service();
     let mut candidates = Vec::new();
     for repo in repos {
         let issues = forge
@@ -258,16 +259,29 @@ pub async fn stage_startup_assignments(
             converge_startup_claim(forge, policy, workflow, &claim).await?;
             continue;
         }
-        let job = match temper_engine::recovered_job_from_assignment(
-            forge,
-            &repo,
-            target,
-            &assignment,
-            workflow,
-            compiled,
-        )
-        .await
-        {
+        let reconstructed = if let Some(service) = artifact_context.as_deref() {
+            temper_engine::recovered_job_from_assignment_with_artifact_context(
+                forge,
+                &repo,
+                target,
+                &assignment,
+                workflow,
+                compiled,
+                service,
+            )
+            .await
+        } else {
+            temper_engine::recovered_job_from_assignment(
+                forge,
+                &repo,
+                target,
+                &assignment,
+                workflow,
+                compiled,
+            )
+            .await
+        };
+        let job = match reconstructed {
             Ok(job) => job,
             Err(reason) => {
                 tracing::warn!(job_id = %job_id, %reason, "quarantining impossible durable assignment");
