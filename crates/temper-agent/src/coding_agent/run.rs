@@ -15,8 +15,9 @@ use super::result::{
 };
 use super::tools::{SUBAGENT_GUIDANCE, add_subagents, tool_registry_for_context};
 use super::{
-    Capability, CodingAgentError, SubmitForPrCallback, SubmitForPrHost, bind_submit_for_pr_host,
-    default_submit_for_pr_host, system_prompt_with_contracts, user_context,
+    Capability, CodingAgentError, ForgeContextHost, SubmitForPrCallback, SubmitForPrHost,
+    bind_submit_for_pr_host, default_submit_for_pr_host, system_prompt_with_contracts,
+    user_context,
 };
 
 /// Runs one capability/role-aware coding-workspace turn on anvil's native
@@ -264,6 +265,36 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
     tool_config: Option<&AgentToolConfig>,
     submit_for_pr: Option<SubmitForPrHost>,
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
+    run_coding_agent_native_with_totals_tool_config_and_hosts(
+        handle,
+        provider_config,
+        context,
+        cwd,
+        max_iterations,
+        config_dir,
+        enable_subagents,
+        tool_config,
+        submit_for_pr,
+        None,
+    )
+    .await
+}
+
+/// Full host-controlled run surface. Both hosts are bound to this run by the
+/// caller; absence keeps the corresponding model-visible tools disabled.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
+    handle: skein::runtime::RuntimeHandle,
+    provider_config: &ProviderConfig,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    max_iterations: usize,
+    config_dir: Option<&Path>,
+    enable_subagents: bool,
+    tool_config: Option<&AgentToolConfig>,
+    submit_for_pr: Option<SubmitForPrHost>,
+    forge_context: Option<ForgeContextHost>,
+) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let codebase_memory =
         prepare_codebase_memory_tools(tool_config, &context.work_item.role, context, cwd).await?;
@@ -308,7 +339,8 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
     let submit_for_pr: Option<SubmitForPrCallback> = submit_for_pr
         .filter(|_| super::submit_for_pr_available(context))
         .map(|host| bind_submit_for_pr_host(host, context, cwd));
-    let mut tools = tool_registry_for_context(capability, context, cwd, submit_for_pr);
+    let mut tools =
+        tool_registry_for_context(capability, context, cwd, submit_for_pr, forge_context);
     codebase_memory.toolset.append_to_registry(&mut tools);
     if enable_subagents {
         tools = add_subagents(

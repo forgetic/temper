@@ -18,25 +18,25 @@
 //! `tokio::process`: the worker runs on the skein runtime, which has no
 //! tokio reactor, so a blocking child must run on the blocking pool.
 
-use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::future::Future;
+use std::net::TcpListener;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
 
 use temper_protocol_agent::{
-    AgentToolConfig, PROTOCOL_VERSION, SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest,
-    SubmitForPrResponse, TOOL_CONFIG_FLAG, WorkspaceContext,
+    AgentToolConfig, FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, SUBMIT_FOR_PR_ADDRESS_FLAG,
+    SubmitForPrRequest, SubmitForPrResponse, TOOL_CONFIG_FLAG, WorkspaceContext,
 };
 
 use crate::agent_runner::{
-    AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner, WorkspaceResult,
-    handle_submit_for_pr_with_proof,
+    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
+    WorkspaceResult,
 };
 use crate::pre_push::submit_for_pr_pre_push_response_blocking;
+
+mod side_channel;
+use side_channel::{ForgeSideChannelRequest, start_forge_server, start_submit_server};
 
 /// Host-side submit gate used by the out-of-process carrier.
 type SubmitForPrHandler =
@@ -67,6 +67,8 @@ pub struct OutOfProcessRunner {
     /// Host-controlled submit gate serviced over a worker-owned local channel
     /// while the child process remains alive.
     submit_for_pr: SubmitForPrHandler,
+    /// Optional authenticated, assignment-bound read-only Forge host.
+    forge_context: Option<AgentForgeContextHost>,
 }
 
 impl std::fmt::Debug for OutOfProcessRunner {
@@ -80,6 +82,10 @@ impl std::fmt::Debug for OutOfProcessRunner {
             )
             .field("tool_config", &self.tool_config)
             .field("submit_for_pr", &"<handler>")
+            .field(
+                "forge_context",
+                &self.forge_context.as_ref().map(|_| "<host>"),
+            )
             .finish()
     }
 }
@@ -92,6 +98,7 @@ impl OutOfProcessRunner {
             env: Vec::new(),
             tool_config: None,
             submit_for_pr: default_submit_for_pr_handler(),
+            forge_context: None,
         }
     }
 
@@ -123,11 +130,19 @@ impl OutOfProcessRunner {
         self.submit_for_pr = Arc::new(handler);
         self
     }
+
+    /// Installs the worker-owned assignment-bound Forge read host.
+    #[must_use]
+    pub fn with_forge_context_host(mut self, host: AgentForgeContextHost) -> Self {
+        self.forge_context = Some(host);
+        self
+    }
 }
 
 impl AgentRunner for OutOfProcessRunner {
     async fn run(
         &self,
+        job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {
@@ -179,6 +194,20 @@ impl AgentRunner for OutOfProcessRunner {
             None
         };
 
+        let forge_listener = if self.forge_context.is_some() {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+                AgentRunError::transient(format!("bind Forge context side channel: {error}"))
+            })?;
+            let address = listener.local_addr().map_err(|error| {
+                AgentRunError::transient(format!(
+                    "read Forge context side-channel address: {error}"
+                ))
+            })?;
+            Some((listener, address.to_string()))
+        } else {
+            None
+        };
+
         let accepted_submit = AcceptedSubmitProofStore::new();
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
@@ -190,10 +219,13 @@ impl AgentRunner for OutOfProcessRunner {
         let result_path_owned = result_path.clone();
         let tool_config_path_owned = tool_config_path.clone();
         let accepted_submit_for_child = accepted_submit.clone();
+        let (forge_requests, mut forge_request_rx) = temper_worker_io::channel();
+        let forge_context = self.forge_context.clone();
+        let job_id = job_id.to_string();
         // `skein::runtime::spawn_blocking` returns the closure's value
         // directly (no JoinError wrapper), so the closure's own
         // `Result<ChildOutcome, AgentRunError>` is what comes back.
-        let outcome = skein::runtime::spawn_blocking(move || {
+        let mut child = Box::pin(skein::runtime::spawn_blocking(move || {
             run_child(ChildRunRequest {
                 program: &program_owned,
                 args: &args_owned,
@@ -204,11 +236,51 @@ impl AgentRunner for OutOfProcessRunner {
                 result_path: &result_path_owned,
                 tool_config_path: tool_config_path_owned.as_deref(),
                 submit_listener,
+                forge_listener,
+                forge_requests,
                 submit_for_pr,
                 accepted_submit: accepted_submit_for_child,
             })
-        })
-        .await;
+        }));
+        let outcome = loop {
+            enum Next {
+                Child(Result<ChildOutcome, AgentRunError>),
+                Forge(Option<ForgeSideChannelRequest>),
+            }
+            let next = std::future::poll_fn(|task_cx| {
+                if let std::task::Poll::Ready(outcome) = child.as_mut().poll(task_cx) {
+                    return std::task::Poll::Ready(Next::Child(outcome));
+                }
+                if forge_context.is_some() {
+                    let mut receive = Box::pin(forge_request_rx.recv());
+                    match receive.as_mut().poll(task_cx) {
+                        std::task::Poll::Ready(request) => {
+                            std::task::Poll::Ready(Next::Forge(request))
+                        }
+                        std::task::Poll::Pending => std::task::Poll::Pending,
+                    }
+                } else {
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
+            match next {
+                Next::Child(outcome) => break outcome,
+                Next::Forge(Some(request)) => {
+                    let response = match &forge_context {
+                        Some(host) => match host(job_id.clone(), request.operation).await {
+                            Ok(result) => ForgeContextResponse::success(result),
+                            Err(code) => ForgeContextResponse::error(code),
+                        },
+                        None => ForgeContextResponse::error(
+                            temper_protocol_agent::ForgeContextErrorCode::NotAuthorized,
+                        ),
+                    };
+                    let _ = request.response.send(response);
+                }
+                Next::Forge(None) => break child.as_mut().await,
+            }
+        };
 
         let ChildOutcome {
             status_code,
@@ -257,6 +329,8 @@ struct ChildRunRequest<'a> {
     result_path: &'a Path,
     tool_config_path: Option<&'a Path>,
     submit_listener: Option<(TcpListener, String)>,
+    forge_listener: Option<(TcpListener, String)>,
+    forge_requests: temper_worker_io::CqSender<ForgeSideChannelRequest>,
     submit_for_pr: SubmitForPrHandler,
     accepted_submit: AcceptedSubmitProofStore,
 }
@@ -276,6 +350,8 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         result_path,
         tool_config_path,
         submit_listener,
+        forge_listener,
+        forge_requests,
         submit_for_pr,
         accepted_submit,
     } = request;
@@ -306,6 +382,10 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
             cwd.to_path_buf(),
         )
     });
+    let forge_server = forge_listener.map(|(listener, address)| {
+        command.arg(FORGE_CONTEXT_ADDRESS_FLAG).arg(&address);
+        start_forge_server(listener, address, forge_requests)
+    });
     // Inject the one secret (the provider credential) explicitly, so the agent
     // does not depend on the worker's own inherited environment.
     for (key, value) in env {
@@ -327,98 +407,15 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
     if let Some(server) = submit_server {
         server.stop();
     }
+    if let Some(server) = forge_server {
+        server.stop();
+    }
     let output = output?;
 
     Ok(ChildOutcome {
         status_code: output.status.code(),
         stderr_tail: stderr_tail(&output.stderr, 2_000),
     })
-}
-
-struct SubmitServer {
-    stop: Arc<AtomicBool>,
-    address: String,
-    thread: Option<thread::JoinHandle<()>>,
-}
-
-impl SubmitServer {
-    fn stop(mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        // Wake a nonblocking accept loop promptly instead of waiting for the
-        // next poll interval.
-        let _ = TcpStream::connect(&self.address);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-fn start_submit_server(
-    listener: TcpListener,
-    address: String,
-    handler: SubmitForPrHandler,
-    accepted_submit: AcceptedSubmitProofStore,
-    context: WorkspaceContext,
-    cwd: PathBuf,
-) -> SubmitServer {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_for_thread = Arc::clone(&stop);
-    let thread = thread::spawn(move || {
-        if listener.set_nonblocking(true).is_err() {
-            return;
-        }
-        while !stop_for_thread.load(Ordering::SeqCst) {
-            match listener.accept() {
-                Ok((stream, _addr)) => {
-                    handle_submit_stream(stream, &handler, &accepted_submit, &context, &cwd);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    SubmitServer {
-        stop,
-        address,
-        thread: Some(thread),
-    }
-}
-
-fn handle_submit_stream(
-    mut stream: TcpStream,
-    handler: &SubmitForPrHandler,
-    accepted_submit: &AcceptedSubmitProofStore,
-    context: &WorkspaceContext,
-    cwd: &Path,
-) {
-    let mut request_bytes = Vec::new();
-    let response = match stream.read_to_end(&mut request_bytes) {
-        Ok(_) => match serde_json::from_slice::<SubmitForPrRequest>(&request_bytes) {
-            Ok(request) if request.protocol_version == PROTOCOL_VERSION => {
-                handle_submit_for_pr_with_proof(
-                    accepted_submit,
-                    |request, context, cwd| handler(request, context, cwd),
-                    request,
-                    context,
-                    cwd,
-                )
-            }
-            Ok(request) => SubmitForPrResponse::rejected(format!(
-                "submit_for_pr protocol version mismatch: got {}, expected {}",
-                request.protocol_version, PROTOCOL_VERSION
-            )),
-            Err(error) => {
-                SubmitForPrResponse::rejected(format!("invalid submit_for_pr request: {error}"))
-            }
-        },
-        Err(error) => SubmitForPrResponse::rejected(format!("read submit_for_pr request: {error}")),
-    };
-    if let Ok(bytes) = serde_json::to_vec(&response) {
-        let _ = stream.write_all(&bytes);
-        let _ = stream.shutdown(Shutdown::Write);
-    }
 }
 
 fn submit_for_pr_available(context: &WorkspaceContext) -> bool {

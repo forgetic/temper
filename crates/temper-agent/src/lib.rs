@@ -22,14 +22,15 @@ mod tool_preview;
 pub mod usage;
 
 pub use coding_agent::{
-    AgentSessionState, Capability, CodingAgentError, DEFAULT_MAX_ITERATIONS, SubmitForPrCallback,
-    SubmitForPrHost, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult,
-    WorkspaceResultChild, WorkspaceWorkItem, bind_submit_for_pr_host, default_submit_for_pr_host,
-    run_coding_agent_native, run_coding_agent_native_with_options,
-    run_coding_agent_native_with_options_and_submit_for_pr,
+    AgentSessionState, Capability, CodingAgentError, DEFAULT_MAX_ITERATIONS, ForgeContextFuture,
+    ForgeContextHost, SubmitForPrCallback, SubmitForPrHost, WorkspaceContext, WorkspaceGuidance,
+    WorkspaceRepository, WorkspaceResult, WorkspaceResultChild, WorkspaceWorkItem,
+    bind_submit_for_pr_host, default_submit_for_pr_host, run_coding_agent_native,
+    run_coding_agent_native_with_options, run_coding_agent_native_with_options_and_submit_for_pr,
     run_coding_agent_native_with_options_tool_config_and_submit_for_pr,
     run_coding_agent_native_with_submit_for_pr, run_coding_agent_native_with_tool_config,
     run_coding_agent_native_with_totals, run_coding_agent_native_with_totals_and_submit_for_pr,
+    run_coding_agent_native_with_totals_tool_config_and_hosts,
     run_coding_agent_native_with_totals_tool_config_and_submit_for_pr, submit_for_pr_available,
     system_prompt as coding_agent_system_prompt, user_context as coding_agent_user_context,
 };

@@ -25,7 +25,9 @@
 use std::path::PathBuf;
 
 use temper_agent::{AuthChoice, DEFAULT_MAX_ITERATIONS};
-use temper_protocol_agent::{SUBMIT_FOR_PR_ADDRESS_FLAG, TOOL_CONFIG_FLAG};
+use temper_protocol_agent::{
+    FORGE_CONTEXT_ADDRESS_FLAG, SUBMIT_FOR_PR_ADDRESS_FLAG, TOOL_CONFIG_FLAG,
+};
 
 /// The fully-parsed agent command line. Every field originates from a flag; the
 /// provider credential (the one secret) is read separately from the environment
@@ -47,6 +49,8 @@ pub(crate) struct Options {
     pub(crate) workspace: Option<PathBuf>,
     /// Optional worker-owned local `submit_for_pr` side-channel address.
     pub(crate) submit_for_pr_address: Option<String>,
+    /// Optional worker-owned local read-only Forge side-channel address.
+    pub(crate) forge_context_address: Option<String>,
     /// Optional worker-written non-secret tool config JSON (`--tool-config`).
     pub(crate) tool_config: Option<PathBuf>,
     /// Optional debug capture / prompt-overlay dir (`--capture-dir`).
@@ -67,6 +71,7 @@ impl Options {
         let mut result = None;
         let mut workspace = None;
         let mut submit_for_pr_address = None;
+        let mut forge_context_address = None;
         let mut tool_config = None;
         let mut capture_dir = None;
         let mut max_iterations = DEFAULT_MAX_ITERATIONS;
@@ -86,6 +91,9 @@ impl Options {
                 "--workspace" => workspace = Some(PathBuf::from(value(&mut iter, "--workspace")?)),
                 flag if flag == SUBMIT_FOR_PR_ADDRESS_FLAG => {
                     submit_for_pr_address = Some(value(&mut iter, SUBMIT_FOR_PR_ADDRESS_FLAG)?)
+                }
+                flag if flag == FORGE_CONTEXT_ADDRESS_FLAG => {
+                    forge_context_address = Some(value(&mut iter, FORGE_CONTEXT_ADDRESS_FLAG)?)
                 }
                 flag if flag == TOOL_CONFIG_FLAG => {
                     tool_config = Some(PathBuf::from(value(&mut iter, TOOL_CONFIG_FLAG)?))
@@ -120,6 +128,7 @@ impl Options {
             result,
             workspace,
             submit_for_pr_address,
+            forge_context_address,
             tool_config,
             capture_dir,
             max_iterations,
@@ -129,7 +138,7 @@ impl Options {
 }
 
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
-[--submit-for-pr-address <ADDR>] [--tool-config <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
+[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--tool-config <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
 --workspace (default cwd), writes the result to --result";
@@ -192,6 +201,7 @@ mod tests {
         assert_eq!(options.result, PathBuf::from("/r.json"));
         assert!(options.workspace.is_none());
         assert!(options.submit_for_pr_address.is_none());
+        assert!(options.forge_context_address.is_none());
         assert!(options.tool_config.is_none());
         assert_eq!(options.provider, AuthChoice::ChatGptOAuth);
         assert!(!options.subagents);
@@ -222,6 +232,8 @@ mod tests {
             "/ws",
             "--submit-for-pr-address",
             "127.0.0.1:12345",
+            "--forge-context-address",
+            "127.0.0.1:23456",
             "--tool-config",
             "/tools.json",
             "--provider",
@@ -251,6 +263,10 @@ mod tests {
         assert_eq!(
             options.submit_for_pr_address.as_deref(),
             Some("127.0.0.1:12345")
+        );
+        assert_eq!(
+            options.forge_context_address.as_deref(),
+            Some("127.0.0.1:23456")
         );
         assert_eq!(options.tool_config, Some(PathBuf::from("/tools.json")));
         assert_eq!(options.capture_dir, Some(PathBuf::from("/cap")));

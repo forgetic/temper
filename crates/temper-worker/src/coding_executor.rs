@@ -216,7 +216,10 @@ async fn execute<R: AgentRunner>(
     let AgentRunOutput {
         result,
         accepted_submit,
-    } = match runner.run(&workspace_context, &workspace_root).await {
+    } = match runner
+        .run(&job_id, &workspace_context, &workspace_root)
+        .await
+    {
         Ok(output) => output,
         Err(AgentRunError { class, message }) => {
             return failure(class, message);

@@ -2,12 +2,15 @@
 
 //! Worker-side client for authenticated, assignment-scoped context reads.
 
+use std::sync::Arc;
+
 use skein::cx::Cx;
 use temper_protocol_worker::{
     ContextOutcome, FetchContext, ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult,
     WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 
+use crate::agent_runner::AgentForgeContextHost;
 use crate::transport::{HttpTransport, Transport};
 
 /// A context client bound to one worker's currently active job.
@@ -73,6 +76,45 @@ impl<T: Transport> ForgeContextClient<T> {
     }
 }
 
+/// Builds the worker-owned per-run host. The returned callback accepts only a
+/// job id plus the closed operation; worker identity, pool auth, transport, and
+/// runtime capability remain captured on the host side.
+pub fn forge_context_host<T: Transport>(
+    transport: Arc<T>,
+    cx: Cx,
+    worker_id: impl Into<String>,
+    auth: Option<WorkerAuth>,
+) -> AgentForgeContextHost {
+    let worker_id = worker_id.into();
+    Arc::new(move |job_id, operation| {
+        let transport = Arc::clone(&transport);
+        let worker_id = worker_id.clone();
+        let auth = auth.clone();
+        let cx = cx.clone();
+        Box::pin(async move {
+            let request = FetchContext::new(&worker_id, &job_id, operation);
+            let response = transport
+                .send(cx, WorkerProtocolMessage::FetchContext(request), auth)
+                .await
+                .map_err(|_| ForgeContextErrorCode::ForgeUnavailable)?
+                .ok_or(ForgeContextErrorCode::ForgeUnavailable)?;
+            let WorkerProtocolMessage::ContextResponse(response) = response else {
+                return Err(ForgeContextErrorCode::InvalidRequest);
+            };
+            if response.protocol_version != WORKER_PROTOCOL_VERSION
+                || response.worker_id != worker_id
+                || response.job_id != job_id
+            {
+                return Err(ForgeContextErrorCode::InvalidRequest);
+            }
+            match response.outcome {
+                ContextOutcome::Success { result } => Ok(result),
+                ContextOutcome::Error { code } => Err(code),
+            }
+        })
+    })
+}
+
 /// Split-deployment client using `POST /v1/message` and bearer authentication.
 pub type HttpForgeContextClient = ForgeContextClient<HttpTransport>;
 
@@ -118,6 +160,60 @@ mod tests {
                 )))
             }
         }
+    }
+
+    #[test]
+    fn host_keeps_concurrent_assignment_identity_per_call() {
+        temper_engine_io::block_on_with(move |cx, _handle| async move {
+            #[derive(Clone, Default)]
+            struct MultiTransport {
+                jobs: Arc<Mutex<Vec<String>>>,
+            }
+            impl Transport for MultiTransport {
+                fn send(
+                    &self,
+                    _cx: Cx,
+                    message: WorkerProtocolMessage,
+                    _auth: Option<WorkerAuth>,
+                ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send
+                {
+                    let jobs = Arc::clone(&self.jobs);
+                    async move {
+                        let WorkerProtocolMessage::FetchContext(request) = message else {
+                            return Err("unexpected request".to_string());
+                        };
+                        jobs.lock().expect("jobs").push(request.job_id.clone());
+                        Ok(Some(WorkerProtocolMessage::ContextResponse(
+                            ContextResponse::error(&request, ForgeContextErrorCode::NotFound),
+                        )))
+                    }
+                }
+            }
+
+            let transport = Arc::new(MultiTransport::default());
+            let jobs = Arc::clone(&transport.jobs);
+            let host = forge_context_host(
+                transport,
+                cx,
+                "worker-a",
+                Some(WorkerAuth::bearer("pool-secret")),
+            );
+            let operation = ForgeContextOperation::ForgeGetItem(ForgeGetItemOperation {
+                repo: "ai/temper".to_string(),
+                number: 284,
+                artifact_type: None,
+                include_comments: false,
+            });
+            assert_eq!(
+                host("job-a".to_string(), operation.clone()).await,
+                Err(ForgeContextErrorCode::NotFound)
+            );
+            assert_eq!(
+                host("job-b".to_string(), operation).await,
+                Err(ForgeContextErrorCode::NotFound)
+            );
+            assert_eq!(&*jobs.lock().expect("jobs"), &["job-a", "job-b"]);
+        });
     }
 
     #[test]

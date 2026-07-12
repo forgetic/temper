@@ -58,7 +58,7 @@ fn in_process_runner_passes_tool_config_to_native_loop() {
         std::fs::create_dir_all(temp.path().join("temper")).expect("prepared repo dir");
 
         let error = runner
-            .run(&context, temp.path())
+            .run("job-test", &context, temp.path())
             .await
             .expect_err("required codebase-memory startup failure aborts run");
         assert_eq!(error.class, FailureClass::Transient);

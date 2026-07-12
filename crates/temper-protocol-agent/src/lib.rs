@@ -17,10 +17,11 @@
 //!   *only* bridge to the out-of-band control/observability plane. The worker
 //!   writes it to a file and passes its path as the agent's `--context` flag,
 //!   running the agent in the prepared checkout (`--workspace`, also cwd).
-//! - **Live side channel (agent ↔ worker):** writable engineer agents may call
-//!   `submit_for_pr` during the run. The worker services a local request/response
-//!   channel and returns a [`SubmitForPrResponse`] to the same live agent session
-//!   so failed gates can be fixed and retried before the terminal result.
+//! - **Live side channels (agent ↔ worker):** writable engineer agents may call
+//!   `submit_for_pr`, and every role may use bounded read-only Forge context
+//!   operations when the worker configured a fetch host. The worker services
+//!   per-run local request/response channels; Forge credentials and assignment
+//!   identity never enter the child protocol.
 //! - **Outbound result (agent → worker), terminal:** a [`WorkspaceResult`]
 //!   written to the file named by the agent's `--result` flag.
 
@@ -37,6 +38,10 @@ pub use temper_protocol_context::{
 };
 use temper_verdict::{VerdictChildView, VerdictContracts, VerdictResultView};
 
+mod forge;
+pub use forge::{
+    FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextRequest, ForgeContextResponse, ForgeContextToolOutcome,
+};
 mod submit;
 pub use submit::{
     SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse,

@@ -56,12 +56,13 @@ use workstream_cleanup::StandaloneWorkstreamCleaner;
 pub fn run(resolved: &Resolved, config_path: Option<&Path>) -> Result<(), String> {
     let resolved = resolved.clone();
     let config_path = config_path.map(Path::to_path_buf);
-    temper_engine_io::block_on_with(move |_cx, handle| async move {
-        run_async(handle, &resolved, config_path.as_deref()).await
+    temper_engine_io::block_on_with(move |cx, handle| async move {
+        run_async(cx, handle, &resolved, config_path.as_deref()).await
     })
 }
 
 async fn run_async(
+    cx: skein::cx::Cx,
     handle: RuntimeHandle,
     resolved: &Resolved,
     config_path: Option<&Path>,
@@ -316,6 +317,13 @@ async fn run_async(
         .collect();
 
     let pr_freshness_guard = Arc::new(InProcessPrFreshnessGuard::new(daemon.clone()));
+    let transport = Arc::new(InProcessTransport::new(daemon.clone()));
+    let forge_context = temper_worker::forge_context_host(
+        Arc::clone(&transport),
+        cx,
+        worker_config.worker_id.clone(),
+        worker_config.worker_auth.clone(),
+    );
     let runner = Arc::new(
         InProcessAgentRunner::new(
             handle.clone(),
@@ -324,7 +332,8 @@ async fn run_async(
             resolved.agent.config_dir.clone(),
             resolved.agent.enable_subagents,
         )
-        .with_tool_config(temper_worker_service::agent_tool_config(resolved)),
+        .with_tool_config(temper_worker_service::agent_tool_config(resolved))
+        .with_forge_context_host(forge_context),
     );
     let executor = Arc::new(
         CodingExecutor::new(
@@ -339,7 +348,6 @@ async fn run_async(
         )
         .with_pr_freshness_guard(pr_freshness_guard),
     );
-    let transport = Arc::new(InProcessTransport::new(daemon.clone()));
 
     let worker_handle = handle.clone();
     handle.spawn_with_cx(move |_cx| async move {
