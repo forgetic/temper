@@ -12,8 +12,7 @@ use temper_forge::{
 /// mutate forge state. The blanket implementation is the only production
 /// adapter; tests can use any normal Forge, including `MemoryForge`.
 #[async_trait]
-#[allow(dead_code)]
-pub(crate) trait ArtifactContextForge: Send + Sync {
+pub trait ArtifactContextForge: Send + Sync {
     async fn issue(
         &self,
         repository: &RepositoryId,
