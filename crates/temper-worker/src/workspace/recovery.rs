@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::{Workspace, WorkspaceError};
+use super::{CheckoutState, Workspace, WorkspaceError};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RecoveryContext {
@@ -105,9 +105,17 @@ impl Workspace {
             return Ok(PreparationOutcome::Quarantined(Box::new(manifest)));
         }
 
-        let existed = self.path.exists();
-        self.ensure_checkout_repo().await?;
-        let state = if existed {
+        let checkout_state = self.ensure_checkout_repo().await?;
+        self.prepare_writable_after_checkout(work_branch, checkout_state)
+            .await
+    }
+
+    pub(super) async fn prepare_writable_after_checkout(
+        &self,
+        work_branch: &str,
+        checkout_state: CheckoutState,
+    ) -> Result<PreparationOutcome, WorkspaceError> {
+        let state = if checkout_state == CheckoutState::Reused {
             let state = self.inspect_repository().await?;
             state.head.is_some().then_some(state)
         } else {
@@ -293,9 +301,18 @@ impl Workspace {
         if let Some(manifest) = self.existing_quarantine().await? {
             return Ok(PreparationOutcome::Quarantined(Box::new(manifest)));
         }
-        let existed = self.path.exists();
-        self.ensure_checkout_repo().await?;
-        let state = if existed {
+        let checkout_state = self.ensure_checkout_repo().await?;
+        self.prepare_read_only_after_checkout(expected_branch, target, checkout_state)
+            .await
+    }
+
+    pub(super) async fn prepare_read_only_after_checkout(
+        &self,
+        expected_branch: &str,
+        target: ReadOnlyTarget,
+        checkout_state: CheckoutState,
+    ) -> Result<PreparationOutcome, WorkspaceError> {
+        let state = if checkout_state == CheckoutState::Reused {
             let state = self.inspect_repository().await?;
             state.head.is_some().then_some(state)
         } else {

@@ -17,6 +17,13 @@ impl Fixture {
         let origin = git_root.join("acme/service.git");
         git(["init", "--bare", path_str(&origin)]);
         let pull_request_head_sha = seed_origin(&origin, temp.path());
+        git([
+            "-C",
+            path_str(&origin),
+            "symbolic-ref",
+            "HEAD",
+            "refs/heads/main",
+        ]);
 
         Self {
             workspace_root: temp.path().join("workspaces"),

@@ -373,14 +373,10 @@ async fn prepare_workspace(
         // resumes from the existing remote branch, so the agent's fix commits on
         // top of the PR head and the success path pushes it back, re-running CI.
         JobMode::PullRequestWritable => {
-            return prepare_writable(workspace, repo_spec).await;
+            return prepare_writable(workspace, repo_spec, None).await;
         }
         JobMode::Writable if repo_spec.is_writable() => {
-            workspace
-                .ensure_base_branch_exists_from_default(default_branch)
-                .await
-                .map_err(|error| workspace_failure("prepare workspace target branch", error))?;
-            return prepare_writable(workspace, repo_spec).await;
+            return prepare_writable(workspace, repo_spec, Some(default_branch)).await;
         }
         // A read-only issue job may still be pointed at a feature branch from
         // workflow metadata (for example architect plan decomposition). Create
@@ -389,10 +385,8 @@ async fn prepare_workspace(
         // target branch.
         JobMode::ReadOnly => {
             workspace
-                .ensure_base_branch_exists_from_default(default_branch)
+                .prepare_read_only_from_default(default_branch)
                 .await
-                .map_err(|error| workspace_failure("prepare workspace target branch", error))?;
-            workspace.prepare_read_only().await
         }
         // Read-only sibling in a writable job: the feed gives read-only repos
         // their repository default branch, so no target-branch materialization is
@@ -419,6 +413,7 @@ async fn prepare_workspace(
 async fn prepare_writable(
     workspace: &Workspace,
     repo_spec: &WorkspaceRepo,
+    default_branch: Option<&str>,
 ) -> Result<(), JobOutcome> {
     let Some(branch_hint) = repo_spec.branch_hint.clone() else {
         return Err(failure(
@@ -429,7 +424,15 @@ async fn prepare_writable(
             ),
         ));
     };
-    match workspace.prepare(&branch_hint).await {
+    let outcome = match default_branch {
+        Some(default_branch) => {
+            workspace
+                .prepare_from_default(default_branch, &branch_hint)
+                .await
+        }
+        None => workspace.prepare(&branch_hint).await,
+    };
+    match outcome {
         Ok(PreparationOutcome::Quarantined(manifest)) => {
             return Err(failure(
                 FailureClass::Permanent,
