@@ -21,11 +21,36 @@ fn hermetic_real_stack_delivers_bundle_and_services_repeated_forge_reads() {
                     .collect::<Vec<_>>()
                     .join("\n");
                 assert!(prompt.contains("Artifact context bundle (version 1):"));
-                assert!(prompt.contains("Primary artifact:"));
-                assert!(prompt.contains("Plan lineage boundary marker"));
-                assert!(prompt.contains("Cross-repository architecture parent"));
-                assert!(prompt.contains("Mandatory lineage:"));
-                assert!(prompt.contains("kind=design"));
+                let primary = prompt_section(&prompt, "Primary artifact:", "Mandatory lineage:");
+                assert!(primary.contains("issue acme/service#1 — Plan lineage delivery"));
+                assert!(primary.contains("Plan lineage boundary marker"));
+                assert!(!primary.contains("Cross-repository architecture parent"));
+                assert!(!primary.contains("Markdown-only background"));
+
+                let lineage =
+                    prompt_section(&prompt, "Mandatory lineage:", "Validation summaries:");
+                assert!(lineage.contains("Cross-repository architecture parent"));
+                assert!(lineage.contains("kind=design labels=design, ready"));
+                assert!(!lineage.contains("Plan lineage delivery"));
+                assert!(!lineage.contains("Markdown-only background"));
+
+                assert_eq!(
+                    prompt_section(
+                        &prompt,
+                        "Validation summaries:",
+                        "Optional body-omitted references:",
+                    ),
+                    "- No validation dependencies or implementations were collected."
+                );
+                let optional = prompt_section(
+                    &prompt,
+                    "Optional body-omitted references:",
+                    "Diagnostics and truncation:",
+                );
+                assert!(optional.contains("issue acme/service#2 — Markdown-only background"));
+                assert!(optional.contains("relation=related source=issue acme/service#1"));
+                assert!(!optional.contains("Cross-repository architecture parent"));
+                assert!(!optional.contains("Plan lineage delivery"));
                 assert!(prompt.contains("Forge context tools:"));
                 observed_bundle_for_script.fetch_add(1, Ordering::SeqCst);
                 tool_call(
@@ -137,6 +162,19 @@ fn hermetic_real_stack_delivers_bundle_and_services_repeated_forge_reads() {
             )
             .await
             .expect("cross-repository parent created");
+        let markdown_reference = stack
+            .forge()
+            .create_issue(
+                stack.primary_repo_id(),
+                CreateIssue {
+                    title: "Markdown-only background".to_string(),
+                    body: "This body must be omitted from the initial bundle.".to_string(),
+                    labels: vec!["docs".to_string()],
+                    assignees: Vec::<UserId>::new(),
+                },
+            )
+            .await
+            .expect("markdown reference created");
         let source = stack
             .forge()
             .get_issue_by_number(stack.primary_repo_id(), stack.issue_number())
@@ -149,7 +187,8 @@ fn hermetic_real_stack_delivers_bundle_and_services_repeated_forge_reads() {
                 &source.id,
                 UpdateIssue {
                     body: Some(format!(
-                        "Plan lineage boundary marker: preserve this legacy artifact body at the agent boundary.\n{}",
+                        "Plan lineage boundary marker: preserve this legacy artifact body at the agent boundary.\nSee #{} for background.\n{}",
+                        markdown_reference.number.get(),
                         render_metadata_block(&WorkflowMetadata {
                             kind: Some(ArtifactKindId::new("code")),
                             parents: vec![ArtifactRef::in_repo(platform_id, parent.number)],
@@ -176,6 +215,17 @@ fn hermetic_real_stack_delivers_bundle_and_services_repeated_forge_reads() {
             "bundle and bounded reads reached the agent\n"
         );
     });
+}
+
+fn prompt_section<'a>(prompt: &'a str, heading: &str, next_heading: &str) -> &'a str {
+    prompt
+        .split_once(heading)
+        .unwrap_or_else(|| panic!("missing prompt heading {heading}"))
+        .1
+        .split_once(next_heading)
+        .unwrap_or_else(|| panic!("missing following prompt heading {next_heading}"))
+        .0
+        .trim()
 }
 
 fn tool_call(id: &str, name: &str, args: serde_json::Value) -> Reply {
