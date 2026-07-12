@@ -1449,6 +1449,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-memory",
  "temper-log",
+ "temper-protocol-context",
  "temper-protocol-worker",
  "temper-runner",
  "temper-verdict",

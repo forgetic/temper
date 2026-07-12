@@ -14,6 +14,7 @@ mod extras;
 mod forge;
 mod lineage;
 mod markdown;
+mod retrieval;
 
 #[cfg(test)]
 mod tests;
@@ -28,6 +29,12 @@ use temper_protocol_worker::{
 use temper_workflow::{ArtifactSource, ValidatedWorkflow};
 
 pub use catalog::ConfiguredRepositoryCatalog;
+pub use forge::ArtifactContextForge;
+pub use retrieval::{
+    ArtifactContextService, DEFAULT_RELATED_DEPTH, DEFAULT_RELATED_RESULTS, MAX_COMMENT_BYTES,
+    MAX_FORGE_RESPONSE_BYTES, MAX_ITEM_BODY_BYTES, MAX_ITEM_COMMENTS, MAX_RELATED_DEPTH,
+    MAX_RELATED_RESULTS,
+};
 
 pub const DEFAULT_LINEAGE_DEPTH: usize = 8;
 pub const DEFAULT_FULL_SNAPSHOTS: usize = 16;

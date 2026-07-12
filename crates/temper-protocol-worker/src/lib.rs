@@ -43,7 +43,9 @@ pub use temper_protocol_context::{
     ARTIFACT_CONTEXT_VERSION, ArtifactContextBundle, ArtifactContextDiagnostic,
     ArtifactContextDiagnosticCode, ArtifactContextTruncation, ArtifactIndexEntry,
     ArtifactReference, ArtifactRelation, ArtifactRelationType, ArtifactRepository,
-    ArtifactSnapshot, ArtifactType,
+    ArtifactSnapshot, ArtifactType, ForgeContextErrorCode, ForgeContextOperation,
+    ForgeContextResult, ForgeGetItemOperation, ForgeGetItemResult, ForgeItemComment,
+    ForgeListRelatedOperation, ForgeListRelatedResult, ForgeRelatedEdge, ForgeRelationType,
 };
 pub use workspace::{RepoAccess, WorkspaceManifest, WorkspaceRepo};
 
