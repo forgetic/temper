@@ -110,6 +110,7 @@ fn plan_validation_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
         number,
         "issue",
         JobContext {
+            artifact_context: None,
             role: "tester".to_string(),
             repo: repo_path.to_string(),
             queue: "plan_validation".to_string(),

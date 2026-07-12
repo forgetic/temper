@@ -300,6 +300,29 @@ fn issue_lists_sort_deterministically() {
     .unwrap();
     assert_eq!(issue_titles(&number_desc), vec!["Third", "Second", "First"]);
 
+    let limited = block_on(forge.list_issues(
+        &repository.id,
+        IssueQuery {
+            limit: Some(2),
+            sort: Some(ItemSort {
+                field: ItemSortField::Number,
+                direction: SortDirection::Desc,
+            }),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(issue_titles(&limited), vec!["Third", "Second"]);
+    let empty = block_on(forge.list_issues(
+        &repository.id,
+        IssueQuery {
+            limit: Some(0),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(empty.is_empty());
+
     let created_desc = block_on(forge.list_issues(
         &repository.id,
         IssueQuery {

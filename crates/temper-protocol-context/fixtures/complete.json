@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "repository": {"id": "repo-1", "path": "ai/temper"},
+  "artifact_type": "issue",
+  "snapshots": [
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 279
+      },
+      "title": "Add artifact context",
+      "body": "Define the shared contracts.",
+      "labels": ["code", "ready"],
+      "state": "open"
+    },
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 277
+      },
+      "title": "Workflow context plan",
+      "body": "Parent planning artifact.",
+      "state": "open"
+    }
+  ],
+  "index": [
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 279
+      },
+      "title": "Add artifact context",
+      "state": "open",
+      "snapshot_index": 0
+    },
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 277
+      },
+      "title": "Workflow context plan",
+      "state": "open",
+      "snapshot_index": 1
+    }
+  ],
+  "relations": [
+    {
+      "relation_type": "parent",
+      "source": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 279
+      },
+      "target": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 277
+      }
+    }
+  ],
+  "truncation": {
+    "depth_exceeded": false,
+    "count_exceeded": false,
+    "content_truncated": false
+  }
+}

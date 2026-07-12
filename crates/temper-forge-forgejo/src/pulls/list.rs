@@ -32,12 +32,15 @@ impl<C: HttpClient> ForgejoForge<C> {
         } else {
             self.list_labeled_pull_requests(&repo, &query).await?
         };
+        pulls.sort_by(|left, right| compare_pull_requests(left, right, &query));
+        if let Some(limit) = query.limit {
+            pulls.truncate(limit);
+        }
         if query.details.dependencies {
             for pull in &mut pulls {
                 pull.dependencies = self.load_item_dependencies(&repo, pull.number).await?;
             }
         }
-        pulls.sort_by(|left, right| compare_pull_requests(left, right, &query));
         Ok(pulls)
     }
 
@@ -54,7 +57,7 @@ impl<C: HttpClient> ForgejoForge<C> {
             pull_request_state_param(query.state).to_string(),
         )];
         let dtos: Vec<PullRequestDto> = self
-            .list_all("list pull requests", &path, base_query)
+            .list_up_to("list pull requests", &path, base_query, query.limit)
             .await?;
         let mut pulls = Vec::new();
         for dto in dtos {
@@ -110,8 +113,13 @@ impl<C: HttpClient> ForgejoForge<C> {
             ("type".to_string(), "pulls".to_string()),
             ("labels".to_string(), query.labels.join(",")),
         ];
-        self.list_all("discover labeled pull requests", &path, base_query)
-            .await
+        self.list_up_to(
+            "discover labeled pull requests",
+            &path,
+            base_query,
+            query.limit,
+        )
+        .await
     }
 
     /// Materializes labelled candidates exactly through `/pulls/{number}`.

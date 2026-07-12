@@ -1,0 +1,34 @@
+{
+  "role": "engineer",
+  "repo": "ai/temper",
+  "queue": "code_ready",
+  "artifact_kind": "code",
+  "artifact": {
+    "number": 279,
+    "title": "Add artifact context",
+    "body": "Preserve this singular artifact shape.",
+    "labels": ["code"],
+    "state": "Open"
+  },
+  "artifact_context": {
+    "version": 1,
+    "repository": {"id": "repo-1", "path": "ai/temper"},
+    "artifact_type": "issue",
+    "snapshots": [{
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 279
+      },
+      "title": "Add artifact context",
+      "body": "Preserve this singular artifact shape.",
+      "labels": ["code"],
+      "state": "open"
+    }],
+    "truncation": {
+      "depth_exceeded": false,
+      "count_exceeded": false,
+      "content_truncated": false
+    }
+  }
+}

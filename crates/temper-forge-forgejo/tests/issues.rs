@@ -32,6 +32,25 @@ fn issue_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
 }
 
 #[test]
+fn zero_issue_limit_skips_provider_requests() {
+    let client = MockHttpClient::new();
+    let forge = forge(client.clone());
+
+    let issues = block_on(forge.list_issues(
+        &repo_id(),
+        IssueQuery {
+            limit: Some(0),
+            details: ItemListDetails::summary(),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert!(issues.is_empty());
+    assert_eq!(client.call_count(), 0);
+}
+
+#[test]
 fn list_issues_constructs_request_excludes_pulls_and_maps() {
     let client = MockHttpClient::new();
     // The provider may still return a PR-as-issue row; the backend drops it.

@@ -236,6 +236,7 @@ fn role_tools_correlation_helpers_use_targeted_summary_queries() {
         counted.issue_queries(),
         vec![
             IssueQuery {
+                limit: None,
                 state: Some(IssueState::Open),
                 labels: Vec::new(),
                 body_contains: Some("\"correlation_key\": \"closed-child\"".into()),
@@ -245,6 +246,7 @@ fn role_tools_correlation_helpers_use_targeted_summary_queries() {
                 details: ItemListDetails::summary(),
             },
             IssueQuery {
+                limit: None,
                 state: Some(IssueState::Closed),
                 labels: Vec::new(),
                 body_contains: Some("\"correlation_key\": \"closed-child\"".into()),
@@ -259,6 +261,7 @@ fn role_tools_correlation_helpers_use_targeted_summary_queries() {
         counted.pull_request_queries(),
         vec![
             PullRequestQuery {
+                limit: None,
                 state: Some(PullRequestState::Open),
                 labels: Vec::new(),
                 body_contains: Some("\"correlation_key\": \"merged-pr\"".into()),
@@ -268,6 +271,7 @@ fn role_tools_correlation_helpers_use_targeted_summary_queries() {
                 details: ItemListDetails::summary(),
             },
             PullRequestQuery {
+                limit: None,
                 state: Some(PullRequestState::Closed),
                 labels: Vec::new(),
                 body_contains: Some("\"correlation_key\": \"merged-pr\"".into()),
@@ -277,6 +281,7 @@ fn role_tools_correlation_helpers_use_targeted_summary_queries() {
                 details: ItemListDetails::summary(),
             },
             PullRequestQuery {
+                limit: None,
                 state: Some(PullRequestState::Merged),
                 labels: Vec::new(),
                 body_contains: Some("\"correlation_key\": \"merged-pr\"".into()),

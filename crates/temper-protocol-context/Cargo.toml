@@ -1,0 +1,16 @@
+[package]
+name = "temper-protocol-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Serde-only artifact context contracts shared across Temper protocol boundaries."
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

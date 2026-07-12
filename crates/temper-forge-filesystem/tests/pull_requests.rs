@@ -371,6 +371,29 @@ fn pull_request_lists_sort_deterministically() {
         vec!["Third", "Second", "First"]
     );
 
+    let limited = block_on(forge.list_pull_requests(
+        &repository.id,
+        PullRequestQuery {
+            limit: Some(2),
+            sort: Some(ItemSort {
+                field: ItemSortField::Number,
+                direction: SortDirection::Desc,
+            }),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(pull_request_titles(&limited), vec!["Third", "Second"]);
+    let empty = block_on(forge.list_pull_requests(
+        &repository.id,
+        PullRequestQuery {
+            limit: Some(0),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(empty.is_empty());
+
     let created_desc = block_on(forge.list_pull_requests(
         &repository.id,
         PullRequestQuery {

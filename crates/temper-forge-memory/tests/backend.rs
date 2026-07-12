@@ -13,8 +13,9 @@ use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_forge_model::{
     BranchRef, ChangeSource, ChangeSourceEvent, CiJob, CiJobQuery, CiJobStatus, CreateComment,
     CreateIssue, CreatePullRequest, CreateRepository, Forge, ForgeError, IssueQuery, IssueState,
-    ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
-    RepositoryId, RepositoryPath, UpdateIssue, UpdatePullRequest, UpsertLabel, UserId, Version,
+    ItemListDetails, ItemNumber, ItemSort, ItemSortField, MergeMethod, MergePullRequest,
+    PullRequestQuery, PullRequestState, RepositoryId, RepositoryPath, SortDirection, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, UserId, Version,
 };
 
 struct NoopWake;
@@ -430,6 +431,46 @@ fn pull_requests_create_update_and_merge() {
         )),
         Err(ForgeError::Conflict(_))
     ));
+}
+
+#[test]
+fn list_limits_apply_after_deterministic_sorting() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    for _ in 0..3 {
+        block_on(forge.create_issue(&repo, issue_input(&["code"]))).unwrap();
+        block_on(forge.create_pull_request(&repo, pr_input(&repo, &["code"]))).unwrap();
+    }
+
+    let issues = block_on(forge.list_issues(
+        &repo,
+        IssueQuery {
+            limit: Some(2),
+            sort: Some(ItemSort {
+                field: ItemSortField::Number,
+                direction: SortDirection::Desc,
+            }),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        issues
+            .iter()
+            .map(|item| item.number.get())
+            .collect::<Vec<_>>(),
+        vec![3, 2]
+    );
+
+    let pulls = block_on(forge.list_pull_requests(
+        &repo,
+        PullRequestQuery {
+            limit: Some(0),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(pulls.is_empty());
 }
 
 #[test]

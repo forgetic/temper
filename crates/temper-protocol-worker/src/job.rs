@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use temper_protocol_context::ArtifactContextBundle;
 use temper_verdict::VerdictContracts;
 
 use crate::WorkspaceManifest;
@@ -103,6 +104,11 @@ pub struct JobContext {
     /// The coordinating artifact this job services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<JobArtifactSnapshot>,
+
+    /// Versioned graph context for the coordinating artifact and related work.
+    /// Absent for workers/producers that predate artifact-context collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_context: Option<ArtifactContextBundle>,
 
     /// The repositories to assemble into the job's workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -26,7 +26,7 @@ impl<C: HttpClient> GitHubForge<C> {
             pull_request_state_param(query.state).to_string(),
         )];
         let dtos: Vec<PullRequestDto> = self
-            .list_all("list pull requests", &path, base_query)
+            .list_up_to("list pull requests", &path, base_query, query.limit)
             .await?;
         let mut pulls: Vec<PullRequest> = dtos
             .into_iter()
@@ -36,6 +36,9 @@ impl<C: HttpClient> GitHubForge<C> {
         // GitHub exposes no native dependency links, so `query.details` needs
         // no enrichment pass: `dependencies` is always empty.
         pulls.sort_by(|left, right| compare_pull_requests(left, right, &query));
+        if let Some(limit) = query.limit {
+            pulls.truncate(limit);
+        }
         Ok(pulls)
     }
 }

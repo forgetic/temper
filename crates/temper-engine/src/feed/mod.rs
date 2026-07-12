@@ -61,6 +61,7 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
     let queue = item.queue.as_str().to_string();
 
     let context = JobContext {
+        artifact_context: None,
         role: role.clone(),
         repo: repo.to_string(),
         queue: queue.clone(),
@@ -224,6 +225,7 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
 
     let source_metadata = crate::verdict_contract::source_metadata_from_snapshot(Some(&artifact));
     let mut context = JobContext {
+        artifact_context: None,
         role: job.role.clone(),
         repo: job.repo.clone(),
         queue: item.queue.as_str().to_string(),

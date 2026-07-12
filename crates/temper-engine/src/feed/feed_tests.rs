@@ -181,6 +181,7 @@ fn maps_issue_work_item_to_daemon_job() {
     assert_eq!(
         serde_json::from_value::<JobContext>(job.job_payload).expect("valid JobContext"),
         JobContext {
+            artifact_context: None,
             role: "engineer".to_string(),
             repo: "ai/temper".to_string(),
             queue: "code_ready".to_string(),

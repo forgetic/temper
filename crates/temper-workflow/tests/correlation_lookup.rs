@@ -66,6 +66,7 @@ fn normal_ensure_paths_use_targeted_summary_correlation_queries() {
         issue_queries,
         vec![
             IssueQuery {
+                limit: None,
                 state: Some(IssueState::Open),
                 labels: vec!["code".into(), "ready".into()],
                 body_contains: Some("\"correlation_key\": \"code-issue-42\"".into()),
@@ -75,6 +76,7 @@ fn normal_ensure_paths_use_targeted_summary_correlation_queries() {
                 details: ItemListDetails::summary(),
             },
             IssueQuery {
+                limit: None,
                 state: Some(IssueState::Closed),
                 labels: vec!["code".into(), "ready".into()],
                 body_contains: Some("\"correlation_key\": \"code-issue-42\"".into()),
@@ -91,6 +93,7 @@ fn normal_ensure_paths_use_targeted_summary_correlation_queries() {
         pull_request_queries,
         vec![
             PullRequestQuery {
+                limit: None,
                 state: Some(PullRequestState::Open),
                 labels: vec!["implementation".into()],
                 body_contains: Some("\"correlation_key\": \"implementation-pr-42\"".into()),
@@ -100,6 +103,7 @@ fn normal_ensure_paths_use_targeted_summary_correlation_queries() {
                 details: ItemListDetails::summary(),
             },
             PullRequestQuery {
+                limit: None,
                 state: Some(PullRequestState::Closed),
                 labels: vec!["implementation".into()],
                 body_contains: Some("\"correlation_key\": \"implementation-pr-42\"".into()),
@@ -109,6 +113,7 @@ fn normal_ensure_paths_use_targeted_summary_correlation_queries() {
                 details: ItemListDetails::summary(),
             },
             PullRequestQuery {
+                limit: None,
                 state: Some(PullRequestState::Merged),
                 labels: vec!["implementation".into()],
                 body_contains: Some("\"correlation_key\": \"implementation-pr-42\"".into()),

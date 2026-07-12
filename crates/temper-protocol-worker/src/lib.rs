@@ -39,6 +39,12 @@ pub use lifecycle::{
 };
 pub use message::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 pub use result::{Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus};
+pub use temper_protocol_context::{
+    ARTIFACT_CONTEXT_VERSION, ArtifactContextBundle, ArtifactContextDiagnostic,
+    ArtifactContextDiagnosticCode, ArtifactContextTruncation, ArtifactIndexEntry,
+    ArtifactReference, ArtifactRelation, ArtifactRelationType, ArtifactRepository,
+    ArtifactSnapshot, ArtifactType,
+};
 pub use workspace::{RepoAccess, WorkspaceManifest, WorkspaceRepo};
 
 #[cfg(test)]
