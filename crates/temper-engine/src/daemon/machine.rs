@@ -13,8 +13,8 @@ use std::{
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
 use temper_protocol_worker::{
-    Artifact, Assign, ErrorCode, JobResult, Poll, ProtocolError, PullRequestFreshness,
-    WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
+    Artifact, Assign, ContextResponse, ErrorCode, FetchContext, JobResult, Poll, ProtocolError,
+    PullRequestFreshness, WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -111,6 +111,10 @@ pub(super) enum DaemonCompletion {
     SetApplyGrace { apply_grace: Duration },
     /// Enable webhook intake with the given verification config.
     ConfigureWebhook { config: WebhookConfig },
+    /// Installs the immutable repository authorization catalog for context reads.
+    ConfigureArtifactContextCatalog {
+        catalog: crate::ConfiguredRepositoryCatalog,
+    },
     /// Enable worker-pool authentication with the given pool/token policy.
     ConfigureWorkerPoolAuth { config: WorkerPoolAuthConfig },
     #[cfg(test)]
@@ -178,6 +182,16 @@ pub(super) enum DaemonRequest {
         check: PullRequestFreshness,
         responder: HttpResponder,
     },
+    RunFetchContext {
+        request: FetchContext,
+        role: String,
+        responder: HttpResponder,
+    },
+    RespondContext {
+        response: ContextResponse,
+        audit: ContextReadAudit,
+        responder: HttpResponder,
+    },
     RunWakeScan {
         token: u64,
         hint: temper_runner::ChangeHint,
@@ -197,6 +211,16 @@ pub(super) enum DaemonRequest {
         temper_engine_io::OneshotSender<Vec<QueuedJob>>,
         Vec<QueuedJob>,
     ),
+}
+
+pub(super) struct ContextReadAudit {
+    pub(super) worker_id: String,
+    pub(super) job_id: String,
+    pub(super) role: String,
+    pub(super) operation: String,
+    pub(super) repository: String,
+    pub(super) item_number: u64,
+    pub(super) status: String,
 }
 
 pub(super) struct PollWaiter {
@@ -237,6 +261,7 @@ pub(super) struct DaemonMachine {
     pub(super) startup_recovery: bool,
     pub(super) deferred_enqueues: Vec<DeferredEnqueue>,
     pub(super) assignment_contexts: BTreeMap<String, crate::applier::ClaimContext>,
+    pub(super) artifact_catalog: crate::ConfiguredRepositoryCatalog,
     pub(super) next_id: u64,
     pub(super) stopped: bool,
 }
@@ -301,6 +326,7 @@ impl DaemonMachine {
             startup_recovery: false,
             deferred_enqueues: Vec::new(),
             assignment_contexts: BTreeMap::new(),
+            artifact_catalog: crate::ConfiguredRepositoryCatalog::default(),
             next_id: 0,
             stopped: false,
         }
@@ -635,6 +661,10 @@ impl Machine for DaemonMachine {
             }
             DaemonCompletion::ConfigureWebhook { config } => {
                 self.webhook = Some(config);
+                Vec::new()
+            }
+            DaemonCompletion::ConfigureArtifactContextCatalog { catalog } => {
+                self.artifact_catalog = catalog;
                 Vec::new()
             }
             DaemonCompletion::ConfigureWorkerPoolAuth { config } => {

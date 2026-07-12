@@ -14,7 +14,11 @@ use std::future::Future;
 use skein::cx::Cx;
 use temper_engine::Daemon;
 use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
-use temper_worker::Transport;
+use temper_worker::{ForgeContextClient, Transport};
+
+/// Co-resident context client. It uses the same authenticated protocol DTOs and
+/// daemon route as [`temper_worker::HttpForgeContextClient`] without a socket.
+pub type InProcessForgeContextClient = ForgeContextClient<InProcessTransport>;
 
 /// In-process worker→daemon transport.
 ///

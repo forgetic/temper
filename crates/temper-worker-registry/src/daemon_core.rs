@@ -338,6 +338,22 @@ impl DaemonCore {
             .count()
     }
 
+    /// Authenticates a worker and proves that `job_id` is its currently active
+    /// assignment. Pending, staged, completed, released, unknown, and
+    /// wrong-worker jobs all return `None` after authentication.
+    pub fn authorize_context_read(
+        &self,
+        worker_id: &str,
+        job_id: &str,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<Option<InFlightJob>, WorkerAuthError> {
+        self.authenticate_registered_worker(worker_id, None, auth)?;
+        if self.coordinator.assigned_worker(job_id) != Some(worker_id) {
+            return Ok(None);
+        }
+        Ok(self.in_flight_job(job_id))
+    }
+
     /// Reserve one job for a poller without making it externally in-flight.
     pub fn reserve_authenticated_poll(
         &mut self,
@@ -445,6 +461,13 @@ impl DaemonCore {
                 Ok(Some(self.handle_result(result)))
             }
             WorkerProtocolMessage::LeaseAck(lease_ack) => Ok(self.handle_lease_ack(lease_ack)),
+            WorkerProtocolMessage::FetchContext(_) | WorkerProtocolMessage::ContextResponse(_) => {
+                Ok(Some(error_response(
+                    ErrorCode::MalformedMessage,
+                    "context messages are handled by the daemon transport",
+                    None,
+                )))
+            }
             WorkerProtocolMessage::Error(_) => Ok(None),
         }
     }
@@ -722,6 +745,8 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::Result(msg) => msg.protocol_version,
         WorkerProtocolMessage::Release(msg) => msg.protocol_version,
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
+        WorkerProtocolMessage::FetchContext(msg) => msg.protocol_version,
+        WorkerProtocolMessage::ContextResponse(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,
     }
 }

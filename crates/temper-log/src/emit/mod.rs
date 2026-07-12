@@ -248,6 +248,21 @@ pub struct ItemResolved<'a> {
     pub duration_ms: u64,
 }
 
+/// Inputs for [`emit_forge_context_read`] (`engine` / `forge.context.read`).
+#[derive(Clone, Debug)]
+pub struct ForgeContextRead<'a> {
+    pub worker_id: &'a str,
+    pub job_id: &'a str,
+    pub role: &'a str,
+    pub operation: &'a str,
+    pub repository: &'a str,
+    pub item_number: u64,
+    pub status: &'a str,
+    pub result_count: usize,
+    pub truncated: bool,
+    pub duration_ms: u64,
+}
+
 /// Inputs for [`emit_role_saturated`] (`worker` / `role.saturated`).
 ///
 /// A *global* line about a shared resource: it carries no subject tag but names
@@ -638,6 +653,26 @@ pub fn emit_item_resolved(ev: ItemResolved<'_>) {
     );
 }
 
+/// Emits the debug-level audit record for one bounded Forge context read.
+pub fn emit_forge_context_read(ev: ForgeContextRead<'_>) {
+    tracing::debug!(
+        target: "temper::engine",
+        service = Service::Engine.as_str(),
+        event = Event::ForgeContextRead.as_str(),
+        worker_id = ev.worker_id,
+        job_id = ev.job_id,
+        role = ev.role,
+        operation = ev.operation,
+        repo = ev.repository,
+        item_number = ev.item_number,
+        status = ev.status,
+        result_count = ev.result_count,
+        truncated = ev.truncated,
+        duration_ms = ev.duration_ms,
+        "engine: forge context read",
+    );
+}
+
 /// Emits `worker` / `role.saturated` (a global line, no subject tag).
 pub fn emit_role_saturated(ev: RoleSaturated<'_>) {
     let message = prefixed(
@@ -715,6 +750,7 @@ mod tests {
             (Event::LeaseClaimed, Service::Worker),
             (Event::LeaseReleased, Service::Worker),
             (Event::LeaseLost, Service::Worker),
+            (Event::ForgeContextRead, Service::Engine),
             (Event::RoleSaturated, Service::Worker),
             (Event::AgentStarted, Service::Agent),
             (Event::AgentFinished, Service::Agent),
