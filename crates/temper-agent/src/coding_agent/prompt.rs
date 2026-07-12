@@ -385,7 +385,7 @@ fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
 
 fn render_summary(text: &mut String, summary: &ArtifactSummary) {
     text.push_str(&format!(
-        "- {} — {} [{}] kind={} labels={} relation={} exposed_by={}\n",
+        "- {} — {} [{}] kind={} labels={} relation={} source={}\n",
         reference_name(&summary.artifact),
         summary.title,
         summary.state,
