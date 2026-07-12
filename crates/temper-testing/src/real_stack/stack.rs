@@ -17,6 +17,7 @@ use temper_worker::{
     CodingExecutor, CodingExecutorConfig, Transport, WorkerComponentHandle, WorkerConfig,
     start_worker_with_transport,
 };
+use temper_workflow::InMemoryJournal;
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, DurableAssignment, LeaseManager, RoleId, ValidatedWorkflow,
     parse_metadata_block,
@@ -59,6 +60,7 @@ pub struct HermeticDurableWorld {
     pub(crate) hooks: PauseHooks,
     pub(crate) router: Arc<DaemonRouter>,
     pub(crate) apply_grace: Option<Duration>,
+    pub(crate) mechanical_journal: InMemoryJournal,
 }
 
 /// Process-local handles that may be stopped and reconstructed over one world.
@@ -200,7 +202,7 @@ impl HermeticRealStack {
         self.components.daemon.crash().await;
         let daemon = self.build_daemon(handle).begin_startup_recovery();
         let daemon = Arc::new(daemon);
-        let recovered = self.stage_primary_assignment(daemon.as_ref()).await;
+        let recovered = self.stage_durable_assignments(daemon.as_ref()).await;
         self.router.replace(daemon.clone());
         self.components.daemon = daemon;
         self.components.recovered = recovered;
@@ -235,75 +237,129 @@ impl HermeticRealStack {
         orphaned
     }
 
-    async fn stage_primary_assignment(
+    async fn stage_durable_assignments(
         &self,
         daemon: &Daemon,
     ) -> BTreeMap<String, HermeticRecoveredClaim> {
-        let mut recovered = BTreeMap::new();
-        let issue = self
+        let mut candidates = Vec::new();
+        if let Some(issue) = self
             .forge
             .get_issue_by_number(&self.primary_repo_id, self.issue_number)
             .await
-            .expect("hermetic startup issue inventory");
-        let Some(issue) = issue else {
-            return recovered;
-        };
-        let metadata = parse_metadata_block(&issue.body)
-            .expect("hermetic startup metadata parses")
-            .unwrap_or_default();
-        let Some(assignment) = metadata.assignment else {
-            return recovered;
-        };
-        let job_id = assignment
-            .job_id
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .expect("durable assignment has job id");
-        let worker_id = assignment
-            .worker_id
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .expect("durable assignment has worker id");
-        let prior_boot = assignment
-            .daemon_boot_id
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .expect("durable assignment has daemon boot id");
-        let target = ArtifactSource::Issue {
-            number: self.issue_number,
-        };
-        let job = temper_engine::recovered_job_from_assignment(
-            self.forge.as_ref(),
-            &self.primary_repo_id,
-            target,
-            &assignment,
-            self.workflow.as_ref(),
-            &self.compiled,
-        )
-        .await
-        .expect("hermetic durable assignment reconstructs");
-        daemon
-            .stage_recovered_job(
-                temper_engine::RecoveredJob {
-                    job_id: job.job_id,
-                    worker_id,
-                    role: job.role,
-                    repo: job.repo,
-                    artifact: job.artifact,
-                    job_payload: job.job_payload,
-                },
-                prior_boot,
+            .expect("hermetic startup issue inventory")
+        {
+            let metadata = parse_metadata_block(&issue.body)
+                .expect("hermetic startup issue metadata parses")
+                .unwrap_or_default();
+            if let Some(assignment) = metadata.assignment {
+                candidates.push((
+                    ArtifactSource::Issue {
+                        number: self.issue_number,
+                    },
+                    assignment,
+                    metadata.kind,
+                    None,
+                ));
+            }
+        }
+        for pull_request in self
+            .forge
+            .list_pull_requests(&self.primary_repo_id, PullRequestQuery::default())
+            .await
+            .expect("hermetic startup pull-request inventory")
+        {
+            let metadata = parse_metadata_block(&pull_request.body)
+                .expect("hermetic startup pull-request metadata parses")
+                .unwrap_or_default();
+            if let Some(assignment) = metadata.assignment {
+                candidates.push((
+                    ArtifactSource::PullRequest {
+                        number: pull_request.number,
+                    },
+                    assignment,
+                    metadata.kind,
+                    pull_request.head_sha,
+                ));
+            }
+        }
+
+        let mut recovered = BTreeMap::new();
+        for (target, assignment, kind, current_head) in candidates {
+            // A writable PR worker pushes before publishing Result. If startup
+            // sees that durable assignment's branch already advanced, use the
+            // production monotonic repair recovery instead of staging an orphan
+            // that would redispatch the same repair.
+            if matches!(target, ArtifactSource::PullRequest { .. })
+                && assignment.assignment_pr_head.as_deref() != current_head.as_deref()
+                && current_head
+                    .as_deref()
+                    .is_some_and(|head| !head.trim().is_empty())
+            {
+                let kind = kind
+                    .unwrap_or_else(|| temper_workflow::ArtifactKindId::new("implementation_pr"));
+                if temper_engine::recover_advanced_pull_request_assignment_from_durable(
+                    self.forge.as_ref(),
+                    &self.primary_repo_id,
+                    target,
+                    &assignment,
+                    kind,
+                    self.workflow.as_ref(),
+                )
+                .await
+                .expect("hermetic advanced PR assignment recovers")
+                {
+                    continue;
+                }
+            }
+
+            let job_id = assignment
+                .job_id
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .expect("durable assignment has job id");
+            let worker_id = assignment
+                .worker_id
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .expect("durable assignment has worker id");
+            let prior_boot = assignment
+                .daemon_boot_id
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .expect("durable assignment has daemon boot id");
+            let job = temper_engine::recovered_job_from_assignment(
+                self.forge.as_ref(),
+                &self.primary_repo_id,
+                target,
+                &assignment,
+                self.workflow.as_ref(),
+                &self.compiled,
             )
             .await
-            .expect("hermetic durable assignment stages");
-        recovered.insert(
-            job_id,
-            HermeticRecoveredClaim {
-                repo: self.primary_repo_id.clone(),
-                target,
-                assignment,
-            },
-        );
+            .expect("hermetic durable assignment reconstructs");
+            daemon
+                .stage_recovered_job(
+                    temper_engine::RecoveredJob {
+                        job_id: job.job_id,
+                        worker_id,
+                        role: job.role,
+                        repo: job.repo,
+                        artifact: job.artifact,
+                        job_payload: job.job_payload,
+                    },
+                    prior_boot,
+                )
+                .await
+                .expect("hermetic durable assignment stages");
+            recovered.insert(
+                job_id,
+                HermeticRecoveredClaim {
+                    repo: self.primary_repo_id.clone(),
+                    target,
+                    assignment,
+                },
+            );
+        }
         recovered
     }
 
@@ -470,7 +526,7 @@ impl HermeticRealStack {
         Ok(output.lines().map(str::to_string).collect())
     }
 
-    fn origin(&self, repo: &str) -> Result<&Path, String> {
+    pub(super) fn origin(&self, repo: &str) -> Result<&Path, String> {
         self.origins
             .get(repo)
             .map(PathBuf::as_path)
@@ -532,10 +588,19 @@ impl Transport for ResultTappingTransport {
         message: WorkerProtocolMessage,
         auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
-        let daemon = self.router.current();
         let result_tx = self.result_tx.clone();
         let hooks = self.hooks.clone();
         async move {
+            let reports_jobs = matches!(
+                &message,
+                WorkerProtocolMessage::Heartbeat(heartbeat) if !heartbeat.jobs.is_empty()
+            );
+            if reports_jobs {
+                hooks.reach(PausePoint::WorkerHeartbeatReportingJob).await;
+            }
+            // Resolve the replaceable endpoint after the pre-delivery pause so
+            // a test can park an already-created request, replace the daemon,
+            // and prove that the reconnect reaches the new incarnation.
             let recorded = match &message {
                 WorkerProtocolMessage::Result(result) => Some(result.clone()),
                 _ => None,
@@ -546,9 +611,13 @@ impl Transport for ResultTappingTransport {
                 hooks.reach(PausePoint::WorkerPushCompleted).await;
                 hooks.reach(PausePoint::ResultApplicationStarted).await;
             }
+            let daemon = self.router.current();
             let reply = daemon
                 .deliver_protocol_message_with_auth(message, auth)
                 .await;
+            if reports_jobs && matches!(&reply, Ok(None)) {
+                hooks.reach(PausePoint::WorkerHeartbeatCompleted).await;
+            }
             if matches!(&reply, Ok(Some(WorkerProtocolMessage::Assign(_)))) {
                 // The daemon only emits Assign after the durable claim CAS.
                 hooks.reach(PausePoint::AssignmentClaimCommitted).await;

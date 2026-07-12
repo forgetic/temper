@@ -269,6 +269,7 @@ impl HermeticRealStackBuilder {
             config_dir: None,
             enable_subagents: self.enable_subagents,
             submit_for_pr: self.submit_for_pr,
+            hooks: hooks.clone(),
         });
 
         let role_identities = role_identities(&self.worker_roles);
@@ -332,6 +333,7 @@ impl HermeticRealStackBuilder {
                 hooks,
                 router,
                 apply_grace: self.apply_grace,
+                mechanical_journal: temper_workflow::InMemoryJournal::new(),
             },
             components: HermeticComponentHandles {
                 daemon,

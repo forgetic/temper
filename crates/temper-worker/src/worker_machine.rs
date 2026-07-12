@@ -274,9 +274,17 @@ impl Machine for WorkerMachine {
                 requests
             }
             WorkerCompletion::HeartbeatDelivered(Err(error)) => {
-                vec![WorkerRequest::Log(format!(
-                    "worker: heartbeat failed: {error}"
-                ))]
+                // A daemon replacement forgets process-local registrations but
+                // the worker still owns its in-flight job set. Re-register and
+                // keep that set intact so the next exact heartbeat can reattach
+                // any durable assignment staged by startup recovery.
+                self.registered = false;
+                vec![
+                    WorkerRequest::Log(format!("worker: heartbeat failed: {error}")),
+                    WorkerRequest::SendRegister(crate::client::register_message_params(
+                        &self.params,
+                    )),
+                ]
             }
             WorkerCompletion::HeartbeatDelivered(Ok(())) => Vec::new(),
             WorkerCompletion::Shutdown => {

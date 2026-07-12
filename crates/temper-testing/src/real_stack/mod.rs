@@ -46,6 +46,7 @@
 //! });
 //! ```
 
+mod acceptance;
 mod builder;
 mod clock;
 mod git;
