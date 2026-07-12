@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Assign, Heartbeat, JobResult, LeaseAck, Poll, ProtocolError, Register, Release};
+use crate::{
+    Assign, ContextResponse, FetchContext, Heartbeat, JobResult, LeaseAck, Poll, ProtocolError,
+    Register, Release,
+};
 
 pub const WORKER_PROTOCOL_VERSION: u32 = 1;
 
@@ -16,5 +19,7 @@ pub enum WorkerProtocolMessage {
     Result(JobResult),
     Release(Release),
     LeaseAck(LeaseAck),
+    FetchContext(FetchContext),
+    ContextResponse(ContextResponse),
     Error(ProtocolError),
 }

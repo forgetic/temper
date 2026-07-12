@@ -5,6 +5,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 mod response;
+mod validation;
+
+pub use validation::validate_context_operation;
 
 use response::{
     bounded_comment, enforce_item_response_bound, enforce_related_response_bound, load_comments,
@@ -39,8 +42,8 @@ pub const MAX_COMMENT_BYTES: usize = 8 * 1024;
 pub const MAX_ITEM_BODY_BYTES: usize = 256 * 1024;
 pub const MAX_FORGE_RESPONSE_BYTES: usize = 512 * 1024;
 const INVERSE_SCAN_LIMIT: usize = 100;
-// Leaves room for the tagged `ForgeContextResult` transport envelope.
-const MAX_INNER_RESPONSE_BYTES: usize = MAX_FORGE_RESPONSE_BYTES - 128;
+// Leaves room for the tagged result plus bounded worker/job transport identity.
+const MAX_INNER_RESPONSE_BYTES: usize = MAX_FORGE_RESPONSE_BYTES - 2048;
 
 /// Read-only artifact-context service shared by transport adapters.
 ///
@@ -70,6 +73,7 @@ impl<'a, F: ArtifactContextForge + ?Sized> ArtifactContextService<'a, F> {
         &self,
         operation: ForgeContextOperation,
     ) -> Result<ForgeContextResult, ForgeContextErrorCode> {
+        validate_context_operation(&operation, self.catalog)?;
         match operation {
             ForgeContextOperation::ForgeGetItem(operation) => self
                 .forge_get_item(operation)
@@ -136,9 +140,12 @@ impl<'a, F: ArtifactContextForge + ?Sized> ArtifactContextService<'a, F> {
         if operation.relations.is_empty() {
             return Err(ForgeContextErrorCode::InvalidRequest);
         }
+        if operation.relations.len() > 7 {
+            return Err(ForgeContextErrorCode::LimitExceeded);
+        }
         let depth = operation.depth.unwrap_or(DEFAULT_RELATED_DEPTH);
         let limit = operation.limit.unwrap_or(DEFAULT_RELATED_RESULTS);
-        if depth == 0 || depth > MAX_RELATED_DEPTH || limit > MAX_RELATED_RESULTS {
+        if depth == 0 || depth > MAX_RELATED_DEPTH || limit == 0 || limit > MAX_RELATED_RESULTS {
             return Err(ForgeContextErrorCode::LimitExceeded);
         }
 

@@ -67,6 +67,8 @@ pub enum Event {
     PrMerged,
     /// A work item was resolved end-to-end (`item.resolved`).
     ItemResolved,
+    /// A worker requested one bounded Forge context read (`forge.context.read`).
+    ForgeContextRead,
     /// A role is saturated; items are queued behind the holder (`role.saturated`).
     RoleSaturated,
 }
@@ -100,6 +102,7 @@ impl Event {
             Self::PrUpdated => "pr.updated",
             Self::PrMerged => "pr.merged",
             Self::ItemResolved => "item.resolved",
+            Self::ForgeContextRead => "forge.context.read",
             Self::RoleSaturated => "role.saturated",
         }
     }
@@ -108,7 +111,7 @@ impl Event {
     ///
     /// Kept in sync with the enum by the `all_variants_have_unique_dotted_form`
     /// test, which fails if a new variant is added without listing it here.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::IssueOpened,
         Self::WakeReceived,
         Self::CiCompleted,
@@ -131,6 +134,7 @@ impl Event {
         Self::PrUpdated,
         Self::PrMerged,
         Self::ItemResolved,
+        Self::ForgeContextRead,
         Self::RoleSaturated,
     ];
 }
@@ -166,6 +170,7 @@ mod tests {
             "pr.updated",
             "pr.merged",
             "item.resolved",
+            "forge.context.read",
             "role.saturated",
         ];
         let actual: Vec<&str> = Event::ALL.iter().map(|e| e.as_str()).collect();
@@ -196,6 +201,6 @@ mod tests {
         // variant is added but not appended to ALL, this and the uniqueness test
         // catch it (the array literal would also fail to compile on a length
         // mismatch).
-        assert_eq!(Event::ALL.len(), 23);
+        assert_eq!(Event::ALL.len(), 24);
     }
 }

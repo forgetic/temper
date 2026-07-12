@@ -76,6 +76,7 @@ pub async fn run_async(
     )
     .with_worker_pool_auth(worker_pool_auth_config(resolved)?)
     .with_artifact_context_catalog(artifact_catalog)
+    .with_forge_context_reader(forge.clone(), workflow.clone())
     .begin_startup_recovery();
 
     // Inventory durable claims before opening any feed. The worker protocol
