@@ -23,6 +23,7 @@ mod adapt;
 mod applier;
 mod repositories;
 mod runtime;
+mod startup_recovery;
 
 pub use adapt::{
     daemon_run_config, engine_config, forgejo_config, worker_pool_auth_config, workflow_role_limits,
@@ -30,3 +31,4 @@ pub use adapt::{
 pub use applier::result_applier;
 pub use repositories::{ensure_workflow_labels, resolve_repositories, role_feed_targets};
 pub use runtime::{run, run_async};
+pub use startup_recovery::{RecoveredClaim, converge_startup_orphans, stage_startup_assignments};

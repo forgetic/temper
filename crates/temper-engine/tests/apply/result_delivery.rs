@@ -69,15 +69,13 @@ fn result_without_in_flight_job_does_not_invoke_applier() {
         let client = temper_engine_io::http::JsonClient::new();
         assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
-        assert_release(
+        assert_mismatched_result(
             post_json(
                 &client,
                 &url,
                 &WorkerProtocolMessage::Result(job_result("worker-a", "phantom-job", Vec::new())),
             )
             .await,
-            "worker-a",
-            "phantom-job",
         );
 
         daemon
@@ -89,15 +87,13 @@ fn result_without_in_flight_job_does_not_invoke_applier() {
                 json!({"n":"pending"}),
             )
             .await;
-        assert_release(
+        assert_mismatched_result(
             post_json(
                 &client,
                 &url,
                 &WorkerProtocolMessage::Result(job_result("worker-a", "pending-job", Vec::new())),
             )
             .await,
-            "worker-a",
-            "pending-job",
         );
 
         daemon
@@ -131,4 +127,16 @@ fn result_without_in_flight_job_does_not_invoke_applier() {
         assert_eq!(recorded_result.job_id, real_result.job_id);
         assert!(rx.try_recv().is_none());
     })
+}
+
+fn assert_mismatched_result(message: WorkerProtocolMessage) {
+    match message {
+        WorkerProtocolMessage::Error(error) => {
+            assert_eq!(
+                error.code,
+                temper_protocol_worker::ErrorCode::MalformedMessage
+            );
+        }
+        other => panic!("expected mismatched-result error, got {other:?}"),
+    }
 }

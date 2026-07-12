@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use super::{Workspace, WorkspaceError};
 
@@ -17,6 +18,11 @@ impl Workspace {
             return Ok(());
         }
 
+        if let Some(manifest) = self.existing_quarantine().await? {
+            return Err(WorkspaceError::Quarantined {
+                path: PathBuf::from(manifest.quarantine_path),
+            });
+        }
         self.ensure_checkout_repo().await?;
 
         let target_fetch_error = match self.fetch_remote_branch(&self.base_branch).await {

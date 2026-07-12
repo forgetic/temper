@@ -327,7 +327,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         // execution context is moved into the executor below.
         let repository_id = apply.repository_id;
         let source = apply.source;
-        match Executor::with_context(self.workflow.as_ref(), self.forge.as_ref(), apply.context)
+        let mut executor =
+            Executor::with_context(self.workflow.as_ref(), self.forge.as_ref(), apply.context);
+        if let Some(hook) = &self.child_issue_hook {
+            executor = executor.with_child_issue_hook(hook.clone());
+        }
+        match executor
             .execute(repository_id, source, apply.routed, apply.role_id)
             .await
         {

@@ -10,11 +10,13 @@
 use super::{LeaseError, LeasePlanner, LeasePolicy};
 use crate::ArtifactSource;
 use crate::ids::RoleId;
-use crate::metadata::{Lease, WorkflowMetadata, parse_metadata_block, replace_metadata_block};
+use crate::metadata::{
+    DurableAssignment, Lease, WorkflowMetadata, parse_metadata_block, replace_metadata_block,
+};
 use chrono::{DateTime, Utc};
 use temper_forge::{
     Forge, ForgeError, IssueId, PullRequestId, RepositoryId, UpdateIssue, UpdatePullRequest,
-    Version,
+    UserId, Version,
 };
 
 /// A loaded artifact's mutable handle, its current metadata, and the
@@ -29,12 +31,16 @@ enum LoadedLease {
         id: IssueId,
         body: String,
         metadata: WorkflowMetadata,
+        labels: Vec<String>,
+        assignees: Vec<UserId>,
         version: Version,
     },
     PullRequest {
         id: PullRequestId,
         body: String,
         metadata: WorkflowMetadata,
+        labels: Vec<String>,
+        assignees: Vec<UserId>,
         version: Version,
     },
 }
@@ -53,6 +59,20 @@ impl LoadedLease {
         match self {
             LoadedLease::Issue { version, .. } | LoadedLease::PullRequest { version, .. } => {
                 *version
+            }
+        }
+    }
+
+    fn labels(&self) -> &[String] {
+        match self {
+            LoadedLease::Issue { labels, .. } | LoadedLease::PullRequest { labels, .. } => labels,
+        }
+    }
+
+    fn assignees(&self) -> &[UserId] {
+        match self {
+            LoadedLease::Issue { assignees, .. } | LoadedLease::PullRequest { assignees, .. } => {
+                assignees
             }
         }
     }
@@ -84,6 +104,23 @@ impl PreparedAcquire {
     pub fn version(&self) -> Version {
         self.loaded.version()
     }
+}
+
+/// Lifecycle projection included in the same conditional Forge update as a
+/// durable assignment claim.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AssignmentMutation {
+    pub add_labels: Vec<String>,
+    pub remove_labels: Vec<String>,
+    pub add_assignees: Vec<UserId>,
+    pub remove_assignees: Vec<UserId>,
+}
+
+/// Input to [`LeaseManager::claim_assignment`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssignmentClaimRequest {
+    pub assignment: DurableAssignment,
+    pub mutation: AssignmentMutation,
 }
 
 /// Applies lease decisions to a [`Forge`] by rewriting metadata blocks.
@@ -186,6 +223,356 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         Ok(lease)
     }
 
+    /// Atomically persists an exact assignment, lease, and lifecycle mutation.
+    ///
+    /// The body and Forge labels/assignees share one conditional update, so an
+    /// observer can never see the assignment publication without the matching
+    /// lifecycle projection (or vice versa).
+    pub async fn claim_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        mut request: AssignmentClaimRequest,
+        now: DateTime<Utc>,
+    ) -> Result<DurableAssignment, LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        if let Some(current) = loaded.metadata().assignment.as_ref() {
+            if assignment_identity_matches(current, &request.assignment) {
+                return Ok(current.clone());
+            }
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+
+        let role =
+            request
+                .assignment
+                .role
+                .clone()
+                .ok_or_else(|| LeaseError::MalformedMetadata {
+                    reason: "assignment role is required".to_string(),
+                })?;
+        let lease_owner = request
+            .assignment
+            .daemon_boot_id
+            .clone()
+            .or_else(|| request.assignment.worker_id.clone())
+            .ok_or_else(|| LeaseError::MalformedMetadata {
+                reason: "assignment daemon_boot_id or worker_id is required".to_string(),
+            })?;
+        let lease =
+            self.planner
+                .acquire(loaded.metadata().lease.as_ref(), role, lease_owner, now)?;
+
+        request.assignment.pre_claim_labels = loaded.labels().to_vec();
+        request.assignment.pre_claim_assignees = loaded
+            .assignees()
+            .iter()
+            .map(|user| user.as_str().to_string())
+            .collect();
+        request.assignment.assigned_at = Some(now);
+        request.assignment.expires_at = Some(lease.expires_at);
+        self.write_assignment(
+            &loaded,
+            Some(request.assignment.clone()),
+            Some(lease),
+            request.mutation,
+            target,
+        )
+        .await?;
+        Ok(request.assignment)
+    }
+
+    /// Validates that fresh Forge metadata names this exact assignment.
+    pub async fn validate_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+    ) -> Result<bool, LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        Ok(loaded
+            .metadata()
+            .assignment
+            .as_ref()
+            .is_some_and(|current| assignment_identity_matches(current, expected)))
+    }
+
+    /// Clears an exact durable assignment and its lease. A mismatched caller
+    /// cannot release another worker or daemon boot's claim.
+    pub async fn release_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+    ) -> Result<(), LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Ok(());
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+        self.write_assignment(&loaded, None, None, AssignmentMutation::default(), target)
+            .await
+    }
+
+    /// Rolls an unpublished assignment back to its captured pre-claim
+    /// lifecycle state while clearing the assignment and lease in one CAS.
+    pub async fn rollback_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+    ) -> Result<(), LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Ok(());
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+        let add_labels = current
+            .pre_claim_labels
+            .iter()
+            .filter(|label| !loaded.labels().contains(label))
+            .cloned()
+            .collect();
+        let remove_labels = loaded
+            .labels()
+            .iter()
+            .filter(|label| !current.pre_claim_labels.contains(label))
+            .cloned()
+            .collect();
+        let pre_assignees = current
+            .pre_claim_assignees
+            .iter()
+            .map(|user| UserId::new(user.clone()))
+            .collect::<Vec<_>>();
+        let add_assignees = pre_assignees
+            .iter()
+            .filter(|user| !loaded.assignees().contains(user))
+            .cloned()
+            .collect();
+        let remove_assignees = loaded
+            .assignees()
+            .iter()
+            .filter(|user| !pre_assignees.contains(user))
+            .cloned()
+            .collect();
+        self.write_assignment(
+            &loaded,
+            None,
+            None,
+            AssignmentMutation {
+                add_labels,
+                remove_labels,
+                add_assignees,
+                remove_assignees,
+            },
+            target,
+        )
+        .await
+    }
+
+    /// Converges an abandoned issue assignment from fresh Forge state.
+    ///
+    /// Unlike [`rollback_assignment`](Self::rollback_assignment), this does not
+    /// restore an assignment-time label snapshot. It preserves unrelated labels
+    /// added while the worker ran and projects the issue to `blocked` when fresh
+    /// dependency reads remain unresolved, or back to the assignment's queue
+    /// labels when they are resolved. Assignment metadata and lease are cleared
+    /// in the same conditional update.
+    pub async fn converge_issue_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+        queue_labels: &[String],
+        claim_labels: &[String],
+        dependencies_unresolved: bool,
+    ) -> Result<(), LeaseError> {
+        if !matches!(target, ArtifactSource::Issue { .. }) {
+            return self.rollback_assignment(repo_id, target, expected).await;
+        }
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Ok(());
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+
+        let mut add_labels = Vec::new();
+        let mut remove_labels = loaded
+            .labels()
+            .iter()
+            .filter(|label| {
+                label.as_str() == "in-progress" || claim_labels.iter().any(|added| added == *label)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if dependencies_unresolved {
+            if !loaded.labels().iter().any(|label| label == "blocked") {
+                add_labels.push("blocked".to_string());
+            }
+            for label in queue_labels {
+                if loaded.labels().contains(label) && !remove_labels.contains(label) {
+                    remove_labels.push(label.clone());
+                }
+            }
+        } else {
+            if loaded.labels().iter().any(|label| label == "blocked") {
+                remove_labels.push("blocked".to_string());
+            }
+            for label in queue_labels {
+                if !loaded.labels().contains(label) && !add_labels.contains(label) {
+                    add_labels.push(label.clone());
+                }
+            }
+        }
+
+        let pre_assignees = current
+            .pre_claim_assignees
+            .iter()
+            .map(|user| UserId::new(user.clone()))
+            .collect::<Vec<_>>();
+        let add_assignees = pre_assignees
+            .iter()
+            .filter(|user| !loaded.assignees().contains(user))
+            .cloned()
+            .collect();
+        let remove_assignees = loaded
+            .assignees()
+            .iter()
+            .filter(|user| !pre_assignees.contains(user))
+            .cloned()
+            .collect();
+        self.write_assignment(
+            &loaded,
+            None,
+            None,
+            AssignmentMutation {
+                add_labels,
+                remove_labels,
+                add_assignees,
+                remove_assignees,
+            },
+            target,
+        )
+        .await
+    }
+
+    /// Conditionally refreshes the lease for an exact durable assignment.
+    ///
+    /// This is the restart-reattachment path. The job, worker, and prior daemon
+    /// boot identity must still match fresh Forge metadata; a heartbeat for an
+    /// unknown, superseded, or mismatched job therefore cannot extend a claim.
+    pub async fn heartbeat_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+        now: DateTime<Utc>,
+    ) -> Result<DurableAssignment, LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: expected.job_id.clone().unwrap_or_default(),
+            });
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+        let lease =
+            loaded
+                .metadata()
+                .lease
+                .as_ref()
+                .ok_or_else(|| LeaseError::MalformedMetadata {
+                    reason: "durable assignment is missing its lease".to_string(),
+                })?;
+        let refreshed = self.planner.heartbeat(Some(lease), &lease.worker, now)?;
+        let mut assignment = current.clone();
+        assignment.expires_at = Some(refreshed.expires_at);
+        self.write_assignment(
+            &loaded,
+            Some(assignment.clone()),
+            Some(refreshed),
+            AssignmentMutation::default(),
+            target,
+        )
+        .await?;
+        Ok(assignment)
+    }
+
+    /// Clears an impossible durable claim and leaves one idempotent attention
+    /// marker instead of guessing a ready/blocked state.
+    pub async fn quarantine_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+    ) -> Result<(), LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Ok(());
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+        let pre_assignees = current
+            .pre_claim_assignees
+            .iter()
+            .map(|user| UserId::new(user.clone()))
+            .collect::<Vec<_>>();
+        let add_labels = (!loaded.labels().iter().any(|label| label == "needs-human"))
+            .then(|| "needs-human".to_string())
+            .into_iter()
+            .collect();
+        let remove_labels = loaded
+            .labels()
+            .iter()
+            .filter(|label| label.as_str() == "in-progress")
+            .cloned()
+            .collect();
+        let add_assignees = pre_assignees
+            .iter()
+            .filter(|user| !loaded.assignees().contains(user))
+            .cloned()
+            .collect();
+        let remove_assignees = loaded
+            .assignees()
+            .iter()
+            .filter(|user| !pre_assignees.contains(user))
+            .cloned()
+            .collect();
+        self.write_assignment(
+            &loaded,
+            None,
+            None,
+            AssignmentMutation {
+                add_labels,
+                remove_labels,
+                add_assignees,
+                remove_assignees,
+            },
+            target,
+        )
+        .await
+    }
+
     /// Extends `worker`'s lease on `target` with a fresh heartbeat and expiry.
     pub async fn heartbeat(
         &self,
@@ -262,6 +649,8 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
                     id: issue.id,
                     body: issue.body,
                     metadata,
+                    labels: issue.labels,
+                    assignees: issue.assignees,
                     version: issue.version,
                 })
             }
@@ -276,10 +665,74 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
                     id: pull_request.id,
                     body: pull_request.body,
                     metadata,
+                    labels: pull_request.labels,
+                    assignees: pull_request.assignees,
                     version: pull_request.version,
                 })
             }
         }
+    }
+
+    async fn write_assignment(
+        &self,
+        loaded: &LoadedLease,
+        assignment: Option<DurableAssignment>,
+        lease: Option<Lease>,
+        mutation: AssignmentMutation,
+        target: ArtifactSource,
+    ) -> Result<(), LeaseError> {
+        let (body, mut metadata) = match loaded {
+            LoadedLease::Issue { body, metadata, .. }
+            | LoadedLease::PullRequest { body, metadata, .. } => (body, metadata.clone()),
+        };
+        metadata.assignment = assignment;
+        metadata.lease = lease;
+        let new_body = replace_metadata_block(body, &metadata).map_err(|error| {
+            LeaseError::MalformedMetadata {
+                reason: error.to_string(),
+            }
+        })?;
+        let expected_version = Some(loaded.version());
+        let result = match loaded {
+            LoadedLease::Issue { id, .. } => self
+                .forge
+                .update_issue(
+                    id,
+                    UpdateIssue {
+                        body: Some(new_body),
+                        add_labels: mutation.add_labels,
+                        remove_labels: mutation.remove_labels,
+                        add_assignees: mutation.add_assignees,
+                        remove_assignees: mutation.remove_assignees,
+                        expected_version,
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await
+                .map(|_| ()),
+            LoadedLease::PullRequest { id, .. } => self
+                .forge
+                .update_pull_request(
+                    id,
+                    UpdatePullRequest {
+                        body: Some(new_body),
+                        add_labels: mutation.add_labels,
+                        remove_labels: mutation.remove_labels,
+                        add_assignees: mutation.add_assignees,
+                        remove_assignees: mutation.remove_assignees,
+                        expected_version,
+                        ..UpdatePullRequest::default()
+                    },
+                )
+                .await
+                .map(|_| ()),
+        };
+        result.map_err(|error| match error {
+            ForgeError::Conflict(_) => LeaseError::Contended { target },
+            other => LeaseError::Backend {
+                message: other.to_string(),
+            },
+        })
     }
 
     /// Writes `lease` into the artifact's metadata block via a *conditional*
@@ -339,6 +792,19 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
             },
         })
     }
+}
+
+fn assignment_identity_matches(current: &DurableAssignment, expected: &DurableAssignment) -> bool {
+    optional_match(&current.job_id, &expected.job_id)
+        && optional_match(&current.role, &expected.role)
+        && optional_match(&current.worker_id, &expected.worker_id)
+        && optional_match(&current.daemon_boot_id, &expected.daemon_boot_id)
+}
+
+fn optional_match<T: PartialEq>(current: &Option<T>, expected: &Option<T>) -> bool {
+    expected
+        .as_ref()
+        .is_none_or(|expected| current.as_ref() == Some(expected))
 }
 
 /// Parses metadata from a body, mapping a malformed block to a lease error.

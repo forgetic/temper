@@ -163,6 +163,12 @@ async fn push_candidate<F: Forge + ?Sized>(
     artifacts: &mut Vec<ScannedArtifact>,
     emit_ci_completed: bool,
 ) -> Result<(), ScanError> {
+    // A durable create intent keeps children staged until the entire sibling
+    // graph exists. This metadata guard is independent of labels and therefore
+    // applies uniformly to normal, wake, audit, automated, and targeted scans.
+    if classified.metadata.staged {
+        return Ok(());
+    }
     let Some(needs) = signal_needs_for_candidate(queues, &classified) else {
         return Ok(());
     };

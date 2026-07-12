@@ -31,7 +31,7 @@
 mod manager;
 mod planner;
 
-pub use manager::{LeaseManager, PreparedAcquire};
+pub use manager::{AssignmentClaimRequest, AssignmentMutation, LeaseManager, PreparedAcquire};
 pub use planner::{LeaseConflict, LeasePlanner, LeasePolicy};
 
 use crate::ArtifactSource;
@@ -56,6 +56,8 @@ pub enum LeaseError {
     /// the same "no lease" snapshot cannot both win, because the second write
     /// fails its compare-and-swap.
     Contended { target: ArtifactSource },
+    /// Fresh metadata already names a different durable assignment.
+    AssignmentConflict { job_id: String },
     /// A backend operation failed.
     Backend { message: String },
 }
@@ -74,6 +76,9 @@ impl fmt::Display for LeaseError {
                 formatter,
                 "lease write for {target:?} lost a race: the artifact changed since it was read"
             ),
+            LeaseError::AssignmentConflict { job_id } => {
+                write!(formatter, "artifact is durably assigned to job `{job_id}`")
+            }
             LeaseError::Backend { message } => write!(formatter, "backend error: {message}"),
         }
     }

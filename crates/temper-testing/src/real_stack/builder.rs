@@ -5,7 +5,7 @@ use std::time::Duration;
 use jig_server::FakeLlm;
 use skein::runtime::RuntimeHandle;
 use temper_agent::{ProviderConfig, SubmitForPrHost, default_submit_for_pr_host};
-use temper_engine::{Daemon, ForgeApplier, LeaseApplier, system_clock};
+use temper_engine::{Daemon, ForgeApplier, LeaseApplier};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{CreateIssue, CreateRepository, Forge, UserId};
 use temper_worker::{
@@ -15,9 +15,13 @@ use temper_worker::{
 use temper_workflow::{LeasePolicy, ValidatedWorkflow};
 
 use super::DEFAULT_MAX_ITERATIONS;
+use super::clock::MutableWallClock;
 use super::git::{path_str, seed_origin};
+use super::pause::PauseHooks;
 use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
-use super::stack::HermeticRealStack;
+use super::stack::{
+    DaemonRouter, HermeticComponentHandles, HermeticDurableWorld, HermeticRealStack,
+};
 use super::types::{
     FakeModelResponse, FakeModelSetup, HermeticIssueSpec, HermeticRepoSpec, WorkerRoleSpec,
 };
@@ -215,12 +219,21 @@ impl HermeticRealStackBuilder {
 
         let workflow = Arc::new(self.workflow.unwrap_or_else(crate::workflow));
         let compiled = workflow.compile();
+        let clock = MutableWallClock::new(
+            super::DEFAULT_NOW
+                .parse()
+                .map_err(|error| format!("parse default timestamp: {error}"))?,
+        );
+        let hooks = PauseHooks::default();
         let applier = Arc::new(LeaseApplier::new(
             forge.clone(),
             LeasePolicy::new(chrono::Duration::seconds(300)),
             "hermetic-daemon",
-            Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
-            system_clock(),
+            Arc::new(
+                ForgeApplier::new(forge.clone(), workflow.clone())
+                    .with_child_issue_hook(Arc::new(hooks.clone())),
+            ),
+            clock.capability(),
         ));
         let daemon_handle = Daemon::with_applier(Arc::new(handle.clone()), applier);
         let daemon_handle = match self.apply_grace {
@@ -256,6 +269,7 @@ impl HermeticRealStackBuilder {
             config_dir: None,
             enable_subagents: self.enable_subagents,
             submit_for_pr: self.submit_for_pr,
+            hooks: hooks.clone(),
         });
 
         let role_identities = role_identities(&self.worker_roles);
@@ -285,37 +299,48 @@ impl HermeticRealStackBuilder {
             heartbeat_interval: Duration::from_millis(50),
             executor: ExecutorSelection::Stub,
         };
+        let coding_config = CodingExecutorConfig {
+            workspace_root: workspace_root.clone(),
+            git_base_url: format!("file://{}", path_str(&git_root)?),
+            role_identities,
+        };
         let executor = Arc::new(
-            CodingExecutor::new(
-                CodingExecutorConfig {
-                    workspace_root: workspace_root.clone(),
-                    git_base_url: format!("file://{}", path_str(&git_root)?),
-                    role_identities,
-                },
-                runner,
-            )
-            .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(daemon.clone()))),
+            CodingExecutor::new(coding_config.clone(), runner.clone())
+                .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(daemon.clone()))),
         );
+        let router = Arc::new(DaemonRouter::new(daemon.clone()));
 
         Ok(HermeticRealStack {
-            _temp: temp,
-            _fake_llm: fake_llm,
-            forge,
-            workflow,
-            compiled,
-            daemon,
-            result_tx,
-            result_rx,
-            origins,
-            repo_ids,
-            workspace_root,
-            primary_repo_path,
-            primary_repo_id,
-            issue_number: issue.number,
-            role: primary_worker_role.role,
-            worker_config,
-            executor,
-            worker_started: false,
+            world: HermeticDurableWorld {
+                _temp: temp,
+                _fake_llm: fake_llm,
+                forge,
+                workflow,
+                compiled,
+                result_tx,
+                result_rx,
+                origins,
+                repo_ids,
+                workspace_root,
+                primary_repo_path,
+                primary_repo_id,
+                issue_number: issue.number,
+                role: primary_worker_role.role,
+                worker_config,
+                coding_config,
+                runner,
+                clock,
+                hooks,
+                router,
+                apply_grace: self.apply_grace,
+                mechanical_journal: temper_workflow::InMemoryJournal::new(),
+            },
+            components: HermeticComponentHandles {
+                daemon,
+                executor,
+                worker: None,
+                recovered: BTreeMap::new(),
+            },
         })
     }
 }

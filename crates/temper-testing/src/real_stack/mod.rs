@@ -4,7 +4,7 @@
 //! host Actions runner: a real [`temper_engine::Daemon`] with the Forge-backed
 //! result applier, a real [`temper_worker::WorkerMachine`] /
 //! [`temper_worker::WorkerShell`] loop reached through
-//! [`temper_daemon_transport::InProcessTransport`], the real
+//! [`ResultTappingTransport`], the real
 //! [`temper_worker::CodingExecutor`], and the native coding agent pointed at a
 //! Jig fake LLM. Product repositories are local `file://` bare git remotes and
 //! Forge state lives in [`temper_forge_memory::MemoryForge`].
@@ -46,8 +46,11 @@
 //! });
 //! ```
 
+mod acceptance;
 mod builder;
+mod clock;
 mod git;
+mod pause;
 mod runner;
 mod stack;
 mod types;
@@ -55,8 +58,13 @@ mod types;
 pub use jig_core::{Reply, Script, StopReason, Turn};
 
 pub use builder::HermeticRealStackBuilder;
+pub use clock::MutableWallClock;
+pub use pause::{PauseHooks, PausePermit, PausePoint, ReachedPause};
 pub use runner::NativeJigAgentRunner;
-pub use stack::{HermeticRealStack, HermeticRunResult, ResultTappingTransport};
+pub use stack::{
+    HermeticComponentHandles, HermeticDurableWorld, HermeticRealStack, HermeticRunResult,
+    ResultTappingTransport,
+};
 pub use types::{
     FakeModelResponse, FakeModelWrite, HermeticIssueSpec, HermeticRepoSpec, WorkerRoleSpec,
 };

@@ -224,6 +224,24 @@ fn assign_candidate_is_deterministic() {
 }
 
 #[test]
+fn restore_assignment_is_idempotent_but_never_exceeds_capacity() {
+    let mut registry = WorkerRegistry::new();
+    registry.register(&register("worker-a", "engineer", "ai/temper", 1));
+
+    registry
+        .restore_assignment("worker-a", "job-1")
+        .expect("first restoration succeeds");
+    registry
+        .restore_assignment("worker-a", "job-1")
+        .expect("repeated restoration is idempotent");
+    assert_eq!(registry.free_capacity("worker-a"), Some(0));
+    assert_eq!(
+        registry.restore_assignment("worker-a", "job-2"),
+        Err(RegistryError::NoCapacity("worker-a".to_string()))
+    );
+}
+
+#[test]
 fn completing_a_job_frees_capacity() {
     let mut registry = WorkerRegistry::new();
     registry.register(&register("worker-a", "engineer", "ai/temper", 1));

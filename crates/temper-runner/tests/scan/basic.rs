@@ -18,6 +18,67 @@ fn untriaged_issue_yields_architect_triage_work() {
 }
 
 #[test]
+fn staged_issue_is_never_returned_by_role_scans_despite_ready_labels() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let issue = block_on(forge.create_issue(
+        &repo,
+        CreateIssue {
+            title: "partially wired child".into(),
+            body: render_metadata_block(&WorkflowMetadata {
+                kind: Some(ArtifactKindId::new("code")),
+                staged: true,
+                ..WorkflowMetadata::default()
+            }),
+            labels: vec!["code".into(), "ready".into()],
+            assignees: Vec::new(),
+        },
+    ))
+    .expect("staged issue is created");
+    let workflow = workflow();
+    let compiled = workflow.compile();
+
+    assert!(scan_repo(&forge, &repo).is_empty());
+    assert!(
+        block_on(scan_role(
+            &forge,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("engineer"),
+        ))
+        .expect("normal role scan succeeds")
+        .is_empty()
+    );
+    assert!(
+        block_on(temper_runner::scan_role_wake(
+            &forge,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("engineer"),
+        ))
+        .expect("wake scan succeeds")
+        .is_empty()
+    );
+    assert!(
+        block_on(temper_runner::scan_role_audit(
+            &forge,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("engineer"),
+        ))
+        .expect("audit scan succeeds")
+        .is_empty()
+    );
+    assert_eq!(issue.number.get(), 1);
+}
+
+#[test]
 fn ready_code_issue_yields_engineer_work() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);

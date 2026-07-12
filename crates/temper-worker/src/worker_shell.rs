@@ -13,7 +13,11 @@
 //! single-process mode. The protocol crossing the seam is identical; only the
 //! carrier differs.
 
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 
 use skein::runtime::RuntimeHandle;
 use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
@@ -23,6 +27,43 @@ use crate::executor::{JobExecutor, job_result};
 use crate::transport::{HttpTransport, Transport};
 use crate::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 
+/// Shared cancellation authority for a worker component and all job futures it
+/// spawned. Dropping a cancelled job future prevents its later git/Forge
+/// publication from outliving the component machine.
+#[derive(Clone, Default)]
+pub(crate) struct WorkerCancellation {
+    cancelled: Arc<AtomicBool>,
+    waiters: Arc<Mutex<Vec<Waker>>>,
+}
+
+impl WorkerCancellation {
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        for waiter in std::mem::take(&mut *self.waiters.lock().expect("worker cancel lock")) {
+            waiter.wake();
+        }
+    }
+
+    async fn run<F: Future>(&self, future: F) -> Option<F::Output> {
+        let mut future = std::pin::pin!(future);
+        std::future::poll_fn(|cx| {
+            if self.cancelled.load(Ordering::SeqCst) {
+                return Poll::Ready(None);
+            }
+            if let Poll::Ready(output) = Pin::new(&mut future).poll(cx) {
+                return Poll::Ready(Some(output));
+            }
+            let mut waiters = self.waiters.lock().expect("worker cancel lock");
+            if self.cancelled.load(Ordering::SeqCst) {
+                return Poll::Ready(None);
+            }
+            waiters.push(cx.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+}
+
 /// Performs the worker's I/O on a skein spawn capability (production runtime or lab).
 pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner = RuntimeHandle> {
     spawner: S,
@@ -31,6 +72,7 @@ pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner 
     worker_auth: Option<WorkerAuth>,
     worker_id: String,
     executor: Arc<E>,
+    cancellation: WorkerCancellation,
 }
 
 impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, RuntimeHandle> {
@@ -44,13 +86,14 @@ impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, Runti
         worker_id: String,
         executor: Arc<E>,
     ) -> Self {
-        Self::with_transport(
+        Self::with_transport_controlled(
             handle,
             cq,
             Arc::new(HttpTransport::new(daemon_url)),
             None,
             worker_id,
             executor,
+            WorkerCancellation::default(),
         )
     }
 }
@@ -66,6 +109,26 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
         worker_id: String,
         executor: Arc<E>,
     ) -> Self {
+        Self::with_transport_controlled(
+            spawner,
+            cq,
+            transport,
+            worker_auth,
+            worker_id,
+            executor,
+            WorkerCancellation::default(),
+        )
+    }
+
+    pub(crate) fn with_transport_controlled(
+        spawner: S,
+        cq: CqSender<WorkerCompletion>,
+        transport: Arc<T>,
+        worker_auth: Option<WorkerAuth>,
+        worker_id: String,
+        executor: Arc<E>,
+        cancellation: WorkerCancellation,
+    ) -> Self {
         Self {
             spawner,
             cq,
@@ -73,6 +136,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
             worker_auth,
             worker_id,
             executor,
+            cancellation,
         }
     }
 
@@ -115,16 +179,19 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
             }
             WorkerRequest::SendHeartbeat(message) => {
                 self.post(message, |reply| {
-                    WorkerCompletion::HeartbeatDelivered(reply.map(|_| ()))
+                    WorkerCompletion::HeartbeatDelivered(heartbeat_outcome(reply))
                 });
             }
             WorkerRequest::RunJob(assign) => {
                 let executor = Arc::clone(&self.executor);
                 let cq = self.cq.clone();
                 let worker_id = self.worker_id.clone();
+                let cancellation = self.cancellation.clone();
                 let job_id = assign.job_id.clone();
                 self.spawner.spawn_task(async move {
-                    let outcome = executor.execute(assign).await;
+                    let Some(outcome) = cancellation.run(executor.execute(assign)).await else {
+                        return;
+                    };
                     let result = job_result(&worker_id, &job_id, outcome);
                     let _ = cq.send(WorkerCompletion::JobFinished { job_id, result });
                 });
@@ -147,5 +214,18 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 tracing::debug!(target: "temper_worker", "{line}");
             }
         }
+    }
+}
+
+fn heartbeat_outcome(reply: Result<Option<WorkerProtocolMessage>, String>) -> Result<(), String> {
+    match reply {
+        Ok(None) => Ok(()),
+        Ok(Some(WorkerProtocolMessage::Error(error))) => {
+            Err(format!("daemon rejected heartbeat: {error:?}"))
+        }
+        Ok(Some(other)) => Err(format!(
+            "daemon returned unexpected heartbeat response: {other:?}"
+        )),
+        Err(error) => Err(error),
     }
 }

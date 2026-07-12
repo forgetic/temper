@@ -12,8 +12,8 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_protocol_worker::{Artifact, JobContext};
 use temper_workflow::{
-    ArtifactKindId, ArtifactSource, CompiledWorkflow, QueueId, RawWorkflowSpec, RoleId,
-    ValidatedWorkflow, WorkflowMetadata, render_metadata_block,
+    ArtifactKindId, ArtifactSource, CompiledWorkflow, DurableAssignment, QueueId, RawWorkflowSpec,
+    RoleId, ValidatedWorkflow, WorkflowMetadata, render_metadata_block,
 };
 
 use crate::Daemon;

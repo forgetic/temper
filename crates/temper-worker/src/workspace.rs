@@ -2,7 +2,11 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
 mod git;
+mod recovery;
 mod target_branch;
+
+use recovery::ReadOnlyTarget;
+pub use recovery::{PreparationOutcome, QuarantineManifest, RecoveryContext};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoleGitIdentity {
@@ -22,6 +26,7 @@ pub struct Workspace {
     base_branch: String,
     remote_url: String,
     identity: RoleGitIdentity,
+    recovery_context: RecoveryContext,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -67,6 +72,10 @@ pub enum WorkspaceError {
     Utf8(String),
     #[error("invalid repo `{0}`: expected owner/name")]
     InvalidRepo(String),
+    #[error("workspace recovery requires permanent operator attention: {0}")]
+    Recovery(String),
+    #[error("workspace is quarantined at `{path}`")]
+    Quarantined { path: PathBuf },
     #[error("{0}")]
     BranchMaterialization(String),
 }
@@ -214,6 +223,11 @@ impl Workspace {
             base_branch: config.base_branch.clone(),
             remote_url: remote_url.into(),
             identity,
+            recovery_context: RecoveryContext {
+                job_id: format!("legacy/{repo}/{role}"),
+                correlation_key: role.to_string(),
+                repository: repo.to_string(),
+            },
         })
     }
 
@@ -231,6 +245,7 @@ impl Workspace {
             base_branch,
             remote_url: remote_url.into(),
             identity,
+            recovery_context: RecoveryContext::default(),
         }
     }
 
@@ -241,57 +256,16 @@ impl Workspace {
     /// Prepare a read-only sibling: clone-or-reuse, fetch the base branch, and
     /// check it out without creating a work branch. Such a repo is present only
     /// so the combined build resolves; it is never committed or pushed.
-    pub async fn prepare_read_only(&self) -> Result<(), WorkspaceError> {
-        self.prepare_base_checkout().await?;
-        let start_point = format!("origin/{}", self.base_branch);
-        self.run_workspace_git(
-            false,
-            format!("git checkout -B {} {start_point}", self.base_branch),
-            vec![
-                OsString::from("checkout"),
-                OsString::from("-B"),
-                OsString::from(self.base_branch.clone()),
-                OsString::from(start_point),
-            ],
+    pub async fn prepare_read_only(&self) -> Result<PreparationOutcome, WorkspaceError> {
+        self.prepare_read_only_target(
+            &self.base_branch,
+            ReadOnlyTarget::RemoteBranch(self.base_branch.clone()),
         )
-        .await?;
-        Ok(())
+        .await
     }
 
-    pub async fn prepare(&self, work_branch: &str) -> Result<(), WorkspaceError> {
-        self.prepare_base_checkout().await?;
-
-        // Resume from an existing work branch when it is already on the forge
-        // (for example after a worker pushed a full result before dying, or a
-        // revise round is re-entering an existing PR head) instead of resetting
-        // to base — resetting would orphan the pushed commits and make the
-        // final worker push non-fast-forward. A fetch failure (most commonly:
-        // the branch does not exist yet) falls back to a fresh branch from base.
-        let start_point = match self.try_fetch_work_branch(work_branch).await {
-            true => format!("origin/{work_branch}"),
-            false => format!("origin/{}", self.base_branch),
-        };
-        self.run_workspace_git(
-            false,
-            format!("git checkout -B {work_branch} {start_point}"),
-            vec![
-                OsString::from("checkout"),
-                OsString::from("-B"),
-                OsString::from(work_branch),
-                OsString::from(start_point),
-            ],
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    /// Fetches the remote work branch if it exists. `false` when the fetch
-    /// fails (branch absent, or transient trouble — in which case the fresh
-    /// start is safe: a later non-fast-forward push fails loudly rather than
-    /// clobbering remote state).
-    async fn try_fetch_work_branch(&self, work_branch: &str) -> bool {
-        self.fetch_remote_branch(work_branch).await.is_ok()
+    pub async fn prepare(&self, work_branch: &str) -> Result<PreparationOutcome, WorkspaceError> {
+        self.prepare_writable_recovering(work_branch).await
     }
 
     /// Prepare the workspace at a pull request's head (read-only review checkout):
@@ -302,46 +276,15 @@ impl Workspace {
         &self,
         pull_request_number: u64,
         work_branch: &str,
-    ) -> Result<(), WorkspaceError> {
-        self.prepare_base_checkout().await?;
-
-        let remote_ref = format!("refs/pull/{pull_request_number}/head");
-        let local_ref = format!("refs/temper/pr/{pull_request_number}/head");
-        let refspec = format!("+{remote_ref}:{local_ref}");
-        self.run_workspace_git(
-            true,
-            format!("git fetch origin {refspec}"),
-            vec![
-                OsString::from("fetch"),
-                OsString::from("origin"),
-                OsString::from(refspec),
-            ],
+    ) -> Result<PreparationOutcome, WorkspaceError> {
+        self.prepare_read_only_target(
+            work_branch,
+            ReadOnlyTarget::PullRequest(pull_request_number),
         )
-        .await?;
-
-        self.run_workspace_git(
-            false,
-            format!("git checkout -B {work_branch} {local_ref}"),
-            vec![
-                OsString::from("checkout"),
-                OsString::from("-B"),
-                OsString::from(work_branch),
-                OsString::from(local_ref),
-            ],
-        )
-        .await?;
-
-        Ok(())
+        .await
     }
 
-    async fn prepare_base_checkout(&self) -> Result<(), WorkspaceError> {
-        self.ensure_checkout_repo().await?;
-        self.fetch_remote_branch(&self.base_branch).await?;
-
-        Ok(())
-    }
-
-    async fn ensure_checkout_repo(&self) -> Result<(), WorkspaceError> {
+    pub(super) async fn ensure_checkout_repo(&self) -> Result<(), WorkspaceError> {
         if self.path.exists() {
             self.run_workspace_git(
                 false,
@@ -381,7 +324,7 @@ impl Workspace {
         Ok(())
     }
 
-    async fn fetch_remote_branch(&self, branch: &str) -> Result<(), WorkspaceError> {
+    pub(super) async fn fetch_remote_branch(&self, branch: &str) -> Result<(), WorkspaceError> {
         let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
         self.run_workspace_git(
             true,
@@ -430,7 +373,19 @@ impl Workspace {
         )
         .await?;
 
-        self.head_sha().await
+        let head = self.head_sha().await?;
+        let remote_tracking_ref = format!("refs/remotes/origin/{branch_name}");
+        self.run_workspace_git(
+            false,
+            format!("git update-ref {remote_tracking_ref} {head}"),
+            vec![
+                OsString::from("update-ref"),
+                OsString::from(remote_tracking_ref),
+                OsString::from(&head),
+            ],
+        )
+        .await?;
+        Ok(head)
     }
 
     /// Discard all local tracked and untracked working-tree changes.

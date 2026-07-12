@@ -136,6 +136,18 @@ fn lease_won_inner_applied_then_lease_released() {
         );
         let job = in_flight_job(issue);
         let result = job_result(&job.job_id);
+        assert_eq!(
+            applier
+                .claim(
+                    job.clone(),
+                    temper_engine::ClaimContext {
+                        worker_id: result.worker_id.clone(),
+                        daemon_boot_id: "daemon-1".to_string(),
+                    },
+                )
+                .await,
+            temper_engine::ClaimOutcome::Claimed
+        );
 
         applier.apply(job.clone(), result.clone()).await;
 

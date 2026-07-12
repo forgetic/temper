@@ -100,6 +100,86 @@ impl Daemon {
         self
     }
 
+    /// Closes the startup barrier. Completions are FIFO, so calling this on a
+    /// newly constructed daemon guarantees subsequent enqueue/poll work cannot
+    /// dispatch until [`complete_startup_recovery`](Self::complete_startup_recovery).
+    pub fn begin_startup_recovery(self) -> Self {
+        let _ = self.cq.send(DaemonCompletion::BeginStartupRecovery);
+        self
+    }
+
+    /// Adds one deterministic job context reconstructed from durable metadata.
+    pub async fn stage_recovered_job(
+        &self,
+        job: temper_worker_registry::RecoveredJob,
+        prior_daemon_boot_id: impl Into<String>,
+    ) -> Result<(), temper_worker_registry::RegistryError> {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::StageRecoveredJob {
+                job,
+                daemon_boot_id: prior_daemon_boot_id.into(),
+                reply,
+            })
+            .is_err()
+        {
+            return Err(temper_worker_registry::RegistryError::UnknownWorker(
+                "daemon stopped during startup recovery".to_string(),
+            ));
+        }
+        rx.recv().await.unwrap_or_else(|| {
+            Err(temper_worker_registry::RegistryError::UnknownWorker(
+                "daemon stopped during startup recovery".to_string(),
+            ))
+        })
+    }
+
+    /// Waits for the injected runtime timer while the startup barrier remains
+    /// closed, giving prior workers a bounded heartbeat reattachment window.
+    pub async fn wait_startup_recovery_grace(&self, delay: Duration) {
+        if delay.is_zero() {
+            return;
+        }
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::ArmStartupRecoveryGrace { delay, reply })
+            .is_ok()
+        {
+            let _ = rx.recv().await;
+        }
+    }
+
+    /// Detaches and returns staged claims that did not receive a matching
+    /// heartbeat. The startup barrier remains closed so callers can converge
+    /// every returned claim in Forge before releasing dispatch.
+    pub async fn collect_startup_orphans(&self) -> Vec<temper_worker_registry::RecoveredJob> {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::CollectStartupOrphans { reply })
+            .is_err()
+        {
+            return Vec::new();
+        }
+        rx.recv().await.unwrap_or_default()
+    }
+
+    /// Opens dispatch and releases deferred enqueues and long-poll waiters.
+    /// Call this only after Forge convergence and startup reconciliation have
+    /// completed successfully.
+    pub async fn complete_startup_recovery(&self) {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::CompleteStartupRecovery { reply })
+            .is_ok()
+        {
+            let _ = rx.recv().await;
+        }
+    }
+
     fn with_applier_worker_pools_role_limits_and_apply_grace(
         spawner: Arc<dyn Spawner>,
         applier: Arc<dyn ResultApplier>,
@@ -129,6 +209,30 @@ impl Daemon {
             cq: cq_tx,
             scanner_slot,
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Stops and joins the daemon machine without releasing its assignments.
+    /// This is the abrupt-loss primitive used by deterministic restart tests;
+    /// production shutdown should use [`release_assignments_for_shutdown`](Self::release_assignments_for_shutdown).
+    pub async fn crash(&self) {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self.cq.send(DaemonCompletion::Crash { reply }).is_ok() {
+            let _ = rx.recv().await;
+        }
+    }
+
+    /// Signals clean shutdown by releasing every assignment still owned by this
+    /// daemon boot. Crash recovery remains independent because this is only a
+    /// best-effort fast path through the same conditional claim rollback.
+    pub async fn release_assignments_for_shutdown(&self) {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::ReleaseAssignmentsForShutdown { reply })
+            .is_ok()
+        {
+            let _ = rx.recv().await;
         }
     }
 

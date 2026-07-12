@@ -146,7 +146,44 @@ fn pull_request_writable_success_refreshes_same_pr_handoff_without_opening_anoth
             )
             .await
             .expect("existing PR exists");
-        let job = pr_repair_in_flight_job("acme/service", pull_request.number, branch_name);
+        let assignment_head = "assigned-head";
+        let pull_request = forge
+            .set_pull_request_head(&pull_request.id, Some(assignment_head.to_string()))
+            .expect("assignment head is recorded");
+        let job = pr_repair_in_flight_job(
+            "acme/service",
+            &repo,
+            &pull_request,
+            branch_name,
+            assignment_head,
+        );
+        let mut claimed_metadata = metadata;
+        claimed_metadata.assignment = Some(DurableAssignment {
+            job_id: Some(job.job_id.clone()),
+            role: Some(RoleId::new("engineer")),
+            queue: Some("pr_ci_failed".to_string()),
+            action: Some("address_ci_failure".to_string()),
+            worker_id: Some("worker-a".to_string()),
+            coordination_key: Some(format!("pr-for-pull-request-{}", pull_request.number.get())),
+            assignment_pr_head: Some(assignment_head.to_string()),
+            ..DurableAssignment::default()
+        });
+        forge
+            .update_pull_request(
+                &pull_request.id,
+                UpdatePullRequest {
+                    body: Some(format!(
+                        "Old repair report.\n\n{}",
+                        render_metadata_block(&claimed_metadata)
+                    )),
+                    ..UpdatePullRequest::default()
+                },
+            )
+            .await
+            .expect("durable assignment is seeded");
+        forge
+            .set_pull_request_head(&pull_request.id, Some("abc123".to_string()))
+            .expect("worker push advances the PR head");
         let repair_report = "# Implementation report\n\nFixed the failing PR feedback.";
         let mut result = success_result(
             "worker-a",
@@ -170,17 +207,29 @@ fn pull_request_writable_success_refreshes_same_pr_handoff_without_opening_anoth
         assert_eq!(pull.title, "Refresh PR after feedback");
         assert!(pull.body.starts_with(repair_report));
         assert!(!pull.body.contains("Old repair report"));
+        let published_metadata = parse_metadata_block(&pull.body)
+            .expect("metadata parses")
+            .expect("metadata remains");
+        assert_eq!(published_metadata.repaired_head.as_deref(), Some("abc123"));
+        assert_eq!(published_metadata.assignment, claimed_metadata.assignment);
         assert_eq!(
-            parse_metadata_block(&pull.body).expect("metadata parses"),
-            Some(metadata)
+            pull.labels,
+            vec!["implementation".to_string(), "needs-reviewer".to_string()]
         );
+        assert_eq!(pull.requested_reviewers, vec![UserId::new("reviewer")]);
     })
 }
 
-fn pr_repair_in_flight_job(repo_path: &str, number: ItemNumber, branch: &str) -> InFlightJob {
+fn pr_repair_in_flight_job(
+    repo_path: &str,
+    repo: &RepositoryId,
+    pull_request: &PullRequest,
+    branch: &str,
+    assignment_head: &str,
+) -> InFlightJob {
     job_for_context(
         repo_path,
-        number,
+        pull_request.number,
         "pull_request",
         JobContext {
             role: "engineer".to_string(),
@@ -189,7 +238,7 @@ fn pr_repair_in_flight_job(repo_path: &str, number: ItemNumber, branch: &str) ->
             artifact_kind: "implementation_pr".to_string(),
             artifact: None,
             workspace: Some(WorkspaceManifest {
-                coordination_key: format!("pr-for-pull-request-{}", number.get()),
+                coordination_key: format!("pr-for-pull-request-{}", pull_request.number.get()),
                 repos: vec![writable_repo(repo_path, branch)],
             }),
             action: Some("address_ci_failure".to_string()),
@@ -198,7 +247,18 @@ fn pr_repair_in_flight_job(repo_path: &str, number: ItemNumber, branch: &str) ->
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
-            pull_request_freshness: None,
+            pull_request_freshness: Some(temper_protocol_worker::PullRequestFreshness {
+                repository_id: repo.as_str().to_string(),
+                repo: repo_path.to_string(),
+                role: "engineer".to_string(),
+                queue: "pr_ci_failed".to_string(),
+                action: "address_ci_failure".to_string(),
+                number: pull_request.number.get(),
+                pull_request_id: pull_request.id.as_str().to_string(),
+                head_sha: Some(assignment_head.to_string()),
+                queue_condition: Some("ci_failed".to_string()),
+                queue_labels: Vec::new(),
+            }),
         },
     )
 }

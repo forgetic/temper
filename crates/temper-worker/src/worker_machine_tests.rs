@@ -316,6 +316,47 @@ fn heartbeat_timer_sends_only_when_work_in_flight_and_rearms() {
 }
 
 #[test]
+fn rejected_heartbeat_reregisters_without_losing_the_in_flight_job() {
+    let mut machine = WorkerMachine::new(params());
+    machine.on_start(EngineTime::ZERO);
+    run(&mut machine, vec![WorkerCompletion::Registered(Ok(()))]);
+    run(
+        &mut machine,
+        vec![WorkerCompletion::PollReply(Ok(Some(
+            WorkerProtocolMessage::Assign(assign("job-1")),
+        )))],
+    );
+
+    let requests = run(
+        &mut machine,
+        vec![WorkerCompletion::HeartbeatDelivered(Err(
+            "unknown worker after daemon restart".to_string(),
+        ))],
+    );
+
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, WorkerRequest::SendRegister(_))),
+        "heartbeat rejection must reconnect the worker: {requests:?}"
+    );
+    assert!(machine.in_flight().contains("job-1"));
+
+    let after_register = run(&mut machine, vec![WorkerCompletion::Registered(Ok(()))]);
+    assert!(
+        after_register
+            .iter()
+            .any(|request| matches!(request, WorkerRequest::ArmPollTimer(_)))
+    );
+    let heartbeat = run(&mut machine, vec![WorkerCompletion::HeartbeatTimer]);
+    assert!(
+        heartbeat
+            .iter()
+            .any(|request| matches!(request, WorkerRequest::SendHeartbeat(_)))
+    );
+}
+
+#[test]
 fn poll_transport_error_backs_off_and_logs() {
     let mut machine = WorkerMachine::new(params());
     machine.on_start(EngineTime::ZERO);
@@ -338,4 +379,12 @@ fn poll_transport_error_backs_off_and_logs() {
             .any(|r| matches!(r, WorkerRequest::ArmPollTimer(_))),
         "expected a backoff timer after a transport error, got {requests:?}"
     );
+}
+
+#[test]
+fn shutdown_stops_the_worker_without_emitting_cleanup_requests() {
+    let mut machine = WorkerMachine::new(params());
+    let requests = machine.on_completion(EngineTime::ZERO, WorkerCompletion::Shutdown);
+    assert!(requests.is_empty());
+    assert!(machine.is_stopped());
 }

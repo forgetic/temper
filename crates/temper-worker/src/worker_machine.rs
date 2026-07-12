@@ -44,6 +44,9 @@ pub enum WorkerCompletion {
     PollTimer,
     /// The heartbeat cadence timer fired: time to heartbeat (if work in flight).
     HeartbeatTimer,
+    /// Stop the component loop without reporting or releasing in-flight work.
+    /// Test restart harnesses use this to model a process crash deterministically.
+    Shutdown,
 }
 
 /// An I/O request the shell must perform.
@@ -80,6 +83,7 @@ pub struct WorkerMachine {
     in_flight: BTreeSet<String>,
     /// Set once the worker has registered; gates the first poll.
     registered: bool,
+    stopped: bool,
 }
 
 impl WorkerMachine {
@@ -90,6 +94,7 @@ impl WorkerMachine {
             free_capacity,
             in_flight: BTreeSet::new(),
             registered: false,
+            stopped: false,
         }
     }
 
@@ -269,12 +274,28 @@ impl Machine for WorkerMachine {
                 requests
             }
             WorkerCompletion::HeartbeatDelivered(Err(error)) => {
-                vec![WorkerRequest::Log(format!(
-                    "worker: heartbeat failed: {error}"
-                ))]
+                // A daemon replacement forgets process-local registrations but
+                // the worker still owns its in-flight job set. Re-register and
+                // keep that set intact so the next exact heartbeat can reattach
+                // any durable assignment staged by startup recovery.
+                self.registered = false;
+                vec![
+                    WorkerRequest::Log(format!("worker: heartbeat failed: {error}")),
+                    WorkerRequest::SendRegister(crate::client::register_message_params(
+                        &self.params,
+                    )),
+                ]
             }
             WorkerCompletion::HeartbeatDelivered(Ok(())) => Vec::new(),
+            WorkerCompletion::Shutdown => {
+                self.stopped = true;
+                Vec::new()
+            }
         }
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped
     }
 }
 

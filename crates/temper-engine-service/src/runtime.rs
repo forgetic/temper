@@ -8,15 +8,16 @@ use std::sync::Arc;
 use temper_config::{ExposeSecret, Resolved};
 use temper_engine::{
     Daemon, DaemonRunConfig, EngineConfig, HintedMechanical, MechanicalBackstopConfig,
-    PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget, WebhookConfig,
-    spawn_mechanical_backstop, spawn_poll_backstop,
+    MechanicalScope, PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget,
+    WebhookConfig, run_mechanical_backstop_tick, spawn_mechanical_backstop, spawn_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath};
-use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
+use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
-    engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
-    worker_pool_auth_config, workflow_role_limits,
+    converge_startup_orphans, engine_config, ensure_workflow_labels, resolve_repositories,
+    result_applier, role_feed_targets, stage_startup_assignments, worker_pool_auth_config,
+    workflow_role_limits,
 };
 
 /// Runs the engine on the skein runtime until SIGINT/SIGTERM, then drains.
@@ -52,6 +53,11 @@ pub async fn run_async(
     let wake_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Wake);
     let lease_ttl = lease_ttl(&config)?;
 
+    // Complete durable child-create intents before constructing the daemon or
+    // spawning either dispatch backstop. This is the startup recovery barrier:
+    // no role scan can observe a partially-wired child while recovery runs.
+    recover_child_create_intents(forge.as_ref(), workflow.as_ref(), &repo_ids).await?;
+
     let daemon = split_daemon(
         Arc::clone(&spawner),
         result_applier(
@@ -65,7 +71,51 @@ pub async fn run_async(
         config.worker_pools.clone(),
         role_limits,
     )
-    .with_worker_pool_auth(worker_pool_auth_config(resolved)?);
+    .with_worker_pool_auth(worker_pool_auth_config(resolved)?)
+    .begin_startup_recovery();
+
+    // Inventory durable claims before opening any feed. The worker protocol
+    // listener is intentionally available during the bounded grace so external
+    // workers can register and prove prior ownership with `Heartbeat.jobs`.
+    let recovered = stage_startup_assignments(
+        &daemon,
+        forge.as_ref(),
+        &repo_ids,
+        workflow.as_ref(),
+        compiled.as_ref(),
+        LeasePolicy::new(lease_ttl),
+        (temper_engine::system_clock())(),
+    )
+    .await?;
+    let server = temper_engine::serve(&handle, &daemon, config.bind)
+        .await
+        .map_err(|error| format!("serve failed: {error}"))?;
+    if !recovered.is_empty() {
+        daemon
+            .wait_startup_recovery_grace(std::time::Duration::from_secs(10))
+            .await;
+    }
+    let orphaned = daemon.collect_startup_orphans().await;
+    converge_startup_orphans(
+        forge.as_ref(),
+        LeasePolicy::new(lease_ttl),
+        workflow.as_ref(),
+        &recovered,
+        &orphaned,
+    )
+    .await?;
+
+    let mechanical_trigger = spawn_mechanical(
+        &spawner,
+        forge.clone(),
+        workflow.clone(),
+        compiled.as_ref(),
+        repositories,
+        &daemon,
+        config.mechanical_cadence,
+        lease_ttl,
+    )
+    .await?;
 
     spawn_poll(
         &spawner,
@@ -76,17 +126,6 @@ pub async fn run_async(
         normal_targets,
         config.poll_cadence,
     );
-
-    let mechanical_trigger = spawn_mechanical(
-        &spawner,
-        forge.clone(),
-        workflow.clone(),
-        compiled.as_ref(),
-        repositories,
-        config.mechanical_cadence,
-        lease_ttl,
-    )
-    .await?;
     let daemon = attach_webhook(
         daemon,
         forge,
@@ -98,7 +137,7 @@ pub async fn run_async(
         mechanical_trigger,
     )?;
 
-    drain_after_signal(&handle, &daemon, config.bind).await
+    drain_after_signal(&daemon, server).await
 }
 
 fn load_workflow(
@@ -139,6 +178,23 @@ fn lease_ttl(config: &DaemonRunConfig) -> Result<chrono::Duration, String> {
         .map_err(|error| format!("invalid lease ttl: {error}"))
 }
 
+async fn recover_child_create_intents(
+    forge: &dyn Forge,
+    workflow: &ValidatedWorkflow,
+    repo_ids: &[RepositoryId],
+) -> Result<(), String> {
+    let executor = workflow.executor(forge);
+    for repo_id in repo_ids {
+        executor
+            .recover_create_issue_intents(repo_id)
+            .await
+            .map_err(|error| {
+                format!("failed to recover durable child-create intents in `{repo_id}`: {error}")
+            })?;
+    }
+    Ok(())
+}
+
 fn spawn_poll(
     spawner: &Arc<dyn temper_engine_io::Spawner>,
     daemon: Daemon,
@@ -160,29 +216,48 @@ fn spawn_poll(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_mechanical(
     spawner: &Arc<dyn temper_engine_io::Spawner>,
     forge: Arc<dyn Forge>,
     workflow: Arc<ValidatedWorkflow>,
     compiled: &CompiledWorkflow,
     repositories: RepositorySet,
+    daemon: &Daemon,
     cadence: Option<std::time::Duration>,
     lease_ttl: chrono::Duration,
 ) -> Result<Option<Arc<dyn HintedMechanical>>, String> {
-    // A webhook delivery runs an immediate hinted mechanical pass through this,
-    // so the cadence itself can stay slow without losing reaction latency.
-    let Some(cadence) = cadence else {
-        return Ok(None);
-    };
     ensure_workflow_labels(forge.as_ref(), &repositories, compiled).await?;
-    let mechanical_config = MechanicalBackstopConfig {
-        repositories,
-        cadence,
+    let initial_config = MechanicalBackstopConfig {
+        repositories: repositories.clone(),
+        cadence: cadence.unwrap_or(std::time::Duration::from_secs(1)),
         lease_policy: LeasePolicy::new(lease_ttl),
         // TODO(#477 split-worker): distributed engine deployments observe the
         // merge but do not own worker workspaces; add a worker-protocol cleanup
         // request before enabling landed-workstream cleanup outside standalone.
         pull_request_merge_observer: None,
+    };
+    let journals = (0..repositories.repositories().len())
+        .map(|_| InMemoryJournal::new())
+        .collect::<Vec<_>>();
+    run_mechanical_backstop_tick(
+        forge.as_ref(),
+        workflow.as_ref(),
+        (temper_engine::system_clock())(),
+        &initial_config,
+        &journals,
+        &MechanicalScope::All,
+    )
+    .await
+    .map_err(|error| format!("startup mechanical reconciliation failed: {error}"))?;
+    daemon.complete_startup_recovery().await;
+
+    let Some(cadence) = cadence else {
+        return Ok(None);
+    };
+    let mechanical_config = MechanicalBackstopConfig {
+        cadence,
+        ..initial_config
     };
     let trigger = spawn_mechanical_backstop(
         spawner,
@@ -235,18 +310,13 @@ fn attach_webhook(
 }
 
 async fn drain_after_signal(
-    handle: &skein::runtime::RuntimeHandle,
-    daemon: &Daemon,
-    bind: std::net::SocketAddr,
+    daemon_guard: &Daemon,
+    server: temper_engine_io::http::EngineHttpServer,
 ) -> Result<(), String> {
     let mut sigint = skein::signal::sigint()
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
     let mut sigterm = skein::signal::sigterm()
         .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
-
-    let server = temper_engine::serve(handle, daemon, bind)
-        .await
-        .map_err(|error| format!("serve failed: {error}"))?;
 
     std::future::poll_fn(|task_cx| {
         if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
@@ -256,6 +326,7 @@ async fn drain_after_signal(
         }
     })
     .await;
+    daemon_guard.release_assignments_for_shutdown().await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
 }

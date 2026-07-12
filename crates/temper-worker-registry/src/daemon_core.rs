@@ -15,7 +15,8 @@ use temper_protocol_worker::{
 };
 
 use crate::{
-    DispatchCoordinator, WorkItem, WorkerPoolAuthConfig, WorkerPoolPolicies, WorkerPoolPolicy,
+    Assignment, DispatchCoordinator, RegistryError, WorkItem, WorkerPoolAuthConfig,
+    WorkerPoolPolicies, WorkerPoolPolicy,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,10 +62,37 @@ pub struct RoleSaturation {
     pub pending: Vec<(String, Artifact)>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecoveredJob {
+    pub job_id: String,
+    pub worker_id: String,
+    pub role: String,
+    pub repo: String,
+    pub artifact: Artifact,
+    pub job_payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeartbeatRecovery {
+    /// Durable jobs that match this worker. Includes jobs reattached by this
+    /// heartbeat and already-reattached jobs refreshed by later heartbeats.
+    pub matched_job_ids: Vec<String>,
+    /// Job ids reported by the worker that were unknown or belonged to another
+    /// worker. These ids must never extend a durable lease.
+    pub rejected_job_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StagedRecovery {
+    worker_id: String,
+    item: WorkItem,
+}
+
 #[derive(Debug, Default)]
 pub struct DaemonCore {
     coordinator: DispatchCoordinator,
     job_context: BTreeMap<String, (Artifact, serde_json::Value)>,
+    staged_recovery: BTreeMap<String, StagedRecovery>,
     worker_auth: WorkerPoolAuthConfig,
     authenticated_workers: BTreeMap<String, String>,
     pool_policies: WorkerPoolPolicies,
@@ -127,6 +155,76 @@ impl DaemonCore {
 
     pub fn worker_pool_auth(&self) -> &WorkerPoolAuthConfig {
         &self.worker_auth
+    }
+
+    /// Stages one assignment reconstructed from durable Forge metadata.
+    ///
+    /// A staged job is intentionally not dispatchable. It becomes in-flight
+    /// only when its recorded worker reports the same job id in a heartbeat;
+    /// this is the prior-boot ownership proof used during the bounded startup
+    /// grace period.
+    pub fn stage_recovered_job(&mut self, recovered: RecoveredJob) -> Result<(), RegistryError> {
+        let repos = manifest_repos(&recovered.job_payload, &recovered.repo);
+        let item = WorkItem {
+            job_id: recovered.job_id.clone(),
+            role: recovered.role,
+            coordination_key: payload_coordination_key(&recovered.job_payload)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string),
+            repo: recovered.repo,
+            repos,
+        };
+        let staged = StagedRecovery {
+            worker_id: recovered.worker_id,
+            item,
+        };
+        if let Some(current) = self.staged_recovery.get(&recovered.job_id) {
+            return if current == &staged {
+                Ok(())
+            } else {
+                Err(RegistryError::DuplicateJob(recovered.job_id))
+            };
+        }
+        if self
+            .coordinator
+            .assigned_work_item(&recovered.job_id)
+            .is_some()
+            || self.job_context.contains_key(&recovered.job_id)
+        {
+            return Err(RegistryError::DuplicateJob(recovered.job_id));
+        }
+        self.job_context.insert(
+            recovered.job_id.clone(),
+            (recovered.artifact, recovered.job_payload),
+        );
+        self.staged_recovery.insert(recovered.job_id, staged);
+        Ok(())
+    }
+
+    /// Drops every staged job that failed to prove prior-boot ownership. The
+    /// returned contexts are used by startup recovery to clear their durable
+    /// claims and converge them to a safe workflow state.
+    pub fn take_unreattached_recovered_jobs(&mut self) -> Vec<RecoveredJob> {
+        let staged = std::mem::take(&mut self.staged_recovery);
+        staged
+            .into_iter()
+            .filter_map(|(job_id, staged)| {
+                let (artifact, job_payload) = self.job_context.remove(&job_id)?;
+                Some(RecoveredJob {
+                    job_id,
+                    worker_id: staged.worker_id,
+                    role: staged.item.role,
+                    repo: staged.item.repo,
+                    artifact,
+                    job_payload,
+                })
+            })
+            .collect()
+    }
+
+    pub fn staged_recovery_len(&self) -> usize {
+        self.staged_recovery.len()
     }
 
     pub fn enqueue_job(
@@ -240,6 +338,35 @@ impl DaemonCore {
             .count()
     }
 
+    /// Reserve one job for a poller without making it externally in-flight.
+    pub fn reserve_authenticated_poll(
+        &mut self,
+        poll: Poll,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<WorkerProtocolMessage, WorkerAuthError> {
+        self.authenticate_registered_worker(&poll.worker_id, None, auth)?;
+        Ok(self.reserve_poll(poll))
+    }
+
+    /// Commit a durable-claim-backed reservation as the visible assignment.
+    pub fn commit_assignment(&mut self, job_id: &str) -> Result<(), RegistryError> {
+        self.coordinator.commit_reservation(job_id).map(|_| ())
+    }
+
+    /// Restore a failed or canceled claim to the front of the pending queue.
+    pub fn rollback_assignment(&mut self, job_id: &str) -> bool {
+        self.coordinator.rollback_reservation(job_id)
+    }
+
+    pub fn rollback_committed_assignment(&mut self, job_id: &str) -> bool {
+        self.coordinator.rollback_committed(job_id)
+    }
+
+    /// Full context for an assignment reservation or committed assignment.
+    pub fn job_context(&self, job_id: &str) -> Option<(Artifact, serde_json::Value)> {
+        self.job_context.get(job_id).cloned()
+    }
+
     /// Full context of a currently in-flight (assigned, not yet completed) job,
     /// recoverable until `handle(Result)` completes it. `None` if the job is
     /// pending (not yet dispatched), unknown, or already completed.
@@ -253,6 +380,13 @@ impl DaemonCore {
             artifact,
             job_payload,
         })
+    }
+
+    pub fn in_flight_jobs(&self) -> Vec<InFlightJob> {
+        self.coordinator
+            .assigned_work_items()
+            .filter_map(|item| self.in_flight_job(&item.job_id))
+            .collect()
     }
 
     /// Whether any pending or assigned job is still known for this workspace
@@ -303,14 +437,9 @@ impl DaemonCore {
                     None,
                 )))
             }
-            WorkerProtocolMessage::Heartbeat(heartbeat) => {
-                self.authenticate_registered_worker(
-                    &heartbeat.worker_id,
-                    heartbeat.worker_pool.as_deref(),
-                    auth,
-                )?;
-                Ok(self.handle_heartbeat(heartbeat))
-            }
+            WorkerProtocolMessage::Heartbeat(heartbeat) => self
+                .handle_authenticated_heartbeat(heartbeat, auth)
+                .map(|(response, _recovery)| response),
             WorkerProtocolMessage::Result(result) => {
                 self.authenticate_registered_worker(&result.worker_id, None, auth)?;
                 Ok(Some(self.handle_result(result)))
@@ -410,51 +539,116 @@ impl DaemonCore {
         }
     }
 
-    fn handle_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
+    fn reserve_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
         if !self.coordinator.registry().is_healthy(&poll.worker_id) {
             return error_response(ErrorCode::UnknownWorker, "unknown worker", None);
         }
 
-        let Some(assignment) = self.coordinator.dispatch_for_worker(&poll.worker_id) else {
+        let Some(assignment) = self.coordinator.reserve_for_worker(&poll.worker_id) else {
             return error_response(ErrorCode::PollTimeout, "no work available", None);
         };
 
         let Some((artifact, job_payload)) = self.job_context.get(&assignment.job_id).cloned()
         else {
-            let _ = self.coordinator.complete(&assignment.job_id);
+            self.coordinator.rollback_reservation(&assignment.job_id);
             return error_response(
                 ErrorCode::MalformedMessage,
-                "assigned job missing daemon job context",
+                "reserved job missing daemon job context",
                 Some(assignment.job_id),
             );
         };
-
-        WorkerProtocolMessage::Assign(Assign {
-            protocol_version: WORKER_PROTOCOL_VERSION,
-            job_id: assignment.job_id,
-            role: assignment.role,
-            repo: assignment.repo,
-            artifact,
-            job_payload,
-        })
+        assignment_message(assignment, artifact, job_payload)
     }
 
-    fn handle_heartbeat(&mut self, heartbeat: Heartbeat) -> Option<WorkerProtocolMessage> {
-        match self
+    fn handle_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
+        let response = self.reserve_poll(poll);
+        let WorkerProtocolMessage::Assign(assign) = &response else {
+            return response;
+        };
+        if self.coordinator.commit_reservation(&assign.job_id).is_err() {
+            return error_response(
+                ErrorCode::CapacityExceeded,
+                "assignment reservation could not be committed",
+                Some(assign.job_id.clone()),
+            );
+        }
+        response
+    }
+
+    /// Authenticates and applies a heartbeat while exposing exact durable-job
+    /// matches to the daemon lease handler.
+    pub fn handle_authenticated_heartbeat(
+        &mut self,
+        heartbeat: Heartbeat,
+        auth: Option<&WorkerAuth>,
+    ) -> Result<(Option<WorkerProtocolMessage>, HeartbeatRecovery), WorkerAuthError> {
+        self.authenticate_registered_worker(
+            &heartbeat.worker_id,
+            heartbeat.worker_pool.as_deref(),
+            auth,
+        )?;
+        Ok(self.handle_heartbeat(heartbeat))
+    }
+
+    fn handle_heartbeat(
+        &mut self,
+        heartbeat: Heartbeat,
+    ) -> (Option<WorkerProtocolMessage>, HeartbeatRecovery) {
+        if self
             .coordinator
             .registry_mut()
             .heartbeat(&heartbeat.worker_id)
+            .is_err()
         {
-            Ok(()) => None,
-            Err(_) => Some(error_response(
-                ErrorCode::UnknownWorker,
-                "unknown worker",
-                None,
-            )),
+            return (
+                Some(error_response(
+                    ErrorCode::UnknownWorker,
+                    "unknown worker",
+                    None,
+                )),
+                HeartbeatRecovery::default(),
+            );
         }
+
+        let mut recovery = HeartbeatRecovery::default();
+        for reported in heartbeat.jobs {
+            if self.coordinator.assigned_worker(&reported.job_id)
+                == Some(heartbeat.worker_id.as_str())
+            {
+                recovery.matched_job_ids.push(reported.job_id);
+                continue;
+            }
+
+            let Some(staged) = self.staged_recovery.get(&reported.job_id).cloned() else {
+                recovery.rejected_job_ids.push(reported.job_id);
+                continue;
+            };
+            if staged.worker_id != heartbeat.worker_id {
+                recovery.rejected_job_ids.push(reported.job_id);
+                continue;
+            }
+            match self
+                .coordinator
+                .restore_assignment(&staged.worker_id, staged.item)
+            {
+                Ok(_) => {
+                    self.staged_recovery.remove(&reported.job_id);
+                    recovery.matched_job_ids.push(reported.job_id);
+                }
+                Err(_) => recovery.rejected_job_ids.push(reported.job_id),
+            }
+        }
+        (None, recovery)
     }
 
     fn handle_result(&mut self, result: JobResult) -> WorkerProtocolMessage {
+        if self.coordinator.assigned_worker(&result.job_id) != Some(result.worker_id.as_str()) {
+            return error_response(
+                ErrorCode::MalformedMessage,
+                "result does not match the assigned job and worker",
+                Some(result.job_id),
+            );
+        }
         let _ = self.coordinator.complete(&result.job_id);
         self.job_context.remove(&result.job_id);
 
@@ -470,6 +664,21 @@ impl DaemonCore {
     fn handle_lease_ack(&mut self, _lease_ack: LeaseAck) -> Option<WorkerProtocolMessage> {
         None
     }
+}
+
+fn assignment_message(
+    assignment: Assignment,
+    artifact: Artifact,
+    job_payload: serde_json::Value,
+) -> WorkerProtocolMessage {
+    WorkerProtocolMessage::Assign(Assign {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        job_id: assignment.job_id,
+        role: assignment.role,
+        repo: assignment.repo,
+        artifact,
+        job_payload,
+    })
 }
 
 /// Every repository the assigned worker must be capable of: the manifest's

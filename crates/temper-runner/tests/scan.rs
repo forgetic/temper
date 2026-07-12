@@ -15,7 +15,10 @@ use temper_forge::{
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{AutomatedWorkItem, WorkItem, scan, scan_automated_queues, scan_role};
-use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId};
+use temper_workflow::{
+    ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId, WorkflowMetadata,
+    render_metadata_block,
+};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 

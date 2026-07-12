@@ -111,6 +111,7 @@ struct OneshotInner<T> {
     value: Option<T>,
     waker: Option<Waker>,
     sender_alive: bool,
+    receiver_alive: bool,
 }
 
 /// Sending half of a oneshot cell (used to route one HTTP response back to
@@ -126,21 +127,31 @@ pub fn oneshot<T>() -> (OneshotSender<T>, OneshotReceiver<T>) {
         value: None,
         waker: None,
         sender_alive: true,
+        receiver_alive: true,
     }));
     (OneshotSender(Arc::clone(&inner)), OneshotReceiver(inner))
 }
 
 impl<T> OneshotSender<T> {
+    pub fn is_receiver_alive(&self) -> bool {
+        self.0.lock().expect("oneshot lock").receiver_alive
+    }
+
     /// Deliver the value, waking the receiver.
-    pub fn send(self, value: T) {
-        let waker = {
+    pub fn send(self, value: T) -> bool {
+        let (delivered, waker) = {
             let mut inner = self.0.lock().expect("oneshot lock");
-            inner.value = Some(value);
-            inner.waker.take()
+            if !inner.receiver_alive {
+                (false, None)
+            } else {
+                inner.value = Some(value);
+                (true, inner.waker.take())
+            }
         };
         if let Some(waker) = waker {
             waker.wake();
         }
+        delivered
     }
 }
 
@@ -154,6 +165,12 @@ impl<T> Drop for OneshotSender<T> {
         if let Some(waker) = waker {
             waker.wake();
         }
+    }
+}
+
+impl<T> Drop for OneshotReceiver<T> {
+    fn drop(&mut self) {
+        self.0.lock().expect("oneshot lock").receiver_alive = false;
     }
 }
 
@@ -204,5 +221,13 @@ mod tests {
             Poll::Ready(Some("ok")) => {}
             other => panic!("unexpected poll result: {other:?}"),
         }
+    }
+
+    #[test]
+    fn oneshot_reports_receiver_loss() {
+        let (tx, rx) = oneshot::<&str>();
+        drop(rx);
+        assert!(!tx.is_receiver_alive());
+        assert!(!tx.send("lost"));
     }
 }

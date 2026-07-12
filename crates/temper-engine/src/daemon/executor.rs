@@ -25,10 +25,29 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
             DaemonRequest::Respond {
                 responder,
                 response,
-            } => responder.respond(response),
+            } => {
+                responder.respond(response);
+            }
+            DaemonRequest::RespondAssignment {
+                responder,
+                response,
+                job,
+                context,
+            } => {
+                if !responder.try_respond(response) {
+                    let _ = self
+                        .cq
+                        .send(DaemonCompletion::AssignmentDeliveryFailed { job, context });
+                }
+            }
             DaemonRequest::StartPollTimer { id, delay } => {
                 arm_timer(&*self.spawner, &self.cq, delay, move || {
                     DaemonCompletion::PollDeadline { id }
+                });
+            }
+            DaemonRequest::StartStartupRecoveryGrace { delay, reply } => {
+                arm_timer(&*self.spawner, &self.cq, delay, move || {
+                    DaemonCompletion::StartupRecoveryGraceElapsed { reply }
                 });
             }
             DaemonRequest::RunApply { job, result } => {
@@ -55,15 +74,59 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     responder.respond(response);
                 });
             }
-            DaemonRequest::RunClaimAndRespond {
+            DaemonRequest::RunClaim {
                 job,
+                worker_id,
+                daemon_boot_id,
+                assign,
+                responder,
+            } => {
+                let applier = Arc::clone(&self.applier);
+                let cq = self.cq.clone();
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    let outcome = applier
+                        .claim(
+                            job,
+                            crate::applier::ClaimContext {
+                                worker_id: worker_id.clone(),
+                                daemon_boot_id,
+                            },
+                        )
+                        .await;
+                    let _ = cq.send(DaemonCompletion::ClaimFinished {
+                        assign,
+                        worker_id,
+                        responder,
+                        outcome,
+                    });
+                });
+            }
+            DaemonRequest::RunClaimRollback { job, context } => {
+                let applier = Arc::clone(&self.applier);
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    applier.release_claim(job, context).await;
+                });
+            }
+            DaemonRequest::RunHeartbeatsAndRespond {
+                assignments,
                 responder,
                 response,
             } => {
                 let applier = Arc::clone(&self.applier);
                 self.spawner.spawn_with_cx(move |_cx| async move {
-                    applier.claim(job).await;
+                    for (job, context) in assignments {
+                        applier.heartbeat(job, context).await;
+                    }
                     responder.respond(response);
+                });
+            }
+            DaemonRequest::RunShutdownRelease { assignments, reply } => {
+                let applier = Arc::clone(&self.applier);
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    for (job, context) in assignments {
+                        applier.release_claim(job, context).await;
+                    }
+                    reply.send(());
                 });
             }
             DaemonRequest::RunPullRequestFreshnessCheck { check, responder } => {
@@ -108,9 +171,14 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
             // so they sit at debug; `RUST_LOG=info` shows only the §7 events +
             // startup banner. The §7 events go through `emit_*`, not this sink.
             DaemonRequest::Log(line) => tracing::debug!("{line}"),
-            DaemonRequest::WorkstreamActiveReply(reply, active) => reply.send(active),
+            DaemonRequest::WorkstreamActiveReply(reply, active) => {
+                reply.send(active);
+            }
+
             #[cfg(test)]
-            DaemonRequest::QueuedJobsReply(reply, jobs) => reply.send(jobs),
+            DaemonRequest::QueuedJobsReply(reply, jobs) => {
+                reply.send(jobs);
+            }
         }
     }
 }

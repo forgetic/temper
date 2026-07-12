@@ -13,15 +13,18 @@ use std::{
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
 use temper_protocol_worker::{
-    Artifact, JobResult, Poll, PullRequestFreshness, WorkerAuth, WorkerProtocolMessage,
+    Artifact, Assign, ErrorCode, JobResult, Poll, ProtocolError, PullRequestFreshness,
+    WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
-use temper_worker_registry::{DaemonCore, WorkerPoolAuthConfig, WorkerPoolPolicy};
+use temper_worker_registry::{
+    DaemonCore, RecoveredJob, RegistryError, WorkerPoolAuthConfig, WorkerPoolPolicy,
+};
 
 use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
-use crate::applier::ApplyOutcome;
+use crate::applier::{ApplyOutcome, ClaimOutcome};
 use crate::webhook::WebhookConfig;
 
 /// `<io-event-completion>`s observed by the daemon machine.
@@ -33,10 +36,52 @@ pub(super) enum DaemonCompletion {
     },
     /// A long-poll waiter's max-wait deadline elapsed.
     PollDeadline { id: u64 },
+    /// A durable assignment claim finished off-loop.
+    ClaimFinished {
+        assign: Assign,
+        worker_id: String,
+        responder: HttpResponder,
+        outcome: ClaimOutcome,
+    },
+    AssignmentDeliveryFailed {
+        job: InFlightJob,
+        context: crate::applier::ClaimContext,
+    },
     /// A result applier finished off-loop.
     ApplyFinished {
         job_id: String,
         outcome: ApplyOutcome,
+    },
+    /// Close the dispatch barrier before startup inventory begins.
+    BeginStartupRecovery,
+    /// Stage one durable prior-boot assignment for heartbeat reattachment.
+    StageRecoveredJob {
+        job: RecoveredJob,
+        daemon_boot_id: String,
+        reply: temper_engine_io::OneshotSender<Result<(), RegistryError>>,
+    },
+    /// Detach claims that received no matching heartbeat while keeping the
+    /// dispatch barrier closed for Forge convergence.
+    CollectStartupOrphans {
+        reply: temper_engine_io::OneshotSender<Vec<RecoveredJob>>,
+    },
+    /// Open the barrier only after every detached claim converged in Forge.
+    CompleteStartupRecovery {
+        reply: temper_engine_io::OneshotSender<()>,
+    },
+    ArmStartupRecoveryGrace {
+        delay: Duration,
+        reply: temper_engine_io::OneshotSender<()>,
+    },
+    StartupRecoveryGraceElapsed {
+        reply: temper_engine_io::OneshotSender<()>,
+    },
+    ReleaseAssignmentsForShutdown {
+        reply: temper_engine_io::OneshotSender<()>,
+    },
+    /// Stop the daemon loop without releasing durable assignments.
+    Crash {
+        reply: temper_engine_io::OneshotSender<()>,
     },
     /// Daemon API: enqueue one job (scans, backstops, tests).
     Enqueue {
@@ -80,9 +125,19 @@ pub(super) enum DaemonRequest {
         responder: HttpResponder,
         response: HttpResponseData,
     },
+    RespondAssignment {
+        responder: HttpResponder,
+        response: HttpResponseData,
+        job: InFlightJob,
+        context: crate::applier::ClaimContext,
+    },
     StartPollTimer {
         id: u64,
         delay: Duration,
+    },
+    StartStartupRecoveryGrace {
+        delay: Duration,
+        reply: temper_engine_io::OneshotSender<()>,
     },
     RunApply {
         job: InFlightJob,
@@ -98,10 +153,26 @@ pub(super) enum DaemonRequest {
     },
     /// Apply an assignment-time source claim before returning the assignment to
     /// the worker that will start the job.
-    RunClaimAndRespond {
+    RunClaim {
         job: InFlightJob,
+        worker_id: String,
+        daemon_boot_id: String,
+        assign: Assign,
+        responder: HttpResponder,
+    },
+    RunClaimRollback {
+        job: InFlightJob,
+        context: crate::applier::ClaimContext,
+    },
+    /// Refresh exact recovered assignments before acknowledging their heartbeat.
+    RunHeartbeatsAndRespond {
+        assignments: Vec<(InFlightJob, crate::applier::ClaimContext)>,
         responder: HttpResponder,
         response: HttpResponseData,
+    },
+    RunShutdownRelease {
+        assignments: Vec<(InFlightJob, crate::applier::ClaimContext)>,
+        reply: temper_engine_io::OneshotSender<()>,
     },
     RunPullRequestFreshnessCheck {
         check: PullRequestFreshness,
@@ -134,6 +205,14 @@ pub(super) struct PollWaiter {
     pub(super) responder: HttpResponder,
 }
 
+pub(super) struct DeferredEnqueue {
+    pub(super) job_id: String,
+    pub(super) role: String,
+    pub(super) repo: String,
+    pub(super) artifact: Artifact,
+    pub(super) job_payload: serde_json::Value,
+}
+
 /// The daemon's functional core: deterministic worker-protocol, long-poll,
 /// apply-window, and webhook-verification logic. No I/O, no clocks — time
 /// arrives as data on completions; everything it wants done leaves as
@@ -152,7 +231,14 @@ pub(super) struct DaemonMachine {
     /// The engine's once-per-delivery clock snapshot; updated as the first
     /// act of every transition, before any handler logic runs.
     pub(super) now: EngineTime,
+    pub(super) daemon_boot_id: String,
+    /// Closed while durable assignments are inventoried and offered a bounded
+    /// heartbeat reattachment grace period.
+    pub(super) startup_recovery: bool,
+    pub(super) deferred_enqueues: Vec<DeferredEnqueue>,
+    pub(super) assignment_contexts: BTreeMap<String, crate::applier::ClaimContext>,
     pub(super) next_id: u64,
+    pub(super) stopped: bool,
 }
 
 impl DaemonMachine {
@@ -211,7 +297,12 @@ impl DaemonMachine {
             retry_backoff_until: BTreeMap::new(),
             apply_grace,
             now: EngineTime::ZERO,
+            daemon_boot_id: new_daemon_boot_id(),
+            startup_recovery: false,
+            deferred_enqueues: Vec::new(),
+            assignment_contexts: BTreeMap::new(),
             next_id: 0,
+            stopped: false,
         }
     }
 
@@ -267,6 +358,46 @@ impl DaemonMachine {
     }
 }
 
+fn in_flight_job_from_assignment(assign: &Assign) -> InFlightJob {
+    InFlightJob {
+        job_id: assign.job_id.clone(),
+        role: assign.role.clone(),
+        repo: assign.repo.clone(),
+        artifact: assign.artifact.clone(),
+        job_payload: assign.job_payload.clone(),
+    }
+}
+
+fn claim_failure_response(
+    responder: HttpResponder,
+    job_id: String,
+    reason: String,
+) -> DaemonRequest {
+    DaemonRequest::Respond {
+        responder,
+        response: super::protocol::protocol_response(Some(WorkerProtocolMessage::Error(
+            ProtocolError {
+                protocol_version: WORKER_PROTOCOL_VERSION,
+                code: ErrorCode::PollTimeout,
+                message: format!("durable assignment claim failed: {reason}"),
+                retry_after_ms: Some(100),
+                job_id: Some(job_id),
+            },
+        ))),
+    }
+}
+
+fn new_daemon_boot_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_BOOT: AtomicU64 = AtomicU64::new(1);
+    let sequence = NEXT_BOOT.fetch_add(1, Ordering::Relaxed);
+    let epoch_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("daemon-boot-{epoch_nanos:x}-{sequence:x}")
+}
+
 fn retry_delay(attempt: u32) -> Duration {
     const MAX_BACKOFF_SECS: u64 = 300;
     let exponent = attempt.saturating_sub(1).min(8);
@@ -286,14 +417,17 @@ impl Machine for DaemonMachine {
         match completion {
             DaemonCompletion::Http { request, responder } => self.handle_http(request, responder),
             DaemonCompletion::PollDeadline { id } => {
+                if self.startup_recovery {
+                    return Vec::new();
+                }
                 let Some(waiter) = self.waiters.remove(&id) else {
                     return Vec::new();
                 };
-                let response = match self.core.handle_authenticated(
-                    WorkerProtocolMessage::Poll(waiter.poll.clone()),
-                    waiter.auth.as_ref(),
-                ) {
-                    Ok(response) => response.expect("poll messages produce a response"),
+                let response = match self
+                    .core
+                    .reserve_authenticated_poll(waiter.poll.clone(), waiter.auth.as_ref())
+                {
+                    Ok(response) => response,
                     Err(_) => {
                         return vec![DaemonRequest::Respond {
                             responder: waiter.responder,
@@ -302,6 +436,63 @@ impl Machine for DaemonMachine {
                     }
                 };
                 self.poll_response_requests(response, &waiter.poll.worker_id, waiter.responder)
+            }
+            DaemonCompletion::ClaimFinished {
+                assign,
+                worker_id,
+                responder,
+                outcome,
+            } => {
+                let context = crate::applier::ClaimContext {
+                    worker_id: worker_id.clone(),
+                    daemon_boot_id: self.daemon_boot_id.clone(),
+                };
+                if !responder.is_open() {
+                    self.core.rollback_assignment(&assign.job_id);
+                    return vec![DaemonRequest::RunClaimRollback {
+                        job: in_flight_job_from_assignment(&assign),
+                        context,
+                    }];
+                }
+                match outcome {
+                    ClaimOutcome::Claimed => {
+                        if self.core.commit_assignment(&assign.job_id).is_ok() {
+                            self.assignment_contexts
+                                .insert(assign.job_id.clone(), context.clone());
+                            vec![
+                                DaemonRequest::Log(super::protocol::assignment_log_line(
+                                    &assign, &worker_id,
+                                )),
+                                DaemonRequest::RespondAssignment {
+                                    job: in_flight_job_from_assignment(&assign),
+                                    context,
+                                    responder,
+                                    response: super::protocol::protocol_response(Some(
+                                        WorkerProtocolMessage::Assign(assign),
+                                    )),
+                                },
+                            ]
+                        } else {
+                            self.core.rollback_assignment(&assign.job_id);
+                            vec![claim_failure_response(
+                                responder,
+                                assign.job_id,
+                                "assignment reservation became stale".to_string(),
+                            )]
+                        }
+                    }
+                    ClaimOutcome::Contended { reason }
+                    | ClaimOutcome::Stale { reason }
+                    | ClaimOutcome::Retryable { reason } => {
+                        self.core.rollback_assignment(&assign.job_id);
+                        vec![claim_failure_response(responder, assign.job_id, reason)]
+                    }
+                }
+            }
+            DaemonCompletion::AssignmentDeliveryFailed { job, context } => {
+                self.assignment_contexts.remove(&job.job_id);
+                self.core.rollback_committed_assignment(&job.job_id);
+                vec![DaemonRequest::RunClaimRollback { job, context }]
             }
             DaemonCompletion::ApplyFinished { job_id, outcome } => {
                 self.applying.remove(&job_id);
@@ -326,6 +517,84 @@ impl Machine for DaemonMachine {
                         Vec::new()
                     }
                 }
+            }
+            DaemonCompletion::BeginStartupRecovery => {
+                self.startup_recovery = true;
+                Vec::new()
+            }
+            DaemonCompletion::StageRecoveredJob {
+                job,
+                daemon_boot_id,
+                reply,
+            } => {
+                let job_id = job.job_id.clone();
+                let worker_id = job.worker_id.clone();
+                let outcome = self.core.stage_recovered_job(job);
+                if outcome.is_ok() {
+                    self.assignment_contexts.insert(
+                        job_id,
+                        crate::applier::ClaimContext {
+                            worker_id,
+                            daemon_boot_id,
+                        },
+                    );
+                }
+                reply.send(outcome);
+                Vec::new()
+            }
+            DaemonCompletion::CollectStartupOrphans { reply } => {
+                let orphaned = self.core.take_unreattached_recovered_jobs();
+                for job in &orphaned {
+                    self.assignment_contexts.remove(&job.job_id);
+                }
+                reply.send(orphaned);
+                Vec::new()
+            }
+            DaemonCompletion::CompleteStartupRecovery { reply } => {
+                self.startup_recovery = false;
+                let deferred = std::mem::take(&mut self.deferred_enqueues);
+                let mut requests = Vec::new();
+                for enqueue in deferred {
+                    requests.extend(self.handle_enqueue(
+                        enqueue.job_id,
+                        enqueue.role,
+                        enqueue.repo,
+                        enqueue.artifact,
+                        enqueue.job_payload,
+                    ));
+                }
+                requests.extend(self.fulfil_waiters());
+                for id in self.waiters.keys().copied() {
+                    requests.push(DaemonRequest::StartPollTimer {
+                        id,
+                        delay: Duration::from_millis(self.max_poll_wait_ms),
+                    });
+                }
+                reply.send(());
+                requests
+            }
+            DaemonCompletion::ArmStartupRecoveryGrace { delay, reply } => {
+                vec![DaemonRequest::StartStartupRecoveryGrace { delay, reply }]
+            }
+            DaemonCompletion::StartupRecoveryGraceElapsed { reply } => {
+                reply.send(());
+                Vec::new()
+            }
+            DaemonCompletion::ReleaseAssignmentsForShutdown { reply } => {
+                let jobs = self.core.in_flight_jobs();
+                let mut assignments = Vec::new();
+                for job in jobs {
+                    if let Some(context) = self.assignment_contexts.remove(&job.job_id) {
+                        self.core.coordinator_mut().complete(&job.job_id).ok();
+                        assignments.push((job, context));
+                    }
+                }
+                vec![DaemonRequest::RunShutdownRelease { assignments, reply }]
+            }
+            DaemonCompletion::Crash { reply } => {
+                self.stopped = true;
+                reply.send(());
+                Vec::new()
             }
             DaemonCompletion::Enqueue {
                 job_id,
@@ -381,6 +650,10 @@ impl Machine for DaemonMachine {
             }
         }
     }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped
+    }
 }
 
 #[cfg(test)]
@@ -388,6 +661,46 @@ mod retry_tests {
     use super::*;
     use serde_json::json;
     use temper_protocol_worker::Artifact;
+
+    #[test]
+    fn startup_recovery_barrier_defers_enqueue_until_orphans_are_collected() {
+        let mut machine = DaemonMachine::default_machine(Duration::ZERO);
+        machine.on_completion(EngineTime::ZERO, DaemonCompletion::BeginStartupRecovery);
+        let requests = machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::Enqueue {
+                job_id: "job-after-recovery".to_string(),
+                role: "engineer".to_string(),
+                repo: "ai/temper".to_string(),
+                artifact: Artifact {
+                    item: json!(258),
+                    kind: "issue".to_string(),
+                },
+                job_payload: json!({}),
+            },
+        );
+        assert!(requests.is_empty());
+        assert!(machine.core.queued_jobs().is_empty());
+        assert_eq!(machine.deferred_enqueues.len(), 1);
+
+        let (reply, _rx) = temper_engine_io::oneshot();
+        machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::CollectStartupOrphans { reply },
+        );
+        assert!(machine.startup_recovery);
+        assert_eq!(machine.deferred_enqueues.len(), 1);
+        assert!(machine.core.queued_jobs().is_empty());
+
+        let (reply, _rx) = temper_engine_io::oneshot();
+        machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::CompleteStartupRecovery { reply },
+        );
+        assert!(!machine.startup_recovery);
+        assert!(machine.deferred_enqueues.is_empty());
+        assert_eq!(machine.core.queued_jobs().len(), 1);
+    }
 
     #[test]
     fn retryable_apply_uses_observable_bounded_exponential_backoff() {

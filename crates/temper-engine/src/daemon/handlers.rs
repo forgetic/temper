@@ -10,17 +10,17 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_protocol_worker::{
-    Artifact, Assign, JobResult, Poll, PullRequestFreshness, Register, WORKER_AUTHORIZATION_HEADER,
-    WorkerAuth, WorkerProtocolMessage,
+    Artifact, Assign, Heartbeat, JobResult, Poll, PullRequestFreshness, Register,
+    WORKER_AUTHORIZATION_HEADER, WorkerAuth, WorkerProtocolMessage,
 };
 
 use crate::InFlightJob;
 use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
 
-use super::machine::{DaemonMachine, DaemonRequest, PollWaiter};
+use super::machine::{DaemonMachine, DaemonRequest, DeferredEnqueue, PollWaiter};
 use super::protocol::{
-    ResultDisposition, assignment_log_line, is_poll_timeout, protocol_response, register_log_line,
-    result_disposition, result_disposition_log_value, result_received_log_line,
+    ResultDisposition, is_poll_timeout, protocol_response, register_log_line, result_disposition,
+    result_disposition_log_value, result_received_log_line,
 };
 use super::state_dto::{DaemonStateSnapshot, JobDto};
 
@@ -116,6 +116,9 @@ impl DaemonMachine {
                 self.handle_register(register, auth, responder)
             }
             WorkerProtocolMessage::Poll(poll) => self.handle_poll(poll, auth, responder),
+            WorkerProtocolMessage::Heartbeat(heartbeat) => {
+                self.handle_heartbeat(heartbeat, auth, responder)
+            }
             WorkerProtocolMessage::Result(result) => self.handle_result(result, auth, responder),
             other => match self.core.handle_authenticated(other, auth.as_ref()) {
                 Ok(response) => vec![DaemonRequest::Respond {
@@ -159,17 +162,65 @@ impl DaemonMachine {
         requests
     }
 
+    fn handle_heartbeat(
+        &mut self,
+        heartbeat: Heartbeat,
+        auth: Option<WorkerAuth>,
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
+        let (response, recovery) = match self
+            .core
+            .handle_authenticated_heartbeat(heartbeat, auth.as_ref())
+        {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                return vec![DaemonRequest::Respond {
+                    responder,
+                    response: HttpResponseData::status_only(401),
+                }];
+            }
+        };
+
+        let mut assignments = Vec::new();
+        for job_id in recovery.matched_job_ids {
+            let Some(job) = self.core.in_flight_job(&job_id) else {
+                continue;
+            };
+            let Some(context) = self.assignment_contexts.get(&job_id).cloned() else {
+                continue;
+            };
+            assignments.push((job, context));
+        }
+        vec![DaemonRequest::RunHeartbeatsAndRespond {
+            assignments,
+            responder,
+            response: protocol_response(response),
+        }]
+    }
+
     fn handle_poll(
         &mut self,
         poll: Poll,
         auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
+        if self.startup_recovery {
+            let id = self.next_token();
+            self.waiters.insert(
+                id,
+                PollWaiter {
+                    poll,
+                    auth,
+                    responder,
+                },
+            );
+            return Vec::new();
+        }
         let response = match self
             .core
-            .handle_authenticated(WorkerProtocolMessage::Poll(poll.clone()), auth.as_ref())
+            .reserve_authenticated_poll(poll.clone(), auth.as_ref())
         {
-            Ok(response) => response.expect("poll messages produce a response"),
+            Ok(response) => response,
             Err(_) => {
                 return vec![DaemonRequest::Respond {
                     responder,
@@ -208,14 +259,13 @@ impl DaemonMachine {
         match response {
             WorkerProtocolMessage::Assign(assign) => {
                 let job = in_flight_job_from_assign(&assign);
-                vec![
-                    DaemonRequest::Log(assignment_log_line(&assign, worker_id)),
-                    DaemonRequest::RunClaimAndRespond {
-                        job,
-                        responder,
-                        response: protocol_response(Some(WorkerProtocolMessage::Assign(assign))),
-                    },
-                ]
+                vec![DaemonRequest::RunClaim {
+                    job,
+                    worker_id: worker_id.to_string(),
+                    daemon_boot_id: self.daemon_boot_id.clone(),
+                    assign,
+                    responder,
+                }]
             }
             response => vec![DaemonRequest::Respond {
                 responder,
@@ -252,6 +302,7 @@ impl DaemonMachine {
         // must not apply, retry, or drop beyond the core response.
         if let (Some(job), Some(WorkerProtocolMessage::Release(_))) = (in_flight, response.as_ref())
         {
+            self.assignment_contexts.remove(&job.job_id);
             let disposition = result_disposition(&result);
             requests.push(DaemonRequest::Log(result_received_log_line(
                 &result,
@@ -331,6 +382,16 @@ impl DaemonMachine {
         artifact: Artifact,
         job_payload: serde_json::Value,
     ) -> Vec<DaemonRequest> {
+        if self.startup_recovery {
+            self.deferred_enqueues.push(DeferredEnqueue {
+                job_id,
+                role,
+                repo,
+                artifact,
+                job_payload,
+            });
+            return Vec::new();
+        }
         let mut requests = Vec::new();
         let now = self.now;
         self.recently_applied.retain(|_, deadline| *deadline > now);
@@ -419,7 +480,10 @@ impl DaemonMachine {
         })
     }
 
-    fn fulfil_waiters(&mut self) -> Vec<DaemonRequest> {
+    pub(super) fn fulfil_waiters(&mut self) -> Vec<DaemonRequest> {
+        if self.startup_recovery {
+            return Vec::new();
+        }
         let mut requests = Vec::new();
         let ids = self.waiters.keys().copied().collect::<Vec<_>>();
 
@@ -428,11 +492,11 @@ impl DaemonMachine {
                 continue;
             };
 
-            let response = match self.core.handle_authenticated(
-                WorkerProtocolMessage::Poll(waiter.poll.clone()),
-                waiter.auth.as_ref(),
-            ) {
-                Ok(response) => response.expect("poll messages produce a response"),
+            let response = match self
+                .core
+                .reserve_authenticated_poll(waiter.poll.clone(), waiter.auth.as_ref())
+            {
+                Ok(response) => response,
                 Err(_) => {
                     let waiter = self
                         .waiters

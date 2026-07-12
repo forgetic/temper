@@ -49,6 +49,7 @@ use crate::artifact::ArtifactRef;
 use crate::ids::{ArtifactKindId, RoleId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use temper_forge::{ItemNumber, RepositoryId};
@@ -105,6 +106,25 @@ pub struct WorkflowMetadata {
     /// Active claim lease, if the artifact is currently claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<Lease>,
+    /// Durable assignment identity written before an `Assign` message is
+    /// published. Older metadata blocks omit this field and continue to parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<DurableAssignment>,
+    /// PR head produced by the most recently published in-place repair. While
+    /// CI for this exact SHA is absent or pending, stale CI from an earlier head
+    /// must not make the pull request eligible to land.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repaired_head: Option<String>,
+    /// True while a newly-created child is deliberately hidden from every
+    /// dispatch scan. Activation clears this only after the complete sibling
+    /// relation graph has been written.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub staged: bool,
+    /// Durable multi-child creation records owned by this source artifact.
+    /// The map key includes transition/effect/correlation identity, allowing a
+    /// restarted process to finish fan-out without the worker result.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub create_issue_intents: BTreeMap<String, CreateIssuesIntent>,
 }
 
 impl WorkflowMetadata {
@@ -112,6 +132,51 @@ impl WorkflowMetadata {
     pub fn is_empty(&self) -> bool {
         self == &WorkflowMetadata::default()
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// A restart-safe description of one `create_issues` effect.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateIssuesIntent {
+    pub transition: String,
+    pub effect_index: usize,
+    pub correlation_key: String,
+    #[serde(default)]
+    pub record_parent_dependencies: bool,
+    #[serde(default)]
+    pub children: Vec<CreateIssueIntentChild>,
+    #[serde(default)]
+    pub parent_wired: bool,
+    #[serde(default)]
+    pub completed: bool,
+}
+
+/// Persisted normalized input and progress for one intended child issue.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateIssueIntentChild {
+    pub slug: String,
+    pub title: String,
+    /// Hex-encoded UTF-8 body. Encoding is required because a child body may
+    /// itself contain the `-->` workflow-comment terminator; embedding that
+    /// sequence in the parent's HTML comment would truncate the durable intent.
+    pub body_hex: String,
+    #[serde(default)]
+    pub final_labels: Vec<String>,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    pub repository_id: RepositoryId,
+    pub correlation_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<ItemNumber>,
+    #[serde(default)]
+    pub wired: bool,
+    #[serde(default)]
+    pub activated: bool,
 }
 
 /// Builds the canonical cross-repository child correlation key.
@@ -133,6 +198,40 @@ pub fn global_child_correlation_key(
         child_slug.len(),
         child_slug
     )
+}
+
+/// Exact, durable identity of a worker assignment.
+///
+/// Every member is optional so records can be extended independently and old
+/// fixtures remain compatible. Runtime assignment claims populate all fields
+/// available for a job.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DurableAssignment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<RoleId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordination_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_boot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_pr_head: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_claim_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_claim_assignees: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// A claim lease, recording who holds an artifact and until when.
