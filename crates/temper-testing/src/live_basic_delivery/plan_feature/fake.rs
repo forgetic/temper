@@ -93,6 +93,14 @@ impl PlanFeatureFake {
 }
 
 fn architect_reply(view: &RequestView) -> Reply {
+    assert_lineage_context(
+        view,
+        if messages_contain(view, PLAN_TITLE) {
+            PLAN_TITLE
+        } else {
+            FEATURE_TITLE
+        },
+    );
     if view.prior_tool_results == 0 {
         return bash_reply("printf plan-centric-architect\\n");
     }
@@ -148,6 +156,14 @@ fn architect_reply(view: &RequestView) -> Reply {
 
 fn engineer_reply(view: &RequestView) -> Reply {
     let second = messages_contain(view, SECOND_CODE_TITLE);
+    assert_lineage_context(
+        view,
+        if second {
+            SECOND_CODE_TITLE
+        } else {
+            FIRST_CODE_TITLE
+        },
+    );
     match view.prior_tool_results {
         0 => Reply {
             turns: vec![Turn::ToolCall {
@@ -182,6 +198,11 @@ fn engineer_reply(view: &RequestView) -> Reply {
 }
 
 fn tester_reply(view: &RequestView) -> Reply {
+    assert_lineage_context(view, PLAN_TITLE);
+    assert!(
+        messages_contain(view, "Validation summaries:"),
+        "plan validation turn must receive implementation summary context"
+    );
     if view.prior_tool_results == 0 {
         return bash_reply("printf plan-centric-validation\\n");
     }
@@ -205,6 +226,21 @@ fn bash_reply(command: &str) -> Reply {
         usage: Default::default(),
         stop: StopReason::ToolCalls,
     }
+}
+
+fn assert_lineage_context(view: &RequestView, legacy_title: &str) {
+    assert!(
+        messages_contain(view, "Artifact context bundle (version 1):"),
+        "{legacy_title} turn did not receive the artifact context bundle"
+    );
+    assert!(
+        messages_contain(view, "Primary artifact:"),
+        "{legacy_title} turn did not receive the primary artifact"
+    );
+    assert!(
+        messages_contain(view, legacy_title),
+        "{legacy_title} from the singular work item was not preserved at the agent boundary"
+    );
 }
 
 fn messages_contain(view: &RequestView, needle: &str) -> bool {

@@ -1,0 +1,15 @@
+{
+  "protocol_version": 1,
+  "type": "fetch-context",
+  "worker_id": "worker-a",
+  "job_id": "job-285",
+  "operation": {
+    "operation": "forge_list_related",
+    "repo": "ai/temper",
+    "number": 285,
+    "type": "issue",
+    "relations": ["parent", "dependency", "produced_pr"],
+    "depth": 2,
+    "limit": 50
+  }
+}

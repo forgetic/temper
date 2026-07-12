@@ -9,10 +9,12 @@ It exercises:
 2. architect creation of a `plan` issue carrying feature-branch metadata;
 3. dependency-linked `code` children where the second child is blocked on the
    first;
-4. implementation PRs landing into the feature branch;
-5. tester validation creating an aggregate `feature_landing_pr` from the feature
+4. lineage delivery at every agent boundary: the versioned artifact bundle,
+   primary legacy work-item content, ancestry, and plan-validation summaries;
+5. implementation PRs landing into the feature branch;
+6. tester validation creating an aggregate `feature_landing_pr` from the feature
    branch to `main`;
-6. final landing closing both plan and feature issues.
+7. final landing closing both plan and feature issues.
 
 Run with:
 

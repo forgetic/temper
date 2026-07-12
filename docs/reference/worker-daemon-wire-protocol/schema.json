@@ -26,6 +26,12 @@
    "$ref": "#/$defs/leaseAck"
   },
   {
+   "$ref": "#/$defs/fetchContext"
+  },
+  {
+   "$ref": "#/$defs/contextResponse"
+  },
+  {
    "$ref": "#/$defs/error"
   }
  ],
@@ -254,6 +260,9 @@
         }
        }
       },
+      "artifact_context": {
+       "$ref": "#/$defs/artifactContextBundle"
+      },
       "action": {
        "type": "string"
       },
@@ -372,6 +381,190 @@
      "minLength": 1
     }
    }
+  },
+  "artifactContextBundle": {
+   "type": "object",
+   "required": ["version", "repository", "artifact_type", "truncation"],
+   "properties": {
+    "version": { "const": 1 },
+    "repository": { "$ref": "#/$defs/artifactRepository" },
+    "artifact_type": { "enum": ["issue", "pull_request"] },
+    "snapshots": { "type": "array", "items": { "$ref": "#/$defs/artifactSnapshot" } },
+    "index": { "type": "array", "items": { "$ref": "#/$defs/artifactIndexEntry" } },
+    "relations": { "type": "array", "items": { "$ref": "#/$defs/artifactRelation" } },
+    "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/artifactDiagnostic" } },
+    "truncation": { "$ref": "#/$defs/contextTruncation" }
+   }
+  },
+  "artifactRepository": {
+   "type": "object",
+   "required": ["id", "path"],
+   "properties": {
+    "id": { "type": "string" },
+    "path": { "type": "string", "minLength": 1 }
+   }
+  },
+  "artifactReference": {
+   "type": "object",
+   "required": ["repository", "artifact_type", "number"],
+   "properties": {
+    "repository": { "$ref": "#/$defs/artifactRepository" },
+    "artifact_type": { "enum": ["issue", "pull_request"] },
+    "number": { "type": "integer", "minimum": 1 }
+   }
+  },
+  "artifactSnapshot": {
+   "type": "object",
+   "required": ["artifact", "title", "body", "state"],
+   "properties": {
+    "artifact": { "$ref": "#/$defs/artifactReference" },
+    "title": { "type": "string" },
+    "body": { "type": "string" },
+    "labels": { "type": "array", "items": { "type": "string" } },
+    "state": { "type": "string" }
+   }
+  },
+  "artifactIndexEntry": {
+   "type": "object",
+   "required": ["artifact", "title", "state"],
+   "properties": {
+    "artifact": { "$ref": "#/$defs/artifactReference" },
+    "title": { "type": "string" },
+    "state": { "type": "string" },
+    "snapshot_index": { "type": "integer", "minimum": 0 }
+   }
+  },
+  "contextTruncation": {
+   "type": "object",
+   "required": ["depth_exceeded", "count_exceeded", "content_truncated"],
+   "properties": {
+    "depth_exceeded": { "type": "boolean" },
+    "count_exceeded": { "type": "boolean" },
+    "content_truncated": { "type": "boolean" }
+   }
+  },
+  "artifactRelation": {
+   "type": "object",
+   "required": ["relation_type", "source", "target"],
+   "properties": {
+    "relation_type": { "enum": ["parent", "dependency", "related"] },
+    "source": { "$ref": "#/$defs/artifactReference" },
+    "target": { "$ref": "#/$defs/artifactReference" }
+   }
+  },
+  "artifactDiagnostic": {
+   "type": "object",
+   "required": ["code", "message"],
+   "properties": {
+    "code": { "enum": ["missing_artifact", "closed_ancestor", "malformed_metadata", "repository_not_allowed", "cycle_detected", "depth_exceeded", "count_exceeded", "content_truncated", "forge_read_failed"] },
+    "message": { "type": "string" },
+    "source": { "$ref": "#/$defs/artifactReference" }
+   }
+  },
+  "forgeItemComment": {
+   "type": "object",
+   "required": ["id", "author_id", "body", "created_at", "updated_at"],
+   "properties": {
+    "id": { "type": "string" },
+    "author_id": { "type": "string" },
+    "body": { "type": "string" },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" }
+   }
+  },
+  "forgeRelatedEdge": {
+   "type": "object",
+   "required": ["relation", "source", "target"],
+   "properties": {
+    "relation": { "enum": ["parent", "child", "dependency", "dependent", "produced_pr", "body_reference", "referenced_by"] },
+    "source": { "$ref": "#/$defs/artifactReference" },
+    "target": { "$ref": "#/$defs/artifactReference" }
+   }
+  },
+  "forgeContextOperation": {
+   "oneOf": [
+    {
+     "type": "object",
+     "required": ["operation", "repo", "number"],
+     "properties": {
+      "operation": { "const": "forge_get_item" },
+      "repo": { "type": "string", "minLength": 1 },
+      "number": { "type": "integer", "minimum": 1 },
+      "type": { "enum": ["issue", "pull_request"] },
+      "include_comments": { "type": "boolean" }
+     }
+    },
+    {
+     "type": "object",
+     "required": ["operation", "repo", "number", "relations"],
+     "properties": {
+      "operation": { "const": "forge_list_related" },
+      "repo": { "type": "string", "minLength": 1 },
+      "number": { "type": "integer", "minimum": 1 },
+      "type": { "enum": ["issue", "pull_request"] },
+      "relations": {
+       "type": "array",
+       "minItems": 1,
+       "uniqueItems": true,
+       "items": { "enum": ["parent", "child", "dependency", "dependent", "produced_pr", "body_reference", "referenced_by"] }
+      },
+      "depth": { "type": "integer", "minimum": 1, "maximum": 2 },
+      "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
+     }
+    }
+   ]
+  },
+  "fetchContext": {
+   "type": "object",
+   "required": ["protocol_version", "type", "worker_id", "job_id", "operation"],
+   "properties": {
+    "protocol_version": { "const": 1 },
+    "type": { "const": "fetch-context" },
+    "worker_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "job_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "operation": { "$ref": "#/$defs/forgeContextOperation" }
+   }
+  },
+  "contextResponse": {
+   "type": "object",
+   "required": ["protocol_version", "type", "worker_id", "job_id", "status"],
+   "properties": {
+    "protocol_version": { "const": 1 },
+    "type": { "const": "context-response" },
+    "worker_id": { "type": "string", "minLength": 1 },
+    "job_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["success", "error"] },
+    "result": {
+     "oneOf": [
+      {
+       "type": "object",
+       "required": ["result", "item", "truncation"],
+       "properties": {
+        "result": { "const": "item" },
+        "item": { "$ref": "#/$defs/artifactSnapshot" },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/forgeItemComment" } },
+        "truncation": { "$ref": "#/$defs/contextTruncation" }
+       }
+      },
+      {
+       "type": "object",
+       "required": ["result", "root", "truncation"],
+       "properties": {
+        "result": { "const": "related" },
+        "root": { "$ref": "#/$defs/artifactReference" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/artifactIndexEntry" } },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/forgeRelatedEdge" } },
+        "truncation": { "$ref": "#/$defs/contextTruncation" }
+       }
+      }
+     ]
+    },
+    "code": { "enum": ["invalid_request", "not_authorized", "not_found", "forge_unavailable", "limit_exceeded"] }
+   },
+   "allOf": [
+    { "if": { "properties": { "status": { "const": "success" } } }, "then": { "required": ["result"] } },
+    { "if": { "properties": { "status": { "const": "error" } } }, "then": { "required": ["code"] } }
+   ]
   },
   "heartbeat": {
    "type": "object",

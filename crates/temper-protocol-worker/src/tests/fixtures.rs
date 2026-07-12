@@ -71,6 +71,9 @@ fn fixtures_round_trip_and_match_variants() {
             | ("result-verdict-children", WorkerProtocolMessage::Result(_))
             | ("release", WorkerProtocolMessage::Release(_))
             | ("lease-ack", WorkerProtocolMessage::LeaseAck(_))
+            | ("fetch-context", WorkerProtocolMessage::FetchContext(_))
+            | ("context-response", WorkerProtocolMessage::ContextResponse(_))
+            | ("context-response-error", WorkerProtocolMessage::ContextResponse(_))
             | ("error", WorkerProtocolMessage::Error(_)) => {}
             (name, msg) => panic!("{name} parsed as unexpected variant: {msg:?}"),
         }

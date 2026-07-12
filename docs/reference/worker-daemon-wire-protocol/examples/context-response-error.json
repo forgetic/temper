@@ -1,0 +1,8 @@
+{
+  "protocol_version": 1,
+  "type": "context-response",
+  "worker_id": "worker-a",
+  "job_id": "job-285",
+  "status": "error",
+  "code": "not_authorized"
+}

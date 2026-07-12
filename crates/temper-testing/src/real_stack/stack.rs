@@ -552,7 +552,7 @@ impl DaemonRouter {
         *self.daemon.lock().expect("daemon router lock") = daemon;
     }
 
-    fn current(&self) -> Arc<Daemon> {
+    pub(crate) fn current(&self) -> Arc<Daemon> {
         self.daemon.lock().expect("daemon router lock").clone()
     }
 }

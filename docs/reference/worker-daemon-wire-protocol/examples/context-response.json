@@ -1,0 +1,42 @@
+{
+  "protocol_version": 1,
+  "type": "context-response",
+  "worker_id": "worker-a",
+  "job_id": "job-285",
+  "status": "success",
+  "result": {
+    "result": "related",
+    "root": {
+      "repository": {"id": "repo-1", "path": "ai/temper"},
+      "artifact_type": "issue",
+      "number": 285
+    },
+    "items": [{
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 277
+      },
+      "title": "Plan workflow context delivery",
+      "state": "open"
+    }],
+    "edges": [{
+      "relation": "parent",
+      "source": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 285
+      },
+      "target": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 277
+      }
+    }],
+    "truncation": {
+      "depth_exceeded": false,
+      "count_exceeded": false,
+      "content_truncated": false
+    }
+  }
+}
