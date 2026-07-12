@@ -9,6 +9,7 @@ description = "Versioned, serde-only process protocol between the temper worker 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+temper-protocol-context = { path = "../temper-protocol-context" }
 temper-verdict = { path = "../temper-verdict" }
 
 [lints]

@@ -55,10 +55,12 @@
 temper-engine-io = []
 # The backend-agnostic forge model: Forge trait + domain types. Leaf.
 temper-forge-model = []
+# Shared artifact graph context; serde-only and independent of tier protocols.
+temper-protocol-context = []
 temper-protocol-interaction = []
 # Shared serde contract + pure validation used independently by all three tiers.
 temper-verdict = []
-temper-protocol-worker = ["temper-verdict"]
+temper-protocol-worker = ["temper-protocol-context", "temper-verdict"]
 temper-worker-registry = ["temper-protocol-worker"]
 # Concrete backends — each implements the model's traits and depends ONLY on the
 # model (plus engine-io for the HTTP backends). They are wired into the system
@@ -109,7 +111,7 @@ temper-worker = ["temper-protocol-worker", "temper-worker-io", "temper-protocol-
 # Never depends on a worker- or engine-implementation crate (rule 3).
 # ===========================================================================
 temper-agent-io = []
-temper-protocol-agent = ["temper-verdict"]
+temper-protocol-agent = ["temper-protocol-context", "temper-verdict"]
 temper-agent-core = ["temper-agent-io"]
 # NOTE / DIVERGENCE from rule 3: besides temper-protocol-agent (the protocol the
 # worker exposes), the agent also depends on the engine-owned conversation /

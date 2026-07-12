@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "repository": {"id": "repo-1", "path": "ai/temper"},
+  "artifact_type": "pull_request",
+  "index": [
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "pull_request",
+        "number": 42
+      },
+      "title": "Large implementation",
+      "state": "open"
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "content_truncated",
+      "message": "artifact body exceeded the content budget",
+      "source": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "pull_request",
+        "number": 42
+      }
+    },
+    {
+      "code": "count_exceeded",
+      "message": "artifact count limit reached"
+    }
+  ],
+  "truncation": {
+    "depth_exceeded": false,
+    "count_exceeded": true,
+    "content_truncated": true
+  }
+}

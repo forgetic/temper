@@ -126,6 +126,9 @@ pub struct IssueQuery {
     pub author_id: Option<UserId>,
     pub assignee_id: Option<UserId>,
     pub sort: Option<ItemSort>,
+    /// Maximum number of results, applied after filtering and deterministic sorting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
     #[serde(default)]
     pub details: ItemListDetails,
 }
@@ -140,6 +143,9 @@ pub struct PullRequestQuery {
     pub author_id: Option<UserId>,
     pub assignee_id: Option<UserId>,
     pub sort: Option<ItemSort>,
+    /// Maximum number of results, applied after filtering and deterministic sorting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
     #[serde(default)]
     pub details: ItemListDetails,
 }

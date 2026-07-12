@@ -31,6 +31,9 @@ pub(crate) fn list_issues(
         }
     }
     sort_issues(&mut issues, &query);
+    if let Some(limit) = query.limit {
+        issues.truncate(limit);
+    }
     Ok(issues)
 }
 

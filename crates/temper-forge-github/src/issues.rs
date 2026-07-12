@@ -44,7 +44,9 @@ impl<C: HttpClient> GitHubForge<C> {
         if !query.labels.is_empty() {
             base_query.push(("labels".to_string(), query.labels.join(",")));
         }
-        let dtos: Vec<IssueDto> = self.list_all("list issues", &path, base_query).await?;
+        let dtos: Vec<IssueDto> = self
+            .list_up_to("list issues", &path, base_query, query.limit)
+            .await?;
 
         let mut issues: Vec<Issue> = dtos
             .into_iter()
@@ -56,6 +58,9 @@ impl<C: HttpClient> GitHubForge<C> {
         // GitHub exposes no native dependency links, so `query.details` needs
         // no enrichment pass: `dependencies` is always empty.
         issues.sort_by(|left, right| compare_issues(left, right, &query));
+        if let Some(limit) = query.limit {
+            issues.truncate(limit);
+        }
         Ok(issues)
     }
 

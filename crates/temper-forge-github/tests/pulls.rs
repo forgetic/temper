@@ -37,6 +37,24 @@ fn pull_json(number: u64, state: &str, merged_at: &str) -> String {
 }
 
 #[test]
+fn zero_pull_request_limit_skips_provider_requests() {
+    let client = MockHttpClient::new();
+    let forge = forge(client.clone());
+
+    let pulls = block_on(forge.list_pull_requests(
+        &repo_id(),
+        PullRequestQuery {
+            limit: Some(0),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert!(pulls.is_empty());
+    assert_eq!(client.call_count(), 0);
+}
+
+#[test]
 fn list_pull_requests_maps_states_and_filters_labels_client_side() {
     let client = MockHttpClient::new();
     client.push_response(

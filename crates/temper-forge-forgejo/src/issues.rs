@@ -48,7 +48,9 @@ impl<C: HttpClient> ForgejoForge<C> {
         if !query.labels.is_empty() {
             base_query.push(("labels".to_string(), query.labels.join(",")));
         }
-        let dtos: Vec<IssueDto> = self.list_all("list issues", &path, base_query).await?;
+        let dtos: Vec<IssueDto> = self
+            .list_up_to("list issues", &path, base_query, query.limit)
+            .await?;
 
         let mut issues: Vec<Issue> = dtos
             .into_iter()
@@ -58,12 +60,15 @@ impl<C: HttpClient> ForgejoForge<C> {
             .map(|dto| self.materialize_issue(&repo, dto, None))
             .collect();
         issues.retain(|issue| issue_matches_query(issue, &query));
+        issues.sort_by(|left, right| compare_issues(left, right, &query));
+        if let Some(limit) = query.limit {
+            issues.truncate(limit);
+        }
         if query.details.dependencies {
             for issue in &mut issues {
                 issue.dependencies = self.load_item_dependencies(&repo, issue.number).await?;
             }
         }
-        issues.sort_by(|left, right| compare_issues(left, right, &query));
         Ok(issues)
     }
 

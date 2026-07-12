@@ -280,6 +280,7 @@ impl CorrelationLookupPlan {
         [IssueState::Open, IssueState::Closed]
             .into_iter()
             .map(|state| IssueQuery {
+                limit: None,
                 state: Some(state),
                 labels: self.labels.clone(),
                 body_contains: Some(self.body_contains.clone()),
@@ -300,6 +301,7 @@ impl CorrelationLookupPlan {
         ]
         .into_iter()
         .map(|state| PullRequestQuery {
+            limit: None,
             state: Some(state),
             labels: self.labels.clone(),
             body_contains: Some(self.body_contains.clone()),

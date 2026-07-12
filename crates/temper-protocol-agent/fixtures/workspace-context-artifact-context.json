@@ -1,0 +1,40 @@
+{
+  "repos": [{
+    "id": "repo-1",
+    "owner": "ai",
+    "name": "temper",
+    "default_branch": "main",
+    "dir": "temper",
+    "access": "writable",
+    "base_branch": "main",
+    "branch_hint": "agent/pr-for-code-279"
+  }],
+  "work_item": {
+    "role": "engineer",
+    "queue": "code_ready",
+    "kind": "code",
+    "target": "Issue { number: ItemNumber(279) }",
+    "context": "{\"artifact\":{\"number\":279,\"title\":\"Add artifact context\"}}"
+  },
+  "artifact_context": {
+    "version": 1,
+    "repository": {"id": "repo-1", "path": "ai/temper"},
+    "artifact_type": "issue",
+    "index": [{
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 279
+      },
+      "title": "Add artifact context",
+      "state": "open"
+    }],
+    "truncation": {
+      "depth_exceeded": false,
+      "count_exceeded": false,
+      "content_truncated": false
+    }
+  },
+  "action": "open_pr",
+  "correlation_key": "pr-for-code-279"
+}

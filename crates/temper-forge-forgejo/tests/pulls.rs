@@ -58,6 +58,31 @@ fn merged_pr_json(number: u64, extra: &str) -> String {
 }
 
 #[test]
+fn pull_request_limit_bounds_page_size_and_stops_when_satisfied() {
+    let client = MockHttpClient::new();
+    client.push_response(200, format!("[{}]", pr_json(2, "open", "[]", "")));
+    let forge = forge(client.clone());
+
+    let pulls = block_on(forge.list_pull_requests(
+        &repo_id(),
+        PullRequestQuery {
+            limit: Some(1),
+            details: ItemListDetails::summary(),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(pulls.len(), 1);
+    assert_eq!(client.call_count(), 1);
+    assert!(
+        client.recorded()[0]
+            .query
+            .contains(&("limit".to_string(), "1".to_string()))
+    );
+}
+
+#[test]
 fn unlabelled_open_pull_request_query_does_not_fetch_closed_history() {
     let client = MockHttpClient::new();
     client.push_response(200, "[]");

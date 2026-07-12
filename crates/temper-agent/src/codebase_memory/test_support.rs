@@ -171,6 +171,7 @@ pub(super) fn workspace_context(cwd: &Path, repos: &[(&str, &str, &str)]) -> Wor
         })
         .collect();
     WorkspaceContext {
+        artifact_context: None,
         repos: repositories,
         work_item: WorkspaceWorkItem {
             role: "engineer".to_string(),

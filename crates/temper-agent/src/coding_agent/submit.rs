@@ -238,6 +238,7 @@ mod tests {
 
     fn context(role: &str, repo_access: &str, checkout: &str) -> WorkspaceContext {
         WorkspaceContext {
+            artifact_context: None,
             repos: vec![WorkspaceRepository {
                 id: "r".to_string(),
                 owner: "o".to_string(),

@@ -619,6 +619,7 @@ fn pr_freshness_issue_job(
         number,
         "issue",
         JobContext {
+            artifact_context: None,
             role: "engineer".to_string(),
             repo: repo_path.to_string(),
             queue: "code_ready".to_string(),

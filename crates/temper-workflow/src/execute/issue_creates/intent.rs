@@ -25,6 +25,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 .list_issues(
                     repo_id,
                     IssueQuery {
+                        limit: None,
                         state: Some(state),
                         labels: Vec::new(),
                         body_contains: Some("\"create_issue_intents\"".into()),
