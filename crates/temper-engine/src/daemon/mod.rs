@@ -41,7 +41,8 @@ pub struct Daemon {
     scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
     context_reader_slot: Arc<std::sync::Mutex<Option<Arc<dyn context_reader::ContextReader>>>>,
     change_source_listeners: Arc<std::sync::Mutex<Vec<ChangeSourceListener>>>,
-    pub(crate) artifact_catalog: Arc<crate::ConfiguredRepositoryCatalog>,
+    artifact_catalog: Arc<crate::ConfiguredRepositoryCatalog>,
+    pub(crate) artifact_context: Option<Arc<crate::ArtifactContextBundleService>>,
 }
 
 /// Type-erased wake scanner installed by webhook or change-source wiring.

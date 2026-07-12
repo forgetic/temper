@@ -114,6 +114,16 @@ async fn run_async(
     ));
 
     let repositories = resolve_repositories(forge.as_ref(), &daemon_config.repos).await?;
+    let artifact_catalog = temper_engine::ConfiguredRepositoryCatalog::from_repository_set(
+        &repositories,
+        forge_base_url.clone(),
+    )?;
+    let artifact_context = Arc::new(temper_engine::ArtifactContextBundleService::new(
+        forge.clone(),
+        workflow.clone(),
+        artifact_catalog,
+        temper_engine::ArtifactContextPolicy::default(),
+    ));
     let repo_ids: Vec<RepositoryId> = repositories
         .repositories()
         .iter()
@@ -162,6 +172,8 @@ async fn run_async(
         role_limits,
     )
     .with_worker_pool_auth(worker_pool_auth_config(resolved)?)
+    .with_artifact_context_service(artifact_context)
+    .with_forge_context_reader(forge.clone(), workflow.clone())
     .begin_startup_recovery();
 
     // The prior in-process worker died with this standalone process, so there

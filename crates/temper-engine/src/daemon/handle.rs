@@ -100,8 +100,8 @@ impl Daemon {
         self
     }
 
-    /// Installs the immutable configured-repository catalog used by all feed
-    /// enrichment paths, including poll and webhook wake scans.
+    /// Installs the immutable configured-repository catalog used to authorize
+    /// bounded worker context reads.
     pub fn with_artifact_context_catalog(
         mut self,
         catalog: crate::ConfiguredRepositoryCatalog,
@@ -113,8 +113,21 @@ impl Daemon {
         self
     }
 
+    /// Installs the immutable artifact-context service shared by poll, webhook,
+    /// direct scan, and durable-recovery enrichment. Its repository catalog is
+    /// also used to authorize bounded worker context reads.
+    pub fn with_artifact_context_service(
+        mut self,
+        service: Arc<crate::ArtifactContextBundleService>,
+    ) -> Self {
+        let catalog = service.catalog().clone();
+        self.artifact_context = Some(service);
+        self.with_artifact_context_catalog(catalog)
+    }
+
     /// Installs the read-only Forge capability used for authenticated on-demand
     /// context requests. Call after [`with_artifact_context_catalog`](Self::with_artifact_context_catalog)
+    /// or [`with_artifact_context_service`](Self::with_artifact_context_service)
     /// so the reader captures the authoritative startup catalog.
     pub fn with_forge_context_reader<F>(
         self,
@@ -134,6 +147,12 @@ impl Daemon {
             .lock()
             .expect("context reader slot") = Some(Arc::new(reader));
         self
+    }
+
+    /// Returns the startup-constructed artifact-context service, when this
+    /// daemon was configured for graph enrichment.
+    pub fn artifact_context_service(&self) -> Option<Arc<crate::ArtifactContextBundleService>> {
+        self.artifact_context.clone()
     }
 
     /// Closes the startup barrier. Completions are FIFO, so calling this on a
@@ -251,6 +270,7 @@ impl Daemon {
             context_reader_slot,
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
             artifact_catalog: Arc::new(crate::ConfiguredRepositoryCatalog::default()),
+            artifact_context: None,
         }
     }
 

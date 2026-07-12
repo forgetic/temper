@@ -97,6 +97,43 @@ pub async fn recovered_job_from_assignment<F: Forge + ?Sized>(
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
 ) -> Result<WorkItemJob, String> {
+    recovered_job_from_assignment_inner(forge, repo, target, assignment, workflow, compiled, None)
+        .await
+}
+
+/// Reconstructs a durable assignment through the same artifact-context service
+/// used for fresh poll and webhook dispatches.
+pub async fn recovered_job_from_assignment_with_artifact_context<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    target: ArtifactSource,
+    assignment: &temper_workflow::DurableAssignment,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    artifact_context: &crate::ArtifactContextBundleService,
+) -> Result<WorkItemJob, String> {
+    recovered_job_from_assignment_inner(
+        forge,
+        repo,
+        target,
+        assignment,
+        workflow,
+        compiled,
+        Some(artifact_context),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    target: ArtifactSource,
+    assignment: &temper_workflow::DurableAssignment,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    artifact_context: Option<&crate::ArtifactContextBundleService>,
+) -> Result<WorkItemJob, String> {
     let role = assignment
         .role
         .clone()
@@ -133,9 +170,18 @@ pub async fn recovered_job_from_assignment<F: Forge + ?Sized>(
         .await
         .map_err(|error| error.to_string())?;
     let mut job = job_from_work_item(&repo_label, &item);
-    match enrich_work_item_job_inner(forge, repo, &item, &mut job, workflow, compiled, true, None)
-        .await
-        .map_err(|error| error.to_string())?
+    match enrich_work_item_job_inner(
+        forge,
+        repo,
+        &item,
+        &mut job,
+        workflow,
+        compiled,
+        true,
+        artifact_context,
+    )
+    .await
+    .map_err(|error| error.to_string())?
     {
         EnrichOutcome::Enriched => {}
         outcome => {
@@ -187,7 +233,7 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
     recovering_assignment: bool,
-    configured_catalog: Option<&crate::ConfiguredRepositoryCatalog>,
+    artifact_context: Option<&crate::ArtifactContextBundleService>,
 ) -> Result<EnrichOutcome, ScanError> {
     let repository = forge
         .get_repository(repo)
@@ -245,22 +291,34 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     };
     enrich_job_context_from_workflow(item, workflow, compiled, &mut context)?;
 
-    let fallback_catalog;
-    let catalog = if let Some(catalog) = configured_catalog {
-        catalog
+    let action = context.action.as_deref().ok_or_else(|| {
+        ScanError::InvalidWorkflow("enriched job is missing a selected action".to_string())
+    })?;
+    context.artifact_context = Some(if let Some(service) = artifact_context {
+        service
+            .resolve(repo, item.target, action)
+            .await
+            .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))?
     } else {
-        fallback_catalog = crate::ConfiguredRepositoryCatalog::single(
+        // Compatibility path for callers that construct a bare daemon in tests
+        // or embed the feed without production runtime wiring.
+        let catalog = crate::ConfiguredRepositoryCatalog::single(
             repository.id.clone(),
             temper_forge::RepositoryPath::new(repository.owner.clone(), repository.name.clone()),
             "",
         );
-        &fallback_catalog
-    };
-    context.artifact_context = Some(
-        crate::resolve_initial_artifact_context(forge, catalog, workflow, repo, item.target)
-            .await
-            .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))?,
-    );
+        crate::resolve_initial_artifact_context_for_action_with_policy(
+            forge,
+            &catalog,
+            workflow,
+            repo,
+            item.target,
+            action,
+            crate::ArtifactContextPolicy::default(),
+        )
+        .await
+        .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))?
+    });
 
     // A pull-request writable job is an in-place PR-head fix: the worker checks
     // out the PR's real head branch and pushes the agent's fix back to that same
@@ -713,7 +771,7 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
             workflow,
             compiled,
             false,
-            (!daemon.artifact_catalog.is_empty()).then_some(daemon.artifact_catalog.as_ref()),
+            daemon.artifact_context.as_deref(),
         )
         .await
         {

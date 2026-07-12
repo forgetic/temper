@@ -85,6 +85,7 @@ impl Daemon {
             context_reader_slot: Arc::clone(&self.context_reader_slot),
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
             artifact_catalog: Arc::clone(&self.artifact_catalog),
+            artifact_context: self.artifact_context.clone(),
         }
     }
 }

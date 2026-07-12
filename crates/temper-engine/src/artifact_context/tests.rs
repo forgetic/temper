@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use temper_forge::{CreateIssue, CreateRepository, Forge, IssueState, RepositoryPath, UpdateIssue};
+use std::sync::Arc;
+
+use temper_forge::{
+    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueState, RepositoryPath,
+    UpdateIssue,
+};
 use temper_forge_memory::MemoryForge;
 use temper_runner::RepositoryTarget;
 use temper_workflow::{
@@ -11,6 +16,8 @@ use temper_workflow::{
 use super::*;
 
 const WORKFLOW: &str = include_str!("../../../temper-workflow/fixtures/reference-delivery.json");
+const PLAN_WORKFLOW: &str =
+    include_str!("../../../../scenarios/plan-centric-feature-branch/config/workflow.json");
 
 fn issue(title: &str, body: String, labels: &[&str]) -> CreateIssue {
     CreateIssue {
@@ -220,5 +227,227 @@ fn memory_forge_keeps_reference_bodies_out_of_bundle() {
                 .iter()
                 .any(|entry| entry.artifact.number == 999)
         );
+    });
+}
+
+#[test]
+fn service_selects_mandatory_lineage_and_plan_validation_aggregates() {
+    temper_engine_io::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repository = forge
+            .create_repository(CreateRepository {
+                owner: "ai".into(),
+                name: "temper".into(),
+                default_branch: "main".into(),
+                description: None,
+            })
+            .await
+            .unwrap();
+        let feature = forge
+            .create_issue(
+                &repository.id,
+                issue(
+                    "feature",
+                    render_metadata_block(&WorkflowMetadata {
+                        kind: Some(ArtifactKindId::new("feature")),
+                        ..Default::default()
+                    }),
+                    &["feature"],
+                ),
+            )
+            .await
+            .unwrap();
+        let plan = forge
+            .create_issue(
+                &repository.id,
+                issue(
+                    "plan",
+                    render_metadata_block(&WorkflowMetadata {
+                        kind: Some(ArtifactKindId::new("plan")),
+                        parents: vec![ArtifactRef::same_repo(feature.number)],
+                        target_branch: Some("feature/1".into()),
+                        ..Default::default()
+                    }),
+                    &["plan", "needs-validation"],
+                ),
+            )
+            .await
+            .unwrap();
+        let code = forge
+            .create_issue(
+                &repository.id,
+                issue(
+                    "code",
+                    render_metadata_block(&WorkflowMetadata {
+                        kind: Some(ArtifactKindId::new("code")),
+                        parents: vec![ArtifactRef::same_repo(plan.number)],
+                        target_branch: Some("feature/1".into()),
+                        ..Default::default()
+                    }),
+                    &["code", "ready"],
+                ),
+            )
+            .await
+            .unwrap();
+        forge
+            .update_issue(
+                &plan.id,
+                UpdateIssue {
+                    body: Some(render_metadata_block(&WorkflowMetadata {
+                        kind: Some(ArtifactKindId::new("plan")),
+                        parents: vec![ArtifactRef::same_repo(feature.number)],
+                        dependencies: vec![ArtifactRef::same_repo(code.number)],
+                        target_branch: Some("feature/1".into()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let implementation = forge
+            .create_pull_request(
+                &repository.id,
+                CreatePullRequest {
+                    title: "implementation".into(),
+                    body: render_metadata_block(&WorkflowMetadata {
+                        kind: Some(ArtifactKindId::new("implementation_pr")),
+                        parents: vec![ArtifactRef::same_repo(code.number)],
+                        ..Default::default()
+                    }),
+                    source: BranchRef {
+                        repository_id: repository.id.clone(),
+                        branch: "agent/code".into(),
+                    },
+                    target: BranchRef {
+                        repository_id: repository.id.clone(),
+                        branch: "feature/1".into(),
+                    },
+                    labels: vec!["implementation".into()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let landing = forge
+            .create_pull_request(
+                &repository.id,
+                CreatePullRequest {
+                    title: "landing".into(),
+                    body: render_metadata_block(&WorkflowMetadata {
+                        kind: Some(ArtifactKindId::new("feature_landing_pr")),
+                        parents: vec![
+                            ArtifactRef::same_repo(plan.number),
+                            ArtifactRef::same_repo(feature.number),
+                        ],
+                        ..Default::default()
+                    }),
+                    source: BranchRef {
+                        repository_id: repository.id.clone(),
+                        branch: "feature/1".into(),
+                    },
+                    target: BranchRef {
+                        repository_id: repository.id.clone(),
+                        branch: "main".into(),
+                    },
+                    labels: vec!["feature-landing".into(), "merge-conflict".into()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let workflow: RawWorkflowSpec = serde_json::from_str(PLAN_WORKFLOW).unwrap();
+        let workflow = Arc::new(workflow.validate().unwrap());
+        let catalog = ConfiguredRepositoryCatalog::single(
+            repository.id.clone(),
+            RepositoryPath::new("ai", "temper"),
+            "https://forge.example",
+        );
+        let forge_handle: Arc<dyn Forge> = forge.clone();
+        let service = ArtifactContextBundleService::new(
+            forge_handle,
+            workflow,
+            catalog,
+            ArtifactContextPolicy::default(),
+        );
+
+        let cases = [
+            (
+                ArtifactSource::Issue {
+                    number: feature.number,
+                },
+                "plan_feature",
+                vec!["feature"],
+            ),
+            (
+                ArtifactSource::Issue {
+                    number: plan.number,
+                },
+                "decompose_plan",
+                vec!["feature", "plan"],
+            ),
+            (
+                ArtifactSource::Issue {
+                    number: code.number,
+                },
+                "open_pr",
+                vec!["feature", "plan", "code"],
+            ),
+            (
+                ArtifactSource::PullRequest {
+                    number: implementation.number,
+                },
+                "address_implementation_ci_failure",
+                vec!["feature", "plan", "code", "implementation"],
+            ),
+            (
+                ArtifactSource::PullRequest {
+                    number: landing.number,
+                },
+                "resolve_feature_landing_merge_conflict",
+                vec!["feature", "plan", "landing"],
+            ),
+        ];
+        for (source, action, expected) in cases {
+            let bundle = service
+                .resolve(&repository.id, source, action)
+                .await
+                .unwrap();
+            assert_eq!(
+                bundle
+                    .snapshots
+                    .iter()
+                    .map(|snapshot| snapshot.title.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "action {action}"
+            );
+        }
+
+        let validation = service
+            .resolve(
+                &repository.id,
+                ArtifactSource::Issue {
+                    number: plan.number,
+                },
+                "validate_plan",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            validation
+                .snapshots
+                .iter()
+                .map(|snapshot| snapshot.title.as_str())
+                .collect::<Vec<_>>(),
+            ["feature", "plan"]
+        );
+        let summaries = validation
+            .index
+            .iter()
+            .map(|entry| entry.title.as_str())
+            .collect::<Vec<_>>();
+        assert!(summaries.contains(&"code"));
+        assert!(summaries.contains(&"implementation"));
     });
 }

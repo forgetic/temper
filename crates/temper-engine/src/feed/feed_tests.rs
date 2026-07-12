@@ -25,6 +25,8 @@ const REFERENCE_DELIVERY_FIXTURE: &str =
 
 #[path = "feed_tests/action_assignment.rs"]
 mod action_assignment;
+#[path = "feed_tests/artifact_context_dispatch.rs"]
+mod artifact_context_dispatch;
 #[path = "feed_tests/attention.rs"]
 mod attention;
 #[path = "feed_tests/reconciliation.rs"]

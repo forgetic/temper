@@ -21,6 +21,7 @@ mod tests;
 
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use temper_forge::{Forge, RepositoryId};
 use temper_protocol_worker::{
@@ -35,6 +36,61 @@ pub use retrieval::{
     MAX_FORGE_RESPONSE_BYTES, MAX_ITEM_BODY_BYTES, MAX_ITEM_COMMENTS, MAX_RELATED_DEPTH,
     MAX_RELATED_RESULTS, validate_context_operation,
 };
+
+/// Shared startup-constructed resolver used by every dispatch path.
+///
+/// Keeping the Forge handle, validated workflow, repository allow-list, URL
+/// parsing policy, and collection bounds together prevents poll, webhook, and
+/// recovery dispatches from drifting into subtly different graph reads.
+#[derive(Clone)]
+pub struct ArtifactContextBundleService {
+    forge: Arc<dyn Forge>,
+    workflow: Arc<ValidatedWorkflow>,
+    catalog: ConfiguredRepositoryCatalog,
+    policy: ArtifactContextPolicy,
+}
+
+impl ArtifactContextBundleService {
+    pub fn new(
+        forge: Arc<dyn Forge>,
+        workflow: Arc<ValidatedWorkflow>,
+        catalog: ConfiguredRepositoryCatalog,
+        policy: ArtifactContextPolicy,
+    ) -> Self {
+        Self {
+            forge,
+            workflow,
+            catalog,
+            policy,
+        }
+    }
+
+    /// Resolves the bundle selected for the already-resolved workflow action.
+    /// Aggregate child and implementation-PR summaries are intentionally
+    /// collected only for plan validation; all actions receive mandatory
+    /// ancestry and safe markdown references.
+    pub async fn resolve(
+        &self,
+        repository: &RepositoryId,
+        source: ArtifactSource,
+        action: &str,
+    ) -> Result<ArtifactContextBundle, ArtifactContextError> {
+        resolve_initial_artifact_context_for_action_with_policy(
+            self.forge.as_ref(),
+            &self.catalog,
+            self.workflow.as_ref(),
+            repository,
+            source,
+            action,
+            self.policy,
+        )
+        .await
+    }
+
+    pub fn catalog(&self) -> &ConfiguredRepositoryCatalog {
+        &self.catalog
+    }
+}
 
 pub const DEFAULT_LINEAGE_DEPTH: usize = 8;
 pub const DEFAULT_FULL_SNAPSHOTS: usize = 16;
@@ -112,9 +168,56 @@ pub async fn resolve_initial_artifact_context_with_policy<F: Forge + ?Sized>(
     source: ArtifactSource,
     policy: ArtifactContextPolicy,
 ) -> Result<ArtifactContextBundle, ArtifactContextError> {
+    resolve_initial_artifact_context_selected(
+        forge, catalog, workflow, repository, source, policy, true,
+    )
+    .await
+}
+
+/// Resolves a bundle after workflow action selection. Only `validate_plan`
+/// needs potentially broad child/implementation evidence; other actions avoid
+/// those aggregate list queries while retaining ancestry and references.
+pub async fn resolve_initial_artifact_context_for_action_with_policy<F: Forge + ?Sized>(
+    forge: &F,
+    catalog: &ConfiguredRepositoryCatalog,
+    workflow: &ValidatedWorkflow,
+    repository: &RepositoryId,
+    source: ArtifactSource,
+    action: &str,
+    policy: ArtifactContextPolicy,
+) -> Result<ArtifactContextBundle, ArtifactContextError> {
+    resolve_initial_artifact_context_selected(
+        forge,
+        catalog,
+        workflow,
+        repository,
+        source,
+        policy,
+        action == "validate_plan",
+    )
+    .await
+}
+
+async fn resolve_initial_artifact_context_selected<F: Forge + ?Sized>(
+    forge: &F,
+    catalog: &ConfiguredRepositoryCatalog,
+    workflow: &ValidatedWorkflow,
+    repository: &RepositoryId,
+    source: ArtifactSource,
+    policy: ArtifactContextPolicy,
+    include_validation_aggregates: bool,
+) -> Result<ArtifactContextBundle, ArtifactContextError> {
     let collection =
         lineage::collect_lineage(forge, catalog, workflow, repository, source, policy).await?;
-    let extras = extras::collect_extras(forge, catalog, workflow, &collection, policy).await;
+    let mut extras = extras::collect_references(forge, catalog, &collection, policy).await;
+    if include_validation_aggregates {
+        extras.extend(
+            extras::collect_validation_aggregates(forge, catalog, workflow, &collection, policy)
+                .await,
+            policy,
+            &collection,
+        );
+    }
     let mut bundle = lineage::ordered_bundle(collection);
     let mandatory_index = bundle.index.len();
     bundle.index.extend(extras.index);
