@@ -70,6 +70,41 @@ fn existing_target_branch_is_reused_without_resetting_it() {
 }
 
 #[test]
+fn reused_dirty_read_only_target_is_still_quarantined() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let target_branch = "feature/reused-read-only";
+        let executor = fixture.executor(AgentBehavior::ReadOnlyVerdict.runner(), true);
+        let assignment = || {
+            assign_with_context(
+                "reused-read-only",
+                read_only_job_context("agent/reused-read-only", "reused-read-only")
+                    .with_base_branch(target_branch),
+            )
+        };
+
+        expect_verdict(executor.execute(assignment()).await);
+        let checkout = fixture
+            .workspace_root
+            .join("architect/reused-read-only/service");
+        fs::write(checkout.join("architect-note.txt"), "preserve this work\n")
+            .expect("write genuine local edit");
+
+        let message = expect_failure_class(
+            executor.execute(assignment()).await,
+            FailureClass::Permanent,
+        );
+
+        assert!(message.contains("quarantined during inspect-read-only"));
+        let quarantine = checkout.with_file_name("service.temper-quarantine");
+        let manifest = fs::read_to_string(quarantine.join("temper-recovery.json"))
+            .expect("read quarantine recovery manifest");
+        assert!(manifest.contains("architect-note.txt"));
+        assert!(!checkout.exists());
+    });
+}
+
+#[test]
 fn each_writable_repo_materializes_target_branch_independently() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

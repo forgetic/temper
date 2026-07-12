@@ -29,6 +29,12 @@ pub struct Workspace {
     recovery_context: RecoveryContext,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CheckoutState {
+    Created,
+    Reused,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScopedWorkspaceCleanupOutcome {
     Removed { path: PathBuf },
@@ -284,7 +290,7 @@ impl Workspace {
         .await
     }
 
-    pub(super) async fn ensure_checkout_repo(&self) -> Result<(), WorkspaceError> {
+    pub(super) async fn ensure_checkout_repo(&self) -> Result<CheckoutState, WorkspaceError> {
         if self.path.exists() {
             self.run_workspace_git(
                 false,
@@ -297,6 +303,7 @@ impl Workspace {
                 ],
             )
             .await?;
+            Ok(CheckoutState::Reused)
         } else {
             if let Some(parent) = self.path.parent() {
                 // Offload the mkdir to the blocking pool: in unified mode the
@@ -319,9 +326,8 @@ impl Workspace {
                 ],
             )
             .await?;
+            Ok(CheckoutState::Created)
         }
-
-        Ok(())
     }
 
     pub(super) async fn fetch_remote_branch(&self, branch: &str) -> Result<(), WorkspaceError> {

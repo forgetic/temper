@@ -1,3 +1,4 @@
+use super::support::target_branch::seed_feature_branch;
 use super::support::*;
 
 #[test]
@@ -27,9 +28,17 @@ fn read_only_job_returns_verdict_and_body() {
 fn read_only_job_materializes_missing_target_base_without_head_push() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
-        let executor = fixture.executor(AgentBehavior::ReadOnlyVerdict.runner(), true);
+        let target_branch = "feature/plan-7";
+        let main_head = git_output([
+            "-C",
+            path_str(&fixture.origin),
+            "rev-parse",
+            "refs/heads/main",
+        ]);
+        let agent = AgentBehavior::ReadOnlyVerdict.runner();
+        let executor = fixture.executor(agent.clone(), true);
         let context =
-            read_only_job_context("agent/plan-7", "plan-7").with_base_branch("feature/plan-7");
+            read_only_job_context("agent/plan-7", "plan-7").with_base_branch(target_branch);
 
         let (verdict, body, summary, children) = expect_verdict(
             executor
@@ -41,8 +50,58 @@ fn read_only_job_materializes_missing_target_base_without_head_push() {
         assert_eq!(body.as_deref(), Some("rewritten"));
         assert_eq!(summary.as_deref(), Some("did triage"));
         assert!(children.is_empty());
-        assert_origin_branch_exists(&fixture, "feature/plan-7");
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "rev-parse",
+                &format!("refs/heads/{target_branch}"),
+            ]),
+            main_head,
+            "missing target branch should be created from the default branch"
+        );
+        assert_origin_branch_exists(&fixture, target_branch);
+        assert_prepared_read_only_checkout(&fixture, "plan-7", target_branch, &main_head, &agent);
         assert_no_origin_branch(&fixture, "agent/plan-7");
+    });
+}
+
+#[test]
+fn read_only_job_uses_existing_target_without_quarantine_or_reset() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let target_branch = "feature/existing-plan-7";
+        let target_head = seed_feature_branch(&fixture, "acme/service", target_branch);
+        let agent = AgentBehavior::ReadOnlyVerdict.runner();
+        let executor = fixture.executor(agent.clone(), true);
+        let context = read_only_job_context("agent/existing-plan-7", "existing-plan-7")
+            .with_base_branch(target_branch);
+
+        let (verdict, _, _, _) = expect_verdict(
+            executor
+                .execute(assign_with_context("existing-plan-7", context))
+                .await,
+        );
+
+        assert_eq!(verdict, "ready_code");
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "rev-parse",
+                &format!("refs/heads/{target_branch}"),
+            ]),
+            target_head,
+            "materialization must not reset an existing target branch"
+        );
+        assert_prepared_read_only_checkout(
+            &fixture,
+            "existing-plan-7",
+            target_branch,
+            &target_head,
+            &agent,
+        );
+        assert_no_origin_branch(&fixture, "agent/existing-plan-7");
     });
 }
 
@@ -213,4 +272,38 @@ fn read_only_job_with_undeclared_verdict_is_permanent() {
         );
         assert_no_origin_branch(&fixture, "agent/triage-undeclared-7");
     });
+}
+
+fn assert_prepared_read_only_checkout(
+    fixture: &Fixture,
+    coordination_key: &str,
+    expected_branch: &str,
+    expected_head: &str,
+    agent: &FakeAgentRunner,
+) {
+    let checkout = fixture
+        .workspace_root
+        .join("architect")
+        .join(coordination_key)
+        .join("service");
+    assert_eq!(
+        git_output(["-C", path_str(&checkout), "branch", "--show-current"]),
+        expected_branch
+    );
+    assert_eq!(
+        git_output(["-C", path_str(&checkout), "rev-parse", "HEAD"]),
+        expected_head
+    );
+    assert_eq!(
+        agent.observed_head_sha(),
+        expected_head,
+        "agent should start"
+    );
+    assert_workspace_clean(fixture, "architect", coordination_key);
+    assert!(
+        !checkout
+            .with_file_name("service.temper-quarantine")
+            .exists(),
+        "fresh checkout must not be quarantined"
+    );
 }
