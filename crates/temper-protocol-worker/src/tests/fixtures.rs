@@ -19,6 +19,8 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::Result(msg) => msg.protocol_version,
         WorkerProtocolMessage::Release(msg) => msg.protocol_version,
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
+        WorkerProtocolMessage::FetchContext(msg) => msg.protocol_version,
+        WorkerProtocolMessage::ContextResponse(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,
     }
 }

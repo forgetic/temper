@@ -100,13 +100,52 @@ impl Daemon {
         self
     }
 
+    /// Installs the immutable configured-repository catalog used to authorize
+    /// bounded worker context reads.
+    pub fn with_artifact_context_catalog(
+        mut self,
+        catalog: crate::ConfiguredRepositoryCatalog,
+    ) -> Self {
+        self.artifact_catalog = Arc::new(catalog.clone());
+        let _ = self
+            .cq
+            .send(DaemonCompletion::ConfigureArtifactContextCatalog { catalog });
+        self
+    }
+
     /// Installs the immutable artifact-context service shared by poll, webhook,
-    /// direct scan, and durable-recovery enrichment.
+    /// direct scan, and durable-recovery enrichment. Its repository catalog is
+    /// also used to authorize bounded worker context reads.
     pub fn with_artifact_context_service(
         mut self,
         service: Arc<crate::ArtifactContextBundleService>,
     ) -> Self {
+        let catalog = service.catalog().clone();
         self.artifact_context = Some(service);
+        self.with_artifact_context_catalog(catalog)
+    }
+
+    /// Installs the read-only Forge capability used for authenticated on-demand
+    /// context requests. Call after [`with_artifact_context_catalog`](Self::with_artifact_context_catalog)
+    /// or [`with_artifact_context_service`](Self::with_artifact_context_service)
+    /// so the reader captures the authoritative startup catalog.
+    pub fn with_forge_context_reader<F>(
+        self,
+        forge: Arc<F>,
+        workflow: Arc<ValidatedWorkflow>,
+    ) -> Self
+    where
+        F: Forge + Send + Sync + ?Sized + 'static,
+    {
+        let reader = super::context_reader::BoundedContextReader::new(
+            forge,
+            Arc::clone(&self.artifact_catalog),
+            workflow,
+        );
+        *self
+            .context_reader_slot
+            .lock()
+            .expect("context reader slot") = Some(Arc::new(reader));
         self
     }
 
@@ -206,11 +245,15 @@ impl Daemon {
         let (cq_tx, cq_rx) = channel();
         let scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>> =
             Arc::new(std::sync::Mutex::new(None));
+        let context_reader_slot: Arc<
+            std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>,
+        > = Arc::new(std::sync::Mutex::new(None));
         let executor = DaemonExecutor {
             spawner: Arc::clone(&spawner),
             cq: cq_tx.clone(),
             applier,
             scanner_slot: Arc::clone(&scanner_slot),
+            context_reader_slot: Arc::clone(&context_reader_slot),
         };
         let machine = DaemonMachine::default_machine_with_worker_pools_and_role_limits(
             apply_grace,
@@ -224,7 +267,9 @@ impl Daemon {
         Self {
             cq: cq_tx,
             scanner_slot,
+            context_reader_slot,
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
+            artifact_catalog: Arc::new(crate::ConfiguredRepositoryCatalog::default()),
             artifact_context: None,
         }
     }

@@ -85,7 +85,7 @@ pub(super) fn resolve_repository(
 }
 
 pub(super) fn validate_identity(repo: &str, number: u64) -> Result<(), ForgeContextErrorCode> {
-    if repo.trim().is_empty() || number == 0 {
+    if repo.trim().is_empty() || repo.len() > 512 || number == 0 {
         Err(ForgeContextErrorCode::InvalidRequest)
     } else {
         Ok(())

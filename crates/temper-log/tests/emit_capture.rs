@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use temper_log::WorkItemRef;
-use temper_log::emit::{self, TransitionApplied};
+use temper_log::emit::{self, ForgeContextRead, TransitionApplied};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
 use tracing_subscriber::Layer;
@@ -122,6 +122,62 @@ fn transition_applied_emits_fields_and_human_message() {
             "engine:  [acme/widgets#42] triage_intake_to_code applied | body rewritten as code spec | -untriaged +code +ready"
         )
     );
+}
+
+#[test]
+fn forge_context_read_audit_is_structured_and_never_accepts_sensitive_content() {
+    let layer = CaptureLayer::default();
+    let events = layer.events.clone();
+    let subscriber = registry().with(layer);
+
+    with_default(subscriber, || {
+        emit::emit_forge_context_read(ForgeContextRead {
+            worker_id: "worker-a",
+            job_id: "job-283",
+            role: "engineer",
+            operation: "forge_get_item",
+            repository: "ai/temper",
+            item_number: 283,
+            status: "success",
+            result_count: 1,
+            truncated: false,
+            duration_ms: 12,
+        });
+    });
+
+    let captured = events.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    let event = &captured[0];
+    assert_eq!(event.target, "temper::engine");
+    for (field, expected) in [
+        ("service", "engine"),
+        ("event", "forge.context.read"),
+        ("worker_id", "worker-a"),
+        ("job_id", "job-283"),
+        ("role", "engineer"),
+        ("operation", "forge_get_item"),
+        ("repo", "ai/temper"),
+        ("item_number", "283"),
+        ("status", "success"),
+        ("result_count", "1"),
+        ("duration_ms", "12"),
+    ] {
+        assert_eq!(event.fields.get(field).map(String::as_str), Some(expected));
+    }
+    assert_eq!(
+        event.fields.get("truncated").map(String::as_str),
+        Some("false")
+    );
+    let rendered = format!("{:?}", event.fields);
+    for forbidden in [
+        "sensitive body",
+        "private comment",
+        "Authorization",
+        "Bearer",
+        "pool-secret",
+    ] {
+        assert!(!rendered.contains(forbidden), "audit leaked {forbidden}");
+    }
 }
 
 #[test]
