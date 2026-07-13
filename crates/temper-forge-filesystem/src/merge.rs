@@ -52,7 +52,7 @@ pub(crate) fn merge_pull_request(
     sort_pull_requests_by_number(&mut pull_requests);
     forge.write_pull_requests(&repo_id, &pull_requests)?;
     forge.write_metadata(&metadata)?;
-    forge.publish_item_hint(&repo_id, number, ChangeKind::PullRequest);
+    forge.publish_pull_request_number_hint(&repo_id, number, ChangeKind::State);
 
     Ok(merge)
 }

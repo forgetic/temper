@@ -452,7 +452,7 @@ fn role_worker_hint_matching_ticks_only_the_hinted_repository() {
         ExecutionContext::new(),
     );
 
-    let hint = ChangeHint::repo(RepositoryPath::new("acme", "b"), ChangeKind::Issue);
+    let hint = ChangeHint::repository(RepositoryPath::new("acme", "b"), ChangeKind::Edited);
     let report = block_on(worker.tick_matching_hints(ts("2026-05-29T00:00:00Z"), &[hint]));
 
     assert!(report.failures.is_empty());
@@ -498,7 +498,7 @@ fn mechanical_worker_hint_matching_ticks_only_the_hinted_repository() {
     )
     .expect("worker builds");
 
-    let hint = ChangeHint::repo(RepositoryPath::new("acme", "b"), ChangeKind::Issue);
+    let hint = ChangeHint::repository(RepositoryPath::new("acme", "b"), ChangeKind::Edited);
     let report = block_on(worker.tick_matching_hints(ts("2026-05-29T00:00:00Z"), &[hint]));
 
     assert!(report.failures.is_empty());
@@ -549,7 +549,7 @@ fn repository_scan_order_is_deterministic_and_hints_prioritize() {
     );
 
     seen.lock().unwrap().clear();
-    let hint = ChangeHint::repo(RepositoryPath::new("acme", "c"), ChangeKind::Issue);
+    let hint = ChangeHint::repository(RepositoryPath::new("acme", "c"), ChangeKind::Edited);
     let report = block_on(worker.tick_hinted(ts("2026-05-29T00:00:01Z"), &[hint]));
     assert!(report.failures.is_empty());
     assert_eq!(

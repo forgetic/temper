@@ -77,7 +77,7 @@ pub(crate) fn create_pull_request(
     sort_pull_requests_by_number(&mut pull_requests);
     forge.write_pull_requests(repo_id, &pull_requests)?;
     forge.write_metadata(&metadata)?;
-    forge.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+    forge.publish_pull_request_hint(&pull_request, ChangeKind::Created);
 
     Ok(pull_request)
 }
@@ -149,7 +149,7 @@ pub(crate) fn update_pull_request(
     sort_pull_requests_by_number(&mut pull_requests);
     forge.write_pull_requests(&repo_id, &pull_requests)?;
     forge.write_metadata(&metadata)?;
-    forge.publish_pull_request_hint(&updated, ChangeKind::PullRequest);
+    forge.publish_pull_request_hint(&updated, ChangeKind::Edited);
 
     Ok(updated)
 }
@@ -161,7 +161,7 @@ pub(crate) fn add_pull_request_dependency_op(
 ) -> ForgeResult<PullRequest> {
     let _guard = forge.write_lock()?;
     let pull_request = add_pull_request_dependency(forge, id, target)?;
-    forge.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+    forge.publish_pull_request_hint(&pull_request, ChangeKind::Dependency);
     Ok(pull_request)
 }
 
@@ -172,6 +172,6 @@ pub(crate) fn remove_pull_request_dependency_op(
 ) -> ForgeResult<PullRequest> {
     let _guard = forge.write_lock()?;
     let pull_request = remove_pull_request_dependency(forge, id, target)?;
-    forge.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+    forge.publish_pull_request_hint(&pull_request, ChangeKind::Dependency);
     Ok(pull_request)
 }

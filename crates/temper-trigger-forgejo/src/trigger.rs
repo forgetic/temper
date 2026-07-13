@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use temper_forge::{ItemNumber, RepositoryPath};
+use temper_forge::{HintArtifactKind, ItemNumber, RepositoryPath};
 use temper_runner::{ChangeHint, ChangeKind};
 use temper_wake::{WakeError, send_wake_with_hint};
 
@@ -133,10 +133,11 @@ fn handle_request(
             tracing::info!(
                 target: "temper_trigger_forgejo",
                 event = %event,
-                kind = ?hint.kind,
+                change = ?hint.change,
+                target = ?hint.target,
                 repo_owner = %hint.repo.owner,
                 repo_name = %hint.repo.name,
-                item = ?hint.item.map(ItemNumber::get),
+                item = ?hint.artifact_target().map(|(_, number)| number.get()),
                 wake_outcome = %delivery.outcome(),
                 targets = delivery.targets,
                 sent = delivery.sent,
@@ -247,28 +248,146 @@ fn parse_hint(body: &[u8], event: &str) -> Result<ChangeHint, TriggerError> {
     let value: Value = serde_json::from_slice(body)
         .map_err(|error| TriggerError::BadRequest(format!("invalid JSON payload: {error}")))?;
     let repo = parse_repo(&value)?;
-    let item = value
-        .pointer("/pull_request/number")
-        .and_then(Value::as_u64)
-        .or_else(|| value.pointer("/issue/number").and_then(Value::as_u64))
-        .map(ItemNumber::new);
-    let kind = match event {
-        "issues" | "issue" => ChangeKind::Issue,
-        "pull_request" | "pull_request_sync" => ChangeKind::PullRequest,
+    let issue = value.pointer("/issue/number").and_then(json_u64);
+    let pull_request = value.pointer("/pull_request/number").and_then(json_u64);
+
+    let artifact = if review_event(event) {
+        pull_request.map(|number| (HintArtifactKind::PullRequest, number))
+    } else if ci_event(event) {
+        ci_pr_number(&value).map(|number| (HintArtifactKind::PullRequest, number))
+    } else {
+        match event {
+            "issues" | "issue" | "issue_dependency" | "issue_dependencies" => {
+                issue.map(|number| (HintArtifactKind::Issue, number))
+            }
+            "pull_request"
+            | "pull_request_sync"
+            | "pull_request_dependency"
+            | "pull_request_dependencies" => {
+                pull_request.map(|number| (HintArtifactKind::PullRequest, number))
+            }
+            "pull_request_comment" => pull_request
+                .or(issue)
+                .map(|number| (HintArtifactKind::PullRequest, number)),
+            "issue_comment" => pull_request.map_or_else(
+                || {
+                    issue.map(|number| {
+                        let kind = if value
+                            .pointer("/issue/pull_request")
+                            .is_some_and(|marker| !marker.is_null())
+                        {
+                            HintArtifactKind::PullRequest
+                        } else {
+                            HintArtifactKind::Issue
+                        };
+                        (kind, number)
+                    })
+                },
+                |number| Some((HintArtifactKind::PullRequest, number)),
+            ),
+            "comment" if issue.is_some() && pull_request.is_some() => None,
+            "comment" => pull_request.map_or_else(
+                || {
+                    issue.map(|number| {
+                        let kind = if value
+                            .pointer("/issue/pull_request")
+                            .is_some_and(|marker| !marker.is_null())
+                        {
+                            HintArtifactKind::PullRequest
+                        } else {
+                            HintArtifactKind::Issue
+                        };
+                        (kind, number)
+                    })
+                },
+                |number| Some((HintArtifactKind::PullRequest, number)),
+            ),
+            _ => None,
+        }
+    };
+
+    let mut change = match event {
+        "issues" | "issue" | "pull_request" | "pull_request_sync" => ChangeKind::Edited,
+        "issue_dependency"
+        | "issue_dependencies"
+        | "pull_request_dependency"
+        | "pull_request_dependencies" => ChangeKind::Dependency,
         "issue_comment" | "pull_request_comment" | "comment" => ChangeKind::Comment,
-        "pull_request_review"
-        | "pull_request_review_approved"
-        | "pull_request_review_rejected"
-        | "pull_request_review_comment"
-        | "pull_request_approved"
-        | "pull_request_rejected"
-        | "review" => ChangeKind::Review,
+        event if review_event(event) => ChangeKind::Review,
         "push" => ChangeKind::Push,
-        "status" | "check_run" | "workflow_run" | "workflow_job" | "action_run_failure"
-        | "action_run_recover" | "action_run_success" => ChangeKind::Ci,
+        event if ci_event(event) => ChangeKind::Ci,
         _ => ChangeKind::Unknown,
     };
-    Ok(ChangeHint { repo, item, kind })
+    if artifact.is_none()
+        && !matches!(
+            change,
+            ChangeKind::Push | ChangeKind::Ci | ChangeKind::Unknown
+        )
+    {
+        change = ChangeKind::Unknown;
+    }
+
+    Ok(match artifact {
+        Some((kind, number)) => ChangeHint::artifact(repo, kind, ItemNumber::new(number), change),
+        None => ChangeHint::repository(repo, change),
+    })
+}
+
+fn review_event(event: &str) -> bool {
+    matches!(
+        event,
+        "pull_request_review"
+            | "pull_request_review_approved"
+            | "pull_request_review_rejected"
+            | "pull_request_review_comment"
+            | "pull_request_approved"
+            | "pull_request_rejected"
+            | "review"
+    )
+}
+
+fn ci_event(event: &str) -> bool {
+    matches!(
+        event,
+        "status"
+            | "check_run"
+            | "workflow_run"
+            | "workflow_job"
+            | "action_run_failure"
+            | "action_run_recover"
+            | "action_run_success"
+    )
+}
+
+fn ci_pr_number(value: &Value) -> Option<u64> {
+    value
+        .pointer("/pull_request/number")
+        .and_then(json_u64)
+        .or_else(|| {
+            value
+                .pointer("/workflow_run/pull_requests/0/number")
+                .and_then(json_u64)
+        })
+        .or_else(|| {
+            value
+                .pointer("/check_run/pull_requests/0/number")
+                .and_then(json_u64)
+        })
+        .or_else(|| {
+            let payload = value.pointer("/run/event_payload")?;
+            let payload = match payload {
+                Value::String(raw) => serde_json::from_str::<Value>(raw).ok()?,
+                Value::Object(_) => payload.clone(),
+                _ => return None,
+            };
+            payload.pointer("/pull_request/number").and_then(json_u64)
+        })
+}
+
+fn json_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
 }
 
 fn parse_repo(value: &Value) -> Result<RepositoryPath, TriggerError> {
