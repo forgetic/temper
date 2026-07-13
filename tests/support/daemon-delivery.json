@@ -217,12 +217,7 @@
       "roles": [
         "engineer"
       ],
-      "effects": [
-        {
-          "kind": "create_comment",
-          "body": "CI failed before landing. Engineer: push a fix to the PR head; Temper will retry landing once fresh CI passes."
-        }
-      ]
+      "effects": []
     },
     {
       "id": "land_pr",

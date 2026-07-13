@@ -271,6 +271,14 @@ pub enum Diagnostic {
         action: String,
         checkout: String,
     },
+    /// A writable pull-request action contains an effect that its monotonic
+    /// repair publication path cannot safely apply.
+    QueueActionUnsupportedPullRequestRepairEffect {
+        queue: String,
+        role: String,
+        action: String,
+        effect: String,
+    },
     /// A validation binding uses an action that does not authorize its validator role.
     ValidationBindingActionUnauthorized {
         binding: String,
@@ -337,6 +345,7 @@ impl Diagnostic {
             | Diagnostic::QueueActionArtifactMismatch { .. }
             | Diagnostic::QueueActionFilterArtifactMismatch { .. }
             | Diagnostic::QueueActionInvalidCheckout { .. }
+            | Diagnostic::QueueActionUnsupportedPullRequestRepairEffect { .. }
             | Diagnostic::ValidationBindingActionUnauthorized { .. }
             | Diagnostic::ValidationBindingActionArtifactMismatch { .. }
             | Diagnostic::TransitionOutcomeUnauthorized { .. }
@@ -449,6 +458,15 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 formatter,
                 "action assignment for role `{role}` on queue `{queue}` uses action `{action}` with unsupported checkout capability `{checkout}`"
+            ),
+            Diagnostic::QueueActionUnsupportedPullRequestRepairEffect {
+                queue,
+                role,
+                action,
+                effect,
+            } => write!(
+                formatter,
+                "action assignment for role `{role}` on queue `{queue}` uses pull_request_writable checkout, but action `{action}` contains unsupported repair effect `{effect}`"
             ),
             Diagnostic::ValidationBindingActionUnauthorized {
                 binding,

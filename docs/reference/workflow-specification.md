@@ -128,6 +128,15 @@ job guidance. Temper validates that the referenced role/action/artifact exist,
 that the action authorizes the role and operates on a queue-selected artifact,
 and that checkout capability tokens are supported.
 
+A `pull_request_writable` action publishes its repaired-head marker together with
+the transition's labels and assignees. Such transitions may contain only label,
+assignee, and reviewer-request effects; use generated assignment guidance rather
+than a `create_comment` effect for CI repair instructions. Reviewer requests are
+best-effort after the repaired-head commit. Other effect kinds are rejected by
+static validation because they require independent durable publication semantics.
+An empty effect list is valid because repaired-head publication is itself the
+state transition.
+
 ## Static validation
 
 Validation rejects or diagnoses:
@@ -138,8 +147,8 @@ Validation rejects or diagnoses:
   transitions, gates, relations, or external tools;
 - artifact/state mismatches, including labels illegal for an artifact kind;
 - queue role-worker actions whose role/action/artifact is missing, unauthorized,
-  incompatible with the queue's artifact kinds, or declares an unsupported
-  checkout capability;
+  incompatible with the queue's artifact kinds, declares an unsupported checkout
+  capability, or binds a writable PR repair to an unsupported effect;
 - queue automation whose actor/transition/fallback is missing, unauthorized, or
   incompatible with the queue's artifact kinds;
 - `create_pull_request.artifact_kind` values that are undeclared or name a

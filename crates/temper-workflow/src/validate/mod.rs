@@ -11,6 +11,7 @@
 //! and transition outcome routing).
 
 mod contracts;
+mod queue_actions;
 mod references;
 
 use crate::ValidationErrors;
@@ -89,7 +90,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
     contracts::check_role_external_tools(spec, &mut diagnostics);
     contracts::check_default_artifact_kinds(spec, &mut diagnostics);
     contracts::check_queue_automation_contract(spec, &roles, &mut diagnostics);
-    contracts::check_queue_action_contract(spec, &roles, &mut diagnostics);
+    queue_actions::check_queue_action_contract(spec, &roles, &mut diagnostics);
     contracts::check_validation_binding_contract(spec, &roles, &artifacts, &mut diagnostics);
     contracts::check_create_pull_request_artifact_kind_targets(spec, &mut diagnostics);
     contracts::check_create_issues_cardinality(spec, &mut diagnostics);
