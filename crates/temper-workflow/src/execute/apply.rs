@@ -15,7 +15,9 @@
 //! merge (if any) and final label/assignee update — the commit point. See the
 //! parent module docs for why pre-commit effects are ordered this way.
 
-use super::issue_creates::{PreparedCreateIssues, validate_child_dependencies};
+use super::issue_creates::{
+    PreparedCreateIssues, create_issues_completion, validate_child_dependencies,
+};
 use super::messaging::PreparedAttachReview;
 use super::verify::AppliedState;
 use super::{ExecutionError, Executor, Loaded};
@@ -46,7 +48,20 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .await?;
         self.apply_pull_request_creates(repo_id, &prepared.pull_request_creates)
             .await?;
-        self.apply_issue_creates(repo_id, plan.target, &prepared.issue_creates)
+        let create_completion = create_issues_completion(
+            prepared.body.as_deref(),
+            &prepared.add_labels,
+            &prepared.remove_labels,
+            &prepared.add_assignees,
+            &prepared.remove_assignees,
+        );
+        let create_committed = self
+            .apply_issue_creates(
+                repo_id,
+                plan.target,
+                &prepared.issue_creates,
+                &create_completion,
+            )
             .await?;
         self.apply_review_requests(loaded, &prepared.review_requests)
             .await?;
@@ -63,9 +78,15 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         .await?;
         self.apply_close_parent_issues(repo_id, loaded, prepared.close_parent_issues)
             .await?;
-        let committed = self
-            .apply_update(repo_id, loaded, Some(plan), prepared)
-            .await?;
+        let committed = if create_committed.is_some() {
+            // Fan-out completion atomically folded the durable intent progress
+            // into the routed source update, so applying `prepared` again would
+            // split the transition's commit point.
+            create_committed
+        } else {
+            self.apply_update(repo_id, loaded, Some(plan), prepared)
+                .await?
+        };
         if let Some(state) = committed {
             self.verify_state(&state, &plan.postconditions)?;
         } else {

@@ -154,15 +154,17 @@ impl Loaded {
 
 /// Durable checkpoints in the staged child-issue lifecycle.
 ///
-/// Hooks run after the Forge mutation has committed but before the parent
-/// create-intent records that checkpoint. This makes them useful for crash
-/// injection: replay must discover the committed mutation and continue without
-/// creating or dispatching a duplicate child.
+/// Hooks run after a Forge mutation has committed and before the next pass can
+/// durably subsume it. This makes them useful for crash injection: replay must
+/// discover the committed mutation and continue without creating, relating, or
+/// dispatching a duplicate child.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChildIssueCheckpoint {
     Created,
     Wired,
+    ParentAggregated,
     Activated,
+    Completed,
 }
 
 /// Optional observer for child issue lifecycle checkpoints.
