@@ -1,19 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The work-item feed: translating scanned [`WorkItem`]s into daemon jobs and
-//! enriching their payloads with the workspace context the worker-side coding
-//! agent needs.
-//!
-//! [`job_from_work_item`] is a pure translation (no I/O); [`enrich_work_item_job`]
-//! performs the Forge reads — repository coordinates, base branch, branch hint,
-//! correlation key, artifact snapshot, and workspace manifest — and decides
-//! whether a scanned item should be skipped (terminal artifact, or an
-//! implementation PR already exists).
+//! Maps scanned work items into enriched daemon jobs while keeping pure job
+//! identity translation separate from Forge-backed workspace context loading.
 
 mod action_assignment;
+mod targeted;
 mod workspace;
 
 use self::action_assignment::{enrich_job_context_from_workflow, enrich_pull_request_writable_job};
+use self::targeted::TargetedEnrichment;
 use std::collections::BTreeSet;
 
 use serde_json::json;
@@ -23,7 +18,8 @@ use temper_forge::{
 };
 use temper_protocol_worker::{Artifact, JobContext};
 use temper_runner::{
-    ScanError, WorkItem, pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake,
+    ScanError, TargetedArtifactSnapshot, WorkItem, pr_branch_hint, pr_correlation_key, scan_role,
+    scan_role_wake,
 };
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, Effect, RoleId, ValidatedWorkflow,
@@ -36,11 +32,11 @@ use workspace::{build_workspace_manifest, target_number, terminal_checked_snapsh
 pub use self::backstop::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, run_poll_backstop_tick, spawn_poll_backstop,
 };
+pub use self::targeted::{TargetedRoleFeedResult, enqueue_targeted_role_work};
 
 mod backstop;
 
-/// A daemon job derived from a scanned `WorkItem`: exactly the arguments
-/// `Daemon::enqueue_job` consumes.
+/// Arguments consumed by `Daemon::enqueue_job` for a scanned work item.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkItemJob {
     pub job_id: String,
@@ -179,6 +175,7 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
         compiled,
         true,
         artifact_context,
+        None,
     )
     .await
     .map_err(|error| error.to_string())?
@@ -209,9 +206,7 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
     Ok(job)
 }
 
-/// Enrich a mapped job's payload with the workspace context the worker-side
-/// coding agent needs. Forge reads happen here so `job_from_work_item` stays
-/// pure.
+/// Adds Forge-backed workspace context to a mapped job.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     forge: &F,
@@ -221,7 +216,10 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
 ) -> Result<EnrichOutcome, ScanError> {
-    enrich_work_item_job_inner(forge, repo, item, job, workflow, compiled, false, None).await
+    enrich_work_item_job_inner(
+        forge, repo, item, job, workflow, compiled, false, None, None,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -234,15 +232,37 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
     recovering_assignment: bool,
     artifact_context: Option<&crate::ArtifactContextBundleService>,
+    targeted: Option<TargetedEnrichment<'_>>,
 ) -> Result<EnrichOutcome, ScanError> {
-    let repository = forge
-        .get_repository(repo)
-        .await?
-        .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?;
+    let repository = match targeted.as_ref() {
+        Some(targeted) => targeted.repository.clone(),
+        None => forge
+            .get_repository(repo)
+            .await?
+            .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?,
+    };
 
     let number = target_number(item.target);
-    let Some(artifact) = terminal_checked_snapshot(forge, repo, item.target).await? else {
-        return Ok(EnrichOutcome::SkipTerminalArtifact);
+    let artifact = match targeted.as_ref() {
+        Some(targeted) => {
+            if targeted.snapshot.source() != item.target
+                || targeted.classified.source != item.target
+            {
+                return Err(ScanError::InvalidWorkflow(
+                    "targeted enrichment snapshot does not match work item".to_string(),
+                ));
+            }
+            let Some(snapshot) = targeted::job_snapshot(targeted.snapshot) else {
+                return Ok(EnrichOutcome::SkipTerminalArtifact);
+            };
+            snapshot
+        }
+        None => {
+            let Some(snapshot) = terminal_checked_snapshot(forge, repo, item.target).await? else {
+                return Ok(EnrichOutcome::SkipTerminalArtifact);
+            };
+            snapshot
+        }
     };
     // Deterministic failures are durably parked with this engine-owned
     // attention label. Exclude it before any custom queue/action can dispatch
@@ -294,31 +314,20 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     let action = context.action.as_deref().ok_or_else(|| {
         ScanError::InvalidWorkflow("enriched job is missing a selected action".to_string())
     })?;
-    context.artifact_context = Some(if let Some(service) = artifact_context {
-        service
-            .resolve(repo, item.target, action)
-            .await
-            .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))?
-    } else {
-        // Compatibility path for callers that construct a bare daemon in tests
-        // or embed the feed without production runtime wiring.
-        let catalog = crate::ConfiguredRepositoryCatalog::single(
-            repository.id.clone(),
-            temper_forge::RepositoryPath::new(repository.owner.clone(), repository.name.clone()),
-            "",
-        );
-        crate::resolve_initial_artifact_context_for_action_with_policy(
+    context.artifact_context = Some(
+        targeted::resolve_artifact_context(
             forge,
-            &catalog,
-            workflow,
+            &repository,
+            &job.repo,
             repo,
-            item.target,
+            workflow,
+            item,
             action,
-            crate::ArtifactContextPolicy::default(),
+            artifact_context,
+            targeted.as_ref(),
         )
-        .await
-        .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))?
-    });
+        .await?,
+    );
 
     // A pull-request writable job is an in-place PR-head fix: the worker checks
     // out the PR's real head branch and pushes the agent's fix back to that same
@@ -326,7 +335,14 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     // declares when this mode is appropriate; the enrichment only materializes
     // the PR-head checkout and action-specific guidance.
     if context.checkout_capability.as_deref() == Some("pull_request_writable") {
-        enrich_pull_request_writable_job(forge, repo, item, compiled, &mut context).await?;
+        let preloaded = targeted
+            .as_ref()
+            .and_then(|targeted| match targeted.snapshot {
+                TargetedArtifactSnapshot::PullRequest(pull_request) => Some(pull_request.as_ref()),
+                TargetedArtifactSnapshot::Issue(_) => None,
+            });
+        enrich_pull_request_writable_job(forge, repo, item, compiled, &mut context, preloaded)
+            .await?;
     }
 
     if !recovering_assignment
@@ -773,6 +789,7 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
             compiled,
             false,
             daemon.artifact_context.as_deref(),
+            None,
         )
         .await
         {

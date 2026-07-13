@@ -59,13 +59,15 @@ pub use artifact_context::{
     DEFAULT_RELATED_DEPTH, DEFAULT_RELATED_RESULTS, MAX_COMMENT_BYTES, MAX_FORGE_RESPONSE_BYTES,
     MAX_ITEM_BODY_BYTES, MAX_ITEM_COMMENTS, MAX_RELATED_DEPTH, MAX_RELATED_RESULTS,
     resolve_initial_artifact_context, resolve_initial_artifact_context_for_action_with_policy,
+    resolve_initial_artifact_context_for_action_with_primary,
     resolve_initial_artifact_context_with_policy,
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
 pub use engine_config::EngineConfig;
 pub use feed::{
-    PollBackstopConfig, RoleFeedMode, RoleFeedTarget, WorkItemJob, job_from_work_item,
+    PollBackstopConfig, RoleFeedMode, RoleFeedTarget, TargetedRoleFeedResult, WorkItemJob,
+    enqueue_targeted_role_work, job_from_work_item,
     recover_advanced_pull_request_assignment_from_durable, recovered_job_from_assignment,
     recovered_job_from_assignment_with_artifact_context, run_poll_backstop_tick,
     spawn_poll_backstop,
