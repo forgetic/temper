@@ -1,0 +1,18 @@
+[package]
+name = "temper-protocol-activity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Versioned serde DTOs and pure validation for Temper agent activity streams."
+
+[dependencies]
+base64 = "0.22"
+serde.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,162 @@
+{
+  "frame": {
+    "version": 1,
+    "occurred_at": "2026-07-13T14:28:03.421Z",
+    "elapsed_ms": 12831,
+    "scope": {
+      "id": "investigate-abc",
+      "kind": "sub_agent",
+      "parent_id": "main"
+    },
+    "turn": 2,
+    "event": {
+      "type": "steering.applied",
+      "data": {
+        "source": "user",
+        "instruction": {
+          "storage": "inline",
+          "text": "Focus on protocol validation.",
+          "truncated": false
+        }
+      }
+    }
+  },
+  "batch": {
+    "version": 1,
+    "run_id": "run-0190",
+    "first_seq": 7,
+    "events": [
+      {
+        "version": 1,
+        "run_id": "run-0190",
+        "seq": 7,
+        "occurred_at": "2026-07-13T14:28:03.421Z",
+        "elapsed_ms": 12831,
+        "assignment": {
+          "job_id": "ai/temper/issue-304/engineer/code",
+          "repository": "ai/temper",
+          "artifact_ref": "ai/temper#304",
+          "role": "engineer",
+          "action": "code",
+          "correlation_key": "activity-contract"
+        },
+        "agent_session_id": "session-7",
+        "scope": {
+          "id": "main",
+          "kind": "main"
+        },
+        "turn": 2,
+        "event": {
+          "type": "assistant.message",
+          "data": {
+            "message_id": "message-7",
+            "content": {
+              "storage": "blob",
+              "blob": {
+                "digest": "sha256:686b4ceac796818f0488251765910d02af884328d702594a56c4b96b06407e4f",
+                "bytes": 16,
+                "media_type": "text_plain_utf8"
+              }
+            }
+          }
+        }
+      },
+      {
+        "version": 1,
+        "run_id": "run-0190",
+        "seq": 8,
+        "occurred_at": "2026-07-13T14:28:03.500+00:00",
+        "elapsed_ms": 12910,
+        "assignment": {
+          "job_id": "ai/temper/issue-304/engineer/code",
+          "repository": "ai/temper",
+          "artifact_ref": "ai/temper#304",
+          "role": "engineer",
+          "action": "code",
+          "correlation_key": "activity-contract"
+        },
+        "agent_session_id": "session-7",
+        "scope": {
+          "id": "main",
+          "kind": "main"
+        },
+        "turn": 2,
+        "event": {
+          "type": "usage",
+          "data": {
+            "input_tokens": 100,
+            "output_tokens": 40,
+            "cache_read_tokens": 20,
+            "cache_write_tokens": 10
+          }
+        }
+      }
+    ],
+    "blobs": [
+      {
+        "blob": {
+          "digest": "sha256:686b4ceac796818f0488251765910d02af884328d702594a56c4b96b06407e4f",
+          "bytes": 16,
+          "media_type": "text_plain_utf8"
+        },
+        "data_base64": "aGVsbG8gdHJhbnNjcmlwdA=="
+      }
+    ]
+  },
+  "acknowledgement": {
+    "version": 1,
+    "run_id": "run-0190",
+    "highest_contiguous_seq": 8
+  },
+  "capture_policies": [
+    {
+      "version": 1,
+      "capture": "off",
+      "retention_days": 14,
+      "max_run_bytes": 50000000,
+      "max_inline_bytes": 16384,
+      "max_blob_bytes": 8388608,
+      "capture_thinking": false
+    },
+    {
+      "version": 1,
+      "capture": "metadata",
+      "retention_days": 14,
+      "max_run_bytes": 50000000,
+      "max_inline_bytes": 16384,
+      "max_blob_bytes": 8388608,
+      "capture_thinking": false
+    },
+    {
+      "version": 1,
+      "capture": "transcript",
+      "retention_days": 14,
+      "max_run_bytes": 50000000,
+      "max_inline_bytes": 16384,
+      "max_blob_bytes": 8388608,
+      "capture_thinking": false
+    },
+    {
+      "version": 1,
+      "capture": "diagnostic",
+      "retention_days": 14,
+      "max_run_bytes": 50000000,
+      "max_inline_bytes": 16384,
+      "max_blob_bytes": 8388608,
+      "capture_thinking": true
+    }
+  ],
+  "blob_reference": {
+    "digest": "sha256:686b4ceac796818f0488251765910d02af884328d702594a56c4b96b06407e4f",
+    "bytes": 16,
+    "media_type": "text_plain_utf8"
+  },
+  "blob_attachment": {
+    "blob": {
+      "digest": "sha256:686b4ceac796818f0488251765910d02af884328d702594a56c4b96b06407e4f",
+      "bytes": 16,
+      "media_type": "text_plain_utf8"
+    },
+    "data_base64": "aGVsbG8gdHJhbnNjcmlwdA=="
+  }
+}
