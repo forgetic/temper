@@ -11,7 +11,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
-use temper_forge::{Forge, RepositoryId};
+use temper_forge::{Forge, Repository, RepositoryId};
 use temper_protocol_worker::{
     Artifact, PullRequestFreshness, PullRequestFreshnessResponse, WORKER_AUTHORIZATION_HEADER,
     WorkerAuth, WorkerProtocolMessage,
@@ -475,6 +475,25 @@ impl Daemon {
     ) -> Result<usize, temper_runner::ScanError> {
         crate::feed::enqueue_scanned_role_work(
             self, forge, repo, workflow, compiled, now, role, mode,
+        )
+        .await
+    }
+
+    /// Evaluates one exact artifact for a configured role set without running
+    /// broad candidate discovery or repository-wide pending reconciliation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
+        &self,
+        forge: &F,
+        repository: &Repository,
+        workflow: &ValidatedWorkflow,
+        compiled: &CompiledWorkflow,
+        now: DateTime<Utc>,
+        artifact: temper_runner::ArtifactAddress,
+        roles: &[RoleId],
+    ) -> Result<crate::feed::TargetedRoleFeedResult, temper_runner::ScanError> {
+        crate::feed::enqueue_targeted_role_work(
+            self, forge, repository, workflow, compiled, now, artifact, roles,
         )
         .await
     }

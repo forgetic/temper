@@ -92,6 +92,23 @@ pub(crate) fn queues_for_scan<'a>(
         .collect()
 }
 
+pub(crate) fn queues_for_roles<'a>(
+    compiled: &'a CompiledWorkflow,
+    roles: &[RoleId],
+) -> Vec<&'a QueueManifest> {
+    compiled
+        .queues()
+        .iter()
+        .filter(|queue| {
+            roles.iter().any(|role| {
+                compiled
+                    .role(role)
+                    .is_some_and(|manifest| manifest.queues.contains(&queue.id))
+            })
+        })
+        .collect()
+}
+
 #[derive(Default)]
 struct CandidateQueryBuilder {
     issue_open_all: bool,

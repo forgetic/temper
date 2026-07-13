@@ -64,6 +64,40 @@ pub(super) async fn collect_lineage<F: ArtifactContextForge + ?Sized>(
         .map_err(|error| ArtifactContextError::Primary(error.to_string()))?;
     let primary_snapshot =
         primary_item.snapshot(repository, Some(primary_classified.kind.to_string()));
+    collect_lineage_from_primary(
+        forge,
+        catalog,
+        workflow,
+        repository_id,
+        primary_snapshot,
+        primary_classified,
+        policy,
+    )
+    .await
+}
+
+/// Collects bounded lineage from a primary snapshot that was already fetched
+/// and classified by a targeted scan.
+pub(super) async fn collect_lineage_from_primary<F: ArtifactContextForge + ?Sized>(
+    forge: &F,
+    catalog: &ConfiguredRepositoryCatalog,
+    workflow: &ValidatedWorkflow,
+    repository_id: &RepositoryId,
+    primary_snapshot: ArtifactSnapshot,
+    primary_classified: ClassifiedArtifact,
+    policy: ArtifactContextPolicy,
+) -> Result<Collection, ArtifactContextError> {
+    let configured = catalog.by_id(repository_id).ok_or_else(|| {
+        ArtifactContextError::Primary(format!("repository `{repository_id}` is not configured"))
+    })?;
+    if &primary_snapshot.artifact.repository != configured
+        || primary_snapshot.artifact.artifact_type != source_type(primary_classified.source)
+        || primary_snapshot.artifact.number != source_number(primary_classified.source).get()
+    {
+        return Err(ArtifactContextError::Primary(
+            "preloaded primary snapshot does not match configured artifact identity".into(),
+        ));
+    }
     let primary = key(&primary_snapshot.artifact);
     let mut collection = Collection {
         primary: primary.clone(),

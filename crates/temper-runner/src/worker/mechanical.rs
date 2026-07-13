@@ -3,7 +3,7 @@
 use super::automation;
 use super::{Progress, Worker, WorkerError, saturating_u32, saturating_u64};
 use crate::coding_workspace::ExternalToolExecutors;
-use crate::scan::targeted_automated_work_items;
+use crate::scan::{ArtifactAddress, TargetedArtifactSnapshot, load_targeted_artifact};
 use crate::worker::PullRequestMergeObserver;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -152,55 +152,45 @@ where
         artifact_kind: HintArtifactKind,
         change: ChangeKind,
     ) -> Result<Progress, WorkerError> {
-        let classifier = temper_workflow::Classifier::new(self.workflow);
         let mut targeted_snapshots = Vec::new();
-        let classified = match artifact_kind {
-            HintArtifactKind::PullRequest => {
-                let pull_request = self
-                    .forge
-                    .get_pull_request_by_number(self.repo, item)
-                    .await?;
-                if let Some(pull_request) = pull_request {
-                    targeted_snapshots.push(ArtifactSnapshot::from_pull_request(&pull_request));
-                    if change != ChangeKind::Ci {
-                        if let Some(metadata) = parse_metadata_block(&pull_request.body)
-                            .map_err(|error| ForgeError::Backend(error.to_string()))?
-                        {
-                            for parent in metadata
-                                .parents
-                                .iter()
-                                .filter(|parent| parent.is_in_repository(self.repo))
-                            {
-                                if let Some(issue) = self
-                                    .forge
-                                    .get_issue_by_number(self.repo, parent.number)
-                                    .await?
-                                {
-                                    targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
-                                }
-                            }
-                        }
-                    }
-                    classifier.classify_pull_request(&pull_request).ok()
-                } else {
-                    None
-                }
-            }
-            HintArtifactKind::Issue => self
-                .forge
-                .get_issue_by_number(self.repo, item)
-                .await?
-                .and_then(|issue| classifier.classify_issue(&issue).ok()),
-        };
-        let Some(classified) = classified else {
+        let Some(loaded) = load_targeted_artifact(
+            self.forge,
+            self.repo,
+            self.workflow,
+            ArtifactAddress::new(artifact_kind, item),
+        )
+        .await?
+        else {
             return Ok(Progress::unchanged());
         };
-        let automation_items = targeted_automated_work_items(
+        if let TargetedArtifactSnapshot::PullRequest(pull_request) = &loaded.snapshot {
+            targeted_snapshots.push(ArtifactSnapshot::from_pull_request(pull_request));
+            if change != ChangeKind::Ci {
+                if let Some(metadata) = parse_metadata_block(&pull_request.body)
+                    .map_err(|error| ForgeError::Backend(error.to_string()))?
+                {
+                    for parent in metadata
+                        .parents
+                        .iter()
+                        .filter(|parent| parent.is_in_repository(self.repo))
+                    {
+                        if let Some(issue) = self
+                            .forge
+                            .get_issue_by_number(self.repo, parent.number)
+                            .await?
+                        {
+                            targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                        }
+                    }
+                }
+            }
+        }
+        let automation_items = crate::scan::targeted_automated_work_items(
             self.forge,
             self.repo,
             self.workflow,
             &self.compiled,
-            classified,
+            &loaded,
             now,
         )
         .await?;

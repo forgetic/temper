@@ -312,3 +312,5 @@ mod basic;
 mod gated_queues;
 #[path = "scan/intake.rs"]
 mod intake;
+#[path = "scan/targeted_role.rs"]
+mod targeted_role;

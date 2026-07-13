@@ -200,6 +200,7 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
     item: &WorkItem,
     compiled: &CompiledWorkflow,
     context: &mut JobContext,
+    preloaded: Option<&PullRequest>,
 ) -> Result<(), ScanError> {
     let ArtifactSource::PullRequest { number } = item.target else {
         return Err(invalid_workflow_scan(format!(
@@ -208,10 +209,15 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
             item.target
         )));
     };
-    let pull_request = forge
-        .get_pull_request_by_number(repo, number)
-        .await?
-        .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("pull request {number}"))))?;
+    let pull_request = match preloaded {
+        Some(pull_request) => pull_request.clone(),
+        None => forge
+            .get_pull_request_by_number(repo, number)
+            .await?
+            .ok_or_else(|| {
+                ScanError::Forge(ForgeError::NotFound(format!("pull request {number}")))
+            })?,
+    };
     let head_branch = pull_request.source.branch.clone();
     let base_branch = pull_request.target.branch.clone();
     if head_branch.trim().is_empty() {
