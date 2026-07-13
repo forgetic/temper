@@ -15,6 +15,7 @@ use crate::RoleFeedTarget;
 use crate::lease_applier::WallClock;
 
 use super::machine::DaemonCompletion;
+use super::wake_coordinator::WakeRequest;
 use super::{Daemon, HintedMechanical};
 
 const CHANGE_SOURCE_RECV_TIMEOUT: Duration = Duration::from_millis(100);
@@ -32,7 +33,12 @@ impl ChangeSourceListener {
             while !thread_stop.load(Ordering::Relaxed) {
                 match source.recv_timeout(CHANGE_SOURCE_RECV_TIMEOUT) {
                     ChangeSourceEvent::Hint(hint) => {
-                        if cq.send(DaemonCompletion::ChangeHint { hint }).is_err() {
+                        if cq
+                            .send(DaemonCompletion::ScheduleWake {
+                                request: WakeRequest::from_hint(hint),
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }

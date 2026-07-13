@@ -12,6 +12,7 @@ use std::{
 
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
+use temper_forge::RepositoryPath;
 use temper_protocol_worker::{
     Artifact, Assign, ContextResponse, ErrorCode, FetchContext, JobResult, Poll, ProtocolError,
     PullRequestFreshness, WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
@@ -26,6 +27,10 @@ use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
 use crate::applier::{ApplyOutcome, ClaimOutcome};
 use crate::webhook::WebhookConfig;
+
+use super::wake_coordinator::{
+    BroadMode, WakeCoordinator, WakeDecision, WakeLane, WakeOutcome, WakeRequest, WakeWork,
+};
 
 /// `<io-event-completion>`s observed by the daemon machine.
 pub(super) enum DaemonCompletion {
@@ -103,10 +108,30 @@ pub(super) enum DaemonCompletion {
         correlation_key: String,
         reply: temper_engine_io::OneshotSender<bool>,
     },
-    /// A webhook or companion change-source wake scan completed.
-    WakeScanFinished { token: u64 },
-    /// Daemon API: submit one lossy backend change hint to the wake-scan path.
-    ChangeHint { hint: temper_runner::ChangeHint },
+    /// Schedule one bounded wake request after webhook verification or from a
+    /// companion/startup source.
+    ScheduleWake { request: WakeRequest },
+    /// One generation-tagged leading-edge debounce timer elapsed.
+    WakeTimerElapsed {
+        repo: RepositoryPath,
+        generation: u64,
+    },
+    /// One admitted repository wake finished.
+    WakeFinished {
+        work: WakeWork,
+        outcome: WakeOutcome,
+    },
+    /// Install configured repository/lane routes before accepting wake hints.
+    ConfigureWakeRepositories {
+        repositories: Vec<(RepositoryPath, BTreeSet<WakeLane>)>,
+        unresolved_lanes: BTreeSet<WakeLane>,
+        configured_repository_limit: usize,
+    },
+    /// Adjust the leading-edge debounce and global repository-run cap.
+    ConfigureWakeScheduling {
+        debounce: Duration,
+        max_in_flight_repositories: usize,
+    },
     /// Adjust the post-apply re-enqueue grace window.
     SetApplyGrace { apply_grace: Duration },
     /// Enable webhook intake with the given verification config.
@@ -192,9 +217,13 @@ pub(super) enum DaemonRequest {
         audit: ContextReadAudit,
         responder: HttpResponder,
     },
-    RunWakeScan {
-        token: u64,
-        hint: temper_runner::ChangeHint,
+    StartWakeTimer {
+        repo: RepositoryPath,
+        generation: u64,
+        delay: Duration,
+    },
+    RunWake {
+        work: WakeWork,
     },
     /// A role is at its configured concurrency limit with same-role work
     /// pending. Carries the configured figure and the `artifact.ref` strings of
@@ -246,7 +275,6 @@ pub(super) struct DaemonMachine {
     pub(super) max_poll_wait_ms: u64,
     pub(super) webhook: Option<WebhookConfig>,
     pub(super) waiters: BTreeMap<u64, PollWaiter>,
-    pub(super) webhook_waiters: BTreeMap<u64, HttpResponder>,
     pub(super) applying: BTreeSet<String>,
     pub(super) recently_applied: BTreeMap<String, EngineTime>,
     pub(super) retry_attempts: BTreeMap<String, u32>,
@@ -262,6 +290,7 @@ pub(super) struct DaemonMachine {
     pub(super) deferred_enqueues: Vec<DeferredEnqueue>,
     pub(super) assignment_contexts: BTreeMap<String, crate::applier::ClaimContext>,
     pub(super) artifact_catalog: crate::ConfiguredRepositoryCatalog,
+    pub(super) wake_coordinator: WakeCoordinator,
     pub(super) next_id: u64,
     pub(super) stopped: bool,
 }
@@ -315,7 +344,6 @@ impl DaemonMachine {
             max_poll_wait_ms,
             webhook: None,
             waiters: BTreeMap::new(),
-            webhook_waiters: BTreeMap::new(),
             applying: BTreeSet::new(),
             recently_applied: BTreeMap::new(),
             retry_attempts: BTreeMap::new(),
@@ -327,6 +355,7 @@ impl DaemonMachine {
             deferred_enqueues: Vec::new(),
             assignment_contexts: BTreeMap::new(),
             artifact_catalog: crate::ConfiguredRepositoryCatalog::default(),
+            wake_coordinator: WakeCoordinator::default(),
             next_id: 0,
             stopped: false,
         }
@@ -381,6 +410,38 @@ impl DaemonMachine {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         id
+    }
+
+    pub(super) fn schedule_wake(&mut self, request: WakeRequest) -> Vec<DaemonRequest> {
+        let apply_active = !self.applying.is_empty();
+        let decisions =
+            if request.lanes.is_empty() && request.scope.broad_mode() == Some(BroadMode::Startup) {
+                self.wake_coordinator
+                    .schedule_startup_broad(self.now, request.repo, apply_active)
+            } else {
+                self.wake_coordinator
+                    .schedule(self.now, request, apply_active)
+            };
+        Self::wake_decision_requests(decisions)
+    }
+
+    pub(super) fn wake_decision_requests(decisions: Vec<WakeDecision>) -> Vec<DaemonRequest> {
+        decisions
+            .into_iter()
+            .filter_map(|decision| match decision {
+                WakeDecision::StartTimer {
+                    repo,
+                    generation,
+                    delay,
+                } => Some(DaemonRequest::StartWakeTimer {
+                    repo,
+                    generation,
+                    delay,
+                }),
+                WakeDecision::Started { work } => Some(DaemonRequest::RunWake { work }),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -524,7 +585,7 @@ impl Machine for DaemonMachine {
             }
             DaemonCompletion::ApplyFinished { job_id, outcome } => {
                 self.applying.remove(&job_id);
-                match outcome {
+                let mut requests = match outcome {
                     ApplyOutcome::Retryable { reason } => {
                         let attempt = self.retry_attempts.entry(job_id.clone()).or_insert(0);
                         *attempt = attempt.saturating_add(1);
@@ -544,7 +605,13 @@ impl Machine for DaemonMachine {
                             .insert(job_id, self.now + self.apply_grace);
                         Vec::new()
                     }
+                };
+                if self.applying.is_empty() {
+                    requests.extend(Self::wake_decision_requests(
+                        self.wake_coordinator.promote_apply_deferred(),
+                    ));
                 }
+                requests
             }
             DaemonCompletion::BeginStartupRecovery => {
                 self.startup_recovery = true;
@@ -644,18 +711,46 @@ impl Machine for DaemonMachine {
                 self.core
                     .workstream_active_by_correlation_key(&correlation_key),
             )],
-            DaemonCompletion::WakeScanFinished { token } => {
-                match self.webhook_waiters.remove(&token) {
-                    Some(responder) => vec![DaemonRequest::Respond {
-                        responder,
-                        response: HttpResponseData::status_only(202),
-                    }],
-                    None => Vec::new(),
-                }
+            DaemonCompletion::ScheduleWake { request } => self.schedule_wake(request),
+            DaemonCompletion::WakeTimerElapsed { repo, generation } => {
+                let decisions = self.wake_coordinator.timer_elapsed(
+                    self.now,
+                    repo,
+                    generation,
+                    !self.applying.is_empty(),
+                );
+                Self::wake_decision_requests(decisions)
             }
-            DaemonCompletion::ChangeHint { hint } => {
-                let token = self.next_token();
-                vec![DaemonRequest::RunWakeScan { token, hint }]
+            DaemonCompletion::WakeFinished { work, outcome } => {
+                let decisions = self.wake_coordinator.finish(
+                    self.now,
+                    &work,
+                    outcome,
+                    !self.applying.is_empty(),
+                );
+                Self::wake_decision_requests(decisions)
+            }
+            DaemonCompletion::ConfigureWakeRepositories {
+                repositories,
+                unresolved_lanes,
+                configured_repository_limit,
+            } => {
+                for (repo, lanes) in repositories {
+                    self.wake_coordinator.configure_repository(repo, lanes);
+                }
+                self.wake_coordinator.configure_unresolved_repositories(
+                    unresolved_lanes,
+                    configured_repository_limit,
+                );
+                Vec::new()
+            }
+            DaemonCompletion::ConfigureWakeScheduling {
+                debounce,
+                max_in_flight_repositories,
+            } => {
+                self.wake_coordinator
+                    .configure(debounce, max_in_flight_repositories);
+                Vec::new()
             }
             DaemonCompletion::SetApplyGrace { apply_grace } => {
                 self.apply_grace = apply_grace;
@@ -689,93 +784,5 @@ impl Machine for DaemonMachine {
 }
 
 #[cfg(test)]
-mod retry_tests {
-    use super::*;
-    use serde_json::json;
-    use temper_protocol_worker::Artifact;
-
-    #[test]
-    fn startup_recovery_barrier_defers_enqueue_until_orphans_are_collected() {
-        let mut machine = DaemonMachine::default_machine(Duration::ZERO);
-        machine.on_completion(EngineTime::ZERO, DaemonCompletion::BeginStartupRecovery);
-        let requests = machine.on_completion(
-            EngineTime::ZERO,
-            DaemonCompletion::Enqueue {
-                job_id: "job-after-recovery".to_string(),
-                role: "engineer".to_string(),
-                repo: "ai/temper".to_string(),
-                artifact: Artifact {
-                    item: json!(258),
-                    kind: "issue".to_string(),
-                },
-                job_payload: json!({}),
-            },
-        );
-        assert!(requests.is_empty());
-        assert!(machine.core.queued_jobs().is_empty());
-        assert_eq!(machine.deferred_enqueues.len(), 1);
-
-        let (reply, _rx) = temper_engine_io::oneshot();
-        machine.on_completion(
-            EngineTime::ZERO,
-            DaemonCompletion::CollectStartupOrphans { reply },
-        );
-        assert!(machine.startup_recovery);
-        assert_eq!(machine.deferred_enqueues.len(), 1);
-        assert!(machine.core.queued_jobs().is_empty());
-
-        let (reply, _rx) = temper_engine_io::oneshot();
-        machine.on_completion(
-            EngineTime::ZERO,
-            DaemonCompletion::CompleteStartupRecovery { reply },
-        );
-        assert!(!machine.startup_recovery);
-        assert!(machine.deferred_enqueues.is_empty());
-        assert_eq!(machine.core.queued_jobs().len(), 1);
-    }
-
-    #[test]
-    fn retryable_apply_uses_observable_bounded_exponential_backoff() {
-        assert_eq!(retry_delay(1), Duration::from_secs(1));
-        assert_eq!(retry_delay(2), Duration::from_secs(2));
-        assert_eq!(retry_delay(20), Duration::from_secs(256));
-
-        let mut machine = DaemonMachine::default_machine(Duration::ZERO);
-        let requests = machine.on_completion(
-            EngineTime::ZERO,
-            DaemonCompletion::ApplyFinished {
-                job_id: "job-1".to_string(),
-                outcome: ApplyOutcome::Retryable {
-                    reason: "temporary Forge outage".to_string(),
-                },
-            },
-        );
-        assert_eq!(machine.retry_attempts.get("job-1"), Some(&1));
-        assert!(requests.iter().any(|request| matches!(
-            request,
-            DaemonRequest::Log(line)
-                if line.contains("attempt=1")
-                    && line.contains("backoff_ms=1000")
-                    && line.contains("temporary Forge outage")
-        )));
-
-        let requests = machine.on_completion(
-            EngineTime::ZERO,
-            DaemonCompletion::Enqueue {
-                job_id: "job-1".to_string(),
-                role: "engineer".to_string(),
-                repo: "ai/temper".to_string(),
-                artifact: Artifact {
-                    item: json!(1),
-                    kind: "issue".to_string(),
-                },
-                job_payload: json!({}),
-            },
-        );
-        assert!(requests.iter().any(|request| matches!(
-            request,
-            DaemonRequest::Log(line) if line.contains("retry backoff")
-        )));
-        assert!(machine.core.queued_jobs().is_empty());
-    }
-}
+#[path = "machine_tests.rs"]
+mod tests;

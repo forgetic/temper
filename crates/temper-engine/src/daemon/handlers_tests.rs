@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
+use crate::daemon::wake_coordinator::WakeLane;
 use crate::webhook::webhook_signature;
 use crate::{RoleFeedMode, RoleFeedTarget, WebhookConfig};
-use temper_forge::{
-    ChangeKind, HintArtifactKind, HintTarget, ItemNumber, RepositoryId, RepositoryPath,
-};
+use std::collections::BTreeMap;
+use temper_forge::{ChangeKind, HintArtifactKind, ItemNumber, RepositoryId, RepositoryPath};
 use temper_workflow::RoleId;
 
 #[test]
@@ -44,10 +44,16 @@ fn verified_webhook_acks_before_wake_scan_finishes() {
         DaemonRequest::Respond { response, .. }
             if response.status == 202 && response.body.is_empty()
     ));
-    assert!(matches!(&requests[2], DaemonRequest::RunWakeScan { .. }));
-    assert!(
-        machine.webhook_waiters.is_empty(),
-        "webhook response must not be held behind wake-scan completion"
+    assert!(matches!(&requests[2], DaemonRequest::StartWakeTimer { .. }));
+    assert_eq!(
+        machine
+            .wake_coordinator
+            .repository_state(&RepositoryPath::new("ai", "temper"))
+            .expect("configured webhook repository")
+            .pending
+            .len(),
+        1,
+        "the configured role lane owns the repository timer"
     );
 }
 
@@ -101,11 +107,10 @@ fn proven_heartbeat_is_acknowledged_before_suppression_accounting() {
         &requests[2],
         DaemonRequest::Log(line) if line.contains("reason=lease_heartbeat")
     ));
-    assert!(
-        !requests
-            .iter()
-            .any(|request| matches!(request, DaemonRequest::RunWakeScan { .. }))
-    );
+    assert!(!requests.iter().any(|request| matches!(
+        request,
+        DaemonRequest::StartWakeTimer { .. } | DaemonRequest::RunWake { .. }
+    )));
 }
 
 #[test]
@@ -217,18 +222,21 @@ fn forgejo_action_run_success_webhook_is_accepted() {
         DaemonRequest::Respond { response, .. }
             if response.status == 202 && response.body.is_empty()
     ));
-    match &requests[2] {
-        DaemonRequest::RunWakeScan { hint, .. } => {
-            assert_eq!(hint.repo, RepositoryPath::new("ai", "temper"));
-            assert_eq!(
-                hint.target,
-                HintTarget::Artifact {
-                    kind: HintArtifactKind::PullRequest,
-                    number: ItemNumber::new(23)
-                }
-            );
-            assert_eq!(hint.change, ChangeKind::Ci);
-        }
-        _ => panic!("expected wake scan"),
-    }
+    assert!(matches!(&requests[2], DaemonRequest::StartWakeTimer { .. }));
+    let state = machine
+        .wake_coordinator
+        .repository_state(&RepositoryPath::new("ai", "temper"))
+        .expect("configured webhook repository");
+    let lane = WakeLane::Role(RoleId::new("engineer"));
+    let scope = state
+        .pending
+        .scope(&lane)
+        .expect("role lane receives CI target");
+    assert_eq!(
+        scope.targets(),
+        Some(&BTreeMap::from([(
+            (HintArtifactKind::PullRequest, ItemNumber::new(23)),
+            ChangeKind::Ci,
+        )]))
+    );
 }
