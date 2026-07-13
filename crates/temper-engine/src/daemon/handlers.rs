@@ -454,6 +454,29 @@ impl DaemonMachine {
         ))]
     }
 
+    pub(super) fn handle_reconcile_pending_targeted_role_jobs(
+        &mut self,
+        repo: String,
+        role: String,
+        artifact: Artifact,
+        current_job_ids: BTreeSet<String>,
+    ) -> Vec<DaemonRequest> {
+        let pruned =
+            self.core
+                .retain_pending_jobs_for_artifact(&repo, &role, &artifact, &current_job_ids);
+        if pruned.is_empty() {
+            return Vec::new();
+        }
+
+        vec![DaemonRequest::Log(format!(
+            "engine: pruned stale targeted pending jobs repo={repo} role={role} artifact_kind={} artifact_item={} count={} job_ids={}",
+            artifact.kind,
+            artifact.item,
+            pruned.len(),
+            pruned.join(",")
+        ))]
+    }
+
     /// Builds the §7 `role.saturated` request when the just-enqueued role is at
     /// its configured finite concurrency limit with same-role work queued.
     /// The concurrency figure and ordered pending entries both come from the

@@ -163,6 +163,12 @@ where
         else {
             return Ok(Progress::unchanged());
         };
+        // Staged fan-out children are not externally dispatchable yet. This
+        // guard must precede both targeted automation and reconciliation so a
+        // webhook cannot mutate a partially wired child.
+        if loaded.classified.metadata.staged {
+            return Ok(Progress::unchanged());
+        }
         if let TargetedArtifactSnapshot::PullRequest(pull_request) = &loaded.snapshot {
             targeted_snapshots.push(ArtifactSnapshot::from_pull_request(pull_request));
             if change != ChangeKind::Ci {

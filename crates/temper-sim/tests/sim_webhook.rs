@@ -128,6 +128,7 @@ fn run_world(seed: u64, storm: usize) -> (Vec<u16>, usize, u64) {
             secret: SECRET.to_string(),
             targets: vec![RoleFeedTarget {
                 repo,
+                path: temper_forge::RepositoryPath::new("acme", "service"),
                 role: RoleId::new("engineer"),
                 mode: RoleFeedMode::Wake,
             }],

@@ -12,7 +12,9 @@ use temper_workflow::{
     GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow, queue_active,
 };
 
-use super::candidate::{self, CandidateQueryPlan, ScanMode, candidate_query_plan};
+use super::candidate::{
+    self, CandidateQueryPlan, ScanMode, candidate_query_plan, candidate_query_plan_for_roles,
+};
 use super::{AutomatedWorkItem, ScanError, TargetedArtifactSnapshot, WorkItem};
 
 pub(super) async fn scan_inner<F: Forge + ?Sized>(
@@ -40,6 +42,25 @@ pub(super) async fn scan_inner<F: Forge + ?Sized>(
     let query_plan = candidate_query_plan(workflow, compiled, role, mode);
     let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan, false).await?;
     Ok(work_items(&queues, &artifacts, now, role_filter))
+}
+
+pub(super) async fn scan_roles_inner<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    roles: &[RoleId],
+    mode: ScanMode,
+) -> Result<Vec<WorkItem>, ScanError> {
+    let queues = candidate::queues_for_roles(compiled, roles);
+    if queues.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let query_plan = candidate_query_plan_for_roles(workflow, compiled, roles, mode);
+    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan, false).await?;
+    Ok(work_items_for_roles(&queues, &artifacts, now, roles))
 }
 
 pub(super) async fn scan_automated_inner<F: Forge + ?Sized>(

@@ -197,6 +197,59 @@ fn role_scan_returns_only_the_roles_subscribed_queues() {
 }
 
 #[test]
+fn broad_multi_role_wake_shares_one_candidate_query_plan() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let untriaged = create_issue(&forge, &repo, &["untriaged"]);
+    let ready = create_issue(&forge, &repo, &["code", "ready"]);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let roles = [RoleId::new("architect"), RoleId::new("engineer")];
+
+    let broad = CountingForge::new(forge.clone());
+    let items = block_on(scan_roles_wake(
+        &broad,
+        &repo,
+        &workflow,
+        &compiled,
+        ts("2026-05-29T00:00:00Z"),
+        &roles,
+    ))
+    .expect("broad role wake succeeds");
+    assert!(
+        items
+            .iter()
+            .any(|item| item.target == (ArtifactSource::Issue { number: untriaged }))
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| item.target == (ArtifactSource::Issue { number: ready }))
+    );
+
+    let separate = CountingForge::new(forge);
+    for role in &roles {
+        block_on(temper_runner::scan_role_wake(
+            &separate,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            role,
+        ))
+        .expect("role wake succeeds");
+    }
+    let broad_lists =
+        broad.count(CountedForgeOp::ListIssues) + broad.count(CountedForgeOp::ListPullRequests);
+    let separate_lists = separate.count(CountedForgeOp::ListIssues)
+        + separate.count(CountedForgeOp::ListPullRequests);
+    assert!(
+        broad_lists < separate_lists,
+        "broad={broad_lists} separate={separate_lists}"
+    );
+}
+
+#[test]
 fn role_scan_without_ci_gated_queue_does_not_list_ci_jobs() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);

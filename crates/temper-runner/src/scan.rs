@@ -21,7 +21,9 @@ use temper_workflow::{
     ExternalToolId, QueueId, RoleId, TransitionId, ValidatedWorkflow, VerdictId,
 };
 
-pub use candidate::{CandidateQueryPlan, ScanMode, candidate_query_plan};
+pub use candidate::{
+    CandidateQueryPlan, ScanMode, candidate_query_plan, candidate_query_plan_for_roles,
+};
 
 /// Explicit issue-or-pull-request address used by item-scoped scans.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -236,6 +238,19 @@ pub async fn scan_role_wake<F: Forge + ?Sized>(
         ScanMode::Wake,
     )
     .await
+}
+
+/// Runs one broad recovery-inclusive scan for the union of queues subscribed
+/// by `roles`, sharing candidate and signal reads across subscribers.
+pub async fn scan_roles_wake<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    roles: &[RoleId],
+) -> Result<Vec<WorkItem>, ScanError> {
+    query::scan_roles_inner(forge, repo, workflow, compiled, now, roles, ScanMode::Wake).await
 }
 
 /// Loads and classifies exactly one explicitly typed artifact.

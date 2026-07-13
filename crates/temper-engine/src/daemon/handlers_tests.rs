@@ -18,6 +18,7 @@ fn verified_webhook_acks_before_wake_scan_finishes() {
         secret: secret.to_string(),
         targets: vec![RoleFeedTarget {
             repo: RepositoryId::new("forgejo:ai/temper"),
+            path: RepositoryPath::new("ai", "temper"),
             role: RoleId::new("engineer"),
             mode: RoleFeedMode::Wake,
         }],
@@ -194,6 +195,7 @@ fn forgejo_action_run_success_webhook_is_accepted() {
         secret: secret.to_string(),
         targets: vec![RoleFeedTarget {
             repo: RepositoryId::new("forgejo:ai/temper"),
+            path: RepositoryPath::new("ai", "temper"),
             role: RoleId::new("engineer"),
             mode: RoleFeedMode::Wake,
         }],

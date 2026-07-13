@@ -14,7 +14,9 @@ use temper_forge::{
     UserId,
 };
 use temper_forge_memory::MemoryForge;
-use temper_runner::{AutomatedWorkItem, WorkItem, scan, scan_automated_queues, scan_role};
+use temper_runner::{
+    AutomatedWorkItem, WorkItem, scan, scan_automated_queues, scan_role, scan_roles_wake,
+};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId, WorkflowMetadata,
     render_metadata_block,

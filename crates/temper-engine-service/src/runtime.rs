@@ -8,11 +8,11 @@ use std::sync::Arc;
 use temper_config::{ExposeSecret, Resolved};
 use temper_engine::{
     Daemon, DaemonRunConfig, EngineConfig, HintedMechanical, MechanicalBackstopConfig,
-    MechanicalScope, PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget,
-    WebhookConfig, run_mechanical_backstop_tick, spawn_mechanical_backstop, spawn_poll_backstop,
+    MechanicalTrigger, PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget,
+    WebhookConfig, spawn_coordinated_mechanical_backstop, spawn_coordinated_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath};
-use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, ValidatedWorkflow};
+use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
     converge_startup_orphans, engine_config, ensure_workflow_labels, resolve_repositories,
@@ -58,8 +58,8 @@ pub async fn run_async(
         artifact_catalog,
         temper_engine::ArtifactContextPolicy::default(),
     ));
-    let normal_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Normal);
-    let wake_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Wake);
+    let normal_targets = role_feed_targets(&repositories, &config.roles, RoleFeedMode::Normal);
+    let wake_targets = role_feed_targets(&repositories, &config.roles, RoleFeedMode::Wake);
     let lease_ttl = lease_ttl(&config)?;
 
     // Complete durable child-create intents before constructing the daemon or
@@ -116,36 +116,31 @@ pub async fn run_async(
     )
     .await?;
 
-    let mechanical_trigger = spawn_mechanical(
+    let daemon = configure_wake_execution(
         &spawner,
+        daemon,
         forge.clone(),
         workflow.clone(),
-        compiled.as_ref(),
+        compiled.clone(),
         repositories,
-        &daemon,
+        wake_targets.clone(),
         config.mechanical_cadence,
         lease_ttl,
     )
     .await?;
 
+    daemon.complete_startup_recovery().await;
     spawn_poll(
         &spawner,
         daemon.clone(),
-        forge.clone(),
-        workflow.clone(),
-        compiled.clone(),
         normal_targets,
         config.poll_cadence,
     );
     let daemon = attach_webhook(
         daemon,
-        forge,
-        workflow,
-        compiled,
         resolved.engine.webhook_secret_value.as_ref(),
         config.webhook_secret_file.as_ref(),
         wake_targets,
-        mechanical_trigger,
     )?;
 
     drain_after_signal(&daemon, server).await
@@ -209,37 +204,26 @@ async fn recover_child_create_intents(
 fn spawn_poll(
     spawner: &Arc<dyn temper_engine_io::Spawner>,
     daemon: Daemon,
-    forge: Arc<dyn Forge>,
-    workflow: Arc<ValidatedWorkflow>,
-    compiled: Arc<CompiledWorkflow>,
     targets: Vec<RoleFeedTarget>,
     cadence: std::time::Duration,
 ) {
-    let poll_config = PollBackstopConfig { targets, cadence };
-    spawn_poll_backstop(
-        spawner,
-        daemon,
-        forge,
-        workflow,
-        compiled,
-        poll_config,
-        temper_engine::system_clock(),
-    );
+    spawn_coordinated_poll_backstop(spawner, daemon, PollBackstopConfig { targets, cadence });
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn spawn_mechanical(
+async fn configure_wake_execution(
     spawner: &Arc<dyn temper_engine_io::Spawner>,
+    daemon: Daemon,
     forge: Arc<dyn Forge>,
     workflow: Arc<ValidatedWorkflow>,
-    compiled: &CompiledWorkflow,
+    compiled: Arc<CompiledWorkflow>,
     repositories: RepositorySet,
-    daemon: &Daemon,
+    wake_targets: Vec<RoleFeedTarget>,
     cadence: Option<std::time::Duration>,
     lease_ttl: chrono::Duration,
-) -> Result<Option<Arc<dyn HintedMechanical>>, String> {
-    ensure_workflow_labels(forge.as_ref(), &repositories, compiled).await?;
-    let initial_config = MechanicalBackstopConfig {
+) -> Result<Daemon, String> {
+    ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
+    let mechanical_config = MechanicalBackstopConfig {
         repositories: repositories.clone(),
         cadence: cadence.unwrap_or(std::time::Duration::from_secs(1)),
         lease_policy: LeasePolicy::new(lease_ttl),
@@ -248,48 +232,31 @@ async fn spawn_mechanical(
         // request before enabling landed-workstream cleanup outside standalone.
         pull_request_merge_observer: None,
     };
-    let journals = (0..repositories.repositories().len())
-        .map(|_| InMemoryJournal::new())
-        .collect::<Vec<_>>();
-    run_mechanical_backstop_tick(
-        forge.as_ref(),
-        workflow.as_ref(),
-        (temper_engine::system_clock())(),
-        &initial_config,
-        &journals,
-        &MechanicalScope::All,
-    )
-    .await
-    .map_err(|error| format!("startup mechanical reconciliation failed: {error}"))?;
-    daemon.complete_startup_recovery().await;
-
-    let Some(cadence) = cadence else {
-        return Ok(None);
-    };
-    let mechanical_config = MechanicalBackstopConfig {
-        cadence,
-        ..initial_config
-    };
-    let trigger = spawn_mechanical_backstop(
-        spawner,
-        forge,
-        workflow,
+    let trigger: Arc<dyn HintedMechanical> = Arc::new(MechanicalTrigger::new(
+        forge.clone(),
+        workflow.clone(),
         mechanical_config,
         temper_engine::system_clock(),
+    ));
+    let daemon = daemon.with_wake_execution(
+        forge,
+        workflow,
+        compiled,
+        wake_targets,
+        temper_engine::system_clock(),
+        Some(trigger),
     );
-    Ok(Some(Arc::new(trigger)))
+    if let Some(cadence) = cadence {
+        spawn_coordinated_mechanical_backstop(spawner, daemon.clone(), repositories, cadence);
+    }
+    Ok(daemon)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn attach_webhook(
     daemon: Daemon,
-    forge: Arc<dyn Forge>,
-    workflow: Arc<ValidatedWorkflow>,
-    compiled: Arc<CompiledWorkflow>,
     secret_value: Option<&temper_config::Secret>,
     secret_file: Option<&std::path::PathBuf>,
     wake_targets: Vec<RoleFeedTarget>,
-    mechanical_trigger: Option<Arc<dyn HintedMechanical>>,
 ) -> Result<Daemon, String> {
     let secret = if let Some(secret) = secret_value {
         secret.expose_secret().trim().to_string()
@@ -310,14 +277,7 @@ fn attach_webhook(
         secret,
         targets: wake_targets,
     });
-    Ok(daemon.with_webhook_and_mechanical(
-        forge,
-        workflow,
-        compiled,
-        webhook_config,
-        temper_engine::system_clock(),
-        mechanical_trigger,
-    ))
+    Ok(daemon.with_webhook_config(webhook_config))
 }
 
 async fn drain_after_signal(

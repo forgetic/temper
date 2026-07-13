@@ -8,8 +8,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use temper_forge::{ChangeHint, Forge, ForgeError};
 use temper_runner::{
-    MultiRepoMechanicalWorker, MultiRepoTickReport, Progress, PullRequestMergeObserver,
-    RepositoryJournal, RepositorySet, WorkerError,
+    ArtifactAddress, MultiRepoMechanicalWorker, MultiRepoTickReport, Progress,
+    PullRequestMergeObserver, RepositoryJournal, RepositorySet, WorkerError,
 };
 use temper_workflow::{InMemoryJournal, LeasePolicy, ValidatedWorkflow};
 
@@ -38,6 +38,15 @@ pub enum MechanicalScope {
     /// edge-triggered accelerator. A hint for an unconfigured repo simply
     /// matches nothing (the pass is a no-op), so a forged/stale hint is safe.
     Hinted(Vec<ChangeHint>),
+    /// Exact artifact work admitted by the daemon coordinator. Unlike hinted
+    /// broad work this uses exact fetch and bounded targeted reconciliation.
+    Targeted(
+        Vec<(
+            temper_forge::RepositoryPath,
+            ArtifactAddress,
+            temper_forge::ChangeKind,
+        )>,
+    ),
 }
 
 /// Runs one mechanical pass over the in-scope repositories.
@@ -100,6 +109,7 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
     let report: MultiRepoTickReport = match scope {
         MechanicalScope::All => worker.tick_report(now).await,
         MechanicalScope::Hinted(hints) => worker.tick_matching_hints(now, hints).await,
+        MechanicalScope::Targeted(targets) => worker.tick_targeted(now, targets).await,
     };
     match report.into_worker_result() {
         Ok(progress) => Ok(progress),
@@ -205,6 +215,23 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
         true
     }
 
+    /// Runs coordinator-admitted work without the standalone boolean guard.
+    /// The daemon coordinator already owns pending/in-flight/dirty semantics,
+    /// including the mandatory dirty follow-up that a skip-on-busy flag would
+    /// otherwise lose.
+    pub async fn run_coordinated(&self, scope: MechanicalScope) -> Result<Progress, WorkerError> {
+        let now = (self.clock)();
+        run_mechanical_backstop_tick(
+            self.forge.as_ref(),
+            self.workflow.as_ref(),
+            now,
+            &self.config,
+            &self.journals,
+            &scope,
+        )
+        .await
+    }
+
     /// Accelerator entry point: run a pass covering only the hinted repositories.
     /// Called from the webhook path so an event triggers immediate mechanical
     /// reconciliation for the affected repo (ADR 0009 edge-trigger).
@@ -214,6 +241,30 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
         }
         self.run(MechanicalScope::Hinted(hints)).await
     }
+}
+
+/// Spawns the production mechanical cadence as bounded daemon wake requests.
+/// The cadence callback performs no reconciliation itself.
+pub fn spawn_coordinated_mechanical_backstop(
+    spawner: &std::sync::Arc<dyn temper_engine_io::Spawner>,
+    daemon: crate::Daemon,
+    repositories: RepositorySet,
+    cadence: Duration,
+) {
+    let paths = repositories
+        .repositories()
+        .iter()
+        .map(|repository| repository.path.clone())
+        .collect::<Vec<_>>();
+    temper_engine_io::spawn_cadence_loop(spawner, cadence, move || {
+        let daemon = daemon.clone();
+        let paths = paths.clone();
+        async move {
+            for path in paths {
+                daemon.schedule_mechanical_poll(path);
+            }
+        }
+    });
 }
 
 /// Owns the per-repo journals and runs the mechanical backstop until the

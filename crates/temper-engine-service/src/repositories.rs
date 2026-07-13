@@ -3,7 +3,7 @@
 //! Repository resolution, label bootstrap, and role feed target helpers.
 
 use temper_engine::{RepositorySet, RepositoryTarget, RoleFeedMode, RoleFeedTarget};
-use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
+use temper_forge::{Forge, RepositoryPath, UpsertLabel};
 use temper_workflow::{CompiledWorkflow, RoleId};
 
 /// Resolves each configured `owner/name` to a live repository (id + path),
@@ -58,17 +58,19 @@ pub async fn ensure_workflow_labels<F: Forge + ?Sized>(
     Ok(())
 }
 
-/// The cross-product of repositories and roles in the given feed mode.
+/// The cross-product of configured repository routes and roles in the given
+/// feed mode.
 pub fn role_feed_targets(
-    repos: &[RepositoryId],
+    repos: &RepositorySet,
     roles: &[RoleId],
     mode: RoleFeedMode,
 ) -> Vec<RoleFeedTarget> {
-    let mut targets = Vec::with_capacity(repos.len() * roles.len());
-    for repo in repos {
+    let mut targets = Vec::with_capacity(repos.repositories().len() * roles.len());
+    for repo in repos.repositories() {
         for role in roles {
             targets.push(RoleFeedTarget {
-                repo: repo.clone(),
+                repo: repo.id.clone(),
+                path: repo.path.clone(),
                 role: role.clone(),
                 mode,
             });
