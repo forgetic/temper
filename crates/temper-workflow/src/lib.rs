@@ -99,6 +99,7 @@ mod prompt;
 pub mod reconcile;
 pub mod recover;
 pub mod relation;
+mod repair_effects;
 pub mod spec;
 pub mod validate;
 mod validate_build;

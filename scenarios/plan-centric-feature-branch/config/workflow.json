@@ -399,9 +399,7 @@
       "id": "address_implementation_ci_failure",
       "artifact": "implementation_pr",
       "roles": ["engineer"],
-      "effects": [
-        { "kind": "create_comment", "body": "CI failed before landing this implementation PR into the feature branch. Engineer: push a fix to the PR head; Temper will retry landing once fresh CI passes." }
-      ]
+      "effects": []
     },
     {
       "id": "resolve_implementation_merge_conflict",
@@ -479,9 +477,7 @@
       "id": "address_feature_landing_ci_failure",
       "artifact": "feature_landing_pr",
       "roles": ["engineer"],
-      "effects": [
-        { "kind": "create_comment", "body": "CI failed before final feature landing. Engineer: repair the feature branch through the writable landing PR head; Temper will retry once fresh CI passes." }
-      ]
+      "effects": []
     },
     {
       "id": "resolve_feature_landing_merge_conflict",

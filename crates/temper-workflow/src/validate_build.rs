@@ -248,7 +248,7 @@ fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
 }
 
 /// Converts a raw effect into a typed effect.
-fn build_effect(effect: &RawEffect) -> Effect {
+pub(crate) fn build_effect(effect: &RawEffect) -> Effect {
     match effect {
         RawEffect::AddLabel { label } => Effect::AddLabel(LabelId::new(label)),
         RawEffect::RemoveLabel { label, if_present } => {

@@ -476,6 +476,11 @@ async fn recover_advanced_pull_request_assignment<F: Forge + ?Sized>(
         let mut remove_assignees = Vec::new();
         let mut reviewer_roles = Vec::new();
         for effect in &transition.effects {
+            if !effect.supports_pull_request_repair_publication() {
+                return Err(ScanError::InvalidWorkflow(format!(
+                    "durable PR repair action `{action}` cannot be recovered atomically"
+                )));
+            }
             match effect {
                 Effect::AddLabel(label) => push_unique_string(&mut add_labels, label.as_str()),
                 Effect::RemoveLabel(label) | Effect::RemoveLabelIfPresent(label) => {
@@ -498,11 +503,7 @@ async fn recover_advanced_pull_request_assignment<F: Forge + ?Sized>(
                         }
                     }
                 }
-                _ => {
-                    return Err(ScanError::InvalidWorkflow(format!(
-                        "durable PR repair action `{action}` cannot be recovered atomically"
-                    )));
-                }
+                _ => unreachable!("unsupported repair effect was rejected before recovery"),
             }
         }
 

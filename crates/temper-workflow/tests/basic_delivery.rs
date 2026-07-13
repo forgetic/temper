@@ -505,7 +505,8 @@ fn failed_ci_routes_back_to_the_engineer() {
             .contains(&QueueId::new("pr_ci_failed"))
     );
 
-    // The engineer can act on it via `address_ci_failure`.
+    // The engineer can act on it via `address_ci_failure`. The transition has
+    // no ordinary effects because PR repair publication records the new head.
     let respond = planner
         .plan_transition(
             &TransitionId::new("address_ci_failure"),
@@ -513,10 +514,7 @@ fn failed_ci_routes_back_to_the_engineer() {
             &failed,
         )
         .expect("engineer can address a CI failure");
-    assert!(matches!(
-        respond.effects.as_slice(),
-        [WorkflowEffect::CreateComment { .. }]
-    ));
+    assert!(respond.effects.is_empty());
 
     // The same green PR does not match the CI-failure queue.
     let green = classify_pr(&workflow, 22, &["implementation"]);

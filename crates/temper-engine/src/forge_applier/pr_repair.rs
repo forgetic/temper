@@ -328,23 +328,16 @@ fn repair_transition(
     }
     let mut reviewer_roles = Vec::new();
     for effect in &transition.effects {
-        match effect {
-            Effect::AddLabel(_)
-            | Effect::RemoveLabel(_)
-            | Effect::RemoveLabelIfPresent(_)
-            | Effect::SetAssignee(_)
-            | Effect::RemoveAssignee(_) => {}
-            Effect::RequestReviewers { roles } => {
-                for role in roles {
-                    if !reviewer_roles.contains(role) {
-                        reviewer_roles.push(role.clone());
-                    }
+        if !effect.supports_pull_request_repair_publication() {
+            return Err(format!(
+                "pull-request repair action `{action}` contains an effect that cannot be published atomically"
+            ));
+        }
+        if let Effect::RequestReviewers { roles } = effect {
+            for role in roles {
+                if !reviewer_roles.contains(role) {
+                    reviewer_roles.push(role.clone());
                 }
-            }
-            _ => {
-                return Err(format!(
-                    "pull-request repair action `{action}` contains an effect that cannot be published atomically"
-                ));
             }
         }
     }

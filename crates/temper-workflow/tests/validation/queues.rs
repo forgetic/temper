@@ -81,3 +81,63 @@ fn queue_action_contract_is_validated() {
             })
     );
 }
+
+#[test]
+fn pull_request_writable_action_rejects_non_publishable_effects() {
+    let mut spec = valid_spec();
+    spec.artifact_kinds[1].target = ArtifactTarget::PullRequest;
+    spec.transitions[0].effects = vec![RawEffect::CreateComment {
+        body: "repair requested".to_string(),
+    }];
+    spec.queues[0].actions.push(RawQueueAction {
+        role: "engineer".to_string(),
+        action: "claim_code".to_string(),
+        checkout: Some("pull_request_writable".to_string()),
+        ..RawQueueAction::default()
+    });
+
+    let errors = spec
+        .validate()
+        .expect_err("non-publishable PR repair effect must fail validation");
+    assert!(errors.diagnostics().contains(
+        &Diagnostic::QueueActionUnsupportedPullRequestRepairEffect {
+            queue: "code_ready".to_string(),
+            role: "engineer".to_string(),
+            action: "claim_code".to_string(),
+            effect: "create_comment".to_string(),
+        }
+    ));
+}
+
+#[test]
+fn pull_request_writable_action_accepts_publishable_effects() {
+    let mut spec = valid_spec();
+    spec.artifact_kinds[1].target = ArtifactTarget::PullRequest;
+    spec.transitions[0].effects = vec![
+        RawEffect::RemoveLabel {
+            label: "ready".to_string(),
+            if_present: true,
+        },
+        RawEffect::AddLabel {
+            label: "in-progress".to_string(),
+        },
+        RawEffect::SetAssignee {
+            role: "engineer".to_string(),
+        },
+        RawEffect::RemoveAssignee {
+            role: "reviewer".to_string(),
+        },
+        RawEffect::RequestReviewers {
+            roles: vec!["reviewer".to_string()],
+        },
+    ];
+    spec.queues[0].actions.push(RawQueueAction {
+        role: "engineer".to_string(),
+        action: "claim_code".to_string(),
+        checkout: Some("pull_request_writable".to_string()),
+        ..RawQueueAction::default()
+    });
+
+    spec.validate()
+        .expect("supported PR repair effects must validate");
+}
