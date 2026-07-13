@@ -18,14 +18,25 @@
 //! The agent has git credentials only via the prepared repo checkouts; it never
 //! calls the forge API. The executor owns the final branch push.
 
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use temper_protocol_agent::{SubmitForPrRequest, SubmitForPrResponse, WorkspaceContext};
-use temper_protocol_worker::FailureClass;
+use temper_protocol_worker::{
+    FailureClass, ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult,
+};
 
 use crate::pre_push::{WorkspaceFingerprint, fingerprint_writable_repos_blocking};
 pub use temper_protocol_agent::WorkspaceResult;
+
+/// Async worker-owned Forge reader. The job id is supplied by the executor,
+/// never by the model or child process.
+pub type AgentForgeContextFuture =
+    Pin<Box<dyn Future<Output = Result<ForgeContextResult, ForgeContextErrorCode>> + Send>>;
+pub type AgentForgeContextHost =
+    Arc<dyn Fn(String, ForgeContextOperation) -> AgentForgeContextFuture + Send + Sync>;
 
 /// What a completed agent turn produced at the worker boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,6 +183,7 @@ impl std::error::Error for AgentRunError {}
 pub trait AgentRunner: Send + Sync {
     fn run(
         &self,
+        job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> impl std::future::Future<Output = Result<AgentRunOutput, AgentRunError>> + Send;

@@ -1,7 +1,10 @@
 //! Role system-prompt and user-turn context construction.
 
 use super::Capability;
-use temper_protocol_agent::WorkspaceContext;
+use temper_protocol_agent::{
+    ArtifactContextBundle, ArtifactReference, ArtifactRelationType, ArtifactSnapshot,
+    ArtifactSummary, ArtifactType, WorkspaceContext,
+};
 use temper_verdict::{VerdictContract, VerdictContracts};
 
 /// Builds the role system prompt for a capability.
@@ -280,9 +283,143 @@ pub fn user_context(context: &WorkspaceContext) -> String {
         }
     }
 
-    text.push_str("\nWork item context (JSON):\n");
-    text.push_str(&context.work_item.context);
-    text.push('\n');
+    match &context.artifact_context {
+        Some(bundle) => render_artifact_context(&mut text, bundle),
+        None => {
+            // Backward compatibility for contexts emitted before artifact bundles:
+            // preserve the historical heading and singular JSON verbatim.
+            text.push_str("\nWork item context (JSON):\n");
+            text.push_str(&context.work_item.context);
+            text.push('\n');
+        }
+    }
 
     text
+}
+
+fn render_artifact_context(text: &mut String, bundle: &ArtifactContextBundle) {
+    text.push_str(&format!(
+        "\nArtifact context bundle (version {}):\nRepository: {} ({})\n",
+        bundle.version, bundle.repository.path, bundle.repository.id
+    ));
+
+    text.push_str("\nPrimary artifact:\n");
+    render_snapshot(text, &bundle.primary);
+
+    text.push_str("\nMandatory lineage:\n");
+    if bundle.lineage.is_empty() {
+        text.push_str("- No mandatory ancestors.\n");
+    } else {
+        for snapshot in &bundle.lineage {
+            render_snapshot(text, snapshot);
+        }
+    }
+
+    text.push_str("\nValidation summaries:\n");
+    if bundle.validation_scope.is_empty() {
+        text.push_str("- No validation dependencies or implementations were collected.\n");
+    } else {
+        for summary in &bundle.validation_scope {
+            render_summary(text, summary);
+        }
+    }
+
+    text.push_str("\nOptional body-omitted references:\n");
+    if bundle.optional_references.is_empty() {
+        text.push_str("- None.\n");
+    } else {
+        for summary in &bundle.optional_references {
+            render_summary(text, summary);
+        }
+    }
+
+    text.push_str("\nDiagnostics and truncation:\n");
+    if bundle.diagnostics.is_empty() {
+        text.push_str("- No collection diagnostics.\n");
+    } else {
+        for diagnostic in &bundle.diagnostics {
+            let code = serde_json::to_value(diagnostic.code)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_else(|| "unknown".to_string());
+            let source = diagnostic
+                .source
+                .as_ref()
+                .map(|source| format!(" ({})", reference_name(source)))
+                .unwrap_or_default();
+            text.push_str(&format!("- {code}{source}: {}\n", diagnostic.message));
+        }
+    }
+    text.push_str(&format!(
+        "- truncation: depth_exceeded={}, count_exceeded={}, content_truncated={}\n",
+        bundle.truncation.depth_exceeded,
+        bundle.truncation.count_exceeded,
+        bundle.truncation.content_truncated
+    ));
+
+    text.push_str(
+        "\nForge context tools:\n\
+         If `forge_get_item` and `forge_list_related` are available, use them for \
+         bounded read-only follow-up when a body is omitted, diagnostics report \
+         missing context, or an indirect relation must be followed. Pass only a \
+         configured owner/name repository and artifact identity; the host binds \
+         assignment credentials. Repeated calls may follow indirect relations.\n",
+    );
+}
+
+fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
+    text.push_str(&format!(
+        "- {} — {} [{}] kind={} labels={}\n  Body:\n{}\n",
+        reference_name(&snapshot.artifact),
+        snapshot.title,
+        snapshot.state,
+        snapshot.workflow_kind.as_deref().unwrap_or("(unknown)"),
+        if snapshot.labels.is_empty() {
+            "(none)".to_string()
+        } else {
+            snapshot.labels.join(", ")
+        },
+        snapshot.body
+    ));
+}
+
+fn render_summary(text: &mut String, summary: &ArtifactSummary) {
+    text.push_str(&format!(
+        "- {} — {} [{}] kind={} labels={} relation={} source={}\n",
+        reference_name(&summary.artifact),
+        summary.title,
+        summary.state,
+        summary.workflow_kind.as_deref().unwrap_or("(unknown)"),
+        if summary.labels.is_empty() {
+            "(none)".to_string()
+        } else {
+            summary.labels.join(", ")
+        },
+        relation_name(summary.relation_type),
+        reference_name(&summary.source),
+    ));
+}
+
+fn reference_name(reference: &ArtifactReference) -> String {
+    format!(
+        "{} {}#{}",
+        artifact_type_name(reference.artifact_type),
+        reference.repository.path,
+        reference.number
+    )
+}
+
+fn artifact_type_name(artifact_type: ArtifactType) -> &'static str {
+    match artifact_type {
+        ArtifactType::Issue => "issue",
+        ArtifactType::PullRequest => "pull request",
+    }
+}
+
+fn relation_name(relation: ArtifactRelationType) -> &'static str {
+    match relation {
+        ArtifactRelationType::Parent => "parent",
+        ArtifactRelationType::Dependency => "dependency",
+        ArtifactRelationType::Related => "related",
+    }
 }

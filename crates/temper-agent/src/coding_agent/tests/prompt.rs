@@ -165,4 +165,193 @@ fn user_context_includes_work_item_and_guidance() {
     assert!(rendered.contains("Use docs/product-change.md"));
     assert!(rendered.contains("No .temper-only diffs."));
     assert!(rendered.contains(r#"{"artifact":{"title":"Implement docs"}}"#));
+    assert!(rendered.contains("Work item context (JSON):"));
+}
+
+#[test]
+fn workflow_prompts_use_the_coordinating_artifact_as_primary() {
+    let cases = [
+        ("plan_feature", "architect", "issue", 101, "Feature"),
+        ("decompose_plan", "architect", "issue", 102, "Plan"),
+        ("validate_plan", "tester", "issue", 102, "Plan"),
+        ("open_pr", "engineer", "issue", 103, "Code child"),
+        (
+            "address_implementation_ci_failure",
+            "engineer",
+            "pull_request",
+            104,
+            "Implementation PR",
+        ),
+        (
+            "review_pr",
+            "reviewer",
+            "pull_request",
+            104,
+            "Implementation PR",
+        ),
+    ];
+
+    for (action, role, artifact_type, number, title) in cases {
+        let mut context = parsed_fixture();
+        context.action = action.to_string();
+        context.work_item.role = role.to_string();
+        context.artifact_context = Some(
+            serde_json::from_value(serde_json::json!({
+                "version": 1,
+                "repository": {"id":"repo-1", "path":"acme/service"},
+                "artifact_type": artifact_type,
+                "primary": snapshot(artifact_type, number, title, "coordinating body", &["ready"], if artifact_type == "issue" { "code" } else { "implementation_pr" }),
+                "lineage": [snapshot("issue", 100, "Mandatory ancestor", "ancestor body", &["feature"], "feature")],
+                "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":false}
+            }))
+            .expect("workflow bundle parses"),
+        );
+
+        let rendered = user_context(&context);
+        let primary = artifact_section(&rendered, "Primary artifact:", "Mandatory lineage:");
+        let lineage = artifact_section(&rendered, "Mandatory lineage:", "Validation summaries:");
+        assert!(
+            primary.contains(&format!("{title} [open]")),
+            "action {action} primary section: {primary}"
+        );
+        assert!(primary.contains("coordinating body"), "action {action}");
+        assert!(!primary.contains("Mandatory ancestor"), "action {action}");
+        assert!(lineage.contains("Mandatory ancestor"), "action {action}");
+        assert!(!lineage.contains(title), "action {action}");
+        assert!(rendered.contains(&format!("Role: {role}")));
+    }
+}
+
+#[test]
+fn artifact_bundle_renders_only_explicit_members_in_each_section() {
+    let mut context = parsed_fixture();
+    context.action = "validate_plan".to_string();
+    context.work_item.role = "tester".to_string();
+    context.artifact_context = Some(serde_json::from_value(serde_json::json!({
+        "version": 1,
+        "repository": {"id":"repo-1", "path":"acme/service"},
+        "artifact_type": "issue",
+        "primary": snapshot("issue", 7, "Validation plan", "plan body", &["needs-validation", "plan"], "plan"),
+        "lineage": [
+            snapshot("issue", 1, "Feature root", "feature body", &["feature"], "feature"),
+            snapshot("issue", 3, "Design parent", "design body", &["design"], "design")
+        ],
+        "validation_scope": [
+            summary("issue", 8, "Code child", &["code", "implemented"], "code", "dependency", "issue", 7),
+            summary("pull_request", 9, "Implementation PR", &["implementation"], "implementation_pr", "related", "issue", 8)
+        ],
+        "optional_references": [
+            summary("issue", 11, "Markdown reference", &["docs"], "reference", "related", "issue", 3)
+        ],
+        "diagnostics":[{"code":"content_truncated","message":"body bounded","source":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7}}],
+        "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":true}
+    })).expect("bundle parses"));
+
+    let rendered = user_context(&context);
+    let primary = artifact_section(&rendered, "Primary artifact:", "Mandatory lineage:");
+    assert_eq!(
+        primary,
+        "- issue acme/service#7 — Validation plan [open] kind=plan labels=needs-validation, plan\n  Body:\nplan body"
+    );
+
+    let lineage = artifact_section(&rendered, "Mandatory lineage:", "Validation summaries:");
+    assert_eq!(
+        lineage,
+        "- issue acme/service#1 — Feature root [open] kind=feature labels=feature\n  Body:\nfeature body\n- issue acme/service#3 — Design parent [open] kind=design labels=design\n  Body:\ndesign body"
+    );
+
+    let validation = artifact_section(
+        &rendered,
+        "Validation summaries:",
+        "Optional body-omitted references:",
+    );
+    assert_eq!(
+        validation,
+        "- issue acme/service#8 — Code child [open] kind=code labels=code, implemented relation=dependency source=issue acme/service#7\n- pull request acme/service#9 — Implementation PR [open] kind=implementation_pr labels=implementation relation=related source=issue acme/service#8"
+    );
+
+    let optional = artifact_section(
+        &rendered,
+        "Optional body-omitted references:",
+        "Diagnostics and truncation:",
+    );
+    assert_eq!(
+        optional,
+        "- issue acme/service#11 — Markdown reference [open] kind=reference labels=docs relation=related source=issue acme/service#3"
+    );
+    assert!(!optional.contains("Code child"));
+    assert!(!optional.contains("Implementation PR"));
+
+    let diagnostics = artifact_section(
+        &rendered,
+        "Diagnostics and truncation:",
+        "Forge context tools:",
+    );
+    assert!(diagnostics.contains("content_truncated (issue acme/service#7): body bounded"));
+    assert!(diagnostics.contains("content_truncated=true"));
+    assert!(rendered.contains("Repeated calls may follow indirect relations"));
+    assert!(!rendered.contains("Work item context (JSON):"));
+}
+
+fn snapshot(
+    artifact_type: &str,
+    number: u64,
+    title: &str,
+    body: &str,
+    labels: &[&str],
+    workflow_kind: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "artifact": {
+            "repository": {"id":"repo-1", "path":"acme/service"},
+            "artifact_type": artifact_type,
+            "number": number
+        },
+        "title": title,
+        "body": body,
+        "labels": labels,
+        "state": "open",
+        "workflow_kind": workflow_kind
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn summary(
+    artifact_type: &str,
+    number: u64,
+    title: &str,
+    labels: &[&str],
+    workflow_kind: &str,
+    relation_type: &str,
+    source_type: &str,
+    source_number: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "artifact": {
+            "repository": {"id":"repo-1", "path":"acme/service"},
+            "artifact_type": artifact_type,
+            "number": number
+        },
+        "title": title,
+        "labels": labels,
+        "state": "open",
+        "workflow_kind": workflow_kind,
+        "relation_type": relation_type,
+        "source": {
+            "repository": {"id":"repo-1", "path":"acme/service"},
+            "artifact_type": source_type,
+            "number": source_number
+        }
+    })
+}
+
+fn artifact_section<'a>(rendered: &'a str, heading: &str, next_heading: &str) -> &'a str {
+    rendered
+        .split_once(heading)
+        .unwrap_or_else(|| panic!("missing heading {heading}"))
+        .1
+        .split_once(next_heading)
+        .unwrap_or_else(|| panic!("missing following heading {next_heading}"))
+        .0
+        .trim()
 }

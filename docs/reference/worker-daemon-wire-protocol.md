@@ -32,9 +32,10 @@ JSON keeps v1 easy to inspect and fixture-test while preserving message
 semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.action`, `JobContext.checkout_capability`,
 `JobContext.allowed_verdicts`, `JobContext.verdict_contracts`,
-`JobContext.source_metadata`, `JobResult.verdict`, `JobResult.body`,
+`JobContext.source_metadata`, `JobContext.artifact_context`, `JobResult.verdict`, `JobResult.body`,
 `JobResult.children`, and `JobResult.children[].kind` are all optional, and the
-protocol version remains `1`.
+protocol version remains `1`. The `fetch-context`/`context-response` pair is an
+additive assignment-scoped capability in the same v1 envelope.
 
 ## Envelope
 
@@ -129,6 +130,16 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `branch_hint` | string | no | Deterministic worker branch suggestion, for example `agent/pr-for-code-42`. |
 | `correlation_key` | string | no | Deterministic PR correlation key, for example `pr-for-code-42`. |
 | `artifact` | object | no | Enqueue-time issue snapshot. Omitted for older minimal payloads and for PR-targeted jobs in v1. |
+| `artifact_context` | object | no | Versioned bounded graph bundle with explicitly separated primary, mandatory ancestry, validation scope, optional references, diagnostics, and truncation flags. Additive; legacy workers may ignore it. |
+| `artifact_context.version` | integer | yes when `artifact_context` is present | Artifact-context schema version, currently `1` and independent of the worker protocol version. |
+| `artifact_context.repository` | object | yes when `artifact_context` is present | Stable id and configured `owner/name` path of the coordinating repository. |
+| `artifact_context.artifact_type` | string | yes when `artifact_context` is present | `issue` or `pull_request`. |
+| `artifact_context.primary` | object | yes when `artifact_context` is present | Full coordinating snapshot; primary identity never depends on a vector position. |
+| `artifact_context.lineage` | array | no | Full mandatory ancestor snapshots in deterministic root-to-leaf order, excluding the primary. |
+| `artifact_context.validation_scope` | array | no | Body-omitted declared dependencies and verified implementation PRs. Each summary retains labels, state, optional workflow kind, relation type, and the source artifact that exposed it. |
+| `artifact_context.optional_references` | array | no | Body-omitted Markdown references, with the same self-describing summary metadata. |
+| `artifact_context.diagnostics` | array | no | Non-fatal partial-collection diagnostics. Dispatch continues when only related context is unavailable. |
+| `artifact_context.truncation` | object | yes when `artifact_context` is present | Explicit `depth_exceeded`, `count_exceeded`, and `content_truncated` booleans. |
 | `artifact.number` | integer | yes when `artifact` is present | Repository-scoped issue number. |
 | `artifact.title` | string | yes when `artifact` is present | Issue title at enqueue time. |
 | `artifact.body` | string | yes when `artifact` is present | Issue body at enqueue time. |
@@ -143,9 +154,64 @@ workflow jobs so Smith-style workers can run without Forge API access:
 For compatibility, old minimal payloads containing only `role`, `repo`, `queue`,
 and `artifact_kind` remain valid; the enrichment fields are optional. The
 `action`, `checkout_capability`, `allowed_verdicts`, `verdict_contracts`, and
-`source_metadata` additions are also optional, and adding them does not change the protocol version: it remains `1`.
-Readers must ignore unknown fields in the standard payload just as they do for
+`source_metadata`, and `artifact_context` additions are also optional, and adding them does not change the protocol version: it remains `1`.
+The legacy singular `artifact` object is retained unchanged when
+`artifact_context` is present; consumers must not require one carrier to replace
+the other. Readers must ignore unknown fields in the standard payload just as they do for
 protocol messages.
+
+### `fetch-context` — worker → daemon
+
+An active worker requests one bounded, read-only Forge lookup for its current
+assignment. It sends the message through the same carrier as poll/result traffic:
+`POST /v1/message` with worker-pool bearer authentication in split deployments,
+or the co-resident in-process transport in standalone mode. Both carriers reach
+the same authorization and retrieval implementation.
+
+| Field | Type | Required | Semantics |
+| --- | --- | --- | --- |
+| `protocol_version` | integer | yes | Constant `1`. |
+| `type` | string | yes | Constant `fetch-context`. |
+| `worker_id` | string | yes | Registered worker identity, at most 256 bytes. |
+| `job_id` | string | yes | An assignment currently active on that worker, at most 256 bytes. |
+| `operation` | object | yes | Exactly one closed-vocabulary operation described below. |
+
+`forge_get_item` accepts `repo`, positive `number`, optional `type`
+(`issue`/`pull_request`), and `include_comments` (default `false`).
+`forge_list_related` accepts `repo`, positive `number`, optional `type`, a
+non-empty unique subset of `parent`, `child`, `dependency`, `dependent`,
+`produced_pr`, `body_reference`, and `referenced_by`, plus optional bounded
+`depth` and `limit`. Repeated calls are supported so a client can deliberately
+follow indirect relations without one unbounded graph request.
+
+The daemon authorizes the worker-pool credential, exact `(worker_id, job_id)`
+active-assignment binding, and configured repository before any Forge read.
+Pending, completed, another worker's, and unconfigured-repository reads are
+`not_authorized`. The operation is read-only; mutation names are invalid.
+
+### `context-response` — daemon → worker
+
+Every accepted `fetch-context` envelope receives exactly one tagged outcome with
+the request identity echoed back. Workers must reject a response whose version,
+worker id, or job id differs from the request.
+
+| Field | Type | Required | Semantics |
+| --- | --- | --- | --- |
+| `protocol_version` | integer | yes | Constant `1`. |
+| `type` | string | yes | Constant `context-response`. |
+| `worker_id` | string | yes | Echo of the request worker. |
+| `job_id` | string | yes | Echo of the request assignment. |
+| `status` | string | yes | Exactly `success` or `error`. |
+| `result` | object | success only | Tagged `item` or `related` result with bounded content and truncation flags. |
+| `code` | string | error only | One stable public code: `invalid_request`, `not_authorized`, `not_found`, `forge_unavailable`, or `limit_exceeded`. |
+
+The daemon never serializes backend error details or credentials. Responses are
+hard-bounded; item bodies/comments and relation counts are truncated
+predictably, with truncation dimensions reported in the result. See
+[`fetch-context.json`](worker-daemon-wire-protocol/examples/fetch-context.json),
+[`context-response.json`](worker-daemon-wire-protocol/examples/context-response.json),
+and the stable error example
+[`context-response-error.json`](worker-daemon-wire-protocol/examples/context-response-error.json).
 
 ### `heartbeat` — worker → daemon
 
@@ -280,20 +346,21 @@ Defined error and timeout cases include:
   policy.
 - `job_timeout`: job exceeded daemon execution policy and may be reclaimed.
 
-## Reserved future capability
+## Assignment-scoped context capability
 
-`fetch_context` is reserved as a future worker-to-daemon message for
-daemon-mediated read-only Forge reads during a job. It is intentionally not part
-of the v1 message union. The compatibility rules below must allow adding it
-later without a breaking version bump when it is additive and optional for older
-peers.
+`fetch-context` is an implemented additive v1 capability. Older workers remain
+compatible because they never send the new message, and older standard job
+payload readers ignore `artifact_context`. A worker that does use the capability
+must treat stable error codes as data and must not retry `not_authorized` or
+`invalid_request` unchanged. `forge_unavailable` may be retried while the
+assignment remains active.
 
 ## Versioning and compatibility
 
 - `protocol_version` is a single integer in every message; v1 is `1`.
 - A changed `protocol_version` signals a breaking change.
 - Readers must ignore unknown fields in otherwise valid messages.
-- Additive optional fields do not require a version bump.
-- Future additive capabilities such as `labels`-based routing or `fetch_context`
-  must not require Smith workers to depend on Temper internals.
-- This rule is load-bearing for the zero-dependency consolidation goal.
+- Additive optional fields and message capabilities do not require a version bump.
+- `artifact_context` is additive. The singular `artifact` remains valid and unchanged for backward compatibility.
+- `fetch-context`/`context-response` are optional v1 capabilities; workers that do not use them continue to interoperate.
+- Context operations and public errors are closed vocabularies even though readers ignore unknown fields elsewhere.

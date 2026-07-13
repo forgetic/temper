@@ -53,6 +53,7 @@ impl RecordingAgent {
 impl AgentRunner for RecordingAgent {
     async fn run(
         &self,
+        _job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {

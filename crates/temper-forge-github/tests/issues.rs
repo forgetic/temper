@@ -5,7 +5,8 @@ mod support;
 use support::{MockHttpClient, block_on, body_json, forge, forge_with, issue_id, repo_id};
 use temper_forge_github::{CasMode, HttpMethod};
 use temper_forge_model::{
-    CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemNumber, UpdateIssue, UserId,
+    CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemListDetails, ItemNumber,
+    UpdateIssue, UserId,
 };
 
 fn issue_json(number: u64, title: &str, state: &str) -> String {
@@ -37,6 +38,31 @@ fn pull_as_issue_json(number: u64) -> String {
             "pull_request": {{"url": "https://api.github.com/repos/acme/widgets/pulls/8"}}
         }}"#
     )
+}
+
+#[test]
+fn issue_limit_bounds_page_size_and_stops_when_satisfied() {
+    let client = MockHttpClient::new();
+    client.push_response(200, format!("[{}]", issue_json(7, "limited", "open")));
+    let forge = forge(client.clone());
+
+    let issues = block_on(forge.list_issues(
+        &repo_id(),
+        IssueQuery {
+            limit: Some(1),
+            details: ItemListDetails::summary(),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(client.call_count(), 1);
+    assert!(
+        client.recorded()[0]
+            .query
+            .contains(&("per_page".to_string(), "1".to_string()))
+    );
 }
 
 #[test]

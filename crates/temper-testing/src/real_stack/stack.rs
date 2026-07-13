@@ -327,13 +327,15 @@ impl HermeticRealStack {
                 .clone()
                 .filter(|value| !value.trim().is_empty())
                 .expect("durable assignment has daemon boot id");
-            let job = temper_engine::recovered_job_from_assignment(
+            let artifact_context = super::artifact_context::daemon_service(daemon);
+            let job = temper_engine::recovered_job_from_assignment_with_artifact_context(
                 self.forge.as_ref(),
                 &self.primary_repo_id,
                 target,
                 &assignment,
                 self.workflow.as_ref(),
                 &self.compiled,
+                artifact_context.as_ref(),
             )
             .await
             .expect("hermetic durable assignment reconstructs");
@@ -361,24 +363,6 @@ impl HermeticRealStack {
             );
         }
         recovered
-    }
-
-    fn build_daemon(&self, handle: &RuntimeHandle) -> Daemon {
-        let applier = Arc::new(temper_engine::LeaseApplier::new(
-            self.forge.clone(),
-            temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300)),
-            "hermetic-daemon",
-            Arc::new(
-                temper_engine::ForgeApplier::new(self.forge.clone(), self.workflow.clone())
-                    .with_child_issue_hook(Arc::new(self.hooks.clone())),
-            ),
-            self.clock.capability(),
-        ));
-        let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);
-        match self.apply_grace {
-            Some(grace) => daemon.with_apply_grace(grace),
-            None => daemon,
-        }
     }
 
     /// Enqueues the currently seeded issue for the builder's primary worker
@@ -568,7 +552,7 @@ impl DaemonRouter {
         *self.daemon.lock().expect("daemon router lock") = daemon;
     }
 
-    fn current(&self) -> Arc<Daemon> {
+    pub(crate) fn current(&self) -> Arc<Daemon> {
         self.daemon.lock().expect("daemon router lock").clone()
     }
 }

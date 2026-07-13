@@ -19,6 +19,7 @@ pub mod agent_session;
 pub mod client;
 pub mod coding_executor;
 pub mod config;
+pub mod context_client;
 pub mod executor;
 pub mod observability;
 pub mod out_of_process_runner;
@@ -31,8 +32,8 @@ pub mod worker_shell;
 pub mod workspace;
 
 pub use agent_runner::{
-    AcceptedSubmitProof, AcceptedSubmitProofStore, AgentRunError, AgentRunOutput, AgentRunner,
-    WorkspaceResult, handle_submit_for_pr_with_proof,
+    AcceptedSubmitProof, AcceptedSubmitProofStore, AgentForgeContextFuture, AgentForgeContextHost,
+    AgentRunError, AgentRunOutput, AgentRunner, WorkspaceResult, handle_submit_for_pr_with_proof,
 };
 pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
@@ -40,6 +41,9 @@ pub use config::{
     AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
     ExecutorSelection, ParseOutcome, USAGE, WorkerConfig, WorkerParams, parse,
     role_identities_from_env,
+};
+pub use context_client::{
+    ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,
 };
 pub use executor::{JobExecutor, JobOutcome, StubExecutor, job_result};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};

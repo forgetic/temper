@@ -235,12 +235,53 @@ impl HermeticRealStackBuilder {
             ),
             clock.capability(),
         ));
-        let daemon_handle = Daemon::with_applier(Arc::new(handle.clone()), applier);
+        let artifact_context =
+            super::artifact_context::service(forge.clone(), workflow.clone(), &repo_ids);
+        let daemon_handle = Daemon::with_applier(Arc::new(handle.clone()), applier)
+            .with_artifact_context_service(artifact_context)
+            .with_forge_context_reader(forge.clone(), workflow.clone());
         let daemon_handle = match self.apply_grace {
             Some(apply_grace) => daemon_handle.with_apply_grace(apply_grace),
             None => daemon_handle,
         };
         let daemon = Arc::new(daemon_handle);
+        let router = Arc::new(DaemonRouter::new(daemon.clone()));
+        let router_for_context = Arc::clone(&router);
+        let context_worker_id = primary_worker_role.worker_id.clone();
+        let forge_context: temper_worker::AgentForgeContextHost =
+            Arc::new(move |job_id, operation| {
+                let router = Arc::clone(&router_for_context);
+                let worker_id = context_worker_id.clone();
+                Box::pin(async move {
+                    let request =
+                        temper_protocol_worker::FetchContext::new(&worker_id, &job_id, operation);
+                    let response = router
+                        .current()
+                        .deliver_protocol_message(
+                            temper_protocol_worker::WorkerProtocolMessage::FetchContext(request),
+                        )
+                        .await
+                        .map_err(|_| {
+                            temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable
+                        })?
+                        .ok_or(temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable)?;
+                    let temper_protocol_worker::WorkerProtocolMessage::ContextResponse(response) =
+                        response
+                    else {
+                        return Err(temper_protocol_worker::ForgeContextErrorCode::InvalidRequest);
+                    };
+                    if response.protocol_version != temper_protocol_worker::WORKER_PROTOCOL_VERSION
+                        || response.worker_id != worker_id
+                        || response.job_id != job_id
+                    {
+                        return Err(temper_protocol_worker::ForgeContextErrorCode::InvalidRequest);
+                    }
+                    match response.outcome {
+                        temper_protocol_worker::ContextOutcome::Success { result } => Ok(result),
+                        temper_protocol_worker::ContextOutcome::Error { code } => Err(code),
+                    }
+                })
+            });
         let (result_tx, result_rx) = temper_engine_io::channel();
 
         let script = match self.fake_model {
@@ -269,6 +310,7 @@ impl HermeticRealStackBuilder {
             config_dir: None,
             enable_subagents: self.enable_subagents,
             submit_for_pr: self.submit_for_pr,
+            forge_context,
             hooks: hooks.clone(),
         });
 
@@ -308,7 +350,6 @@ impl HermeticRealStackBuilder {
             CodingExecutor::new(coding_config.clone(), runner.clone())
                 .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(daemon.clone()))),
         );
-        let router = Arc::new(DaemonRouter::new(daemon.clone()));
 
         Ok(HermeticRealStack {
             world: HermeticDurableWorld {

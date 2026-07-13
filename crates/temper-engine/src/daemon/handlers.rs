@@ -10,13 +10,14 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_protocol_worker::{
-    Artifact, Assign, Heartbeat, JobResult, Poll, PullRequestFreshness, Register,
-    WORKER_AUTHORIZATION_HEADER, WorkerAuth, WorkerProtocolMessage,
+    Artifact, Assign, ForgeContextErrorCode, Heartbeat, JobResult, Poll, PullRequestFreshness,
+    Register, WORKER_AUTHORIZATION_HEADER, WorkerAuth, WorkerProtocolMessage,
 };
 
 use crate::InFlightJob;
 use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
 
+use super::context_transport::malformed_context_response;
 use super::machine::{DaemonMachine, DaemonRequest, DeferredEnqueue, PollWaiter};
 use super::protocol::{
     ResultDisposition, is_poll_timeout, protocol_response, register_log_line, result_disposition,
@@ -95,20 +96,38 @@ impl DaemonMachine {
         request: &HttpRequestData,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
-        let auth = match worker_auth_from_headers(&request.headers) {
-            Ok(auth) => auth,
-            Err(()) => {
+        let msg = match serde_json::from_slice::<WorkerProtocolMessage>(&request.body) {
+            Ok(message) => message,
+            Err(_) => {
+                if let Some((response, audit)) = malformed_context_response(&request.body) {
+                    return vec![DaemonRequest::RespondContext {
+                        response,
+                        audit,
+                        responder,
+                    }];
+                }
                 return vec![DaemonRequest::Respond {
                     responder,
-                    response: HttpResponseData::status_only(401),
+                    response: HttpResponseData::status_only(400),
                 }];
             }
         };
-        let Ok(msg) = serde_json::from_slice::<WorkerProtocolMessage>(&request.body) else {
-            return vec![DaemonRequest::Respond {
-                responder,
-                response: HttpResponseData::status_only(400),
-            }];
+        let auth = match worker_auth_from_headers(&request.headers) {
+            Ok(auth) => auth,
+            Err(()) => {
+                return match msg {
+                    WorkerProtocolMessage::FetchContext(fetch) => self.context_error_requests(
+                        fetch,
+                        "unknown",
+                        ForgeContextErrorCode::NotAuthorized,
+                        responder,
+                    ),
+                    _ => vec![DaemonRequest::Respond {
+                        responder,
+                        response: HttpResponseData::status_only(401),
+                    }],
+                };
+            }
         };
 
         match msg {
@@ -120,6 +139,9 @@ impl DaemonMachine {
                 self.handle_heartbeat(heartbeat, auth, responder)
             }
             WorkerProtocolMessage::Result(result) => self.handle_result(result, auth, responder),
+            WorkerProtocolMessage::FetchContext(fetch) => {
+                self.handle_fetch_context(fetch, auth, responder)
+            }
             other => match self.core.handle_authenticated(other, auth.as_ref()) {
                 Ok(response) => vec![DaemonRequest::Respond {
                     responder,

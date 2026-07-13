@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "repository": {"id": "repo-1", "path": "ai/temper"},
+  "artifact_type": "issue",
+  "primary": {
+    "artifact": {
+      "repository": {"id": "repo-1", "path": "ai/temper"},
+      "artifact_type": "issue",
+      "number": 295
+    },
+    "title": "Encode explicit artifact context",
+    "body": "Implement the revised contract.",
+    "labels": ["code", "ready"],
+    "state": "open",
+    "workflow_kind": "code"
+  },
+  "lineage": [
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 276
+      },
+      "title": "Workflow context feature",
+      "body": "Root feature.",
+      "labels": ["feature"],
+      "state": "open",
+      "workflow_kind": "feature"
+    },
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 277
+      },
+      "title": "Workflow context plan",
+      "body": "Parent planning artifact.",
+      "labels": ["plan"],
+      "state": "open",
+      "workflow_kind": "plan"
+    }
+  ],
+  "validation_scope": [
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "pull_request",
+        "number": 294
+      },
+      "title": "Verified implementation",
+      "labels": ["implementation"],
+      "state": "open",
+      "workflow_kind": "implementation_pr",
+      "relation_type": "related",
+      "source": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 295
+      }
+    }
+  ],
+  "optional_references": [
+    {
+      "artifact": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 250
+      },
+      "title": "Referenced background",
+      "labels": ["docs"],
+      "state": "closed",
+      "relation_type": "related",
+      "source": {
+        "repository": {"id": "repo-1", "path": "ai/temper"},
+        "artifact_type": "issue",
+        "number": 277
+      }
+    }
+  ],
+  "truncation": {
+    "depth_exceeded": false,
+    "count_exceeded": false,
+    "content_truncated": false
+  }
+}

@@ -12,6 +12,7 @@ fn role_maps_to_capability() {
         Capability::for_role("reviewer"),
         Capability::ReviewWorkspace
     );
+    assert_eq!(Capability::for_role("tester"), Capability::ReviewWorkspace);
     assert_eq!(
         Capability::for_role("architect"),
         Capability::TriageWorkspace
@@ -146,6 +147,7 @@ fn submit_for_pr_tool_exposed_only_to_writable_engineer_sessions() {
         &engineer,
         &cwd,
         Some(callback()),
+        None,
     );
     assert!(tool_names(&engineer_tools).contains(&"submit_for_pr"));
 
@@ -156,6 +158,7 @@ fn submit_for_pr_tool_exposed_only_to_writable_engineer_sessions() {
         &read_only_engineer,
         &cwd,
         Some(callback()),
+        None,
     );
     assert!(!tool_names(&read_only_tools).contains(&"submit_for_pr"));
 
@@ -167,6 +170,7 @@ fn submit_for_pr_tool_exposed_only_to_writable_engineer_sessions() {
         &architect,
         &cwd,
         Some(callback()),
+        None,
     );
     assert!(!tool_names(&architect_tools).contains(&"submit_for_pr"));
 
@@ -178,8 +182,36 @@ fn submit_for_pr_tool_exposed_only_to_writable_engineer_sessions() {
         &reviewer,
         &cwd,
         Some(callback()),
+        None,
     );
     assert!(!tool_names(&reviewer_tools).contains(&"submit_for_pr"));
+}
+
+#[test]
+fn forge_tools_are_available_to_every_role_only_with_a_host() {
+    let cwd = std::env::temp_dir();
+    let host: ForgeContextHost = std::sync::Arc::new(|_| {
+        Box::pin(async { Err(temper_protocol_agent::ForgeContextErrorCode::NotFound) })
+    });
+    for (role, capability) in [
+        ("architect", Capability::TriageWorkspace),
+        ("engineer", Capability::CodingWorkspace),
+        ("reviewer", Capability::ReviewWorkspace),
+        ("tester", Capability::ReviewWorkspace),
+    ] {
+        let mut context = super::common::parsed_fixture();
+        context.work_item.role = role.to_string();
+        let with_host =
+            tool_registry_for_context(capability, &context, &cwd, None, Some(host.clone()));
+        let names = tool_names(&with_host);
+        assert!(names.contains(&"forge_get_item"), "role={role}");
+        assert!(names.contains(&"forge_list_related"), "role={role}");
+
+        let without_host = tool_registry_for_context(capability, &context, &cwd, None, None);
+        let names = tool_names(&without_host);
+        assert!(!names.contains(&"forge_get_item"), "role={role}");
+        assert!(!names.contains(&"forge_list_related"), "role={role}");
+    }
 }
 
 fn tool_names(registry: &ToolRegistry) -> Vec<&str> {

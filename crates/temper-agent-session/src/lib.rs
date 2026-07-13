@@ -22,7 +22,8 @@
 //! `--model <id>`, `--investigate-model <id>`, `--provider-url <url>`,
 //! `--max-iterations <n>`, `--subagents <on|off>`, `--capture-dir <dir>`,
 //! optional non-secret `--tool-config <file>`, the optional worker-owned
-//! `--submit-for-pr-address <addr>` side channel, plus the required
+//! `--submit-for-pr-address <addr>` gate channel and
+//! `--forge-context-address <addr>` read-only Forge channel, plus the required
 //! `--context`/`--result` paths and the optional `--workspace`. The **one**
 //! secret, the provider credential, arrives via
 //! `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`.
@@ -41,6 +42,7 @@
 
 mod config;
 mod entry;
+mod forge_client;
 mod options;
 mod run;
 mod submit_client;

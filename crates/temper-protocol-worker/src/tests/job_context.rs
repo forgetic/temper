@@ -8,6 +8,7 @@ use super::sample_manifest;
 #[test]
 fn full_job_context_round_trips_without_loss() {
     let context = JobContext {
+        artifact_context: None,
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),
         queue: "code_ready".to_string(),
@@ -48,6 +49,7 @@ fn full_job_context_round_trips_without_loss() {
 #[test]
 fn job_context_omits_empty_optional_fields() {
     let context = JobContext {
+        artifact_context: None,
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),
         queue: "code_ready".to_string(),
@@ -82,6 +84,7 @@ fn job_context_omits_empty_optional_fields() {
     assert_eq!(value.get("allowed_verdicts"), None);
     assert_eq!(value.get("verdict_contracts"), None);
     assert_eq!(value.get("source_metadata"), None);
+    assert_eq!(value.get("artifact_context"), None);
     assert_eq!(value.get("guidance"), None);
     assert_eq!(value.get("pull_request_freshness"), None);
 }
@@ -91,6 +94,7 @@ fn thin_pre_enrichment_job_context_omits_artifact_and_workspace() {
     // The daemon's pure work-item mapping has no Forge access, so it emits a
     // thin context; enrichment fills artifact + workspace before dispatch.
     let context = JobContext {
+        artifact_context: None,
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),
         queue: "code_ready".to_string(),
@@ -143,7 +147,43 @@ fn job_context_unknown_fields_are_ignored() {
     .expect("unknown job context fields must be accepted");
 
     assert_eq!(context.role, "engineer");
+    assert!(context.artifact_context.is_none());
     assert!(context.verdict_contracts.is_empty());
     assert!(context.source_metadata.is_empty());
     assert_eq!(context.workspace.expect("workspace present").repos.len(), 1);
+}
+
+#[test]
+fn artifact_context_embedding_fixture_preserves_singular_artifact() {
+    let json = include_str!("../../fixtures/job-context-artifact-context.json");
+    let raw: serde_json::Value = serde_json::from_str(json).expect("golden fixture is json");
+    let context: JobContext = serde_json::from_str(json).expect("golden fixture parses");
+
+    assert_eq!(context.artifact.as_ref().unwrap().number, 279);
+    let bundle = context.artifact_context.as_ref().unwrap();
+    assert_eq!(bundle.version, 1);
+    assert_eq!(bundle.primary.artifact.number, 279);
+    assert_eq!(bundle.primary.workflow_kind.as_deref(), Some("code"));
+    assert_eq!(
+        serde_json::to_value(context.artifact.as_ref().unwrap()).unwrap(),
+        raw["artifact"],
+        "the legacy singular artifact shape must not change"
+    );
+}
+
+#[test]
+fn legacy_job_context_without_bundle_keeps_artifact_shape() {
+    let json = r#"{
+        "role":"engineer","repo":"ai/temper","queue":"code_ready","artifact_kind":"code",
+        "artifact":{"number":7,"title":"legacy","body":"body","labels":["code"],"state":"Open"}
+    }"#;
+    let context: JobContext = serde_json::from_str(json).expect("legacy context parses");
+    assert!(context.artifact_context.is_none());
+    assert_eq!(
+        serde_json::to_value(context.artifact.unwrap()).unwrap(),
+        serde_json::json!({
+            "number": 7, "title": "legacy", "body": "body",
+            "labels": ["code"], "state": "Open"
+        })
+    );
 }

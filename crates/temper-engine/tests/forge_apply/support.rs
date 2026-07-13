@@ -353,6 +353,7 @@ pub(crate) fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob 
         number,
         "issue",
         JobContext {
+            artifact_context: None,
             role: "engineer".to_string(),
             repo: repo_path.to_string(),
             queue: "code_ready".to_string(),
@@ -376,6 +377,7 @@ pub(crate) fn open_pr_in_flight_job(repo_path: &str, number: ItemNumber) -> InFl
         number,
         "issue",
         JobContext {
+            artifact_context: None,
             role: "engineer".to_string(),
             repo: repo_path.to_string(),
             queue: "code_ready".to_string(),
@@ -417,6 +419,7 @@ pub(crate) fn coordinated_in_flight_job(
         number,
         "issue",
         JobContext {
+            artifact_context: None,
             role: "engineer".to_string(),
             repo: primary_path.to_string(),
             queue: "code_ready".to_string(),
@@ -443,6 +446,7 @@ pub(crate) fn triage_in_flight_job(repo_path: &str, number: ItemNumber) -> InFli
         number,
         "issue",
         JobContext {
+            artifact_context: None,
             role: "architect".to_string(),
             repo: repo_path.to_string(),
             queue: "triage".to_string(),
@@ -470,6 +474,7 @@ pub(crate) fn review_in_flight_job(repo_path: &str, number: ItemNumber) -> InFli
         number,
         "pull_request",
         JobContext {
+            artifact_context: None,
             role: "reviewer".to_string(),
             repo: repo_path.to_string(),
             queue: "pr_needs_review".to_string(),

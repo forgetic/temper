@@ -10,6 +10,7 @@ use tongs::tools::{
 };
 
 use super::Capability;
+use super::forge::{ForgeContextHost, ForgeGetItemTool, ForgeListRelatedTool};
 use super::submit::{SubmitForPrCallback, SubmitForPrTool, submit_for_pr_available};
 use temper_protocol_agent::WorkspaceContext;
 
@@ -29,10 +30,15 @@ pub(crate) fn tool_registry_for_context(
     context: &WorkspaceContext,
     cwd: &Path,
     submit_for_pr: Option<SubmitForPrCallback>,
+    forge_context: Option<ForgeContextHost>,
 ) -> ToolRegistry {
     let mut tools = coding_tools_vec(capability, cwd);
     if let Some(callback) = submit_for_pr.filter(|_| submit_for_pr_available(context)) {
         tools.push(Box::new(SubmitForPrTool::new(context, callback)));
+    }
+    if let Some(host) = forge_context {
+        tools.push(Box::new(ForgeGetItemTool::new(host.clone())));
+        tools.push(Box::new(ForgeListRelatedTool::new(host)));
     }
     ToolRegistry::from_tools(tools)
 }

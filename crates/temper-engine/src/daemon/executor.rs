@@ -4,8 +4,13 @@
 //! runtime and feeds the resulting completions back into the queue.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use temper_engine_io::{CqSender, Executor as EngineExecutor, Spawner, arm_timer};
+use temper_protocol_worker::{
+    ContextResponse, ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult,
+    WorkerProtocolMessage,
+};
 
 use crate::applier::ResultApplier;
 
@@ -17,6 +22,39 @@ pub(super) struct DaemonExecutor {
     pub(super) cq: CqSender<DaemonCompletion>,
     pub(super) applier: Arc<dyn ResultApplier>,
     pub(super) scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
+    pub(super) context_reader_slot:
+        Arc<std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>>,
+}
+
+fn context_operation_name(operation: &ForgeContextOperation) -> &'static str {
+    match operation {
+        ForgeContextOperation::ForgeGetItem(_) => "forge_get_item",
+        ForgeContextOperation::ForgeListRelated(_) => "forge_list_related",
+    }
+}
+
+fn context_error_name(code: ForgeContextErrorCode) -> &'static str {
+    match code {
+        ForgeContextErrorCode::InvalidRequest => "invalid_request",
+        ForgeContextErrorCode::NotAuthorized => "not_authorized",
+        ForgeContextErrorCode::NotFound => "not_found",
+        ForgeContextErrorCode::ForgeUnavailable => "forge_unavailable",
+        ForgeContextErrorCode::LimitExceeded => "limit_exceeded",
+    }
+}
+
+fn context_result_metrics(
+    result: &Result<ForgeContextResult, ForgeContextErrorCode>,
+) -> (&'static str, usize, bool) {
+    match result {
+        Ok(ForgeContextResult::Item(item)) => ("success", 1, item.truncation.is_truncated()),
+        Ok(ForgeContextResult::Related(related)) => (
+            "success",
+            related.items.len(),
+            related.truncation.is_truncated(),
+        ),
+        Err(code) => (context_error_name(*code), 0, false),
+    }
 }
 
 impl EngineExecutor<DaemonMachine> for DaemonExecutor {
@@ -138,6 +176,65 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                         &serde_json::to_value(&response).expect("freshness response serializes"),
                     ));
                 });
+            }
+            DaemonRequest::RunFetchContext {
+                request,
+                role,
+                responder,
+            } => {
+                let reader = self
+                    .context_reader_slot
+                    .lock()
+                    .expect("context reader slot")
+                    .clone();
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    let started = Instant::now();
+                    let result = match reader {
+                        Some(reader) => reader.read(request.operation.clone()).await,
+                        None => Err(ForgeContextErrorCode::ForgeUnavailable),
+                    };
+                    let (status, result_count, truncated) = context_result_metrics(&result);
+                    temper_log::emit::emit_forge_context_read(temper_log::emit::ForgeContextRead {
+                        worker_id: &request.worker_id,
+                        job_id: &request.job_id,
+                        role: &role,
+                        operation: context_operation_name(&request.operation),
+                        repository: request.operation.repository(),
+                        item_number: request.operation.number(),
+                        status,
+                        result_count,
+                        truncated,
+                        duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                    });
+                    let response = match result {
+                        Ok(result) => ContextResponse::success(&request, result),
+                        Err(code) => ContextResponse::error(&request, code),
+                    };
+                    responder.respond(super::protocol::protocol_response(Some(
+                        WorkerProtocolMessage::ContextResponse(response),
+                    )));
+                });
+            }
+            DaemonRequest::RespondContext {
+                response,
+                audit,
+                responder,
+            } => {
+                temper_log::emit::emit_forge_context_read(temper_log::emit::ForgeContextRead {
+                    worker_id: &audit.worker_id,
+                    job_id: &audit.job_id,
+                    role: &audit.role,
+                    operation: &audit.operation,
+                    repository: &audit.repository,
+                    item_number: audit.item_number,
+                    status: &audit.status,
+                    result_count: 0,
+                    truncated: false,
+                    duration_ms: 0,
+                });
+                responder.respond(super::protocol::protocol_response(Some(
+                    WorkerProtocolMessage::ContextResponse(response),
+                )));
             }
             DaemonRequest::RunWakeScan { token, hint } => {
                 let scanner = self.scanner_slot.lock().expect("scanner slot").clone();

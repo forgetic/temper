@@ -44,11 +44,20 @@ pub async fn run_async(
         role_tokens,
     } = engine_config(resolved)?;
     let forge_config_for_roles = forge_config.clone();
+    let forge_url = forge_config.base_url.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);
 
     let (workflow, compiled) = load_workflow(&config)?;
     let role_limits = workflow_role_limits(&compiled);
     let (repositories, repo_ids) = resolve_repo_targets(forge.as_ref(), &config.repos).await?;
+    let artifact_catalog =
+        temper_engine::ConfiguredRepositoryCatalog::from_repository_set(&repositories, forge_url)?;
+    let artifact_context = Arc::new(temper_engine::ArtifactContextBundleService::new(
+        forge.clone(),
+        workflow.clone(),
+        artifact_catalog,
+        temper_engine::ArtifactContextPolicy::default(),
+    ));
     let normal_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Normal);
     let wake_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Wake);
     let lease_ttl = lease_ttl(&config)?;
@@ -72,6 +81,8 @@ pub async fn run_async(
         role_limits,
     )
     .with_worker_pool_auth(worker_pool_auth_config(resolved)?)
+    .with_artifact_context_service(artifact_context)
+    .with_forge_context_reader(forge.clone(), workflow.clone())
     .begin_startup_recovery();
 
     // Inventory durable claims before opening any feed. The worker protocol

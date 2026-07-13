@@ -1,6 +1,35 @@
 use super::support::*;
 
 #[test]
+fn artifact_context_bundle_is_copied_without_reconstruction() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
+        let bundle = json!({
+            "version":1,
+            "repository":{"id":"repo-1","path":"acme/service"},
+            "artifact_type":"issue",
+            "primary":{"artifact":{"repository":{"id":"repo-1","path":"acme/service"},"artifact_type":"issue","number":7},"title":"Primary","body":"Detailed issue body","labels":["code"],"state":"open","workflow_kind":"code"},
+            "diagnostics":[{"code":"content_truncated","message":"kept verbatim"}],
+            "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":true}
+        });
+        let mut assignment = assign("agent/pr-for-code-7", "artifact-context-7");
+        assignment.job_payload["artifact_context"] = bundle.clone();
+
+        expect_success(executor.execute(assignment).await);
+
+        let context = agent.captured_context();
+        assert_eq!(
+            serde_json::to_value(context.artifact_context.expect("bundle copied")).unwrap(),
+            bundle
+        );
+        let legacy: Value = serde_json::from_str(&context.work_item.context).unwrap();
+        assert_eq!(legacy["artifact"]["body"], "Detailed issue body");
+    });
+}
+
+#[test]
 fn context_shape_matches_temper_coding_agent_contract() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

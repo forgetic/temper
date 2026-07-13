@@ -76,6 +76,9 @@ environment variables.
 | `--context <FILE>` | Worker-written `WorkspaceContext` JSON path (required). | — (set per job by the worker) |
 | `--result <FILE>` | `WorkspaceResult` JSON path the agent must write (required). | — (set per job by the worker) |
 | `--workspace <DIR>` | Prepared coordination-scoped workspace root. | process cwd |
+| `--submit-for-pr-address <HOST:PORT>` | Optional worker-owned loopback gate for writable engineer sessions. | absent; tool unavailable |
+| `--forge-context-address <HOST:PORT>` | Optional worker-owned loopback channel for bounded assignment-scoped Forge reads. Carries no credential or assignment identity. | absent; tools unavailable |
+| `--tool-config <FILE>` | Optional non-secret agent-local tool configuration. | absent |
 | `--provider <anthropic\|chatgpt\|deepseek>` | Provider adapter to use. | `chatgpt` |
 | `--model <ID>` | Main model id. | provider built-in default |
 | `--investigate-model <ID>` | Cheaper read-only subagent model id. | provider built-in default |

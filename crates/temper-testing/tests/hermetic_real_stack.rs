@@ -174,6 +174,8 @@ fn submit_retry_real_stack_script() -> Script {
     })
 }
 
+#[path = "hermetic_real_stack/artifact_context.rs"]
+mod artifact_context;
 #[path = "hermetic_real_stack/basic_delivery.rs"]
 mod basic_delivery;
 #[path = "hermetic_real_stack/multi_repo.rs"]

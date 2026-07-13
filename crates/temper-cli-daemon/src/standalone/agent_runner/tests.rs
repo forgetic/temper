@@ -58,7 +58,7 @@ fn in_process_runner_passes_tool_config_to_native_loop() {
         std::fs::create_dir_all(temp.path().join("temper")).expect("prepared repo dir");
 
         let error = runner
-            .run(&context, temp.path())
+            .run("job-test", &context, temp.path())
             .await
             .expect_err("required codebase-memory startup failure aborts run");
         assert_eq!(error.class, FailureClass::Transient);
@@ -191,6 +191,7 @@ fn run_kind_maps_roles_to_activities() {
 fn ctx(owner: &str, name: &str, kind: &str, target: &str) -> WorkspaceContext {
     use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
     WorkspaceContext {
+        artifact_context: None,
         repos: vec![WorkspaceRepository {
             id: format!("forgejo:{owner}/{name}"),
             owner: owner.to_string(),

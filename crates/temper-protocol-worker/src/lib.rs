@@ -21,6 +21,7 @@
 
 mod assignment;
 mod auth;
+mod context;
 mod job;
 mod lifecycle;
 mod message;
@@ -29,6 +30,7 @@ mod workspace;
 
 pub use assignment::{Artifact, Assign, Capability, Capacity, Poll, Register};
 pub use auth::{WORKER_AUTHORIZATION_HEADER, WORKER_AUTHORIZATION_SCHEME, WorkerAuth};
+pub use context::{ContextOutcome, ContextResponse, FetchContext};
 pub use job::{
     JobArtifactSnapshot, JobContext, PullRequestFreshness, PullRequestFreshnessResponse,
     PullRequestFreshnessStatus,
@@ -39,6 +41,14 @@ pub use lifecycle::{
 };
 pub use message::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 pub use result::{Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus};
+pub use temper_protocol_context::{
+    ARTIFACT_CONTEXT_VERSION, ArtifactContextBundle, ArtifactContextDiagnostic,
+    ArtifactContextDiagnosticCode, ArtifactContextTruncation, ArtifactIndexEntry,
+    ArtifactReference, ArtifactRelation, ArtifactRelationType, ArtifactRepository,
+    ArtifactSnapshot, ArtifactSummary, ArtifactType, ForgeContextErrorCode, ForgeContextOperation,
+    ForgeContextResult, ForgeGetItemOperation, ForgeGetItemResult, ForgeItemComment,
+    ForgeListRelatedOperation, ForgeListRelatedResult, ForgeRelatedEdge, ForgeRelationType,
+};
 pub use workspace::{RepoAccess, WorkspaceManifest, WorkspaceRepo};
 
 #[cfg(test)]

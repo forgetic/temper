@@ -2,8 +2,8 @@ use temper_protocol_agent::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
 };
 use temper_protocol_worker::{
-    JobArtifactSnapshot, PullRequestFreshness as WorkerPullRequestFreshness, RepoAccess,
-    WorkspaceManifest,
+    ArtifactContextBundle, JobArtifactSnapshot, PullRequestFreshness as WorkerPullRequestFreshness,
+    RepoAccess, WorkspaceManifest,
 };
 use temper_verdict::{SourceMetadata, VerdictContracts};
 
@@ -23,6 +23,7 @@ pub(super) fn build_workspace_context(
     artifact_kind: &str,
     manifest: &WorkspaceManifest,
     artifact: &JobArtifactSnapshot,
+    artifact_context: Option<&ArtifactContextBundle>,
     artifact_wire_kind: &str,
     checkout: &str,
     allowed_verdicts: &[String],
@@ -94,6 +95,7 @@ pub(super) fn build_workspace_context(
             ),
             context: work_item_context,
         },
+        artifact_context: artifact_context.cloned(),
         action: action.to_string(),
         correlation_key: manifest.coordination_key.clone(),
         checkout: Some(checkout.to_string()),

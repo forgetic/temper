@@ -11,6 +11,7 @@
 //! `docs/reference/forgejo-backend.md`.
 
 use crate::ids::{RepoCoord, parse_issue_id, parse_repository_id};
+use crate::items::coalesce_label_update;
 use crate::map::map_issue;
 use crate::pulls::response_validator;
 use crate::types::IssueDto;
@@ -48,7 +49,9 @@ impl<C: HttpClient> ForgejoForge<C> {
         if !query.labels.is_empty() {
             base_query.push(("labels".to_string(), query.labels.join(",")));
         }
-        let dtos: Vec<IssueDto> = self.list_all("list issues", &path, base_query).await?;
+        let dtos: Vec<IssueDto> = self
+            .list_up_to("list issues", &path, base_query, query.limit)
+            .await?;
 
         let mut issues: Vec<Issue> = dtos
             .into_iter()
@@ -58,12 +61,15 @@ impl<C: HttpClient> ForgejoForge<C> {
             .map(|dto| self.materialize_issue(&repo, dto, None))
             .collect();
         issues.retain(|issue| issue_matches_query(issue, &query));
+        issues.sort_by(|left, right| compare_issues(left, right, &query));
+        if let Some(limit) = query.limit {
+            issues.truncate(limit);
+        }
         if query.details.dependencies {
             for issue in &mut issues {
                 issue.dependencies = self.load_item_dependencies(&repo, issue.number).await?;
             }
         }
-        issues.sort_by(|left, right| compare_issues(left, right, &query));
         Ok(issues)
     }
 
@@ -213,14 +219,14 @@ impl<C: HttpClient> ForgejoForge<C> {
             .await?;
         }
 
-        self.apply_item_label_update(
-            &repo,
-            number,
-            input.set_labels.clone(),
-            input.add_labels.clone(),
-            input.remove_labels.clone(),
-        )
-        .await?;
+        let (set_labels, add_labels, remove_labels) = coalesce_label_update(
+            &current.labels,
+            input.set_labels,
+            input.add_labels,
+            input.remove_labels,
+        );
+        self.apply_item_label_update(&repo, number, set_labels, add_labels, remove_labels)
+            .await?;
         self.apply_item_assignee_update(
             &repo,
             number,

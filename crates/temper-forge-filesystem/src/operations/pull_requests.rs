@@ -31,6 +31,9 @@ pub(crate) fn list_pull_requests(
         }
     }
     sort_pull_requests(&mut pull_requests, &query);
+    if let Some(limit) = query.limit {
+        pull_requests.truncate(limit);
+    }
     Ok(pull_requests)
 }
 

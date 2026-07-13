@@ -130,20 +130,48 @@ impl<C: HttpClient> ForgejoForge<C> {
         path: &str,
         base_query: Vec<(String, String)>,
     ) -> ForgeResult<Vec<T>> {
-        let limit = self.config().page_limit.max(1);
+        self.list_up_to(context, path, base_query, None).await
+    }
+
+    /// Fetches at most `max_items` provider rows, reducing the page size and
+    /// stopping pagination as soon as the bound is reached. `Some(0)` performs
+    /// no provider request.
+    pub(crate) async fn list_up_to<T: DeserializeOwned>(
+        &self,
+        context: &str,
+        path: &str,
+        base_query: Vec<(String, String)>,
+        max_items: Option<usize>,
+    ) -> ForgeResult<Vec<T>> {
+        if max_items == Some(0) {
+            return Ok(Vec::new());
+        }
+        let configured_limit = self.config().page_limit.max(1) as usize;
+        let page_limit = max_items
+            .map(|maximum| configured_limit.min(maximum))
+            .unwrap_or(configured_limit);
         let mut items = Vec::new();
         let mut page = 1u32;
         loop {
+            let remaining = max_items
+                .map(|maximum| maximum.saturating_sub(items.len()))
+                .unwrap_or(page_limit);
+            if remaining == 0 {
+                break;
+            }
             let mut query = base_query.clone();
-            query.push(("limit".to_string(), limit.to_string()));
+            query.push(("limit".to_string(), page_limit.to_string()));
             query.push(("page".to_string(), page.to_string()));
             let response = self
                 .request_checked(context, HttpMethod::Get, path, query, None)
                 .await?;
             let batch: Vec<T> = Self::decode(context, &response)?;
             let batch_len = batch.len();
-            items.extend(batch);
-            if batch_len < limit as usize || page >= MAX_LIST_PAGES {
+            items.extend(batch.into_iter().take(remaining));
+            if batch_len < page_limit
+                || max_items.is_some_and(|maximum| items.len() >= maximum)
+                || page >= MAX_LIST_PAGES
+            {
                 break;
             }
             page += 1;

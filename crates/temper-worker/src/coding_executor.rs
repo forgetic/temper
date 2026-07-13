@@ -103,6 +103,7 @@ async fn execute<R: AgentRunner>(
         queue,
         artifact_kind,
         artifact,
+        artifact_context,
         workspace: manifest,
         action,
         checkout_capability,
@@ -187,6 +188,7 @@ async fn execute<R: AgentRunner>(
         &artifact_kind,
         &manifest,
         &artifact,
+        artifact_context.as_ref(),
         assign.artifact.kind.as_str(),
         &checkout,
         &allowed_verdicts,
@@ -214,7 +216,10 @@ async fn execute<R: AgentRunner>(
     let AgentRunOutput {
         result,
         accepted_submit,
-    } = match runner.run(&workspace_context, &workspace_root).await {
+    } = match runner
+        .run(&job_id, &workspace_context, &workspace_root)
+        .await
+    {
         Ok(output) => output,
         Err(AgentRunError { class, message }) => {
             return failure(class, message);
