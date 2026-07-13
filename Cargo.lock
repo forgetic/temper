@@ -1604,6 +1604,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-protocol-activity"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "temper-protocol-agent"
 version = "0.1.0"
 dependencies = [

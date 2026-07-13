@@ -1,0 +1,150 @@
+[
+  {
+    "type": "run.started",
+    "data": { "capture": "metadata" }
+  },
+  {
+    "type": "run.finished",
+    "data": {
+      "status": "succeeded",
+      "duration_ms": 1500,
+      "stop_reason": "end_turn"
+    }
+  },
+  {
+    "type": "scope.started",
+    "data": { "display_name": "investigate" }
+  },
+  {
+    "type": "scope.finished",
+    "data": { "status": "succeeded", "duration_ms": 900 }
+  },
+  {
+    "type": "turn.started",
+    "data": {}
+  },
+  {
+    "type": "turn.finished",
+    "data": { "duration_ms": 800, "stop_reason": "tool_use" }
+  },
+  {
+    "type": "model.call.started",
+    "data": {
+      "call_id": "model-1",
+      "provider": "anthropic",
+      "model": "claude-sonnet",
+      "attempt": 0
+    }
+  },
+  {
+    "type": "model.call.retrying",
+    "data": {
+      "call_id": "model-1",
+      "next_attempt": 1,
+      "delay_ms": 250,
+      "failure": {
+        "code": "timeout",
+        "message": "provider timed out",
+        "retryable": true
+      }
+    }
+  },
+  {
+    "type": "model.call.finished",
+    "data": {
+      "call_id": "model-1",
+      "attempt": 1,
+      "status": "succeeded",
+      "duration_ms": 700,
+      "time_to_first_token_ms": 120,
+      "stop_reason": "end_turn"
+    }
+  },
+  {
+    "type": "assistant.message",
+    "data": {
+      "message_id": "message-1",
+      "content": {
+        "storage": "inline",
+        "text": "I updated the contract.",
+        "truncated": false
+      }
+    }
+  },
+  {
+    "type": "output.text.delta",
+    "data": {
+      "delta": { "text": "I updated", "truncated": false }
+    }
+  },
+  {
+    "type": "output.thinking.delta",
+    "data": {
+      "delta": { "text": "checking invariants", "truncated": false }
+    }
+  },
+  {
+    "type": "tool.started",
+    "data": {
+      "call_id": "tool-1",
+      "name": "bash",
+      "arguments": {
+        "storage": "inline",
+        "text": "cargo test -p temper-protocol-activity",
+        "truncated": false
+      }
+    }
+  },
+  {
+    "type": "tool.finished",
+    "data": {
+      "call_id": "tool-1",
+      "name": "bash",
+      "status": "succeeded",
+      "duration_ms": 340,
+      "result": {
+        "storage": "inline",
+        "text": "tests passed",
+        "truncated": false
+      }
+    }
+  },
+  {
+    "type": "steering.applied",
+    "data": {
+      "source": "user",
+      "instruction": {
+        "storage": "inline",
+        "text": "Keep the protocol provider-neutral.",
+        "truncated": false
+      }
+    }
+  },
+  {
+    "type": "usage",
+    "data": {
+      "input_tokens": 100,
+      "output_tokens": 40,
+      "cache_read_tokens": 20,
+      "cache_write_tokens": 10
+    }
+  },
+  {
+    "type": "trace.gap",
+    "data": {
+      "dropped_events": 3,
+      "dropped_bytes": 42,
+      "kinds": ["text_delta", "thinking_delta"]
+    }
+  },
+  {
+    "type": "run.failed",
+    "data": {
+      "failure": {
+        "code": "child_process",
+        "message": "agent exited before writing a result",
+        "retryable": false
+      }
+    }
+  }
+]
