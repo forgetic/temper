@@ -177,10 +177,10 @@ impl Worker for CountingWorker {
 }
 
 fn test_hint() -> ChangeHint {
-    ChangeHint::item(
+    ChangeHint::issue(
         RepositoryPath::new("acme", "service"),
         ItemNumber::new(1),
-        ChangeKind::Issue,
+        ChangeKind::Edited,
     )
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Library-only Forgejo/Gitea webhook intake helpers for daemon wake scans.
+//! Library-only Forgejo/Gitea/GitHub webhook intake helpers for daemon wake scans.
 
 mod payload;
 mod trigger_facts;
@@ -11,11 +11,11 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
-use temper_forge::{ChangeHint, ChangeKind, Forge, RepositoryPath};
-use temper_workflow::{CompiledWorkflow, ValidatedWorkflow};
+use temper_forge::{ChangeHint, ChangeKind, Forge, HintArtifactKind, HintTarget, RepositoryPath};
+use temper_workflow::{CompiledWorkflow, ValidatedWorkflow, is_heartbeat_only_body_change};
 
 use crate::{Daemon, RoleFeedMode, RoleFeedTarget};
-use payload::{parse_item, parse_repo};
+use payload::{is_ci_event, is_review_event, parse_repo, parse_target};
 use trigger_facts::{parse_trigger_facts, wake_artifact_kind, wake_queue};
 
 /// Errors returned while verifying or parsing a webhook delivery.
@@ -39,6 +39,20 @@ impl fmt::Display for WebhookError {
 }
 
 impl std::error::Error for WebhookError {}
+
+/// Whether an accepted webhook must schedule work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WebhookDisposition {
+    Schedule,
+    SuppressHeartbeat,
+}
+
+/// Fully verified and conservatively classified webhook delivery.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedWebhook {
+    pub hint: ChangeHint,
+    pub disposition: WebhookDisposition,
+}
 
 /// Webhook intake configuration: the shared webhook secret plus the configured
 /// daemon role-feed targets eligible for wake scans.
@@ -81,48 +95,163 @@ pub fn webhook_event(headers: &BTreeMap<String, String>) -> &str {
 
 /// Parses a webhook JSON body into a provider-neutral change hint.
 pub fn parse_change_hint(body: &[u8], event: &str) -> Result<ChangeHint, WebhookError> {
+    Ok(parse_webhook(body, event)?.hint)
+}
+
+fn parse_webhook(body: &[u8], event: &str) -> Result<VerifiedWebhook, WebhookError> {
     let value: Value = serde_json::from_slice(body)
         .map_err(|error| WebhookError::BadPayload(format!("invalid JSON payload: {error}")))?;
     let repo = parse_repo(&value)?;
-    let kind = match event {
-        "issues" | "issue" => ChangeKind::Issue,
-        "pull_request" | "pull_request_sync" => ChangeKind::PullRequest,
-        "issue_comment" | "pull_request_comment" | "comment" => ChangeKind::Comment,
-        "pull_request_review"
-        | "pull_request_review_approved"
-        | "pull_request_review_rejected"
-        | "pull_request_review_comment"
-        | "pull_request_approved"
-        | "pull_request_rejected"
-        | "review" => ChangeKind::Review,
-        "push" => ChangeKind::Push,
-        "status" | "check_run" | "workflow_run" | "workflow_job" | "action_run_failure"
-        | "action_run_recover" | "action_run_success" => ChangeKind::Ci,
-        _ => ChangeKind::Unknown,
+    let target = parse_target(&value, event);
+    let mut change = classify_change(&value, event);
+    if target == HintTarget::Repository && item_event(event) {
+        // An item-like event with no unambiguous artifact address must force the
+        // broad fallback rather than preserve a misleading targeted change.
+        change = ChangeKind::Unknown;
+    }
+    let hint = ChangeHint {
+        repo,
+        target,
+        change,
     };
-    let item = parse_item(&value, event);
-    Ok(ChangeHint { repo, item, kind })
+    let disposition = classify_disposition(&value, event, &hint);
+    Ok(VerifiedWebhook { hint, disposition })
 }
 
-/// Verifies a webhook signature and parses its body into a change hint.
+fn classify_change(value: &Value, event: &str) -> ChangeKind {
+    if is_review_event(event) {
+        return ChangeKind::Review;
+    }
+    if is_ci_event(event) {
+        return ChangeKind::Ci;
+    }
+    match event {
+        "push" => ChangeKind::Push,
+        "issue_comment" | "pull_request_comment" | "comment" => ChangeKind::Comment,
+        "issue_dependency"
+        | "issue_dependencies"
+        | "pull_request_dependency"
+        | "pull_request_dependencies" => ChangeKind::Dependency,
+        "issues" | "issue" | "pull_request" | "pull_request_sync" => classify_item_change(value),
+        _ => ChangeKind::Unknown,
+    }
+}
+
+fn classify_item_change(value: &Value) -> ChangeKind {
+    match value.pointer("/action").and_then(Value::as_str) {
+        Some("opened" | "created") => ChangeKind::Created,
+        Some("closed" | "reopened" | "merged") => ChangeKind::State,
+        Some("labeled" | "unlabeled" | "label_updated") => ChangeKind::Label,
+        Some("assigned" | "unassigned") => ChangeKind::Assignee,
+        Some("dependency_added" | "dependency_removed") => ChangeKind::Dependency,
+        Some("edited") => explicit_edit_kind(value),
+        Some("synchronize" | "synchronized") => ChangeKind::Edited,
+        _ => ChangeKind::Edited,
+    }
+}
+
+fn explicit_edit_kind(value: &Value) -> ChangeKind {
+    let Some(changes) = value.pointer("/changes").and_then(Value::as_object) else {
+        return ChangeKind::Edited;
+    };
+    if changes.len() != 1 {
+        return ChangeKind::Edited;
+    }
+    match changes.keys().next().map(String::as_str) {
+        Some("body") => ChangeKind::Body,
+        Some("title") => ChangeKind::Title,
+        Some("state") => ChangeKind::State,
+        Some("label" | "labels") => ChangeKind::Label,
+        Some("dependency" | "dependencies") => ChangeKind::Dependency,
+        Some("assignee" | "assignees") => ChangeKind::Assignee,
+        _ => ChangeKind::Edited,
+    }
+}
+
+fn classify_disposition(value: &Value, event: &str, hint: &ChangeHint) -> WebhookDisposition {
+    if !matches!(event, "issues" | "issue" | "pull_request")
+        || value.pointer("/action").and_then(Value::as_str) != Some("edited")
+        || !matches!(hint.target, HintTarget::Artifact { .. })
+    {
+        return WebhookDisposition::Schedule;
+    }
+    let Some(changes) = value.pointer("/changes").and_then(Value::as_object) else {
+        return WebhookDisposition::Schedule;
+    };
+    if changes.len() != 1 || !changes.contains_key("body") {
+        return WebhookDisposition::Schedule;
+    }
+    let Some(old_body) = value.pointer("/changes/body/from").and_then(Value::as_str) else {
+        return WebhookDisposition::Schedule;
+    };
+    let new_body = value
+        .pointer("/changes/body/to")
+        .and_then(Value::as_str)
+        .or_else(|| match hint.target {
+            HintTarget::Artifact {
+                kind: HintArtifactKind::Issue,
+                ..
+            } => value.pointer("/issue/body").and_then(Value::as_str),
+            HintTarget::Artifact {
+                kind: HintArtifactKind::PullRequest,
+                ..
+            } => value.pointer("/pull_request/body").and_then(Value::as_str),
+            HintTarget::Repository => None,
+        });
+
+    if new_body.is_some_and(|new_body| is_heartbeat_only_body_change(old_body, new_body)) {
+        WebhookDisposition::SuppressHeartbeat
+    } else {
+        WebhookDisposition::Schedule
+    }
+}
+
+fn item_event(event: &str) -> bool {
+    matches!(
+        event,
+        "issues"
+            | "issue"
+            | "pull_request"
+            | "pull_request_sync"
+            | "issue_comment"
+            | "pull_request_comment"
+            | "comment"
+            | "issue_dependency"
+            | "issue_dependencies"
+            | "pull_request_dependency"
+            | "pull_request_dependencies"
+    ) || is_review_event(event)
+}
+
+/// Verifies a webhook signature and parses its body into a classified delivery.
 pub fn parse_verified_webhook(
     headers: &BTreeMap<String, String>,
     body: &[u8],
     secret: &str,
-) -> Result<ChangeHint, WebhookError> {
+) -> Result<VerifiedWebhook, WebhookError> {
+    // Verification deliberately precedes JSON parsing and all classification.
     verify_webhook_signature(headers, body, secret)?;
-    parse_change_hint(body, webhook_event(headers))
+    parse_webhook(body, webhook_event(headers))
 }
 
 pub(crate) fn webhook_accepted_log_line(hint: &ChangeHint) -> String {
-    let item = hint
-        .item
-        .map(|item| item.to_string())
-        .unwrap_or_else(|| "-".to_string());
+    let target = match hint.target {
+        HintTarget::Repository => "repository".to_string(),
+        HintTarget::Artifact { kind, number } => {
+            format!("{}#{}", artifact_token(kind), number)
+        }
+    };
 
     format!(
-        "engine: webhook accepted repo={}/{} kind={:?} item={}",
-        hint.repo.owner, hint.repo.name, hint.kind, item
+        "engine: webhook accepted repo={}/{} target={} change={:?}",
+        hint.repo.owner, hint.repo.name, target, hint.change
+    )
+}
+
+pub(crate) fn webhook_suppressed_log_line(hint: &ChangeHint) -> String {
+    format!(
+        "engine: webhook suppressed repo={}/{} reason=lease_heartbeat",
+        hint.repo.owner, hint.repo.name
     )
 }
 
@@ -131,6 +260,13 @@ fn webhook_wake_scan_log_line(repo: &RepositoryPath, enqueued: usize) -> String 
         "engine: webhook wake scan repo={}/{} enqueued={enqueued}",
         repo.owner, repo.name
     )
+}
+
+fn artifact_token(kind: HintArtifactKind) -> &'static str {
+    match kind {
+        HintArtifactKind::Issue => "issue",
+        HintArtifactKind::PullRequest => "pull_request",
+    }
 }
 
 /// Computes the lowercase hex HMAC-SHA256 signature for a webhook body.
@@ -150,16 +286,21 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
     headers: &BTreeMap<String, String>,
     body: &[u8],
 ) -> Result<usize, WebhookError> {
-    let hint = parse_verified_webhook(headers, body, &config.secret)?;
-    // Per-delivery accounting stays at debug; the operator-facing facts below are
-    // the §7 `trigger:` info events.
-    let line = webhook_accepted_log_line(&hint);
+    let verified = parse_verified_webhook(headers, body, &config.secret)?;
+    let hint = &verified.hint;
+    let line = webhook_accepted_log_line(hint);
     tracing::debug!("{line}");
+
+    if verified.disposition == WebhookDisposition::SuppressHeartbeat {
+        let line = webhook_suppressed_log_line(hint);
+        tracing::debug!("{line}");
+        return Ok(0);
+    }
 
     let repo =
         temper_log::strip_provider_scheme(&format!("{}/{}", hint.repo.owner, hint.repo.name))
             .to_string();
-    let facts = parse_trigger_facts(body, webhook_event(headers), &hint);
+    let facts = parse_trigger_facts(body, webhook_event(headers), hint);
     if let Some(issue) = facts.issue_opened.as_ref() {
         let item = temper_log::WorkItemRef::issue(repo.clone(), issue.number);
         temper_log::emit::emit_issue_opened(temper_log::emit::IssueOpened {
@@ -184,7 +325,7 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
         compiled,
         now,
         &config.targets,
-        &hint,
+        hint,
     )
     .await)
 }
@@ -250,25 +391,22 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
     }
 
     if matched_target {
-        // The §7 `wake | artifact=… queue=…` info line, emitted once per accepted
-        // delivery that names an item and matched a configured target. The
-        // per-scan enqueue accounting drops to debug.
-        if let Some(item_number) = hint.item {
+        if let HintTarget::Artifact { kind, number } = hint.target {
             let repo = temper_log::strip_provider_scheme(&format!(
                 "{}/{}",
                 hint.repo.owner, hint.repo.name
             ))
             .to_string();
-            let item = match hint.kind {
-                ChangeKind::PullRequest => {
-                    temper_log::WorkItemRef::pull_request(repo, item_number.get())
+            let item = match kind {
+                HintArtifactKind::Issue => temper_log::WorkItemRef::issue(repo, number.get()),
+                HintArtifactKind::PullRequest => {
+                    temper_log::WorkItemRef::pull_request(repo, number.get())
                 }
-                _ => temper_log::WorkItemRef::issue(repo, item_number.get()),
             };
             temper_log::emit::emit_wake_received(temper_log::emit::WakeReceived {
                 item: &item,
-                artifact_kind: wake_artifact_kind(hint.kind),
-                queue: wake_queue(hint.kind),
+                artifact_kind: wake_artifact_kind(kind),
+                queue: wake_queue(kind, hint.change),
             });
         }
         let line = webhook_wake_scan_log_line(&hint.repo, total);
@@ -325,42 +463,4 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use temper_forge::ItemNumber;
-
-    use super::*;
-
-    #[test]
-    fn webhook_accepted_log_line_includes_item_number() {
-        let hint = ChangeHint::item(
-            RepositoryPath::new("ai", "temper"),
-            ItemNumber::new(147),
-            ChangeKind::PullRequest,
-        );
-
-        assert_eq!(
-            webhook_accepted_log_line(&hint),
-            "engine: webhook accepted repo=ai/temper kind=PullRequest item=147"
-        );
-    }
-
-    #[test]
-    fn webhook_accepted_log_line_renders_missing_item_as_dash() {
-        let hint = ChangeHint::repo(RepositoryPath::new("ai", "temper"), ChangeKind::Push);
-
-        assert_eq!(
-            webhook_accepted_log_line(&hint),
-            "engine: webhook accepted repo=ai/temper kind=Push item=-"
-        );
-    }
-
-    #[test]
-    fn webhook_wake_scan_log_line_includes_enqueued_count() {
-        let repo = RepositoryPath::new("ai", "temper");
-
-        assert_eq!(
-            webhook_wake_scan_log_line(&repo, 3),
-            "engine: webhook wake scan repo=ai/temper enqueued=3"
-        );
-    }
-}
+mod tests;

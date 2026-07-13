@@ -165,7 +165,7 @@ fn run_mechanical_backstop_tick_applies_dependency_unblock_once() {
 }
 
 fn hint(owner: &str, name: &str) -> ChangeHint {
-    ChangeHint::repo(RepositoryPath::new(owner, name), ChangeKind::Push)
+    ChangeHint::repository(RepositoryPath::new(owner, name), ChangeKind::Push)
 }
 
 #[test]

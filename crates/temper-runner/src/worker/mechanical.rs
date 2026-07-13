@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use temper_forge::{ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId};
+use temper_forge::{ChangeKind, Forge, ForgeError, HintArtifactKind, ItemNumber, RepositoryId};
 use temper_workflow::{
     Applier, ApplyOutcome, ArtifactSnapshot, CompiledWorkflow, DefaultRecoveryPolicy, Executor,
     LeaseManager, LeasePolicy, ReconciliationMode, RecoveryPolicy, ValidatedWorkflow,
@@ -149,19 +149,20 @@ where
         &self,
         now: DateTime<Utc>,
         item: ItemNumber,
-        kind: ChangeKind,
+        artifact_kind: HintArtifactKind,
+        change: ChangeKind,
     ) -> Result<Progress, WorkerError> {
         let classifier = temper_workflow::Classifier::new(self.workflow);
         let mut targeted_snapshots = Vec::new();
-        let classified = match kind {
-            ChangeKind::Ci | ChangeKind::PullRequest => {
+        let classified = match artifact_kind {
+            HintArtifactKind::PullRequest => {
                 let pull_request = self
                     .forge
                     .get_pull_request_by_number(self.repo, item)
                     .await?;
                 if let Some(pull_request) = pull_request {
                     targeted_snapshots.push(ArtifactSnapshot::from_pull_request(&pull_request));
-                    if matches!(kind, ChangeKind::PullRequest) {
+                    if change != ChangeKind::Ci {
                         if let Some(metadata) = parse_metadata_block(&pull_request.body)
                             .map_err(|error| ForgeError::Backend(error.to_string()))?
                         {
@@ -185,17 +186,11 @@ where
                     None
                 }
             }
-            // Issue-like events are routed to issues deterministically. Review
-            // hints may come from PR review webhooks, but providers also emit a
-            // PullRequest/Ci hint for PR state; keeping Review issue-routed
-            // avoids guessing across artifact namespaces.
-            ChangeKind::Issue | ChangeKind::Label | ChangeKind::Review | ChangeKind::Comment => {
-                self.forge
-                    .get_issue_by_number(self.repo, item)
-                    .await?
-                    .and_then(|issue| classifier.classify_issue(&issue).ok())
-            }
-            ChangeKind::Push | ChangeKind::Unknown => return Ok(Progress::unchanged()),
+            HintArtifactKind::Issue => self
+                .forge
+                .get_issue_by_number(self.repo, item)
+                .await?
+                .and_then(|issue| classifier.classify_issue(&issue).ok()),
         };
         let Some(classified) = classified else {
             return Ok(Progress::unchanged());

@@ -361,9 +361,9 @@ mod tests {
 
     #[test]
     fn payload_round_trips_repo_hint() {
-        let hint = ChangeHint::repo(
+        let hint = ChangeHint::repository(
             temper_forge::RepositoryPath::new("acme", "service"),
-            temper_runner::ChangeKind::Issue,
+            temper_runner::ChangeKind::Edited,
         );
         let payload = encode_payload(Some("wake-secret"), Some(&hint)).expect("payload encodes");
         assert_eq!(

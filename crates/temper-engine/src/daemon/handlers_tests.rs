@@ -3,7 +3,9 @@
 use super::*;
 use crate::webhook::webhook_signature;
 use crate::{RoleFeedMode, RoleFeedTarget, WebhookConfig};
-use temper_forge::{ChangeKind, ItemNumber, RepositoryId, RepositoryPath};
+use temper_forge::{
+    ChangeKind, HintArtifactKind, HintTarget, ItemNumber, RepositoryId, RepositoryPath,
+};
 use temper_workflow::RoleId;
 
 #[test]
@@ -46,6 +48,63 @@ fn verified_webhook_acks_before_wake_scan_finishes() {
     assert!(
         machine.webhook_waiters.is_empty(),
         "webhook response must not be held behind wake-scan completion"
+    );
+}
+
+#[test]
+fn proven_heartbeat_is_acknowledged_before_suppression_accounting() {
+    let secret = "secret";
+    let old = r#"Prose
+
+<!-- temper:workflow
+{"lease":{"role":"engineer","worker":"worker","claimed_at":"2026-07-13T12:00:00Z","heartbeat_at":"2026-07-13T12:00:00Z","expires_at":"2026-07-13T12:05:00Z"}}
+-->"#;
+    let new = r#"Prose
+
+<!-- temper:workflow
+{"lease":{"role":"engineer","worker":"worker","claimed_at":"2026-07-13T12:00:00Z","heartbeat_at":"2026-07-13T12:01:00Z","expires_at":"2026-07-13T12:06:00Z"}}
+-->"#;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "action": "edited",
+        "repository": {"full_name": "ai/temper"},
+        "issue": {"number": 319, "body": new},
+        "changes": {"body": {"from": old}}
+    }))
+    .unwrap();
+    let signature = webhook_signature(secret, &body);
+    let mut machine = DaemonMachine::new(Duration::from_secs(10), 30_000);
+    machine.webhook = Some(WebhookConfig {
+        secret: secret.to_string(),
+        targets: Vec::new(),
+    });
+    let (reply, _response) = temper_engine_io::oneshot();
+
+    let requests = machine.handle_http(
+        HttpRequestData {
+            method: "POST".to_string(),
+            uri: "/forgejo/webhook".to_string(),
+            headers: vec![
+                ("x-forgejo-event".to_string(), "issues".to_string()),
+                ("x-forgejo-signature".to_string(), signature),
+            ],
+            body,
+        },
+        HttpResponder::from_oneshot(reply),
+    );
+
+    assert_eq!(requests.len(), 3);
+    assert!(matches!(
+        &requests[1],
+        DaemonRequest::Respond { response, .. } if response.status == 202
+    ));
+    assert!(matches!(
+        &requests[2],
+        DaemonRequest::Log(line) if line.contains("reason=lease_heartbeat")
+    ));
+    assert!(
+        !requests
+            .iter()
+            .any(|request| matches!(request, DaemonRequest::RunWakeScan { .. }))
     );
 }
 
@@ -161,8 +220,14 @@ fn forgejo_action_run_success_webhook_is_accepted() {
     match &requests[2] {
         DaemonRequest::RunWakeScan { hint, .. } => {
             assert_eq!(hint.repo, RepositoryPath::new("ai", "temper"));
-            assert_eq!(hint.item, Some(ItemNumber::new(23)));
-            assert_eq!(hint.kind, ChangeKind::Ci);
+            assert_eq!(
+                hint.target,
+                HintTarget::Artifact {
+                    kind: HintArtifactKind::PullRequest,
+                    number: ItemNumber::new(23)
+                }
+            );
+            assert_eq!(hint.change, ChangeKind::Ci);
         }
         _ => panic!("expected wake scan"),
     }

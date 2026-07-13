@@ -155,8 +155,9 @@ where
             TickReason::Wake => match targeted_single_repo_hints(self, hints).await? {
                 Some(targets) => {
                     let mut progress = Progress::unchanged();
-                    for (item, kind) in targets {
-                        let item_progress = self.tick_artifact(now, item, kind).await?;
+                    for (item, artifact_kind, change) in targets {
+                        let item_progress =
+                            self.tick_artifact(now, item, artifact_kind, change).await?;
                         progress.changed |= item_progress.changed;
                         progress.actions = progress.actions.saturating_add(item_progress.actions);
                     }
