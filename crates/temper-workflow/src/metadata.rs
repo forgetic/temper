@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use temper_forge::{ItemNumber, RepositoryId};
+use temper_forge::{ItemNumber, RepositoryId, UserId};
 
 /// Marker that opens a workflow metadata block.
 pub const METADATA_BEGIN: &str = "<!-- temper:workflow";
@@ -149,10 +149,35 @@ pub struct CreateIssuesIntent {
     pub record_parent_dependencies: bool,
     #[serde(default)]
     pub children: Vec<CreateIssueIntentChild>,
+    /// Source-artifact mutation that commits the routed transition after every
+    /// child is wired and activated. Legacy intents omit this field; recovery
+    /// still finishes their boolean progress without inventing a transition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<CreateIssuesCompletion>,
     #[serde(default)]
     pub parent_wired: bool,
     #[serde(default)]
     pub completed: bool,
+}
+
+/// Durable source-artifact update committed together with fan-out completion.
+///
+/// Bodies are hex encoded for the same reason as child bodies: an authored body
+/// can contain the HTML-comment terminator and must not truncate the intent
+/// embedded in the source artifact's metadata block.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateIssuesCompletion {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_assignees: Vec<UserId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_assignees: Vec<UserId>,
 }
 
 /// Persisted normalized input and progress for one intended child issue.
