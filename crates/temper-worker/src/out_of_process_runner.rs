@@ -36,7 +36,11 @@ use crate::agent_runner::{
 use crate::pre_push::submit_for_pr_pre_push_response_blocking;
 
 mod side_channel;
+mod stderr;
 use side_channel::{ForgeSideChannelRequest, start_forge_server, start_submit_server};
+#[cfg(test)]
+use stderr::stderr_tail;
+use stderr::{DiagnosticIdentity, emit_reader_unavailable, stream as stream_stderr};
 
 /// Host-side submit gate used by the out-of-process carrier.
 type SubmitForPrHandler =
@@ -69,6 +73,10 @@ pub struct OutOfProcessRunner {
     submit_for_pr: SubmitForPrHandler,
     /// Optional authenticated, assignment-bound read-only Forge host.
     forge_context: Option<AgentForgeContextHost>,
+    /// Unit-test override used to verify diagnostics emitted from the blocking
+    /// pool without installing a process-global subscriber.
+    #[cfg(test)]
+    diagnostic_dispatch: Option<tracing::Dispatch>,
 }
 
 impl std::fmt::Debug for OutOfProcessRunner {
@@ -99,6 +107,8 @@ impl OutOfProcessRunner {
             tool_config: None,
             submit_for_pr: default_submit_for_pr_handler(),
             forge_context: None,
+            #[cfg(test)]
+            diagnostic_dispatch: None,
         }
     }
 
@@ -136,6 +146,20 @@ impl OutOfProcessRunner {
     pub fn with_forge_context_host(mut self, host: AgentForgeContextHost) -> Self {
         self.forge_context = Some(host);
         self
+    }
+
+    #[cfg(test)]
+    fn with_diagnostic_dispatch(mut self, dispatch: tracing::Dispatch) -> Self {
+        self.diagnostic_dispatch = Some(dispatch);
+        self
+    }
+
+    fn diagnostic_dispatch(&self) -> tracing::Dispatch {
+        #[cfg(test)]
+        if let Some(dispatch) = &self.diagnostic_dispatch {
+            return dispatch.clone();
+        }
+        tracing::dispatcher::get_default(|dispatch| dispatch.clone())
     }
 }
 
@@ -222,24 +246,31 @@ impl AgentRunner for OutOfProcessRunner {
         let (forge_requests, mut forge_request_rx) = temper_worker_io::channel();
         let forge_context = self.forge_context.clone();
         let job_id = job_id.to_string();
+        let child_job_id = job_id.clone();
+        // Carry the caller's tracing dispatch onto the blocking pool so scoped
+        // subscribers and worker log routing see child diagnostics there too.
+        let tracing_dispatch = self.diagnostic_dispatch();
         // `skein::runtime::spawn_blocking` returns the closure's value
         // directly (no JoinError wrapper), so the closure's own
         // `Result<ChildOutcome, AgentRunError>` is what comes back.
         let mut child = Box::pin(skein::runtime::spawn_blocking(move || {
-            run_child(ChildRunRequest {
-                program: &program_owned,
-                args: &args_owned,
-                env: &env_owned,
-                cwd: &cwd_owned,
-                context: &context_owned,
-                context_path: &context_path_owned,
-                result_path: &result_path_owned,
-                tool_config_path: tool_config_path_owned.as_deref(),
-                submit_listener,
-                forge_listener,
-                forge_requests,
-                submit_for_pr,
-                accepted_submit: accepted_submit_for_child,
+            tracing::dispatcher::with_default(&tracing_dispatch, || {
+                run_child(ChildRunRequest {
+                    program: &program_owned,
+                    args: &args_owned,
+                    env: &env_owned,
+                    cwd: &cwd_owned,
+                    context: &context_owned,
+                    job_id: &child_job_id,
+                    context_path: &context_path_owned,
+                    result_path: &result_path_owned,
+                    tool_config_path: tool_config_path_owned.as_deref(),
+                    submit_listener,
+                    forge_listener,
+                    forge_requests,
+                    submit_for_pr,
+                    accepted_submit: accepted_submit_for_child,
+                })
             })
         }));
         let outcome = loop {
@@ -325,6 +356,7 @@ struct ChildRunRequest<'a> {
     env: &'a [(String, String)],
     cwd: &'a Path,
     context: &'a WorkspaceContext,
+    job_id: &'a str,
     context_path: &'a Path,
     result_path: &'a Path,
     tool_config_path: Option<&'a Path>,
@@ -336,9 +368,10 @@ struct ChildRunRequest<'a> {
 }
 
 /// Runs the child to completion on the blocking pool: spawn with stdout
-/// discarded, collect stderr, and return the exit outcome. Returns a
-/// [`transient`](AgentRunError::transient) error only for spawn/IO failures that
-/// a re-dispatch might survive.
+/// discarded, stream bounded stderr diagnostics, and return the exit outcome.
+/// Returns a [`transient`](AgentRunError::transient) error only for spawn/wait
+/// failures that a re-dispatch might survive. Stderr reader failures are logged
+/// and never replace the child's exit classification.
 fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError> {
     let ChildRunRequest {
         program,
@@ -346,6 +379,7 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         env,
         cwd,
         context,
+        job_id,
         context_path,
         result_path,
         tool_config_path,
@@ -391,15 +425,31 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
     for (key, value) in env {
         command.env(key, value);
     }
-    let output = match command
+    let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child.wait_with_output().map_err(|error| {
-            AgentRunError::transient(format!("wait for agent command `{program}`: {error}"))
-        }),
+        .spawn();
+    let outcome = match child {
+        Ok(mut child) => {
+            let identity = DiagnosticIdentity::from_context(job_id, context);
+            let stderr_tail = match child.stderr.take() {
+                Some(stderr) => stream_stderr(stderr, &identity),
+                None => {
+                    emit_reader_unavailable(&identity);
+                    String::new()
+                }
+            };
+            child
+                .wait()
+                .map(|status| ChildOutcome {
+                    status_code: status.code(),
+                    stderr_tail,
+                })
+                .map_err(|error| {
+                    AgentRunError::transient(format!("wait for agent command `{program}`: {error}"))
+                })
+        }
         Err(error) => Err(AgentRunError::transient(format!(
             "spawn agent command `{program}`: {error}"
         ))),
@@ -410,12 +460,7 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
     if let Some(server) = forge_server {
         server.stop();
     }
-    let output = output?;
-
-    Ok(ChildOutcome {
-        status_code: output.status.code(),
-        stderr_tail: stderr_tail(&output.stderr, 2_000),
-    })
+    outcome
 }
 
 fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
@@ -427,22 +472,10 @@ fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
         )
 }
 
-/// Last `max_len` bytes of captured stderr, on a char boundary, for error
-/// messages. The push token is never embedded in a command label or remote URL
-/// (it is passed via a separate `-c http.extraheader` arg), so captured stderr
-/// does not carry it.
-fn stderr_tail(stderr: &[u8], max_len: usize) -> String {
-    let text = String::from_utf8_lossy(stderr).into_owned();
-    if text.len() <= max_len {
-        return text;
-    }
-    let mut start = text.len() - max_len;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    text[start..].to_string()
-}
-
 #[cfg(test)]
 #[path = "out_of_process_runner_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "out_of_process_runner_stderr_tests.rs"]
+mod stderr_tests;

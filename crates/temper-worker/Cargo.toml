@@ -39,6 +39,7 @@ temper-engine-io = { path = "../temper-engine-io" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-worker-io = { path = "../temper-worker-io" }
+tracing-subscriber = { workspace = true }
 temper-workflow = { path = "../temper-workflow" }
 
 # A deterministic, hermetic agent that speaks the temper-protocol-agent: writes
