@@ -42,8 +42,6 @@ impl DaemonMachine {
                 ];
                 match verified.disposition {
                     WebhookDisposition::Schedule => {
-                        let repo_key =
-                            format!("{}/{}", verified.hint.repo.owner, verified.hint.repo.name);
                         let unresolved_lanes = config
                             .targets
                             .iter()
@@ -64,9 +62,7 @@ impl DaemonMachine {
                         let lanes = config
                             .targets
                             .iter()
-                            .filter(|target| {
-                                temper_log::strip_provider_scheme(target.repo.as_str()) == repo_key
-                            })
+                            .filter(|target| target.path == verified.hint.repo)
                             .map(|target| WakeLane::Role(target.role.clone()))
                             .collect::<BTreeSet<_>>();
                         if !lanes.is_empty() {

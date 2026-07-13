@@ -408,6 +408,13 @@ impl WakeCoordinator {
             .max(configured_repository_limit);
     }
 
+    pub(crate) fn configured_repositories(&self) -> Vec<RepositoryPath> {
+        self.repositories
+            .values()
+            .map(|state| state.repo.clone())
+            .collect()
+    }
+
     pub(crate) fn repository_state(&self, repo: &RepositoryPath) -> Option<&WakeRepositoryState> {
         self.repositories.get(&repository_key(repo))
     }

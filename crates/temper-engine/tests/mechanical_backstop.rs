@@ -8,12 +8,15 @@ use temper_engine::{
     MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger, run_mechanical_backstop_tick,
 };
 use temper_forge::{
-    ChangeHint, ChangeKind, CreateIssue, CreateRepository, Forge, IssueState, ItemNumber,
-    RepositoryId, RepositoryPath, UpdateIssue,
+    ChangeHint, ChangeKind, CreateIssue, CreateRepository, Forge, HintArtifactKind, IssueState,
+    ItemNumber, RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_forge_memory::MemoryForge;
-use temper_runner::{Progress, RepositorySet, RepositoryTarget};
-use temper_workflow::{InMemoryJournal, LeasePolicy, RawWorkflowSpec, ValidatedWorkflow};
+use temper_runner::{ArtifactAddress, Progress, RepositorySet, RepositoryTarget};
+use temper_workflow::{
+    ArtifactKindId, InMemoryJournal, LeasePolicy, RawWorkflowSpec, ValidatedWorkflow,
+    WorkflowMetadata, render_metadata_block,
+};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
@@ -229,6 +232,76 @@ fn hinted_scope_ticks_only_the_matching_repository() {
         assert_eq!(
             issue_labels(&forge, &repo.id, blocked).await,
             vec!["code".to_string(), "ready".to_string()]
+        );
+    })
+}
+
+#[test]
+fn targeted_mechanical_wake_does_not_mutate_staged_artifact() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = MemoryForge::new();
+        let repo = new_repo(&forge).await;
+        let dependency = create_issue(&forge, &repo.id, &["code", "ready"]).await;
+        close_issue(&forge, &repo.id, dependency).await;
+        let staged = forge
+            .create_issue(
+                &repo.id,
+                CreateIssue {
+                    title: "staged blocked child".to_string(),
+                    body: render_metadata_block(&WorkflowMetadata {
+                        kind: Some(ArtifactKindId::new("code")),
+                        staged: true,
+                        ..WorkflowMetadata::default()
+                    }),
+                    labels: vec!["code".to_string(), "blocked".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("staged issue is created")
+            .number;
+        add_issue_dependency(&forge, &repo.id, staged, dependency).await;
+        let config = MechanicalBackstopConfig {
+            repositories: RepositorySet::new(vec![repo.clone()]),
+            cadence: Duration::from_millis(10),
+            lease_policy: lease_policy(),
+            pull_request_merge_observer: None,
+        };
+
+        let journals = [InMemoryJournal::new()];
+        assert_eq!(
+            run_mechanical_backstop_tick(
+                &forge,
+                &workflow(),
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+                &journals,
+                &MechanicalScope::Targeted(vec![(
+                    repo.path.clone(),
+                    ArtifactAddress::new(HintArtifactKind::Issue, staged),
+                    ChangeKind::Dependency,
+                )]),
+            )
+            .await
+            .expect("targeted tick succeeds"),
+            Progress::unchanged()
+        );
+        assert_eq!(
+            run_mechanical_backstop_tick(
+                &forge,
+                &workflow(),
+                ts("2026-05-29T00:00:01Z"),
+                &config,
+                &journals,
+                &MechanicalScope::All,
+            )
+            .await
+            .expect("broad tick succeeds"),
+            Progress::unchanged()
+        );
+        assert_eq!(
+            issue_labels(&forge, &repo.id, staged).await,
+            vec!["blocked".to_string(), "code".to_string()]
         );
     })
 }

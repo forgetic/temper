@@ -64,9 +64,10 @@ impl Drop for ChangeSourceListener {
 }
 
 impl Daemon {
-    /// Wires a local backend change source into the daemon wake-scan path.
+    /// Wires a local backend change source into coordinated daemon wake work.
     ///
-    /// This is the same scanner path used after a verified live webhook, without
+    /// This is the same admitted execution path used after a verified live
+    /// webhook, without
     /// enabling the Forgejo webhook HTTP route. Hints are never authoritative;
     /// each hint only wakes a normal Forge scan for the configured targets.
     pub fn with_change_source<F: Forge + Send + Sync + ?Sized + 'static>(
@@ -103,7 +104,7 @@ impl Daemon {
         mechanical: Option<Arc<dyn HintedMechanical>>,
     ) -> Self {
         let daemon =
-            self.with_wake_scanner(forge, workflow, compiled, wake_targets, clock, mechanical);
+            self.with_wake_execution(forge, workflow, compiled, wake_targets, clock, mechanical);
         let listener = ChangeSourceListener::spawn(source, daemon.cq.clone());
         daemon
             .change_source_listeners

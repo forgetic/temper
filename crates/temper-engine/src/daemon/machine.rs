@@ -102,6 +102,14 @@ pub(super) enum DaemonCompletion {
         role: String,
         current_job_ids: BTreeSet<String>,
     },
+    /// Reconcile stale pending jobs only for one `(repo, role, artifact)`
+    /// targeted view.
+    ReconcilePendingTargetedRoleJobs {
+        repo: String,
+        role: String,
+        artifact: Artifact,
+        current_job_ids: BTreeSet<String>,
+    },
     /// Daemon API: answer whether a correlation key still has pending or
     /// in-flight work known to the dispatch core.
     WorkstreamActive {
@@ -665,6 +673,14 @@ impl Machine for DaemonMachine {
                         delay: Duration::from_millis(self.max_poll_wait_ms),
                     });
                 }
+                // Coordinator state is intentionally volatile. Once durable
+                // startup convergence opens the barrier, submit one broad
+                // recovery generation per configured repository so lost
+                // pending/dirty hints are never a correctness dependency.
+                for repo in self.wake_coordinator.configured_repositories() {
+                    requests
+                        .extend(self.schedule_wake(WakeRequest::broad(repo, BroadMode::Startup)));
+                }
                 reply.send(());
                 requests
             }
@@ -703,6 +719,17 @@ impl Machine for DaemonMachine {
                 role,
                 current_job_ids,
             } => self.handle_reconcile_pending_role_jobs(repo, role, current_job_ids),
+            DaemonCompletion::ReconcilePendingTargetedRoleJobs {
+                repo,
+                role,
+                artifact,
+                current_job_ids,
+            } => self.handle_reconcile_pending_targeted_role_jobs(
+                repo,
+                role,
+                artifact,
+                current_job_ids,
+            ),
             DaemonCompletion::WorkstreamActive {
                 correlation_key,
                 reply,

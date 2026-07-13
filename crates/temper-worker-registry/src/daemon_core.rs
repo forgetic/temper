@@ -292,6 +292,34 @@ impl DaemonCore {
         job_ids
     }
 
+    /// Reconcile pending daemon jobs for exactly one `(repo, role, artifact)`
+    /// partial scan view, without pruning unrelated artifacts.
+    pub fn retain_pending_jobs_for_artifact(
+        &mut self,
+        repo: &str,
+        role: &str,
+        artifact: &Artifact,
+        current_job_ids: &BTreeSet<String>,
+    ) -> Vec<String> {
+        let job_context = &self.job_context;
+        let removed = self.coordinator.retain_pending_by_scope_matching(
+            repo,
+            role,
+            current_job_ids,
+            |item| {
+                job_context
+                    .get(&item.job_id)
+                    .is_some_and(|(pending_artifact, _)| pending_artifact == artifact)
+            },
+        );
+        let mut job_ids = Vec::with_capacity(removed.len());
+        for item in removed {
+            self.job_context.remove(&item.job_id);
+            job_ids.push(item.job_id);
+        }
+        job_ids
+    }
+
     /// Reports finite configured saturation for `role` and the work waiting
     /// behind that limit.
     ///

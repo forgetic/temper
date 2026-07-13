@@ -52,7 +52,28 @@ pub fn candidate_query_plan(
     role: Option<&RoleId>,
     mode: ScanMode,
 ) -> CandidateQueryPlan {
-    let queues = queues_for_scan(compiled, role, mode);
+    candidate_query_plan_for_queues(workflow, queues_for_scan(compiled, role, mode), mode)
+}
+
+/// Plans one candidate pass for the union of queues subscribed by `roles`.
+///
+/// This is the broad daemon-wake counterpart to role-at-a-time planning: queue
+/// overlap and recovery label interest are deduplicated by one builder before
+/// any Forge list request is issued.
+pub fn candidate_query_plan_for_roles(
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    roles: &[RoleId],
+    mode: ScanMode,
+) -> CandidateQueryPlan {
+    candidate_query_plan_for_queues(workflow, queues_for_roles(compiled, roles), mode)
+}
+
+fn candidate_query_plan_for_queues(
+    workflow: &ValidatedWorkflow,
+    queues: Vec<&QueueManifest>,
+    mode: ScanMode,
+) -> CandidateQueryPlan {
     let mut builder = CandidateQueryBuilder::default();
 
     for queue in queues {

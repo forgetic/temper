@@ -70,13 +70,13 @@ pub use feed::{
     enqueue_targeted_role_work, job_from_work_item,
     recover_advanced_pull_request_assignment_from_durable, recovered_job_from_assignment,
     recovered_job_from_assignment_with_artifact_context, run_poll_backstop_tick,
-    spawn_poll_backstop,
+    spawn_coordinated_poll_backstop, spawn_poll_backstop,
 };
 pub use forge_applier::ForgeApplier;
 pub use lease_applier::{LeaseApplier, WallClock, system_clock};
 pub use mechanical::{
     MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger, run_mechanical_backstop_tick,
-    spawn_mechanical_backstop,
+    spawn_coordinated_mechanical_backstop, spawn_mechanical_backstop,
 };
 pub use pr_freshness::check_pull_request_freshness;
 // Public so out-of-crate `ResultApplier` implementations can name the job type

@@ -4,6 +4,8 @@
 //! identity translation separate from Forge-backed workspace context loading.
 
 mod action_assignment;
+mod broad;
+mod recovery;
 mod targeted;
 mod workspace;
 
@@ -13,8 +15,7 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 use temper_forge::{
-    Forge, ForgeError, PullRequestQuery, PullRequestState, RepositoryId, RequestReviewers,
-    UpdatePullRequest, UserId,
+    Forge, ForgeError, PullRequestState, RepositoryId, RequestReviewers, UpdatePullRequest, UserId,
 };
 use temper_protocol_worker::{Artifact, JobContext};
 use temper_runner::{
@@ -30,8 +31,11 @@ use crate::workflow_meta::implementation_pr_labels;
 use workspace::{build_workspace_manifest, target_number, terminal_checked_snapshot};
 
 pub use self::backstop::{
-    PollBackstopConfig, RoleFeedMode, RoleFeedTarget, run_poll_backstop_tick, spawn_poll_backstop,
+    PollBackstopConfig, RoleFeedMode, RoleFeedTarget, run_poll_backstop_tick,
+    spawn_coordinated_poll_backstop, spawn_poll_backstop,
 };
+pub(crate) use self::broad::enqueue_scanned_roles_wake;
+use self::recovery::recover_advanced_pull_request_assignments;
 pub use self::targeted::{TargetedRoleFeedResult, enqueue_targeted_role_work};
 
 mod backstop;
@@ -176,6 +180,7 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
         true,
         artifact_context,
         None,
+        None,
     )
     .await
     .map_err(|error| error.to_string())?
@@ -217,7 +222,7 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
 ) -> Result<EnrichOutcome, ScanError> {
     enrich_work_item_job_inner(
-        forge, repo, item, job, workflow, compiled, false, None, None,
+        forge, repo, item, job, workflow, compiled, false, None, None, None,
     )
     .await
 }
@@ -232,14 +237,17 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
     recovering_assignment: bool,
     artifact_context: Option<&crate::ArtifactContextBundleService>,
+    repository: Option<&temper_forge::Repository>,
     targeted: Option<TargetedEnrichment<'_>>,
 ) -> Result<EnrichOutcome, ScanError> {
     let repository = match targeted.as_ref() {
         Some(targeted) => targeted.repository.clone(),
-        None => forge
-            .get_repository(repo)
-            .await?
-            .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?,
+        None => match repository {
+            Some(repository) => repository.clone(),
+            None => forge.get_repository(repo).await?.ok_or_else(|| {
+                ScanError::Forge(ForgeError::NotFound(format!("repository {repo}")))
+            })?,
+        },
     };
 
     let number = target_number(item.target);
@@ -397,82 +405,6 @@ fn issue_metadata_target_branch(item: &WorkItem, artifact_body: &str) -> Option<
             let trimmed = branch.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
-}
-
-async fn recover_advanced_pull_request_assignments<F: Forge + ?Sized>(
-    daemon: &crate::Daemon,
-    forge: &F,
-    repo: &RepositoryId,
-    workflow: &ValidatedWorkflow,
-    role: &RoleId,
-) -> Result<(), ScanError> {
-    let pull_requests = forge
-        .list_pull_requests(
-            repo,
-            PullRequestQuery {
-                state: Some(PullRequestState::Open),
-                ..PullRequestQuery::default()
-            },
-        )
-        .await?;
-    for pull_request in pull_requests {
-        let Some(current_head) = pull_request.head_sha.as_deref() else {
-            continue;
-        };
-        let metadata = match parse_metadata_block(&pull_request.body) {
-            Ok(metadata) => metadata.unwrap_or_default(),
-            Err(error) => {
-                tracing::warn!(
-                    pull_request = %pull_request.number,
-                    %error,
-                    "could not inspect PR assignment metadata during repair recovery"
-                );
-                continue;
-            }
-        };
-        let Some(assignment) = metadata.assignment.as_ref() else {
-            continue;
-        };
-        if assignment.role.as_ref() != Some(role)
-            || assignment.assignment_pr_head.as_deref() == Some(current_head)
-        {
-            continue;
-        }
-        let Some(coordination_key) = assignment.coordination_key.as_deref() else {
-            continue;
-        };
-        if daemon
-            .workstream_active_by_correlation_key(coordination_key)
-            .await
-        {
-            // The daemon that owns this assignment is still tracking the
-            // worker. Only an empty (restarted) dispatch core recovers a push
-            // for which no result can still be delivered locally.
-            continue;
-        }
-        let (Some(queue), Some(action)) =
-            (assignment.queue.as_deref(), assignment.action.as_deref())
-        else {
-            continue;
-        };
-        let Some(transition) = workflow
-            .transitions()
-            .iter()
-            .find(|transition| transition.id.as_str() == action)
-        else {
-            continue;
-        };
-        let item = WorkItem {
-            queue: temper_workflow::QueueId::new(queue),
-            role: role.clone(),
-            target: ArtifactSource::PullRequest {
-                number: pull_request.number,
-            },
-            kind: transition.artifact.clone(),
-        };
-        recover_advanced_pull_request_assignment(forge, repo, &item, workflow).await?;
-    }
-    Ok(())
 }
 
 /// Recovers a worker-pushed PR head that became visible before its result was
@@ -789,6 +721,7 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
             compiled,
             false,
             daemon.artifact_context.as_deref(),
+            None,
             None,
         )
         .await

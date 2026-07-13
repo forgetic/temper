@@ -4,6 +4,7 @@
 //! repository/role targets, re-feeding ready work the webhook edge-trigger may
 //! have missed (ADR 0009).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +30,7 @@ pub enum RoleFeedMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoleFeedTarget {
     pub repo: RepositoryId,
+    pub path: temper_forge::RepositoryPath,
     pub role: RoleId,
     pub mode: RoleFeedMode,
 }
@@ -83,6 +85,34 @@ pub async fn run_poll_backstop_tick<F: Forge + ?Sized>(
 
 fn poll_backstop_log_line(enqueued: usize) -> String {
     format!("engine: poll backstop enqueued={enqueued}")
+}
+
+/// Spawns the production poll cadence as coordinator submissions. The callback
+/// performs no Forge work and never bypasses daemon admission.
+pub fn spawn_coordinated_poll_backstop(
+    spawner: &Arc<dyn Spawner>,
+    daemon: Daemon,
+    config: PollBackstopConfig,
+) {
+    let mut routes = BTreeMap::<String, (temper_forge::RepositoryPath, Vec<RoleId>)>::new();
+    for target in config.targets {
+        let path = format!("{}/{}", target.path.owner, target.path.name);
+        let route = routes
+            .entry(path)
+            .or_insert_with(|| (target.path.clone(), Vec::new()));
+        if !route.1.contains(&target.role) {
+            route.1.push(target.role);
+        }
+    }
+    temper_engine_io::spawn_cadence_loop(spawner, config.cadence, move || {
+        let daemon = daemon.clone();
+        let routes = routes.clone();
+        async move {
+            for (_key, (repo, roles)) in routes {
+                daemon.schedule_role_poll(repo, roles);
+            }
+        }
+    });
 }
 
 /// Spawns a machine-driven fixed-delay poll backstop onto the engine runtime.

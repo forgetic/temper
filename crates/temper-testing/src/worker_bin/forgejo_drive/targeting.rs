@@ -1,13 +1,13 @@
 use temper_forge_model::{
     ChangeHint, ChangeKind, Forge, HintArtifactKind, HintTarget, ItemNumber, RepositoryPath,
 };
-use temper_runner::{MechanicalWorker, RepositorySet, WorkerError};
+use temper_runner::{ArtifactAddress, MechanicalWorker, RepositorySet, WorkerError};
 use temper_workflow::{CommandJournal, RecoveryPolicy};
 
 const MECHANICAL_TARGETED_WAKE_CAP: usize = 32;
 
 type ArtifactWake = (ItemNumber, HintArtifactKind, ChangeKind);
-type RepositoryArtifactWake = (RepositoryPath, ItemNumber, HintArtifactKind, ChangeKind);
+type RepositoryArtifactWake = (RepositoryPath, ArtifactAddress, ChangeKind);
 
 pub(super) async fn targeted_single_repo_hints<F, J, P>(
     worker: &MechanicalWorker<'_, F, J, P>,
@@ -22,7 +22,7 @@ where
     let targets = targeted_hints_for_path(Some(&repo_path), hints).map(|items| {
         items
             .into_iter()
-            .map(|(_, item, artifact_kind, change)| (item, artifact_kind, change))
+            .map(|(_, artifact, change)| (artifact.number, artifact.kind, change))
             .collect()
     });
     Ok(targets)
@@ -33,7 +33,7 @@ pub(super) fn targeted_multi_repo_hints(
     hints: &[ChangeHint],
 ) -> Option<Vec<RepositoryArtifactWake>> {
     targeted_hints_for_path(None, hints).and_then(|targets| {
-        if targets.iter().all(|(path, _, _, _)| {
+        if targets.iter().all(|(path, _, _)| {
             !repositories
                 .matching_hints(&[ChangeHint::repository(path.clone(), ChangeKind::Unknown)])
                 .is_empty()
@@ -62,15 +62,18 @@ fn targeted_hints_for_path(
         let HintTarget::Artifact { kind, number } = hint.target else {
             return None;
         };
-        targets.push((hint.repo.clone(), number, kind, hint.change));
+        targets.push((
+            hint.repo.clone(),
+            ArtifactAddress::new(kind, number),
+            hint.change,
+        ));
     }
     targets.sort_by(|left, right| {
-        (&left.0.owner, &left.0.name, left.1, left.2, left.3).cmp(&(
+        (&left.0.owner, &left.0.name, left.1, left.2).cmp(&(
             &right.0.owner,
             &right.0.name,
             right.1,
             right.2,
-            right.3,
         ))
     });
     targets.dedup();
@@ -128,9 +131,9 @@ mod tests {
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, RepositoryPath::new("ai", "temper"));
-        assert_eq!(out[0].1, ItemNumber::new(7));
-        assert_eq!(out[0].2, HintArtifactKind::PullRequest);
-        assert_eq!(out[0].3, ChangeKind::Ci);
+        assert_eq!(out[0].1.number, ItemNumber::new(7));
+        assert_eq!(out[0].1.kind, HintArtifactKind::PullRequest);
+        assert_eq!(out[0].2, ChangeKind::Ci);
     }
 
     #[test]
@@ -142,7 +145,7 @@ mod tests {
         let out = targeted_hints_for_path(None, &hints).unwrap();
         assert!(
             out.iter()
-                .all(|target| target.2 == HintArtifactKind::PullRequest)
+                .all(|target| target.1.kind == HintArtifactKind::PullRequest)
         );
     }
 

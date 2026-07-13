@@ -217,6 +217,7 @@ pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
             compiled,
             false,
             daemon.artifact_context.as_deref(),
+            Some(repository),
             Some(TargetedEnrichment {
                 repository,
                 snapshot: &scan.snapshot,

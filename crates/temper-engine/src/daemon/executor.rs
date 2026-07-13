@@ -3,12 +3,10 @@
 //! The daemon's imperative shell: performs each machine request on the engine
 //! runtime and feeds the resulting completions back into the queue.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use temper_engine_io::{CqSender, Executor as EngineExecutor, Spawner, arm_timer};
-use temper_forge::{ChangeHint, ChangeKind};
 use temper_protocol_worker::{
     ContextResponse, ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult,
     WorkerProtocolMessage,
@@ -16,15 +14,15 @@ use temper_protocol_worker::{
 
 use crate::applier::ResultApplier;
 
-use super::WakeScanner;
+use super::WakeExecutor;
 use super::machine::{DaemonCompletion, DaemonMachine, DaemonRequest};
-use super::wake_coordinator::{BroadMode, WakeOutcome, WakeWork};
+use super::wake_coordinator::WakeOutcome;
 
 pub(super) struct DaemonExecutor {
     pub(super) spawner: Arc<dyn Spawner>,
     pub(super) cq: CqSender<DaemonCompletion>,
     pub(super) applier: Arc<dyn ResultApplier>,
-    pub(super) scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
+    pub(super) wake_executor_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeExecutor>>>>,
     pub(super) context_reader_slot:
         Arc<std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>>,
 }
@@ -58,38 +56,6 @@ fn context_result_metrics(
         ),
         Err(code) => (context_error_name(*code), 0, false),
     }
-}
-
-fn wake_hint(work: &WakeWork) -> ChangeHint {
-    let mut broad = None;
-    let mut targets = BTreeMap::new();
-    for scope in work.batch.lanes().values() {
-        if let Some(mode) = scope.broad_mode() {
-            broad = Some(broad.map_or(mode, |current: BroadMode| current.max(mode)));
-            continue;
-        }
-        if let Some(scope_targets) = scope.targets() {
-            for (address, change) in scope_targets {
-                targets
-                    .entry(*address)
-                    .and_modify(|current: &mut ChangeKind| *current = (*current).max(*change))
-                    .or_insert(*change);
-            }
-        }
-    }
-
-    if let Some(mode) = broad {
-        let change = match mode {
-            BroadMode::Push => ChangeKind::Push,
-            _ => ChangeKind::Unknown,
-        };
-        return ChangeHint::repository(work.repo.clone(), change);
-    }
-    if targets.len() == 1 {
-        let ((kind, number), change) = targets.into_iter().next().expect("single target exists");
-        return ChangeHint::artifact(work.repo.clone(), kind, number, change);
-    }
-    ChangeHint::repository(work.repo.clone(), ChangeKind::Unknown)
 }
 
 impl EngineExecutor<DaemonMachine> for DaemonExecutor {
@@ -281,23 +247,25 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 });
             }
             DaemonRequest::RunWake { work } => {
-                let scanner = self.scanner_slot.lock().expect("scanner slot").clone();
+                let executor = self
+                    .wake_executor_slot
+                    .lock()
+                    .expect("wake executor slot")
+                    .clone();
                 let cq = self.cq.clone();
-                let hint = wake_hint(&work);
-                match scanner {
-                    Some(scanner) => {
+                match executor {
+                    Some(executor) => {
                         self.spawner.spawn_with_cx(move |_cx| async move {
-                            scanner.scan(hint).await;
-                            let _ = cq.send(DaemonCompletion::WakeFinished {
-                                work,
-                                outcome: WakeOutcome::Succeeded,
-                            });
+                            let outcome = executor.run(work.clone()).await;
+                            let _ = cq.send(DaemonCompletion::WakeFinished { work, outcome });
                         });
                     }
                     None => {
                         let _ = cq.send(DaemonCompletion::WakeFinished {
                             work,
-                            outcome: WakeOutcome::Succeeded,
+                            outcome: WakeOutcome::Failed {
+                                reason: "no wake executor is configured".to_string(),
+                            },
                         });
                     }
                 }
