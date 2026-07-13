@@ -411,7 +411,7 @@ fn test_tool_config() -> AgentToolConfig {
     }
 }
 
-fn test_context() -> WorkspaceContext {
+pub(super) fn test_context() -> WorkspaceContext {
     test_context_for_role("engineer")
 }
 
