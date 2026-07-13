@@ -12,13 +12,90 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use temper_forge::{Forge, ForgeError, RepositoryId};
+use temper_forge::{
+    Forge, ForgeError, HintArtifactKind, Issue, IssueState, ItemNumber, PullRequest,
+    PullRequestState, RepositoryId,
+};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, ClassifiedArtifact, CompiledWorkflow, ExecutionError,
     ExternalToolId, QueueId, RoleId, TransitionId, ValidatedWorkflow, VerdictId,
 };
 
 pub use candidate::{CandidateQueryPlan, ScanMode, candidate_query_plan};
+
+/// Explicit issue-or-pull-request address used by item-scoped scans.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ArtifactAddress {
+    pub kind: HintArtifactKind,
+    pub number: ItemNumber,
+}
+
+impl ArtifactAddress {
+    pub const fn new(kind: HintArtifactKind, number: ItemNumber) -> Self {
+        Self { kind, number }
+    }
+
+    pub const fn issue(number: ItemNumber) -> Self {
+        Self::new(HintArtifactKind::Issue, number)
+    }
+
+    pub const fn pull_request(number: ItemNumber) -> Self {
+        Self::new(HintArtifactKind::PullRequest, number)
+    }
+
+    pub const fn source(self) -> ArtifactSource {
+        match self.kind {
+            HintArtifactKind::Issue => ArtifactSource::Issue {
+                number: self.number,
+            },
+            HintArtifactKind::PullRequest => ArtifactSource::PullRequest {
+                number: self.number,
+            },
+        }
+    }
+}
+
+/// The exact Forge representation loaded for an item-scoped scan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TargetedArtifactSnapshot {
+    Issue(Box<Issue>),
+    PullRequest(Box<PullRequest>),
+}
+
+impl TargetedArtifactSnapshot {
+    pub fn source(&self) -> ArtifactSource {
+        match self {
+            Self::Issue(issue) => ArtifactSource::Issue {
+                number: issue.number,
+            },
+            Self::PullRequest(pull_request) => ArtifactSource::PullRequest {
+                number: pull_request.number,
+            },
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        match self {
+            Self::Issue(issue) => issue.state == IssueState::Open,
+            Self::PullRequest(pull_request) => pull_request.state == PullRequestState::Open,
+        }
+    }
+}
+
+/// One exact load and its single classification result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadedTargetedArtifact {
+    pub snapshot: TargetedArtifactSnapshot,
+    pub classified: ClassifiedArtifact,
+}
+
+/// Result of evaluating one artifact for a configured set of roles.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TargetedRoleScan {
+    pub snapshot: TargetedArtifactSnapshot,
+    pub classified: ClassifiedArtifact,
+    pub work_items: Vec<WorkItem>,
+}
 
 /// A role-addressed member of an active queue.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,6 +238,85 @@ pub async fn scan_role_wake<F: Forge + ?Sized>(
     .await
 }
 
+/// Loads and classifies exactly one explicitly typed artifact.
+///
+/// Missing or unclassifiable artifacts are ordinary targeted misses. The
+/// selected namespace is never probed through the other exact-fetch API.
+pub async fn load_targeted_artifact<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    address: ArtifactAddress,
+) -> Result<Option<LoadedTargetedArtifact>, ScanError> {
+    let classifier = temper_workflow::Classifier::new(workflow);
+    let loaded = match address.kind {
+        HintArtifactKind::Issue => {
+            let Some(issue) = forge.get_issue_by_number(repo, address.number).await? else {
+                return Ok(None);
+            };
+            let Ok(classified) = classifier.classify_issue(&issue) else {
+                return Ok(None);
+            };
+            LoadedTargetedArtifact {
+                snapshot: TargetedArtifactSnapshot::Issue(Box::new(issue)),
+                classified,
+            }
+        }
+        HintArtifactKind::PullRequest => {
+            let Some(pull_request) = forge
+                .get_pull_request_by_number(repo, address.number)
+                .await?
+            else {
+                return Ok(None);
+            };
+            let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
+                return Ok(None);
+            };
+            LoadedTargetedArtifact {
+                snapshot: TargetedArtifactSnapshot::PullRequest(Box::new(pull_request)),
+                classified,
+            }
+        }
+    };
+    Ok(Some(loaded))
+}
+
+/// Loads one artifact and evaluates only queues subscribed by `roles`.
+///
+/// Queue and subscriber order remains workflow-declaration order. All cheap
+/// matches are assembled before one unioned signal read, and staged artifacts
+/// are rejected before any signal operation.
+#[allow(clippy::too_many_arguments)]
+pub async fn targeted_role_work_items<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    address: ArtifactAddress,
+    roles: &[RoleId],
+    now: DateTime<Utc>,
+) -> Result<Option<TargetedRoleScan>, ScanError> {
+    let Some(loaded) = load_targeted_artifact(forge, repo, workflow, address).await? else {
+        return Ok(None);
+    };
+    let work_items = query::targeted_role_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        &loaded.snapshot,
+        loaded.classified.clone(),
+        roles,
+        now,
+    )
+    .await?;
+    Ok(Some(TargetedRoleScan {
+        snapshot: loaded.snapshot,
+        classified: loaded.classified,
+        work_items,
+    }))
+}
+
 /// Scans active queues that declare mechanical automation metadata.
 ///
 /// The scan is read-only and bounded by the automated queues' candidate query
@@ -176,18 +332,27 @@ pub async fn scan_automated_queues<F: Forge + ?Sized>(
     query::scan_automated_inner(forge, repo, workflow, compiled, now).await
 }
 
-/// Returns automated queue items for one already-classified artifact, reusing
-/// the same signal read, queue matching, activity and automation metadata logic
-/// as the broad automated scan.
+/// Returns automated queue items for one already-loaded and classified
+/// artifact, reusing the same signal read, queue matching, activity and
+/// automation metadata logic as targeted role evaluation.
 pub async fn targeted_automated_work_items<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
-    classified: ClassifiedArtifact,
+    loaded: &LoadedTargetedArtifact,
     now: DateTime<Utc>,
 ) -> Result<Vec<AutomatedWorkItem>, ScanError> {
-    query::targeted_automated_inner(forge, repo, workflow, compiled, classified, now).await
+    query::targeted_automated_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        &loaded.snapshot,
+        loaded.classified.clone(),
+        now,
+    )
+    .await
 }
 
 /// Runs a broad audit scan for all workflow queues and workflow-labelled

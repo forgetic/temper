@@ -3,7 +3,9 @@ use crate::ClassifiedArtifact;
 use crate::classify::ArtifactSource;
 use crate::dependency_state;
 use crate::plan::{CiStatus, GateSignals, ReviewStatus, SignalNeeds};
-use temper_forge::{CiJobQuery, Forge, PullRequestReviewStatus, RepositoryId};
+use temper_forge::{
+    CiJobQuery, Forge, Issue, PullRequest, PullRequestReviewStatus, PullRequestState, RepositoryId,
+};
 
 impl<'a, F: Forge + ?Sized> Executor<'a, F> {
     /// Reads runtime gate signals for a target from fresh Forge state.
@@ -63,6 +65,58 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             .gate_signals_with_needs(repo_id, &loaded, needs)
             .await?;
         Ok((loaded.classified().clone(), signals))
+    }
+
+    /// Reads only the requested runtime gate signals for an issue snapshot that
+    /// the caller already loaded and classified.
+    ///
+    /// Targeted scanners use this entry point so an item-addressed wake does not
+    /// refetch the selected issue merely to evaluate dependency gates.
+    pub async fn read_classified_issue_gate_signals_with_needs(
+        &self,
+        repo_id: &RepositoryId,
+        issue: &Issue,
+        classified: &ClassifiedArtifact,
+        needs: SignalNeeds,
+    ) -> Result<GateSignals, ExecutionError> {
+        let loaded = Loaded::Issue {
+            id: issue.id.clone(),
+            version: issue.version,
+            classified: classified.clone(),
+        };
+        self.gate_signals_with_needs(repo_id, &loaded, needs).await
+    }
+
+    /// Reads only the requested runtime gate signals for a pull-request
+    /// snapshot that the caller already loaded and classified.
+    ///
+    /// CI and review reads are derived directly from the supplied PR
+    /// representation. Terminal PRs retain the same CI short-circuit as the
+    /// ordinary fresh-load path.
+    pub async fn read_classified_pull_request_gate_signals_with_needs(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request: &PullRequest,
+        classified: &ClassifiedArtifact,
+        needs: SignalNeeds,
+    ) -> Result<GateSignals, ExecutionError> {
+        let terminal = matches!(
+            pull_request.state,
+            PullRequestState::Closed | PullRequestState::Merged
+        );
+        let needs = SignalNeeds {
+            ci: needs.ci && !terminal,
+            ..needs
+        };
+        let loaded = Loaded::PullRequest {
+            id: pull_request.id.clone(),
+            merged: pull_request.state == PullRequestState::Merged,
+            terminal,
+            head_sha: pull_request.head_sha.clone(),
+            requested_reviewers: pull_request.requested_reviewers.clone(),
+            classified: classified.clone(),
+        };
+        self.gate_signals_with_needs(repo_id, &loaded, needs).await
     }
 
     /// Reads every runtime gate signal for the loaded artifact from fresh Forge state.
