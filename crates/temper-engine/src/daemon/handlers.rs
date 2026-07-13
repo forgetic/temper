@@ -4,7 +4,7 @@
 //! protocol dispatch, webhook delivery verification, enqueue gating, and
 //! long-poll waiter fulfilment. Pure transitions returning [`DaemonRequest`]s.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
@@ -14,12 +14,6 @@ use temper_protocol_worker::{
     Register, WORKER_AUTHORIZATION_HEADER, WorkerAuth, WorkerProtocolMessage,
 };
 
-use crate::InFlightJob;
-use crate::webhook::{
-    WebhookDisposition, WebhookError, parse_verified_webhook, webhook_accepted_log_line,
-    webhook_suppressed_log_line,
-};
-
 use super::context_transport::malformed_context_response;
 use super::machine::{DaemonMachine, DaemonRequest, DeferredEnqueue, PollWaiter};
 use super::protocol::{
@@ -27,6 +21,7 @@ use super::protocol::{
     result_disposition_log_value, result_received_log_line,
 };
 use super::state_dto::{DaemonStateSnapshot, JobDto};
+use crate::InFlightJob;
 
 impl DaemonMachine {
     pub(super) fn handle_http(
@@ -336,6 +331,11 @@ impl DaemonMachine {
 
             match disposition {
                 ResultDisposition::Apply => {
+                    if self.applying.is_empty() {
+                        requests.extend(Self::wake_decision_requests(
+                            self.wake_coordinator.begin_apply(),
+                        ));
+                    }
                     self.applying.insert(job.job_id.clone());
                     requests.push(DaemonRequest::RunApply { job, result });
                 }
@@ -345,6 +345,11 @@ impl DaemonMachine {
                 // guarded scan path. The result is still logged as `rescan`: it
                 // is not a terminal workflow outcome.
                 ResultDisposition::DropForRescan => {
+                    if self.applying.is_empty() {
+                        requests.extend(Self::wake_decision_requests(
+                            self.wake_coordinator.begin_apply(),
+                        ));
+                    }
                     self.applying.insert(job.job_id.clone());
                     requests.push(DaemonRequest::RunApplyAndRespond {
                         job,
@@ -362,52 +367,6 @@ impl DaemonMachine {
             response: protocol_response(response),
         });
         requests
-    }
-
-    fn handle_webhook_delivery(
-        &mut self,
-        request: &HttpRequestData,
-        responder: HttpResponder,
-    ) -> Vec<DaemonRequest> {
-        let config = self.webhook.as_ref().expect("webhook config checked");
-        let headers: BTreeMap<String, String> = request
-            .headers
-            .iter()
-            .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
-            .collect();
-
-        match parse_verified_webhook(&headers, &request.body, &config.secret) {
-            Ok(verified) => {
-                let mut requests = vec![
-                    DaemonRequest::Log(webhook_accepted_log_line(&verified.hint)),
-                    DaemonRequest::Respond {
-                        responder,
-                        response: HttpResponseData::status_only(202),
-                    },
-                ];
-                match verified.disposition {
-                    WebhookDisposition::Schedule => {
-                        let token = self.next_token();
-                        requests.push(DaemonRequest::RunWakeScan {
-                            token,
-                            hint: verified.hint,
-                        });
-                    }
-                    WebhookDisposition::SuppressHeartbeat => requests.push(DaemonRequest::Log(
-                        webhook_suppressed_log_line(&verified.hint),
-                    )),
-                }
-                requests
-            }
-            Err(WebhookError::InvalidSignature) => vec![DaemonRequest::Respond {
-                responder,
-                response: HttpResponseData::status_only(401),
-            }],
-            Err(WebhookError::BadPayload(_)) => vec![DaemonRequest::Respond {
-                responder,
-                response: HttpResponseData::status_only(400),
-            }],
-        }
     }
 
     pub(super) fn handle_enqueue(

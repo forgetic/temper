@@ -18,6 +18,10 @@ crates/temper-worker-registry/src/daemon_core_tests.rs
 # conditional Forge write boundary so recovery CAS semantics remain auditable.
 crates/temper-workflow/src/lease/manager.rs
 
+# The wake coordinator is one pure transition owner for bounded lane compaction,
+# apply deferral, timer generations, global admission, and dirty completion semantics.
+crates/temper-engine/src/daemon/wake_coordinator.rs
+
 # The daemon machine owns the startup barrier alongside poll waiters and claim
 # transitions; keeping these states together prevents dispatch bypass paths.
 crates/temper-engine/src/daemon/machine.rs

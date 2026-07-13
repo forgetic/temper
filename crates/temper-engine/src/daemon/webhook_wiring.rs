@@ -4,9 +4,10 @@
 //! each verified delivery, runs the role-work wake scan and (optionally) an
 //! immediate hinted mechanical pass.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use temper_forge::Forge;
+use temper_forge::{Forge, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, ValidatedWorkflow};
 
 use crate::RoleFeedTarget;
@@ -14,6 +15,7 @@ use crate::lease_applier::WallClock;
 use crate::webhook::{WebhookConfig, run_wake_scan};
 
 use super::machine::DaemonCompletion;
+use super::wake_coordinator::WakeLane;
 use super::{Daemon, HintedMechanical, WakeScanner};
 
 impl Daemon {
@@ -65,6 +67,12 @@ impl Daemon {
         clock: WallClock,
         mechanical: Option<Arc<dyn HintedMechanical>>,
     ) -> Self {
+        let has_mechanical = mechanical.is_some();
+        let WakeRepositoryConfiguration {
+            repositories,
+            unresolved_lanes,
+            configured_repository_limit,
+        } = wake_repositories(&wake_targets, has_mechanical);
         let scanner = Arc::new(ForgeWakeScanner {
             daemon: self.wake_scan_handle(),
             forge,
@@ -75,6 +83,11 @@ impl Daemon {
             mechanical,
         });
         *self.scanner_slot.lock().expect("scanner slot") = Some(scanner);
+        let _ = self.cq.send(DaemonCompletion::ConfigureWakeRepositories {
+            repositories,
+            unresolved_lanes,
+            configured_repository_limit,
+        });
         self
     }
 
@@ -87,6 +100,51 @@ impl Daemon {
             artifact_catalog: Arc::clone(&self.artifact_catalog),
             artifact_context: self.artifact_context.clone(),
         }
+    }
+}
+
+struct WakeRepositoryConfiguration {
+    repositories: Vec<(RepositoryPath, BTreeSet<WakeLane>)>,
+    unresolved_lanes: BTreeSet<WakeLane>,
+    configured_repository_limit: usize,
+}
+
+fn wake_repositories(
+    targets: &[RoleFeedTarget],
+    has_mechanical: bool,
+) -> WakeRepositoryConfiguration {
+    let mut repositories: BTreeMap<String, (RepositoryPath, BTreeSet<WakeLane>)> = BTreeMap::new();
+    let mut unresolved_lanes = BTreeSet::new();
+    if has_mechanical {
+        unresolved_lanes.insert(WakeLane::Mechanical);
+    }
+    let configured_repository_limit = targets
+        .iter()
+        .map(|target| target.repo.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    for target in targets {
+        unresolved_lanes.insert(WakeLane::Role(target.role.clone()));
+        let path = temper_log::strip_provider_scheme(target.repo.as_str());
+        let Some((owner, name)) = path.split_once('/') else {
+            continue;
+        };
+        if owner.is_empty() || name.is_empty() || name.contains('/') {
+            continue;
+        }
+        let entry = repositories.entry(path.to_string()).or_insert_with(|| {
+            let mut lanes = BTreeSet::new();
+            if has_mechanical {
+                lanes.insert(WakeLane::Mechanical);
+            }
+            (RepositoryPath::new(owner, name), lanes)
+        });
+        entry.1.insert(WakeLane::Role(target.role.clone()));
+    }
+    WakeRepositoryConfiguration {
+        repositories: repositories.into_values().collect(),
+        unresolved_lanes,
+        configured_repository_limit,
     }
 }
 

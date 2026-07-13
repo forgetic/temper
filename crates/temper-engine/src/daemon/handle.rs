@@ -11,7 +11,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
-use temper_forge::{Forge, RepositoryId};
+use temper_forge::{Forge, RepositoryId, RepositoryPath};
 use temper_protocol_worker::{
     Artifact, PullRequestFreshness, PullRequestFreshnessResponse, WORKER_AUTHORIZATION_HEADER,
     WorkerAuth, WorkerProtocolMessage,
@@ -29,6 +29,7 @@ use super::WakeScanner;
 use super::executor::DaemonExecutor;
 use super::machine::{DaemonCompletion, DaemonMachine};
 use super::protocol::decode_in_process_reply;
+use super::wake_coordinator::{BroadMode, WakeRequest};
 
 impl Daemon {
     /// Create a daemon that discards applied results. The spawner is the
@@ -90,6 +91,22 @@ impl Daemon {
         let _ = self
             .cq
             .send(DaemonCompletion::SetApplyGrace { apply_grace });
+        self
+    }
+
+    /// Configures leading-edge wake debounce and the global number of
+    /// repositories whose wake work may run concurrently. The default cap is
+    /// two; changing it never creates a runtime thread or bypasses coordinator
+    /// admission.
+    pub fn with_wake_scheduling(
+        self,
+        debounce: Duration,
+        max_in_flight_repositories: usize,
+    ) -> Self {
+        let _ = self.cq.send(DaemonCompletion::ConfigureWakeScheduling {
+            debounce,
+            max_in_flight_repositories,
+        });
         self
     }
 
@@ -438,7 +455,19 @@ impl Daemon {
     /// the repository and re-runs the normal Forge-backed role scan before any
     /// work is enqueued.
     pub fn submit_change_hint(&self, hint: temper_forge::ChangeHint) {
-        let _ = self.cq.send(DaemonCompletion::ChangeHint { hint });
+        let _ = self.cq.send(DaemonCompletion::ScheduleWake {
+            request: WakeRequest::from_hint(hint),
+        });
+    }
+
+    /// Explicitly schedules a broad startup recovery pass for one configured
+    /// repository. Wake state itself is intentionally not persisted, so
+    /// startup broad scans and periodic poll backstops recover hints lost on a
+    /// restart.
+    pub fn schedule_startup_broad(&self, repo: RepositoryPath) {
+        let _ = self.cq.send(DaemonCompletion::ScheduleWake {
+            request: WakeRequest::broad(repo, BroadMode::Startup),
+        });
     }
 
     /// Map a scanned `WorkItem` to a job and enqueue it.

@@ -18,6 +18,12 @@ mod handlers;
 mod machine;
 mod protocol;
 pub mod state_dto;
+// The coordinator's complete role/mechanical/poll contract is consumed in
+// stages; constructors not used by the compatibility scanner remain exercised
+// by its pure tests until the targeted executor lands.
+#[allow(dead_code)]
+mod wake_coordinator;
+mod webhook_handlers;
 mod webhook_wiring;
 
 use std::sync::Arc;
