@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, DurableAssignment, Lease, MetadataError, RoleId, WorkflowMetadata,
-    global_child_correlation_key, parse_metadata_block, render_metadata_block,
+    global_child_correlation_key, is_heartbeat_only_body_change, parse_metadata_block,
+    render_metadata_block,
 };
 
 fn ts(value: &str) -> DateTime<Utc> {
@@ -214,4 +215,42 @@ fn legacy_metadata_and_optional_assignment_fields_are_compatible() {
         .unwrap()
         .unwrap();
     assert_eq!(reparsed, metadata);
+}
+
+#[test]
+fn heartbeat_only_body_change_requires_exact_structural_delta() {
+    let mut old = full_metadata();
+    old.assignment = Some(DurableAssignment {
+        job_id: Some("job-257".to_string()),
+        expires_at: Some(ts("2026-05-29T00:30:00Z")),
+        ..DurableAssignment::default()
+    });
+    let old_body = format!("Human prose.\n\n{}", render_metadata_block(&old));
+
+    let mut heartbeat = old.clone();
+    heartbeat.lease.as_mut().unwrap().heartbeat_at = ts("2026-05-29T00:06:00Z");
+    heartbeat.lease.as_mut().unwrap().expires_at = ts("2026-05-29T00:31:00Z");
+    heartbeat.assignment.as_mut().unwrap().expires_at = Some(ts("2026-05-29T00:31:00Z"));
+    let heartbeat_body = format!("Human prose.\n\n{}", render_metadata_block(&heartbeat));
+    assert!(is_heartbeat_only_body_change(&old_body, &heartbeat_body));
+
+    let mut extra_metadata = heartbeat.clone();
+    extra_metadata.target_branch = Some("feature/changed".to_string());
+    assert!(!is_heartbeat_only_body_change(
+        &old_body,
+        &format!("Human prose.\n\n{}", render_metadata_block(&extra_metadata))
+    ));
+    assert!(!is_heartbeat_only_body_change(
+        &old_body,
+        &format!("Edited prose.\n\n{}", render_metadata_block(&heartbeat))
+    ));
+    assert!(!is_heartbeat_only_body_change(&old_body, &old_body));
+    assert!(!is_heartbeat_only_body_change(
+        "no metadata",
+        &heartbeat_body
+    ));
+    assert!(!is_heartbeat_only_body_change(
+        "<!-- temper:workflow\n{bad}\n-->",
+        &heartbeat_body
+    ));
 }

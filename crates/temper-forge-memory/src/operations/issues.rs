@@ -70,7 +70,7 @@ pub(crate) fn create_issue(
     };
     issues.push(issue.clone());
     sort_issues_by_number(issues);
-    inner.publish_item_hint(repo_id, issue.number, ChangeKind::Issue);
+    inner.publish_issue_hint(repo_id, issue.number, ChangeKind::Created);
     Ok(issue)
 }
 
@@ -138,7 +138,7 @@ pub(crate) fn update_issue(
     issue.updated_at = now;
     let updated = issue.clone();
     sort_issues_by_number(issues);
-    inner.publish_item_hint(&repo_id, updated.number, ChangeKind::Issue);
+    inner.publish_issue_hint(&repo_id, updated.number, ChangeKind::Edited);
     Ok(updated)
 }
 
@@ -150,7 +150,7 @@ pub(crate) fn add_dependency(
     let mut inner = forge.lock();
     let (issue, changed) = add_issue_dependency(&mut inner, id, target)?;
     if changed {
-        inner.publish_item_hint(&issue.repo_id, issue.number, ChangeKind::Issue);
+        inner.publish_issue_hint(&issue.repo_id, issue.number, ChangeKind::Dependency);
     }
     Ok(issue)
 }
@@ -163,7 +163,7 @@ pub(crate) fn remove_dependency(
     let mut inner = forge.lock();
     let (issue, changed) = remove_issue_dependency(&mut inner, id, target)?;
     if changed {
-        inner.publish_item_hint(&issue.repo_id, issue.number, ChangeKind::Issue);
+        inner.publish_issue_hint(&issue.repo_id, issue.number, ChangeKind::Dependency);
     }
     Ok(issue)
 }
@@ -203,7 +203,7 @@ pub(crate) fn add_comment(
     comments.push(comment.clone());
     sort_comments(comments);
     if let Some((repo_id, issue)) = inner.state.find_issue(id) {
-        inner.publish_item_hint(&repo_id, issue.number, ChangeKind::Comment);
+        inner.publish_issue_hint(&repo_id, issue.number, ChangeKind::Comment);
     }
     Ok(comment)
 }

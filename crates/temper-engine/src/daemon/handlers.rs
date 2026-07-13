@@ -15,7 +15,10 @@ use temper_protocol_worker::{
 };
 
 use crate::InFlightJob;
-use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
+use crate::webhook::{
+    WebhookDisposition, WebhookError, parse_verified_webhook, webhook_accepted_log_line,
+    webhook_suppressed_log_line,
+};
 
 use super::context_transport::malformed_context_response;
 use super::machine::{DaemonMachine, DaemonRequest, DeferredEnqueue, PollWaiter};
@@ -374,16 +377,27 @@ impl DaemonMachine {
             .collect();
 
         match parse_verified_webhook(&headers, &request.body, &config.secret) {
-            Ok(hint) => {
-                let token = self.next_token();
-                vec![
-                    DaemonRequest::Log(webhook_accepted_log_line(&hint)),
+            Ok(verified) => {
+                let mut requests = vec![
+                    DaemonRequest::Log(webhook_accepted_log_line(&verified.hint)),
                     DaemonRequest::Respond {
                         responder,
                         response: HttpResponseData::status_only(202),
                     },
-                    DaemonRequest::RunWakeScan { token, hint },
-                ]
+                ];
+                match verified.disposition {
+                    WebhookDisposition::Schedule => {
+                        let token = self.next_token();
+                        requests.push(DaemonRequest::RunWakeScan {
+                            token,
+                            hint: verified.hint,
+                        });
+                    }
+                    WebhookDisposition::SuppressHeartbeat => requests.push(DaemonRequest::Log(
+                        webhook_suppressed_log_line(&verified.hint),
+                    )),
+                }
+                requests
             }
             Err(WebhookError::InvalidSignature) => vec![DaemonRequest::Respond {
                 responder,

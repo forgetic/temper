@@ -11,8 +11,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use temper_forge_model::{
-    ChangeHint, ChangeKind, ChangeSource, ChangeSourceEvent, ItemNumber, PullRequest, Repository,
-    RepositoryId, RepositoryPath,
+    ChangeHint, ChangeKind, ChangeSource, ChangeSourceEvent, HintArtifactKind, ItemNumber,
+    PullRequest, Repository, RepositoryId, RepositoryPath,
 };
 
 const HINT_LOG: &str = "hints.log";
@@ -107,29 +107,48 @@ impl FilesystemForge {
         FilesystemHintSource::new(path, offset)
     }
 
-    pub(crate) fn publish_path_hint(&self, path: RepositoryPath, kind: ChangeKind) {
-        self.publish_hint(ChangeHint::repo(path, kind));
+    pub(crate) fn publish_path_hint(&self, path: RepositoryPath, change: ChangeKind) {
+        self.publish_hint(ChangeHint::repository(path, change));
     }
 
-    pub(crate) fn publish_repo_hint(&self, repo_id: &RepositoryId, kind: ChangeKind) {
+    pub(crate) fn publish_repo_hint(&self, repo_id: &RepositoryId, change: ChangeKind) {
         if let Ok(Some(repo)) = self.find_repository_by_id(repo_id) {
-            self.publish_hint(ChangeHint::repo(repo_path(&repo), kind));
+            self.publish_hint(ChangeHint::repository(repo_path(&repo), change));
         }
     }
 
-    pub(crate) fn publish_item_hint(
+    fn publish_artifact_hint(
         &self,
         repo_id: &RepositoryId,
-        item: ItemNumber,
-        kind: ChangeKind,
+        kind: HintArtifactKind,
+        number: ItemNumber,
+        change: ChangeKind,
     ) {
         if let Ok(Some(repo)) = self.find_repository_by_id(repo_id) {
-            self.publish_hint(ChangeHint::item(repo_path(&repo), item, kind));
+            self.publish_hint(ChangeHint::artifact(repo_path(&repo), kind, number, change));
         }
     }
 
-    pub(crate) fn publish_pull_request_hint(&self, pr: &PullRequest, kind: ChangeKind) {
-        self.publish_item_hint(&pr.repo_id, pr.number, kind);
+    pub(crate) fn publish_issue_hint(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        change: ChangeKind,
+    ) {
+        self.publish_artifact_hint(repo_id, HintArtifactKind::Issue, number, change);
+    }
+
+    pub(crate) fn publish_pull_request_number_hint(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        change: ChangeKind,
+    ) {
+        self.publish_artifact_hint(repo_id, HintArtifactKind::PullRequest, number, change);
+    }
+
+    pub(crate) fn publish_pull_request_hint(&self, pr: &PullRequest, change: ChangeKind) {
+        self.publish_pull_request_number_hint(&pr.repo_id, pr.number, change);
     }
 
     fn hint_log_path(&self) -> PathBuf {
