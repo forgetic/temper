@@ -23,6 +23,7 @@ pub mod state_dto;
 // by its pure tests until the targeted executor lands.
 #[allow(dead_code)]
 mod wake_coordinator;
+mod wake_observability;
 mod webhook_handlers;
 mod webhook_wiring;
 

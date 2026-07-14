@@ -38,14 +38,21 @@ fn verified_webhook_acks_before_wake_scan_finishes() {
         HttpResponder::from_oneshot(reply),
     );
 
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     assert!(matches!(&requests[0], DaemonRequest::Log(line) if line.contains("webhook accepted")));
     assert!(matches!(
         &requests[1],
         DaemonRequest::Respond { response, .. }
             if response.status == 202 && response.body.is_empty()
     ));
-    assert!(matches!(&requests[2], DaemonRequest::StartWakeTimer { .. }));
+    assert!(matches!(
+        &requests[2],
+        DaemonRequest::WakeMeasurement(measurement)
+            if measurement.outcome == "accepted"
+                && measurement.scope == "broad"
+                && measurement.reason == "push"
+    ));
+    assert!(matches!(&requests[3], DaemonRequest::StartWakeTimer { .. }));
     assert_eq!(
         machine
             .wake_coordinator
@@ -106,7 +113,9 @@ fn proven_heartbeat_is_acknowledged_before_suppression_accounting() {
     ));
     assert!(matches!(
         &requests[2],
-        DaemonRequest::Log(line) if line.contains("reason=lease_heartbeat")
+        DaemonRequest::WakeMeasurement(measurement)
+            if measurement.outcome == "suppressed"
+                && measurement.reason == "lease_heartbeat"
     ));
     assert!(!requests.iter().any(|request| matches!(
         request,
@@ -218,13 +227,20 @@ fn forgejo_action_run_success_webhook_is_accepted() {
         HttpResponder::from_oneshot(reply),
     );
 
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     assert!(matches!(
         &requests[1],
         DaemonRequest::Respond { response, .. }
             if response.status == 202 && response.body.is_empty()
     ));
-    assert!(matches!(&requests[2], DaemonRequest::StartWakeTimer { .. }));
+    assert!(matches!(
+        &requests[2],
+        DaemonRequest::WakeMeasurement(measurement)
+            if measurement.outcome == "accepted"
+                && measurement.scope == "targeted"
+                && measurement.reason == "ci"
+    ));
+    assert!(matches!(&requests[3], DaemonRequest::StartWakeTimer { .. }));
     let state = machine
         .wake_coordinator
         .repository_state(&RepositoryPath::new("ai", "temper"))

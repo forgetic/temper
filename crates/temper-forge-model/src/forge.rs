@@ -187,6 +187,13 @@ pub struct CiJobQuery {
 /// across backends.
 #[async_trait]
 pub trait Forge: Send + Sync {
+    /// Returns the cumulative provider HTTP request count when the backend can
+    /// expose it without performing I/O. Callers use deltas only for debug
+    /// measurements; correctness must never depend on this optional counter.
+    fn provider_request_count(&self) -> Option<u64> {
+        None
+    }
+
     /// Returns the user identity used by this backend client.
     async fn current_user(&self) -> ForgeResult<User>;
 

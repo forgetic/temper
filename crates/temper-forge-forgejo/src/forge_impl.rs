@@ -21,6 +21,10 @@ use temper_forge_model::{
 
 #[async_trait::async_trait]
 impl<C: HttpClient> Forge for ForgejoForge<C> {
+    fn provider_request_count(&self) -> Option<u64> {
+        Some(ForgejoForge::provider_request_count(self))
+    }
+
     async fn current_user(&self) -> ForgeResult<User> {
         self.current_user().await
     }

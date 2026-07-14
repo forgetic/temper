@@ -1,6 +1,6 @@
 //! Child activation pass.
 
-use super::{decode_intent_body, metadata_error, normalized_labels};
+use super::{FanOutMetrics, decode_intent_body, metadata_error, normalized_labels};
 use crate::metadata::{
     CreateIssueIntentChild, CreateIssuesIntent, parse_metadata_block, replace_metadata_block,
 };
@@ -17,6 +17,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         &self,
         mut intent: CreateIssuesIntent,
         mut issues: Vec<Issue>,
+        metrics: &mut FanOutMetrics,
     ) -> Result<(CreateIssuesIntent, Vec<Issue>), ExecutionError> {
         if !intent.parent_wired || intent.children.iter().any(|child| !child.wired) {
             return Err(ExecutionError::Backend {
@@ -29,7 +30,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
             let labels = self.staged_labels(child);
             let (issue, changed) = self
-                .activate_staged_issue(issue_slot.clone(), &child.correlation_key, &labels)
+                .activate_staged_issue(issue_slot.clone(), &child.correlation_key, &labels, metrics)
                 .await?;
             *issue_slot = issue;
             if changed {
@@ -46,6 +47,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         mut issue: Issue,
         correlation_key: &str,
         labels: &[String],
+        metrics: &mut FanOutMetrics,
     ) -> Result<(Issue, bool), ExecutionError> {
         for _ in 0..3 {
             let mut metadata = parse_metadata_block(&issue.body)
@@ -78,6 +80,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let body_only = add_labels.is_empty() && remove_labels.is_empty();
             metadata.staged = false;
             let body = replace_metadata_block(&issue.body, &metadata).map_err(metadata_error)?;
+            metrics.write();
             match self
                 .forge
                 .update_issue_from_snapshot(
@@ -98,6 +101,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             {
                 Ok(committed) => return Ok((committed, true)),
                 Err(ForgeError::Conflict(_)) => {
+                    metrics.read();
                     issue = self
                         .forge
                         .get_issue_with_details(&issue.id, temper_forge::ItemListDetails::summary())

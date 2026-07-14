@@ -1913,6 +1913,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-memory",
+ "tracing",
 ]
 
 [[package]]

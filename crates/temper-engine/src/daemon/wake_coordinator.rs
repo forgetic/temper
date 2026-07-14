@@ -101,6 +101,10 @@ impl WakeBatch {
         self.lanes.len()
     }
 
+    pub(crate) fn target_count(&self) -> usize {
+        self.lanes.values().map(WakeScope::target_count).sum()
+    }
+
     pub(crate) fn lanes(&self) -> &BTreeMap<WakeLane, WakeScope> {
         &self.lanes
     }
@@ -231,6 +235,13 @@ pub(crate) struct WakeWork {
     pub(crate) started_at: EngineTime,
 }
 
+impl WakeWork {
+    /// Stable correlation key for every event and Forge request in this run.
+    pub(crate) fn run_id(&self) -> String {
+        format!("{}/{}:{}", self.repo.owner, self.repo.name, self.generation)
+    }
+}
+
 /// Executor result. Failure never creates work by itself; only an already dirty
 /// batch can produce a follow-up generation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -253,10 +264,12 @@ pub(crate) enum WakeDecision {
     Accepted {
         repo: RepositoryPath,
         lane: WakeLane,
+        scope: WakeScope,
     },
     Coalesced {
         repo: RepositoryPath,
         lane: WakeLane,
+        scope: WakeScope,
     },
     Deferred {
         repo: RepositoryPath,
@@ -284,8 +297,7 @@ pub(crate) enum WakeDecision {
         lanes: BTreeSet<WakeLane>,
     },
     Finished {
-        repo: RepositoryPath,
-        generation: u64,
+        work: WakeWork,
         outcome: WakeOutcome,
     },
     IgnoredUnknownRepository {
@@ -423,6 +435,16 @@ impl WakeCoordinator {
         self.in_flight_repositories
     }
 
+    pub(crate) fn pending_target_count(&self, repo: &RepositoryPath) -> usize {
+        self.repository_state(repo)
+            .map(|state| {
+                state.pending.target_count()
+                    + state.dirty.target_count()
+                    + state.apply_deferred.target_count()
+            })
+            .unwrap_or(0)
+    }
+
     pub(crate) fn schedule_startup_broad(
         &mut self,
         now: EngineTime,
@@ -499,10 +521,12 @@ impl WakeCoordinator {
                 MergeResult::Accepted => WakeDecision::Accepted {
                     repo: state.repo.clone(),
                     lane,
+                    scope: request.scope.clone(),
                 },
                 MergeResult::Coalesced => WakeDecision::Coalesced {
                     repo: state.repo.clone(),
                     lane,
+                    scope: request.scope.clone(),
                 },
                 MergeResult::BroadPromoted(mode) => WakeDecision::BroadPromoted {
                     repo: state.repo.clone(),
@@ -646,8 +670,7 @@ impl WakeCoordinator {
         state.in_flight_generation = None;
         self.in_flight_repositories = self.in_flight_repositories.saturating_sub(1);
         let mut decisions = vec![WakeDecision::Finished {
-            repo: state.repo.clone(),
-            generation: work.generation,
+            work: work.clone(),
             outcome,
         }];
 
