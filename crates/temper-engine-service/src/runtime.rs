@@ -113,6 +113,10 @@ pub async fn run_async(
     // retention run before transport opens, but a journal failure can never
     // prevent assignment execution.
     let trace_journal = start_trace_journal(&agent_traces, recovered.keys().cloned());
+    let daemon = match trace_journal.as_ref() {
+        Some(journal) => daemon.with_trace_journal(journal.clone()),
+        None => daemon,
+    };
     let daemon = attach_trace_query(daemon, &agent_traces, trace_journal.as_ref());
     let server = temper_engine::serve(&handle, &daemon, config.bind)
         .await

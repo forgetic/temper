@@ -354,6 +354,47 @@ impl DaemonCore {
         Ok(self.in_flight_job(job_id))
     }
 
+    /// Authenticates a worker for durable activity ingestion. Network carriers
+    /// require configured pool authentication; a co-resident trusted carrier
+    /// may bypass the credential requirement, but never registration/health.
+    pub fn authorize_activity_worker(
+        &self,
+        worker_id: &str,
+        role: &str,
+        repository: &str,
+        auth: Option<&WorkerAuth>,
+        trusted_transport: bool,
+    ) -> Result<(), WorkerAuthError> {
+        if worker_id.trim().is_empty() {
+            return Err(WorkerAuthError::new(
+                "activity batch worker_id must not be empty",
+            ));
+        }
+        if !trusted_transport {
+            if !self.worker_auth.is_enabled() {
+                return Err(WorkerAuthError::new(
+                    "distributed activity ingestion requires configured worker authentication",
+                ));
+            }
+            self.authenticate_registered_worker(worker_id, None, auth)?;
+        }
+        if !self.coordinator.registry().is_healthy(worker_id) {
+            return Err(WorkerAuthError::new(format!(
+                "worker `{worker_id}` is not registered and healthy"
+            )));
+        }
+        if !self
+            .coordinator
+            .registry()
+            .can_handle(worker_id, role, repository)
+        {
+            return Err(WorkerAuthError::new(format!(
+                "worker `{worker_id}` is not authorized for activity role `{role}` in `{repository}`"
+            )));
+        }
+        Ok(())
+    }
+
     /// Reserve one job for a poller without making it externally in-flight.
     pub fn reserve_authenticated_poll(
         &mut self,
@@ -474,6 +515,13 @@ impl DaemonCore {
                 Ok(Some(error_response(
                     ErrorCode::MalformedMessage,
                     "context messages are handled by the daemon transport",
+                    None,
+                )))
+            }
+            WorkerProtocolMessage::ActivityBatch(_) | WorkerProtocolMessage::ActivityAck(_) => {
+                Ok(Some(error_response(
+                    ErrorCode::MalformedMessage,
+                    "activity messages are handled by the daemon transport",
                     None,
                 )))
             }
@@ -756,6 +804,8 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::FetchContext(msg) => msg.protocol_version,
         WorkerProtocolMessage::ContextResponse(msg) => msg.protocol_version,
+        WorkerProtocolMessage::ActivityBatch(msg) => msg.protocol_version,
+        WorkerProtocolMessage::ActivityAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,
     }
 }

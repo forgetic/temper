@@ -195,6 +195,10 @@ async fn run_async(
     )
     .await?;
     let trace_journal = start_trace_journal(&engine_agent_traces, recovered.keys().cloned());
+    let daemon = match trace_journal.as_ref() {
+        Some(journal) => daemon.with_trace_journal(journal.clone()),
+        None => daemon,
+    };
     let daemon = attach_trace_query(daemon, &engine_agent_traces, trace_journal.as_ref());
     let orphaned = daemon.collect_startup_orphans().await;
     converge_startup_orphans(

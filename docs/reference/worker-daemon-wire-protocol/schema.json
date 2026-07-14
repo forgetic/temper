@@ -32,6 +32,12 @@
    "$ref": "#/$defs/contextResponse"
   },
   {
+   "$ref": "#/$defs/activityBatch"
+  },
+  {
+   "$ref": "#/$defs/activityAck"
+  },
+  {
    "$ref": "#/$defs/error"
   }
  ],
@@ -580,6 +586,59 @@
     { "if": { "properties": { "status": { "const": "success" } } }, "then": { "required": ["result"] } },
     { "if": { "properties": { "status": { "const": "error" } } }, "then": { "required": ["code"] } }
    ]
+  },
+  "activityCapturePolicy": {
+   "type": "object",
+   "required": ["version", "capture", "retention_days", "max_run_bytes", "max_inline_bytes", "max_blob_bytes", "capture_thinking"],
+   "properties": {
+    "version": { "const": 1 },
+    "capture": { "enum": ["off", "metadata", "transcript", "diagnostic"] },
+    "retention_days": { "type": "integer", "minimum": 1 },
+    "max_run_bytes": { "type": "integer", "minimum": 1 },
+    "max_inline_bytes": { "type": "integer", "minimum": 1 },
+    "max_blob_bytes": { "type": "integer", "minimum": 1 },
+    "capture_thinking": { "type": "boolean" }
+   }
+  },
+  "activityBatch": {
+   "type": "object",
+   "required": ["protocol_version", "type", "worker_id", "assignment_id", "capture_policy", "batch"],
+   "properties": {
+    "protocol_version": { "const": 1 },
+    "type": { "const": "activity-batch" },
+    "worker_id": { "type": "string", "minLength": 1 },
+    "assignment_id": { "type": "string", "minLength": 1 },
+    "capture_policy": { "$ref": "#/$defs/activityCapturePolicy" },
+    "batch": {
+     "type": "object",
+     "required": ["version", "run_id", "first_seq", "events"],
+     "properties": {
+      "version": { "const": 1 },
+      "run_id": { "type": "string", "minLength": 1 },
+      "first_seq": { "type": "integer", "minimum": 1 },
+      "events": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+      "blobs": { "type": "array", "items": { "type": "object" } }
+     }
+    }
+   }
+  },
+  "activityAck": {
+   "type": "object",
+   "required": ["protocol_version", "type", "worker_id", "acknowledgement"],
+   "properties": {
+    "protocol_version": { "const": 1 },
+    "type": { "const": "activity-ack" },
+    "worker_id": { "type": "string", "minLength": 1 },
+    "acknowledgement": {
+     "type": "object",
+     "required": ["version", "run_id", "highest_contiguous_seq"],
+     "properties": {
+      "version": { "const": 1 },
+      "run_id": { "type": "string", "minLength": 1 },
+      "highest_contiguous_seq": { "type": "integer", "minimum": 0 }
+     }
+    }
+   }
   },
   "heartbeat": {
    "type": "object",

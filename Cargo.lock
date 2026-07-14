@@ -1657,6 +1657,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "temper-protocol-activity",
  "temper-protocol-context",
  "temper-verdict",
  "thiserror",
@@ -1874,6 +1875,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "fs2",
  "serde",
  "serde_json",
  "skein",

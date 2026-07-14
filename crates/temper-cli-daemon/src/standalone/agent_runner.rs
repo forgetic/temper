@@ -12,7 +12,7 @@
 //! deployment keeps the subprocess `OutOfProcessRunner`.
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
@@ -28,6 +28,8 @@ use temper_worker::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
     TraceCollector, WorkerAgentTraceConfig,
 };
+
+const TERMINAL_ACTIVITY_FLUSH_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {
@@ -182,6 +184,7 @@ impl AgentRunner for InProcessAgentRunner {
         let enable_subagents = self.enable_subagents;
         let tool_config = self.tool_config.clone();
         let trace_policy = self.trace_policy.clone();
+        let trace_collector = self.trace_collector.clone();
         let submit_for_pr = self.submit_for_pr.clone();
         let accepted_submit = AcceptedSubmitProofStore::new();
         let accepted_submit_for_host = accepted_submit.clone();
@@ -235,15 +238,35 @@ impl AgentRunner for InProcessAgentRunner {
                         error.class == temper_protocol_worker::FailureClass::Transient,
                     ),
                 };
-                if let Err(error) = terminal {
-                    tracing::warn!(
-                        target: "temper::worker",
-                        service = "worker",
-                        event = "agent.activity.terminal_failed",
-                        run_id = trace.run_id(),
-                        %error,
-                        "standalone worker could not persist the terminal agent activity event"
-                    );
+                match terminal {
+                    Ok(sequence) => {
+                        if !trace_collector
+                            .await_acknowledged(
+                                trace.run_id(),
+                                sequence,
+                                TERMINAL_ACTIVITY_FLUSH_TIMEOUT,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                target: "temper::worker",
+                                service = "worker",
+                                event = "agent.activity.terminal_flush_timeout",
+                                run_id = trace.run_id(),
+                                "standalone worker terminal activity flush did not complete before its deadline; preserving the agent outcome"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "temper::worker",
+                            service = "worker",
+                            event = "agent.activity.terminal_failed",
+                            run_id = trace.run_id(),
+                            %error,
+                            "standalone worker could not persist the terminal agent activity event"
+                        );
+                    }
                 }
             }
 

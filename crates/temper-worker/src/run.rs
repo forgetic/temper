@@ -18,6 +18,7 @@ use temper_worker_io::{CqSender, OneshotReceiver, Spawner, channel, drive, onesh
 use crate::client::WorkerError;
 use crate::config::{WorkerConfig, WorkerParams};
 use crate::executor::JobExecutor;
+use crate::trace::spawn_activity_forwarder;
 use crate::transport::{HttpTransport, Transport};
 use crate::worker_machine::{WorkerCompletion, WorkerMachine};
 use crate::worker_shell::{WorkerCancellation, WorkerShell};
@@ -72,6 +73,7 @@ where
 pub struct WorkerComponentHandle {
     completions: CqSender<WorkerCompletion>,
     joined: OneshotReceiver<()>,
+    forwarder_joined: Option<OneshotReceiver<()>>,
     cancellation: WorkerCancellation,
 }
 
@@ -81,11 +83,18 @@ impl WorkerComponentHandle {
         self.cancellation.cancel();
         let _ = self.completions.send(WorkerCompletion::Shutdown);
         let _ = self.joined.recv().await;
+        if let Some(joined) = self.forwarder_joined {
+            let _ = joined.recv().await;
+        }
     }
 
     /// Waits until the worker exits without requesting shutdown.
     pub async fn join(self) {
         let _ = self.joined.recv().await;
+        self.cancellation.cancel();
+        if let Some(joined) = self.forwarder_joined {
+            let _ = joined.recv().await;
+        }
     }
 }
 
@@ -107,6 +116,14 @@ where
     let (cq_tx, cq_rx) = channel();
 
     let cancellation = WorkerCancellation::default();
+    let forwarder_joined = spawn_activity_forwarder(
+        spawner.clone(),
+        config.agent_traces.clone(),
+        Arc::clone(&transport),
+        config.worker_id.clone(),
+        config.worker_auth.clone(),
+        cancellation.clone(),
+    );
     let shell = WorkerShell::with_transport_controlled(
         spawner.clone(),
         cq_tx.clone(),
@@ -126,6 +143,7 @@ where
     WorkerComponentHandle {
         completions: cq_tx,
         joined,
+        forwarder_joined,
         cancellation,
     }
 }
