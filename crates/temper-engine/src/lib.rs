@@ -39,6 +39,7 @@ pub mod forge_applier;
 pub mod lease_applier;
 pub mod mechanical;
 pub mod pr_freshness;
+pub mod trace_journal;
 mod verdict_contract;
 mod verdict_validation;
 mod webhook;
@@ -77,6 +78,11 @@ pub use mechanical::{
     spawn_mechanical_backstop,
 };
 pub use pr_freshness::check_pull_request_freshness;
+pub use trace_journal::{
+    AgentTraceJournal, AgentTraceManifest, AgentTraceRunStatus, AgentTraceSummary,
+    AuthenticatedWorkerBinding, RetentionProtection, RetentionReport, TraceAuditRecord,
+    TraceJournalConfig, TraceJournalError, TraceRecoveryFailure, TraceRecoveryReport,
+};
 // Public so out-of-crate `ResultApplier` implementations can name the job type
 // the trait passes them.
 pub use temper_protocol_worker::{JobArtifactSnapshot, JobContext, RepoOutcome, WorkerAuth};

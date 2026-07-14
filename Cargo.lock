@@ -1443,6 +1443,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "fs2",
+ "getrandom 0.3.4",
  "hmac",
  "secrecy",
  "serde",
@@ -1460,6 +1462,7 @@ dependencies = [
  "temper-verdict",
  "temper-worker-registry",
  "temper-workflow",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use temper_config::{ExposeSecret, Resolved};
 use temper_engine::{
-    Daemon, DaemonRunConfig, EngineConfig, HintedMechanical, MechanicalBackstopConfig,
-    MechanicalScope, PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget,
-    WebhookConfig, run_mechanical_backstop_tick, spawn_mechanical_backstop, spawn_poll_backstop,
+    AgentTraceJournal, Daemon, DaemonRunConfig, EngineAgentTraceConfig, EngineConfig,
+    HintedMechanical, MechanicalBackstopConfig, MechanicalScope, PollBackstopConfig, RepositorySet,
+    RetentionProtection, RoleFeedMode, RoleFeedTarget, WebhookConfig, run_mechanical_backstop_tick,
+    spawn_mechanical_backstop, spawn_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, ValidatedWorkflow};
@@ -108,6 +109,10 @@ pub async fn run_async(
         (temper_engine::system_clock())(),
     )
     .await?;
+    // Trace storage is intentionally best-effort: startup recovery and
+    // retention run before transport opens, but a journal failure can never
+    // prevent assignment execution.
+    let _trace_journal = start_trace_journal(&agent_traces, recovered.keys().cloned());
     let server = temper_engine::serve(&handle, &daemon, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
@@ -159,6 +164,31 @@ pub async fn run_async(
     )?;
 
     drain_after_signal(&daemon, server).await
+}
+
+pub fn start_trace_journal(
+    config: &EngineAgentTraceConfig,
+    recovered_job_ids: impl IntoIterator<Item = String>,
+) -> Option<AgentTraceJournal> {
+    let protection = RetentionProtection {
+        job_ids: recovered_job_ids.into_iter().collect(),
+        ..RetentionProtection::default()
+    };
+    match AgentTraceJournal::from_engine_config_with_clock_and_protection(
+        config,
+        temper_engine::system_clock(),
+        &protection,
+    ) {
+        Ok(journal) => journal,
+        Err(error) => {
+            tracing::error!(
+                target: "temper::engine",
+                error = %error,
+                "agent trace journal unavailable; assignment execution will continue"
+            );
+            None
+        }
+    }
 }
 
 fn load_workflow(
