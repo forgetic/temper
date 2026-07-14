@@ -71,11 +71,15 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let body = replace_metadata_block(&issue.body, &metadata).map_err(metadata_error)?;
             match self
                 .forge
-                .update_issue(
-                    &issue.id,
+                .update_issue_from_snapshot(
+                    &issue,
                     UpdateIssue {
                         body: Some(body),
-                        expected_version: Some(issue.version),
+                        // Staged children are intent-owned and cannot be
+                        // dispatched. Their body-only wiring write is safe to
+                        // apply from the supplied snapshot without a provider
+                        // CAS preflight.
+                        expected_version: None,
                         ..UpdateIssue::default()
                     },
                 )
@@ -83,14 +87,16 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             {
                 Ok(committed) => return Ok((committed, true)),
                 Err(ForgeError::Conflict(_)) => {
-                    issue = self.forge.get_issue(&issue.id).await?.ok_or_else(|| {
-                        ExecutionError::Backend {
+                    issue = self
+                        .forge
+                        .get_issue_with_details(&issue.id, temper_forge::ItemListDetails::summary())
+                        .await?
+                        .ok_or_else(|| ExecutionError::Backend {
                             message: format!(
                                 "issue {:?} vanished while wiring dependencies",
                                 issue.id
                             ),
-                        }
-                    })?;
+                        })?;
                 }
                 Err(error) => return Err(error.into()),
             }

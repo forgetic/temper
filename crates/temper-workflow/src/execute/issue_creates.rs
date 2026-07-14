@@ -68,6 +68,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         &self,
         repo_id: &RepositoryId,
         target: ArtifactSource,
+        parent_snapshot: Option<Issue>,
         creates: &[PreparedCreateIssues],
         completion: &CreateIssuesCompletion,
     ) -> Result<Option<AppliedState>, ExecutionError> {
@@ -82,11 +83,18 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 message: "create_issues durability requires an issue source artifact".into(),
             });
         };
+        let mut parent = parent_snapshot.ok_or_else(|| ExecutionError::Backend {
+            message: "create_issues durability requires a validated source issue snapshot".into(),
+        })?;
+        if parent.repo_id != *repo_id || parent.number != parent_number {
+            return Err(ExecutionError::Backend {
+                message: "create_issues source snapshot does not match its target".into(),
+            });
+        }
 
         // Persist all sibling effects before any child mutation. This keeps a
         // multi-effect transition recoverable from the source artifact alone.
         let mut pending = Vec::new();
-        let mut latest_parent = None;
         for create in creates {
             let key = create_intent_key(
                 target,
@@ -96,10 +104,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             );
             let proposed =
                 self.intent_from_create(repo_id, parent_number, create, completion.clone());
-            let persisted = self
-                .persist_create_intent(repo_id, parent_number, &key, proposed)
-                .await?;
-            latest_parent = Some(persisted.parent);
+            let persisted = self.persist_create_intent(parent, &key, proposed).await?;
+            parent = persisted.parent;
             if !persisted.intent.completed {
                 pending.push((
                     key,
@@ -113,7 +119,6 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
         }
 
-        let mut parent = latest_parent.expect("non-empty creates persist a parent");
         let mut completed = Vec::new();
         for (key, intent, mode) in pending {
             let resumed = self

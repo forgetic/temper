@@ -10,8 +10,7 @@ use crate::metadata::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use temper_forge::{
-    Forge, ForgeError, Issue, IssueQuery, IssueState, ItemListDetails, ItemNumber, RepositoryId,
-    UpdateIssue,
+    Forge, ForgeError, Issue, IssueQuery, IssueState, ItemListDetails, RepositoryId, UpdateIssue,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -49,7 +48,11 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         for summary in parents.into_values() {
             // Summary list responses may truncate a large persisted intent.
             // Reload the selected parent by id before parsing authoritative data.
-            let Some(mut parent) = self.forge.get_issue(&summary.id).await? else {
+            let Some(mut parent) = self
+                .forge
+                .get_issue_with_details(&summary.id, ItemListDetails::summary())
+                .await?
+            else {
                 continue;
             };
             let Some(metadata) = parse_metadata_block(&parent.body).map_err(metadata_error)? else {
@@ -98,20 +101,10 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     /// an existing incomplete record is the caller's recovery signal.
     pub(super) async fn persist_create_intent(
         &self,
-        repo_id: &RepositoryId,
-        parent_number: ItemNumber,
+        mut parent: Issue,
         key: &str,
         proposed: CreateIssuesIntent,
     ) -> Result<PersistedCreateIntent, ExecutionError> {
-        let mut parent = self
-            .forge
-            .get_issue_by_number(repo_id, parent_number)
-            .await?
-            .ok_or(ExecutionError::TargetMissing {
-                target: ArtifactSource::Issue {
-                    number: parent_number,
-                },
-            })?;
         for _ in 0..3 {
             let mut metadata = parse_metadata_block(&parent.body)
                 .map_err(metadata_error)?
@@ -136,8 +129,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let body = replace_metadata_block(&parent.body, &metadata).map_err(metadata_error)?;
             match self
                 .forge
-                .update_issue(
-                    &parent.id,
+                .update_issue_from_snapshot(
+                    &parent,
                     UpdateIssue {
                         body: Some(body),
                         expected_version: Some(parent.version),
@@ -189,8 +182,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let body = replace_metadata_block(&parent.body, &metadata).map_err(metadata_error)?;
             match self
                 .forge
-                .update_issue(
-                    &parent.id,
+                .update_issue_from_snapshot(
+                    &parent,
                     UpdateIssue {
                         body: Some(body),
                         expected_version: Some(parent.version),
@@ -245,8 +238,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let body = replace_metadata_block(&parent.body, &metadata).map_err(metadata_error)?;
             match self
                 .forge
-                .update_issue(
-                    &parent.id,
+                .update_issue_from_snapshot(
+                    &parent,
                     UpdateIssue {
                         body: Some(body),
                         expected_version: Some(parent.version),
@@ -324,8 +317,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let completion = completion.cloned().unwrap_or_default();
             match self
                 .forge
-                .update_issue(
-                    &parent.id,
+                .update_issue_from_snapshot(
+                    &parent,
                     UpdateIssue {
                         body: Some(body),
                         add_labels: completion.add_labels,
@@ -352,7 +345,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
 
     async fn reload_parent(&self, parent: &Issue) -> Result<Issue, ExecutionError> {
         self.forge
-            .get_issue(&parent.id)
+            .get_issue_with_details(&parent.id, ItemListDetails::summary())
             .await?
             .ok_or(ExecutionError::TargetMissing {
                 target: ArtifactSource::Issue {

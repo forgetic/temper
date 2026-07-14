@@ -75,17 +75,22 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 .filter(|label| !labels.contains(label))
                 .cloned()
                 .collect::<Vec<_>>();
+            let body_only = add_labels.is_empty() && remove_labels.is_empty();
             metadata.staged = false;
             let body = replace_metadata_block(&issue.body, &metadata).map_err(metadata_error)?;
             match self
                 .forge
-                .update_issue(
-                    &issue.id,
+                .update_issue_from_snapshot(
+                    &issue,
                     UpdateIssue {
                         body: Some(body),
                         add_labels,
                         remove_labels,
-                        expected_version: Some(issue.version),
+                        // New-protocol children already carry final labels and
+                        // are still intent-owned while staged, so activation is
+                        // a body-only unconditional write. Legacy recovery that
+                        // must repair labels retains CAS protection.
+                        expected_version: (!body_only).then_some(issue.version),
                         ..UpdateIssue::default()
                     },
                 )
@@ -93,11 +98,13 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             {
                 Ok(committed) => return Ok((committed, true)),
                 Err(ForgeError::Conflict(_)) => {
-                    issue = self.forge.get_issue(&issue.id).await?.ok_or_else(|| {
-                        ExecutionError::Backend {
+                    issue = self
+                        .forge
+                        .get_issue_with_details(&issue.id, temper_forge::ItemListDetails::summary())
+                        .await?
+                        .ok_or_else(|| ExecutionError::Backend {
                             message: format!("intent child #{} vanished", issue.number),
-                        }
-                    })?;
+                        })?;
                 }
                 Err(error) => return Err(error.into()),
             }

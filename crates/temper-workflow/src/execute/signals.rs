@@ -82,6 +82,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         let loaded = Loaded::Issue {
             id: issue.id.clone(),
             version: issue.version,
+            snapshot: issue.clone(),
             classified: classified.clone(),
         };
         self.gate_signals_with_needs(repo_id, &loaded, needs).await
