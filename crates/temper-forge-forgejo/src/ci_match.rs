@@ -4,8 +4,9 @@
 //! Adapts Forgejo Actions runs to a query target (a pull request and/or commit
 //! SHA), mirroring the matching rules, PR-number derivation, and newest-first
 //! sorting of the reference TypeScript tooling. An explicit query commit is a
-//! mandatory ownership filter; PR metadata remains a widening axis only for
-//! PR-only diagnostic reads.
+//! mandatory ownership filter. A run carrying a different PR identity is still
+//! rejected, while runs without PR identity (such as push workflows) remain
+//! eligible for combined PR-and-commit reads.
 
 use crate::types::ActionRunDto;
 use chrono::{DateTime, Utc};
@@ -69,8 +70,16 @@ pub(crate) fn run_index(run: &ActionRunDto) -> u64 {
 pub(crate) fn match_run(run: &ActionRunDto, target: &Target) -> Option<MatchReason> {
     // A query commit is authoritative. PR refs/numbers/branches and the fetched
     // PR head are useful for PR-only history, but cannot prove that a run owns
-    // this particular commit.
+    // this particular commit. When both sides do identify a PR, however, a
+    // mismatch is conclusive: the same commit may back more than one PR and a
+    // terminal job from one must not satisfy or fail another. Runs without a PR
+    // identity remain eligible so push-based PR CI is preserved.
     if let Some(commit) = target.explicit_commit() {
+        if let (Some(target_pr), Some(run_pr)) = (target.pr_number, run_pr_number(run)) {
+            if target_pr != run_pr {
+                return None;
+            }
+        }
         if sha_matches(&run.head_sha, commit) || sha_matches(&run.commit_sha, commit) {
             return Some(MatchReason::HeadSha);
         }
@@ -247,6 +256,13 @@ mod tests {
 
         let old_pr = run("#7", "feature", "oldhead1234567", "pull_request");
         assert_eq!(match_run(&old_pr, &target), None);
+
+        let other_pr_same_head = run("#8", "feature", "current1234567", "pull_request");
+        assert_eq!(
+            match_run(&other_pr_same_head, &target),
+            None,
+            "a shared commit does not make another PR's jobs current"
+        );
 
         let mut old_payload = run("main", "feature", "", "pull_request");
         old_payload.event_payload =

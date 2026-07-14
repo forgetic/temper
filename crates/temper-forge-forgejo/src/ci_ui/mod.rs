@@ -76,12 +76,13 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
             continue;
         };
         // A caller-supplied commit is mandatory: only provider SHA evidence can
-        // own that query, and PR/branch metadata must not widen it. PR-only
-        // reads retain same-branch history so fail→pass diagnostics still expose
-        // both heads.
+        // own that query. A different PR pseudo-ref is conclusive even when the
+        // commit is shared, while runs without a PR pseudo-ref remain eligible
+        // so push-based PR CI is preserved. PR-only reads retain same-branch
+        // history so fail→pass diagnostics still expose both heads.
         let sha_ok = crate::ci_ui_parse::commit_matches(&live.commit.short_sha, target);
         let matches = if target.explicit_commit().is_some() {
-            sha_ok
+            sha_ok && !branch_conflicts_with_pr(&live.commit.branch.name, target)
         } else {
             sha_ok || branch_matches(&live.commit.branch.name, target)
         };
@@ -103,6 +104,18 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
         }
     }
     Ok(jobs)
+}
+
+/// Whether a run explicitly identifies a different pull request.
+///
+/// Source branch names and blank branch values carry no PR identity and do not
+/// conflict. Forgejo's `#<number>` pseudo-ref does, so it can safely prevent a
+/// shared commit's workflow from leaking between pull requests.
+fn branch_conflicts_with_pr(branch: &str, target: &Target) -> bool {
+    let run_pr = branch
+        .strip_prefix('#')
+        .and_then(|number| number.parse::<u64>().ok());
+    matches!((target.pr_number, run_pr), (Some(expected), Some(actual)) if expected != actual)
 }
 
 /// Whether a run's commit branch identifies the target pull request. Forgejo's
