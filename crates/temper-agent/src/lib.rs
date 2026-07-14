@@ -7,6 +7,7 @@
 
 #![allow(clippy::result_large_err)]
 
+pub mod activity;
 pub mod codebase_memory;
 pub mod coding_agent;
 pub mod decision;
@@ -21,6 +22,7 @@ pub mod provider;
 mod tool_preview;
 pub mod usage;
 
+pub use activity::AgentActivityConfig;
 pub use coding_agent::{
     AgentSessionState, Capability, CodingAgentError, DEFAULT_MAX_ITERATIONS, ForgeContextFuture,
     ForgeContextHost, SubmitForPrCallback, SubmitForPrHost, WorkspaceContext, WorkspaceGuidance,

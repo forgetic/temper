@@ -400,7 +400,7 @@ impl ProviderConfig {
     }
 
     /// The (non-secret) provider id this config routes through.
-    pub(in crate::provider) fn provider_id(&self) -> &str {
+    pub fn provider_id(&self) -> &str {
         &self.provider_id
     }
 

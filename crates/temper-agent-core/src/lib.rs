@@ -21,16 +21,21 @@ pub mod shell;
 pub mod subagent_tool;
 
 pub use machine::{
-    AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn, StreamDelta,
+    AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,
+    ModelCallStatus, StreamDelta, ToolCallStatus, ToolResultMetadata,
 };
 pub use run::{
     SubAgent, SubAgentControl, SubAgentError, run_sub_agent, run_sub_agent_controllable,
     run_sub_agent_controllable_with_hook, run_sub_agent_controllable_with_hooks,
-    run_sub_agent_with_events, run_sub_agent_with_hook,
+    run_sub_agent_controllable_with_observability, run_sub_agent_with_events,
+    run_sub_agent_with_hook,
 };
-pub use shell::{AgentOutcome, AgentShell, EventSink, NullEventSink, TurnHook};
+pub use shell::{
+    AgentOutcome, AgentShell, EventClock, EventSink, ModelIdentity, NullEventSink,
+    RunObservability, SystemEventClock, TurnHook,
+};
 #[cfg(feature = "test-support")]
 pub use shell::{
     StreamRetryConfig, StreamRetryConfigOverrideGuard, install_stream_retry_config_override,
 };
-pub use subagent_tool::{SubAgentFactory, SubAgentTool};
+pub use subagent_tool::{SubAgentFactory, SubAgentObserverFactory, SubAgentTool};

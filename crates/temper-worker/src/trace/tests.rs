@@ -65,7 +65,7 @@ fn usage_frame(tokens: u64) -> AgentActivityFrameV1 {
         occurred_at: "2026-07-14T11:09:03.000Z".to_string(),
         elapsed_ms: tokens,
         scope: AgentScopeV1 {
-            id: MAIN_SCOPE_ID.to_string(),
+            id: "child-main".to_string(),
             kind: AgentScopeKindV1::Main,
             parent_id: None,
         },
@@ -114,8 +114,10 @@ fn parallel_frames_get_one_gap_free_sequence_and_trusted_identity() {
     assert_eq!(recovered.len(), 1);
     let recovered = &recovered[0];
     assert_eq!(recovered.events.len(), count + 2);
+    assert_ne!(recovered.manifest.main_scope.id, "child-main");
     for (index, event) in recovered.events.iter().enumerate() {
         assert_eq!(event.seq, index as u64 + 1);
+        assert_eq!(event.scope.id, recovered.manifest.main_scope.id);
         assert_eq!(event.assignment.job_id, "trusted-job-308");
         assert_eq!(event.assignment.repository, "acme/svc");
         assert_eq!(event.assignment.artifact_ref, "acme/svc#308");
@@ -135,6 +137,54 @@ fn parallel_frames_get_one_gap_free_sequence_and_trusted_identity() {
             ..
         }))
     ));
+}
+
+#[test]
+fn child_root_is_mapped_to_one_unique_canonical_scope_with_correct_parentage() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let collector = collector(temp.path());
+    let first = collector
+        .begin_run("first-run", &context())
+        .expect("begin first")
+        .expect("enabled");
+    let second = collector
+        .begin_run("second-run", &context())
+        .expect("begin second")
+        .expect("enabled");
+    assert_ne!(
+        first.manifest().main_scope.id,
+        second.manifest().main_scope.id
+    );
+
+    first.accept_frame(usage_frame(1)).expect("bind child root");
+    let mut child = usage_frame(2);
+    child.scope = AgentScopeV1 {
+        id: "child-scope".to_string(),
+        kind: AgentScopeKindV1::SubAgent,
+        parent_id: Some("child-main".to_string()),
+    };
+    first.accept_frame(child).expect("accept child scope");
+    let mut second_root = usage_frame(3);
+    second_root.scope.id = "another-main".to_string();
+    assert!(matches!(
+        first.accept_frame(second_root),
+        Err(TraceError::InvalidSpool(_))
+    ));
+    first.finish_success(None).expect("finish first");
+    second.finish_success(None).expect("finish second");
+    drop(first);
+    drop(second);
+
+    let recovered = collector.recover().expect("recover");
+    let first = recovered
+        .iter()
+        .find(|run| run.manifest.assignment.job_id == "first-run")
+        .expect("first recovered run");
+    assert_eq!(first.events[1].scope, first.manifest.main_scope);
+    assert_eq!(
+        first.events[2].scope.parent_id.as_deref(),
+        Some(first.manifest.main_scope.id.as_str())
+    );
 }
 
 #[test]

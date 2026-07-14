@@ -1257,6 +1257,7 @@ name = "temper-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "jig-core",
  "jig-record",
  "jig-runtime",
@@ -1267,6 +1268,7 @@ dependencies = [
  "skein",
  "temper-agent-core",
  "temper-agent-io",
+ "temper-protocol-activity",
  "temper-protocol-agent",
  "temper-protocol-interaction",
  "temper-verdict",

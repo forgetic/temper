@@ -44,6 +44,9 @@ pub struct AgentConfig {
     /// Worker-resolved shared trace capture policy. The activity producer
     /// consumes this in the agent tier; it contains no storage path or token.
     pub trace_policy: AgentActivityCapturePolicyV1,
+    /// Optional worker-owned local endpoint for newline-delimited activity
+    /// frames. Absence preserves legacy/third-party behavior.
+    pub activity_address: Option<String>,
     /// Optional host submit callback. In out-of-process mode this is a thin
     /// client for the worker-owned local side channel; when absent the
     /// `submit_for_pr` tool is not exposed by this agent process.
@@ -67,6 +70,7 @@ impl AgentConfig {
             config_dir,
             tool_config: None,
             trace_policy: AgentActivityCapturePolicyV1::default(),
+            activity_address: None,
             submit_for_pr: None,
             forge_context: None,
         }
@@ -81,6 +85,12 @@ impl AgentConfig {
     /// Stores the worker-resolved capture policy for this session.
     pub fn with_trace_policy(mut self, trace_policy: AgentActivityCapturePolicyV1) -> Self {
         self.trace_policy = trace_policy;
+        self
+    }
+
+    /// Installs the optional worker-owned activity endpoint.
+    pub fn with_activity_address(mut self, activity_address: Option<String>) -> Self {
+        self.activity_address = activity_address;
         self
     }
 
@@ -118,6 +128,7 @@ mod tests {
         assert_eq!(config.config_dir, Some(PathBuf::from("/cfg")));
         assert!(config.tool_config.is_none());
         assert_eq!(config.trace_policy, AgentActivityCapturePolicyV1::default());
+        assert!(config.activity_address.is_none());
         assert_eq!(config.provider.base_url(), "https://llm.example");
     }
 }

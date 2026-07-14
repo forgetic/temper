@@ -27,13 +27,20 @@ use tongs::error::{Error, Result};
 use tongs::model::ContentBlock;
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
-use crate::run::{SubAgent, run_sub_agent, run_sub_agent_with_events};
-use crate::shell::EventSink;
+use crate::run::{
+    SubAgent, run_sub_agent, run_sub_agent_controllable_with_observability,
+    run_sub_agent_with_events,
+};
+use crate::shell::{EventSink, RunObservability};
 
 /// Builds the nested [`SubAgent`] to run for one invocation, given the task
 /// string the parent model supplied. Called fresh per tool call so each
 /// invocation gets its own tools/workspace/budget.
 pub type SubAgentFactory = Arc<dyn Fn(String) -> SubAgent + Send + Sync>;
+
+/// Builds a fresh observer for one nested invocation. Unlike a static event
+/// sink, this factory can mint a unique scope identity for concurrent calls.
+pub type SubAgentObserverFactory = Arc<dyn Fn() -> RunObservability + Send + Sync>;
 
 /// A [`Tool`] that runs a nested sub-agent.
 pub struct SubAgentTool {
@@ -46,6 +53,9 @@ pub struct SubAgentTool {
     /// Observability sink forwarded to every nested run (token usage, tool
     /// starts). `None` keeps nested runs silent.
     events: Option<Arc<dyn EventSink>>,
+    /// Preferred scope-aware observer factory. Called once per invocation so
+    /// parallel sub-agents never share scope identity or in-flight state.
+    observer_factory: Option<SubAgentObserverFactory>,
     /// Runtime spawn capability, forwarded to each nested run. Passed
     /// explicitly (no ambient handle lookup).
     handle: RuntimeHandle,
@@ -72,6 +82,7 @@ impl SubAgentTool {
             parameters: default_task_schema(),
             factory,
             events: None,
+            observer_factory: None,
             handle,
         }
     }
@@ -86,6 +97,13 @@ impl SubAgentTool {
     /// to `events`.
     pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
         self.events = Some(events);
+        self
+    }
+
+    /// Install a scope-aware observer factory. It takes precedence over the
+    /// legacy static sink configured by [`Self::with_events`].
+    pub fn with_observer_factory(mut self, factory: SubAgentObserverFactory) -> Self {
+        self.observer_factory = Some(factory);
         self
     }
 }
@@ -130,11 +148,24 @@ impl Tool for SubAgentTool {
             .to_string();
 
         let sub_agent = (self.factory)(task);
-        let outcome = match &self.events {
-            Some(events) => {
-                run_sub_agent_with_events(self.handle.clone(), sub_agent, Arc::clone(events)).await
+        let outcome = if let Some(factory) = &self.observer_factory {
+            let (_control, run) = run_sub_agent_controllable_with_observability(
+                self.handle.clone(),
+                sub_agent,
+                factory(),
+                None,
+                None,
+            )
+            .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
+            run.await
+        } else {
+            match &self.events {
+                Some(events) => {
+                    run_sub_agent_with_events(self.handle.clone(), sub_agent, Arc::clone(events))
+                        .await
+                }
+                None => run_sub_agent(self.handle.clone(), sub_agent).await,
             }
-            None => run_sub_agent(self.handle.clone(), sub_agent).await,
         }
         .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
 

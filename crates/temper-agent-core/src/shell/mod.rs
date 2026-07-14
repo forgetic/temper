@@ -18,7 +18,10 @@
 mod executor;
 mod streaming;
 
-pub use executor::{AgentOutcome, AgentShell, EventSink, NullEventSink, TurnHook};
+pub use executor::{
+    AgentOutcome, AgentShell, EventClock, EventSink, ModelIdentity, NullEventSink,
+    RunObservability, SystemEventClock, TurnHook,
+};
 #[cfg(feature = "test-support")]
 pub use streaming::{
     StreamRetryConfig, StreamRetryConfigOverrideGuard, install_stream_retry_config_override,
