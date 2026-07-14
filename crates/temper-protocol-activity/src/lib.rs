@@ -28,6 +28,8 @@ pub use validation::{
 /// CLI flag carrying a worker-written, non-secret capture policy JSON file to
 /// the first-party agent process.
 pub const TRACE_POLICY_FLAG: &str = "--trace-policy";
+/// CLI flag carrying the worker-owned per-run loopback activity endpoint.
+pub const ACTIVITY_ADDRESS_FLAG: &str = "--activity-address";
 
 /// Current agent activity wire-contract version.
 pub const ACTIVITY_PROTOCOL_VERSION: u32 = 1;

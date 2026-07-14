@@ -29,6 +29,7 @@ temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-worker = { path = "../temper-worker" }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
+temper-protocol-activity = { path = "../temper-protocol-activity" }
 temper-agent = { path = "../temper-agent" }
 temper-protocol-agent = { path = "../temper-protocol-agent" }
 

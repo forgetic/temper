@@ -24,17 +24,21 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
-use temper_protocol_activity::{AgentActivityCapturePolicyV1, TRACE_POLICY_FLAG};
+use temper_protocol_activity::{
+    ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, FailureCodeV1, TRACE_POLICY_FLAG,
+};
 use temper_protocol_agent::{
     AgentToolConfig, FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, SUBMIT_FOR_PR_ADDRESS_FLAG,
     SubmitForPrRequest, SubmitForPrResponse, TOOL_CONFIG_FLAG, WorkspaceContext,
 };
 
+use crate::WorkerAgentTraceConfig;
 use crate::agent_runner::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
     WorkspaceResult,
 };
 use crate::pre_push::submit_for_pr_pre_push_response_blocking;
+use crate::trace::{TraceCollector, TraceRun};
 
 mod side_channel;
 mod stderr;
@@ -72,6 +76,9 @@ pub struct OutOfProcessRunner {
     /// Shared, non-secret capture policy written to a per-run JSON file for the
     /// first-party agent process. `None` preserves third-party agent compatibility.
     trace_policy: Option<AgentActivityCapturePolicyV1>,
+    /// Worker-owned durable collector. It runs for every invocation, including
+    /// third-party children that never connect to an activity endpoint.
+    trace_collector: TraceCollector,
     /// Host-controlled submit gate serviced over a worker-owned local channel
     /// while the child process remains alive.
     submit_for_pr: SubmitForPrHandler,
@@ -94,6 +101,7 @@ impl std::fmt::Debug for OutOfProcessRunner {
             )
             .field("tool_config", &self.tool_config)
             .field("trace_policy", &self.trace_policy)
+            .field("trace_collector", &self.trace_collector)
             .field("submit_for_pr", &"<handler>")
             .field(
                 "forge_context",
@@ -111,6 +119,7 @@ impl OutOfProcessRunner {
             env: Vec::new(),
             tool_config: None,
             trace_policy: None,
+            trace_collector: TraceCollector::default(),
             submit_for_pr: default_submit_for_pr_handler(),
             forge_context: None,
             #[cfg(test)]
@@ -137,6 +146,13 @@ impl OutOfProcessRunner {
     #[must_use]
     pub fn with_trace_policy(mut self, trace_policy: Option<AgentActivityCapturePolicyV1>) -> Self {
         self.trace_policy = trace_policy;
+        self
+    }
+
+    /// Configures worker-owned run collection and its durable spool.
+    #[must_use]
+    pub fn with_trace_collector(mut self, config: WorkerAgentTraceConfig) -> Self {
+        self.trace_collector = TraceCollector::new(config);
         self
     }
 
@@ -183,6 +199,55 @@ impl AgentRunner for OutOfProcessRunner {
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {
+        let trace = match self.trace_collector.begin_run(job_id, context) {
+            Ok(trace) => trace,
+            Err(error) => {
+                tracing::warn!(
+                    target: "temper::worker",
+                    service = "worker",
+                    event = "agent.activity.start_failed",
+                    job_id,
+                    correlation_key = context.correlation_key.as_str(),
+                    %error,
+                    "worker could not start durable agent tracing; continuing without it"
+                );
+                None
+            }
+        };
+        let outcome = self.run_agent(job_id, context, cwd, trace.as_ref()).await;
+        if let Some(trace) = trace {
+            let terminal = match &outcome {
+                Ok(_) => trace.finish_success(None),
+                Err(error) => trace.finish_failure(
+                    FailureCodeV1::ChildProcess,
+                    &error.message,
+                    error.class == temper_protocol_worker::FailureClass::Transient,
+                ),
+            };
+            if let Err(error) = terminal {
+                tracing::warn!(
+                    target: "temper::worker",
+                    service = "worker",
+                    event = "agent.activity.terminal_failed",
+                    run_id = trace.run_id(),
+                    job_id,
+                    %error,
+                    "worker could not persist the terminal agent activity event"
+                );
+            }
+        }
+        outcome
+    }
+}
+
+impl OutOfProcessRunner {
+    async fn run_agent(
+        &self,
+        job_id: &str,
+        context: &WorkspaceContext,
+        cwd: &Path,
+        trace: Option<&TraceRun>,
+    ) -> Result<AgentRunOutput, AgentRunError> {
         let Some((program, args)) = self.command.split_first() else {
             return Err(AgentRunError::permanent("agent command is empty"));
         };
@@ -216,19 +281,37 @@ impl AgentRunner for OutOfProcessRunner {
             }
             None => None,
         };
-        let trace_policy_path = match &self.trace_policy {
-            Some(policy) => {
-                let path = temp.path().join("trace-policy.json");
-                let bytes = serde_json::to_vec_pretty(policy).map_err(|error| {
-                    AgentRunError::transient(format!("serialize agent trace policy: {error}"))
-                })?;
-                std::fs::write(&path, bytes).map_err(|error| {
-                    AgentRunError::transient(format!("write agent trace policy file: {error}"))
-                })?;
+        let trace_policy_path = self.trace_policy.as_ref().and_then(|policy| {
+            let path = temp.path().join("trace-policy.json");
+            let bytes = match serde_json::to_vec_pretty(policy) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper::worker",
+                        service = "worker",
+                        event = "agent.activity.policy_serialize_failed",
+                        job_id,
+                        %error,
+                        "worker could not serialize agent trace policy; continuing without child activity"
+                    );
+                    return None;
+                }
+            };
+            if let Err(error) = std::fs::write(&path, bytes) {
+                tracing::warn!(
+                    target: "temper::worker",
+                    service = "worker",
+                    event = "agent.activity.policy_write_failed",
+                    job_id,
+                    path = %path.display(),
+                    %error,
+                    "worker could not write agent trace policy; continuing without child activity"
+                );
+                None
+            } else {
                 Some(path)
             }
-            None => None,
-        };
+        });
 
         let submit_listener = if submit_for_pr_available(context) {
             let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
@@ -258,6 +341,29 @@ impl AgentRunner for OutOfProcessRunner {
             None
         };
 
+        let activity_endpoint = if self.trace_policy.is_some() {
+            trace.and_then(|trace| match trace.bind_endpoint() {
+                Ok(endpoint) => Some(endpoint),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper::worker",
+                        service = "worker",
+                        event = "agent.activity.endpoint_failed",
+                        run_id = trace.run_id(),
+                        job_id,
+                        %error,
+                        "worker could not bind the child activity endpoint; continuing without child activity"
+                    );
+                    None
+                }
+            })
+        } else {
+            None
+        };
+        let activity_address = activity_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.address().to_string());
+
         let accepted_submit = AcceptedSubmitProofStore::new();
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
@@ -269,6 +375,7 @@ impl AgentRunner for OutOfProcessRunner {
         let result_path_owned = result_path.clone();
         let tool_config_path_owned = tool_config_path.clone();
         let trace_policy_path_owned = trace_policy_path.clone();
+        let activity_address_owned = activity_address.clone();
         let accepted_submit_for_child = accepted_submit.clone();
         let (forge_requests, mut forge_request_rx) = temper_worker_io::channel();
         let forge_context = self.forge_context.clone();
@@ -293,6 +400,7 @@ impl AgentRunner for OutOfProcessRunner {
                     result_path: &result_path_owned,
                     tool_config_path: tool_config_path_owned.as_deref(),
                     trace_policy_path: trace_policy_path_owned.as_deref(),
+                    activity_address: activity_address_owned.as_deref(),
                     submit_listener,
                     forge_listener,
                     forge_requests,
@@ -340,6 +448,10 @@ impl AgentRunner for OutOfProcessRunner {
                 Next::Forge(None) => break child.as_mut().await,
             }
         };
+
+        if let Some(endpoint) = activity_endpoint {
+            endpoint.stop();
+        }
 
         let ChildOutcome {
             status_code,
@@ -389,6 +501,7 @@ struct ChildRunRequest<'a> {
     result_path: &'a Path,
     tool_config_path: Option<&'a Path>,
     trace_policy_path: Option<&'a Path>,
+    activity_address: Option<&'a str>,
     submit_listener: Option<(TcpListener, String)>,
     forge_listener: Option<(TcpListener, String)>,
     forge_requests: temper_worker_io::CqSender<ForgeSideChannelRequest>,
@@ -413,6 +526,7 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         result_path,
         tool_config_path,
         trace_policy_path,
+        activity_address,
         submit_listener,
         forge_listener,
         forge_requests,
@@ -437,6 +551,9 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
     }
     if let Some(path) = trace_policy_path {
         command.arg(TRACE_POLICY_FLAG).arg(path);
+    }
+    if let Some(address) = activity_address {
+        command.arg(ACTIVITY_ADDRESS_FLAG).arg(address);
     }
     let submit_server = submit_listener.map(|(listener, address)| {
         command.arg(SUBMIT_FOR_PR_ADDRESS_FLAG).arg(&address);
@@ -508,6 +625,10 @@ fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
 #[cfg(test)]
 #[path = "out_of_process_runner_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "out_of_process_runner_trace_tests.rs"]
+mod trace_tests;
 
 #[cfg(test)]
 #[path = "out_of_process_runner_stderr_tests.rs"]

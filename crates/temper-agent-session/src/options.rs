@@ -12,7 +12,9 @@
 //! --workspace <DIR>           checkout/workspace; defaults to cwd
 //! --submit-for-pr-address <ADDR>
 //!                             worker-owned local submit_for_pr side channel
+//! --activity-address <ADDR>  worker-owned local agent activity endpoint
 //! --tool-config <FILE>       optional worker-written non-secret tool config JSON
+//! --trace-policy <FILE>      optional worker-written capture policy JSON
 //! --provider <anthropic|chatgpt|deepseek>
 //! --model <ID>                main model id
 //! --investigate-model <ID>    cheaper read-only subagent model id
@@ -25,7 +27,7 @@
 use std::path::PathBuf;
 
 use temper_agent::{AuthChoice, DEFAULT_MAX_ITERATIONS};
-use temper_protocol_activity::TRACE_POLICY_FLAG;
+use temper_protocol_activity::{ACTIVITY_ADDRESS_FLAG, TRACE_POLICY_FLAG};
 use temper_protocol_agent::{
     FORGE_CONTEXT_ADDRESS_FLAG, SUBMIT_FOR_PR_ADDRESS_FLAG, TOOL_CONFIG_FLAG,
 };
@@ -52,6 +54,9 @@ pub(crate) struct Options {
     pub(crate) submit_for_pr_address: Option<String>,
     /// Optional worker-owned local read-only Forge side-channel address.
     pub(crate) forge_context_address: Option<String>,
+    /// Optional worker-owned agent activity endpoint. The producer installs its
+    /// client from this value; older/third-party agents simply omit the flag.
+    pub(crate) activity_address: Option<String>,
     /// Optional worker-written non-secret tool config JSON (`--tool-config`).
     pub(crate) tool_config: Option<PathBuf>,
     /// Optional worker-written shared trace capture policy JSON.
@@ -75,6 +80,7 @@ impl Options {
         let mut workspace = None;
         let mut submit_for_pr_address = None;
         let mut forge_context_address = None;
+        let mut activity_address = None;
         let mut tool_config = None;
         let mut trace_policy = None;
         let mut capture_dir = None;
@@ -98,6 +104,9 @@ impl Options {
                 }
                 flag if flag == FORGE_CONTEXT_ADDRESS_FLAG => {
                     forge_context_address = Some(value(&mut iter, FORGE_CONTEXT_ADDRESS_FLAG)?)
+                }
+                flag if flag == ACTIVITY_ADDRESS_FLAG => {
+                    activity_address = Some(value(&mut iter, ACTIVITY_ADDRESS_FLAG)?)
                 }
                 flag if flag == TOOL_CONFIG_FLAG => {
                     tool_config = Some(PathBuf::from(value(&mut iter, TOOL_CONFIG_FLAG)?))
@@ -136,6 +145,7 @@ impl Options {
             workspace,
             submit_for_pr_address,
             forge_context_address,
+            activity_address,
             tool_config,
             trace_policy,
             capture_dir,
@@ -146,7 +156,7 @@ impl Options {
 }
 
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
-[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--tool-config <FILE>] [--trace-policy <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
+[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--activity-address <ADDR>] [--tool-config <FILE>] [--trace-policy <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
 --workspace (default cwd), writes the result to --result";
@@ -199,6 +209,7 @@ mod tests {
         assert!(USAGE.contains("temper agent --context <FILE> --result <FILE>"));
         assert!(USAGE.contains("--tool-config <FILE>"));
         assert!(USAGE.contains("--trace-policy <FILE>"));
+        assert!(USAGE.contains("--activity-address <ADDR>"));
         assert!(USAGE.contains("TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON"));
     }
 
@@ -211,6 +222,7 @@ mod tests {
         assert!(options.workspace.is_none());
         assert!(options.submit_for_pr_address.is_none());
         assert!(options.forge_context_address.is_none());
+        assert!(options.activity_address.is_none());
         assert!(options.tool_config.is_none());
         assert!(options.trace_policy.is_none());
         assert_eq!(options.provider, AuthChoice::ChatGptOAuth);
@@ -244,6 +256,8 @@ mod tests {
             "127.0.0.1:12345",
             "--forge-context-address",
             "127.0.0.1:23456",
+            "--activity-address",
+            "127.0.0.1:34567",
             "--tool-config",
             "/tools.json",
             "--trace-policy",
@@ -280,6 +294,7 @@ mod tests {
             options.forge_context_address.as_deref(),
             Some("127.0.0.1:23456")
         );
+        assert_eq!(options.activity_address.as_deref(), Some("127.0.0.1:34567"));
         assert_eq!(options.tool_config, Some(PathBuf::from("/tools.json")));
         assert_eq!(
             options.trace_policy,

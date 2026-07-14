@@ -20,6 +20,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 uuid.workspace = true
+chrono.workspace = true
 # NOTE: no tokio, anywhere. Production code and tests both run on the skein
 # runtime; the transport e2e tests drive the real daemon through its in-process
 # carrier rather than a tokio/axum fake. Keeping tokio out of the graph means
@@ -27,7 +28,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 async-trait = { workspace = true }
-chrono = { workspace = true }
 # Test-only cross-tier glue: proves the reusable in-process Daemon transport
 # without making temper-worker depend on temper-engine in normal builds.
 temper-daemon-transport = { path = "../temper-daemon-transport" }
