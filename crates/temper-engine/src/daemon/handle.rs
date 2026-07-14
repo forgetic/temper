@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use secrecy::SecretString;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
 use temper_forge::{Forge, RepositoryId};
@@ -157,6 +158,20 @@ impl Daemon {
         self
     }
 
+    /// Enables every protected agent-trace query route with one runtime-only
+    /// bearer credential. The secret remains in the executor capability and is
+    /// never submitted to the daemon state machine.
+    pub fn with_agent_trace_query(
+        self,
+        journal: crate::AgentTraceJournal,
+        read_token: SecretString,
+    ) -> Self {
+        *self.trace_query_slot.lock().expect("trace query slot") = Some(
+            crate::trace_query::TraceQueryService::new(journal, read_token),
+        );
+        self
+    }
+
     /// Returns the startup-constructed artifact-context service, when this
     /// daemon was configured for graph enrichment.
     pub fn artifact_context_service(&self) -> Option<Arc<crate::ArtifactContextBundleService>> {
@@ -256,6 +271,7 @@ impl Daemon {
         let context_reader_slot: Arc<
             std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>,
         > = Arc::new(std::sync::Mutex::new(None));
+        let trace_query_slot = Arc::new(std::sync::Mutex::new(None));
         let trace_journal_slot = Arc::new(std::sync::Mutex::new(None));
         let executor = DaemonExecutor {
             spawner: Arc::clone(&spawner),
@@ -263,6 +279,7 @@ impl Daemon {
             applier,
             scanner_slot: Arc::clone(&scanner_slot),
             context_reader_slot: Arc::clone(&context_reader_slot),
+            trace_query_slot: Arc::clone(&trace_query_slot),
             trace_journal_slot: Arc::clone(&trace_journal_slot),
         };
         let machine = DaemonMachine::default_machine_with_worker_pools_and_role_limits(
@@ -278,6 +295,7 @@ impl Daemon {
             cq: cq_tx,
             scanner_slot,
             context_reader_slot,
+            trace_query_slot,
             trace_journal_slot,
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
             artifact_catalog: Arc::new(crate::ConfiguredRepositoryCatalog::default()),

@@ -83,6 +83,7 @@ impl Daemon {
             cq: self.cq.clone(),
             scanner_slot: Arc::new(std::sync::Mutex::new(None)),
             context_reader_slot: Arc::clone(&self.context_reader_slot),
+            trace_query_slot: Arc::clone(&self.trace_query_slot),
             trace_journal_slot: Arc::clone(&self.trace_journal_slot),
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
             artifact_catalog: Arc::clone(&self.artifact_catalog),

@@ -190,6 +190,13 @@ pub(super) enum DaemonRequest {
         role: String,
         responder: HttpResponder,
     },
+    /// Execute an authenticated finite trace query off the pure machine. The
+    /// request remains opaque here so credentials and filesystem state never
+    /// enter daemon snapshots or transitions.
+    RunTraceQuery {
+        request: HttpRequestData,
+        responder: HttpResponder,
+    },
     IngestActivity {
         request: WorkerActivityBatch,
         binding: crate::AuthenticatedWorkerBinding,

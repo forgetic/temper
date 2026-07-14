@@ -113,10 +113,11 @@ pub async fn run_async(
     // retention run before transport opens, but a journal failure can never
     // prevent assignment execution.
     let trace_journal = start_trace_journal(&agent_traces, recovered.keys().cloned());
-    let daemon = match trace_journal {
-        Some(journal) => daemon.with_trace_journal(journal),
+    let daemon = match trace_journal.as_ref() {
+        Some(journal) => daemon.with_trace_journal(journal.clone()),
         None => daemon,
     };
+    let daemon = attach_trace_query(daemon, &agent_traces, trace_journal.as_ref());
     let server = temper_engine::serve(&handle, &daemon, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
@@ -192,6 +193,22 @@ pub fn start_trace_journal(
             );
             None
         }
+    }
+}
+
+/// Attaches the journal-backed query executor only when the named read token
+/// resolved. Keeping this composition helper shared gives split and standalone
+/// deployments identical disabled-route behavior.
+pub fn attach_trace_query(
+    daemon: Daemon,
+    config: &EngineAgentTraceConfig,
+    journal: Option<&AgentTraceJournal>,
+) -> Daemon {
+    match (journal, config.read_token.as_ref()) {
+        (Some(journal), Some(read_token)) => {
+            daemon.with_agent_trace_query(journal.clone(), read_token.clone())
+        }
+        _ => daemon,
     }
 }
 

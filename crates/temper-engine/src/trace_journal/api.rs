@@ -140,7 +140,7 @@ impl AgentTraceJournal {
         self.with_store_lock(|journal| journal.cleanup_retention_locked(protection))
     }
 
-    /// Read helpers used by the later query-API component and by recovery tests.
+    /// Read helpers retained for ingestion/recovery tests and narrow callers.
     pub fn manifest(&self, run_id: &str) -> Result<Option<AgentTraceManifest>, TraceJournalError> {
         self.with_store_lock(|journal| {
             let paths = journal.paths(run_id);
