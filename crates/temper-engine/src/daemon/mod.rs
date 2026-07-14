@@ -40,6 +40,7 @@ pub struct Daemon {
     cq: CqSender<DaemonCompletion>,
     scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
     context_reader_slot: Arc<std::sync::Mutex<Option<Arc<dyn context_reader::ContextReader>>>>,
+    trace_query_slot: Arc<std::sync::Mutex<Option<crate::trace_query::TraceQueryService>>>,
     change_source_listeners: Arc<std::sync::Mutex<Vec<ChangeSourceListener>>>,
     artifact_catalog: Arc<crate::ConfiguredRepositoryCatalog>,
     pub(crate) artifact_context: Option<Arc<crate::ArtifactContextBundleService>>,

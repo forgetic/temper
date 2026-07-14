@@ -31,6 +31,9 @@ impl DaemonMachine {
         request: HttpRequestData,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
+        if crate::trace_query::is_trace_uri(&request.uri) {
+            return vec![DaemonRequest::RunTraceQuery { request, responder }];
+        }
         match (request.method.as_str(), request.uri.as_str()) {
             ("POST", "/v1/message") => self.handle_protocol_message(&request, responder),
             ("POST", "/v1/pr-freshness") => {

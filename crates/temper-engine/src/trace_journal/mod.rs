@@ -74,6 +74,18 @@ pub struct AgentTraceManifest {
     pub created_at: String,
 }
 
+/// One fully revalidated journal run used by the authorized query projection.
+///
+/// Constructing this value re-reads the append-only stream and verifies every
+/// referenced blob, so query callers never serve a stale summary or an
+/// unchecked content-addressed reference.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentTraceRun {
+    pub manifest: AgentTraceManifest,
+    pub summary: AgentTraceSummary,
+    pub events: Vec<AgentRunEventV1>,
+}
+
 /// Terminal or partial state rebuilt entirely from readable JSONL.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -263,6 +275,7 @@ struct RecoveredRun {
 }
 
 include!("api.rs");
+include!("query.rs");
 include!("policy.rs");
 include!("storage.rs");
 include!("recovery.rs");

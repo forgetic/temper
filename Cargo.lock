@@ -1444,6 +1444,7 @@ name = "temper-engine"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "chrono",
  "fs2",
  "getrandom 0.3.4",

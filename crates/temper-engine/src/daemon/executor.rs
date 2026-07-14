@@ -24,6 +24,8 @@ pub(super) struct DaemonExecutor {
     pub(super) scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
     pub(super) context_reader_slot:
         Arc<std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>>,
+    pub(super) trace_query_slot:
+        Arc<std::sync::Mutex<Option<crate::trace_query::TraceQueryService>>>,
 }
 
 fn context_operation_name(operation: &ForgeContextOperation) -> &'static str {
@@ -214,6 +216,21 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                         WorkerProtocolMessage::ContextResponse(response),
                     )));
                 });
+            }
+            DaemonRequest::RunTraceQuery { request, responder } => {
+                let service = self
+                    .trace_query_slot
+                    .lock()
+                    .expect("trace query slot")
+                    .clone();
+                match service {
+                    Some(service) => {
+                        self.spawner.spawn_with_cx(move |_cx| async move {
+                            responder.respond(service.handle(request));
+                        });
+                    }
+                    None => responder.respond(crate::trace_query::disabled_trace_response()),
+                }
             }
             DaemonRequest::RespondContext {
                 response,
