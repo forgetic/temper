@@ -14,7 +14,7 @@
 //! agree on the sequence space.
 
 use crate::board::{
-    Activity, BoardEvent, Card, CiStatus, Lane, Problem, SnapshotState, Steps, Workers,
+    Activity, BoardEvent, Card, CiStatus, Lane, Problem, SnapshotState, Steps, StreamEvent, Workers,
 };
 
 /// A board delta to apply to the read-model. These are the projection's output
@@ -31,6 +31,9 @@ pub enum Delta {
     SetActivity { id: String, activity: Activity },
     /// Update a card's step progress.
     SetSteps { id: String, steps: Steps },
+    /// Append a low-rate event to the card's client-side bounded ring. The Rust
+    /// read model deliberately does not persist this ephemeral stream.
+    PushStream { id: String, event: StreamEvent },
     /// Set (or clear) a card's CI badge.
     SetCi { id: String, ci: Option<CiStatus> },
     /// Mark a card merged (terminal).
@@ -228,6 +231,7 @@ impl ReadModel {
             Delta::UpsertCard(card) => self.touch(&card.id.clone(), card.entered_at),
             Delta::SetActivity { id, .. }
             | Delta::SetSteps { id, .. }
+            | Delta::PushStream { id, .. }
             | Delta::SetCi { id, .. }
             | Delta::SetMerged { id, .. } => self.touch_existing(id),
             Delta::AddProblem { .. } | Delta::ClearProblem { .. } | Delta::SetWorkers(_) => {}
@@ -237,6 +241,7 @@ impl ReadModel {
             Delta::MoveCard { id, lane, now } => self.emit_card_move(&id, lane, now),
             Delta::SetActivity { id, activity } => self.emit_set_activity(&id, activity),
             Delta::SetSteps { id, steps } => self.emit_set_steps(&id, steps),
+            Delta::PushStream { id, event } => self.emit_stream(&id, event),
             Delta::SetCi { id, ci } => self.emit_set_ci(&id, ci),
             Delta::SetMerged { id, merged } => self.emit_set_merged(&id, merged),
             Delta::AddProblem { id, problem } => self.emit_add_problem(id, problem),
@@ -320,6 +325,15 @@ impl ReadModel {
             seq,
             id: id.to_string(),
             steps,
+        })
+    }
+
+    fn emit_stream(&mut self, id: &str, event: StreamEvent) -> Option<BoardEvent> {
+        let seq = self.next_seq();
+        Some(BoardEvent::CardStream {
+            seq,
+            id: id.to_string(),
+            event,
         })
     }
 

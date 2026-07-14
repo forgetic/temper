@@ -153,6 +153,42 @@ fn problem_clear_and_card_step_shapes() {
 }
 
 #[test]
+fn card_stream_event_matches_existing_typescript_shape() {
+    let event = BoardEvent::CardStream {
+        seq: 105,
+        id: "i39".to_string(),
+        event: StreamEvent {
+            kind: StreamEventKind::Tool,
+            k: Some("bash".to_string()),
+            v: "finished (42 ms)".to_string(),
+        },
+    };
+    assert_eq!(
+        serde_json::to_value(&event).expect("serializes"),
+        json!({
+            "t": "card.stream",
+            "seq": 105,
+            "id": "i39",
+            "event": { "kind": "tool", "k": "bash", "v": "finished (42 ms)" }
+        })
+    );
+    assert_eq!(event.seq(), 105);
+}
+
+#[test]
+fn shared_typescript_stream_fixture_parses_as_rust_board_events() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../ui/fixtures/activity/stream-i41.json"))
+            .expect("fixture JSON");
+    let events = fixture["events"].as_array().expect("events array");
+    assert!(!events.is_empty());
+    for value in events {
+        let event: BoardEvent = serde_json::from_value(value.clone()).expect("Rust contract");
+        assert!(matches!(event, BoardEvent::CardStream { .. }));
+    }
+}
+
+#[test]
 fn fixture_snapshot_parses_into_board_types() {
     // The shared cold-start contract fixture must round-trip through our types,
     // proving the Rust projection emits exactly what the TS reducer reads.

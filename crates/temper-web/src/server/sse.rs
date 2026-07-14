@@ -34,6 +34,13 @@ pub fn data_frame(json: &str) -> String {
     format!("data: {json}\n\n")
 }
 
+/// Frame a run event with an SSE id. Native `EventSource` returns this id in
+/// `Last-Event-ID` on reconnect, making the run-local sequence the resume cursor.
+#[must_use]
+pub fn id_data_frame(id: u64, json: &str) -> String {
+    format!("id: {id}\ndata: {json}\n\n")
+}
+
 /// The HTTP response head for an SSE stream (status line + headers + the blank
 /// line that ends the head). Bytes after this are the event stream.
 #[must_use]

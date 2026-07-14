@@ -67,6 +67,24 @@ fn empty_snapshot_serves_empty_board() {
 }
 
 #[test]
+fn trace_routes_are_server_side_and_disabled_without_an_injected_client() {
+    let state = empty_state();
+    let response = route_trace_get(&state, "/api/agent-runs?artifact_ref=ai%2Ftemper%23312");
+    assert_eq!(response.status, 503);
+    let board = route(&state, "GET", "/api/state");
+    assert!(!String::from_utf8_lossy(&board.body).contains("token"));
+}
+
+#[test]
+fn trace_query_parsing_rejects_invalid_limits_and_decodes_artifact_refs() {
+    let parsed = parse_trace_query("artifact_ref=ai%2Ftemper%23312&limit=50").expect("query");
+    assert_eq!(parsed.artifact_ref.as_deref(), Some("ai/temper#312"));
+    assert_eq!(parsed.limit, 50);
+    assert!(parse_trace_query("limit=0").is_err());
+    assert!(parse_event_query("after_seq=bad").is_err());
+}
+
+#[test]
 fn unknown_route_is_404() {
     let state = empty_state();
     assert_eq!(route(&state, "GET", "/missing.js").status, 404);

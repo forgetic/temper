@@ -127,6 +127,13 @@ depgraph leaf.
   each carrying a monotonic `seq`, with `: keep-alive` comments (~15s) so the
   client's pulse tells idle from dead. On reconnect the client re-snaps and
   resumes from the cursor — no gap, no dup.
+- `GET /api/agent-runs?artifact_ref=…` and
+  `GET /api/agent-runs/{run}/events?after_seq=…` → bounded same-origin facade
+  over the engine journal. The configured engine bearer credential is added by
+  temper-web only and is never returned to JavaScript or board state.
+- `GET /api/agent-runs/{run}/stream?after_seq=…` → drawer-scoped detailed SSE.
+  Event IDs are canonical run sequences; native `Last-Event-ID` and the URL
+  cursor both resume without duplicates. Closing the drawer closes this stream.
 - `GET /healthz` → `ok`.
 
 ### Feeds
@@ -158,5 +165,13 @@ library code never reads `std::env`.
 ```sh
 cargo run -p temper-web --bin temper-web -- \
   --bind 127.0.0.1:8080 --ui-dir crates/temper-web/ui \
-  --daemon-url http://127.0.0.1:9000 --log-path /var/log/temper.jsonl
+  --daemon-url http://127.0.0.1:9000 \
+  --trace-url http://127.0.0.1:9000 --trace-read-token "$TRACE_READ_TOKEN" \
+  --trace-poll-ms 1000 --log-path /var/log/temper.jsonl
 ```
+
+The trace token is server-only. Prefer the `TEMPER_WEB_TRACE_READ_TOKEN`
+environment input over command-line arguments in production so it is not shown
+in process listings. Global polling maps only run/scope/turn/tool/error/terminal
+boundaries into `card.stream`; transcript and thinking deltas are delivered only
+to the currently open run drawer.

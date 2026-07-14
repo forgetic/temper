@@ -26,6 +26,79 @@ export interface StreamEvent {
 // Cap for the per-card live activity ring buffer (UX §5: "Capped ring buffer
 // client-side; not persisted"). Drop-oldest once full.
 export const STREAM_CAP = 100;
+/// Drawer history is durable in the engine, but the browser projection remains
+/// bounded. Reopening the drawer rebuilds this window from the journal.
+export const TRACE_EVENT_CAP = 5_000;
+
+export interface TraceUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}
+
+export interface TraceRunSummary {
+  version: number;
+  run_id: string;
+  identity: {
+    artifact_ref: string;
+    role: string;
+    action: string;
+    correlation_key: string;
+    repository: string;
+    job_id: string;
+    worker_id: string;
+    assignment_id: string;
+    agent_session_id?: string;
+  };
+  status: "active" | "succeeded" | "cancelled" | "failed";
+  started_at?: string;
+  completed_at?: string;
+  duration_ms?: number;
+  counts: {
+    events: number;
+    scopes: number;
+    turns: number;
+    model_calls: number;
+    tool_calls: number;
+    retries: number;
+  };
+  usage: TraceUsage;
+  capture_mode: "off" | "metadata" | "transcript" | "diagnostic";
+  has_truncated_content: boolean;
+  has_trace_gaps: boolean;
+  dropped_events: number;
+  first_seq?: number;
+  last_seq: number;
+}
+
+export interface AgentRunEvent {
+  version: number;
+  run_id: string;
+  seq: number;
+  occurred_at: string;
+  elapsed_ms: number;
+  assignment: {
+    artifact_ref: string;
+    role: string;
+    action: string;
+    correlation_key: string;
+    [key: string]: unknown;
+  };
+  agent_session_id?: string;
+  scope: { id: string; kind: "main" | "sub_agent"; parent_id?: string };
+  turn?: number;
+  event: { type: string; data: Record<string, unknown> };
+}
+
+export interface RunView {
+  cardId: string;
+  runs: TraceRunSummary[];
+  selectedRun: string | null;
+  events: AgentRunEvent[];
+  loading: boolean;
+  error?: string;
+}
 
 export interface Card {
   id: string;
@@ -68,6 +141,9 @@ export interface State {
   openCard: string | null;
   now: number;
   cursor: number; // last applied feed sequence (snapshot+resume, Appendix B.5)
+  // Drawer-only durable projection. It is populated from same-origin trace APIs
+  // on open and discarded on close; it is never part of a board snapshot.
+  runView: RunView | null;
 }
 
 // The pipeline columns, in flow order (UX §4.1). The ordered, mutually-exclusive
@@ -97,7 +173,12 @@ export type Event =
   | { t: "pipe"; pipe: State["pipe"] }
   // user actions funnel through the same reducer (unidirectional)
   | { t: "open"; id: string }
-  | { t: "close" };
+  | { t: "close" }
+  | { t: "runs.loaded"; cardId: string; runs: TraceRunSummary[]; selectedRun: string | null }
+  | { t: "run.select"; cardId: string; runId: string }
+  | { t: "run.history"; cardId: string; runId: string; events: AgentRunEvent[] }
+  | { t: "run.event"; cardId: string; runId: string; event: AgentRunEvent }
+  | { t: "run.error"; cardId: string; message: string };
 
 export const MIN = 60_000;
 export const STUCK_MIN = 15;
@@ -115,6 +196,7 @@ export function initialState(now: number): State {
     openCard: null,
     now,
     cursor: 0,
+    runView: null,
   };
 }
 
@@ -240,8 +322,58 @@ export function apply(state: State, ev: Event): State {
     case "pipe":
       return { ...base, pipe: ev.pipe };
     case "open":
-      return { ...state, openCard: ev.id };
+      return {
+        ...state,
+        openCard: ev.id,
+        runView: { cardId: ev.id, runs: [], selectedRun: null, events: [], loading: true },
+      };
     case "close":
-      return { ...state, openCard: null };
+      return { ...state, openCard: null, runView: null };
+    case "runs.loaded": {
+      if (state.openCard !== ev.cardId || state.runView?.cardId !== ev.cardId) return state;
+      return {
+        ...state,
+        runView: {
+          ...state.runView,
+          runs: ev.runs,
+          selectedRun: ev.selectedRun,
+          events: [],
+          loading: ev.selectedRun !== null,
+          error: undefined,
+        },
+      };
+    }
+    case "run.select": {
+      if (state.openCard !== ev.cardId || state.runView?.cardId !== ev.cardId) return state;
+      return {
+        ...state,
+        runView: { ...state.runView, selectedRun: ev.runId, events: [], loading: true, error: undefined },
+      };
+    }
+    case "run.history": {
+      const view = state.runView;
+      if (state.openCard !== ev.cardId || view?.selectedRun !== ev.runId) return state;
+      const events = dedupeTraceEvents(ev.events).slice(-TRACE_EVENT_CAP);
+      return { ...state, runView: { ...view, events, loading: false, error: undefined } };
+    }
+    case "run.event": {
+      const view = state.runView;
+      if (state.openCard !== ev.cardId || view?.selectedRun !== ev.runId) return state;
+      if (view.events.some((event) => event.seq === ev.event.seq)) return state;
+      const events = [...view.events, ev.event]
+        .sort((left, right) => left.seq - right.seq)
+        .slice(-TRACE_EVENT_CAP);
+      return { ...state, runView: { ...view, events, loading: false, error: undefined } };
+    }
+    case "run.error": {
+      if (state.openCard !== ev.cardId || state.runView?.cardId !== ev.cardId) return state;
+      return { ...state, runView: { ...state.runView, loading: false, error: ev.message } };
+    }
   }
+}
+
+function dedupeTraceEvents(events: AgentRunEvent[]): AgentRunEvent[] {
+  const bySeq = new Map<number, AgentRunEvent>();
+  for (const event of events) bySeq.set(event.seq, event);
+  return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
 }
