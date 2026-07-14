@@ -42,7 +42,17 @@ pub async fn run_async(
         daemon: config,
         forge: forge_config,
         role_tokens,
+        agent_traces,
     } = engine_config(resolved)?;
+    if resolved.observability.agent_traces.capture_requested()
+        && agent_traces.journal_root.is_none()
+    {
+        tracing::warn!(
+            target: "temper::engine",
+            service = "engine",
+            "agent tracing disabled: no durable paths.state_dir is available for the engine journal"
+        );
+    }
     let forge_config_for_roles = forge_config.clone();
     let forge_url = forge_config.base_url.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);

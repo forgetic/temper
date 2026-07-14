@@ -68,6 +68,11 @@ fn add_engine_findings(resolved: &Resolved, findings: &mut Vec<CheckFinding>) {
         resolved.engine.webhook_secret.as_ref(),
         findings,
     );
+    add_missing_secret(
+        "observability.agent_traces.read_token",
+        resolved.observability.agent_traces.read_token.as_ref(),
+        findings,
+    );
     if resolved.forge.web_ui.is_none() {
         findings.push(CheckFinding::offline_note(
             "engine",
@@ -250,6 +255,17 @@ fn add_engine_path_findings(resolved: &Resolved, findings: &mut Vec<CheckFinding
     if let Some(path) = &resolved.paths.state_dir {
         add_directory_finding("paths.state_dir", path, findings);
     }
+    add_trace_storage_finding(
+        resolved,
+        "engine",
+        "journal",
+        resolved
+            .observability
+            .agent_traces
+            .engine_journal_root
+            .as_deref(),
+        findings,
+    );
     if let Some(path) = &resolved.engine.webhook_secret_file {
         add_file_finding("engine.webhook_secret_file", path, findings);
     }
@@ -261,8 +277,37 @@ fn add_worker_path_findings(resolved: &Resolved, findings: &mut Vec<CheckFinding
         &resolved.paths.workspace_dir,
         findings,
     );
+    add_trace_storage_finding(
+        resolved,
+        "worker",
+        "spool",
+        resolved
+            .observability
+            .agent_traces
+            .worker_spool_root
+            .as_deref(),
+        findings,
+    );
     if let Some(path) = &resolved.agent.config_dir {
         add_directory_finding("agent.config_dir", path, findings);
+    }
+}
+
+fn add_trace_storage_finding(
+    resolved: &Resolved,
+    scope: &str,
+    storage_kind: &str,
+    root: Option<&Path>,
+    findings: &mut Vec<CheckFinding>,
+) {
+    if resolved.observability.agent_traces.capture_requested() && root.is_none() {
+        findings.push(CheckFinding::offline_note(
+            scope,
+            CheckCategory::Path,
+            format!(
+                "agent tracing is disabled for the {scope}: no durable paths.state_dir is available for the trace {storage_kind}"
+            ),
+        ));
     }
 }
 

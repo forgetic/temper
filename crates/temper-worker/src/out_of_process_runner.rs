@@ -24,6 +24,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use temper_protocol_activity::{AgentActivityCapturePolicyV1, TRACE_POLICY_FLAG};
 use temper_protocol_agent::{
     AgentToolConfig, FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, SUBMIT_FOR_PR_ADDRESS_FLAG,
     SubmitForPrRequest, SubmitForPrResponse, TOOL_CONFIG_FLAG, WorkspaceContext,
@@ -68,6 +69,9 @@ pub struct OutOfProcessRunner {
     /// current workflow role, these are written to a per-run JSON file and
     /// passed as `--tool-config <file>`.
     tool_config: Option<AgentToolConfig>,
+    /// Shared, non-secret capture policy written to a per-run JSON file for the
+    /// first-party agent process. `None` preserves third-party agent compatibility.
+    trace_policy: Option<AgentActivityCapturePolicyV1>,
     /// Host-controlled submit gate serviced over a worker-owned local channel
     /// while the child process remains alive.
     submit_for_pr: SubmitForPrHandler,
@@ -89,6 +93,7 @@ impl std::fmt::Debug for OutOfProcessRunner {
                 &self.env.iter().map(|(key, _)| key).collect::<Vec<_>>(),
             )
             .field("tool_config", &self.tool_config)
+            .field("trace_policy", &self.trace_policy)
             .field("submit_for_pr", &"<handler>")
             .field(
                 "forge_context",
@@ -105,6 +110,7 @@ impl OutOfProcessRunner {
             command,
             env: Vec::new(),
             tool_config: None,
+            trace_policy: None,
             submit_for_pr: default_submit_for_pr_handler(),
             forge_context: None,
             #[cfg(test)]
@@ -124,6 +130,13 @@ impl OutOfProcessRunner {
     #[must_use]
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
+        self
+    }
+
+    /// Sets the non-secret trace capture policy written for first-party agents.
+    #[must_use]
+    pub fn with_trace_policy(mut self, trace_policy: Option<AgentActivityCapturePolicyV1>) -> Self {
+        self.trace_policy = trace_policy;
         self
     }
 
@@ -203,6 +216,19 @@ impl AgentRunner for OutOfProcessRunner {
             }
             None => None,
         };
+        let trace_policy_path = match &self.trace_policy {
+            Some(policy) => {
+                let path = temp.path().join("trace-policy.json");
+                let bytes = serde_json::to_vec_pretty(policy).map_err(|error| {
+                    AgentRunError::transient(format!("serialize agent trace policy: {error}"))
+                })?;
+                std::fs::write(&path, bytes).map_err(|error| {
+                    AgentRunError::transient(format!("write agent trace policy file: {error}"))
+                })?;
+                Some(path)
+            }
+            None => None,
+        };
 
         let submit_listener = if submit_for_pr_available(context) {
             let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
@@ -242,6 +268,7 @@ impl AgentRunner for OutOfProcessRunner {
         let context_path_owned = context_path.clone();
         let result_path_owned = result_path.clone();
         let tool_config_path_owned = tool_config_path.clone();
+        let trace_policy_path_owned = trace_policy_path.clone();
         let accepted_submit_for_child = accepted_submit.clone();
         let (forge_requests, mut forge_request_rx) = temper_worker_io::channel();
         let forge_context = self.forge_context.clone();
@@ -265,6 +292,7 @@ impl AgentRunner for OutOfProcessRunner {
                     context_path: &context_path_owned,
                     result_path: &result_path_owned,
                     tool_config_path: tool_config_path_owned.as_deref(),
+                    trace_policy_path: trace_policy_path_owned.as_deref(),
                     submit_listener,
                     forge_listener,
                     forge_requests,
@@ -360,6 +388,7 @@ struct ChildRunRequest<'a> {
     context_path: &'a Path,
     result_path: &'a Path,
     tool_config_path: Option<&'a Path>,
+    trace_policy_path: Option<&'a Path>,
     submit_listener: Option<(TcpListener, String)>,
     forge_listener: Option<(TcpListener, String)>,
     forge_requests: temper_worker_io::CqSender<ForgeSideChannelRequest>,
@@ -383,6 +412,7 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         context_path,
         result_path,
         tool_config_path,
+        trace_policy_path,
         submit_listener,
         forge_listener,
         forge_requests,
@@ -404,6 +434,9 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         .arg(cwd);
     if let Some(path) = tool_config_path {
         command.arg(TOOL_CONFIG_FLAG).arg(path);
+    }
+    if let Some(path) = trace_policy_path {
+        command.arg(TRACE_POLICY_FLAG).arg(path);
     }
     let submit_server = submit_listener.map(|(listener, address)| {
         command.arg(SUBMIT_FOR_PR_ADDRESS_FLAG).arg(&address);

@@ -120,9 +120,17 @@ fn validate_secret_name(field: &str, raw: &str) -> Result<String, ConfigError> {
             "{field} must be a secret name, not a path (`{name}`)"
         )));
     }
-    if name.contains('\0') {
+    if name.len() > 255
+        || !name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        || !name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    {
         return Err(ConfigError::invalid(format!(
-            "{field} contains an invalid NUL byte"
+            "{field} must be a safe secret name using only ASCII letters, digits, `.`, `_`, or `-`"
         )));
     }
     Ok(name.to_string())

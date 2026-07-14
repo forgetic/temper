@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use crate::error::{ConfigError, FileKind};
 use crate::schema::{
     AgentConfig, AgentCredentials, AgentProviderConfig, Config, Credentials, DeploymentConfig,
-    EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, PathsConfig, ProviderCredential,
-    SCHEMA_VERSION, WorkerConfig, WorkflowConfig,
+    EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ObservabilityConfig, PathsConfig,
+    ProviderCredential, SCHEMA_VERSION, WorkerConfig, WorkflowConfig,
 };
 
 /// Collected, non-secret answers for [`build_config`].
@@ -186,6 +186,7 @@ pub fn build_config(inputs: &ConfigInputs) -> Config {
         deployment: DeploymentConfig::default(),
         workflow: WorkflowConfig::default(),
         paths: PathsConfig::default(),
+        observability: ObservabilityConfig::default(),
         forge,
         engine,
         worker,

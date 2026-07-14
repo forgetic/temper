@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
 use temper_protocol_worker::WorkerAuth;
 
 use crate::workspace::RoleGitIdentity;
@@ -52,7 +53,29 @@ pub struct WorkerConfig {
     pub max_concurrent_jobs: u32,
     pub poll_wait: Duration,
     pub heartbeat_interval: Duration,
+    /// Effective capture policy and durable worker spool root.
+    pub agent_traces: WorkerAgentTraceConfig,
     pub executor: ExecutorSelection,
+}
+
+/// Worker-owned trace collector/spool configuration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkerAgentTraceConfig {
+    pub policy: AgentActivityCapturePolicyV1,
+    pub spool_root: Option<PathBuf>,
+}
+
+impl Default for WorkerAgentTraceConfig {
+    fn default() -> Self {
+        let policy = AgentActivityCapturePolicyV1 {
+            capture: CaptureModeV1::Off,
+            ..Default::default()
+        };
+        Self {
+            policy,
+            spool_root: None,
+        }
+    }
 }
 
 /// Default backoff before re-polling after the daemon returned no work, the

@@ -28,6 +28,15 @@ async fn run_async(
     agent_program: &[String],
 ) -> Result<(), String> {
     let worker_config = adapt::worker_config(resolved)?;
+    if resolved.observability.agent_traces.capture_requested()
+        && worker_config.agent_traces.spool_root.is_none()
+    {
+        tracing::warn!(
+            target: "temper::worker",
+            service = "worker",
+            "agent tracing disabled: no durable paths.state_dir is available for the worker spool"
+        );
+    }
     let git_base_url = adapt::git_base_url(resolved)?;
     let workspace_root = resolved.worker.workspace_root.clone();
 
@@ -42,6 +51,7 @@ async fn run_async(
         OutOfProcessRunner::new(invocation.command)
             .with_env(invocation.env)
             .with_tool_config(invocation.tool_config)
+            .with_trace_policy(invocation.trace_policy)
             .with_forge_context_host(forge_context),
     );
 

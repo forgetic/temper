@@ -14,9 +14,11 @@
 //! integration tests can build an engine config directly.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use secrecy::SecretString;
 use temper_forge::config::ForgejoConfig;
+use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
 
 use crate::DaemonRunConfig;
 
@@ -37,6 +39,34 @@ pub struct EngineConfig {
     /// [`SecretString`] until the true I/O boundary where the per-role Forgejo
     /// client is built.
     pub role_tokens: BTreeMap<String, SecretString>,
+    /// Effective trace policy, durable journal root, and query credential.
+    pub agent_traces: EngineAgentTraceConfig,
+}
+
+/// Engine-owned durable trace-journal configuration.
+///
+/// The query bearer remains a `SecretString`, so cloning/debugging the subsystem
+/// config cannot expose it. A missing journal root always pairs with an effective
+/// `off` policy; the service emits an operator-visible warning at startup.
+#[derive(Clone, Debug)]
+pub struct EngineAgentTraceConfig {
+    pub policy: AgentActivityCapturePolicyV1,
+    pub journal_root: Option<PathBuf>,
+    pub read_token: Option<SecretString>,
+}
+
+impl Default for EngineAgentTraceConfig {
+    fn default() -> Self {
+        let policy = AgentActivityCapturePolicyV1 {
+            capture: CaptureModeV1::Off,
+            ..Default::default()
+        };
+        Self {
+            policy,
+            journal_root: None,
+            read_token: None,
+        }
+    }
 }
 
 impl EngineConfig {
@@ -50,7 +80,15 @@ impl EngineConfig {
             daemon,
             forge,
             role_tokens,
+            agent_traces: EngineAgentTraceConfig::default(),
         }
+    }
+
+    /// Installs the resolved engine trace journal configuration.
+    #[must_use]
+    pub fn with_agent_traces(mut self, agent_traces: EngineAgentTraceConfig) -> Self {
+        self.agent_traces = agent_traces;
+        self
     }
 }
 
@@ -84,10 +122,23 @@ mod tests {
         let mut role_tokens = BTreeMap::new();
         role_tokens.insert("coder".to_string(), SecretString::from("coder-token"));
 
-        let config = EngineConfig::new(daemon, forge, role_tokens);
+        let config = EngineConfig::new(daemon, forge, role_tokens).with_agent_traces(
+            EngineAgentTraceConfig {
+                policy: AgentActivityCapturePolicyV1::default(),
+                journal_root: Some("/var/lib/temper/agent-traces/journal".into()),
+                read_token: Some(SecretString::from("trace-read-super-secret")),
+            },
+        );
 
         assert_eq!(config.daemon.daemon_id, "engine-test");
         assert_eq!(config.forge.base_url, "https://forge.example");
         assert!(config.role_tokens.contains_key("coder"));
+        assert_eq!(
+            config.agent_traces.journal_root.as_deref(),
+            Some(std::path::Path::new("/var/lib/temper/agent-traces/journal"))
+        );
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("trace-read-super-secret"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 }

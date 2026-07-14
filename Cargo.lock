@@ -1313,6 +1313,7 @@ dependencies = [
  "temper-agent-core",
  "temper-agent-io",
  "temper-log",
+ "temper-protocol-activity",
  "temper-protocol-agent",
  "tempfile",
  "tracing",
@@ -1415,6 +1416,8 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "temper-protocol-activity",
+ "tempfile",
  "thiserror",
  "toml",
 ]
@@ -1449,6 +1452,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-memory",
  "temper-log",
+ "temper-protocol-activity",
  "temper-protocol-context",
  "temper-protocol-worker",
  "temper-runner",
@@ -1871,6 +1875,7 @@ dependencies = [
  "temper-engine-io",
  "temper-forge",
  "temper-forge-memory",
+ "temper-protocol-activity",
  "temper-protocol-agent",
  "temper-protocol-worker",
  "temper-verdict",
@@ -1910,6 +1915,7 @@ dependencies = [
  "temper-log",
  "temper-worker",
  "temper-worker-io",
+ "tracing",
 ]
 
 [[package]]

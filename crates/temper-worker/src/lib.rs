@@ -39,8 +39,8 @@ pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
 pub use config::{
     AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
-    ExecutorSelection, ParseOutcome, USAGE, WorkerConfig, WorkerParams, parse,
-    role_identities_from_env,
+    ExecutorSelection, ParseOutcome, USAGE, WorkerAgentTraceConfig, WorkerConfig, WorkerParams,
+    parse, role_identities_from_env,
 };
 pub use context_client::{
     ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,

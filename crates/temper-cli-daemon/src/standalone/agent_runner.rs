@@ -19,6 +19,7 @@ use temper_agent::{
     CodingAgentError, ForgeContextHost, ProviderConfig, RunTotals, SubmitForPrHost,
     run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
+use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
@@ -34,6 +35,7 @@ pub struct InProcessAgentRunner {
     config_dir: Option<PathBuf>,
     enable_subagents: bool,
     tool_config: Option<AgentToolConfig>,
+    trace_policy: AgentActivityCapturePolicyV1,
     submit_for_pr: SubmitForPrHost,
     forge_context: Option<AgentForgeContextHost>,
 }
@@ -53,6 +55,7 @@ impl InProcessAgentRunner {
             config_dir,
             enable_subagents,
             tool_config: None,
+            trace_policy: AgentActivityCapturePolicyV1::default(),
             submit_for_pr: std::sync::Arc::new(|request, context, cwd| {
                 temper_worker::submit_for_pr_pre_push_response_blocking(request, context, cwd)
             }),
@@ -67,6 +70,17 @@ impl InProcessAgentRunner {
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
         self
+    }
+
+    /// Stores the same effective capture policy used by split-mode agents.
+    #[must_use]
+    pub fn with_trace_policy(mut self, trace_policy: AgentActivityCapturePolicyV1) -> Self {
+        self.trace_policy = trace_policy;
+        self
+    }
+
+    pub fn trace_policy(&self) -> &AgentActivityCapturePolicyV1 {
+        &self.trace_policy
     }
 
     /// Returns the stored tool config when it applies to `role`.

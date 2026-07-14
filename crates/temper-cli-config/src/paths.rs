@@ -36,6 +36,8 @@ struct PathReport {
     credentials_source: Option<PathBuf>,
     state_dir: Option<PathBuf>,
     workspace_dir: PathBuf,
+    engine_trace_journal_dir: Option<PathBuf>,
+    worker_trace_spool_dir: Option<PathBuf>,
     workflow_file: Option<PathBuf>,
 }
 
@@ -76,6 +78,8 @@ impl PathReport {
             credentials_source,
             state_dir: resolved.paths.state_dir,
             workspace_dir: resolved.paths.workspace_dir,
+            engine_trace_journal_dir: resolved.observability.agent_traces.engine_journal_root,
+            worker_trace_spool_dir: resolved.observability.agent_traces.worker_spool_root,
             workflow_file: resolved.paths.workflow_file,
         })
     }
@@ -87,12 +91,16 @@ impl PathReport {
              credentials source: {}\n\
              state dir:          {}\n\
              workspace dir:      {}\n\
+             trace journal dir:  {}\n\
+             trace spool dir:    {}\n\
              workflow file:      {}\n",
             display_optional(self.config_root.as_deref(), "(unavailable)"),
             display_optional(self.config_file.as_deref(), "(unavailable)"),
             display_optional(self.credentials_source.as_deref(), "(unavailable)"),
             display_optional(self.state_dir.as_deref(), "(unavailable)"),
             self.workspace_dir.display(),
+            display_optional(self.engine_trace_journal_dir.as_deref(), "(unavailable)"),
+            display_optional(self.worker_trace_spool_dir.as_deref(), "(unavailable)"),
             display_optional(
                 self.workflow_file.as_deref(),
                 "(bundled reference-delivery)"
@@ -107,6 +115,8 @@ impl PathReport {
             "credentials_source": json_path(self.credentials_source.as_deref()),
             "state_dir": json_path(self.state_dir.as_deref()),
             "workspace_dir": self.workspace_dir.display().to_string(),
+            "engine_trace_journal_dir": json_path(self.engine_trace_journal_dir.as_deref()),
+            "worker_trace_spool_dir": json_path(self.worker_trace_spool_dir.as_deref()),
             "workflow_file": json_path(self.workflow_file.as_deref()),
         });
         serde_json::to_string_pretty(&value).map_err(|error| format!("render paths JSON: {error}"))
@@ -477,6 +487,8 @@ mod tests {
         assert_eq!(value["credentials_source"], Value::Null);
         assert_eq!(value["state_dir"], Value::Null);
         assert_eq!(value["workspace_dir"], ".temper/workspace");
+        assert_eq!(value["engine_trace_journal_dir"], Value::Null);
+        assert_eq!(value["worker_trace_spool_dir"], Value::Null);
         assert_eq!(value["workflow_file"], Value::Null);
     }
 }

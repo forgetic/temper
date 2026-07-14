@@ -13,6 +13,7 @@
 
 mod agent_runner;
 mod banner;
+mod trace_config;
 mod transport;
 mod workstream_cleanup;
 
@@ -42,7 +43,7 @@ use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
 use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, RoleGitIdentity,
-    WorkerConfig, run_worker_with_transport,
+    WorkerAgentTraceConfig, WorkerConfig, run_worker_with_transport,
 };
 use temper_worker_service::selected_worker_auth;
 use temper_workflow::{InMemoryJournal, LeasePolicy};
@@ -84,7 +85,9 @@ async fn run_async(
         daemon: daemon_config,
         forge: forge_config,
         role_tokens,
+        agent_traces: engine_agent_traces,
     } = engine_config(resolved)?;
+    trace_config::warn_if_engine_storage_unavailable(resolved, &engine_agent_traces);
     let forge_base_url = forge_config.base_url.clone();
     let forge_config_for_roles = forge_config.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);
@@ -305,7 +308,9 @@ async fn run_async(
         &resolved.worker,
         capabilities,
         temper_worker_service::role_identities(resolved),
+        temper_worker_service::worker_agent_trace_config(resolved),
     )?;
+    trace_config::warn_if_worker_storage_unavailable(resolved, &worker_config.agent_traces);
 
     // The startup capacity line reports workflow-global role concurrency,
     // not this worker's advertised local capacity. Preserve compiled role
@@ -333,6 +338,7 @@ async fn run_async(
             resolved.agent.enable_subagents,
         )
         .with_tool_config(temper_worker_service::agent_tool_config(resolved))
+        .with_trace_policy(worker_config.agent_traces.policy.clone())
         .with_forge_context_host(forge_context),
     );
     let executor = Arc::new(
@@ -458,6 +464,7 @@ pub(super) fn standalone_worker_config(
     worker: &WorkerSettings,
     capabilities: Vec<CapabilitySpec>,
     role_identities: BTreeMap<String, RoleGitIdentity>,
+    agent_traces: WorkerAgentTraceConfig,
 ) -> Result<WorkerConfig, String> {
     Ok(WorkerConfig {
         // Unused on the in-process transport, but the struct carries it.
@@ -470,6 +477,7 @@ pub(super) fn standalone_worker_config(
         max_concurrent_jobs: worker.max_concurrent_jobs,
         poll_wait: Duration::from_secs(20),
         heartbeat_interval: Duration::from_secs(10),
+        agent_traces,
         executor: ExecutorSelection::Stub, // not consulted: the executor is built directly
     })
 }

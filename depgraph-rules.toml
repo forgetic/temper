@@ -147,7 +147,7 @@ temper-log = []
 # through the facade factory — no concrete backend dep.
 temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "temper-forge", "temper-workflow", "temper-reference-delivery", "temper-log"]
 temper-worker-service = ["temper-config", "temper-worker", "temper-worker-io", "temper-log"]
-temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-protocol-agent", "temper-log"]
+temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-protocol-activity", "temper-protocol-agent", "temper-log"]
 
 # Reusable co-resident worker→daemon carrier. This is deliberate cross-tier
 # composition glue kept out of `temper-worker` so slim worker builds do not

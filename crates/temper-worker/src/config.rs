@@ -19,5 +19,6 @@ pub use parse::{USAGE, parse};
 pub use roles::role_identities_from_env;
 pub use types::{
     AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
-    DEFAULT_POLL_BACKOFF, ExecutorSelection, ParseOutcome, WorkerConfig, WorkerParams,
+    DEFAULT_POLL_BACKOFF, ExecutorSelection, ParseOutcome, WorkerAgentTraceConfig, WorkerConfig,
+    WorkerParams,
 };

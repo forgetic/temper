@@ -17,6 +17,7 @@
 use std::path::PathBuf;
 
 use temper_agent::{ForgeContextHost, ProviderConfig, SubmitForPrHost};
+use temper_protocol_activity::AgentActivityCapturePolicyV1;
 use temper_protocol_agent::AgentToolConfig;
 
 /// Everything the coding-agent session is configured by, in one struct.
@@ -40,6 +41,9 @@ pub struct AgentConfig {
     /// `--tool-config`. The native coding loop builds the codebase-memory MCP
     /// bridge from this config when it applies to the current role.
     pub tool_config: Option<AgentToolConfig>,
+    /// Worker-resolved shared trace capture policy. The activity producer
+    /// consumes this in the agent tier; it contains no storage path or token.
+    pub trace_policy: AgentActivityCapturePolicyV1,
     /// Optional host submit callback. In out-of-process mode this is a thin
     /// client for the worker-owned local side channel; when absent the
     /// `submit_for_pr` tool is not exposed by this agent process.
@@ -62,6 +66,7 @@ impl AgentConfig {
             enable_subagents,
             config_dir,
             tool_config: None,
+            trace_policy: AgentActivityCapturePolicyV1::default(),
             submit_for_pr: None,
             forge_context: None,
         }
@@ -70,6 +75,12 @@ impl AgentConfig {
     /// Stores the parsed non-secret agent tool config for this session.
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
+        self
+    }
+
+    /// Stores the worker-resolved capture policy for this session.
+    pub fn with_trace_policy(mut self, trace_policy: AgentActivityCapturePolicyV1) -> Self {
+        self.trace_policy = trace_policy;
         self
     }
 
@@ -106,6 +117,7 @@ mod tests {
         assert!(config.enable_subagents);
         assert_eq!(config.config_dir, Some(PathBuf::from("/cfg")));
         assert!(config.tool_config.is_none());
+        assert_eq!(config.trace_policy, AgentActivityCapturePolicyV1::default());
         assert_eq!(config.provider.base_url(), "https://llm.example");
     }
 }

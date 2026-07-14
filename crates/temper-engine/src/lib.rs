@@ -63,7 +63,7 @@ pub use artifact_context::{
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
-pub use engine_config::EngineConfig;
+pub use engine_config::{EngineAgentTraceConfig, EngineConfig};
 pub use feed::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, WorkItemJob, job_from_work_item,
     recover_advanced_pull_request_assignment_from_durable, recovered_job_from_assignment,

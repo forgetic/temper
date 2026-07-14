@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1, TRACE_POLICY_FLAG};
 use temper_protocol_agent::{
     AgentToolConfig, PROVIDER_CREDENTIALS_ENV, TOOL_CONFIG_FLAG, WorkspaceContext,
 };
@@ -54,6 +55,49 @@ fn tool_config_flag_is_omitted_for_non_matching_role() {
 
     assert!(!args.iter().any(|arg| arg == TOOL_CONFIG_FLAG));
     assert_eq!(copied_config, None);
+}
+
+#[test]
+#[cfg(unix)]
+fn trace_policy_flag_and_validated_file_are_passed_when_configured() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = fake_agent_script(temp.path());
+    let args_path = temp.path().join("args.txt");
+    let tool_path = temp.path().join("tool-config-copy.json");
+    let trace_path = temp.path().join("trace-policy-copy.json");
+    let policy = AgentActivityCapturePolicyV1 {
+        capture: CaptureModeV1::Diagnostic,
+        capture_thinking: true,
+        ..Default::default()
+    };
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_env(vec![
+            (
+                "TEMPER_ARGS_OUT".to_string(),
+                args_path.display().to_string(),
+            ),
+            (
+                "TEMPER_TOOL_OUT".to_string(),
+                tool_path.display().to_string(),
+            ),
+            (
+                "TEMPER_TRACE_POLICY_OUT".to_string(),
+                trace_path.display().to_string(),
+            ),
+        ])
+        .with_trace_policy(Some(policy.clone()));
+    let context = test_context();
+    let cwd = temp.path().to_path_buf();
+    temper_worker_io::block_on(async move { runner.run("job-test", &context, &cwd).await })
+        .expect("agent run succeeds");
+
+    let args = std::fs::read_to_string(args_path).expect("args captured");
+    assert!(args.lines().any(|arg| arg == TRACE_POLICY_FLAG), "{args}");
+    let copied: AgentActivityCapturePolicyV1 =
+        serde_json::from_slice(&std::fs::read(trace_path).expect("trace policy copied"))
+            .expect("trace policy parses");
+    copied.validate().expect("trace policy validates");
+    assert_eq!(copied, policy);
 }
 
 #[test]
@@ -338,6 +382,7 @@ fn fake_agent_script(dir: &Path) -> PathBuf {
 set -eu
 args_out="${TEMPER_ARGS_OUT:?}"
 tool_out="${TEMPER_TOOL_OUT:?}"
+trace_policy_out="${TEMPER_TRACE_POLICY_OUT:-}"
 credential_out="${TEMPER_CREDENTIAL_OUT:-}"
 context_out="${TEMPER_CONTEXT_OUT:-}"
 : > "$args_out"
@@ -346,6 +391,7 @@ if [ -n "$credential_out" ]; then
 fi
 result=""
 tool=""
+trace_policy=""
 context=""
 while [ "$#" -gt 0 ]; do
   arg="$1"
@@ -359,6 +405,11 @@ while [ "$#" -gt 0 ]; do
       ;;
     --tool-config)
       tool="$1"
+      printf '%s\n' "$1" >> "$args_out"
+      shift
+      ;;
+    --trace-policy)
+      trace_policy="$1"
       printf '%s\n' "$1" >> "$args_out"
       shift
       ;;
@@ -377,6 +428,9 @@ while [ "$#" -gt 0 ]; do
 done
 if [ -n "$tool" ]; then
   cp "$tool" "$tool_out"
+fi
+if [ -n "$trace_policy" ] && [ -n "$trace_policy_out" ]; then
+  cp "$trace_policy" "$trace_policy_out"
 fi
 if [ -n "$context_out" ]; then
   cp "$context" "$context_out"

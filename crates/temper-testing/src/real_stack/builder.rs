@@ -339,6 +339,7 @@ impl HermeticRealStackBuilder {
                 .unwrap_or(1),
             poll_wait: Duration::from_millis(25),
             heartbeat_interval: Duration::from_millis(50),
+            agent_traces: Default::default(),
             executor: ExecutorSelection::Stub,
         };
         let coding_config = CodingExecutorConfig {

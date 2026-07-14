@@ -9,6 +9,7 @@ description = "Temper worker process: long-polls a Temper daemon and runs role/c
 [dependencies]
 skein.workspace = true
 temper-protocol-agent = { path = "../temper-protocol-agent" }
+temper-protocol-activity = { path = "../temper-protocol-activity" }
 tracing = { workspace = true }
 temper-worker-io = { path = "../temper-worker-io" }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
