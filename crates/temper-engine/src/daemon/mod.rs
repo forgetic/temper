@@ -9,6 +9,7 @@
 //! timers, result application, wake scans) is performed by
 //! [`executor::DaemonExecutor`] on the engine runtime.
 
+mod activity_transport;
 mod change_source_wiring;
 mod context_reader;
 mod context_transport;
@@ -40,6 +41,7 @@ pub struct Daemon {
     cq: CqSender<DaemonCompletion>,
     scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
     context_reader_slot: Arc<std::sync::Mutex<Option<Arc<dyn context_reader::ContextReader>>>>,
+    trace_journal_slot: Arc<std::sync::Mutex<Option<crate::AgentTraceJournal>>>,
     change_source_listeners: Arc<std::sync::Mutex<Vec<ChangeSourceListener>>>,
     artifact_catalog: Arc<crate::ConfiguredRepositoryCatalog>,
     pub(crate) artifact_context: Option<Arc<crate::ArtifactContextBundleService>>,

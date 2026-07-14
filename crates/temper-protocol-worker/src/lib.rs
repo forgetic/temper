@@ -19,6 +19,7 @@
 //! a diff. The daemon opens one pull request per outcome. A single-repo job is
 //! the degenerate manifest of one writable primary repo.
 
+mod activity;
 mod assignment;
 mod auth;
 mod context;
@@ -28,6 +29,7 @@ mod message;
 mod result;
 mod workspace;
 
+pub use activity::{WorkerActivityAcknowledgement, WorkerActivityBatch};
 pub use assignment::{Artifact, Assign, Capability, Capacity, Poll, Register};
 pub use auth::{WORKER_AUTHORIZATION_HEADER, WORKER_AUTHORIZATION_SCHEME, WorkerAuth};
 pub use context::{ContextOutcome, ContextResponse, FetchContext};

@@ -1,0 +1,47 @@
+{
+  "type": "activity-batch",
+  "protocol_version": 1,
+  "worker_id": "worker-1",
+  "assignment_id": "job-310",
+  "capture_policy": {
+    "version": 1,
+    "capture": "metadata",
+    "retention_days": 14,
+    "max_run_bytes": 50000000,
+    "max_inline_bytes": 16384,
+    "max_blob_bytes": 8388608,
+    "capture_thinking": false
+  },
+  "batch": {
+    "version": 1,
+    "run_id": "run-310",
+    "first_seq": 1,
+    "events": [
+      {
+        "version": 1,
+        "run_id": "run-310",
+        "seq": 1,
+        "occurred_at": "2026-07-14T11:09:03.000Z",
+        "elapsed_ms": 0,
+        "assignment": {
+          "job_id": "job-310",
+          "repository": "ai/temper",
+          "artifact_ref": "ai/temper#310",
+          "role": "engineer",
+          "action": "open_pr",
+          "correlation_key": "pr-for-code-310"
+        },
+        "scope": {
+          "id": "main-310",
+          "kind": "main"
+        },
+        "event": {
+          "type": "run.started",
+          "data": {
+            "capture": "metadata"
+          }
+        }
+      }
+    ]
+  }
+}

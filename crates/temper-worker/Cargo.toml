@@ -21,6 +21,7 @@ thiserror.workspace = true
 toml.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+fs2.workspace = true
 # NOTE: no tokio, anywhere. Production code and tests both run on the skein
 # runtime; the transport e2e tests drive the real daemon through its in-process
 # carrier rather than a tokio/axum fake. Keeping tokio out of the graph means

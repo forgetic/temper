@@ -9,7 +9,7 @@ use std::time::Instant;
 use temper_engine_io::{CqSender, Executor as EngineExecutor, Spawner, arm_timer};
 use temper_protocol_worker::{
     ContextResponse, ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult,
-    WorkerProtocolMessage,
+    WORKER_PROTOCOL_VERSION, WorkerActivityAcknowledgement, WorkerProtocolMessage,
 };
 
 use crate::applier::ResultApplier;
@@ -24,6 +24,7 @@ pub(super) struct DaemonExecutor {
     pub(super) scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
     pub(super) context_reader_slot:
         Arc<std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>>,
+    pub(super) trace_journal_slot: Arc<std::sync::Mutex<Option<crate::AgentTraceJournal>>>,
 }
 
 fn context_operation_name(operation: &ForgeContextOperation) -> &'static str {
@@ -213,6 +214,54 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     responder.respond(super::protocol::protocol_response(Some(
                         WorkerProtocolMessage::ContextResponse(response),
                     )));
+                });
+            }
+            DaemonRequest::IngestActivity {
+                request,
+                binding,
+                responder,
+            } => {
+                let journal = self
+                    .trace_journal_slot
+                    .lock()
+                    .expect("trace journal slot")
+                    .clone();
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    let Some(journal) = journal else {
+                        responder
+                            .respond(temper_engine_io::http::HttpResponseData::status_only(503));
+                        return;
+                    };
+                    let run_id = request.batch.run_id.clone();
+                    let worker_id = request.worker_id.clone();
+                    let batch = request.batch;
+                    let outcome =
+                        skein::runtime::spawn_blocking(move || journal.ingest(&binding, &batch))
+                            .await;
+                    match outcome {
+                        Ok(acknowledgement) => {
+                            responder.respond(super::protocol::protocol_response(Some(
+                                WorkerProtocolMessage::ActivityAck(WorkerActivityAcknowledgement {
+                                    protocol_version: WORKER_PROTOCOL_VERSION,
+                                    worker_id,
+                                    acknowledgement,
+                                }),
+                            )))
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                target: "temper::engine",
+                                service = "engine",
+                                event = "agent.activity.ingest_failed",
+                                run_id,
+                                %error,
+                                "engine rejected or could not persist an agent activity batch"
+                            );
+                            responder.respond(
+                                temper_engine_io::http::HttpResponseData::status_only(503),
+                            );
+                        }
+                    }
                 });
             }
             DaemonRequest::RespondContext {

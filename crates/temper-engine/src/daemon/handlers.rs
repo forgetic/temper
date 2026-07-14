@@ -30,9 +30,12 @@ impl DaemonMachine {
         &mut self,
         request: HttpRequestData,
         responder: HttpResponder,
+        trusted_transport: bool,
     ) -> Vec<DaemonRequest> {
         match (request.method.as_str(), request.uri.as_str()) {
-            ("POST", "/v1/message") => self.handle_protocol_message(&request, responder),
+            ("POST", "/v1/message") => {
+                self.handle_protocol_message(&request, responder, trusted_transport)
+            }
             ("POST", "/v1/pr-freshness") => {
                 self.handle_pull_request_freshness_check(&request.body, responder)
             }
@@ -95,6 +98,7 @@ impl DaemonMachine {
         &mut self,
         request: &HttpRequestData,
         responder: HttpResponder,
+        trusted_transport: bool,
     ) -> Vec<DaemonRequest> {
         let msg = match serde_json::from_slice::<WorkerProtocolMessage>(&request.body) {
             Ok(message) => message,
@@ -141,6 +145,9 @@ impl DaemonMachine {
             WorkerProtocolMessage::Result(result) => self.handle_result(result, auth, responder),
             WorkerProtocolMessage::FetchContext(fetch) => {
                 self.handle_fetch_context(fetch, auth, responder)
+            }
+            WorkerProtocolMessage::ActivityBatch(batch) => {
+                self.handle_activity_batch(batch, auth, trusted_transport, responder)
             }
             other => match self.core.handle_authenticated(other, auth.as_ref()) {
                 Ok(response) => vec![DaemonRequest::Respond {

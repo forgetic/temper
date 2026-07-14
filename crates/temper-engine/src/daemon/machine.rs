@@ -14,7 +14,8 @@ use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
 use temper_protocol_worker::{
     Artifact, Assign, ContextResponse, ErrorCode, FetchContext, JobResult, Poll, ProtocolError,
-    PullRequestFreshness, WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
+    PullRequestFreshness, WORKER_PROTOCOL_VERSION, WorkerActivityBatch, WorkerAuth,
+    WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -33,6 +34,8 @@ pub(super) enum DaemonCompletion {
     Http {
         request: HttpRequestData,
         responder: HttpResponder,
+        /// Set only by the co-resident carrier; public HTTP is always false.
+        trusted_transport: bool,
     },
     /// A long-poll waiter's max-wait deadline elapsed.
     PollDeadline { id: u64 },
@@ -185,6 +188,11 @@ pub(super) enum DaemonRequest {
     RunFetchContext {
         request: FetchContext,
         role: String,
+        responder: HttpResponder,
+    },
+    IngestActivity {
+        request: WorkerActivityBatch,
+        binding: crate::AuthenticatedWorkerBinding,
         responder: HttpResponder,
     },
     RespondContext {
@@ -441,7 +449,11 @@ impl Machine for DaemonMachine {
     ) -> Vec<DaemonRequest> {
         self.now = now;
         match completion {
-            DaemonCompletion::Http { request, responder } => self.handle_http(request, responder),
+            DaemonCompletion::Http {
+                request,
+                responder,
+                trusted_transport,
+            } => self.handle_http(request, responder, trusted_transport),
             DaemonCompletion::PollDeadline { id } => {
                 if self.startup_recovery {
                     return Vec::new();

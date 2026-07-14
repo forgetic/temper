@@ -25,7 +25,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use temper_protocol_activity::{
-    ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, FailureCodeV1, TRACE_POLICY_FLAG,
+    ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, TRACE_POLICY_FLAG,
 };
 use temper_protocol_agent::{
     AgentToolConfig, FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, SUBMIT_FOR_PR_ADDRESS_FLAG,
@@ -42,6 +42,7 @@ use crate::trace::{TraceCollector, TraceRun};
 
 mod side_channel;
 mod stderr;
+mod terminal;
 use side_channel::{ForgeSideChannelRequest, start_forge_server, start_submit_server};
 #[cfg(test)]
 use stderr::stderr_tail;
@@ -216,25 +217,7 @@ impl AgentRunner for OutOfProcessRunner {
         };
         let outcome = self.run_agent(job_id, context, cwd, trace.as_ref()).await;
         if let Some(trace) = trace {
-            let terminal = match &outcome {
-                Ok(_) => trace.finish_success(None),
-                Err(error) => trace.finish_failure(
-                    FailureCodeV1::ChildProcess,
-                    &error.message,
-                    error.class == temper_protocol_worker::FailureClass::Transient,
-                ),
-            };
-            if let Err(error) = terminal {
-                tracing::warn!(
-                    target: "temper::worker",
-                    service = "worker",
-                    event = "agent.activity.terminal_failed",
-                    run_id = trace.run_id(),
-                    job_id,
-                    %error,
-                    "worker could not persist the terminal agent activity event"
-                );
-            }
+            terminal::finish_and_flush(&trace, &self.trace_collector, &outcome, job_id).await;
         }
         outcome
     }
