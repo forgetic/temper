@@ -112,7 +112,11 @@ pub async fn run_async(
     // Trace storage is intentionally best-effort: startup recovery and
     // retention run before transport opens, but a journal failure can never
     // prevent assignment execution.
-    let _trace_journal = start_trace_journal(&agent_traces, recovered.keys().cloned());
+    let trace_journal = start_trace_journal(&agent_traces, recovered.keys().cloned());
+    let daemon = match trace_journal {
+        Some(journal) => daemon.with_trace_journal(journal),
+        None => daemon,
+    };
     let server = temper_engine::serve(&handle, &daemon, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;

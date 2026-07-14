@@ -7,20 +7,20 @@
 //! [`TraceError`] values so runners can log and degrade tracing without changing
 //! the product-work outcome.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use temper_protocol_activity::{
-    ACTIVITY_PROTOCOL_VERSION, AgentActivityBatch, AgentActivityCapturePolicyV1,
-    AgentActivityEventV1, AgentActivityFrameV1, AgentAssignmentIdentityV1, AgentRunEventV1,
-    AgentScopeKindV1, AgentScopeV1, BlobAttachmentV1, BlobReferenceV1, CaptureModeV1,
-    FailureCodeV1, FailureInfoV1, RunFailedV1, RunFinishedV1, RunStartedV1, RunStatusV1,
-    StopReasonV1,
+    ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1,
+    AgentActivityFrameV1, AgentAssignmentIdentityV1, AgentRunEventV1, AgentScopeKindV1,
+    AgentScopeV1, BlobAttachmentV1, BlobReferenceV1, CaptureModeV1, FailureCodeV1, FailureInfoV1,
+    RunFailedV1, RunFinishedV1, RunStartedV1, RunStatusV1, StopReasonV1,
 };
 use temper_protocol_agent::WorkspaceContext;
 use thiserror::Error;
@@ -28,10 +28,13 @@ use thiserror::Error;
 use crate::config::WorkerAgentTraceConfig;
 
 mod endpoint;
+mod forward;
+mod forwarder;
 mod model;
 mod scope;
 mod spool;
 pub use endpoint::ActivityEndpoint;
+pub(crate) use forwarder::spawn_activity_forwarder;
 use model::*;
 use scope::{canonicalize_child_scope, validate_scope_acceptance};
 use spool::*;
@@ -62,42 +65,6 @@ pub struct RecoveredTraceRun {
     pub events: Vec<AgentRunEventV1>,
     pub blobs: Vec<BlobAttachmentV1>,
     pub acknowledged_seq: u64,
-}
-
-impl RecoveredTraceRun {
-    /// Builds the next at-least-once forwarding batch after the durable cursor.
-    /// Blob attachments are included exactly when selected events reference them.
-    pub fn pending_batch(&self, max_events: usize) -> Option<AgentActivityBatch> {
-        if max_events == 0 {
-            return None;
-        }
-        let events = self
-            .events
-            .iter()
-            .filter(|event| event.seq > self.acknowledged_seq)
-            .take(max_events)
-            .cloned()
-            .collect::<Vec<_>>();
-        let first_seq = events.first()?.seq;
-        let referenced = events
-            .iter()
-            .flat_map(|event| event_blob_references(&event.event))
-            .map(|reference| reference.digest.as_str())
-            .collect::<BTreeSet<_>>();
-        let blobs = self
-            .blobs
-            .iter()
-            .filter(|attachment| referenced.contains(attachment.blob.digest.as_str()))
-            .cloned()
-            .collect();
-        Some(AgentActivityBatch {
-            version: ACTIVITY_PROTOCOL_VERSION,
-            run_id: self.manifest.run_id.clone(),
-            first_seq,
-            events,
-            blobs,
-        })
-    }
 }
 
 /// Non-fatal activity collection/storage errors.
@@ -200,6 +167,8 @@ struct TraceRunInner {
     blobs_dir: PathBuf,
     events_path: PathBuf,
     cursor_path: PathBuf,
+    lock_path: PathBuf,
+    lock_file: File,
     started: Instant,
     state: Mutex<RunState>,
 }
@@ -231,6 +200,10 @@ impl TraceRun {
         let run_id = uuid::Uuid::new_v4().to_string();
         let run_dir = root.join(&run_id);
         create_private_dir(&run_dir)?;
+        let (lock_path, lock_file) = open_spool_lock(&run_dir)?;
+        lock_file
+            .lock_exclusive()
+            .map_err(|source| io_error("lock new trace spool", &lock_path, source))?;
         let blobs_dir = run_dir.join("blobs");
         create_private_dir(&blobs_dir)?;
 
@@ -281,6 +254,8 @@ impl TraceRun {
                 blobs_dir,
                 events_path,
                 cursor_path,
+                lock_path: lock_path.clone(),
+                lock_file,
                 started: Instant::now(),
                 state: Mutex::new(RunState {
                     event_file,
@@ -296,6 +271,8 @@ impl TraceRun {
                 }),
             }),
         };
+        fs2::FileExt::unlock(&run.inner.lock_file)
+            .map_err(|source| io_error("unlock new trace spool", &lock_path, source))?;
         run.append_host_event(
             started_at,
             0,
@@ -391,10 +368,13 @@ impl TraceRun {
             state.terminal_reserve,
         )?;
         let path = blob_path(&self.inner.blobs_dir, &attachment.blob)?;
+        lock_spool(&self.inner)?;
         if let Err(error) = atomic_write(&path, &bytes, false) {
+            let _ = unlock_spool(&self.inner);
             state.disabled = true;
             return Err(error);
         }
+        unlock_spool(&self.inner)?;
         state.used_bytes = state.used_bytes.saturating_add(attachment.blob.bytes);
         state
             .blobs
@@ -448,10 +428,13 @@ impl TraceRun {
         }
         let cursor = TraceAckCursorV1::new(&self.inner.manifest.run_id, highest_contiguous_seq);
         let bytes = serde_json::to_vec_pretty(&cursor)?;
+        lock_spool(&self.inner)?;
         if let Err(error) = atomic_write(&self.inner.cursor_path, &bytes, true) {
+            let _ = unlock_spool(&self.inner);
             state.disabled = true;
             return Err(error);
         }
+        unlock_spool(&self.inner)?;
         state.acknowledged_seq = highest_contiguous_seq;
         Ok(())
     }
@@ -533,11 +516,13 @@ fn append_event(
         u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         reserve,
     )?;
+    lock_spool(inner)?;
     let write_result = state
         .event_file
         .write_all(&bytes)
         .and_then(|()| state.event_file.sync_data());
     if let Err(source) = write_result {
+        let _ = unlock_spool(inner);
         state.disabled = true;
         return Err(io_error(
             "append and sync activity event",
@@ -545,6 +530,7 @@ fn append_event(
             source,
         ));
     }
+    unlock_spool(inner)?;
     state.used_bytes = state
         .used_bytes
         .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
@@ -554,6 +540,18 @@ fn append_event(
         .entry(event.scope.id.clone())
         .or_insert_with(|| event.scope.clone());
     Ok(())
+}
+
+fn lock_spool(inner: &TraceRunInner) -> Result<(), TraceError> {
+    inner
+        .lock_file
+        .lock_exclusive()
+        .map_err(|source| io_error("lock trace spool", &inner.lock_path, source))
+}
+
+fn unlock_spool(inner: &TraceRunInner) -> Result<(), TraceError> {
+    fs2::FileExt::unlock(&inner.lock_file)
+        .map_err(|source| io_error("unlock trace spool", &inner.lock_path, source))
 }
 
 fn ensure_accepting(state: &RunState) -> Result<(), TraceError> {

@@ -21,6 +21,8 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::FetchContext(msg) => msg.protocol_version,
         WorkerProtocolMessage::ContextResponse(msg) => msg.protocol_version,
+        WorkerProtocolMessage::ActivityBatch(msg) => msg.protocol_version,
+        WorkerProtocolMessage::ActivityAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,
     }
 }
@@ -74,6 +76,8 @@ fn fixtures_round_trip_and_match_variants() {
             | ("fetch-context", WorkerProtocolMessage::FetchContext(_))
             | ("context-response", WorkerProtocolMessage::ContextResponse(_))
             | ("context-response-error", WorkerProtocolMessage::ContextResponse(_))
+            | ("activity-batch", WorkerProtocolMessage::ActivityBatch(_))
+            | ("activity-ack", WorkerProtocolMessage::ActivityAck(_))
             | ("error", WorkerProtocolMessage::Error(_)) => {}
             (name, msg) => panic!("{name} parsed as unexpected variant: {msg:?}"),
         }

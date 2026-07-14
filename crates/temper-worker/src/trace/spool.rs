@@ -3,6 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityEventV1, AgentRunEventV1, BlobAttachmentV1,
@@ -30,6 +31,20 @@ impl TraceAckCursorV1 {
 }
 
 pub(super) fn recover_run(run_dir: &Path) -> Result<RecoveredTraceRun, TraceError> {
+    let (lock_path, lock_file) = open_spool_lock(run_dir)?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|source| io_error("lock trace spool for recovery", &lock_path, source))?;
+    let recovered = recover_run_locked(run_dir);
+    let unlocked = fs2::FileExt::unlock(&lock_file)
+        .map_err(|source| io_error("unlock trace spool after recovery", &lock_path, source));
+    match (recovered, unlocked) {
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        (Ok(run), Ok(())) => Ok(run),
+    }
+}
+
+fn recover_run_locked(run_dir: &Path) -> Result<RecoveredTraceRun, TraceError> {
     set_private_dir(run_dir)?;
     let manifest_path = run_dir.join("manifest.json");
     let manifest: TraceManifestV1 = read_json(&manifest_path)?;
@@ -121,6 +136,59 @@ pub(super) fn recover_run(run_dir: &Path) -> Result<RecoveredTraceRun, TraceErro
         blobs,
         acknowledged_seq: cursor.highest_contiguous_seq,
     })
+}
+
+pub(super) fn acknowledge_recovered_run(
+    run_dir: &Path,
+    highest_contiguous_seq: u64,
+) -> Result<(), TraceError> {
+    let (lock_path, lock_file) = open_spool_lock(run_dir)?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|source| io_error("lock trace spool for acknowledgement", &lock_path, source))?;
+    let result = (|| {
+        let recovered = recover_run_locked(run_dir)?;
+        let last_seq = recovered.events.last().map_or(0, |event| event.seq);
+        if highest_contiguous_seq > last_seq {
+            return Err(TraceError::InvalidAcknowledgement {
+                acknowledged: highest_contiguous_seq,
+                last_seq,
+            });
+        }
+        if highest_contiguous_seq <= recovered.acknowledged_seq {
+            return Ok(());
+        }
+        let cursor = TraceAckCursorV1::new(&recovered.manifest.run_id, highest_contiguous_seq);
+        let bytes = serde_json::to_vec_pretty(&cursor)?;
+        atomic_write(&run_dir.join("acknowledgement.json"), &bytes, true)
+    })();
+    let unlocked = fs2::FileExt::unlock(&lock_file).map_err(|source| {
+        io_error(
+            "unlock trace spool after acknowledgement",
+            &lock_path,
+            source,
+        )
+    });
+    match (result, unlocked) {
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+pub(super) fn open_spool_lock(run_dir: &Path) -> Result<(PathBuf, File), TraceError> {
+    let path = run_dir.join(".spool.lock");
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(&path)
+        .map_err(|source| io_error("open trace spool lock", &path, source))?;
+    set_private_file(&path)?;
+    Ok((path, file))
 }
 
 fn recover_event_records(path: &Path) -> Result<Vec<AgentRunEventV1>, TraceError> {

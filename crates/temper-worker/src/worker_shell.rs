@@ -44,7 +44,7 @@ impl WorkerCancellation {
         }
     }
 
-    async fn run<F: Future>(&self, future: F) -> Option<F::Output> {
+    pub(crate) async fn run<F: Future>(&self, future: F) -> Option<F::Output> {
         let mut future = std::pin::pin!(future);
         std::future::poll_fn(|cx| {
             if self.cancelled.load(Ordering::SeqCst) {

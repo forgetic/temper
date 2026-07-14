@@ -194,7 +194,11 @@ async fn run_async(
         (temper_engine::system_clock())(),
     )
     .await?;
-    let _trace_journal = start_trace_journal(&engine_agent_traces, recovered.keys().cloned());
+    let trace_journal = start_trace_journal(&engine_agent_traces, recovered.keys().cloned());
+    let daemon = match trace_journal {
+        Some(journal) => daemon.with_trace_journal(journal),
+        None => daemon,
+    };
     let orphaned = daemon.collect_startup_orphans().await;
     converge_startup_orphans(
         forge.as_ref(),

@@ -266,6 +266,9 @@ fn restart_recovers_blobs_cursor_and_truncates_only_final_fragment() {
     records.sync_all().unwrap();
     drop(records);
     drop(run);
+    // Spools created by the collector-only predecessor did not have an
+    // advisory lock file. Forwarding upgrades them in place on first recovery.
+    std::fs::remove_file(events_path.with_file_name(".spool.lock")).unwrap();
 
     let first = collector.recover().expect("first recovery");
     let second = collector.recover().expect("second recovery");
