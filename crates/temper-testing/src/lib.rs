@@ -16,6 +16,8 @@
 
 pub mod agents;
 pub mod ci;
+pub mod counting_forge;
+pub mod counting_http;
 pub mod daemon_worker;
 pub mod forgejo_runtime;
 pub mod forgejo_server;

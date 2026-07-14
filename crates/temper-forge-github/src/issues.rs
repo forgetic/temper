@@ -16,9 +16,11 @@ use crate::pulls::response_validator;
 use crate::types::IssueDto;
 use crate::{GitHubForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use temper_forge_model::{
     Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue, IssueId, IssueQuery,
-    IssueState, ItemNumber, ItemSortField, RepositoryId, SortDirection, UpdateIssue, UserId,
+    IssueState, ItemListDetails, ItemNumber, ItemSortField, RepositoryId, SortDirection,
+    UpdateIssue, UserId,
 };
 
 impl<C: HttpClient> GitHubForge<C> {
@@ -70,6 +72,16 @@ impl<C: HttpClient> GitHubForge<C> {
         self.fetch_issue_excluding_pulls(&repo, number).await
     }
 
+    /// Looks up an issue by id with an explicit detail budget. GitHub has no
+    /// native dependency enrichment, so both variants use one provider read.
+    pub async fn get_issue_with_details(
+        &self,
+        id: &IssueId,
+        _details: ItemListDetails,
+    ) -> ForgeResult<Option<Issue>> {
+        self.get_issue(id).await
+    }
+
     /// Looks up an issue by its repository-scoped number.
     ///
     /// A `404` or a PR-as-issue row both map to `Ok(None)`.
@@ -80,6 +92,16 @@ impl<C: HttpClient> GitHubForge<C> {
     ) -> ForgeResult<Option<Issue>> {
         let repo = parse_repository_id(repo_id)?;
         self.fetch_issue_excluding_pulls(&repo, number).await
+    }
+
+    /// Looks up an issue by number with an explicit detail budget.
+    pub async fn get_issue_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        _details: ItemListDetails,
+    ) -> ForgeResult<Option<Issue>> {
+        self.get_issue_by_number(repo_id, number).await
     }
 
     /// Creates an issue with its labels and assignees in one call.
@@ -205,6 +227,137 @@ impl<C: HttpClient> GitHubForge<C> {
             .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))
     }
 
+    /// Updates an issue from a validated snapshot without unconditional
+    /// read-before/write-after requests. A conditional update retains one
+    /// provider preflight, and label changes remain ordered before a body edit
+    /// that may clear workflow staging.
+    pub async fn update_issue_from_snapshot(
+        &self,
+        current: &Issue,
+        input: UpdateIssue,
+    ) -> ForgeResult<Issue> {
+        let (repo, number) = parse_issue_id(&current.id)?;
+        if current.repo_id != crate::ids::format_repository_id(&repo) {
+            return Err(ForgeError::InvalidRequest(format!(
+                "issue snapshot {} has mismatched repository {}",
+                current.id, current.repo_id
+            )));
+        }
+
+        if let Some(expected) = input.expected_version {
+            if expected != current.version {
+                return Err(ForgeError::Conflict(format!(
+                    "stale conditional update of {}: expected version {expected}, snapshot is {}",
+                    current.id, current.version
+                )));
+            }
+            let path = format!("/repos/{}/issues/{}", repo.path_segment(), number.get());
+            let Some(response) = self
+                .request_optional("get issue", HttpMethod::Get, &path, Vec::new(), None)
+                .await?
+            else {
+                return Err(ForgeError::NotFound(format!("issue {}", current.id)));
+            };
+            let validator = response_validator(&response);
+            let dto: IssueDto = Self::decode("get issue", &response)?;
+            if dto.is_pull_request() {
+                return Err(ForgeError::NotFound(format!("issue {}", current.id)));
+            }
+            self.versions.check(
+                current.id.as_str(),
+                validator.as_deref(),
+                expected,
+                self.config.cas_mode,
+            )?;
+        }
+
+        let UpdateIssue {
+            title,
+            body,
+            state,
+            set_labels,
+            add_labels,
+            remove_labels,
+            add_assignees,
+            remove_assignees,
+            expected_version: _,
+        } = input;
+
+        // Labels must be externally final before a body update can clear
+        // metadata.staged.
+        self.apply_item_label_update(
+            &repo,
+            number,
+            set_labels.clone(),
+            add_labels.clone(),
+            remove_labels.clone(),
+        )
+        .await?;
+        self.apply_item_assignee_update(
+            &repo,
+            number,
+            &current.assignees,
+            add_assignees.clone(),
+            remove_assignees.clone(),
+        )
+        .await?;
+
+        let mut committed = current.clone();
+        apply_committed_labels(&mut committed.labels, set_labels, remove_labels, add_labels);
+        apply_committed_assignees(&mut committed.assignees, remove_assignees, add_assignees);
+
+        let mut edit = serde_json::Map::new();
+        if let Some(title) = &title {
+            edit.insert("title".to_string(), serde_json::json!(title));
+        }
+        if let Some(body) = &body {
+            edit.insert("body".to_string(), serde_json::json!(body));
+        }
+        if let Some(state) = state {
+            let state = match state {
+                IssueState::Open => "open",
+                IssueState::Closed => "closed",
+            };
+            edit.insert("state".to_string(), serde_json::json!(state));
+        }
+        if edit.is_empty() {
+            committed.version = self
+                .versions
+                .commit(current.id.as_str(), None, current.version);
+            return Ok(committed);
+        }
+
+        let path = format!("/repos/{}/issues/{}", repo.path_segment(), number.get());
+        let response = self
+            .request_checked(
+                "update issue",
+                HttpMethod::Patch,
+                &path,
+                Vec::new(),
+                Some(serde_json::Value::Object(edit).to_string()),
+            )
+            .await?;
+        let validator = response_validator(&response);
+        let dto: IssueDto = Self::decode("update issue", &response)?;
+        if dto.is_pull_request() {
+            return Err(ForgeError::NotFound(format!("issue {}", current.id)));
+        }
+        let dependencies = committed.dependencies.clone();
+        let final_labels = committed.labels;
+        let final_assignees = committed.assignees;
+        committed = crate::map::map_issue(&repo, dto);
+        committed.dependencies = dependencies;
+        committed.labels = final_labels;
+        committed.assignees = final_assignees;
+        let fallback_validator = committed.updated_at.to_rfc3339();
+        committed.version = self.versions.commit(
+            committed.id.as_str(),
+            validator.as_deref().or(Some(fallback_validator.as_str())),
+            current.version,
+        );
+        Ok(committed)
+    }
+
     /// Lists comments on an issue in chronological order.
     pub async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
         let (repo, number) = parse_issue_id(id)?;
@@ -265,6 +418,33 @@ impl<C: HttpClient> GitHubForge<C> {
         issue.version = self.versions.observe(issue.id.as_str(), Some(&validator));
         issue
     }
+}
+
+fn sorted_strings(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn apply_committed_labels(
+    current: &mut Vec<String>,
+    set: Option<Vec<String>>,
+    remove: Vec<String>,
+    add: Vec<String>,
+) {
+    let mut labels = set.unwrap_or_else(|| current.clone());
+    labels.retain(|label| !remove.contains(label));
+    labels.extend(add);
+    *current = sorted_strings(labels);
+}
+
+fn apply_committed_assignees(current: &mut Vec<UserId>, remove: Vec<UserId>, add: Vec<UserId>) {
+    current.retain(|user| !remove.contains(user));
+    current.extend(add);
+    current.sort();
+    current.dedup();
 }
 
 /// Returns whether an issue satisfies the client-side filters of `query`.

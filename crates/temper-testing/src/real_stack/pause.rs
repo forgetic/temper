@@ -20,7 +20,9 @@ pub enum PausePoint {
     ResultApplicationCompleted,
     ChildCreated,
     ChildWired,
+    ParentAggregated,
     ChildActivated,
+    ChildCreationCompleted,
     RecoveryBarrierOpening,
 }
 
@@ -71,7 +73,9 @@ impl ChildIssueLifecycleHook for PauseHooks {
         let point = match checkpoint {
             ChildIssueCheckpoint::Created => PausePoint::ChildCreated,
             ChildIssueCheckpoint::Wired => PausePoint::ChildWired,
+            ChildIssueCheckpoint::ParentAggregated => PausePoint::ParentAggregated,
             ChildIssueCheckpoint::Activated => PausePoint::ChildActivated,
+            ChildIssueCheckpoint::Completed => PausePoint::ChildCreationCompleted,
         };
         self.reach(point).await;
     }

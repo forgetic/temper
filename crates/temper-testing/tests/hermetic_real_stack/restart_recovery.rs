@@ -170,7 +170,11 @@ fn daemon_loss_after_child_create_replays_wiring_and_activation_once() {
             .expect("staged child metadata parses")
             .expect("staged child metadata exists");
         assert!(child_metadata.staged, "created child is not dispatchable");
-        assert!(child.labels.is_empty(), "staged child has no queue labels");
+        assert_eq!(
+            child.labels,
+            vec!["code", "ready"],
+            "staged child is created atomically with final labels"
+        );
 
         // Stop both replaceable components while the old result application is
         // still parked immediately after its committed child create. The new
@@ -193,7 +197,9 @@ fn daemon_loss_after_child_create_replays_wiring_and_activation_once() {
             1
         );
         let wired_pause = stack.pause_hooks().arm(PausePoint::ChildWired);
+        let aggregated_pause = stack.pause_hooks().arm(PausePoint::ParentAggregated);
         let activated_pause = stack.pause_hooks().arm(PausePoint::ChildActivated);
+        let completed_pause = stack.pause_hooks().arm(PausePoint::ChildCreationCompleted);
         stack.start_worker(&handle);
 
         let wired = wired_pause.arrived().await;
@@ -208,15 +214,37 @@ fn daemon_loss_after_child_create_replays_wiring_and_activation_once() {
                 .iter()
                 .filter(|issue| issue.number != stack.issue_number())
                 .all(|issue| {
-                    issue.labels.is_empty()
-                        && parse_metadata_block(&issue.body)
-                            .expect("wired child metadata parses")
-                            .expect("wired child metadata exists")
-                            .staged
+                    let metadata = parse_metadata_block(&issue.body)
+                        .expect("wired child metadata parses")
+                        .expect("wired child metadata exists");
+                    let labels_are_final = match issue.title.as_str() {
+                        "Build foundation" => issue.labels == ["code", "ready"],
+                        "Build dependent" => issue.labels == ["blocked", "code"],
+                        _ => false,
+                    };
+                    labels_are_final && metadata.staged
                 }),
-            "no child is dispatchable while dependency wiring is incomplete"
+            "staged children carry final labels but remain undispatchable while wiring completes"
         );
         wired.release();
+
+        let aggregated = aggregated_pause.arrived().await;
+        let aggregated_inventory = stack
+            .forge()
+            .list_issues(stack.primary_repo_id(), IssueQuery::default())
+            .await
+            .expect("aggregated child inventory");
+        assert!(
+            aggregated_inventory
+                .iter()
+                .filter(|issue| issue.number != stack.issue_number())
+                .all(|issue| parse_metadata_block(&issue.body)
+                    .expect("aggregated child metadata parses")
+                    .expect("aggregated child metadata exists")
+                    .staged),
+            "parent aggregation completes before any child activation"
+        );
+        aggregated.release();
 
         let activated = activated_pause.arrived().await;
         let activation_inventory = stack
@@ -239,7 +267,7 @@ fn daemon_loss_after_child_create_replays_wiring_and_activation_once() {
             .iter()
             .find(|issue| issue.title == "Build dependent")
             .expect("dependent child exists");
-        assert!(dependent_staged.labels.is_empty());
+        assert_eq!(dependent_staged.labels, vec!["blocked", "code"]);
         assert!(
             parse_metadata_block(&dependent_staged.body)
                 .expect("dependent staged metadata parses")
@@ -250,6 +278,8 @@ fn daemon_loss_after_child_create_replays_wiring_and_activation_once() {
         activated.release();
         let dependent_activated = dependent_activated_pause.arrived().await;
         dependent_activated.release();
+        let completed = completed_pause.arrived().await;
+        completed.release();
 
         let replay = stack
             .await_worker_result(&cx, std::time::Duration::from_secs(10))

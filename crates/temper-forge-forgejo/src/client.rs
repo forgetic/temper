@@ -6,6 +6,7 @@
 //! responses without touching the network.
 
 use async_trait::async_trait;
+use std::time::Instant;
 use thiserror::Error;
 
 /// HTTP method used by a Forgejo request.
@@ -169,6 +170,10 @@ impl EngineHttpClient {
 #[async_trait]
 impl HttpClient for EngineHttpClient {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let method = request.method.as_str();
+        let normalized_path = normalize_path(&request.path);
+        let operation = format!("{method} {normalized_path}");
+        let started = Instant::now();
         let mut url = format!("{}{}", self.base_url, request.path);
         if !request.query.is_empty() {
             url.push('?');
@@ -176,20 +181,58 @@ impl HttpClient for EngineHttpClient {
         }
 
         let call = temper_engine_io::http::HttpCall {
-            method: request.method.as_str().to_string(),
+            method: method.to_string(),
             url,
             headers: request.headers,
             body: request.body.map(String::into_bytes).unwrap_or_default(),
         };
-        let response = temper_engine_io::http::http_call(&self.client, call)
-            .await
-            .map_err(HttpError::Transport)?;
-        Ok(HttpResponse {
-            status: response.status,
-            headers: response.headers,
-            body: String::from_utf8_lossy(&response.body).into_owned(),
-        })
+        let result = temper_engine_io::http::http_call(&self.client, call).await;
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match result {
+            Ok(response) => {
+                tracing::debug!(
+                    target: "temper_forge_forgejo",
+                    method = %method,
+                    operation = %operation,
+                    path = %normalized_path,
+                    status = response.status,
+                    duration_ms,
+                    "Forge HTTP request"
+                );
+                Ok(HttpResponse {
+                    status: response.status,
+                    headers: response.headers,
+                    body: String::from_utf8_lossy(&response.body).into_owned(),
+                })
+            }
+            Err(error) => {
+                tracing::debug!(
+                    target: "temper_forge_forgejo",
+                    method = %method,
+                    operation = %operation,
+                    path = %normalized_path,
+                    status = 0_u16,
+                    duration_ms,
+                    error = %error,
+                    "Forge HTTP request failed"
+                );
+                Err(HttpError::Transport(error))
+            }
+        }
     }
+}
+
+fn normalize_path(path: &str) -> String {
+    path.split('/')
+        .map(|segment| {
+            if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) {
+                "{id}"
+            } else {
+                segment
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
@@ -254,6 +297,18 @@ mod tests {
         assert_eq!(response.header("missing"), None);
 
         assert!(!HttpResponse::new(404, "nope").is_success());
+    }
+
+    #[test]
+    fn normalizes_resource_ids_without_erasing_repository_coordinates() {
+        assert_eq!(
+            normalize_path("/api/v1/repos/acme/widgets/issues/42/labels/7"),
+            "/api/v1/repos/acme/widgets/issues/{id}/labels/{id}"
+        );
+        assert_eq!(
+            normalize_path("/api/v1/repos/acme/widgets/issues"),
+            "/api/v1/repos/acme/widgets/issues"
+        );
     }
 
     #[test]

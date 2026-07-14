@@ -88,6 +88,7 @@ fn run_world(seed: u64) -> (u32, u64, u64) {
         PollBackstopConfig {
             targets: vec![RoleFeedTarget {
                 repo: repo.clone(),
+                path: temper_forge::RepositoryPath::new("acme", "service"),
                 role: RoleId::new("engineer"),
                 mode: RoleFeedMode::Normal,
             }],

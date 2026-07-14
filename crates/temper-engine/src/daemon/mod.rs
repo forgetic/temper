@@ -18,14 +18,24 @@ mod handlers;
 mod machine;
 mod protocol;
 pub mod state_dto;
+// The coordinator's complete role/mechanical/poll contract is consumed in
+// stages; constructors not used by the compatibility scanner remain exercised
+// by its pure tests until the targeted executor lands.
+#[allow(dead_code)]
+mod wake_coordinator;
+mod wake_observability;
+mod webhook_handlers;
 mod webhook_wiring;
 
 use std::sync::Arc;
 
 use temper_engine_io::CqSender;
+use temper_forge::{ChangeKind, RepositoryPath};
+use temper_runner::ArtifactAddress;
 
 use change_source_wiring::ChangeSourceListener;
 use machine::DaemonCompletion;
+use wake_coordinator::{WakeOutcome, WakeWork};
 
 pub use handle::{h1_handler, serve};
 pub use state_dto::{
@@ -38,19 +48,20 @@ pub use state_dto::{
 #[derive(Clone)]
 pub struct Daemon {
     cq: CqSender<DaemonCompletion>,
-    scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
+    wake_executor_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeExecutor>>>>,
     context_reader_slot: Arc<std::sync::Mutex<Option<Arc<dyn context_reader::ContextReader>>>>,
     change_source_listeners: Arc<std::sync::Mutex<Vec<ChangeSourceListener>>>,
     artifact_catalog: Arc<crate::ConfiguredRepositoryCatalog>,
     pub(crate) artifact_context: Option<Arc<crate::ArtifactContextBundleService>>,
 }
 
-/// Type-erased wake scanner installed by webhook or change-source wiring.
-pub(crate) trait WakeScanner: Send + Sync {
-    fn scan(
+/// Type-erased execution boundary for work admitted by the daemon-owned wake
+/// coordinator.
+pub(crate) trait WakeExecutor: Send + Sync {
+    fn run(
         &self,
-        hint: temper_runner::ChangeHint,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+        work: WakeWork,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = WakeOutcome> + Send>>;
 }
 
 /// Type-erased mechanical accelerator: run a hinted mechanical pass for the
@@ -58,11 +69,47 @@ pub(crate) trait WakeScanner: Send + Sync {
 /// generic [`crate::MechanicalTrigger<F>`] without the daemon being generic over
 /// `F`.
 pub trait HintedMechanical: Send + Sync {
-    /// Run a mechanical pass covering only the hinted repositories.
+    /// Compatibility accelerator for non-daemon embedding. The daemon path
+    /// uses the exact coordinated entry points below.
     fn run_hinted(
         &self,
         hints: Vec<temper_forge::ChangeHint>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+    /// Executes repository-wide mechanical work already admitted by the daemon
+    /// coordinator.
+    fn run_coordinated_broad(
+        &self,
+        repo: RepositoryPath,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
+        let future = self.run_hinted(vec![temper_forge::ChangeHint::repository(
+            repo,
+            ChangeKind::Unknown,
+        )]);
+        Box::pin(async move {
+            future.await;
+            Ok(())
+        })
+    }
+
+    /// Executes one exact artifact already admitted by the daemon coordinator.
+    fn run_coordinated_targeted(
+        &self,
+        repo: RepositoryPath,
+        artifact: ArtifactAddress,
+        change: ChangeKind,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
+        let future = self.run_hinted(vec![temper_forge::ChangeHint::artifact(
+            repo,
+            artifact.kind,
+            artifact.number,
+            change,
+        )]);
+        Box::pin(async move {
+            future.await;
+            Ok(())
+        })
+    }
 }
 
 impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> HintedMechanical
@@ -75,6 +122,40 @@ impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> HintedMechanical
         let trigger = self.clone();
         Box::pin(async move {
             trigger.run_hinted(hints).await;
+        })
+    }
+
+    fn run_coordinated_broad(
+        &self,
+        repo: RepositoryPath,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
+        let trigger = self.clone();
+        Box::pin(async move {
+            trigger
+                .run_coordinated(crate::MechanicalScope::Hinted(vec![
+                    temper_forge::ChangeHint::repository(repo, ChangeKind::Unknown),
+                ]))
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn run_coordinated_targeted(
+        &self,
+        repo: RepositoryPath,
+        artifact: ArtifactAddress,
+        change: ChangeKind,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
+        let trigger = self.clone();
+        Box::pin(async move {
+            trigger
+                .run_coordinated(crate::MechanicalScope::Targeted(vec![(
+                    repo, artifact, change,
+                )]))
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
         })
     }
 }

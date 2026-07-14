@@ -12,8 +12,10 @@ use temper_workflow::{
     GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow, queue_active,
 };
 
-use super::candidate::{self, CandidateQueryPlan, ScanMode, candidate_query_plan};
-use super::{AutomatedWorkItem, ScanError, WorkItem};
+use super::candidate::{
+    self, CandidateQueryPlan, ScanMode, candidate_query_plan, candidate_query_plan_for_roles,
+};
+use super::{AutomatedWorkItem, ScanError, TargetedArtifactSnapshot, WorkItem};
 
 pub(super) async fn scan_inner<F: Forge + ?Sized>(
     forge: &F,
@@ -42,6 +44,25 @@ pub(super) async fn scan_inner<F: Forge + ?Sized>(
     Ok(work_items(&queues, &artifacts, now, role_filter))
 }
 
+pub(super) async fn scan_roles_inner<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    roles: &[RoleId],
+    mode: ScanMode,
+) -> Result<Vec<WorkItem>, ScanError> {
+    let queues = candidate::queues_for_roles(compiled, roles);
+    if queues.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let query_plan = candidate_query_plan_for_roles(workflow, compiled, roles, mode);
+    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan, false).await?;
+    Ok(work_items_for_roles(&queues, &artifacts, now, roles))
+}
+
 pub(super) async fn scan_automated_inner<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
@@ -59,30 +80,68 @@ pub(super) async fn scan_automated_inner<F: Forge + ?Sized>(
     Ok(automated_work_items(&queues, &artifacts, now))
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn targeted_role_inner<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    snapshot: &TargetedArtifactSnapshot,
+    classified: ClassifiedArtifact,
+    roles: &[RoleId],
+    now: DateTime<Utc>,
+) -> Result<Vec<WorkItem>, ScanError> {
+    let queues = candidate::queues_for_roles(compiled, roles);
+    let artifacts =
+        targeted_artifacts(forge, repo, workflow, &queues, snapshot, classified, false).await?;
+    Ok(work_items_for_roles(&queues, &artifacts, now, roles))
+}
+
 pub(super) async fn targeted_automated_inner<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
+    snapshot: &TargetedArtifactSnapshot,
     classified: ClassifiedArtifact,
     now: DateTime<Utc>,
 ) -> Result<Vec<AutomatedWorkItem>, ScanError> {
     let queues = candidate::queues_for_scan(compiled, None, ScanMode::Automated);
+    let artifacts =
+        targeted_artifacts(forge, repo, workflow, &queues, snapshot, classified, true).await?;
+    Ok(automated_work_items(&queues, &artifacts, now))
+}
+
+async fn targeted_artifacts<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    queues: &[&QueueManifest],
+    snapshot: &TargetedArtifactSnapshot,
+    classified: ClassifiedArtifact,
+    emit_ci_completed: bool,
+) -> Result<Vec<ScannedArtifact>, ScanError> {
     if queues.is_empty() {
         return Ok(Vec::new());
+    }
+    if snapshot.source() != classified.source {
+        return Err(ScanError::InvalidWorkflow(
+            "targeted snapshot does not match its classification".to_string(),
+        ));
     }
     let mut artifacts = Vec::new();
     push_candidate(
         forge,
         repo,
         workflow,
-        &queues,
+        queues,
         classified,
+        Some(snapshot),
         &mut artifacts,
-        true,
+        emit_ci_completed,
     )
     .await?;
-    Ok(automated_work_items(&queues, &artifacts, now))
+    Ok(artifacts)
 }
 
 async fn read_artifacts<F: Forge + ?Sized>(
@@ -112,6 +171,7 @@ async fn read_artifacts<F: Forge + ?Sized>(
                 workflow,
                 queues,
                 classified,
+                None,
                 &mut artifacts,
                 emit_ci_completed,
             )
@@ -133,6 +193,7 @@ async fn read_artifacts<F: Forge + ?Sized>(
                 workflow,
                 queues,
                 classified,
+                None,
                 &mut artifacts,
                 emit_ci_completed,
             )
@@ -154,12 +215,14 @@ fn pull_request_key(
     (pull_request.id.clone(), pull_request.number)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn push_candidate<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
     queues: &[&QueueManifest],
     classified: ClassifiedArtifact,
+    snapshot: Option<&TargetedArtifactSnapshot>,
     artifacts: &mut Vec<ScannedArtifact>,
     emit_ci_completed: bool,
 ) -> Result<(), ScanError> {
@@ -174,6 +237,26 @@ async fn push_candidate<F: Forge + ?Sized>(
     };
     let (classified, signals) = if needs.is_empty() {
         (classified, GateSignals::default())
+    } else if let Some(snapshot) = snapshot {
+        let executor = workflow.executor(forge);
+        let signals = match snapshot {
+            TargetedArtifactSnapshot::Issue(issue) => {
+                executor
+                    .read_classified_issue_gate_signals_with_needs(repo, issue, &classified, needs)
+                    .await
+            }
+            TargetedArtifactSnapshot::PullRequest(pull_request) => {
+                executor
+                    .read_classified_pull_request_gate_signals_with_needs(
+                        repo,
+                        pull_request,
+                        &classified,
+                        needs,
+                    )
+                    .await
+            }
+        }?;
+        (classified, signals)
     } else {
         match workflow
             .executor(forge)
@@ -185,6 +268,7 @@ async fn push_candidate<F: Forge + ?Sized>(
             Err(error) => return Err(error.into()),
         }
     };
+
     emit_pr_gate_evaluated(repo, &classified, &signals, needs, emit_ci_completed);
     artifacts.push(ScannedArtifact {
         classified,
@@ -279,6 +363,30 @@ fn work_items(
         let members = active_members(queue, artifacts, now);
         for member in members {
             emit_member_items(queue, member, role_filter.map(|(role, _)| role), &mut items);
+        }
+    }
+    items
+}
+
+fn work_items_for_roles(
+    queues: &[&QueueManifest],
+    artifacts: &[ScannedArtifact],
+    now: DateTime<Utc>,
+    roles: &[RoleId],
+) -> Vec<WorkItem> {
+    let mut items = Vec::new();
+    for &queue in queues {
+        for member in active_members(queue, artifacts, now) {
+            for subscriber in &queue.subscribers {
+                if roles.contains(subscriber) {
+                    items.push(WorkItem {
+                        queue: queue.id.clone(),
+                        role: subscriber.clone(),
+                        target: member.source,
+                        kind: member.kind.clone(),
+                    });
+                }
+            }
         }
     }
     items

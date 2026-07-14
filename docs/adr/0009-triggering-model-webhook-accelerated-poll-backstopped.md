@@ -78,6 +78,33 @@ type:
 3. **The coalescing trigger loop**: backend-agnostic, but depends on queues and
    the executor, so it sits in the workflow/runner layer above `temper-forge`.
 
+### Bounded coordinator ownership and wake scope
+
+The daemon machine is the single owner of volatile wake state. It keys one
+bounded lane set by configured repository and role/mechanical lane, retains at
+most 32 targeted artifact addresses per lane, admits at most the configured
+global number of repository runs, and permits only one dirty follow-up while a
+repository is in flight. The executor may run only `WakeWork` admitted by that
+machine; webhook handlers, startup recovery, polls, and mechanical cadence do
+not bypass it. Apply-window deferral is owned by the same machine, so no new
+scan starts while any result apply is active and the final apply completion
+promotes at most one generation per affected repository.
+
+An unambiguous issue or pull-request address takes the targeted path. Review
+and PR-scoped CI hints retain pull-request identity. Pushes, repository-scoped
+or unknown/ambiguous payloads, explicit recovery, polls, startup, and targeted
+capacity overflow promote to broad discovery. Broad role work shares candidate
+discovery across configured roles; targeted results reconcile only the named
+artifact and never prune unrelated pending jobs. Every path rechecks the
+`metadata.staged` dispatch guard.
+
+Pending, dirty, and apply-deferred hints are intentionally not persisted. A
+restart can lose them without losing correctness because startup schedules a
+broad generation for every configured repository and mandatory periodic polls
+continue to do the same level-triggered discovery. **Webhook receipt is never
+required for correctness**: no queue transition, recovery, or dispatch safety
+property may depend on a delivery arriving.
+
 ### Portable push, if ever needed
 
 Do not add a notification method to `Forge`. If backend-agnostic push is wanted,

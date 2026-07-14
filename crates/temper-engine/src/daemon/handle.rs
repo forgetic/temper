@@ -11,7 +11,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
-use temper_forge::{Forge, RepositoryId};
+use temper_forge::{Forge, Repository, RepositoryId, RepositoryPath};
 use temper_protocol_worker::{
     Artifact, PullRequestFreshness, PullRequestFreshnessResponse, WORKER_AUTHORIZATION_HEADER,
     WorkerAuth, WorkerProtocolMessage,
@@ -25,10 +25,11 @@ use crate::applier::{NoopApplier, ResultApplier};
 use crate::feed::{RoleFeedMode, job_from_work_item};
 
 use super::Daemon;
-use super::WakeScanner;
+use super::WakeExecutor;
 use super::executor::DaemonExecutor;
 use super::machine::{DaemonCompletion, DaemonMachine};
 use super::protocol::decode_in_process_reply;
+use super::wake_coordinator::{BroadMode, WakeLane, WakeRequest};
 
 impl Daemon {
     /// Create a daemon that discards applied results. The spawner is the
@@ -90,6 +91,22 @@ impl Daemon {
         let _ = self
             .cq
             .send(DaemonCompletion::SetApplyGrace { apply_grace });
+        self
+    }
+
+    /// Configures leading-edge wake debounce and the global number of
+    /// repositories whose wake work may run concurrently. The default cap is
+    /// two; changing it never creates a runtime thread or bypasses coordinator
+    /// admission.
+    pub fn with_wake_scheduling(
+        self,
+        debounce: Duration,
+        max_in_flight_repositories: usize,
+    ) -> Self {
+        let _ = self.cq.send(DaemonCompletion::ConfigureWakeScheduling {
+            debounce,
+            max_in_flight_repositories,
+        });
         self
     }
 
@@ -243,7 +260,7 @@ impl Daemon {
         apply_grace: Duration,
     ) -> Self {
         let (cq_tx, cq_rx) = channel();
-        let scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>> =
+        let wake_executor_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeExecutor>>>> =
             Arc::new(std::sync::Mutex::new(None));
         let context_reader_slot: Arc<
             std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>,
@@ -252,7 +269,7 @@ impl Daemon {
             spawner: Arc::clone(&spawner),
             cq: cq_tx.clone(),
             applier,
-            scanner_slot: Arc::clone(&scanner_slot),
+            wake_executor_slot: Arc::clone(&wake_executor_slot),
             context_reader_slot: Arc::clone(&context_reader_slot),
         };
         let machine = DaemonMachine::default_machine_with_worker_pools_and_role_limits(
@@ -266,7 +283,7 @@ impl Daemon {
 
         Self {
             cq: cq_tx,
-            scanner_slot,
+            wake_executor_slot,
             context_reader_slot,
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
             artifact_catalog: Arc::new(crate::ConfiguredRepositoryCatalog::default()),
@@ -326,6 +343,23 @@ impl Daemon {
             role: role.into(),
             current_job_ids,
         });
+    }
+
+    pub(crate) async fn reconcile_pending_targeted_role_jobs(
+        &self,
+        repo: impl Into<String>,
+        role: impl Into<String>,
+        artifact: Artifact,
+        current_job_ids: BTreeSet<String>,
+    ) {
+        let _ = self
+            .cq
+            .send(DaemonCompletion::ReconcilePendingTargetedRoleJobs {
+                repo: repo.into(),
+                role: role.into(),
+                artifact,
+                current_job_ids,
+            });
     }
 
     /// Deliver one worker-protocol message **in-process** and await the daemon's
@@ -432,13 +466,43 @@ impl Daemon {
         rx.recv().await.unwrap_or(true)
     }
 
-    /// Submit one backend change hint to the daemon wake-scan path.
+    /// Submit one backend change hint to the bounded daemon wake path.
     ///
-    /// The hint is lossy acceleration only: the installed wake scanner resolves
-    /// the repository and re-runs the normal Forge-backed role scan before any
-    /// work is enqueued.
+    /// The hint is lossy acceleration only: the configured route carries both
+    /// repository path and stable id, and admitted work re-reads fresh Forge
+    /// state before any job is enqueued.
     pub fn submit_change_hint(&self, hint: temper_forge::ChangeHint) {
-        let _ = self.cq.send(DaemonCompletion::ChangeHint { hint });
+        let _ = self.cq.send(DaemonCompletion::ScheduleWake {
+            request: WakeRequest::from_hint(hint),
+        });
+    }
+
+    /// Schedules one mandatory broad role-poll backstop generation.
+    pub fn schedule_role_poll<I>(&self, repo: RepositoryPath, roles: I)
+    where
+        I: IntoIterator<Item = RoleId>,
+    {
+        let lanes = roles.into_iter().map(WakeLane::Role);
+        let _ = self.cq.send(DaemonCompletion::ScheduleWake {
+            request: WakeRequest::broad_for_lanes(repo, lanes, BroadMode::Poll),
+        });
+    }
+
+    /// Schedules one broad mechanical cadence generation.
+    pub fn schedule_mechanical_poll(&self, repo: RepositoryPath) {
+        let _ = self.cq.send(DaemonCompletion::ScheduleWake {
+            request: WakeRequest::broad_for_lanes(repo, [WakeLane::Mechanical], BroadMode::Poll),
+        });
+    }
+
+    /// Explicitly schedules a broad startup recovery pass for one configured
+    /// repository. Wake state itself is intentionally not persisted, so
+    /// startup broad scans and periodic poll backstops recover hints lost on a
+    /// restart.
+    pub fn schedule_startup_broad(&self, repo: RepositoryPath) {
+        let _ = self.cq.send(DaemonCompletion::ScheduleWake {
+            request: WakeRequest::broad(repo, BroadMode::Startup),
+        });
     }
 
     /// Map a scanned `WorkItem` to a job and enqueue it.
@@ -475,6 +539,25 @@ impl Daemon {
     ) -> Result<usize, temper_runner::ScanError> {
         crate::feed::enqueue_scanned_role_work(
             self, forge, repo, workflow, compiled, now, role, mode,
+        )
+        .await
+    }
+
+    /// Evaluates one exact artifact for a configured role set without running
+    /// broad candidate discovery or repository-wide pending reconciliation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
+        &self,
+        forge: &F,
+        repository: &Repository,
+        workflow: &ValidatedWorkflow,
+        compiled: &CompiledWorkflow,
+        now: DateTime<Utc>,
+        artifact: temper_runner::ArtifactAddress,
+        roles: &[RoleId],
+    ) -> Result<crate::feed::TargetedRoleFeedResult, temper_runner::ScanError> {
+        crate::feed::enqueue_targeted_role_work(
+            self, forge, repository, workflow, compiled, now, artifact, roles,
         )
         .await
     }

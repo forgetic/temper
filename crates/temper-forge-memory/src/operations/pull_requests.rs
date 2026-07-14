@@ -83,7 +83,7 @@ pub(crate) fn create_pull_request(
     };
     pull_requests.push(pull_request.clone());
     sort_pull_requests_by_number(pull_requests);
-    inner.publish_item_hint(repo_id, pull_request.number, ChangeKind::PullRequest);
+    inner.publish_pull_request_hint(&pull_request, ChangeKind::Created);
     Ok(pull_request)
 }
 
@@ -158,7 +158,7 @@ pub(crate) fn update_pull_request(
     pull_request.updated_at = now;
     let updated = pull_request.clone();
     sort_pull_requests_by_number(pull_requests);
-    inner.publish_item_hint(&repo_id, updated.number, ChangeKind::PullRequest);
+    inner.publish_pull_request_hint(&updated, ChangeKind::Edited);
     Ok(updated)
 }
 
@@ -170,7 +170,7 @@ pub(crate) fn add_dependency(
     let mut inner = forge.lock();
     let (pull_request, changed) = add_pull_request_dependency(&mut inner, id, target)?;
     if changed {
-        inner.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+        inner.publish_pull_request_hint(&pull_request, ChangeKind::Dependency);
     }
     Ok(pull_request)
 }
@@ -183,7 +183,7 @@ pub(crate) fn remove_dependency(
     let mut inner = forge.lock();
     let (pull_request, changed) = remove_pull_request_dependency(&mut inner, id, target)?;
     if changed {
-        inner.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+        inner.publish_pull_request_hint(&pull_request, ChangeKind::Dependency);
     }
     Ok(pull_request)
 }
@@ -217,7 +217,7 @@ pub(crate) fn submit_pull_request_review(
     let (review, repo_id, number) = submit_review(forge, id, input)?;
     forge
         .lock()
-        .publish_item_hint(&repo_id, number, ChangeKind::Review);
+        .publish_pull_request_number_hint(&repo_id, number, ChangeKind::Review);
     Ok(review)
 }
 
@@ -255,8 +255,8 @@ pub(crate) fn add_comment(
     };
     comments.push(comment.clone());
     sort_comments(comments);
-    if let Some((repo_id, pull_request)) = inner.state.find_pull_request(id) {
-        inner.publish_item_hint(&repo_id, pull_request.number, ChangeKind::Comment);
+    if let Some((_repo_id, pull_request)) = inner.state.find_pull_request(id) {
+        inner.publish_pull_request_hint(&pull_request, ChangeKind::Comment);
     }
     Ok(comment)
 }
@@ -304,6 +304,6 @@ pub(crate) fn merge_pull_request(
     let number = pull_request.number;
     pull_request.closed_at = Some(now);
     sort_pull_requests_by_number(pull_requests);
-    inner.publish_item_hint(&repo_id, number, ChangeKind::PullRequest);
+    inner.publish_pull_request_number_hint(&repo_id, number, ChangeKind::State);
     Ok(merge)
 }

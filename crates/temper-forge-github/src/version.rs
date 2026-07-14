@@ -35,6 +35,10 @@ pub(crate) struct VersionCache {
 struct CapturedValidator {
     validator: Option<String>,
     version: Version,
+    /// A successful mutation endpoint did not return a validator. The next
+    /// provider read observes that mutation's validator and must stabilize the
+    /// committed portable version rather than spuriously advancing it.
+    awaiting_validator: bool,
 }
 
 impl VersionCache {
@@ -47,7 +51,11 @@ impl VersionCache {
         let mut captured = self.captured.lock().expect("version cache mutex poisoned");
         match captured.get_mut(key) {
             Some(existing) => {
-                if validator.is_some() && existing.validator.as_deref() == validator {
+                if existing.awaiting_validator {
+                    existing.validator = validator.map(str::to_string);
+                    existing.awaiting_validator = false;
+                    existing.version
+                } else if validator.is_some() && existing.validator.as_deref() == validator {
                     existing.version
                 } else {
                     existing.version = existing.version.next();
@@ -61,11 +69,30 @@ impl VersionCache {
                     CapturedValidator {
                         validator: validator.map(str::to_string),
                         version: Version::INITIAL,
+                        awaiting_validator: false,
                     },
                 );
                 Version::INITIAL
             }
         }
+    }
+
+    /// Advances the portable version after a successful provider mutation and
+    /// records the validator returned by that mutation. When an endpoint has no
+    /// validator, the last captured validator is retained.
+    pub(crate) fn commit(&self, key: &str, validator: Option<&str>, previous: Version) -> Version {
+        let mut captured = self.captured.lock().expect("version cache mutex poisoned");
+        let retained = captured.get(key).and_then(|entry| entry.validator.clone());
+        let version = previous.next();
+        captured.insert(
+            key.to_string(),
+            CapturedValidator {
+                validator: validator.map(str::to_string).or(retained),
+                version,
+                awaiting_validator: validator.is_none(),
+            },
+        );
+        version
     }
 
     /// Verifies a conditional-write precondition for `key`.
@@ -116,6 +143,26 @@ mod version_cache_tests {
         assert_eq!(first, second);
         let bumped = cache.observe("pr-1", Some("etag-b"));
         assert_eq!(bumped, first.next());
+    }
+
+    #[test]
+    fn commit_advances_and_stabilizes_the_returned_validator() {
+        let cache = VersionCache::default();
+        let observed = cache.observe("issue-1", Some("etag-a"));
+        let committed = cache.commit("issue-1", Some("etag-b"), observed);
+        assert_eq!(committed, observed.next());
+        assert_eq!(cache.observe("issue-1", Some("etag-b")), committed);
+    }
+
+    #[test]
+    fn commit_without_validator_stabilizes_the_next_provider_read() {
+        let cache = VersionCache::default();
+        let observed = cache.observe("issue-1", Some("etag-a"));
+        let committed = cache.commit("issue-1", None, observed);
+
+        assert_eq!(cache.observe("issue-1", Some("etag-b")), committed);
+        assert_eq!(cache.observe("issue-1", Some("etag-b")), committed);
+        assert_eq!(cache.observe("issue-1", Some("etag-c")), committed.next());
     }
 
     #[test]

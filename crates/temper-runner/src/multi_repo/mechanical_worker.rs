@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
+use temper_forge::{ChangeHint, ChangeKind, Forge, RepositoryPath};
 use temper_workflow::{
     CommandJournal, DefaultRecoveryPolicy, LeasePolicy, ReconciliationMode, RecoveryPolicy,
     ValidatedWorkflow,
@@ -178,14 +178,14 @@ where
     pub async fn tick_targeted(
         &self,
         now: DateTime<Utc>,
-        targets: &[(RepositoryPath, ItemNumber, ChangeKind)],
+        targets: &[(RepositoryPath, crate::scan::ArtifactAddress, ChangeKind)],
     ) -> MultiRepoTickReport {
         let mut report = MultiRepoTickReport::default();
         for repository in &self.mechanical_repositories {
             let mut repo_targets: Vec<_> = targets
                 .iter()
                 .filter(|(path, _, _)| path_key(path) == path_key(&repository.target.path))
-                .map(|(_, item, kind)| (*item, *kind))
+                .map(|(_, artifact, change)| (*artifact, *change))
                 .collect();
             repo_targets.sort();
             repo_targets.dedup();
@@ -207,8 +207,11 @@ where
             }
             let mut progress = Progress::unchanged();
             let mut failure = None;
-            for (item, kind) in repo_targets {
-                match worker.tick_artifact(now, item, kind).await {
+            for (artifact, change) in repo_targets {
+                match worker
+                    .tick_artifact(now, artifact.number, artifact.kind, change)
+                    .await
+                {
                     Ok(item_progress) => {
                         progress.changed |= item_progress.changed;
                         progress.actions = progress.actions.saturating_add(item_progress.actions);

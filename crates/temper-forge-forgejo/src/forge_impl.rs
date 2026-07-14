@@ -14,13 +14,17 @@ use crate::{ForgejoForge, HttpClient};
 use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
-    ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,
-    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
-    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
+    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
+    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait::async_trait]
 impl<C: HttpClient> Forge for ForgejoForge<C> {
+    fn provider_request_count(&self) -> Option<u64> {
+        Some(ForgejoForge::provider_request_count(self))
+    }
+
     async fn current_user(&self) -> ForgeResult<User> {
         self.current_user().await
     }
@@ -72,6 +76,14 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         self.get_issue(id).await
     }
 
+    async fn get_issue_with_details(
+        &self,
+        id: &IssueId,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<Issue>> {
+        self.get_issue_with_details(id, details).await
+    }
+
     async fn get_issue_by_number(
         &self,
         repo_id: &RepositoryId,
@@ -80,8 +92,26 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         self.get_issue_by_number(repo_id, number).await
     }
 
+    async fn get_issue_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<Issue>> {
+        self.get_issue_by_number_with_details(repo_id, number, details)
+            .await
+    }
+
     async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue> {
         self.update_issue(id, input).await
+    }
+
+    async fn update_issue_from_snapshot(
+        &self,
+        current: &Issue,
+        input: UpdateIssue,
+    ) -> ForgeResult<Issue> {
+        self.update_issue_from_snapshot(current, input).await
     }
 
     async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {

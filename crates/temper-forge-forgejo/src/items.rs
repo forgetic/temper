@@ -73,12 +73,28 @@ impl<C: HttpClient> ForgejoForge<C> {
         &self,
         repo: &RepoCoord,
     ) -> ForgeResult<HashMap<String, u64>> {
-        let path = format!("/repos/{}/labels", repo.path_segment());
+        let key = repo.path_segment();
+        if let Some(ids) = self
+            .label_ids
+            .lock()
+            .expect("label id cache mutex poisoned")
+            .get(&key)
+            .cloned()
+        {
+            return Ok(ids);
+        }
+
+        let path = format!("/repos/{key}/labels");
         let dtos: Vec<LabelDto> = self.list_all("list labels", &path, Vec::new()).await?;
-        Ok(dtos
+        let ids = dtos
             .into_iter()
             .map(|label| (label.name, label.id))
-            .collect())
+            .collect::<HashMap<_, _>>();
+        self.label_ids
+            .lock()
+            .expect("label id cache mutex poisoned")
+            .insert(key, ids.clone());
+        Ok(ids)
     }
 
     /// Applies a label update through Forgejo's issue label endpoints.
