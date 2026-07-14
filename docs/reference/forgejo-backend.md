@@ -138,7 +138,35 @@ A dependency read `404` is treated as an empty list for compatibility with
 providers lacking the endpoint. Add/remove first verify the target exists;
 after that, a dependency endpoint `404` is `InvalidRequest`, not silent success.
 Mutation return values may not include enriched dependency vectors; reload with
-exact `get_*` or a full-detail list when dependency state matters.
+an explicit full-detail exact get or a full-detail list when dependency state
+matters. Metadata-only fan-out and recovery use summary exact gets and therefore
+never call this endpoint merely to update workflow bodies.
+
+### Fan-out mutation request budget
+
+Forgejo issue creation resolves label names before the POST, caches the
+repository name/id map across sibling creates, and materializes the POST response
+directly with empty dependencies. A successful label upsert invalidates that
+repository cache. A staged child therefore keeps atomic final labels without a
+post-create issue/dependency refetch.
+
+`update_issue_from_snapshot` derives current labels and assignees from its
+validated snapshot. Conditional writes perform one CAS preflight; unconditional
+writes perform none. Intent-owned staged-child wiring and new-protocol
+activation are body-only unconditional writes because the staging guard keeps
+them undispatchable and excludes concurrent workflow ownership. Label changes
+are sent while `metadata.staged` is still true, and the body PATCH that can clear
+staging is last. Its response becomes the committed representation, with no
+post-write exact or dependency read. Body-only wiring/activation updates issue
+no label-list request. The executor loads a summary issue when the transition
+has no dependency signal need and carries that validated source snapshot into
+intent persistence instead of re-reading the parent.
+
+For known-first same-repository fan-out with `N` children and `D` children that
+have dependencies, the core write ceiling is `4 + 2N + D`. The ten-child
+acyclic maximum (`D <= 9`) is 33 core writes. Provider regression tests cap the
+corresponding Forgejo traffic at 24 GETs, 36 non-GETs, and 60 total requests;
+method/path traces are retained by `temper_testing::counting_http` on failure.
 
 ### Optimistic concurrency is per backend instance
 

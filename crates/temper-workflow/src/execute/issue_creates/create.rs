@@ -39,7 +39,11 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let child = intent.children[index].clone();
             let issue = if let Some(number) = child.number {
                 self.forge
-                    .get_issue_by_number(&child.repository_id, number)
+                    .get_issue_by_number_with_details(
+                        &child.repository_id,
+                        number,
+                        ItemListDetails::summary(),
+                    )
                     .await?
                     .ok_or(ExecutionError::TargetMissing {
                         target: ArtifactSource::Issue { number },

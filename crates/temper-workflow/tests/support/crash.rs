@@ -24,9 +24,9 @@ use std::sync::Mutex;
 use temper_forge::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
-    IssueQuery, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest,
+    PullRequestId, PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath,
+    RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 /// The fault-aware Forge operations.
@@ -34,6 +34,7 @@ use temper_forge::{
 pub enum ForgeOp {
     CreateIssue,
     UpdateIssue,
+    GetIssue,
     GetIssueByNumber,
     ListIssues,
     ListIssuesDefault,
@@ -123,6 +124,7 @@ pub struct CrashForge<F: Forge> {
     faults: Vec<Fault>,
     counts: Mutex<HashMap<ForgeOp, usize>>,
     issue_queries: Mutex<Vec<IssueQuery>>,
+    issue_exact_details: Mutex<Vec<ItemListDetails>>,
     issue_updates: Mutex<Vec<UpdateIssue>>,
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
     merge_inputs: Mutex<Vec<MergePullRequest>>,
@@ -136,6 +138,7 @@ impl<F: Forge> CrashForge<F> {
             faults,
             counts: Mutex::new(HashMap::new()),
             issue_queries: Mutex::new(Vec::new()),
+            issue_exact_details: Mutex::new(Vec::new()),
             issue_updates: Mutex::new(Vec::new()),
             pull_request_queries: Mutex::new(Vec::new()),
             merge_inputs: Mutex::new(Vec::new()),
@@ -162,6 +165,14 @@ impl<F: Forge> CrashForge<F> {
         self.issue_queries
             .lock()
             .expect("issue queries mutex")
+            .clone()
+    }
+
+    /// Returns the exact-issue detail budgets this wrapper observed.
+    pub fn issue_exact_details(&self) -> Vec<ItemListDetails> {
+        self.issue_exact_details
+            .lock()
+            .expect("issue exact details mutex")
             .clone()
     }
 
@@ -280,7 +291,31 @@ impl<F: Forge> Forge for CrashForge<F> {
     }
 
     async fn get_issue(&self, id: &IssueId) -> ForgeResult<Option<Issue>> {
-        self.inner.get_issue(id).await
+        let n = self.tick(ForgeOp::GetIssue);
+        self.issue_exact_details
+            .lock()
+            .expect("issue exact details mutex")
+            .push(ItemListDetails::full());
+        self.guard(ForgeOp::GetIssue, n, FaultPoint::Before)?;
+        let result = self.inner.get_issue(id).await?;
+        self.guard(ForgeOp::GetIssue, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn get_issue_with_details(
+        &self,
+        id: &IssueId,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<Issue>> {
+        let n = self.tick(ForgeOp::GetIssue);
+        self.issue_exact_details
+            .lock()
+            .expect("issue exact details mutex")
+            .push(details);
+        self.guard(ForgeOp::GetIssue, n, FaultPoint::Before)?;
+        let result = self.inner.get_issue_with_details(id, details).await?;
+        self.guard(ForgeOp::GetIssue, n, FaultPoint::After)?;
+        Ok(result)
     }
 
     async fn get_issue_by_number(
@@ -289,8 +324,32 @@ impl<F: Forge> Forge for CrashForge<F> {
         number: ItemNumber,
     ) -> ForgeResult<Option<Issue>> {
         let n = self.tick(ForgeOp::GetIssueByNumber);
+        self.issue_exact_details
+            .lock()
+            .expect("issue exact details mutex")
+            .push(ItemListDetails::full());
         self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::Before)?;
         let result = self.inner.get_issue_by_number(repo_id, number).await?;
+        self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn get_issue_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<Issue>> {
+        let n = self.tick(ForgeOp::GetIssueByNumber);
+        self.issue_exact_details
+            .lock()
+            .expect("issue exact details mutex")
+            .push(details);
+        self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::Before)?;
+        let result = self
+            .inner
+            .get_issue_by_number_with_details(repo_id, number, details)
+            .await?;
         self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::After)?;
         Ok(result)
     }
@@ -303,6 +362,25 @@ impl<F: Forge> Forge for CrashForge<F> {
             .expect("issue updates mutex")
             .push(input.clone());
         let result = self.inner.update_issue(id, input).await?;
+        self.guard(ForgeOp::UpdateIssue, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn update_issue_from_snapshot(
+        &self,
+        current: &Issue,
+        input: UpdateIssue,
+    ) -> ForgeResult<Issue> {
+        let n = self.tick(ForgeOp::UpdateIssue);
+        self.guard(ForgeOp::UpdateIssue, n, FaultPoint::Before)?;
+        self.issue_updates
+            .lock()
+            .expect("issue updates mutex")
+            .push(input.clone());
+        let result = self
+            .inner
+            .update_issue_from_snapshot(current, input)
+            .await?;
         self.guard(ForgeOp::UpdateIssue, n, FaultPoint::After)?;
         Ok(result)
     }

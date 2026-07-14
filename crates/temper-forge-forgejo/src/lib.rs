@@ -39,7 +39,8 @@ pub use config::{CasMode, DEFAULT_PAGE_LIMIT, ForgejoConfig, WebUiCredentials};
 pub use provision::{ROLE_PASSWORD, admin_token_via_basic_auth};
 pub use read_only_basic::ReadOnlyBasicAuthClient;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use version::VersionCache;
 
 /// Forgejo Forge backend.
@@ -52,6 +53,10 @@ pub struct ForgejoForge<C = EngineHttpClient> {
     config: ForgejoConfig,
     client: C,
     versions: Arc<VersionCache>,
+    /// Repository-scoped label name/id maps used by issue fan-out. Forgejo's
+    /// issue endpoints require numeric ids, while the portable surface uses
+    /// names. Shared across clones and invalidated after label upserts.
+    label_ids: Arc<Mutex<HashMap<String, HashMap<String, u64>>>>,
     /// Memo of terminal web-UI CI reads, so an idle mechanical tick skips the
     /// expensive login+scrape for a pull request whose head SHA has not changed
     /// since its CI settled (ADR 0019 cost mitigation). Shared across clones.
@@ -116,6 +121,7 @@ impl<C: HttpClient> ForgejoForge<C> {
             config,
             client,
             versions: Arc::new(VersionCache::default()),
+            label_ids: Arc::new(Mutex::new(HashMap::new())),
             ci_reads: Arc::new(ci_cache::CiReadCache::default()),
         }
     }

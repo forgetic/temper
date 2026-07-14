@@ -113,7 +113,8 @@ use async_trait::async_trait;
 use error::classify_plan_error;
 use std::sync::Arc;
 use temper_forge::{
-    Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId, Version,
+    Forge, Issue, IssueId, ItemListDetails, PullRequestId, PullRequestState, RepositoryId, UserId,
+    Version,
 };
 
 /// A loaded Forge artifact with the handle needed to mutate it.
@@ -121,6 +122,7 @@ enum Loaded {
     Issue {
         id: IssueId,
         version: Version,
+        snapshot: Issue,
         classified: ClassifiedArtifact,
     },
     PullRequest {
@@ -148,6 +150,13 @@ impl Loaded {
     fn classified(&self) -> &ClassifiedArtifact {
         match self {
             Loaded::Issue { classified, .. } | Loaded::PullRequest { classified, .. } => classified,
+        }
+    }
+
+    fn issue_snapshot(&self) -> Option<&Issue> {
+        match self {
+            Loaded::Issue { snapshot, .. } => Some(snapshot),
+            Loaded::PullRequest { .. } => None,
         }
     }
 }
@@ -242,8 +251,15 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         transition: &TransitionId,
         role: &RoleId,
     ) -> Result<ExecutionReport, ExecutionError> {
-        let loaded = self.load(repo_id, target).await?;
         let needs = self.workflow.signal_needs_for_transition(transition);
+        let issue_details = if needs.dependencies {
+            ItemListDetails::full()
+        } else {
+            ItemListDetails::summary()
+        };
+        let loaded = self
+            .load_with_issue_details(repo_id, target, issue_details)
+            .await?;
         let signals = self
             .gate_signals_with_needs(repo_id, &loaded, needs)
             .await?;
@@ -286,8 +302,15 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         transition: &TransitionId,
         role: &RoleId,
     ) -> Result<TransitionPlan, ExecutionError> {
-        let loaded = self.load(repo_id, target).await?;
         let needs = self.workflow.signal_needs_for_transition(transition);
+        let issue_details = if needs.dependencies {
+            ItemListDetails::full()
+        } else {
+            ItemListDetails::summary()
+        };
+        let loaded = self
+            .load_with_issue_details(repo_id, target, issue_details)
+            .await?;
         let signals = self
             .gate_signals_with_needs(repo_id, &loaded, needs)
             .await?;
@@ -303,20 +326,31 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         repo_id: &RepositoryId,
         target: ArtifactSource,
     ) -> Result<Loaded, ExecutionError> {
+        self.load_with_issue_details(repo_id, target, ItemListDetails::full())
+            .await
+    }
+
+    async fn load_with_issue_details(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        issue_details: ItemListDetails,
+    ) -> Result<Loaded, ExecutionError> {
         let classifier = Classifier::new(self.workflow);
         match target {
             ArtifactSource::Issue { number } => {
                 let issue = self
                     .forge
-                    .get_issue_by_number(repo_id, number)
+                    .get_issue_by_number_with_details(repo_id, number, issue_details)
                     .await?
                     .ok_or(ExecutionError::TargetMissing { target })?;
                 let classified = classifier
                     .classify_issue(&issue)
                     .map_err(ExecutionError::Classification)?;
                 Ok(Loaded::Issue {
-                    id: issue.id,
+                    id: issue.id.clone(),
                     version: issue.version,
+                    snapshot: issue,
                     classified,
                 })
             }

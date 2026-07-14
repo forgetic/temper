@@ -36,21 +36,26 @@ fn workflow() -> temper_workflow::ValidatedWorkflow {
     spec.validate().expect("workflow validates")
 }
 
-fn ten_child_dag() -> Vec<CreateIssuesChild> {
-    (0..10)
+fn child_dag(count: usize, dependencies: impl Fn(usize) -> Vec<String>) -> Vec<CreateIssuesChild> {
+    (0..count)
         .map(|index| {
-            let dependencies = (0..index)
-                .map(|dependency| format!("child-{dependency}"))
-                .collect::<Vec<_>>();
             CreateIssuesChild::new(
                 format!("child-{index}"),
                 format!("Child {index}"),
                 format!("Implement child {index}."),
             )
             .with_labels(["code", "ready"])
-            .with_dependencies(dependencies)
+            .with_dependencies(dependencies(index))
         })
         .collect()
+}
+
+fn ten_child_dag() -> Vec<CreateIssuesChild> {
+    child_dag(10, |index| {
+        (0..index)
+            .map(|dependency| format!("child-{dependency}"))
+            .collect()
+    })
 }
 
 #[test]
@@ -190,6 +195,126 @@ fn known_first_ten_child_dag_uses_pass_level_writes_and_no_history_scan() {
 }
 
 #[test]
+fn known_first_core_operations_follow_child_and_dependent_child_formula() {
+    let cases = vec![
+        ("zero", child_dag(0, |_| Vec::new()), 0usize),
+        ("one", child_dag(1, |_| Vec::new()), 0),
+        (
+            "ten sparse",
+            child_dag(10, |index| {
+                [3usize, 9]
+                    .contains(&index)
+                    .then(|| vec!["child-0".to_string()])
+                    .unwrap_or_default()
+            }),
+            2,
+        ),
+        (
+            "ten chain",
+            child_dag(10, |index| {
+                (index > 0)
+                    .then(|| vec![format!("child-{}", index - 1)])
+                    .unwrap_or_default()
+            }),
+            9,
+        ),
+        ("ten maximal", ten_child_dag(), 9),
+    ];
+
+    let workflow = workflow();
+    let transition = TransitionId::new("break_into_children");
+    for (name, children, dependent_children) in cases {
+        let root = TestRoot::new();
+        let forge = root.forge();
+        let repo = new_repo(&forge);
+        let parent = create_issue(&forge, &repo, &["intake"], name);
+        let child_count = children.len();
+        let context =
+            ExecutionContext::new().with_create_issues_at(transition.clone(), 0, children);
+        let counted = CrashForge::new(forge, vec![]);
+
+        block_on(workflow.executor_with_context(&counted, context).execute(
+            &repo,
+            ArtifactSource::Issue { number: parent },
+            &transition,
+            &RoleId::new("architect"),
+        ))
+        .unwrap_or_else(|error| panic!("{name}: fan-out failed: {error}"));
+
+        let writes = counted.count(ForgeOp::CreateIssue) + counted.count(ForgeOp::UpdateIssue);
+        let ceiling = 4 + 2 * child_count + dependent_children;
+        assert!(
+            writes <= ceiling,
+            "{name}: {writes} writes exceeded {ceiling}"
+        );
+        if child_count > 0 {
+            assert_eq!(writes, ceiling, "{name}: operation formula drifted");
+        }
+        let reads = counted.count(ForgeOp::GetIssue)
+            + counted.count(ForgeOp::GetIssueByNumber)
+            + counted.count(ForgeOp::ListIssues);
+        assert!(
+            reads <= 10,
+            "{name}: {reads} core reads exceeded accepted budget"
+        );
+        assert!(writes <= 34, "{name}: accepted write budget exceeded");
+        assert!(
+            counted
+                .issue_exact_details()
+                .iter()
+                .all(|details| *details == temper_forge::ItemListDetails::summary()),
+            "{name}: metadata-only fan-out requested dependency enrichment"
+        );
+    }
+}
+
+#[test]
+fn known_first_multi_repository_grouping_keeps_the_same_write_formula() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = workflow();
+    let parent_repo = new_repo(&forge);
+    let target_repo = block_on(forge.create_repository(CreateRepository {
+        owner: "acme".into(),
+        name: "budget-target".into(),
+        default_branch: "main".into(),
+        description: None,
+    }))
+    .unwrap()
+    .id;
+    let parent = create_issue(&forge, &parent_repo, &["intake"], "multi-repo budget");
+    let transition = TransitionId::new("break_into_children");
+    let children = vec![
+        CreateIssuesChild::new("a", "A", "A").with_labels(["code", "ready"]),
+        CreateIssuesChild::new("b", "B", "B")
+            .with_labels(["code", "ready"])
+            .with_target_repo(target_repo.clone())
+            .with_dependencies(["a"]),
+        CreateIssuesChild::new("c", "C", "C")
+            .with_labels(["code", "ready"])
+            .with_target_repo(target_repo),
+        CreateIssuesChild::new("d", "D", "D")
+            .with_labels(["code", "ready"])
+            .with_dependencies(["c"]),
+    ];
+    let context = ExecutionContext::new().with_create_issues_at(transition.clone(), 0, children);
+    let counted = CrashForge::new(forge, vec![]);
+
+    block_on(workflow.executor_with_context(&counted, context).execute(
+        &parent_repo,
+        ArtifactSource::Issue { number: parent },
+        &transition,
+        &RoleId::new("architect"),
+    ))
+    .unwrap();
+
+    assert_eq!(counted.count(ForgeOp::ListIssues), 0);
+    assert_eq!(counted.count(ForgeOp::CreateIssue), 4);
+    assert_eq!(counted.count(ForgeOp::UpdateIssue), 10);
+    assert_eq!(4 + 10, 4 + 2 * 4 + 2);
+}
+
+#[test]
 fn completion_atomically_preserves_intent_in_the_routed_parent_body_update() {
     let root = TestRoot::new();
     let forge = root.forge();
@@ -286,7 +411,7 @@ fn ten_child_dag_converges_across_every_uncertain_pass_mutation() {
 
         block_on(
             workflow
-                .executor(&forge)
+                .executor(&crashing)
                 .recover_create_issue_intents(&repo),
         )
         .unwrap_or_else(|error| panic!("{case}: recovery failed: {error}"));
@@ -335,6 +460,12 @@ fn ten_child_dag_converges_across_every_uncertain_pass_mutation() {
                 .all(|intent| intent.completed),
             "{case}: parent intent did not complete"
         );
+        let reads = crashing.count(ForgeOp::GetIssue)
+            + crashing.count(ForgeOp::GetIssueByNumber)
+            + crashing.count(ForgeOp::ListIssues);
+        let writes = crashing.count(ForgeOp::CreateIssue) + crashing.count(ForgeOp::UpdateIssue);
+        assert!(reads <= 30, "{case}: crash replay used {reads} reads");
+        assert!(writes <= 68, "{case}: crash replay used {writes} writes");
     }
 }
 

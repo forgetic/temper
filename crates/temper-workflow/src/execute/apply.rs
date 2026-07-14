@@ -59,6 +59,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .apply_issue_creates(
                 repo_id,
                 plan.target,
+                loaded.issue_snapshot().cloned(),
                 &prepared.issue_creates,
                 &create_completion,
             )

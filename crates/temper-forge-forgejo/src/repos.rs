@@ -201,6 +201,10 @@ impl<C: HttpClient> ForgejoForge<C> {
             )
             .await?
         };
+        self.label_ids
+            .lock()
+            .expect("label id cache mutex poisoned")
+            .remove(&repo.path_segment());
         let dto: LabelDto = Self::decode("upsert label", &response)?;
         Ok(map_label(&repo, dto))
     }
