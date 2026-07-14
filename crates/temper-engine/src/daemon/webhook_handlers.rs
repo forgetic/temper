@@ -8,10 +8,9 @@ use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 
 use crate::webhook::{
     WebhookDisposition, WebhookError, parse_verified_webhook, webhook_accepted_log_line,
-    webhook_suppressed_log_line,
 };
 
-use super::machine::{DaemonMachine, DaemonRequest};
+use super::machine::{DaemonMachine, DaemonRequest, WakeMeasurement};
 use super::wake_coordinator::{WakeLane, WakeRequest};
 
 impl DaemonMachine {
@@ -71,9 +70,11 @@ impl DaemonMachine {
                         }
                         requests.extend(self.schedule_wake(WakeRequest::from_hint(verified.hint)));
                     }
-                    WebhookDisposition::SuppressHeartbeat => requests.push(DaemonRequest::Log(
-                        webhook_suppressed_log_line(&verified.hint),
-                    )),
+                    WebhookDisposition::SuppressHeartbeat => {
+                        requests.push(DaemonRequest::WakeMeasurement(
+                            WakeMeasurement::suppressed_heartbeat(&verified.hint.repo),
+                        ))
+                    }
                 }
                 requests
             }

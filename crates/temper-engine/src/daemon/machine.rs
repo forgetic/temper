@@ -29,8 +29,9 @@ use crate::applier::{ApplyOutcome, ClaimOutcome};
 use crate::webhook::WebhookConfig;
 
 use super::wake_coordinator::{
-    BroadMode, WakeCoordinator, WakeDecision, WakeLane, WakeOutcome, WakeRequest, WakeWork,
+    BroadMode, WakeCoordinator, WakeLane, WakeOutcome, WakeRequest, WakeWork,
 };
+pub(super) use super::wake_observability::WakeMeasurement;
 
 /// `<io-event-completion>`s observed by the daemon machine.
 pub(super) enum DaemonCompletion {
@@ -241,6 +242,7 @@ pub(super) enum DaemonRequest {
         concurrency: u64,
         waiting: Vec<String>,
     },
+    WakeMeasurement(WakeMeasurement),
     Log(String),
     WorkstreamActiveReply(temper_engine_io::OneshotSender<bool>, bool),
     #[cfg(test)]
@@ -430,26 +432,7 @@ impl DaemonMachine {
                 self.wake_coordinator
                     .schedule(self.now, request, apply_active)
             };
-        Self::wake_decision_requests(decisions)
-    }
-
-    pub(super) fn wake_decision_requests(decisions: Vec<WakeDecision>) -> Vec<DaemonRequest> {
-        decisions
-            .into_iter()
-            .filter_map(|decision| match decision {
-                WakeDecision::StartTimer {
-                    repo,
-                    generation,
-                    delay,
-                } => Some(DaemonRequest::StartWakeTimer {
-                    repo,
-                    generation,
-                    delay,
-                }),
-                WakeDecision::Started { work } => Some(DaemonRequest::RunWake { work }),
-                _ => None,
-            })
-            .collect()
+        self.wake_decision_requests(decisions)
     }
 }
 
@@ -615,9 +598,8 @@ impl Machine for DaemonMachine {
                     }
                 };
                 if self.applying.is_empty() {
-                    requests.extend(Self::wake_decision_requests(
-                        self.wake_coordinator.promote_apply_deferred(),
-                    ));
+                    let decisions = self.wake_coordinator.promote_apply_deferred();
+                    requests.extend(self.wake_decision_requests(decisions));
                 }
                 requests
             }
@@ -746,7 +728,7 @@ impl Machine for DaemonMachine {
                     generation,
                     !self.applying.is_empty(),
                 );
-                Self::wake_decision_requests(decisions)
+                self.wake_decision_requests(decisions)
             }
             DaemonCompletion::WakeFinished { work, outcome } => {
                 let decisions = self.wake_coordinator.finish(
@@ -755,7 +737,7 @@ impl Machine for DaemonMachine {
                     outcome,
                     !self.applying.is_empty(),
                 );
-                Self::wake_decision_requests(decisions)
+                self.wake_decision_requests(decisions)
             }
             DaemonCompletion::ConfigureWakeRepositories {
                 repositories,

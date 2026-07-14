@@ -3,11 +3,14 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use temper_forge_forgejo::{
-    ForgejoConfig, ForgejoForge, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse,
+    EngineHttpClient, ForgejoConfig, ForgejoForge, HttpClient, HttpError, HttpMethod, HttpRequest,
+    HttpResponse,
 };
-use temper_forge_model::{ItemNumber, RepositoryId};
+use temper_forge_model::{CreateIssue, Forge, ItemNumber, RepositoryId, UpsertLabel};
 use temper_testing::block_on;
 use temper_testing::counting_http::CountingHttpClient;
 use temper_workflow::{
@@ -343,6 +346,11 @@ fn known_first_ten_child_fanout_stays_within_forgejo_http_budget() {
     client
         .check_budget(24, 36, 60)
         .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        Forge::provider_request_count(&forge),
+        Some(u64::try_from(client.request_count()).unwrap()),
+        "Forgejo exposes the exact provider request total for fan-out measurements"
+    );
     let requests = client.requests();
     assert_eq!(
         requests
@@ -382,6 +390,221 @@ fn known_first_ten_child_fanout_stays_within_forgejo_http_budget() {
             .values()
             .all(|intent| intent.completed)
     );
+}
+
+#[derive(Clone, Debug)]
+struct FailAfterCommittedWrite<C> {
+    inner: C,
+    writes_until_failure: Arc<AtomicUsize>,
+}
+
+impl<C> FailAfterCommittedWrite<C> {
+    fn new(inner: C, writes_until_failure: usize) -> Self {
+        Self {
+            inner,
+            writes_until_failure: Arc::new(AtomicUsize::new(writes_until_failure)),
+        }
+    }
+}
+
+#[async_trait]
+impl<C: HttpClient> HttpClient for FailAfterCommittedWrite<C> {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let is_write = request.method != HttpMethod::Get;
+        let response = self.inner.execute(request).await?;
+        if is_write {
+            let failed = self
+                .writes_until_failure
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    if remaining > 0 {
+                        Some(remaining - 1)
+                    } else {
+                        None
+                    }
+                })
+                .is_ok_and(|remaining| remaining == 1);
+            if failed {
+                return Err(HttpError::Transport(
+                    "injected crash after committed Forgejo write".into(),
+                ));
+            }
+        }
+        Ok(response)
+    }
+}
+
+#[test]
+#[ignore = "boots cached local Forgejo; run the documented fan-out baseline command"]
+fn local_forgejo_ten_child_fanout_meets_budget_and_crash_converges() {
+    temper_engine_io::block_on(async move {
+        let cached = skein::runtime::spawn_blocking(
+            temper_testing::forgejo_server::start_cached_provisioned_server,
+        )
+        .await
+        .expect("cached Forgejo fixture starts");
+        let server = cached.server;
+        let provisioned = cached.provisioned;
+        let base_url = server.base_url().to_string();
+        let repo_id = provisioned.repository.clone();
+        let setup = ForgejoForge::new(ForgejoConfig::new(&base_url, &provisioned.admin_token));
+        for (name, _) in LABELS {
+            setup
+                .upsert_label(
+                    &repo_id,
+                    UpsertLabel {
+                        name: name.into(),
+                        color: Some("ededed".into()),
+                        description: None,
+                    },
+                )
+                .await
+                .expect("benchmark label exists");
+        }
+
+        let spec: RawWorkflowSpec = serde_json::from_str(WORKFLOW).expect("workflow parses");
+        let workflow = spec.validate().expect("workflow validates");
+        let transition = TransitionId::new("break_into_children");
+
+        let parent = setup
+            .create_issue(
+                &repo_id,
+                CreateIssue {
+                    title: "Local Forgejo fresh fan-out".into(),
+                    body: "Plan this work.".into(),
+                    labels: vec!["intake".into()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("fresh benchmark parent exists");
+        let client = CountingHttpClient::new(EngineHttpClient::new(&base_url));
+        let forge = ForgejoForge::with_client(
+            ForgejoConfig::new(&base_url, &provisioned.admin_token),
+            client.clone(),
+        );
+        let context =
+            ExecutionContext::new().with_create_issues_at(transition.clone(), 0, ten_child_dag());
+        let started = Instant::now();
+        workflow
+            .executor_with_context(&forge, context)
+            .execute(
+                &repo_id,
+                ArtifactSource::Issue {
+                    number: parent.number,
+                },
+                &transition,
+                &RoleId::new("architect"),
+            )
+            .await
+            .expect("local Forgejo fan-out completes");
+        let fresh_elapsed = started.elapsed();
+        client
+            .check_budget(24, 36, 60)
+            .unwrap_or_else(|error| panic!("{error}"));
+        eprintln!(
+            "local Forgejo ten-child fan-out: {} requests in {:.3}s",
+            client.request_count(),
+            fresh_elapsed.as_secs_f64()
+        );
+        assert!(
+            fresh_elapsed < Duration::from_secs(15),
+            "fresh local fan-out took {:.3}s (15s ceiling)",
+            fresh_elapsed.as_secs_f64()
+        );
+
+        let crash_spec: RawWorkflowSpec =
+            serde_json::from_str(&WORKFLOW.replace("plan-epic-1", "plan-epic-crash"))
+                .expect("crash workflow parses");
+        let crash_workflow = crash_spec.validate().expect("crash workflow validates");
+        let crash_parent = setup
+            .create_issue(
+                &repo_id,
+                CreateIssue {
+                    title: "Local Forgejo crash fan-out".into(),
+                    body: "Recover this work.".into(),
+                    labels: vec!["intake".into()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("crash benchmark parent exists");
+        let crashing_client = CountingHttpClient::new(FailAfterCommittedWrite::new(
+            EngineHttpClient::new(&base_url),
+            2,
+        ));
+        let crashing_forge = ForgejoForge::with_client(
+            ForgejoConfig::new(&base_url, &provisioned.admin_token),
+            crashing_client.clone(),
+        );
+        let context =
+            ExecutionContext::new().with_create_issues_at(transition.clone(), 0, ten_child_dag());
+        let recovery_started = Instant::now();
+        crash_workflow
+            .executor_with_context(&crashing_forge, context)
+            .execute(
+                &repo_id,
+                ArtifactSource::Issue {
+                    number: crash_parent.number,
+                },
+                &transition,
+                &RoleId::new("architect"),
+            )
+            .await
+            .expect_err("injected uncertain child create interrupts the first pass");
+        let recovered = crash_workflow
+            .executor(&crashing_forge)
+            .recover_create_issue_intents(&repo_id)
+            .await
+            .expect("startup-style recovery converges");
+        assert_eq!(
+            recovered,
+            1,
+            "one crash fan-out should recover\n{}",
+            request_paths(&crashing_client.requests())
+        );
+        let recovery_elapsed = recovery_started.elapsed();
+        eprintln!(
+            "local Forgejo crash + convergence: {} requests in {:.3}s",
+            crashing_client.request_count(),
+            recovery_elapsed.as_secs_f64()
+        );
+        assert!(
+            recovery_elapsed < Duration::from_secs(15),
+            "local crash convergence took {:.3}s (15s ceiling)",
+            recovery_elapsed.as_secs_f64()
+        );
+
+        let issues = setup
+            .list_issues(&repo_id, temper_forge_model::IssueQuery::default())
+            .await
+            .expect("final issue inventory loads");
+        for index in 0..10 {
+            let title = format!("Child {index}");
+            let matching = issues
+                .iter()
+                .filter(|issue| issue.title == title)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matching.len(),
+                2,
+                "fresh and recovered {title} exist once each"
+            );
+            assert!(
+                matching.iter().all(|issue| {
+                    parse_metadata_block(&issue.body)
+                        .expect("child metadata parses")
+                        .is_some_and(|metadata| !metadata.staged)
+                }),
+                "{title} remained staged: {:?}\n{}",
+                matching
+                    .iter()
+                    .map(|issue| issue.number.get())
+                    .collect::<Vec<_>>(),
+                request_paths(&crashing_client.requests())
+            );
+        }
+        drop(server);
+    });
 }
 
 fn request_paths(requests: &[HttpRequest]) -> String {

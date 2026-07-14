@@ -15,6 +15,7 @@ use crate::metadata::{
     global_child_correlation_key,
 };
 use std::collections::{BTreeSet, HashSet};
+use std::time::{Duration, Instant};
 use temper_forge::{Forge, Issue, ItemNumber, RepositoryId, UserId};
 
 /// A concrete multi-artifact request prepared from a `CreateIssues` effect.
@@ -56,6 +57,49 @@ enum ParentDependencyStyle {
     Natural,
 }
 
+#[derive(Default)]
+struct FanOutMetrics {
+    forge_reads: u64,
+    forge_writes: u64,
+}
+
+impl FanOutMetrics {
+    fn read(&mut self) {
+        self.forge_reads = self.forge_reads.saturating_add(1);
+    }
+
+    fn write(&mut self) {
+        self.forge_writes = self.forge_writes.saturating_add(1);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_fan_out_completion(
+    repo_id: &RepositoryId,
+    parent_number: ItemNumber,
+    child_count: usize,
+    dependency_edge_count: usize,
+    metrics: &FanOutMetrics,
+    provider_requests: Option<u64>,
+    recovery: bool,
+    duration: Duration,
+) {
+    tracing::debug!(
+        target: "temper::workflow",
+        measurement = "fan_out.completed",
+        parent.ref = %format!("{}#{}", repo_id.as_str(), parent_number.get()),
+        child_count,
+        dependency_edge_count,
+        forge.read_total = metrics.forge_reads,
+        forge.write_total = metrics.forge_writes,
+        provider.request_total = provider_requests.unwrap_or(0),
+        provider.requests_available = provider_requests.is_some(),
+        recovery,
+        duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+        "workflow: issue fan-out completed"
+    );
+}
+
 impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Persists every fan-out before creating its first child, then executes
     /// explicit create, wiring/aggregation, activation, and completion passes.
@@ -75,6 +119,16 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         if creates.is_empty() {
             return Ok(None);
         }
+        let started = Instant::now();
+        let provider_requests_before = self.forge.provider_request_count();
+        let child_count = creates.iter().map(|create| create.children.len()).sum();
+        let dependency_edge_count = creates
+            .iter()
+            .flat_map(|create| &create.children)
+            .map(|child| child.dependencies.len())
+            .sum();
+        let mut fan_out_metrics = FanOutMetrics::default();
+        let mut recovery = false;
         let ArtifactSource::Issue {
             number: parent_number,
         } = target
@@ -104,9 +158,12 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             );
             let proposed =
                 self.intent_from_create(repo_id, parent_number, create, completion.clone());
-            let persisted = self.persist_create_intent(parent, &key, proposed).await?;
+            let persisted = self
+                .persist_create_intent(parent, &key, proposed, &mut fan_out_metrics)
+                .await?;
             parent = persisted.parent;
             if !persisted.intent.completed {
+                recovery |= !persisted.newly_inserted;
                 pending.push((
                     key,
                     persisted.intent,
@@ -122,7 +179,15 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         let mut completed = Vec::new();
         for (key, intent, mode) in pending {
             let resumed = self
-                .resume_create_intent(repo_id, parent_number, &key, intent, mode, parent)
+                .resume_create_intent(
+                    repo_id,
+                    parent_number,
+                    &key,
+                    intent,
+                    mode,
+                    parent,
+                    &mut fan_out_metrics,
+                )
                 .await?;
             parent = resumed.parent;
             completed.push(PendingIntent {
@@ -132,13 +197,31 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         }
 
         if !completed.is_empty() {
-            let (committed, changed) = self.complete_create_intents(parent, &completed).await?;
+            let (committed, changed) = self
+                .complete_create_intents(parent, &completed, &mut fan_out_metrics)
+                .await?;
             parent = committed;
             if changed {
                 self.child_issue_checkpoint(ChildIssueCheckpoint::Completed)
                     .await;
             }
         }
+
+        let provider_requests = provider_requests_before.and_then(|before| {
+            self.forge
+                .provider_request_count()
+                .map(|after| after.saturating_sub(before))
+        });
+        emit_fan_out_completion(
+            repo_id,
+            parent_number,
+            child_count,
+            dependency_edge_count,
+            &fan_out_metrics,
+            provider_requests,
+            recovery,
+            started.elapsed(),
+        );
 
         Ok(Some(AppliedState {
             labels: parent.labels,
@@ -189,6 +272,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn resume_create_intent(
         &self,
         repo_id: &RepositoryId,
@@ -197,6 +281,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         intent: CreateIssuesIntent,
         mode: IntentExecutionMode,
         parent: Issue,
+        metrics: &mut FanOutMetrics,
     ) -> Result<ResumedIntent, ExecutionError> {
         if intent.completed {
             return Ok(ResumedIntent {
@@ -207,12 +292,12 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         }
 
         let (intent, parent, children) = self
-            .create_pass(repo_id, parent_number, key, intent, mode, parent)
+            .create_pass(repo_id, parent_number, key, intent, mode, parent, metrics)
             .await?;
         let (intent, parent, children) = self
-            .wiring_and_aggregation_pass(repo_id, key, intent, parent, children)
+            .wiring_and_aggregation_pass(repo_id, key, intent, parent, children, metrics)
             .await?;
-        let (intent, children) = self.activation_pass(intent, children).await?;
+        let (intent, children) = self.activation_pass(intent, children, metrics).await?;
         debug_assert_eq!(children.len(), intent.children.len());
         Ok(ResumedIntent {
             key: key.to_string(),

@@ -1,6 +1,6 @@
 //! Child wiring and parent aggregation pass.
 
-use super::{ParentDependencyStyle, metadata_error};
+use super::{FanOutMetrics, ParentDependencyStyle, metadata_error};
 use crate::artifact::ArtifactRef;
 use crate::metadata::{
     CreateIssueIntentChild, CreateIssuesIntent, parse_metadata_block, replace_metadata_block,
@@ -20,6 +20,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         mut intent: CreateIssuesIntent,
         mut parent: Issue,
         mut issues: Vec<Issue>,
+        metrics: &mut FanOutMetrics,
     ) -> Result<(CreateIssuesIntent, Issue, Vec<Issue>), ExecutionError> {
         let child_numbers = child_number_map(&intent)?;
         for (child, issue_slot) in intent.children.iter_mut().zip(&mut issues) {
@@ -29,7 +30,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let dependencies = dependency_refs(child, &child_numbers);
             if !dependencies.is_empty() {
                 let (issue, changed) = self
-                    .write_complete_child_dependencies(issue_slot.clone(), &dependencies)
+                    .write_complete_child_dependencies(issue_slot.clone(), &dependencies, metrics)
                     .await?;
                 *issue_slot = issue;
                 if changed {
@@ -44,7 +45,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let parent_dependencies = parent_dependency_refs(repo_id, &intent)?;
             intent.parent_wired = true;
             let (committed, changed) = self
-                .aggregate_create_intent(parent, key, &intent, &parent_dependencies)
+                .aggregate_create_intent(parent, key, &intent, &parent_dependencies, metrics)
                 .await?;
             parent = committed;
             if changed {
@@ -59,6 +60,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         &self,
         mut issue: Issue,
         dependencies: &[ArtifactRef],
+        metrics: &mut FanOutMetrics,
     ) -> Result<(Issue, bool), ExecutionError> {
         for _ in 0..3 {
             let mut metadata = parse_metadata_block(&issue.body)
@@ -69,6 +71,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
             metadata.dependencies = dependencies.to_vec();
             let body = replace_metadata_block(&issue.body, &metadata).map_err(metadata_error)?;
+            metrics.write();
             match self
                 .forge
                 .update_issue_from_snapshot(
@@ -87,6 +90,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             {
                 Ok(committed) => return Ok((committed, true)),
                 Err(ForgeError::Conflict(_)) => {
+                    metrics.read();
                     issue = self
                         .forge
                         .get_issue_with_details(&issue.id, temper_forge::ItemListDetails::summary())

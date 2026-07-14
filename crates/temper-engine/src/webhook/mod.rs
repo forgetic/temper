@@ -248,13 +248,6 @@ pub(crate) fn webhook_accepted_log_line(hint: &ChangeHint) -> String {
     )
 }
 
-pub(crate) fn webhook_suppressed_log_line(hint: &ChangeHint) -> String {
-    format!(
-        "engine: webhook suppressed repo={}/{} reason=lease_heartbeat",
-        hint.repo.owner, hint.repo.name
-    )
-}
-
 fn webhook_wake_scan_log_line(repo: &RepositoryPath, enqueued: usize) -> String {
     format!(
         "engine: webhook wake scan repo={}/{} enqueued={enqueued}",
@@ -292,8 +285,19 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
     tracing::debug!("{line}");
 
     if verified.disposition == WebhookDisposition::SuppressHeartbeat {
-        let line = webhook_suppressed_log_line(hint);
-        tracing::debug!("{line}");
+        tracing::debug!(
+            target: "temper::engine",
+            service = "engine",
+            repo = %format!("{}/{}", hint.repo.owner, hint.repo.name),
+            wake.reason = "lease_heartbeat",
+            wake.scope = "targeted",
+            wake.outcome = "suppressed",
+            wake.pending_target_count = 0,
+            wake.in_flight_repository_count = 0,
+            wake.queue_latency_ms = 0_u64,
+            wake.execution_duration_ms = 0_u64,
+            "engine: wake decision"
+        );
         return Ok(0);
     }
 

@@ -1,6 +1,9 @@
 //! Create pass for durable child fan-out.
 
-use super::{IntentExecutionMode, annotate_target_repo_error, decode_intent_body, metadata_error};
+use super::{
+    FanOutMetrics, IntentExecutionMode, annotate_target_repo_error, decode_intent_body,
+    metadata_error,
+};
 use crate::artifact::ArtifactRef;
 use crate::classify::ArtifactSource;
 use crate::metadata::{
@@ -17,6 +20,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Ensures every child exists, then checkpoints all returned numbers in one
     /// parent update. Any uncertain create aborts before that checkpoint; the
     /// next invocation is recovery and discovers the landed correlation.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn create_pass(
         &self,
         repo_id: &RepositoryId,
@@ -25,9 +29,10 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         mut intent: CreateIssuesIntent,
         mode: IntentExecutionMode,
         mut parent: Issue,
+        metrics: &mut FanOutMetrics,
     ) -> Result<(CreateIssuesIntent, Issue, Vec<Issue>), ExecutionError> {
         let recovered = if mode == IntentExecutionMode::Recovery {
-            self.recover_unresolved_children(&intent).await?
+            self.recover_unresolved_children(&intent, metrics).await?
         } else {
             BTreeMap::new()
         };
@@ -38,6 +43,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         for index in 0..intent.children.len() {
             let child = intent.children[index].clone();
             let issue = if let Some(number) = child.number {
+                metrics.read();
                 self.forge
                     .get_issue_by_number_with_details(
                         &child.repository_id,
@@ -53,6 +59,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             } else {
                 let input = self.staged_child_input(repo_id, parent_number, &child)?;
                 let same_repo = child.repository_id == *repo_id;
+                metrics.write();
                 let created = self
                     .forge
                     .create_issue(&child.repository_id, input)
@@ -80,7 +87,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         }
 
         if numbers_changed {
-            parent = self.save_create_intent(parent, key, &intent).await?;
+            parent = self
+                .save_create_intent(parent, key, &intent, metrics)
+                .await?;
         }
         Ok((intent, parent, children))
     }
@@ -90,6 +99,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     async fn recover_unresolved_children(
         &self,
         intent: &CreateIssuesIntent,
+        metrics: &mut FanOutMetrics,
     ) -> Result<BTreeMap<String, Issue>, ExecutionError> {
         let mut by_repo = BTreeMap::<RepositoryId, BTreeSet<String>>::new();
         for child in intent
@@ -106,6 +116,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         let mut found = BTreeMap::new();
         for (repository_id, wanted) in by_repo {
             for state in [IssueState::Open, IssueState::Closed] {
+                metrics.read();
                 let issues = self
                     .forge
                     .list_issues(

@@ -278,6 +278,10 @@ fn default_synthetic_head(number: ItemNumber) -> String {
 
 #[async_trait]
 impl<F: Forge> Forge for CountingForge<F> {
+    fn provider_request_count(&self) -> Option<u64> {
+        self.inner.provider_request_count()
+    }
+
     async fn current_user(&self) -> ForgeResult<User> {
         self.tick(CountedForgeOp::CurrentUser);
         self.inner.current_user().await

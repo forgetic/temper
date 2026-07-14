@@ -332,9 +332,8 @@ impl DaemonMachine {
             match disposition {
                 ResultDisposition::Apply => {
                     if self.applying.is_empty() {
-                        requests.extend(Self::wake_decision_requests(
-                            self.wake_coordinator.begin_apply(),
-                        ));
+                        let decisions = self.wake_coordinator.begin_apply();
+                        requests.extend(self.wake_decision_requests(decisions));
                     }
                     self.applying.insert(job.job_id.clone());
                     requests.push(DaemonRequest::RunApply { job, result });
@@ -346,9 +345,8 @@ impl DaemonMachine {
                 // is not a terminal workflow outcome.
                 ResultDisposition::DropForRescan => {
                     if self.applying.is_empty() {
-                        requests.extend(Self::wake_decision_requests(
-                            self.wake_coordinator.begin_apply(),
-                        ));
+                        let decisions = self.wake_coordinator.begin_apply();
+                        requests.extend(self.wake_decision_requests(decisions));
                     }
                     self.applying.insert(job.job_id.clone());
                     requests.push(DaemonRequest::RunApplyAndRespond {

@@ -31,7 +31,18 @@ fn nested_applies_release_one_deferred_repository_generation_only_after_final_co
                 ),
             },
         );
-        assert!(requests.is_empty(), "no timer or run starts during apply");
+        assert!(
+            !requests.iter().any(|request| matches!(
+                request,
+                DaemonRequest::StartWakeTimer { .. } | DaemonRequest::RunWake { .. }
+            )),
+            "no timer or run starts during apply"
+        );
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            DaemonRequest::WakeMeasurement(measurement)
+                if measurement.outcome == "deferred"
+        )));
     }
 
     let nested = machine.on_completion(
@@ -64,6 +75,95 @@ fn nested_applies_release_one_deferred_repository_generation_only_after_final_co
             .iter()
             .any(|request| matches!(request, DaemonRequest::RunWake { .. }))
     );
+}
+
+#[test]
+fn wake_measurements_carry_stable_run_id_scope_counts_and_latencies() {
+    let mut machine = DaemonMachine::default_machine(Duration::ZERO);
+    let repository = RepositoryPath::new("ai", "temper");
+    let lane = WakeLane::Role(RoleId::new("engineer"));
+    machine
+        .wake_coordinator
+        .configure_repository(repository.clone(), [lane.clone()]);
+
+    let scheduled = machine.on_completion(
+        EngineTime::ZERO,
+        DaemonCompletion::ScheduleWake {
+            request: WakeRequest::targeted_for_lanes(
+                repository.clone(),
+                [lane],
+                HintArtifactKind::Issue,
+                ItemNumber::new(325),
+                ChangeKind::Label,
+            ),
+        },
+    );
+    let accepted = scheduled
+        .iter()
+        .find_map(|request| match request {
+            DaemonRequest::WakeMeasurement(measurement) => Some(measurement),
+            _ => None,
+        })
+        .expect("accepted decision is measured");
+    assert_eq!(accepted.repo, "ai/temper");
+    assert_eq!(accepted.role.as_deref(), Some("engineer"));
+    assert_eq!(accepted.reason, "label");
+    assert_eq!(accepted.scope, "targeted");
+    assert_eq!(accepted.outcome, "accepted");
+    assert_eq!(accepted.pending_target_count, 1);
+    let generation = scheduled
+        .iter()
+        .find_map(|request| match request {
+            DaemonRequest::StartWakeTimer { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .expect("timer is armed");
+
+    let started = machine.on_completion(
+        EngineTime::from_nanos(2_000_000),
+        DaemonCompletion::WakeTimerElapsed {
+            repo: repository,
+            generation,
+        },
+    );
+    let start_measurement = started
+        .iter()
+        .find_map(|request| match request {
+            DaemonRequest::WakeMeasurement(measurement) => Some(measurement),
+            _ => None,
+        })
+        .expect("start is measured");
+    assert_eq!(start_measurement.run_id.as_deref(), Some("ai/temper:1"));
+    assert_eq!(start_measurement.phase, "start");
+    assert_eq!(start_measurement.queue_latency_ms, 2);
+    assert_eq!(start_measurement.in_flight_repository_count, 1);
+    let work = started
+        .into_iter()
+        .find_map(|request| match request {
+            DaemonRequest::RunWake { work } => Some(work),
+            _ => None,
+        })
+        .expect("wake work starts");
+
+    let finished = machine.on_completion(
+        EngineTime::from_nanos(7_000_000),
+        DaemonCompletion::WakeFinished {
+            work,
+            outcome: WakeOutcome::Succeeded,
+        },
+    );
+    let finish_measurement = finished
+        .iter()
+        .find_map(|request| match request {
+            DaemonRequest::WakeMeasurement(measurement) if measurement.phase == "finish" => {
+                Some(measurement)
+            }
+            _ => None,
+        })
+        .expect("completion is measured");
+    assert_eq!(finish_measurement.run_id.as_deref(), Some("ai/temper:1"));
+    assert_eq!(finish_measurement.execution_duration_ms, 5);
+    assert_eq!(finish_measurement.in_flight_repository_count, 0);
 }
 
 #[test]

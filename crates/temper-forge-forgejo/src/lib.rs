@@ -40,6 +40,7 @@ pub use provision::{ROLE_PASSWORD, admin_token_via_basic_auth};
 pub use read_only_basic::ReadOnlyBasicAuthClient;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use version::VersionCache;
 
@@ -53,6 +54,8 @@ pub struct ForgejoForge<C = EngineHttpClient> {
     config: ForgejoConfig,
     client: C,
     versions: Arc<VersionCache>,
+    /// Cumulative provider requests, shared by clones for per-apply deltas.
+    provider_requests: Arc<AtomicU64>,
     /// Repository-scoped label name/id maps used by issue fan-out. Forgejo's
     /// issue endpoints require numeric ids, while the portable surface uses
     /// names. Shared across clones and invalidated after label upserts.
@@ -121,9 +124,21 @@ impl<C: HttpClient> ForgejoForge<C> {
             config,
             client,
             versions: Arc::new(VersionCache::default()),
+            provider_requests: Arc::new(AtomicU64::new(0)),
             label_ids: Arc::new(Mutex::new(HashMap::new())),
             ci_reads: Arc::new(ci_cache::CiReadCache::default()),
         }
+    }
+
+    /// Returns the cumulative number of provider requests sent by this backend
+    /// backend instance and its clones.
+    pub fn provider_request_count(&self) -> u64 {
+        self.provider_requests.load(Ordering::Relaxed)
+    }
+
+    /// Records one provider request that is about to cross the HTTP seam.
+    pub(crate) fn record_provider_request(&self) {
+        self.provider_requests.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Returns the underlying HTTP client.
