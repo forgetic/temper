@@ -70,6 +70,7 @@ impl RealWorkerProfile {
             max_concurrent_jobs: self.max_concurrent_jobs,
             poll_wait: self.poll_wait,
             heartbeat_interval: self.heartbeat_interval,
+            agent_traces: Default::default(),
             executor: ExecutorSelection::Stub,
         }
     }

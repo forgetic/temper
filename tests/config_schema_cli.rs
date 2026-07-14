@@ -46,6 +46,7 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
         "deployment",
         "workflow",
         "paths",
+        "observability",
         "forge",
         "engine",
         "worker",
@@ -78,6 +79,17 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
         properties["paths"]["properties"]["workspace_dir"]["type"],
         "string"
     );
+    let traces = &properties["observability"]["properties"]["agent_traces"];
+    assert_eq!(traces["type"], "object");
+    assert_eq!(traces["additionalProperties"], false);
+    assert_eq!(
+        traces["properties"]["capture"]["enum"],
+        json!(["off", "metadata", "transcript", "diagnostic"])
+    );
+    assert_eq!(traces["properties"]["retention_days"]["minimum"], 1);
+    assert_eq!(traces["properties"]["max_run_bytes"]["minimum"], 1);
+    assert_eq!(traces["properties"]["capture_thinking"]["type"], "boolean");
+    assert_eq!(traces["properties"]["read_token"]["type"], "string");
 
     assert_eq!(properties["forge"]["properties"]["url"]["type"], "string");
     assert_eq!(properties["engine"]["properties"]["repos"]["type"], "array");

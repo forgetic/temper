@@ -25,6 +25,10 @@ pub use validation::{
     validate_run_event, validate_run_stream, validate_scope_ancestry,
 };
 
+/// CLI flag carrying a worker-written, non-secret capture policy JSON file to
+/// the first-party agent process.
+pub const TRACE_POLICY_FLAG: &str = "--trace-policy";
+
 /// Current agent activity wire-contract version.
 pub const ACTIVITY_PROTOCOL_VERSION: u32 = 1;
 

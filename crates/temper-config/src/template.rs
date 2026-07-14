@@ -14,6 +14,17 @@ pub fn config_template() -> String {
 # Secrets (forge tokens/passwords, LLM credentials) live in the credentials file.
 schema_version = 1
 
+[observability.agent_traces]
+# Durable traces live below [paths] state_dir, never below a workstream checkout.
+# If no durable state directory can be resolved, tracing is disabled with a warning.
+capture = \"metadata\"       # off | metadata | transcript | diagnostic
+retention_days = 14
+max_run_bytes = 50000000
+capture_thinking = false    # valid only with capture = \"diagnostic\"
+# Optional named secret enabling transcript-bearing query routes. The name and
+# availability may be displayed; the token value is never printed.
+# read_token = \"agent-trace-read-token\"
+
 [forge]
 # Forge backend. Only \"forgejo\" is supported today.
 type = \"forgejo\"
@@ -111,6 +122,7 @@ token = \"<bot-rest-token>\"
 # [secrets]
 # forge-engine-token = \"<engine-forge-token>\"
 # webhook-secret = \"<webhook-hmac-secret>\"
+# agent-trace-read-token = \"<trace-query-bearer-token>\"
 #
 # Structured entries are also accepted:
 # [secrets.agent-provider]

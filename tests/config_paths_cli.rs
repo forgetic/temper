@@ -58,6 +58,16 @@ fn config_paths_human_reports_default_locations() {
         stdout.contains(&path_text(&state_dir.join("workspace"))),
         "{stdout}"
     );
+    assert!(stdout.contains("trace journal dir:"), "{stdout}");
+    assert!(
+        stdout.contains(&path_text(&state_dir.join("agent-traces/journal"))),
+        "{stdout}"
+    );
+    assert!(stdout.contains("trace spool dir:"), "{stdout}");
+    assert!(
+        stdout.contains(&path_text(&state_dir.join("agent-traces/worker-spool"))),
+        "{stdout}"
+    );
     assert!(stdout.contains("workflow file:"), "{stdout}");
 }
 
@@ -110,6 +120,14 @@ fn config_paths_json_reports_explicit_bundle_and_configured_paths() {
     );
     assert_eq!(value["state_dir"], path_text(&state));
     assert_eq!(value["workspace_dir"], path_text(&workspace));
+    assert_eq!(
+        value["engine_trace_journal_dir"],
+        path_text(&state.join("agent-traces/journal"))
+    );
+    assert_eq!(
+        value["worker_trace_spool_dir"],
+        path_text(&state.join("agent-traces/worker-spool"))
+    );
     assert_eq!(value["workflow_file"], path_text(&workflow));
 }
 

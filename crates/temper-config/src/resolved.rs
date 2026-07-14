@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use secrecy::SecretString;
+use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
 
 use crate::error::ConfigError;
 
@@ -34,6 +35,7 @@ use crate::error::ConfigError;
 pub struct Resolved {
     pub deployment: DeploymentSettings,
     pub paths: PathSettings,
+    pub observability: ObservabilitySettings,
     pub forge: ForgeSettings,
     pub engine: EngineSettings,
     pub worker: WorkerSettings,
@@ -70,6 +72,56 @@ pub struct PathSettings {
     pub state_dir: Option<PathBuf>,
     pub workspace_dir: PathBuf,
     pub workflow_file: Option<PathBuf>,
+}
+
+/// Resolved observability settings shared by every service adapter.
+#[derive(Debug, Clone)]
+pub struct ObservabilitySettings {
+    pub agent_traces: AgentTraceSettings,
+}
+
+/// One resolved model for agent trace capture, storage, and query access.
+///
+/// `policy` is the shared protocol DTO consumed by workers and agents. Secret
+/// inspection metadata and the runtime bearer value are deliberately separate;
+/// `SecretString` redacts the value in `Debug`, and [`Resolved`] is not
+/// serializable. Trace roots derive only from `paths.state_dir`, never from a
+/// coordination-scoped workspace checkout.
+#[derive(Debug, Clone)]
+pub struct AgentTraceSettings {
+    pub policy: AgentActivityCapturePolicyV1,
+    pub read_token: Option<SecretReference>,
+    pub read_token_value: Option<SecretString>,
+    pub engine_journal_root: Option<PathBuf>,
+    pub worker_spool_root: Option<PathBuf>,
+}
+
+impl AgentTraceSettings {
+    /// Whether the operator requested trace capture. Storage can still be
+    /// unavailable, in which case service adapters use an effective `off`
+    /// policy and emit a warning.
+    pub fn capture_requested(&self) -> bool {
+        self.policy.capture != CaptureModeV1::Off
+    }
+
+    /// A copy of the configured policy disabled when `storage_root` is absent.
+    pub fn policy_for_storage(
+        &self,
+        storage_root: Option<&std::path::Path>,
+    ) -> AgentActivityCapturePolicyV1 {
+        let mut policy = self.policy.clone();
+        if storage_root.is_none() {
+            policy.capture = CaptureModeV1::Off;
+            policy.capture_thinking = false;
+        }
+        policy
+    }
+
+    /// Transcript-bearing query routes are enabled only when a non-empty named
+    /// token value resolved successfully.
+    pub fn transcript_queries_enabled(&self) -> bool {
+        self.read_token_value.is_some()
+    }
 }
 
 /// Resolved forge connection + identities.

@@ -113,6 +113,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome, Str
         max_concurrent_jobs,
         poll_wait: Duration::from_millis(poll_wait_ms),
         heartbeat_interval: Duration::from_millis(heartbeat_interval_ms),
+        agent_traces: Default::default(),
         executor,
     }))
 }

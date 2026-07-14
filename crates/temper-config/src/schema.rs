@@ -22,6 +22,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use temper_protocol_activity::CaptureModeV1;
 
 /// The schema version this binary reads and writes. A file declaring any other
 /// version is rejected with a clear message (see [`crate::load`]).
@@ -43,6 +44,8 @@ pub struct Config {
     pub workflow: WorkflowConfig,
     #[serde(default, skip_serializing_if = "PathsConfig::is_empty")]
     pub paths: PathsConfig,
+    #[serde(default, skip_serializing_if = "ObservabilityConfig::is_empty")]
+    pub observability: ObservabilityConfig,
     #[serde(default, skip_serializing_if = "ForgeConfig::is_empty")]
     pub forge: ForgeConfig,
     #[serde(default, skip_serializing_if = "EngineConfig::is_empty")]
@@ -108,6 +111,56 @@ impl PathsConfig {
     /// `true` when every field is unset, so the section can be omitted entirely.
     fn is_empty(&self) -> bool {
         self.state_dir.is_none() && self.workspace_dir.is_none()
+    }
+}
+
+/// `[observability]` — operator-visible telemetry and durable activity settings.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObservabilityConfig {
+    /// Durable agent-session trace capture and query authorization.
+    #[serde(default, skip_serializing_if = "AgentTraceConfig::is_empty")]
+    pub agent_traces: AgentTraceConfig,
+}
+
+impl ObservabilityConfig {
+    fn is_empty(&self) -> bool {
+        self.agent_traces.is_empty()
+    }
+}
+
+/// `[observability.agent_traces]` — capture, retention, quota, and read access.
+///
+/// Defaults and cross-field validation are applied during resolution. The
+/// capture enum comes from `temper-protocol-activity`, so config, worker, and
+/// agent code cannot acquire different mode vocabularies.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentTraceConfig {
+    /// Capture level: `off`, `metadata`, `transcript`, or `diagnostic`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<CaptureModeV1>,
+    /// Number of days completed traces remain eligible for retention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<u32>,
+    /// Hard byte budget for one canonical run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_run_bytes: Option<u64>,
+    /// Whether diagnostic capture may include bounded model-thinking deltas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_thinking: Option<bool>,
+    /// Named secret reference authorizing transcript-bearing query routes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_token: Option<String>,
+}
+
+impl AgentTraceConfig {
+    fn is_empty(&self) -> bool {
+        self.capture.is_none()
+            && self.retention_days.is_none()
+            && self.max_run_bytes.is_none()
+            && self.capture_thinking.is_none()
+            && self.read_token.is_none()
     }
 }
 

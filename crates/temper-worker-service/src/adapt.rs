@@ -14,7 +14,8 @@ use temper_worker::workspace::RoleGitIdentity;
 use temper_worker::{
     AgentToolConfig, CodebaseMemoryIndex as ProtocolCodebaseMemoryIndex,
     CodebaseMemoryMode as ProtocolCodebaseMemoryMode,
-    CodebaseMemoryToolConfig as ProtocolCodebaseMemoryToolConfig, WorkerAuth,
+    CodebaseMemoryToolConfig as ProtocolCodebaseMemoryToolConfig, WorkerAgentTraceConfig,
+    WorkerAuth,
 };
 
 /// Builds the worker runtime config. The `executor` field is a placeholder
@@ -53,8 +54,20 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
         max_concurrent_jobs: worker.max_concurrent_jobs,
         poll_wait: worker.poll_wait,
         heartbeat_interval: worker.heartbeat_interval,
+        agent_traces: worker_agent_trace_config(resolved),
         executor: ExecutorSelection::Stub,
     })
+}
+
+/// Projects resolved trace policy and the durable spool root into the worker
+/// subsystem config. Missing durable state produces an effective `off` policy;
+/// the service runtime reports that degradation without failing product work.
+pub fn worker_agent_trace_config(resolved: &Resolved) -> WorkerAgentTraceConfig {
+    let traces = &resolved.observability.agent_traces;
+    WorkerAgentTraceConfig {
+        policy: traces.policy_for_storage(traces.worker_spool_root.as_deref()),
+        spool_root: traces.worker_spool_root.clone(),
+    }
 }
 
 /// The selected worker pool's bearer credential, if its policy declares a
@@ -124,6 +137,9 @@ pub struct AgentInvocation {
     pub command: Vec<String>,
     pub env: Vec<(String, String)>,
     pub tool_config: Option<AgentToolConfig>,
+    /// Effective shared capture policy for a known first-party agent command.
+    /// `None` keeps explicit third-party profile commands flag-compatible.
+    pub trace_policy: Option<temper_config::AgentActivityCapturePolicyV1>,
 }
 
 /// Assembles the agent command and the environment injected into it.
@@ -142,16 +158,25 @@ pub fn agent_invocation(
     resolved: &Resolved,
     program: &[String],
 ) -> Result<AgentInvocation, String> {
-    let (command, env) = if let Some((pool, profile)) = selected_agent_profile(resolved)? {
-        profile_agent_command_and_env(pool, profile, program)?
-    } else {
-        legacy_agent_command_and_env(resolved, program)
-    };
+    let (command, env, first_party) =
+        if let Some((pool, profile)) = selected_agent_profile(resolved)? {
+            let first_party =
+                profile.command.is_empty() || is_first_party_agent_command(&profile.command);
+            let (command, env) = profile_agent_command_and_env(pool, profile, program)?;
+            (command, env, first_party)
+        } else {
+            let (command, env) = legacy_agent_command_and_env(resolved, program);
+            (command, env, true)
+        };
 
     Ok(AgentInvocation {
         command,
         env,
         tool_config: agent_tool_config(resolved),
+        trace_policy: first_party.then(|| {
+            let traces = &resolved.observability.agent_traces;
+            traces.policy_for_storage(traces.worker_spool_root.as_deref())
+        }),
     })
 }
 
@@ -263,6 +288,18 @@ fn provider_flag(kind: ProviderKind) -> &'static str {
         ProviderKind::ChatGpt => "chatgpt",
         ProviderKind::Anthropic => "anthropic",
     }
+}
+
+fn is_first_party_agent_command(command: &[String]) -> bool {
+    let Some(program) = command.first() else {
+        return false;
+    };
+    let executable = std::path::Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    executable == "temper-agent"
+        || (executable == "temper" && command.get(1).is_some_and(|arg| arg == "agent"))
 }
 
 /// Converts resolved non-secret agent tool settings into the worker→agent JSON
@@ -392,6 +429,31 @@ mod tests {
                 .any(|part| part.contains("sk-profile")),
             "profile credential must not be passed on argv"
         );
+        assert!(
+            invocation.trace_policy.is_some(),
+            "explicit first-party profile commands receive capture policy"
+        );
+    }
+
+    #[test]
+    fn explicit_third_party_profile_command_omits_first_party_trace_flag() {
+        let mut resolved = resolved_with_profile_pool();
+        resolved.worker.selected_pool = Some("engineers".to_string());
+        resolved
+            .agent
+            .profiles
+            .get_mut("profiled")
+            .expect("profiled profile")
+            .command = vec!["vendor-agent".to_string()];
+
+        let invocation =
+            agent_invocation(&resolved, &["default-agent".to_string()]).expect("invocation");
+
+        assert_eq!(
+            invocation.command.first().map(String::as_str),
+            Some("vendor-agent")
+        );
+        assert!(invocation.trace_policy.is_none());
     }
 
     #[test]
@@ -425,6 +487,7 @@ mod tests {
         assert_eq!(invocation.env.len(), 1);
         assert_eq!(invocation.env[0].0, provider::PROVIDER_CREDENTIALS_ENV);
         assert!(invocation.env[0].1.contains("sk-legacy"));
+        assert!(invocation.trace_policy.is_some());
         assert!(
             !invocation
                 .command

@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use temper_agent::{
     AuthChoice, ProviderConfig, ProviderEnv, XDG_CONFIG_HOME_ENV, resolve_config_dir_from,
 };
+use temper_protocol_activity::AgentActivityCapturePolicyV1;
 use temper_protocol_agent::{
     AgentToolConfig, PROVIDER_CREDENTIALS_ENV, ProviderCredentialJson, WorkspaceContext,
 };
@@ -101,7 +102,8 @@ fn build_config(
         options.subagents,
         config_dir,
     )
-    .with_tool_config(read_tool_config(options.tool_config.as_deref())?);
+    .with_tool_config(read_tool_config(options.tool_config.as_deref())?)
+    .with_trace_policy(read_trace_policy(options.trace_policy.as_deref())?);
     let config = match options.submit_for_pr_address {
         Some(address) => config.with_submit_for_pr(crate::submit_client::host_for_address(address)),
         None => config,
@@ -123,6 +125,24 @@ fn read_tool_config(path: Option<&std::path::Path>) -> Result<Option<AgentToolCo
     AgentToolConfig::from_json(&raw)
         .map(Some)
         .map_err(|error| format!("parse tool config file {}: {error}", path.display()))
+}
+
+/// Reads and validates the non-secret shared capture-policy DTO. An absent file
+/// preserves the protocol's metadata-capture default for direct agent runs.
+fn read_trace_policy(
+    path: Option<&std::path::Path>,
+) -> Result<AgentActivityCapturePolicyV1, String> {
+    let Some(path) = path else {
+        return Ok(AgentActivityCapturePolicyV1::default());
+    };
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| format!("read trace policy file {}: {error}", path.display()))?;
+    let policy: AgentActivityCapturePolicyV1 = serde_json::from_str(&raw)
+        .map_err(|error| format!("parse trace policy file {}: {error}", path.display()))?;
+    policy
+        .validate()
+        .map_err(|error| format!("validate trace policy file {}: {error}", path.display()))?;
+    Ok(policy)
 }
 
 /// Builds the [`ProviderConfig`] from the flags + the parsed credential.
@@ -320,6 +340,41 @@ mod tests {
         std::fs::write(&invalid, "not json").expect("write invalid json");
         let parse_error = read_tool_config(Some(&invalid)).expect_err("invalid json fails");
         assert!(parse_error.contains("parse tool config file"));
+    }
+
+    #[test]
+    fn trace_policy_defaults_and_validates_worker_file() {
+        assert_eq!(
+            read_trace_policy(None).expect("default policy"),
+            AgentActivityCapturePolicyV1::default()
+        );
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let valid = temp.path().join("trace-policy.json");
+        let mut policy = AgentActivityCapturePolicyV1 {
+            capture: temper_protocol_activity::CaptureModeV1::Diagnostic,
+            capture_thinking: true,
+            ..Default::default()
+        };
+        std::fs::write(
+            &valid,
+            serde_json::to_vec(&policy).expect("serialize policy"),
+        )
+        .expect("write policy");
+        assert_eq!(
+            read_trace_policy(Some(&valid)).expect("valid policy"),
+            policy
+        );
+
+        policy.capture = temper_protocol_activity::CaptureModeV1::Metadata;
+        let invalid = temp.path().join("invalid-trace-policy.json");
+        std::fs::write(
+            &invalid,
+            serde_json::to_vec(&policy).expect("serialize policy"),
+        )
+        .expect("write policy");
+        let error = read_trace_policy(Some(&invalid)).expect_err("invalid policy fails");
+        assert!(error.contains("capture_thinking"), "{error}");
     }
 
     /// `entry` (plus the binary shim) is the only module in this crate and in
