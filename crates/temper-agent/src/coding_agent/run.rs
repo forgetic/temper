@@ -276,6 +276,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
         tool_config,
         submit_for_pr,
         None,
+        crate::activity::AgentActivityConfig::default(),
     )
     .await
 }
@@ -294,10 +295,15 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     tool_config: Option<&AgentToolConfig>,
     submit_for_pr: Option<SubmitForPrHost>,
     forge_context: Option<ForgeContextHost>,
+    activity_config: crate::activity::AgentActivityConfig,
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let codebase_memory =
         prepare_codebase_memory_tools(tool_config, &context.work_item.role, context, cwd).await?;
+    let model_identity = temper_agent_core::ModelIdentity::new(
+        provider_config.provider_id(),
+        provider_config.model_id(),
+    );
     let provider = provider_config.build_provider()?;
 
     let mut role_prompt = system_prompt_with_contracts(
@@ -328,13 +334,13 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
         ..tongs::provider::StreamOptions::default()
     };
 
-    // Token accounting: one shared totals ledger across the main run and all
-    // nested sub-agent runs; per-turn/tool lines plus an end-of-run summary
-    // go to stderr (stdout is the protocol stream).
+    // One normalizer feeds every projection: totals/tracing and, when present,
+    // the bounded child-to-worker activity channel.
     let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
-    let events: std::sync::Arc<dyn temper_agent_core::EventSink> = std::sync::Arc::new(
-        crate::usage::UsageLogger::new(crate::usage::MAIN_SCOPE, std::sync::Arc::clone(&totals)),
-    );
+    let scope_factory =
+        crate::activity::ScopeFactory::new(activity_config, std::sync::Arc::clone(&totals));
+    let main_observability = scope_factory.main(crate::usage::MAIN_SCOPE, model_identity.clone());
+    let main_scope_id = main_observability.scope_id.clone();
 
     let submit_for_pr: Option<SubmitForPrCallback> = submit_for_pr
         .filter(|_| super::submit_for_pr_available(context))
@@ -349,7 +355,8 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
             provider_config,
             &stream_options,
             cwd,
-            &totals,
+            &scope_factory,
+            &main_scope_id,
         );
     }
 
@@ -367,10 +374,10 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     let arg_preview = crate::usage::tool_arg_preview_hook(cwd.to_path_buf());
     let model_id = provider_config.model_id().to_string();
     let outcome = async {
-        let (_control, run) = temper_agent_core::run_sub_agent_controllable_with_hooks(
+        let (_control, run) = temper_agent_core::run_sub_agent_controllable_with_observability(
             handle.clone(),
             sub_agent,
-            events,
+            main_observability.observability,
             None,
             Some(arg_preview),
         )?;

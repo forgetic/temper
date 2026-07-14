@@ -177,7 +177,8 @@ pub(crate) fn add_subagents(
     provider_config: &ProviderConfig,
     stream_options: &tongs::provider::StreamOptions,
     cwd: &Path,
-    totals: &std::sync::Arc<crate::usage::UsageTotals>,
+    scope_factory: &crate::activity::ScopeFactory,
+    parent_scope_id: &str,
 ) -> ToolRegistry {
     for spec in subagent_specs() {
         base = add_one_subagent(
@@ -187,7 +188,7 @@ pub(crate) fn add_subagents(
             provider_config,
             stream_options,
             cwd,
-            totals,
+            (scope_factory, parent_scope_id),
         );
     }
     base
@@ -201,7 +202,7 @@ fn add_one_subagent(
     provider_config: &ProviderConfig,
     stream_options: &tongs::provider::StreamOptions,
     cwd: &Path,
-    totals: &std::sync::Arc<crate::usage::UsageTotals>,
+    scope: (&crate::activity::ScopeFactory, &str),
 ) -> ToolRegistry {
     // The role's model tier. The cheap tier (e.g. Haiku) is for the read-only
     // searcher whose product is a focused report and which dominates token spend
@@ -219,6 +220,11 @@ fn add_one_subagent(
     // only the headers need to change.
     let mut stream_options = stream_options.clone();
     stream_options.headers = provider_config.request_headers();
+    let observer_provider = provider_config.provider_id().to_string();
+    let observer_model = provider_config.model_id().to_string();
+    let observer_factory = scope.0.clone();
+    let observer_parent = scope.1.to_string();
+    let observer_display_name = spec.name.to_string();
     let cwd = cwd.to_path_buf();
     let prompt = spec.prompt;
     let with_bash = spec.with_bash;
@@ -260,10 +266,18 @@ fn add_one_subagent(
             tongs::tools::ToolEffects::read(),
             factory,
         )
-        .with_events(std::sync::Arc::new(crate::usage::UsageLogger::new(
-            spec.name,
-            std::sync::Arc::clone(totals),
-        ))),
+        .with_observer_factory(std::sync::Arc::new(move || {
+            observer_factory
+                .child(
+                    observer_parent.clone(),
+                    observer_display_name.clone(),
+                    temper_agent_core::ModelIdentity::new(
+                        observer_provider.clone(),
+                        observer_model.clone(),
+                    ),
+                )
+                .observability
+        })),
     ));
     base
 }

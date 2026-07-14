@@ -12,8 +12,17 @@ use futures::StreamExt;
 use tongs::model::{AssistantMessage, Message, StopReason, StreamEvent};
 use tongs::provider::{Context, Provider, StreamOptions, ToolDef};
 
-use crate::machine::{AgentCompletion, AgentEvent, StreamDelta};
-use crate::shell::EventSink;
+use crate::machine::{AgentCompletion, AgentEvent, ModelCallStatus, StreamDelta};
+use crate::shell::{EventClock, EventSink, ModelIdentity};
+
+/// Per-call observability carried as one value so model identity, scope sink,
+/// turn, and monotonic clock cannot drift across attempt retries.
+pub(super) struct ModelCallObservability<'a> {
+    pub(super) turn: usize,
+    pub(super) model: &'a ModelIdentity,
+    pub(super) clock: &'a dyn EventClock,
+    pub(super) events: &'a dyn EventSink,
+}
 
 /// How long to wait for the provider to start responding (connect + TLS +
 /// request write + first stream event) before treating the call as stalled.
@@ -124,8 +133,14 @@ pub(super) async fn stream_to_completion(
     messages: &[Message],
     tool_defs: &[ToolDef],
     stream_options: &StreamOptions,
-    events: &dyn EventSink,
+    observability: ModelCallObservability<'_>,
 ) -> AgentCompletion {
+    let ModelCallObservability {
+        turn,
+        model,
+        clock,
+        events,
+    } = observability;
     let context = Context {
         system_prompt: system_prompt.map(std::borrow::Cow::Borrowed),
         messages: std::borrow::Cow::Borrowed(messages),
@@ -139,22 +154,75 @@ pub(super) async fn stream_to_completion(
     // Retry only happens before any terminal message is assembled, so a model
     // turn never double-emits. A terminal provider error message (the model
     // chose to stop with an error) is NOT a transport fault and is surfaced as-is.
-    let mut attempt = 0usize;
+    let mut attempt = 0u32;
     let retry_config = stream_retry_config();
+    let call_id = format!("turn-{turn}");
     loop {
-        match stream_one_attempt(provider, &context, stream_options, events).await {
-            StreamAttempt::Responded(message) => {
+        let started_ms = clock.now_millis();
+        events.emit(AgentEvent::ModelCallStarted {
+            turn,
+            call_id: call_id.clone(),
+            attempt,
+            provider: model.provider.clone(),
+            model: model.model.clone(),
+        });
+        match stream_one_attempt(
+            provider,
+            &context,
+            stream_options,
+            clock,
+            started_ms,
+            events,
+        )
+        .await
+        {
+            StreamAttempt::Responded {
+                message,
+                time_to_first_token_ms,
+            } => {
+                let duration_ms = clock.now_millis().saturating_sub(started_ms);
+                events.emit(AgentEvent::ModelCallFinished {
+                    turn,
+                    call_id,
+                    attempt,
+                    status: ModelCallStatus::Succeeded,
+                    duration_ms,
+                    time_to_first_token_ms,
+                    stop_reason: Some(message.stop_reason),
+                    usage: message.usage,
+                    failure: None,
+                });
                 return AgentCompletion::LlmResponded(message);
             }
-            StreamAttempt::Failed { reason, retryable } => {
-                let will_retry = retryable && attempt < retry_config.max_retries;
-                events.emit(AgentEvent::ModelCallFailed {
-                    reason: reason.clone(),
-                    will_retry,
+            StreamAttempt::Failed {
+                reason,
+                retryable,
+                time_to_first_token_ms,
+            } => {
+                let duration_ms = clock.now_millis().saturating_sub(started_ms);
+                events.emit(AgentEvent::ModelCallFinished {
+                    turn,
+                    call_id: call_id.clone(),
+                    attempt,
+                    status: ModelCallStatus::Failed,
+                    duration_ms,
+                    time_to_first_token_ms,
+                    stop_reason: None,
+                    usage: tongs::model::Usage::default(),
+                    failure: Some(reason.clone()),
                 });
+                let will_retry = retryable && (attempt as usize) < retry_config.max_retries;
                 if will_retry {
-                    temper_agent_io::sleep_for(retry_config.backoff(attempt)).await;
-                    attempt += 1;
+                    let delay = retry_config.backoff(attempt as usize);
+                    events.emit(AgentEvent::ModelCallRetrying {
+                        turn,
+                        call_id: call_id.clone(),
+                        next_attempt: attempt.saturating_add(1),
+                        delay_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                        reason: reason.clone(),
+                    });
+                    temper_agent_io::sleep_for(delay).await;
+                    attempt = attempt.saturating_add(1);
                     continue;
                 }
                 return AgentCompletion::LlmFailed(reason);
@@ -166,10 +234,17 @@ pub(super) async fn stream_to_completion(
 /// Outcome of one streaming attempt.
 enum StreamAttempt {
     /// The turn produced a terminal assistant message (normal or model-chosen error).
-    Responded(AssistantMessage),
+    Responded {
+        message: AssistantMessage,
+        time_to_first_token_ms: Option<u64>,
+    },
     /// The attempt failed before a terminal message; `retryable` says whether a
     /// fresh attempt could plausibly succeed (transport / overload faults).
-    Failed { reason: String, retryable: bool },
+    Failed {
+        reason: String,
+        retryable: bool,
+        time_to_first_token_ms: Option<u64>,
+    },
 }
 
 /// Runs one streaming attempt with liveness timeouts. Live deltas are forwarded
@@ -179,8 +254,11 @@ async fn stream_one_attempt(
     provider: &dyn Provider,
     context: &Context<'_>,
     stream_options: &StreamOptions,
+    clock: &dyn EventClock,
+    started_ms: u64,
     events: &dyn EventSink,
 ) -> StreamAttempt {
+    let mut time_to_first_token_ms = None;
     // Liveness guard: a healthy model turn emits stream events steadily, but the
     // provider HTTP path (skein) has no socket read timeout, so a stalled
     // connection would block this task — and, in a parallel `investigate`
@@ -200,6 +278,7 @@ async fn stream_one_attempt(
             return StreamAttempt::Failed {
                 reason: error.to_string(),
                 retryable,
+                time_to_first_token_ms,
             };
         }
         Err(_) => {
@@ -209,6 +288,7 @@ async fn stream_one_attempt(
                     STREAM_CONNECT_TIMEOUT.as_secs()
                 ),
                 retryable: true,
+                time_to_first_token_ms,
             };
         }
     };
@@ -222,6 +302,7 @@ async fn stream_one_attempt(
                     // A clean EOF with no terminal event is usually a dropped
                     // connection mid-stream — worth one more try.
                     retryable: true,
+                    time_to_first_token_ms,
                 };
             }
             Err(_) => {
@@ -231,12 +312,16 @@ async fn stream_one_attempt(
                         STREAM_IDLE_TIMEOUT.as_secs()
                     ),
                     retryable: true,
+                    time_to_first_token_ms,
                 };
             }
         };
         match event {
             Ok(StreamEvent::Done { message, .. }) => {
-                return StreamAttempt::Responded(message);
+                return StreamAttempt::Responded {
+                    message,
+                    time_to_first_token_ms,
+                };
             }
             Ok(StreamEvent::Error { error, .. }) => {
                 // The provider produced a terminal error message; surface it as
@@ -245,15 +330,21 @@ async fn stream_one_attempt(
                 // a transport fault, so it is not retried.
                 let mut message = error;
                 message.stop_reason = StopReason::Error;
-                return StreamAttempt::Responded(message);
+                return StreamAttempt::Responded {
+                    message,
+                    time_to_first_token_ms,
+                };
             }
             Ok(StreamEvent::TextDelta { delta, .. }) => {
+                mark_first_token(&mut time_to_first_token_ms, clock, started_ms);
                 events.emit(AgentEvent::StreamDelta(StreamDelta::Text(delta)));
             }
             Ok(StreamEvent::ThinkingDelta { delta, .. }) => {
+                mark_first_token(&mut time_to_first_token_ms, clock, started_ms);
                 events.emit(AgentEvent::StreamDelta(StreamDelta::Thinking(delta)));
             }
             Ok(StreamEvent::ToolCallEnd { tool_call, .. }) => {
+                mark_first_token(&mut time_to_first_token_ms, clock, started_ms);
                 events.emit(AgentEvent::StreamDelta(StreamDelta::ToolCall {
                     id: tool_call.id,
                     name: tool_call.name,
@@ -265,9 +356,20 @@ async fn stream_one_attempt(
                 return StreamAttempt::Failed {
                     reason: error.to_string(),
                     retryable,
+                    time_to_first_token_ms,
                 };
             }
         }
+    }
+}
+
+fn mark_first_token(
+    time_to_first_token_ms: &mut Option<u64>,
+    clock: &dyn EventClock,
+    started_ms: u64,
+) {
+    if time_to_first_token_ms.is_none() {
+        *time_to_first_token_ms = Some(clock.now_millis().saturating_sub(started_ms));
     }
 }
 
@@ -291,8 +393,14 @@ fn is_retryable(error: &tongs::error::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_retryable;
+    use super::{ModelCallObservability, is_retryable, stream_to_completion};
+    use crate::machine::{AgentEvent, ModelCallStatus};
+    use crate::shell::{EventClock, EventSink, ModelIdentity};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
     use tongs::error::Error;
+    use tongs::model::{AssistantMessage, StopReason, StreamEvent, Usage};
+    use tongs::provider::{Context, EventStream, Provider, StreamOptions};
 
     #[test]
     fn transport_and_overload_errors_are_retryable() {
@@ -311,6 +419,121 @@ mod tests {
             status: 529,
             message: "overloaded".into()
         }));
+    }
+
+    #[test]
+    fn model_attempt_timing_and_usage_use_the_injected_clock() {
+        struct FakeClock(Mutex<VecDeque<u64>>);
+        impl EventClock for FakeClock {
+            fn now_millis(&self) -> u64 {
+                self.0
+                    .lock()
+                    .expect("clock")
+                    .pop_front()
+                    .expect("clock value")
+            }
+        }
+
+        struct FakeProvider;
+        #[async_trait::async_trait]
+        impl Provider for FakeProvider {
+            fn api(&self) -> &str {
+                "fake-api"
+            }
+
+            async fn stream(
+                &self,
+                _context: &Context<'_>,
+                _options: &StreamOptions,
+            ) -> tongs::Result<EventStream> {
+                let message = AssistantMessage {
+                    content: Vec::new(),
+                    api: "fake-api".to_string(),
+                    provider: "fake-provider".to_string(),
+                    model: "fake-model".to_string(),
+                    usage: Usage {
+                        input: 11,
+                        output: 7,
+                        cache_read: 5,
+                        cache_write: 3,
+                        ..Usage::default()
+                    },
+                    stop_reason: StopReason::Stop,
+                    error_message: None,
+                    timestamp: 0,
+                };
+                Ok(EventStream::from_events(vec![
+                    Ok(StreamEvent::Start),
+                    Ok(StreamEvent::TextDelta {
+                        content_index: 0,
+                        delta: "token".to_string(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        reason: StopReason::Stop,
+                        message,
+                    }),
+                ]))
+            }
+        }
+
+        #[derive(Default)]
+        struct Recorder(Mutex<Vec<AgentEvent>>);
+        impl EventSink for Recorder {
+            fn emit(&self, event: AgentEvent) {
+                self.0.lock().expect("events").push(event);
+            }
+        }
+
+        let recorder = Arc::new(Recorder::default());
+        let observed = Arc::clone(&recorder);
+        temper_agent_io::block_on(async move {
+            let clock = FakeClock(Mutex::new(VecDeque::from([100, 125, 180])));
+            let completion = stream_to_completion(
+                &FakeProvider,
+                None,
+                &[],
+                &[],
+                &StreamOptions::default(),
+                ModelCallObservability {
+                    turn: 2,
+                    model: &ModelIdentity::new("fake-provider", "fake-model"),
+                    clock: &clock,
+                    events: observed.as_ref(),
+                },
+            )
+            .await;
+            assert!(matches!(
+                completion,
+                crate::machine::AgentCompletion::LlmResponded(_)
+            ));
+        });
+
+        let events = recorder.0.lock().expect("events");
+        assert!(matches!(
+            events[0],
+            AgentEvent::ModelCallStarted {
+                turn: 2,
+                attempt: 0,
+                ..
+            }
+        ));
+        let AgentEvent::ModelCallFinished {
+            status,
+            duration_ms,
+            time_to_first_token_ms,
+            stop_reason,
+            usage,
+            ..
+        } = &events[2]
+        else {
+            panic!("expected terminal attempt event");
+        };
+        assert_eq!(*status, ModelCallStatus::Succeeded);
+        assert_eq!(*duration_ms, 80);
+        assert_eq!(*time_to_first_token_ms, Some(25));
+        assert_eq!(*stop_reason, Some(StopReason::Stop));
+        assert_eq!(usage.cache_read, 5);
+        assert_eq!(usage.cache_write, 3);
     }
 
     #[test]

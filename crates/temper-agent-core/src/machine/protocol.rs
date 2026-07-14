@@ -18,6 +18,38 @@ use tongs::tools::ToolOutput;
 pub enum AgentEvent {
     /// A model turn is starting (about to call the LLM).
     TurnStart { turn: usize },
+    /// One provider attempt for a model turn is starting. Retries retain the
+    /// same `call_id` and increment `attempt`.
+    ModelCallStarted {
+        turn: usize,
+        call_id: String,
+        attempt: u32,
+        provider: String,
+        model: String,
+    },
+    /// One provider attempt settled. Timing is measured on the runtime's
+    /// monotonic clock around the streaming operation.
+    ModelCallFinished {
+        turn: usize,
+        call_id: String,
+        attempt: u32,
+        status: ModelCallStatus,
+        duration_ms: u64,
+        time_to_first_token_ms: Option<u64>,
+        stop_reason: Option<tongs::model::StopReason>,
+        usage: tongs::model::Usage,
+        /// Present only for a failed attempt. Consumers must redact it before
+        /// projecting it to logs or transport.
+        failure: Option<String>,
+    },
+    /// A failed provider attempt will be retried after a bounded delay.
+    ModelCallRetrying {
+        turn: usize,
+        call_id: String,
+        next_attempt: u32,
+        delay_ms: u64,
+        reason: String,
+    },
     /// A live streaming delta from the model, emitted by the shell as the
     /// response streams in (before the turn's full [`AgentEvent::AssistantMessage`]).
     /// Lets observers — a TUI, a transcript recorder — watch tokens and tool
@@ -43,16 +75,44 @@ pub enum AgentEvent {
         /// pure machine core need not compute it.
         arg_preview: Option<String>,
     },
-    /// A tool finished.
-    ToolEnd { id: String, is_error: bool },
+    /// A tool finished. Timing is measured by the shell around execution and
+    /// `result` is a bounded text-only candidate; unrestricted tool details are
+    /// never placed in the machine event stream.
+    ToolEnd {
+        id: String,
+        name: String,
+        status: ToolCallStatus,
+        duration_ms: u64,
+        result: ToolResultMetadata,
+    },
     /// Steering messages were injected at a turn boundary.
     Steered { count: usize },
-    /// A model call failed (transport/API error or stall). Emitted by the shell
-    /// for observability before the failure is folded into the loop; carries the
-    /// human-readable reason and whether a retry will be attempted.
-    ModelCallFailed { reason: String, will_retry: bool },
     /// The agent run ended (with the reason it stopped).
     AgentEnd { reason: AgentStop },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelCallStatus {
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolCallStatus {
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+/// Bounded, text-only metadata derived from a tool result. The original byte
+/// count and truncation bit let capture projections describe omitted content
+/// without retaining arbitrary output.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ToolResultMetadata {
+    pub preview: Option<String>,
+    pub bytes: u64,
+    pub truncated: bool,
 }
 
 /// A live streaming fragment of a model response, forwarded by the shell.

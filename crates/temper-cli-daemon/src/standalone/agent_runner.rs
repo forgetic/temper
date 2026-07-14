@@ -16,8 +16,8 @@ use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    CodingAgentError, ForgeContextHost, ProviderConfig, RunTotals, SubmitForPrHost,
-    run_coding_agent_native_with_totals_tool_config_and_hosts,
+    AgentActivityConfig, CodingAgentError, ForgeContextHost, ProviderConfig, RunTotals,
+    SubmitForPrHost, run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
 use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
@@ -148,6 +148,24 @@ impl AgentRunner for InProcessAgentRunner {
                 None
             }
         };
+        let activity_endpoint = trace.as_ref().and_then(|trace| match trace.bind_endpoint() {
+            Ok(endpoint) => Some(endpoint),
+            Err(error) => {
+                tracing::warn!(
+                    target: "temper::worker",
+                    service = "worker",
+                    event = "agent.activity.endpoint_failed",
+                    job_id,
+                    run_id = trace.run_id(),
+                    %error,
+                    "standalone worker could not bind agent activity transport; continuing without it"
+                );
+                None
+            }
+        });
+        let activity_address = activity_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.address().to_string());
         if let Some(item) = item.as_ref() {
             emit_agent_started(AgentStarted {
                 item,
@@ -163,6 +181,7 @@ impl AgentRunner for InProcessAgentRunner {
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
         let tool_config = self.tool_config.clone();
+        let trace_policy = self.trace_policy.clone();
         let submit_for_pr = self.submit_for_pr.clone();
         let accepted_submit = AcceptedSubmitProofStore::new();
         let accepted_submit_for_host = accepted_submit.clone();
@@ -196,10 +215,17 @@ impl AgentRunner for InProcessAgentRunner {
                 tool_config.as_ref(),
                 submit_for_pr,
                 forge_context,
+                AgentActivityConfig {
+                    policy: trace_policy,
+                    address: activity_address,
+                },
             )
             .await
             .map_err(classify_coding_agent_error);
 
+            if let Some(endpoint) = activity_endpoint {
+                endpoint.stop();
+            }
             if let Some(trace) = trace {
                 let terminal = match &outcome {
                     Ok(_) => trace.finish_success(None),

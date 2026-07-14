@@ -29,14 +29,15 @@ use crate::config::WorkerAgentTraceConfig;
 
 mod endpoint;
 mod model;
+mod scope;
 mod spool;
 pub use endpoint::ActivityEndpoint;
 use model::*;
+use scope::{canonicalize_child_scope, validate_scope_acceptance};
 use spool::*;
 
 /// Maximum encoded bytes accepted from one child connection.
 pub const MAX_CHILD_ACTIVITY_FRAME_BYTES: usize = 256 * 1024;
-const MAIN_SCOPE_ID: &str = "main";
 const ACK_CURSOR_GROWTH_RESERVE: u64 = 32;
 const MAX_TERMINAL_FAILURE_MESSAGE_BYTES: usize = 512;
 
@@ -212,6 +213,10 @@ struct RunState {
     terminal: bool,
     disabled: bool,
     scopes: BTreeMap<String, AgentScopeV1>,
+    /// Source root identity supplied by the first-party child. The worker maps
+    /// it onto its own per-run canonical root so host boundaries and child
+    /// events share exactly one unique main scope.
+    source_main_scope_id: Option<String>,
     blobs: BTreeMap<String, BlobReferenceV1>,
 }
 
@@ -236,7 +241,7 @@ impl TraceRun {
             .as_ref()
             .map(|session| session.session_id.clone());
         let main_scope = AgentScopeV1 {
-            id: MAIN_SCOPE_ID.to_string(),
+            id: format!("main-{}", uuid::Uuid::new_v4()),
             kind: AgentScopeKindV1::Main,
             parent_id: None,
         };
@@ -286,6 +291,7 @@ impl TraceRun {
                     terminal: false,
                     disabled: false,
                     scopes,
+                    source_main_scope_id: None,
                     blobs: BTreeMap::new(),
                 }),
             }),
@@ -315,7 +321,7 @@ impl TraceRun {
     }
 
     /// Validates and durably accepts one untrusted child frame.
-    pub fn accept_frame(&self, frame: AgentActivityFrameV1) -> Result<u64, TraceError> {
+    pub fn accept_frame(&self, mut frame: AgentActivityFrameV1) -> Result<u64, TraceError> {
         frame.validate()?;
         let encoded_len = serde_json::to_vec(&frame)?.len();
         if encoded_len > MAX_CHILD_ACTIVITY_FRAME_BYTES {
@@ -325,6 +331,11 @@ impl TraceRun {
         }
         let mut state = self.inner.state.lock().expect("trace run state lock");
         ensure_accepting(&state)?;
+        frame.scope = canonicalize_child_scope(
+            &mut state.source_main_scope_id,
+            &self.inner.manifest.main_scope,
+            frame.scope,
+        )?;
         validate_scope_acceptance(&state.scopes, &frame.scope)?;
         validate_event_policy(&self.inner.manifest.policy, &frame.event)?;
         validate_blob_references(&state.blobs, &frame.event)?;
@@ -569,39 +580,6 @@ fn ensure_quota(
         Err(TraceError::QuotaExceeded)
     } else {
         Ok(())
-    }
-}
-
-fn validate_scope_acceptance(
-    scopes: &BTreeMap<String, AgentScopeV1>,
-    scope: &AgentScopeV1,
-) -> Result<(), TraceError> {
-    if let Some(existing) = scopes.get(&scope.id) {
-        if existing != scope {
-            return Err(TraceError::InvalidSpool(format!(
-                "scope {} changed kind or parent",
-                scope.id
-            )));
-        }
-        return Ok(());
-    }
-    match scope.kind {
-        AgentScopeKindV1::Main => Err(TraceError::InvalidSpool(format!(
-            "child main scope must use worker root ID {MAIN_SCOPE_ID}"
-        ))),
-        AgentScopeKindV1::SubAgent => {
-            let parent = scope.parent_id.as_deref().ok_or_else(|| {
-                TraceError::InvalidSpool("sub-agent scope has no parent".to_string())
-            })?;
-            if scopes.contains_key(parent) {
-                Ok(())
-            } else {
-                Err(TraceError::InvalidSpool(format!(
-                    "scope {} references unaccepted parent {parent}",
-                    scope.id
-                )))
-            }
-        }
     }
 }
 

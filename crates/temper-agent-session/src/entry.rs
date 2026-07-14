@@ -109,7 +109,8 @@ fn build_config(
         config_dir,
     )
     .with_tool_config(read_tool_config(options.tool_config.as_deref())?)
-    .with_trace_policy(read_trace_policy(options.trace_policy.as_deref())?);
+    .with_trace_policy(read_trace_policy(options.trace_policy.as_deref())?)
+    .with_activity_address(options.activity_address.clone());
     let config = match options.submit_for_pr_address {
         Some(address) => config.with_submit_for_pr(crate::submit_client::host_for_address(address)),
         None => config,

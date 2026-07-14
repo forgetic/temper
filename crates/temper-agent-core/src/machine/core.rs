@@ -216,10 +216,10 @@ impl AgentMachine {
     }
 
     fn on_tool_finished(&mut self, id: String, output: ToolOutput) -> Vec<AgentRequest> {
-        let mut requests = vec![AgentRequest::Emit(AgentEvent::ToolEnd {
-            id: id.clone(),
-            is_error: output.is_error,
-        })];
+        // The shell emits the timed ToolEnd event immediately before enqueueing
+        // this completion. The pure machine only sequences the result into the
+        // conversation, avoiding a second parallel instrumentation path.
+        let mut requests = Vec::new();
 
         // Record the result into the in-flight (front) batch.
         if let Some(batch) = self.pending_batches.front_mut() {

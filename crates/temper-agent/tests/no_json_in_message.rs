@@ -7,8 +7,9 @@
 //! anti-pattern to delete: opaque to a JSON sink, unreadable to a human,
 //! unfilterable on fields. Piece D rewrote the logger onto real tracing fields at
 //! `debug`/`trace`. This test installs a capturing subscriber, drives the
-//! rewritten `UsageLogger` through a representative `AgentEvent` sequence, and
-//! fails if anyone reintroduces a raw-JSON-in-message line at `info`.
+//! canonical normalizer/projection pipeline through a representative
+//! `AgentEvent` sequence, and fails if anyone reintroduces a raw-JSON-in-message
+//! line at `info`.
 //!
 //! Core guard: **no `info`-level event on the agent target carries a `message`
 //! that starts with `{`** (raw JSON), and the between-state-cause events
@@ -18,8 +19,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use temper_agent::usage::{MAIN_SCOPE, UsageLogger, UsageTotals};
-use temper_agent_core::{AgentEvent, AgentStop, EventSink};
+use temper_agent::activity::{AgentActivityConfig, ScopeFactory};
+use temper_agent::usage::{MAIN_SCOPE, UsageTotals};
+use temper_agent_core::{
+    AgentEvent, AgentStop, ModelCallStatus, ModelIdentity, ToolCallStatus, ToolResultMetadata,
+};
 use tongs::model::Usage;
 use tracing::Level;
 use tracing::field::{Field, Visit};
@@ -101,20 +105,25 @@ impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
     }
 }
 
-/// Drives a `UsageLogger` through a representative slice of the agent event
-/// stream — every variant the leak used to emit at `info` — and returns the
-/// captured tracing events. The registry has no level filter, so `info`,
-/// `debug`, and `trace` are all captured; assertions then discriminate by level.
+/// Drives the canonical activity pipeline through a representative slice of
+/// the agent event stream and returns the captured tracing events. The registry
+/// has no level filter, so `info`, `debug`, and `trace` are all captured;
+/// assertions then discriminate by level.
 fn capture_representative_run() -> Vec<Captured> {
     let layer = CaptureLayer::default();
     let events = layer.events.clone();
     let subscriber = registry().with(layer);
 
     with_default(subscriber, || {
-        // Share the totals ledger between the logger (which folds each turn into
-        // it) and the end-of-run `emit_summary`, mirroring a real run.
         let totals = Arc::new(UsageTotals::default());
-        let logger = UsageLogger::new(MAIN_SCOPE, Arc::clone(&totals));
+        let scopes = ScopeFactory::new(AgentActivityConfig::default(), Arc::clone(&totals));
+        let logger = scopes
+            .main(
+                MAIN_SCOPE,
+                ModelIdentity::new("test-provider", "test-model"),
+            )
+            .observability
+            .events;
 
         logger.emit(AgentEvent::TurnUsage {
             turn: 0,
@@ -133,7 +142,10 @@ fn capture_representative_run() -> Vec<Captured> {
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_ok".to_string(),
-            is_error: false,
+            name: "read".to_string(),
+            status: ToolCallStatus::Succeeded,
+            duration_ms: 12,
+            result: ToolResultMetadata::default(),
         });
         logger.emit(AgentEvent::ToolStart {
             id: "call_bad".to_string(),
@@ -142,11 +154,28 @@ fn capture_representative_run() -> Vec<Captured> {
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_bad".to_string(),
-            is_error: true,
+            name: "bash".to_string(),
+            status: ToolCallStatus::Failed,
+            duration_ms: 7,
+            result: ToolResultMetadata::default(),
         });
-        logger.emit(AgentEvent::ModelCallFailed {
+        logger.emit(AgentEvent::ModelCallFinished {
+            turn: 0,
+            call_id: "turn-0".to_string(),
+            attempt: 0,
+            status: ModelCallStatus::Failed,
+            duration_ms: 30,
+            time_to_first_token_ms: None,
+            stop_reason: None,
+            usage: Usage::default(),
+            failure: Some("stream stalled, retrying".to_string()),
+        });
+        logger.emit(AgentEvent::ModelCallRetrying {
+            turn: 0,
+            call_id: "turn-0".to_string(),
+            next_attempt: 1,
+            delay_ms: 500,
             reason: "stream stalled, retrying".to_string(),
-            will_retry: true,
         });
         logger.emit(AgentEvent::AgentEnd {
             reason: AgentStop::Completed,
