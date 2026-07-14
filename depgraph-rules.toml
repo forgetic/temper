@@ -177,7 +177,7 @@ temper-cli-config = ["temper-cli-common", "temper-config", "temper-workflow"]
 # in-process agent runner lives here; reusable worker→daemon transport glue is
 # pulled from temper-daemon-transport). Builds its forge through the facade
 # factory — no concrete backend dep.
-temper-cli-daemon = ["temper-config", "temper-log", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-protocol-agent", "temper-daemon-transport", "temper-engine", "temper-engine-io", "temper-forge", "temper-reference-delivery", "temper-worker", "temper-protocol-worker", "temper-workflow"]
+temper-cli-daemon = ["temper-config", "temper-log", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-protocol-activity", "temper-protocol-agent", "temper-daemon-transport", "temper-engine", "temper-engine-io", "temper-forge", "temper-reference-delivery", "temper-worker", "temper-protocol-worker", "temper-workflow"]
 
 # `temper init`: interactive first-run. Orchestration only — config writing in
 # temper-config, provisioning inlined directly via temper-provision. Builds its

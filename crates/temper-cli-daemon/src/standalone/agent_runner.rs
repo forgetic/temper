@@ -22,9 +22,11 @@ use temper_agent::{
 use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
+use temper_protocol_activity::FailureCodeV1;
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
 use temper_worker::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
+    TraceCollector, WorkerAgentTraceConfig,
 };
 
 /// Runs coding/triage/review turns in-process on the host loop.
@@ -36,6 +38,7 @@ pub struct InProcessAgentRunner {
     enable_subagents: bool,
     tool_config: Option<AgentToolConfig>,
     trace_policy: AgentActivityCapturePolicyV1,
+    trace_collector: TraceCollector,
     submit_for_pr: SubmitForPrHost,
     forge_context: Option<AgentForgeContextHost>,
 }
@@ -56,6 +59,7 @@ impl InProcessAgentRunner {
             enable_subagents,
             tool_config: None,
             trace_policy: AgentActivityCapturePolicyV1::default(),
+            trace_collector: TraceCollector::default(),
             submit_for_pr: std::sync::Arc::new(|request, context, cwd| {
                 temper_worker::submit_for_pr_pre_push_response_blocking(request, context, cwd)
             }),
@@ -76,6 +80,13 @@ impl InProcessAgentRunner {
     #[must_use]
     pub fn with_trace_policy(mut self, trace_policy: AgentActivityCapturePolicyV1) -> Self {
         self.trace_policy = trace_policy;
+        self
+    }
+
+    /// Configures the same worker-owned collector used by split-mode runs.
+    #[must_use]
+    pub fn with_trace_collector(mut self, config: WorkerAgentTraceConfig) -> Self {
+        self.trace_collector = TraceCollector::new(config);
         self
     }
 
@@ -122,6 +133,21 @@ impl AgentRunner for InProcessAgentRunner {
         let item = work_item_ref(context);
         let kind = run_kind(&role);
         let started = Instant::now();
+        let trace = match self.trace_collector.begin_run(job_id, context) {
+            Ok(trace) => trace,
+            Err(error) => {
+                tracing::warn!(
+                    target: "temper::worker",
+                    service = "worker",
+                    event = "agent.activity.start_failed",
+                    job_id,
+                    correlation_key = context.correlation_key.as_str(),
+                    %error,
+                    "standalone worker could not start durable agent tracing; continuing without it"
+                );
+                None
+            }
+        };
         if let Some(item) = item.as_ref() {
             emit_agent_started(AgentStarted {
                 item,
@@ -173,6 +199,27 @@ impl AgentRunner for InProcessAgentRunner {
             )
             .await
             .map_err(classify_coding_agent_error);
+
+            if let Some(trace) = trace {
+                let terminal = match &outcome {
+                    Ok(_) => trace.finish_success(None),
+                    Err(error) => trace.finish_failure(
+                        FailureCodeV1::Internal,
+                        &error.message,
+                        error.class == temper_protocol_worker::FailureClass::Transient,
+                    ),
+                };
+                if let Err(error) = terminal {
+                    tracing::warn!(
+                        target: "temper::worker",
+                        service = "worker",
+                        event = "agent.activity.terminal_failed",
+                        run_id = trace.run_id(),
+                        %error,
+                        "standalone worker could not persist the terminal agent activity event"
+                    );
+                }
+            }
 
             // §7 `agent.finished` on BOTH paths: a stalled/failed run still
             // gets a `done in <dur> | <summary>` line so the agent plane never

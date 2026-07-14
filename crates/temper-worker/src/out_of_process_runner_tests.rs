@@ -372,7 +372,7 @@ fn run_fake_agent_with_tool_config(
 }
 
 #[cfg(unix)]
-fn fake_agent_script(dir: &Path) -> PathBuf {
+pub(super) fn fake_agent_script(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let path = dir.join("fake-agent.sh");
@@ -410,6 +410,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --trace-policy)
       trace_policy="$1"
+      printf '%s\n' "$1" >> "$args_out"
+      shift
+      ;;
+    --activity-address)
       printf '%s\n' "$1" >> "$args_out"
       shift
       ;;
@@ -469,7 +473,7 @@ pub(super) fn test_context() -> WorkspaceContext {
     test_context_for_role("engineer")
 }
 
-fn test_context_for_role(role: &str) -> WorkspaceContext {
+pub(super) fn test_context_for_role(role: &str) -> WorkspaceContext {
     use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
     WorkspaceContext {
         artifact_context: None,

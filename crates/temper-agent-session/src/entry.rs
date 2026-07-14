@@ -88,6 +88,12 @@ fn build_config(
 ) -> Result<(AgentConfig, Option<tempfile::TempDir>), String> {
     let credential = read_credential()?;
     let (provider, auth_dir) = build_provider(&options, credential)?;
+    if options.activity_address.is_some() {
+        tracing::debug!(
+            target: "temper::agent",
+            "worker activity endpoint supplied for this agent run"
+        );
+    }
 
     let config_dir = resolve_config_dir_from(
         options.capture_dir.as_deref(),

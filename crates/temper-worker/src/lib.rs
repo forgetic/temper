@@ -26,6 +26,7 @@ pub mod out_of_process_runner;
 pub mod pr_freshness;
 pub mod pre_push;
 pub mod run;
+pub mod trace;
 pub mod transport;
 pub mod worker_machine;
 pub mod worker_shell;
@@ -65,6 +66,10 @@ pub use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
 };
 pub use temper_protocol_worker::WorkerAuth;
+pub use trace::{
+    ActivityEndpoint, MAX_CHILD_ACTIVITY_FRAME_BYTES, RecoveredTraceRun, TraceCollector,
+    TraceError, TraceManifestV1, TraceRun,
+};
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 pub use workspace::{

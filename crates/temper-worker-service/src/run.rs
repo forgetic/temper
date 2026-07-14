@@ -52,6 +52,7 @@ async fn run_async(
             .with_env(invocation.env)
             .with_tool_config(invocation.tool_config)
             .with_trace_policy(invocation.trace_policy)
+            .with_trace_collector(worker_config.agent_traces.clone())
             .with_forge_context_host(forge_context),
     );
 

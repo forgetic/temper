@@ -66,7 +66,9 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
                 AgentSurface::AnvilNative(agent) => agent.into_command(),
                 AgentSurface::ExternalCommand(command) => command,
             };
-            let runner = Arc::new(OutOfProcessRunner::new(command));
+            let trace_config = config.agent_traces.clone();
+            let runner =
+                Arc::new(OutOfProcessRunner::new(command).with_trace_collector(trace_config));
             temper_worker_io::block_on_with(move |_cx, handle| async move {
                 let executor = Arc::new(
                     CodingExecutor::new(executor_config, runner).with_pr_freshness_guard(Arc::new(

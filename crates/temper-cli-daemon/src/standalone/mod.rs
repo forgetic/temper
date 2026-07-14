@@ -339,6 +339,7 @@ async fn run_async(
         )
         .with_tool_config(temper_worker_service::agent_tool_config(resolved))
         .with_trace_policy(worker_config.agent_traces.policy.clone())
+        .with_trace_collector(worker_config.agent_traces.clone())
         .with_forge_context_host(forge_context),
     );
     let executor = Arc::new(
