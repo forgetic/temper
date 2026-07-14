@@ -1865,6 +1865,7 @@ dependencies = [
  "serde_json",
  "temper-interaction",
  "temper-log",
+ "temper-protocol-activity",
  "temper-workflow",
  "tracing",
 ]

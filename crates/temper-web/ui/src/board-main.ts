@@ -16,4 +16,9 @@ createApp({
   root,
   eventSource: nativeEventSource,
   now: () => Date.now(),
+  fetchJson: async (url) => {
+    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`trace request failed: ${response.status}`);
+    return response.json() as Promise<unknown>;
+  },
 });

@@ -41,6 +41,7 @@ pub mod feeds;
 pub mod project;
 pub mod readmodel;
 pub mod server;
+pub mod trace;
 
 mod logsource;
 pub use logsource::FileLogSource;

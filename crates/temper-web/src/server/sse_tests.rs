@@ -13,6 +13,14 @@ fn data_frame_is_valid_sse() {
 }
 
 #[test]
+fn id_frame_carries_the_canonical_resume_cursor() {
+    assert_eq!(
+        id_data_frame(42, r#"{"seq":42}"#),
+        "id: 42\ndata: {\"seq\":42}\n\n"
+    );
+}
+
+#[test]
 fn board_event_serializes_to_a_single_line_frame() {
     // Frames must be newline-free so the `\n\n` terminator is unambiguous;
     // compact serde_json never embeds a newline.
