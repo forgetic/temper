@@ -33,8 +33,9 @@ use super::full_path_fixture::{
 };
 use super::full_path_observation::{
     DISTRIBUTED_BEARER_SENTINEL, Observation, READ_TOKEN, REJECTED_BEARER_SENTINEL,
-    assert_exact_prompt_snapshots, assert_large_main_prompt_snapshot,
-    assert_outside_prompt_sentinels_absent, observe_authorized_query,
+    assert_complete_post_idle_activity, assert_exact_prompt_snapshots,
+    assert_large_main_prompt_snapshot, assert_outside_prompt_sentinels_absent,
+    observe_authorized_query,
 };
 use super::*;
 use crate::config::WorkerAgentTraceConfig;
@@ -477,6 +478,7 @@ async fn exercise_path<T: Transport>(
         .expect("generated batch validates");
     let event_count = generated_batch.events.len();
     assert_eq!(event_count, 19);
+    assert_complete_post_idle_activity(&generated_batch.events);
     assert!(
         expected_main_prompt()
             .to_canonical_json_bytes()
@@ -569,6 +571,17 @@ async fn exercise_path<T: Transport>(
         journal.events(&run_id).expect("deduplicated run").len(),
         event_count
     );
+    let recovered_complete_journal = AgentTraceJournal::open(TraceJournalConfig {
+        root: journal_root.to_path_buf(),
+        policy: capture_policy.clone(),
+    })
+    .expect("reopen complete engine journal");
+    let recovered_complete_run = recovered_complete_journal
+        .run(&run_id)
+        .expect("recover complete engine journal")
+        .expect("complete durable activity run");
+    assert_complete_post_idle_activity(&recovered_complete_run.events);
+    drop(recovered_complete_journal);
     let compacted = restarted.recover().expect("compacted spool");
     assert!(compacted[0].events.is_empty());
     assert_eq!(compacted[0].acknowledged_seq, event_count as u64);
