@@ -18,9 +18,17 @@ crates/temper-worker-registry/src/daemon_core_tests.rs
 # conditional Forge write boundary so recovery CAS semantics remain auditable.
 crates/temper-workflow/src/lease/manager.rs
 
+# The wake coordinator is one pure transition owner for bounded lane compaction,
+# apply deferral, timer generations, global admission, and dirty completion semantics.
+crates/temper-engine/src/daemon/wake_coordinator.rs
+
 # The daemon machine owns the startup barrier alongside poll waiters and claim
 # transitions; keeping these states together prevents dispatch bypass paths.
 crates/temper-engine/src/daemon/machine.rs
+
+# The daemon handle composes shared executor capabilities for wake execution,
+# artifact context, and trace storage/query wiring at one construction boundary.
+crates/temper-engine/src/daemon/handle.rs
 
 # Startup recovery inventory and orphan convergence share the service boundary
 # with daemon construction so no feed can bypass durable claim reconstruction.
@@ -78,6 +86,10 @@ crates/temper-runner/tests/multi_repo_worker.rs
 crates/temper-workflow/tests/safety_properties.rs
 crates/temper-workflow/tests/multi_artifact_effects.rs
 crates/temper-workflow/tests/execution.rs
+
+# Durable create-intent budget and crash-replay matrices share one ten-child DAG
+# fixture so operation ceilings remain directly comparable across checkpoints.
+crates/temper-workflow/tests/create_intent_recovery.rs
 
 # Worker automation has many constructor-style helpers around one role flow.
 crates/temper-runner/src/worker/automation.rs

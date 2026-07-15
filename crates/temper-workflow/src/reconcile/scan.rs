@@ -41,6 +41,11 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         let classifier = Classifier::new(self.workflow);
 
         for snapshot in snapshots {
+            // A fan-out child remains completely mechanically inert until the
+            // create intent clears staging after all sibling/parent wiring.
+            if snapshot_is_staged(snapshot) {
+                continue;
+            }
             self.scan_lease(snapshot, now, &mut report);
             match classifier.classify_snapshot_with_dependencies(
                 snapshot.source,
@@ -210,6 +215,9 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         let snapshot = snapshots
             .iter()
             .find(|snapshot| snapshot.source == record.target);
+        if snapshot.is_some_and(snapshot_is_staged) {
+            return;
+        }
 
         // No snapshot means the target vanished, so nothing can be re-applied.
         let pending: Vec<WorkflowEffect> = match snapshot {
@@ -254,6 +262,13 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
             );
         }
     }
+}
+
+fn snapshot_is_staged(snapshot: &ArtifactSnapshot) -> bool {
+    parse_metadata_block(&snapshot.body)
+        .ok()
+        .flatten()
+        .is_some_and(|metadata| metadata.staged)
 }
 
 /// Returns `true` when an effect's result is not yet visible in `labels`.

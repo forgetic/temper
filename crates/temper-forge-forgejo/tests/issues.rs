@@ -11,7 +11,7 @@ use support::{
 use temper_forge_forgejo::{CasMode, HttpMethod};
 use temper_forge_model::{
     CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemListDetails, ItemNumber,
-    ItemSort, ItemSortField, SortDirection, UpdateIssue, UserId, Version,
+    ItemSort, ItemSortField, SortDirection, UpdateIssue, UpsertLabel, UserId, Version,
 };
 
 /// Renders an issue DTO JSON body with overridable labels and trailing fields.
@@ -232,6 +232,28 @@ fn get_issue_by_number_maps_fields_and_dependencies() {
 }
 
 #[test]
+fn exact_issue_summary_omits_dependency_request() {
+    let client = MockHttpClient::new();
+    client.push_response(200, issue_json(7, "open", "[]", ""));
+    let forge = forge(client.clone());
+
+    let issue = block_on(forge.get_issue_by_number_with_details(
+        &repo_id(),
+        ItemNumber::new(7),
+        ItemListDetails::summary(),
+    ))
+    .unwrap()
+    .expect("issue present");
+
+    assert!(issue.dependencies.is_empty());
+    assert_eq!(client.call_count(), 1);
+    assert_eq!(
+        client.recorded()[0].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues/7")
+    );
+}
+
+#[test]
 fn get_issue_returns_none_for_pull_request_row() {
     let client = MockHttpClient::new();
     client.push_response(
@@ -259,7 +281,7 @@ fn get_issue_missing_is_none() {
 }
 
 #[test]
-fn create_issue_applies_labels_atomically_and_refetches() {
+fn create_issue_applies_labels_atomically_and_materializes_post_response() {
     let client = MockHttpClient::new();
     // Label ids are resolved BEFORE the create so the POST payload carries them;
     // the issue is therefore never visible label-less (no separate PUT follows).
@@ -276,16 +298,6 @@ fn create_issue_applies_labels_atomically_and_refetches() {
             r#", "assignees": [{"login": "bob"}]"#,
         ),
     ); // POST create (labels in the payload)
-    client.push_response(
-        200,
-        issue_json(
-            7,
-            "open",
-            r#"[{"id":1,"name":"bug"}]"#,
-            r#", "assignees": [{"login": "bob"}]"#,
-        ),
-    ); // GET refetch
-    client.push_response(200, "[]"); // dependency enrichment
     let forge = forge(client.clone());
 
     let input = CreateIssue {
@@ -299,7 +311,7 @@ fn create_issue_applies_labels_atomically_and_refetches() {
     assert_eq!(issue.assignees, vec![UserId::new("bob")]);
 
     let requests = client.recorded();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 2);
 
     assert_eq!(requests[0].method, HttpMethod::Get);
     assert_eq!(
@@ -328,10 +340,11 @@ fn create_issue_applies_labels_atomically_and_refetches() {
         "create must not issue a separate label PUT when labels apply atomically"
     );
 
-    assert_eq!(requests[2].method, HttpMethod::Get);
+    assert!(issue.dependencies.is_empty());
     assert_eq!(
-        requests[2].path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/issues/7")
+        client.call_count(),
+        2,
+        "create response must not be refetched"
     );
 }
 
@@ -339,8 +352,6 @@ fn create_issue_applies_labels_atomically_and_refetches() {
 fn create_issue_without_labels_skips_label_call() {
     let client = MockHttpClient::new();
     client.push_response(201, issue_json(8, "open", "[]", "")); // POST create
-    client.push_response(200, issue_json(8, "open", "[]", "")); // GET refetch
-    client.push_response(200, "[]"); // dependency enrichment
     let forge = forge(client.clone());
 
     let input = CreateIssue {
@@ -352,10 +363,182 @@ fn create_issue_without_labels_skips_label_call() {
     let _ = block_on(forge.create_issue(&repo_id(), input)).unwrap();
 
     let requests = client.recorded();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].method, HttpMethod::Post);
+}
+
+#[test]
+fn repository_label_ids_are_cached_across_child_creates() {
+    let client = MockHttpClient::new();
+    client.push_response(200, r#"[{"id":1,"name":"code"},{"id":2,"name":"ready"}]"#);
+    client.push_response(
+        201,
+        issue_json(
+            7,
+            "open",
+            r#"[{"id":1,"name":"code"},{"id":2,"name":"ready"}]"#,
+            "",
+        ),
+    );
+    client.push_response(
+        201,
+        issue_json(
+            8,
+            "open",
+            r#"[{"id":1,"name":"code"},{"id":2,"name":"ready"}]"#,
+            "",
+        ),
+    );
+    let forge = forge(client.clone());
+    for title in ["first", "second"] {
+        block_on(forge.create_issue(
+            &repo_id(),
+            CreateIssue {
+                title: title.into(),
+                body: String::new(),
+                labels: vec!["code".into(), "ready".into()],
+                assignees: Vec::new(),
+            },
+        ))
+        .unwrap();
+    }
+
+    let requests = client.recorded();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.path.ends_with("/labels"))
+            .count(),
+        1,
+        "ten sibling creates must share one repository label-id lookup"
+    );
+}
+
+#[test]
+fn label_upsert_invalidates_the_repository_label_id_cache() {
+    let client = MockHttpClient::new();
+    let labels = r#"[{"id":1,"name":"code"}]"#;
+    client.push_response(200, labels);
+    client.push_response(201, issue_json(7, "open", labels, ""));
+    client.push_response(200, labels);
+    client.push_response(200, r#"{"id":1,"name":"code","color":"fff"}"#);
+    client.push_response(200, labels);
+    client.push_response(201, issue_json(8, "open", labels, ""));
+    let forge = forge(client.clone());
+    let create = |title: &str| CreateIssue {
+        title: title.into(),
+        body: String::new(),
+        labels: vec!["code".into()],
+        assignees: Vec::new(),
+    };
+
+    block_on(forge.create_issue(&repo_id(), create("before"))).unwrap();
+    block_on(forge.upsert_label(
+        &repo_id(),
+        UpsertLabel {
+            name: "code".into(),
+            color: Some("fff".into()),
+            description: None,
+        },
+    ))
+    .unwrap();
+    block_on(forge.create_issue(&repo_id(), create("after"))).unwrap();
+
+    let label_path = format!("/api/v1/repos/{OWNER}/{REPO}/labels");
+    assert_eq!(
+        client
+            .recorded()
+            .iter()
+            .filter(|request| request.method == HttpMethod::Get && request.path == label_path)
+            .count(),
+        3,
+        "upsert must invalidate the create-path label id cache"
+    );
+}
+
+#[test]
+fn snapshot_update_orders_labels_before_staging_body_and_skips_post_read() {
+    let client = MockHttpClient::new();
+    client.push_response_with_etag(
+        issue_json(7, "open", r#"[{"id":9,"name":"stale"}]"#, ""),
+        "etag-a",
+    );
+    client.push_response_with_etag(
+        issue_json(7, "open", r#"[{"id":9,"name":"stale"}]"#, ""),
+        "etag-a",
+    );
+    client.push_response(200, r#"[{"id":9,"name":"stale"},{"id":1,"name":"ready"}]"#);
+    client.push_response(200, "[]");
+    client.push_response_with_etag(
+        issue_json(7, "open", r#"[{"id":1,"name":"ready"}]"#, ""),
+        "etag-b",
+    );
+    let forge = forge(client.clone());
+    let current = block_on(forge.get_issue_with_details(&issue_id(7), ItemListDetails::summary()))
+        .unwrap()
+        .unwrap();
+
+    let committed = block_on(forge.update_issue_from_snapshot(
+        &current,
+        UpdateIssue {
+            body: Some("activated".into()),
+            add_labels: vec!["ready".into()],
+            remove_labels: vec!["stale".into()],
+            expected_version: Some(current.version),
+            ..UpdateIssue::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(committed.labels, vec!["ready"]);
+    let requests = client.recorded();
+    assert_eq!(
+        requests.len(),
+        5,
+        "no post-write or dependency read is allowed"
+    );
+    assert_eq!(requests[1].method, HttpMethod::Get); // CAS preflight
+    assert_eq!(requests[2].method, HttpMethod::Get); // cached label ids
+    assert_eq!(requests[3].method, HttpMethod::Put); // labels while staged
+    assert_eq!(requests[4].method, HttpMethod::Patch); // staging body last
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.path.ends_with("/dependencies"))
+    );
+}
+
+#[test]
+fn body_only_snapshot_update_performs_no_label_work() {
+    let client = MockHttpClient::new();
+    client.push_response_with_etag(issue_json(7, "open", "[]", ""), "etag-a");
+    client.push_response_with_etag(issue_json(7, "open", "[]", ""), "etag-a");
+    client.push_response_with_etag(issue_json(7, "open", "[]", ""), "etag-b");
+    let forge = forge(client.clone());
+    let current = block_on(forge.get_issue_with_details(&issue_id(7), ItemListDetails::summary()))
+        .unwrap()
+        .unwrap();
+
+    block_on(forge.update_issue_from_snapshot(
+        &current,
+        UpdateIssue {
+            body: Some("wired".into()),
+            expected_version: Some(current.version),
+            ..UpdateIssue::default()
+        },
+    ))
+    .unwrap();
+
+    let requests = client.recorded();
+    assert_eq!(requests.len(), 3);
     assert_eq!(requests[1].method, HttpMethod::Get);
-    assert_eq!(requests[2].method, HttpMethod::Get); // dependencies
+    assert_eq!(requests[2].method, HttpMethod::Patch);
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.path.ends_with("/labels"))
+    );
 }
 
 #[test]

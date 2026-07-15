@@ -11,9 +11,9 @@
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use temper_forge::ChangeKind;
+use temper_forge::{ChangeKind, HintArtifactKind};
 
-use super::{ChangeHint, payload::action_run_payload_pr_number, payload::json_u64};
+use super::{ChangeHint, payload::ci_pr_number, payload::json_u64};
 
 /// The §7 `trigger:` info events a single verified webhook delivery yields.
 ///
@@ -61,8 +61,8 @@ pub(super) struct CiCompletedFacts {
 ///
 /// Pure (no `tracing`, no I/O) so the parse is unit-testable line-by-line. The
 /// `event` is the provider event header (`super::webhook_event`); the `hint`
-/// supplies the already-parsed repo/item/kind so this only adds the human-facing
-/// extras.
+/// supplies the already-parsed repository, typed target, and change kind so this
+/// only adds the human-facing extras.
 pub(super) fn parse_trigger_facts(
     body: &[u8],
     event: &str,
@@ -98,7 +98,7 @@ pub(super) fn parse_trigger_facts(
         }
     }
 
-    if hint.kind == ChangeKind::Ci {
+    if hint.change == ChangeKind::Ci {
         if let Some(pr_number) = ci_pr_number(&value) {
             let conclusion = ci_conclusion(&value).unwrap_or("unknown").to_string();
             let duration_ms = ci_duration_ms(&value).unwrap_or(0);
@@ -111,28 +111,6 @@ pub(super) fn parse_trigger_facts(
     }
 
     facts
-}
-
-/// Extracts the PR number a CI status delivery concerns, if it names one.
-///
-/// CI payloads name their PR in several shapes across Forgejo's event families;
-/// we accept the common ones and otherwise yield `None` (so a CI event for a
-/// branch with no PR is silently a no-op for the §7 line).
-fn ci_pr_number(value: &Value) -> Option<u64> {
-    value
-        .pointer("/pull_request/number")
-        .and_then(json_u64)
-        .or_else(|| {
-            value
-                .pointer("/workflow_run/pull_requests/0/number")
-                .and_then(json_u64)
-        })
-        .or_else(|| {
-            value
-                .pointer("/check_run/pull_requests/0/number")
-                .and_then(json_u64)
-        })
-        .or_else(|| action_run_payload_pr_number(value))
 }
 
 /// Extracts the CI conclusion token from a status payload (`success`, `failure`,
@@ -202,27 +180,17 @@ fn ci_timestamp(value: &Value, pointers: &[&str]) -> Option<DateTime<Utc>> {
 }
 
 /// The workflow artifact kind a wake delivery feeds, for the §7 `artifact=` field.
-///
-/// An inbound issue is intake (the raw-intake mechanical path of §7); other kinds
-/// fall back to a lowercase token of their change kind so the line stays honest
-/// rather than mislabeling everything `intake`.
-pub(super) fn wake_artifact_kind(kind: ChangeKind) -> &'static str {
+pub(super) fn wake_artifact_kind(kind: HintArtifactKind) -> &'static str {
     match kind {
-        ChangeKind::Issue => "intake",
-        ChangeKind::PullRequest => "pull_request",
-        ChangeKind::Ci => "ci",
-        ChangeKind::Comment => "comment",
-        ChangeKind::Review => "review",
-        ChangeKind::Push => "push",
-        ChangeKind::Label => "label",
-        ChangeKind::Unknown => "change",
+        HintArtifactKind::Issue => "intake",
+        HintArtifactKind::PullRequest => "pull_request",
     }
 }
 
 /// The queue a wake delivery routes into, for the §7 `queue=` field.
-pub(super) fn wake_queue(kind: ChangeKind) -> &'static str {
-    match kind {
-        ChangeKind::Issue => "raw_intake",
+pub(super) fn wake_queue(kind: HintArtifactKind, change: ChangeKind) -> &'static str {
+    match (kind, change) {
+        (HintArtifactKind::Issue, ChangeKind::Created) => "raw_intake",
         _ => "wake",
     }
 }
@@ -234,10 +202,10 @@ mod tests {
     use super::*;
 
     fn issue_hint(number: u64) -> ChangeHint {
-        ChangeHint::item(
+        ChangeHint::issue(
             RepositoryPath::new("acme", "widgets"),
             ItemNumber::new(number),
-            ChangeKind::Issue,
+            ChangeKind::Created,
         )
     }
 
@@ -306,7 +274,7 @@ mod tests {
         }))
         .expect("body serializes");
 
-        let hint = ChangeHint::item(
+        let hint = ChangeHint::pull_request(
             RepositoryPath::new("acme", "widgets"),
             ItemNumber::new(44),
             ChangeKind::Ci,
@@ -341,7 +309,7 @@ mod tests {
         }))
         .expect("body serializes");
 
-        let hint = ChangeHint::item(
+        let hint = ChangeHint::pull_request(
             RepositoryPath::new("ai", "temper"),
             ItemNumber::new(23),
             ChangeKind::Ci,
@@ -367,7 +335,7 @@ mod tests {
         }))
         .expect("body serializes");
 
-        let hint = ChangeHint::repo(RepositoryPath::new("acme", "widgets"), ChangeKind::Ci);
+        let hint = ChangeHint::repository(RepositoryPath::new("acme", "widgets"), ChangeKind::Ci);
         let facts = parse_trigger_facts(&body, "status", &hint);
         assert_eq!(facts.ci_completed, None);
     }
@@ -380,7 +348,7 @@ mod tests {
         }))
         .expect("body serializes");
 
-        let hint = ChangeHint::item(
+        let hint = ChangeHint::pull_request(
             RepositoryPath::new("acme", "api"),
             ItemNumber::new(19),
             ChangeKind::Ci,
@@ -404,9 +372,18 @@ mod tests {
 
     #[test]
     fn wake_artifact_and_queue_map_issue_to_intake() {
-        assert_eq!(wake_artifact_kind(ChangeKind::Issue), "intake");
-        assert_eq!(wake_queue(ChangeKind::Issue), "raw_intake");
-        assert_eq!(wake_artifact_kind(ChangeKind::PullRequest), "pull_request");
-        assert_eq!(wake_queue(ChangeKind::PullRequest), "wake");
+        assert_eq!(wake_artifact_kind(HintArtifactKind::Issue), "intake");
+        assert_eq!(
+            wake_queue(HintArtifactKind::Issue, ChangeKind::Created),
+            "raw_intake"
+        );
+        assert_eq!(
+            wake_artifact_kind(HintArtifactKind::PullRequest),
+            "pull_request"
+        );
+        assert_eq!(
+            wake_queue(HintArtifactKind::PullRequest, ChangeKind::Review),
+            "wake"
+        );
     }
 }

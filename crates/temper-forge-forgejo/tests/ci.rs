@@ -218,6 +218,17 @@ fn combined_pr_and_commit_returns_only_current_queued_rest_jobs() {
         json!({
             "workflow_runs": [
                 {
+                    "index_in_repo": 3,
+                    "run_number": 3,
+                    "status": "skipped",
+                    "event": "pull_request",
+                    "prettyref": "#8",
+                    "head_branch": "feature",
+                    "head_sha": "bbbbbbb2222222",
+                    "event_payload": "{\"pull_request\":{\"number\":8,\"head\":{\"sha\":\"bbbbbbb2222222\"}}}",
+                    "created_at": "2024-01-04T00:00:00Z"
+                },
+                {
                     "index_in_repo": 2,
                     "run_number": 2,
                     "status": "queued",
@@ -246,7 +257,14 @@ fn combined_pr_and_commit_returns_only_current_queued_rest_jobs() {
         json!({
             "workflow_runs": [
                 task_with_head(1, 1, "build", "success", "aaaaaaa1111111"),
-                task_with_head(2, 2, "build", "queued", "bbbbbbb2222222")
+                task_with_head(2, 2, "build", "queued", "bbbbbbb2222222"),
+                task_with_head(
+                    3,
+                    3,
+                    "basic-delivery validation report",
+                    "skipped",
+                    "bbbbbbb2222222"
+                )
             ]
         })
         .to_string(),

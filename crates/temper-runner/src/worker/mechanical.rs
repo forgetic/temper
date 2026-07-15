@@ -3,13 +3,13 @@
 use super::automation;
 use super::{Progress, Worker, WorkerError, saturating_u32, saturating_u64};
 use crate::coding_workspace::ExternalToolExecutors;
-use crate::scan::targeted_automated_work_items;
+use crate::scan::{ArtifactAddress, TargetedArtifactSnapshot, load_targeted_artifact};
 use crate::worker::PullRequestMergeObserver;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use temper_forge::{ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId};
+use temper_forge::{ChangeKind, Forge, ForgeError, HintArtifactKind, ItemNumber, RepositoryId};
 use temper_workflow::{
     Applier, ApplyOutcome, ArtifactSnapshot, CompiledWorkflow, DefaultRecoveryPolicy, Executor,
     LeaseManager, LeasePolicy, ReconciliationMode, RecoveryPolicy, ValidatedWorkflow,
@@ -149,63 +149,54 @@ where
         &self,
         now: DateTime<Utc>,
         item: ItemNumber,
-        kind: ChangeKind,
+        artifact_kind: HintArtifactKind,
+        change: ChangeKind,
     ) -> Result<Progress, WorkerError> {
-        let classifier = temper_workflow::Classifier::new(self.workflow);
         let mut targeted_snapshots = Vec::new();
-        let classified = match kind {
-            ChangeKind::Ci | ChangeKind::PullRequest => {
-                let pull_request = self
-                    .forge
-                    .get_pull_request_by_number(self.repo, item)
-                    .await?;
-                if let Some(pull_request) = pull_request {
-                    targeted_snapshots.push(ArtifactSnapshot::from_pull_request(&pull_request));
-                    if matches!(kind, ChangeKind::PullRequest) {
-                        if let Some(metadata) = parse_metadata_block(&pull_request.body)
-                            .map_err(|error| ForgeError::Backend(error.to_string()))?
-                        {
-                            for parent in metadata
-                                .parents
-                                .iter()
-                                .filter(|parent| parent.is_in_repository(self.repo))
-                            {
-                                if let Some(issue) = self
-                                    .forge
-                                    .get_issue_by_number(self.repo, parent.number)
-                                    .await?
-                                {
-                                    targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
-                                }
-                            }
-                        }
-                    }
-                    classifier.classify_pull_request(&pull_request).ok()
-                } else {
-                    None
-                }
-            }
-            // Issue-like events are routed to issues deterministically. Review
-            // hints may come from PR review webhooks, but providers also emit a
-            // PullRequest/Ci hint for PR state; keeping Review issue-routed
-            // avoids guessing across artifact namespaces.
-            ChangeKind::Issue | ChangeKind::Label | ChangeKind::Review | ChangeKind::Comment => {
-                self.forge
-                    .get_issue_by_number(self.repo, item)
-                    .await?
-                    .and_then(|issue| classifier.classify_issue(&issue).ok())
-            }
-            ChangeKind::Push | ChangeKind::Unknown => return Ok(Progress::unchanged()),
-        };
-        let Some(classified) = classified else {
+        let Some(loaded) = load_targeted_artifact(
+            self.forge,
+            self.repo,
+            self.workflow,
+            ArtifactAddress::new(artifact_kind, item),
+        )
+        .await?
+        else {
             return Ok(Progress::unchanged());
         };
-        let automation_items = targeted_automated_work_items(
+        // Staged fan-out children are not externally dispatchable yet. This
+        // guard must precede both targeted automation and reconciliation so a
+        // webhook cannot mutate a partially wired child.
+        if loaded.classified.metadata.staged {
+            return Ok(Progress::unchanged());
+        }
+        if let TargetedArtifactSnapshot::PullRequest(pull_request) = &loaded.snapshot {
+            targeted_snapshots.push(ArtifactSnapshot::from_pull_request(pull_request));
+            if change != ChangeKind::Ci {
+                if let Some(metadata) = parse_metadata_block(&pull_request.body)
+                    .map_err(|error| ForgeError::Backend(error.to_string()))?
+                {
+                    for parent in metadata
+                        .parents
+                        .iter()
+                        .filter(|parent| parent.is_in_repository(self.repo))
+                    {
+                        if let Some(issue) = self
+                            .forge
+                            .get_issue_by_number(self.repo, parent.number)
+                            .await?
+                        {
+                            targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                        }
+                    }
+                }
+            }
+        }
+        let automation_items = crate::scan::targeted_automated_work_items(
             self.forge,
             self.repo,
             self.workflow,
             &self.compiled,
-            classified,
+            &loaded,
             now,
         )
         .await?;

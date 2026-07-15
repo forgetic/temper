@@ -49,8 +49,11 @@ Required methods:
 - `list_issues`
 - `create_issue`
 - `get_issue`
+- `get_issue_with_details`
 - `get_issue_by_number`
+- `get_issue_by_number_with_details`
 - `update_issue`
+- `update_issue_from_snapshot`
 - `add_issue_dependency`
 - `remove_issue_dependency`
 - `list_issue_comments`
@@ -65,6 +68,19 @@ open issue sets `closed_at`; reopening a closed issue clears `closed_at`. Label
 updates apply `set_labels`, then removals, then additions. Assignee removals are
 applied before additions. `UpdateIssue` also carries `expected_version`; see
 [optimistic concurrency](forge-interface-concurrency.md).
+
+The `*_with_details` exact reads accept the same `ItemListDetails` budget as
+list queries. `summary()` returns the complete workflow/body representation but
+may omit native dependency enrichment. The historical exact methods retain full
+detail.
+
+`update_issue_from_snapshot(current, input)` carries a previously validated
+`Issue` into a mutation. Successful calls return the committed representation
+that callers should pass to the next phase. Backends may use `current` for label
+and assignee replacement and the provider mutation response for body/version,
+avoiding unconditional read-before-write and write-after-read amplification.
+The compatibility default delegates to `update_issue`; native hosted backends
+retain only a preflight read required for a conditional update.
 
 ## Dependency-link operations
 

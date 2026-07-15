@@ -51,10 +51,15 @@ wired child or a second session for an assigned source from escaping the restart
 window in either split or standalone wiring.
 
 Child fan-out persists a normalized intent on the parent before creating any
-child. New children carry `staged: true`; recovery idempotently creates missing
-siblings by correlation key, writes all child and parent dependency edges, and
-activates children only after the graph is complete. A retry therefore neither
-duplicates a child nor dispatches a staged child.
+child. A new intent takes a known-first path with no correlation-history scan;
+recovery groups unresolved keys by repository and issues one open/closed summary
+query pair per repository. Children are created atomically with final labels and
+`staged: true`. Returned child numbers are checkpointed once after creation,
+each dependent child receives its complete sorted dependency list in one update,
+and all child references/wiring progress are aggregated in one parent update.
+Only then does activation clear `staged`. The final source update atomically
+records activation/completion progress and the routed transition, so a retry
+neither duplicates a child nor dispatches a partially wired child.
 
 ## Workspace and repaired-PR convergence
 

@@ -33,6 +33,8 @@ mod attention;
 mod reconciliation;
 #[path = "feed_tests/target_branch.rs"]
 mod target_branch;
+#[path = "feed_tests/targeted.rs"]
+mod targeted;
 
 fn work_item(target: ArtifactSource) -> WorkItem {
     WorkItem {

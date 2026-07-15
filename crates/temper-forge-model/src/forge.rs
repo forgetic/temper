@@ -187,6 +187,13 @@ pub struct CiJobQuery {
 /// across backends.
 #[async_trait]
 pub trait Forge: Send + Sync {
+    /// Returns the cumulative provider HTTP request count when the backend can
+    /// expose it without performing I/O. Callers use deltas only for debug
+    /// measurements; correctness must never depend on this optional counter.
+    fn provider_request_count(&self) -> Option<u64> {
+        None
+    }
+
     /// Returns the user identity used by this backend client.
     async fn current_user(&self) -> ForgeResult<User>;
 
@@ -227,12 +234,52 @@ pub trait Forge: Send + Sync {
     /// Looks up an issue by stable backend identifier.
     async fn get_issue(&self, id: &IssueId) -> ForgeResult<Option<Issue>>;
 
+    /// Looks up an issue by stable backend identifier with an explicit detail
+    /// budget.
+    ///
+    /// The default preserves compatibility with existing backends by using the
+    /// full exact read and stripping dependency data from summary results.
+    /// Native backends should avoid dependency enrichment when
+    /// `details.dependencies` is false.
+    async fn get_issue_with_details(
+        &self,
+        id: &IssueId,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<Issue>> {
+        let mut issue = self.get_issue(id).await?;
+        if !details.dependencies {
+            if let Some(issue) = &mut issue {
+                issue.dependencies.clear();
+            }
+        }
+        Ok(issue)
+    }
+
     /// Looks up an issue by its repository-scoped human-facing number.
     async fn get_issue_by_number(
         &self,
         repo_id: &RepositoryId,
         number: ItemNumber,
     ) -> ForgeResult<Option<Issue>>;
+
+    /// Looks up an issue by number with an explicit detail budget.
+    ///
+    /// The compatibility default delegates to the full exact read. Backends
+    /// with expensive native dependency APIs should override this method.
+    async fn get_issue_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<Issue>> {
+        let mut issue = self.get_issue_by_number(repo_id, number).await?;
+        if !details.dependencies {
+            if let Some(issue) = &mut issue {
+                issue.dependencies.clear();
+            }
+        }
+        Ok(issue)
+    }
 
     /// Updates an issue.
     ///
@@ -243,6 +290,29 @@ pub trait Forge: Send + Sync {
     /// update is unconditional. Either way, a successful update advances the
     /// stored version.
     async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue>;
+
+    /// Updates an issue using a validated current representation.
+    ///
+    /// Carrying the snapshot lets hosted backends derive label and assignee
+    /// replacements without an unconditional read-before-write and return the
+    /// mutation response without a post-write exact read. The compatibility
+    /// default delegates to [`Self::update_issue`].
+    async fn update_issue_from_snapshot(
+        &self,
+        current: &Issue,
+        input: UpdateIssue,
+    ) -> ForgeResult<Issue> {
+        if input
+            .expected_version
+            .is_some_and(|expected| expected != current.version)
+        {
+            return Err(ForgeError::Conflict(format!(
+                "stale conditional update of issue {}: snapshot version is {}",
+                current.id, current.version
+            )));
+        }
+        self.update_issue(&current.id, input).await
+    }
 
     /// Adds a dependency link from an issue to another repository item number.
     async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue>;

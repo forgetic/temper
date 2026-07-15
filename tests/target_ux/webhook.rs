@@ -138,6 +138,7 @@ fn signed_webhook_proves_engine_intake_and_selected_operator_contract() {
                 secret: secret.clone(),
                 targets: vec![temper_engine::RoleFeedTarget {
                     repo: repository,
+                    path: temper_forge::RepositoryPath::new("ai", "temper"),
                     role: RoleId::new("engineer"),
                     mode: temper_engine::RoleFeedMode::Wake,
                 }],

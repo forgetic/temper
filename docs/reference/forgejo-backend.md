@@ -138,7 +138,92 @@ A dependency read `404` is treated as an empty list for compatibility with
 providers lacking the endpoint. Add/remove first verify the target exists;
 after that, a dependency endpoint `404` is `InvalidRequest`, not silent success.
 Mutation return values may not include enriched dependency vectors; reload with
-exact `get_*` or a full-detail list when dependency state matters.
+an explicit full-detail exact get or a full-detail list when dependency state
+matters. Metadata-only fan-out and recovery use summary exact gets and therefore
+never call this endpoint merely to update workflow bodies.
+
+### Fan-out mutation request budget
+
+Forgejo issue creation resolves label names before the POST, caches the
+repository name/id map across sibling creates, and materializes the POST response
+directly with empty dependencies. A successful label upsert invalidates that
+repository cache. A staged child therefore keeps atomic final labels without a
+post-create issue/dependency refetch.
+
+`update_issue_from_snapshot` derives current labels and assignees from its
+validated snapshot. Conditional writes perform one CAS preflight; unconditional
+writes perform none. Intent-owned staged-child wiring and new-protocol
+activation are body-only unconditional writes because the staging guard keeps
+them undispatchable and excludes concurrent workflow ownership. Label changes
+are sent while `metadata.staged` is still true, and the body PATCH that can clear
+staging is last. Its response becomes the committed representation, with no
+post-write exact or dependency read. Body-only wiring/activation updates issue
+no label-list request. The executor loads a summary issue when the transition
+has no dependency signal need and carries that validated source snapshot into
+intent persistence instead of re-reading the parent.
+
+For known-first same-repository fan-out with `N` children and `D` children that
+have one or more dependencies, the core write ceiling is `4 + 2N + D`.
+Dependency *edge* count does not add writes because each dependent child's
+complete sorted edge set is written once. The ten-child acyclic maximum
+(`D <= 9`, even though the maximum DAG has 45 edges) is 33 core writes.
+Provider regression tests cap the corresponding Forgejo traffic at 24 GETs, 36
+non-GETs, and 60 total requests; method/path traces are retained by
+`temper_testing::counting_http` on failure. One injected crash plus replay is
+separately capped by the portable suite at 30 Forge reads and 68 Forge writes,
+with correlation recovery using one open/closed query pair per affected
+repository rather than per child.
+
+Activation ordering is part of the budget protocol, not an optimization:
+children are created with final labels and `metadata.staged=true`, all child
+wiring and parent aggregation complete, and only then does a final body PATCH
+clear staging. Label repair for a legacy child happens while it is still staged.
+No targeted, broad, startup, or poll path may dispatch a staged child.
+
+The ignored local baseline uses the cached
+`temper_testing::forgejo_server` fixture and the real `EngineHttpClient` behind
+a counting client:
+
+```sh
+cargo test -p temper-testing --test forgejo_fanout_budget \
+  local_forgejo_ten_child_fanout_meets_budget_and_crash_converges \
+  -- --ignored --exact --nocapture
+```
+
+The first run needs network access to populate the pinned Forgejo binary cache
+(or set `TEMPER_FORGEJO_BINARY` to an already downloaded binary). Subsequent
+runs restore `.cache/forgejo/` into a fresh per-test server. The test
+materializes the ten-child 45-edge maximum DAG, enforces the 60-request fresh
+ceiling, injects an uncertain committed write and verifies convergence, prints
+both wall times, and requires each local phase to finish within 15 seconds.
+
+### HTTP correlation and webhook acknowledgement
+
+Every Forgejo HTTP completion is a debug event with `method`, normalized `path`
+(numeric resource ids become `{id}`), `operation`, `status`, and numeric
+`duration_ms`. Requests made by an admitted wake
+inherit `wake.run_id`; result application requests inherit `apply.id`. Count
+operations by either span field rather than parsing the human message.
+
+After HMAC verification and payload classification, the engine queues the HTTP
+`202 Accepted` response before any debounce timer, Forge read, scan, or
+mechanical work. A proven lease-heartbeat-only edit is still acknowledged `202`
+and recorded as `wake.outcome=suppressed`. Invalid signatures remain `401` and
+malformed payloads `400`; ambiguous valid payloads are acknowledged and broad
+fall back.
+
+For troubleshooting with `TEMPER_LOG_FORMAT=json`:
+
+```sh
+# Provider operations and statuses for one apply.
+journalctl -u temper -o cat | jq -s \
+  '[.[] | select((.span."apply.id" // ."apply.id")=="job-42" and .operation != null)] |
+   group_by(.operation) | map({operation:.[0].operation, count:length, statuses:map(.status)})'
+
+# Fan-out budget summaries that exceeded the documented provider ceiling.
+journalctl -u temper -o cat | jq -c \
+  'select(.measurement=="fan_out.completed" and ."provider.request_total">60)'
+```
 
 ### Optimistic concurrency is per backend instance
 

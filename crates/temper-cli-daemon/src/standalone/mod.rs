@@ -30,9 +30,9 @@ use std::time::Duration;
 use skein::runtime::RuntimeHandle;
 use temper_config::{ExposeSecret, Resolved, WorkerSettings};
 use temper_engine::{
-    Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, MechanicalScope,
-    PollBackstopConfig, RoleFeedMode, WebhookConfig, run_mechanical_backstop_tick,
-    spawn_mechanical_backstop, spawn_poll_backstop,
+    Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, MechanicalTrigger,
+    PollBackstopConfig, RoleFeedMode, WebhookConfig, spawn_coordinated_mechanical_backstop,
+    spawn_coordinated_poll_backstop,
 };
 use temper_engine_service::{
     attach_trace_query, converge_startup_orphans, engine_config, ensure_workflow_labels,
@@ -46,7 +46,7 @@ use temper_worker::{
     WorkerAgentTraceConfig, WorkerConfig, run_worker_with_transport,
 };
 use temper_worker_service::selected_worker_auth;
-use temper_workflow::{InMemoryJournal, LeasePolicy};
+use temper_workflow::LeasePolicy;
 use workstream_cleanup::StandaloneWorkstreamCleaner;
 
 /// Runs the standalone daemon on the skein runtime until SIGINT/SIGTERM.
@@ -236,50 +236,42 @@ async fn run_async(
             resolved.worker.workspace_root.clone(),
         ))),
     };
-    let startup_journals = (0..repositories.repositories().len())
-        .map(|_| InMemoryJournal::new())
-        .collect::<Vec<_>>();
-    run_mechanical_backstop_tick(
-        forge.as_ref(),
-        workflow.as_ref(),
-        (temper_engine::system_clock())(),
-        &startup_mechanical_config,
-        &startup_journals,
-        &MechanicalScope::All,
-    )
-    .await
-    .map_err(|error| format!("startup mechanical reconciliation failed: {error}"))?;
+    let mechanical_trigger: Arc<dyn HintedMechanical> = Arc::new(MechanicalTrigger::new(
+        forge.clone(),
+        workflow.clone(),
+        startup_mechanical_config,
+        temper_engine::system_clock(),
+    ));
+    let wake_targets = role_feed_targets(&repositories, &daemon_config.roles, RoleFeedMode::Wake);
+    let daemon = daemon.with_wake_execution(
+        forge.clone(),
+        workflow.clone(),
+        compiled.clone(),
+        wake_targets.clone(),
+        temper_engine::system_clock(),
+        Some(Arc::clone(&mechanical_trigger)),
+    );
 
     daemon.complete_startup_recovery().await;
-    let mut mechanical_trigger: Option<Arc<dyn HintedMechanical>> = None;
     if let Some(cadence) = daemon_config.mechanical_cadence {
-        let trigger = spawn_mechanical_backstop(
+        spawn_coordinated_mechanical_backstop(
             &spawner,
-            forge.clone(),
-            workflow.clone(),
-            MechanicalBackstopConfig {
-                cadence,
-                ..startup_mechanical_config
-            },
-            temper_engine::system_clock(),
+            daemon.clone(),
+            repositories.clone(),
+            cadence,
         );
-        mechanical_trigger = Some(Arc::new(trigger));
 
         // §7 mechanical-backstop line: cadence and the repo span it covers.
         emit_engine_status(banner::mechanical_backstop(cadence, repo_paths.len()));
     }
 
-    spawn_poll_backstop(
+    spawn_coordinated_poll_backstop(
         &spawner,
         daemon.clone(),
-        forge.clone(),
-        workflow.clone(),
-        compiled.clone(),
         PollBackstopConfig {
-            targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Normal),
+            targets: role_feed_targets(&repositories, &daemon_config.roles, RoleFeedMode::Normal),
             cadence: daemon_config.poll_cadence,
         },
-        temper_engine::system_clock(),
     );
 
     // §7 poll-backstop line is emitted only after assignment convergence and
@@ -378,17 +370,10 @@ async fn run_async(
     let daemon = if let Some(secret) = resolved.engine.webhook_secret_value.as_ref() {
         let webhook_config = Arc::new(WebhookConfig {
             secret: secret.expose_secret().trim().to_string(),
-            targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Wake),
+            targets: wake_targets.clone(),
         });
 
-        daemon.with_webhook_and_mechanical(
-            forge,
-            workflow,
-            compiled,
-            webhook_config,
-            temper_engine::system_clock(),
-            mechanical_trigger,
-        )
+        daemon.with_webhook_config(webhook_config)
     } else if let Some(path) = daemon_config.webhook_secret_file.as_ref() {
         let secret = std::fs::read_to_string(path).map_err(|error| {
             format!(
@@ -398,17 +383,10 @@ async fn run_async(
         })?;
         let webhook_config = Arc::new(WebhookConfig {
             secret: secret.trim().to_string(),
-            targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Wake),
+            targets: wake_targets,
         });
 
-        daemon.with_webhook_and_mechanical(
-            forge,
-            workflow,
-            compiled,
-            webhook_config,
-            temper_engine::system_clock(),
-            mechanical_trigger,
-        )
+        daemon.with_webhook_config(webhook_config)
     } else {
         daemon
     };

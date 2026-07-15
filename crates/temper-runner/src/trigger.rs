@@ -6,8 +6,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{BTreeMap, BTreeSet};
-use temper_forge::ItemNumber;
-pub use temper_forge::{ChangeHint, ChangeKind};
+pub use temper_forge::{ChangeHint, ChangeKind, HintArtifactKind, HintTarget};
 use temper_workflow::RoleId;
 
 /// Worker endpoint selected for a wake.
@@ -49,8 +48,8 @@ struct WorkerState {
 struct HintKey {
     owner: String,
     name: String,
-    item: Option<u64>,
-    kind: ChangeKind,
+    target: HintTarget,
+    change: ChangeKind,
 }
 
 impl From<&ChangeHint> for HintKey {
@@ -58,8 +57,8 @@ impl From<&ChangeHint> for HintKey {
         Self {
             owner: hint.repo.owner.clone(),
             name: hint.repo.name.clone(),
-            item: hint.item.map(ItemNumber::get),
-            kind: hint.kind,
+            target: hint.target,
+            change: hint.change,
         }
     }
 }
@@ -148,7 +147,7 @@ mod tests {
     }
 
     fn hint() -> ChangeHint {
-        ChangeHint::item(
+        ChangeHint::issue(
             RepositoryPath::new("acme", "service"),
             ItemNumber::new(7),
             ChangeKind::Label,

@@ -71,7 +71,7 @@ pub(crate) fn create_issue(
     sort_issues_by_number(&mut issues);
     forge.write_issues(repo_id, &issues)?;
     forge.write_metadata(&metadata)?;
-    forge.publish_item_hint(repo_id, issue.number, ChangeKind::Issue);
+    forge.publish_issue_hint(repo_id, issue.number, ChangeKind::Created);
 
     Ok(issue)
 }
@@ -138,7 +138,7 @@ pub(crate) fn update_issue(
     sort_issues_by_number(&mut issues);
     forge.write_issues(&repo_id, &issues)?;
     forge.write_metadata(&metadata)?;
-    forge.publish_item_hint(&repo_id, updated.number, ChangeKind::Issue);
+    forge.publish_issue_hint(&repo_id, updated.number, ChangeKind::Edited);
 
     Ok(updated)
 }
@@ -150,7 +150,7 @@ pub(crate) fn add_issue_dependency_op(
 ) -> ForgeResult<Issue> {
     let _guard = forge.write_lock()?;
     let issue = add_issue_dependency(forge, id, target)?;
-    forge.publish_item_hint(&issue.repo_id, issue.number, ChangeKind::Issue);
+    forge.publish_issue_hint(&issue.repo_id, issue.number, ChangeKind::Dependency);
     Ok(issue)
 }
 
@@ -161,7 +161,7 @@ pub(crate) fn remove_issue_dependency_op(
 ) -> ForgeResult<Issue> {
     let _guard = forge.write_lock()?;
     let issue = remove_issue_dependency(forge, id, target)?;
-    forge.publish_item_hint(&issue.repo_id, issue.number, ChangeKind::Issue);
+    forge.publish_issue_hint(&issue.repo_id, issue.number, ChangeKind::Dependency);
     Ok(issue)
 }
 
@@ -204,7 +204,7 @@ pub(crate) fn add_issue_comment(
     forge.write_issue_comments(&repo_id, id, &comments)?;
     forge.write_metadata(&metadata)?;
     if let Some(issue) = forge.find_issue_by_id(id)? {
-        forge.publish_item_hint(&repo_id, issue.number, ChangeKind::Comment);
+        forge.publish_issue_hint(&repo_id, issue.number, ChangeKind::Comment);
     }
 
     Ok(comment)

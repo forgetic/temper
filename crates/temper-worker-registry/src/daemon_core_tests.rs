@@ -330,6 +330,40 @@ fn scoped_pending_reconcile_removes_job_context_only_for_pruned_pending_jobs() {
 }
 
 #[test]
+fn targeted_pending_reconcile_prunes_only_the_exact_artifact() {
+    let mut core = DaemonCore::new();
+    let mut selected = artifact();
+    selected.item = json!(7);
+    let mut unrelated = artifact();
+    unrelated.item = json!(8);
+    core.enqueue_job(
+        "selected-stale",
+        "engineer",
+        "ai/temper",
+        selected.clone(),
+        json!({}),
+    );
+    core.enqueue_job("unrelated", "engineer", "ai/temper", unrelated, json!({}));
+
+    assert_eq!(
+        core.retain_pending_jobs_for_artifact(
+            "ai/temper",
+            "engineer",
+            &selected,
+            &BTreeSet::new(),
+        ),
+        vec!["selected-stale".to_string()]
+    );
+    assert_eq!(
+        core.queued_jobs()
+            .iter()
+            .map(|job| job.job_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["unrelated"]
+    );
+}
+
+#[test]
 fn role_saturation_uses_configured_limit_and_preserves_pending_order() {
     let mut core = DaemonCore::with_role_limits(BTreeMap::from([("architect".to_string(), 1)]));
     core.coordinator_mut().register(&register_multi(

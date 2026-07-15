@@ -57,6 +57,7 @@ impl<'a, C: HttpClient> WebUiClient<'a, C> {
 
     /// Issues one raw web-UI request through the HTTP seam (no API prefix/token).
     async fn execute(&mut self, request: HttpRequest) -> ForgeResult<HttpResponse> {
+        self.forge.record_provider_request();
         let response = self
             .forge
             .http_client()

@@ -152,11 +152,7 @@ impl MemoryForge {
         pull_request.version = pull_request.version.next();
         pull_request.updated_at = now;
         let updated = pull_request.clone();
-        inner.publish_item_hint(
-            &repo_id,
-            updated.number,
-            temper_forge_model::ChangeKind::PullRequest,
-        );
+        inner.publish_pull_request_hint(&updated, temper_forge_model::ChangeKind::Edited);
         Ok(updated)
     }
 
