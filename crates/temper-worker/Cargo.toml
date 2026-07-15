@@ -38,11 +38,17 @@ temper-protocol-agent = { path = "../temper-protocol-agent" }
 # workspace, so tests run the real thing and tap the worker's posted result.
 temper-engine = { path = "../temper-engine" }
 temper-engine-io = { path = "../temper-engine-io" }
+temper-agent = { path = "../temper-agent" }
+temper-agent-core = { path = "../temper-agent-core" }
+temper-log = { path = "../temper-log" }
+temper-web = { path = "../temper-web" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-worker-io = { path = "../temper-worker-io" }
 tracing-subscriber = { workspace = true }
 temper-workflow = { path = "../temper-workflow" }
+secrecy.workspace = true
+tongs.workspace = true
 
 # A deterministic, hermetic agent that speaks the temper-protocol-agent: writes
 # a product file and a terminal result. Lets the worker e2e drive the real

@@ -1,11 +1,8 @@
 //! Worker-owned agent activity collection and durable local spooling.
 //!
-//! A [`TraceRun`] is the trust and ordering boundary for one agent invocation:
-//! it stamps assignment identity from [`WorkspaceContext`], assigns sequence
-//! numbers while holding one acceptance lock, and synchronizes each JSONL record
-//! before returning it to a caller. Trace failures are deliberately reported as
-//! [`TraceError`] values so runners can log and degrade tracing without changing
-//! the product-work outcome.
+//! A [`TraceRun`] is the trust, ordering, and durable-sync boundary for one
+//! invocation. It stamps [`WorkspaceContext`] identity and canonical sequence
+//! numbers. [`TraceError`] lets callers degrade tracing without changing work.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -637,5 +634,10 @@ fn validate_blob_references(
 }
 
 #[cfg(test)]
-#[path = "trace/tests.rs"]
+mod full_path_fixture;
+
+#[cfg(test)]
+mod full_path_tests;
+
+#[cfg(test)]
 mod tests;

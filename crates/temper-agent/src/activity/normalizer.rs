@@ -288,14 +288,25 @@ impl NormalizingEventSink {
         name: String,
         arg_preview: Option<String>,
     ) {
-        let arguments = arg_preview.and_then(|value| {
-            nonempty(value).map(|value| {
-                CapturedContentV1::Inline(sanitized_text(
-                    &value,
-                    self.policy.max_inline_bytes as usize,
-                ))
+        // The start boundary is required in every enabled capture mode, but
+        // arguments are transcript content. Metadata therefore retains only
+        // the call identity and tool name; the worker independently enforces
+        // the same rule for forged child frames.
+        let arguments = if matches!(
+            self.policy.capture,
+            CaptureModeV1::Transcript | CaptureModeV1::Diagnostic
+        ) {
+            arg_preview.and_then(|value| {
+                nonempty(value).map(|value| {
+                    CapturedContentV1::Inline(sanitized_text(
+                        &value,
+                        self.policy.max_inline_bytes as usize,
+                    ))
+                })
             })
-        });
+        } else {
+            None
+        };
         self.project(
             state.current_turn,
             AgentActivityEventV1::ToolStarted(ToolStartedV1 {
