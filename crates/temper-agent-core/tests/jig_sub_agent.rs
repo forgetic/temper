@@ -21,7 +21,7 @@ use temper_agent::ProviderConfig;
 use temper_agent_core::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
 use tongs::provider::StreamOptions;
 use tongs::tools::ToolRegistry;
-use tongs::tools::{create_read_tool, create_write_tool};
+use tongs::tools::{create_read_tool, create_write_tool, tool_to_definition};
 
 #[test]
 fn sub_agent_runs_a_tool_loop_and_completes() {
@@ -269,6 +269,13 @@ fn sub_agent_forwards_live_events_to_the_sink() {
         create_read_tool(checkout.path()),
         create_write_tool(checkout.path()),
     ]);
+    let expected_tools = tools
+        .tools()
+        .iter()
+        .map(|tool| tool_to_definition(tool.as_ref()))
+        .collect::<Vec<_>>();
+    let expected_system = "Use the write tool.";
+    let expected_user = "Create NOTES.md.";
 
     let recorder = Arc::new(Recorder::default());
     let recorder_for_run = Arc::clone(&recorder);
@@ -276,8 +283,8 @@ fn sub_agent_forwards_live_events_to_the_sink() {
         run_sub_agent_with_events(
             handle,
             SubAgent {
-                system_prompt: Some("Use the write tool.".to_string()),
-                user_message: "Create NOTES.md.".to_string(),
+                system_prompt: Some(expected_system.to_string()),
+                user_message: expected_user.to_string(),
                 tools,
                 max_iterations: 6,
                 provider,
@@ -294,6 +301,50 @@ fn sub_agent_forwards_live_events_to_the_sink() {
     assert_eq!(outcome.stop, AgentStop::Completed);
 
     let events = recorder.events.lock().expect("events lock");
+    let prompt_positions = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| {
+            matches!(event, AgentEvent::PromptPrepared { .. }).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(prompt_positions.len(), 1, "one prompt per invocation");
+    let first_turn = events
+        .iter()
+        .position(|event| matches!(event, AgentEvent::TurnStart { .. }))
+        .expect("turn start");
+    assert!(
+        prompt_positions[0] < first_turn,
+        "prompt precedes first turn"
+    );
+    let AgentEvent::PromptPrepared {
+        system_prompt,
+        initial_user_message,
+        tools,
+    } = &events[prompt_positions[0]]
+    else {
+        unreachable!();
+    };
+    assert_eq!(system_prompt.as_deref(), Some(expected_system));
+    assert_eq!(initial_user_message, expected_user);
+    assert_eq!(tools, &expected_tools);
+    for (actual, expected) in tools.iter().zip(&expected_tools) {
+        assert_eq!(actual.parameters, expected.parameters);
+    }
+
+    // The exact same startup values reached the provider request context.
+    let request: serde_json::Value =
+        serde_json::from_slice(&fake.requests()[0].body).expect("provider request JSON");
+    assert_eq!(request["messages"][0]["content"], expected_system);
+    assert_eq!(request["messages"][1]["content"], expected_user);
+    let provider_tools = request["tools"].as_array().expect("provider tools");
+    assert_eq!(provider_tools.len(), expected_tools.len());
+    for (actual, expected) in provider_tools.iter().zip(&expected_tools) {
+        assert_eq!(actual["function"]["name"], expected.name);
+        assert_eq!(actual["function"]["description"], expected.description);
+        assert_eq!(actual["function"]["parameters"], expected.parameters);
+    }
+
     // Lifecycle events present.
     assert!(
         events
@@ -332,6 +383,59 @@ fn sub_agent_forwards_live_events_to_the_sink() {
         )),
         "expected a streamed tool-call delta for `write`"
     );
+}
+
+#[test]
+fn panicking_event_sink_does_not_change_the_run_result() {
+    use temper_agent_core::{EventSink, run_sub_agent_with_events};
+
+    struct PanickingSink;
+    impl EventSink for PanickingSink {
+        fn emit(&self, _event: temper_agent_core::AgentEvent) {
+            panic!("capture sink failed");
+        }
+    }
+
+    let fake = FakeLlm::start(Script::Fixed(Reply {
+        turns: vec![Turn::Text("done".to_string())],
+        usage: Default::default(),
+        stop: StopReason::Stop,
+    }))
+    .expect("start fake LLM");
+    let provider = ProviderConfig::new(
+        "jig-openai-compatible",
+        "jig-panicking-event-sink",
+        "https://example.invalid/unused",
+        "sk-jig-test",
+    )
+    .with_base_url_override(fake.base_url())
+    .build_provider()
+    .expect("build provider");
+
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
+        run_sub_agent_with_events(
+            handle,
+            SubAgent {
+                system_prompt: Some("System prompt".to_string()),
+                user_message: "Finish normally".to_string(),
+                tools: ToolRegistry::new(),
+                max_iterations: 2,
+                provider,
+                stream_options: StreamOptions {
+                    api_key: Some("sk-jig-test".to_string()),
+                    ..StreamOptions::default()
+                },
+            },
+            Arc::new(PanickingSink),
+        )
+        .await
+    })
+    .expect("observability panic must not fail the run");
+
+    assert_eq!(outcome.stop, AgentStop::Completed);
+    assert!(outcome.final_message.content.iter().any(|block| {
+        matches!(block, tongs::model::ContentBlock::Text(text) if text.text == "done")
+    }));
 }
 
 #[test]

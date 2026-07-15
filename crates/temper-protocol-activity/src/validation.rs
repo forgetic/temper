@@ -5,9 +5,9 @@ use base64::Engine as _;
 
 use crate::{
     AgentActivityAcknowledgement, AgentActivityBatch, AgentActivityCapturePolicyV1,
-    AgentActivityEventV1, AgentActivityFrameV1, AgentRunEventV1, AgentScopeKindV1, AgentScopeV1,
-    BlobAttachmentV1, BlobReferenceV1, CaptureModeV1, MAX_BLOB_ATTACHMENT_BYTES,
-    MAX_INLINE_CONTENT_BYTES,
+    AgentActivityChildRecordV1, AgentActivityEventV1, AgentActivityFrameV1, AgentRunEventV1,
+    AgentScopeKindV1, AgentScopeV1, BlobAttachmentV1, BlobReferenceV1, CaptureModeV1,
+    CapturedContentV1, MAX_BLOB_ATTACHMENT_BYTES, MAX_INLINE_CONTENT_BYTES,
 };
 
 mod fields;
@@ -64,6 +64,100 @@ pub fn validate_frame(frame: &AgentActivityFrameV1) -> Result<(), ActivityValida
         ));
     }
     event(&frame.event, frame.turn, "frame.event")
+}
+
+/// Validates one attachment-bearing child record as a complete trust-boundary
+/// unit. Bare frames are validated with [`validate_frame`] and must not be
+/// wrapped unless they actually reference a blob.
+pub fn validate_child_record(
+    record: &AgentActivityChildRecordV1,
+) -> Result<(), ActivityValidationError> {
+    validate_frame(&record.frame)?;
+    if record.blobs.is_empty() {
+        return Err(error(
+            ActivityValidationCode::BlobReferenceMismatch,
+            "child_record.blobs",
+            "an attachment-bearing child record must contain an attachment",
+        ));
+    }
+    if record.blobs.len() > 1 {
+        return Err(error(
+            ActivityValidationCode::BlobReferenceMismatch,
+            "child_record.blobs",
+            "a child record may carry only one referenced attachment",
+        ));
+    }
+
+    let mut references = BTreeMap::<&str, &BlobReferenceV1>::new();
+    for reference in record.frame.event.content_references() {
+        validate_blob_reference(reference)?;
+        if references
+            .insert(reference.digest.as_str(), reference)
+            .is_some_and(|existing| existing != reference)
+        {
+            return Err(error(
+                ActivityValidationCode::BlobReferenceMismatch,
+                "child_record.frame.event",
+                "one digest is associated with conflicting blob metadata",
+            ));
+        }
+    }
+
+    let mut attachments = BTreeMap::<&str, (&BlobAttachmentV1, Vec<u8>)>::new();
+    for attachment in &record.blobs {
+        let decoded = validate_and_decode_blob_attachment(attachment)?;
+        if let Some((existing, _)) =
+            attachments.insert(attachment.blob.digest.as_str(), (attachment, decoded))
+        {
+            let detail = if existing.blob == attachment.blob {
+                "duplicate blob attachment"
+            } else {
+                "conflicting blob attachment metadata"
+            };
+            return Err(error(
+                ActivityValidationCode::BlobReferenceMismatch,
+                "child_record.blobs",
+                detail,
+            ));
+        }
+    }
+
+    for (digest, reference) in &references {
+        let Some((attachment, _)) = attachments.get(digest) else {
+            return Err(error(
+                ActivityValidationCode::BlobReferenceMismatch,
+                "child_record.blobs",
+                format!("missing attachment for {digest}"),
+            ));
+        };
+        if &attachment.blob != *reference {
+            return Err(error(
+                ActivityValidationCode::BlobReferenceMismatch,
+                "child_record.blobs",
+                format!("attachment metadata does not match reference {digest}"),
+            ));
+        }
+    }
+    if let Some(unreferenced) = attachments
+        .keys()
+        .find(|digest| !references.contains_key(**digest))
+    {
+        return Err(error(
+            ActivityValidationCode::BlobReferenceMismatch,
+            "child_record.blobs",
+            format!("unreferenced attachment {unreferenced}"),
+        ));
+    }
+
+    if let AgentActivityEventV1::PromptPrepared(prompt) = &record.frame.event {
+        if let Some(CapturedContentV1::Blob { blob }) = &prompt.content {
+            let (_, decoded) = attachments
+                .get(blob.digest.as_str())
+                .expect("exact reference validation guarantees the prompt attachment");
+            fields::validate_prompt_snapshot_bytes(prompt, decoded, "child_record.frame.event")?;
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_run_event(event_value: &AgentRunEventV1) -> Result<(), ActivityValidationError> {
@@ -305,6 +399,12 @@ pub fn validate_blob_reference(reference: &BlobReferenceV1) -> Result<(), Activi
 pub fn validate_blob_attachment(
     attachment: &BlobAttachmentV1,
 ) -> Result<(), ActivityValidationError> {
+    validate_and_decode_blob_attachment(attachment).map(|_| ())
+}
+
+fn validate_and_decode_blob_attachment(
+    attachment: &BlobAttachmentV1,
+) -> Result<Vec<u8>, ActivityValidationError> {
     validate_blob_reference(&attachment.blob)?;
     let decoded = decode_attachment(attachment)?;
     let actual = BlobReferenceV1::for_bytes(attachment.blob.media_type, &decoded);
@@ -315,7 +415,7 @@ pub fn validate_blob_attachment(
             "declared digest, byte count, or media type does not match attachment data",
         ));
     }
-    Ok(())
+    Ok(decoded)
 }
 
 pub(crate) fn decode_attachment(

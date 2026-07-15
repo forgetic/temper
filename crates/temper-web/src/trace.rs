@@ -338,7 +338,8 @@ pub fn board_projection(event: &AgentRunEventV1) -> Option<StreamEvent> {
             Some("error".to_string()),
             format!("run failed: {:?}", data.failure.code).to_lowercase(),
         ),
-        AgentActivityEventV1::ModelCallStarted(_)
+        AgentActivityEventV1::PromptPrepared(_)
+        | AgentActivityEventV1::ModelCallStarted(_)
         | AgentActivityEventV1::ModelCallFinished(_)
         | AgentActivityEventV1::AssistantMessage(_)
         | AgentActivityEventV1::OutputTextDelta(_)

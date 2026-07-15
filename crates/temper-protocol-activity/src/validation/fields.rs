@@ -1,7 +1,8 @@
 use crate::{
     AgentActivityEventV1, AgentAssignmentIdentityV1, AgentScopeKindV1, AgentScopeV1,
-    CapturedContentV1, FailureInfoV1, InlineContentV1, MAX_IDENTIFIER_BYTES,
-    MAX_INLINE_CONTENT_BYTES, MODEL_CALL_RETRY_FAILURE_MESSAGE,
+    BlobMediaTypeV1, CapturedContentV1, FailureInfoV1, InlineContentV1, MAX_IDENTIFIER_BYTES,
+    MAX_INLINE_CONTENT_BYTES, MODEL_CALL_RETRY_FAILURE_MESSAGE, PromptCaptureDispositionV1,
+    PromptPreparedV1, PromptSnapshotV1,
 };
 
 use super::{ActivityValidationCode, ActivityValidationError, error, validate_blob_reference};
@@ -60,6 +61,7 @@ pub(super) fn event(
             &format!("{path}.data.display_name"),
         ),
         Event::ScopeFinished(_) => Ok(()),
+        Event::PromptPrepared(value) => prompt_prepared(value, turn, path),
         Event::TurnStarted(_) | Event::TurnFinished(_) if turn.is_none() => Err(error(
             ActivityValidationCode::MissingTurn,
             "event.turn",
@@ -133,6 +135,135 @@ pub(super) fn event(
         }
         Event::RunFailed(value) => failure(&value.failure, &format!("{path}.data.failure")),
     }
+}
+
+fn prompt_prepared(
+    value: &PromptPreparedV1,
+    turn: Option<u32>,
+    path: &str,
+) -> Result<(), ActivityValidationError> {
+    if turn != Some(0) {
+        return Err(invalid_event(
+            "event.turn",
+            "prompt.prepared must use turn 0",
+        ));
+    }
+    if !value.system_prompt_present && value.system_prompt_bytes != 0 {
+        return Err(invalid_event(
+            &format!("{path}.data.system_prompt_bytes"),
+            "must be zero when no system prompt is present",
+        ));
+    }
+    if value.tool_manifest_bytes == 0 || value.original_snapshot_bytes == 0 {
+        return Err(invalid_event(
+            &format!("{path}.data"),
+            "prompt and tool-manifest byte counts must be non-zero",
+        ));
+    }
+
+    match value.disposition {
+        PromptCaptureDispositionV1::Captured => {
+            let content = value.content.as_ref().ok_or_else(|| {
+                invalid_event(
+                    &format!("{path}.data.content"),
+                    "captured disposition requires exactly one complete snapshot",
+                )
+            })?;
+            captured_content(content, &format!("{path}.data.content"))?;
+            let content_bytes = match content {
+                CapturedContentV1::Inline(inline) => {
+                    if inline.truncated {
+                        return Err(invalid_event(
+                            &format!("{path}.data.content.truncated"),
+                            "an inline prompt snapshot must be complete and untruncated",
+                        ));
+                    }
+                    validate_prompt_snapshot_bytes(value, inline.text.as_bytes(), path)?;
+                    inline.text.len() as u64
+                }
+                CapturedContentV1::Blob { blob } => {
+                    if blob.media_type != BlobMediaTypeV1::ApplicationJson {
+                        return Err(invalid_event(
+                            &format!("{path}.data.content.blob.media_type"),
+                            "a prompt snapshot blob must use application_json",
+                        ));
+                    }
+                    blob.bytes
+                }
+            };
+            if value.captured_bytes != content_bytes
+                || value.original_snapshot_bytes != content_bytes
+            {
+                return Err(invalid_event(
+                    &format!("{path}.data.captured_bytes"),
+                    "captured and original byte counts must match the complete snapshot",
+                ));
+            }
+            Ok(())
+        }
+        PromptCaptureDispositionV1::OmittedPolicy
+        | PromptCaptureDispositionV1::OmittedLimit
+        | PromptCaptureDispositionV1::OmittedQuota => {
+            if value.content.is_some() || value.captured_bytes != 0 {
+                return Err(invalid_event(
+                    &format!("{path}.data.content"),
+                    "an omitted prompt must have no content and zero captured bytes",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(super) fn validate_prompt_snapshot_bytes(
+    metadata: &PromptPreparedV1,
+    snapshot_bytes: &[u8],
+    path: &str,
+) -> Result<(), ActivityValidationError> {
+    let snapshot: PromptSnapshotV1 = serde_json::from_slice(snapshot_bytes).map_err(|source| {
+        invalid_event(
+            &format!("{path}.data.content"),
+            format!("must be a PromptSnapshotV1 JSON value: {source}"),
+        )
+    })?;
+    let canonical = snapshot.to_canonical_json_bytes().map_err(|source| {
+        invalid_event(
+            &format!("{path}.data.content"),
+            format!("prompt snapshot serialization failed: {source}"),
+        )
+    })?;
+    if canonical != snapshot_bytes {
+        return Err(invalid_event(
+            &format!("{path}.data.content"),
+            "must use the protocol-owned compact canonical JSON representation",
+        ));
+    }
+    let tools = snapshot.tools_to_canonical_json_bytes().map_err(|source| {
+        invalid_event(
+            &format!("{path}.data.content"),
+            format!("tool manifest serialization failed: {source}"),
+        )
+    })?;
+    let tool_count = u32::try_from(snapshot.tools.len())
+        .map_err(|_| invalid_event(&format!("{path}.data.tool_count"), "tool count exceeds u32"))?;
+    let system_prompt_bytes = snapshot
+        .system_prompt
+        .as_ref()
+        .map_or(0, |prompt| prompt.len() as u64);
+    if metadata.system_prompt_present != snapshot.system_prompt.is_some()
+        || metadata.system_prompt_bytes != system_prompt_bytes
+        || metadata.initial_user_message_bytes != snapshot.initial_user_message.len() as u64
+        || metadata.tool_manifest_bytes != tools.len() as u64
+        || metadata.tool_count != tool_count
+        || metadata.original_snapshot_bytes != canonical.len() as u64
+        || metadata.captured_bytes != canonical.len() as u64
+    {
+        return Err(invalid_event(
+            &format!("{path}.data"),
+            "prompt snapshot metadata does not match the canonical inline value",
+        ));
+    }
+    Ok(())
 }
 
 fn optional_content(

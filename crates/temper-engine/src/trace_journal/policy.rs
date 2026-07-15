@@ -49,6 +49,7 @@ fn validate_stream_for_manifest(
         return Ok(());
     }
     validate_run_stream(events)?;
+    validate_content_reference_metadata(events)?;
     let mut terminal_seq = None;
     for event in events {
         if event.run_id != manifest.run_id
@@ -105,6 +106,13 @@ fn validate_event_policy(
             ));
         }
         CaptureModeV1::Metadata => match &event.event {
+            AgentActivityEventV1::PromptPrepared(value)
+                if value.disposition != PromptCaptureDispositionV1::OmittedPolicy =>
+            {
+                return Err(TraceJournalError::PolicyViolation(
+                    "metadata capture contains a non-policy prompt disposition".to_string(),
+                ));
+            }
             AgentActivityEventV1::AssistantMessage(_)
             | AgentActivityEventV1::OutputTextDelta(_)
             | AgentActivityEventV1::OutputThinkingDelta(_) => {
@@ -139,8 +147,26 @@ fn validate_event_policy(
                     "transcript capture contains diagnostic deltas".to_string(),
                 ));
             }
+            if matches!(
+                &event.event,
+                AgentActivityEventV1::PromptPrepared(value)
+                    if value.disposition == PromptCaptureDispositionV1::OmittedPolicy
+            ) {
+                return Err(TraceJournalError::PolicyViolation(
+                    "transcript capture contains a policy-omitted prompt".to_string(),
+                ));
+            }
         }
         CaptureModeV1::Diagnostic => {
+            if matches!(
+                &event.event,
+                AgentActivityEventV1::PromptPrepared(value)
+                    if value.disposition == PromptCaptureDispositionV1::OmittedPolicy
+            ) {
+                return Err(TraceJournalError::PolicyViolation(
+                    "diagnostic capture contains a policy-omitted prompt".to_string(),
+                ));
+            }
             if !policy.capture_thinking
                 && matches!(event.event, AgentActivityEventV1::OutputThinkingDelta(_))
             {
@@ -205,6 +231,11 @@ fn sanitize_for_policy(
     match policy.capture {
         CaptureModeV1::Off => {}
         CaptureModeV1::Metadata => match &mut event.event {
+            AgentActivityEventV1::PromptPrepared(value)
+                if value.disposition == PromptCaptureDispositionV1::Captured =>
+            {
+                omit_prompt(value, PromptCaptureDispositionV1::OmittedPolicy);
+            }
             AgentActivityEventV1::AssistantMessage(value) => {
                 event.event =
                     omission_gap(DroppedEventKindV1::TextDelta, content_bytes(&value.content));
@@ -250,6 +281,14 @@ fn sanitize_for_policy(
     }
 
     match &mut event.event {
+        AgentActivityEventV1::PromptPrepared(value)
+            if value
+                .content
+                .as_ref()
+                .is_some_and(|content| content_exceeds_policy(content, policy)) =>
+        {
+            omit_prompt(value, PromptCaptureDispositionV1::OmittedLimit);
+        }
         AgentActivityEventV1::AssistantMessage(value)
             if content_exceeds_policy(&value.content, policy) =>
         {
@@ -309,6 +348,11 @@ fn sanitize_for_policy(
 
 fn strip_optional_content(mut event: AgentRunEventV1) -> AgentRunEventV1 {
     match &mut event.event {
+        AgentActivityEventV1::PromptPrepared(value)
+            if value.disposition == PromptCaptureDispositionV1::Captured =>
+        {
+            omit_prompt(value, PromptCaptureDispositionV1::OmittedQuota);
+        }
         AgentActivityEventV1::AssistantMessage(value) => {
             event.event =
                 omission_gap(DroppedEventKindV1::TextDelta, content_bytes(&value.content));
@@ -335,6 +379,15 @@ fn strip_optional_content(mut event: AgentRunEventV1) -> AgentRunEventV1 {
         _ => {}
     }
     event
+}
+
+fn omit_prompt(
+    value: &mut temper_protocol_activity::PromptPreparedV1,
+    disposition: PromptCaptureDispositionV1,
+) {
+    value.disposition = disposition;
+    value.captured_bytes = 0;
+    value.content = None;
 }
 
 fn omission_message(max_inline_bytes: u32) -> String {
@@ -373,6 +426,7 @@ fn content_bytes(content: &CapturedContentV1) -> u64 {
 
 fn captured_contents(event: &AgentRunEventV1) -> Vec<&CapturedContentV1> {
     match &event.event {
+        AgentActivityEventV1::PromptPrepared(value) => value.content.iter().collect(),
         AgentActivityEventV1::AssistantMessage(value) => vec![&value.content],
         AgentActivityEventV1::ToolStarted(value) => value.arguments.iter().collect(),
         AgentActivityEventV1::ToolFinished(value) => value.result.iter().collect(),
@@ -381,7 +435,7 @@ fn captured_contents(event: &AgentRunEventV1) -> Vec<&CapturedContentV1> {
     }
 }
 
-fn content_references(event: &AgentRunEventV1) -> Vec<&BlobReferenceV1> {
+pub(crate) fn content_references(event: &AgentRunEventV1) -> Vec<&BlobReferenceV1> {
     captured_contents(event)
         .into_iter()
         .filter_map(|content| match content {
@@ -389,4 +443,24 @@ fn content_references(event: &AgentRunEventV1) -> Vec<&BlobReferenceV1> {
             CapturedContentV1::Inline(_) => None,
         })
         .collect()
+}
+
+fn validate_content_reference_metadata(
+    events: &[AgentRunEventV1],
+) -> Result<(), TraceJournalError> {
+    let mut references = BTreeMap::<&str, &BlobReferenceV1>::new();
+    for event in events {
+        for reference in content_references(event) {
+            if references
+                .insert(reference.digest.as_str(), reference)
+                .is_some_and(|existing| existing != reference)
+            {
+                return Err(TraceJournalError::CorruptRun(format!(
+                    "blob digest {} has conflicting metadata in the event stream",
+                    reference.digest
+                )));
+            }
+        }
+    }
+    Ok(())
 }

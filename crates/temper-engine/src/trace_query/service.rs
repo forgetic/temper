@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use secrecy::SecretString;
 use serde::Serialize;
 use temper_engine_io::http::{HttpRequestData, HttpResponseData};
+use temper_protocol_activity::{BlobAttachmentV1, BlobReferenceV1};
 
-use crate::trace_journal::{AgentTraceJournal, TraceJournalError};
+use crate::trace_journal::{AgentTraceJournal, TraceJournalError, content_references};
 
 use super::ApiError;
 use super::auth::authorize;
 use super::cursor::{RunOrderKey, decode_cursor, encode_cursor, run_order_key};
-use super::model::{TraceEventPage, TraceRunPage, TraceRunSummary};
+use super::model::{TraceEventPage, TraceExportRecordV1, TraceRunPage, TraceRunSummary};
 use super::projection::project_summary;
 use super::request::{EventQuery, RunListQuery, TraceRoute, parse_route};
 
@@ -127,10 +130,38 @@ impl TraceQueryService {
             .run(run_id)
             .map_err(store_unavailable)?
             .ok_or(ApiError::NotFound)?;
+        let mut attachments = BTreeMap::new();
+        for attachment in run.attachments {
+            if attachments
+                .insert(attachment.blob.digest.clone(), attachment)
+                .is_some()
+            {
+                return Err(ApiError::Unavailable);
+            }
+        }
+
+        let mut emitted = BTreeSet::new();
         let mut body = Vec::new();
         for event in run.events {
-            serde_json::to_writer(&mut body, &event).map_err(|_| ApiError::Unavailable)?;
-            body.push(b'\n');
+            let mut references = content_references(&event)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            references.sort_by(|left, right| left.digest.cmp(&right.digest));
+            write_export_record(&mut body, &TraceExportRecordV1::event(event))?;
+            for reference in references {
+                if !emitted.insert(reference.digest.clone()) {
+                    continue;
+                }
+                let attachment = attachments
+                    .get(&reference.digest)
+                    .ok_or(ApiError::Unavailable)?;
+                revalidate_export_attachment(&reference, attachment)?;
+                write_export_record(
+                    &mut body,
+                    &TraceExportRecordV1::attachment(attachment.clone()),
+                )?;
+            }
         }
         Ok(no_store(HttpResponseData {
             status: 200,
@@ -141,6 +172,26 @@ impl TraceQueryService {
             body,
         }))
     }
+}
+
+fn write_export_record(body: &mut Vec<u8>, record: &TraceExportRecordV1) -> Result<(), ApiError> {
+    serde_json::to_writer(&mut *body, record).map_err(|_| ApiError::Unavailable)?;
+    body.push(b'\n');
+    Ok(())
+}
+
+fn revalidate_export_attachment(
+    reference: &BlobReferenceV1,
+    attachment: &BlobAttachmentV1,
+) -> Result<(), ApiError> {
+    attachment.validate().map_err(|_| ApiError::Unavailable)?;
+    let bytes = attachment.decode().map_err(|_| ApiError::Unavailable)?;
+    if &attachment.blob != reference
+        || BlobReferenceV1::for_bytes(reference.media_type, &bytes) != *reference
+    {
+        return Err(ApiError::Unavailable);
+    }
+    Ok(())
 }
 
 struct ListedRun {

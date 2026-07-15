@@ -88,8 +88,8 @@ pub use trace_journal::{
 };
 pub use trace_query::{
     AGENT_RUNS_PATH, DEFAULT_EVENT_PAGE_LIMIT, DEFAULT_RUN_PAGE_LIMIT, MAX_EVENT_PAGE_LIMIT,
-    MAX_RUN_PAGE_LIMIT, TraceEventPage, TraceRunCounts, TraceRunIdentity, TraceRunPage,
-    TraceRunSummary,
+    MAX_RUN_PAGE_LIMIT, TraceEventPage, TraceExportRecordV1, TraceRunCounts, TraceRunIdentity,
+    TraceRunPage, TraceRunSummary,
 };
 // Public so out-of-crate `ResultApplier` implementations can name the job type
 // the trait passes them.

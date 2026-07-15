@@ -6,6 +6,9 @@ use temper_protocol_context::W3cTraceContext;
 
 use crate::{ACTIVITY_PROTOCOL_VERSION, ActivityValidationError};
 
+mod prompt;
+pub use prompt::*;
+
 /// Identity assigned by the worker and held constant for an entire run.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,6 +63,25 @@ pub struct AgentActivityFrameV1 {
 impl AgentActivityFrameV1 {
     pub fn validate(&self) -> Result<(), ActivityValidationError> {
         crate::validate_frame(self)
+    }
+}
+
+/// An attachment-bearing child-to-worker record.
+///
+/// Producers keep bare [`AgentActivityFrameV1`] values on the wire when no
+/// attachment is needed. This envelope is reserved for a frame whose content
+/// references are transported in `blobs` as one atomic queue item.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentActivityChildRecordV1 {
+    pub frame: AgentActivityFrameV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blobs: Vec<BlobAttachmentV1>,
+}
+
+impl AgentActivityChildRecordV1 {
+    pub fn validate(&self) -> Result<(), ActivityValidationError> {
+        crate::validate_child_record(self)
     }
 }
 
@@ -276,6 +298,8 @@ pub enum AgentActivityEventV1 {
     ScopeStarted(ScopeStartedV1),
     #[serde(rename = "scope.finished")]
     ScopeFinished(ScopeFinishedV1),
+    #[serde(rename = "prompt.prepared")]
+    PromptPrepared(PromptPreparedV1),
     #[serde(rename = "turn.started")]
     TurnStarted(TurnStartedV1),
     #[serde(rename = "turn.finished")]
@@ -313,6 +337,7 @@ impl AgentActivityEventV1 {
             Self::RunFinished(_) => "run.finished",
             Self::ScopeStarted(_) => "scope.started",
             Self::ScopeFinished(_) => "scope.finished",
+            Self::PromptPrepared(_) => "prompt.prepared",
             Self::TurnStarted(_) => "turn.started",
             Self::TurnFinished(_) => "turn.finished",
             Self::ModelCallStarted(_) => "model.call.started",
@@ -335,6 +360,7 @@ impl AgentActivityEventV1 {
             Self::RunStarted(_) => EventClassificationV1::Run,
             Self::RunFinished(_) => EventClassificationV1::Terminal,
             Self::ScopeStarted(_) | Self::ScopeFinished(_) => EventClassificationV1::Scope,
+            Self::PromptPrepared(_) => EventClassificationV1::Prompt,
             Self::TurnStarted(_) | Self::TurnFinished(_) => EventClassificationV1::Turn,
             Self::ModelCallStarted(_) | Self::ModelCallFinished(_) => {
                 EventClassificationV1::ModelCall
@@ -388,6 +414,7 @@ impl AgentActivityEventV1 {
 
     pub(crate) fn content_references(&self) -> Vec<&BlobReferenceV1> {
         let content = match self {
+            Self::PromptPrepared(data) => data.content.as_ref(),
             Self::AssistantMessage(data) => Some(&data.content),
             Self::ToolStarted(data) => data.arguments.as_ref(),
             Self::ToolFinished(data) => data.result.as_ref(),
@@ -406,6 +433,7 @@ impl AgentActivityEventV1 {
 pub enum EventClassificationV1 {
     Run,
     Scope,
+    Prompt,
     Turn,
     ModelCall,
     AssistantMessage,

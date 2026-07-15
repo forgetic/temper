@@ -25,6 +25,7 @@ use thiserror::Error;
 
 use crate::config::WorkerAgentTraceConfig;
 
+mod accept;
 mod endpoint;
 mod forward;
 mod forwarder;
@@ -37,8 +38,14 @@ use model::*;
 use scope::{canonicalize_child_scope, validate_scope_acceptance};
 use spool::*;
 
-/// Maximum encoded bytes accepted from one child connection.
+/// Maximum encoded bytes accepted for one bare child frame.
 pub const MAX_CHILD_ACTIVITY_FRAME_BYTES: usize = 256 * 1024;
+/// Maximum encoded bytes accepted for one attachment-bearing child record.
+///
+/// This independently bounds canonical base64 for one legal 8 MiB blob plus
+/// the protocol's fixed, bounded frame and envelope allowance.
+pub const MAX_CHILD_ACTIVITY_RECORD_BYTES: usize =
+    temper_protocol_activity::MAX_CHILD_ACTIVITY_RECORD_BYTES;
 /// Aggregate worker spool capacity, expressed as full per-run reservations.
 ///
 /// Reserving the complete `max_run_bytes` budget when a run starts guarantees
@@ -193,6 +200,15 @@ struct RunState {
     /// events share exactly one unique main scope.
     source_main_scope_id: Option<String>,
     blobs: BTreeMap<String, BlobReferenceV1>,
+    /// Exact attachment-bearing source frames already accepted during this
+    /// live run. The attachment bytes are integrity-bound by the frame digest,
+    /// so an exact retransmission returns its original sequence without
+    /// consuming event or blob quota again.
+    accepted_child_records: BTreeMap<Vec<u8>, u64>,
+    /// A prompt is a required once-per-scope boundary. Retain its original,
+    /// canonicalized source frame so both inline and blob retransmissions are
+    /// idempotent while conflicting second prompts are rejected.
+    accepted_prompts: BTreeMap<String, (AgentActivityFrameV1, u64)>,
 }
 
 impl TraceRun {
@@ -289,6 +305,8 @@ impl TraceRun {
                         scopes,
                         source_main_scope_id: None,
                         blobs: BTreeMap::new(),
+                        accepted_child_records: BTreeMap::new(),
+                        accepted_prompts: BTreeMap::new(),
                     }),
                 }),
             };
@@ -327,43 +345,6 @@ impl TraceRun {
     /// Binds the per-run loopback endpoint used by first-party child agents.
     pub fn bind_endpoint(&self) -> io::Result<ActivityEndpoint> {
         ActivityEndpoint::bind(self.clone())
-    }
-
-    pub fn accept_frame(&self, mut frame: AgentActivityFrameV1) -> Result<u64, TraceError> {
-        let encoded_len = serde_json::to_vec(&frame)?.len();
-        if encoded_len > MAX_CHILD_ACTIVITY_FRAME_BYTES {
-            return Err(TraceError::InvalidSpool(format!(
-                "child frame exceeds {MAX_CHILD_ACTIVITY_FRAME_BYTES} bytes"
-            )));
-        }
-        frame.event.sanitize_retry_failure_message();
-        frame.validate()?;
-        let mut state = self.inner.state.lock().expect("trace run state lock");
-        ensure_accepting(&state)?;
-        frame.scope = canonicalize_child_scope(
-            &mut state.source_main_scope_id,
-            &self.inner.manifest.main_scope,
-            frame.scope,
-        )?;
-        validate_scope_acceptance(&state.scopes, &frame.scope)?;
-        validate_event_policy(&self.inner.manifest.policy, &frame.event)?;
-        validate_blob_references(&state.blobs, &frame.event)?;
-
-        let seq = state.next_seq;
-        let event = AgentRunEventV1 {
-            version: ACTIVITY_PROTOCOL_VERSION,
-            run_id: self.inner.manifest.run_id.clone(),
-            seq,
-            occurred_at: frame.occurred_at,
-            elapsed_ms: elapsed_ms(self.inner.started),
-            assignment: self.inner.manifest.assignment.clone(),
-            agent_session_id: self.inner.manifest.agent_session_id.clone(),
-            scope: frame.scope,
-            turn: frame.turn,
-            event: frame.event,
-        };
-        append_event(&self.inner, &mut state, &event, true)?;
-        Ok(seq)
     }
 
     /// Stores a validated content-addressed blob before a frame references it.
@@ -616,29 +597,20 @@ fn ensure_quota(
     }
 }
 
-fn validate_blob_references(
-    blobs: &BTreeMap<String, BlobReferenceV1>,
-    event: &AgentActivityEventV1,
-) -> Result<(), TraceError> {
-    for reference in event_blob_references(event) {
-        if blobs.get(&reference.digest) != Some(reference) {
-            return Err(TraceError::InvalidSpool(format!(
-                "event references unstored blob {}",
-                reference.digest
-            )));
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod full_path_fixture;
+
+#[cfg(test)]
+mod full_path_observation;
 
 #[cfg(test)]
 mod full_path_retry_tests;
 
 #[cfg(test)]
 mod full_path_tests;
+
+#[cfg(test)]
+mod prompt_tests;
 
 #[cfg(test)]
 mod tests;

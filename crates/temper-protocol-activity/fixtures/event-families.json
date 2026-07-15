@@ -20,6 +20,24 @@
     "data": { "status": "succeeded", "duration_ms": 900 }
   },
   {
+    "type": "prompt.prepared",
+    "data": {
+      "system_prompt_present": true,
+      "system_prompt_bytes": 14,
+      "initial_user_message_bytes": 14,
+      "tool_manifest_bytes": 168,
+      "tool_count": 1,
+      "original_snapshot_bytes": 251,
+      "captured_bytes": 251,
+      "disposition": "captured",
+      "content": {
+        "storage": "inline",
+        "text": "{\"system_prompt\":\"You are exact.\",\"initial_user_message\":\"Inspect café.\",\"tools\":[{\"name\":\"read\",\"description\":\"Read a file.\",\"input_schema\":{\"additionalProperties\":false,\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"],\"type\":\"object\"}}]}",
+        "truncated": false
+      }
+    }
+  },
+  {
     "type": "turn.started",
     "data": {}
   },

@@ -8,6 +8,7 @@
 //! lets the protocol be read and depended on without the driving code.
 
 use tongs::model::{AssistantMessage, ContentBlock, Message, ToolCall};
+use tongs::provider::ToolDef;
 use tongs::tools::ToolOutput;
 
 /// An observability event the machine emits as data (the shell renders/records
@@ -16,6 +17,13 @@ use tongs::tools::ToolOutput;
 /// itself testable.
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
+    /// The exact model-visible startup context assembled for this invocation.
+    /// It deliberately excludes provider transport and execution state.
+    PromptPrepared {
+        system_prompt: Option<String>,
+        initial_user_message: String,
+        tools: Vec<ToolDef>,
+    },
     /// A model turn is starting (about to call the LLM).
     TurnStart { turn: usize },
     /// One provider attempt for a model turn is starting. Retries retain the

@@ -11,6 +11,7 @@
 //! the shell spawns I/O), so callers wrap it in [`temper_agent_io::block_on`]
 //! or call it from another engine task.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
@@ -20,10 +21,22 @@ use tongs::provider::{Provider, StreamOptions, ToolDef};
 use tongs::tools::ToolRegistry;
 use tongs::tools::tool_to_definition;
 
-use crate::machine::{AgentCompletion, AgentMachine, ArgPreviewFn};
+use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, ArgPreviewFn};
 use crate::shell::{
     AgentOutcome, AgentShell, EventSink, ModelIdentity, NullEventSink, RunObservability, TurnHook,
 };
+
+/// Contains observer panics at the core boundary. Observability is best effort:
+/// neither prompt capture nor a later lifecycle callback may change a run.
+struct PanicSafeEventSink {
+    inner: Arc<dyn EventSink>,
+}
+
+impl EventSink for PanicSafeEventSink {
+    fn emit(&self, event: AgentEvent) {
+        let _ = catch_unwind(AssertUnwindSafe(|| self.inner.emit(event)));
+    }
+}
 
 /// A live control handle for a running sub-agent: inject steering messages or
 /// abort it from outside the run.
@@ -245,9 +258,26 @@ pub fn run_sub_agent_controllable_with_observability(
         .collect();
 
     let initial = vec![Message::User(UserMessage {
-        content: UserContent::Text(sub_agent.user_message),
+        content: UserContent::Text(sub_agent.user_message.clone()),
         timestamp: 0,
     })];
+
+    let RunObservability {
+        events,
+        model,
+        clock,
+    } = observability;
+    let events: Arc<dyn EventSink> = Arc::new(PanicSafeEventSink { inner: events });
+    let observability = RunObservability {
+        events: Arc::clone(&events),
+        model,
+        clock,
+    };
+    events.emit(AgentEvent::PromptPrepared {
+        system_prompt: sub_agent.system_prompt.clone(),
+        initial_user_message: sub_agent.user_message.clone(),
+        tools: tool_defs.clone(),
+    });
 
     let (cq_tx, cq_rx) = channel();
     let (outcome_tx, outcome_rx) = oneshot();

@@ -5,15 +5,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use temper_protocol_activity::AgentActivityFrameV1;
+use temper_protocol_activity::{AgentActivityChildRecordV1, AgentActivityFrameV1};
 
-use super::{MAX_CHILD_ACTIVITY_FRAME_BYTES, TraceRun};
+use super::{MAX_CHILD_ACTIVITY_FRAME_BYTES, MAX_CHILD_ACTIVITY_RECORD_BYTES, TraceRun};
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FRAME_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// A per-run loopback endpoint. Each accepted connection carries exactly one
-/// bounded JSON frame and is closed by the worker after acceptance/rejection.
+/// A per-run loopback endpoint. Each connection carries newline-terminated,
+/// independently bounded bare frames or attachment-bearing child records.
 pub struct ActivityEndpoint {
     address: String,
     stopping: Arc<AtomicBool>,
@@ -74,11 +74,11 @@ fn serve(listener: TcpListener, run: TraceRun, stopping: Arc<AtomicBool>, addres
                     tracing::warn!(
                         target: "temper::worker",
                         service = "worker",
-                        event = "agent.activity.frame_rejected",
+                        event = "agent.activity.record_rejected",
                         run_id = run.run_id(),
                         peer = %peer,
                         %error,
-                        "worker rejected an agent activity frame"
+                        "worker rejected an agent activity record"
                     );
                 }
             }
@@ -104,37 +104,73 @@ fn serve(listener: TcpListener, run: TraceRun, stopping: Arc<AtomicBool>, addres
 fn receive_frame(stream: TcpStream, run: &TraceRun) -> Result<(), String> {
     stream
         .set_read_timeout(Some(FRAME_READ_TIMEOUT))
-        .map_err(|error| format!("set frame read timeout: {error}"))?;
-    let limit = u64::try_from(MAX_CHILD_ACTIVITY_FRAME_BYTES)
+        .map_err(|error| format!("set activity record read timeout: {error}"))?;
+    // Include room for CRLF and one sentinel byte. `Take` prevents a peer from
+    // growing the line buffer beyond the absolute record bound before the
+    // worker has identified whether the value is a frame or wrapper.
+    let read_limit = u64::try_from(MAX_CHILD_ACTIVITY_RECORD_BYTES)
         .unwrap_or(u64::MAX)
-        .saturating_add(1);
+        .saturating_add(3);
     let mut reader = BufReader::new(stream);
+    let mut received = false;
     loop {
         let mut bytes = Vec::new();
         let read = reader
             .by_ref()
-            .take(limit)
+            .take(read_limit)
             .read_until(b'\n', &mut bytes)
-            .map_err(|error| format!("read child frame: {error}"))?;
+            .map_err(|error| format!("read child activity record: {error}"))?;
         if read == 0 {
-            return Ok(());
+            return if received {
+                Ok(())
+            } else {
+                Err("child activity record is empty".to_string())
+            };
         }
-        if bytes.len() > MAX_CHILD_ACTIVITY_FRAME_BYTES {
-            return Err(format!(
-                "child frame exceeds {MAX_CHILD_ACTIVITY_FRAME_BYTES} bytes"
-            ));
+        if bytes.last() != Some(&b'\n') {
+            return if bytes.len() > MAX_CHILD_ACTIVITY_RECORD_BYTES {
+                Err(format!(
+                    "child activity record exceeds {MAX_CHILD_ACTIVITY_RECORD_BYTES} bytes"
+                ))
+            } else {
+                Err("child activity record is not newline terminated".to_string())
+            };
         }
-        if bytes.last() == Some(&b'\n') {
-            bytes.pop();
-        }
+        bytes.pop();
         if bytes.last() == Some(&b'\r') {
             bytes.pop();
         }
         if bytes.is_empty() {
-            return Err("child frame is empty".to_string());
+            return Err("child activity record is empty".to_string());
         }
-        let frame: AgentActivityFrameV1 = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("parse child frame: {error}"))?;
-        run.accept_frame(frame).map_err(|error| error.to_string())?;
+        if bytes.len() > MAX_CHILD_ACTIVITY_RECORD_BYTES {
+            return Err(format!(
+                "child activity record exceeds {MAX_CHILD_ACTIVITY_RECORD_BYTES} bytes"
+            ));
+        }
+
+        let frame = serde_json::from_slice::<AgentActivityFrameV1>(&bytes);
+        let record = serde_json::from_slice::<AgentActivityChildRecordV1>(&bytes);
+        match (frame, record) {
+            (Ok(frame), Err(_)) => {
+                if bytes.len() > MAX_CHILD_ACTIVITY_FRAME_BYTES {
+                    return Err(format!(
+                        "child frame exceeds {MAX_CHILD_ACTIVITY_FRAME_BYTES} bytes"
+                    ));
+                }
+                run.accept_frame(frame).map_err(|error| error.to_string())?;
+            }
+            (Err(_), Ok(record)) => {
+                run.accept_record(record)
+                    .map_err(|error| error.to_string())?;
+            }
+            (Ok(_), Ok(_)) => {
+                return Err("child activity input is ambiguous".to_string());
+            }
+            (Err(_), Err(_)) => {
+                return Err("child activity record is malformed".to_string());
+            }
+        }
+        received = true;
     }
 }
