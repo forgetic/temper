@@ -61,7 +61,7 @@ fn collector(root: &Path) -> TraceCollector {
     })
 }
 
-fn usage_frame(tokens: u64) -> AgentActivityFrameV1 {
+pub(super) fn usage_frame(tokens: u64) -> AgentActivityFrameV1 {
     AgentActivityFrameV1 {
         version: ACTIVITY_PROTOCOL_VERSION,
         occurred_at: "2026-07-14T11:09:03.000Z".to_string(),

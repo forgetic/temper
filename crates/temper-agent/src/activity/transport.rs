@@ -386,6 +386,10 @@ fn append_delta(target: &mut AgentActivityFrameV1, incoming: &AgentActivityFrame
     }
 }
 
+/// Connects once and carries every queued activity item on one persistent,
+/// newline-delimited stream. Waiting on the queue may leave the connection idle;
+/// reconnecting after a broken stream is intentionally outside this transport's
+/// best-effort contract.
 fn activity_writer(address: &str, receiver: mpsc::Receiver<WriterMessage>) {
     let address = address.strip_prefix("tcp://").unwrap_or(address);
     let Ok(addresses) = address.to_socket_addrs() else {
