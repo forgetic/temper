@@ -343,8 +343,10 @@ pub struct WorkspaceRepository {
     /// so inter-repo path dependencies resolve (e.g. `temper`, `smith`, `skein`
     /// as flat siblings).
     pub dir: String,
-    /// `writable` (the agent may edit it; a diff opens a PR) or `read_only`
-    /// (present only so the build resolves; never pushed).
+    /// Repository-manifest policy: `writable` makes the repository eligible for
+    /// edits when the effective checkout mode also permits mutation;
+    /// `read_only` means it is present only for inspection/build resolution and
+    /// is never pushed. A read-only checkout mode overrides this policy.
     pub access: String,
     pub base_branch: String,
     /// Work branch a writable repo's diff is pushed to. Absent for read-only.
