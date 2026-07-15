@@ -39,6 +39,94 @@ pub(super) struct Observation {
     pub(super) span_names: Vec<&'static str>,
 }
 
+/// Proves the worker-assigned sequence stays contiguous across the injected
+/// model-call idle gap and that every boundary after it retains its order and
+/// scope identity.
+pub(super) fn assert_complete_post_idle_activity(events: &[AgentRunEventV1]) {
+    assert_eq!(
+        events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        (1..=19).collect::<Vec<_>>(),
+        "the durable activity stream must have no sequence gap"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event.event_type())
+            .collect::<Vec<_>>(),
+        vec![
+            "run.started",
+            "scope.started",
+            "prompt.prepared",
+            "turn.started",
+            "model.call.started",
+            "model.call.finished",
+            "usage",
+            "assistant.message",
+            "tool.started",
+            "tool.finished",
+            "scope.started",
+            "scope.started",
+            "prompt.prepared",
+            "prompt.prepared",
+            "scope.finished",
+            "scope.finished",
+            "turn.finished",
+            "scope.finished",
+            "run.finished",
+        ],
+        "post-idle activity boundaries must remain complete and ordered"
+    );
+
+    let main_scope = &events[1].scope.id;
+    assert_eq!(events[1].scope.kind, AgentScopeKindV1::Main);
+    assert_eq!(events[4].scope.id, *main_scope);
+    let AgentActivityEventV1::ModelCallStarted(model_started) = &events[4].event else {
+        unreachable!("event vocabulary fixes model.call.started at sequence 5");
+    };
+    let AgentActivityEventV1::ModelCallFinished(model_finished) = &events[5].event else {
+        unreachable!("event vocabulary fixes model.call.finished at sequence 6");
+    };
+    assert_eq!(model_started.call_id, "model-call-350");
+    assert_eq!(model_finished.call_id, model_started.call_id);
+    assert_eq!(events[5].scope.id, *main_scope);
+    assert_eq!(events[5].turn, Some(0));
+
+    for (started_index, finished_index) in [(10, 14), (11, 15)] {
+        let child = &events[started_index];
+        assert_eq!(child.scope.kind, AgentScopeKindV1::SubAgent);
+        assert_eq!(child.scope.parent_id.as_deref(), Some(main_scope.as_str()));
+        assert_eq!(events[finished_index].scope.id, child.scope.id);
+        assert_eq!(
+            events[finished_index].scope.kind,
+            AgentScopeKindV1::SubAgent
+        );
+        assert!(matches!(
+            events[finished_index].event,
+            AgentActivityEventV1::ScopeFinished(_)
+        ));
+    }
+
+    assert_eq!(events[16].scope.id, *main_scope);
+    assert_eq!(events[16].turn, Some(0));
+    assert!(matches!(
+        events[16].event,
+        AgentActivityEventV1::TurnFinished(_)
+    ));
+    assert_eq!(events[17].scope.id, *main_scope);
+    assert!(matches!(
+        events[17].event,
+        AgentActivityEventV1::ScopeFinished(_)
+    ));
+    assert_eq!(events[18].scope.id, *main_scope);
+    assert!(matches!(
+        events[18].event,
+        AgentActivityEventV1::RunFinished(RunFinishedV1 {
+            status: RunStatusV1::Succeeded,
+            ..
+        })
+    ));
+}
+
 pub(super) async fn observe_authorized_query(
     cx: Cx,
     base_url: &str,
@@ -94,10 +182,7 @@ pub(super) async fn observe_authorized_query(
     assert_eq!(summary.counts.tool_calls, 1);
 
     let events = page.events;
-    assert_eq!(
-        events.iter().map(|event| event.seq).collect::<Vec<_>>(),
-        (1..=19).collect::<Vec<_>>()
-    );
+    assert_complete_post_idle_activity(&events);
     assert!(events.iter().all(|event| {
         event.run_id == run_id
             && event.assignment.job_id == "job-full-path-350"
@@ -266,6 +351,7 @@ pub(super) async fn observe_authorized_query(
         }
     }
     assert_eq!(exported_events, events);
+    assert_complete_post_idle_activity(&exported_events);
     assert_exact_prompt_snapshots(&exported_events, &exported_blobs);
 
     Observation {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use temper_agent::activity::{AgentActivityConfig, ScopeFactory};
 use temper_agent::usage::UsageTotals;
@@ -9,8 +10,8 @@ use temper_agent_core::{
     ToolResultMetadata,
 };
 use temper_protocol_activity::{
-    AgentActivityBatch, AgentActivityCapturePolicyV1, CaptureModeV1, PromptSnapshotV1,
-    PromptToolDefinitionV1, StopReasonV1, W3cTraceContext,
+    AgentActivityBatch, AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1,
+    PromptSnapshotV1, PromptToolDefinitionV1, StopReasonV1, W3cTraceContext,
 };
 use temper_protocol_agent::{
     AgentSessionState, WorkspaceContext, WorkspaceRepository, WorkspaceWorkItem,
@@ -18,7 +19,10 @@ use temper_protocol_agent::{
 use tongs::model::{ContentBlock, StopReason, TextContent, Usage};
 use tongs::provider::ToolDef;
 
-use super::TraceCollector;
+use super::{ActivityEndpoint, TraceCollector};
+
+const ACTIVITY_READ_POLL: Duration = Duration::from_millis(25);
+const MODEL_CALL_IDLE_GAP: Duration = Duration::from_millis(100);
 
 pub(super) const ARGUMENT_SENTINEL: &str = "ARGUMENT-BYTES-350-MUST-BE-BOUNDED";
 pub(super) const MESSAGE_SENTINEL: &str = "ASSISTANT-BYTES-350-MUST-BE-BOUNDED";
@@ -108,7 +112,8 @@ pub(super) fn produce_first_party_run(collector: &TraceCollector) -> (String, Ag
         .begin_run("job-full-path-350", &workspace_context())
         .expect("begin trace run")
         .expect("metadata capture enabled");
-    let endpoint = run.bind_endpoint().expect("bind child activity socket");
+    let endpoint = ActivityEndpoint::bind_with_read_timeout(run.clone(), ACTIVITY_READ_POLL)
+        .expect("bind child activity socket with test read poll");
     let factory = ScopeFactory::new(
         AgentActivityConfig {
             policy: full_path_policy(),
@@ -127,6 +132,11 @@ pub(super) fn produce_first_party_run(collector: &TraceCollector) -> (String, Ag
         provider: "provider".to_string(),
         model: "model".to_string(),
     });
+    wait_for_durable_model_start(collector);
+    // Keep this factory, its ActivityClient, and their one accepted stream alive
+    // across several endpoint read polls. Recreating any of them would turn the
+    // capstone into a reconnect test and miss the persistent-stream regression.
+    std::thread::sleep(MODEL_CALL_IDLE_GAP);
     events.emit(AgentEvent::ModelCallFinished {
         turn: 0,
         call_id: "model-call-350".to_string(),
@@ -221,8 +231,28 @@ pub(super) fn produce_first_party_run(collector: &TraceCollector) -> (String, Ag
     (run_id, batch)
 }
 
+fn wait_for_durable_model_start(collector: &TraceCollector) {
+    for _ in 0..500 {
+        if collector.recover().ok().is_some_and(|runs| {
+            runs.first().is_some_and(|run| {
+                run.events.iter().any(|event| {
+                    matches!(
+                        &event.event,
+                        AgentActivityEventV1::ModelCallStarted(started)
+                            if started.call_id == "model-call-350"
+                    )
+                })
+            })
+        }) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("model.call.started must be durable before the injected idle gap");
+}
+
 fn wait_for_socket_collection(collector: &TraceCollector) {
-    for _ in 0..200 {
+    for _ in 0..500 {
         if collector
             .recover()
             .ok()
@@ -231,9 +261,9 @@ fn wait_for_socket_collection(collector: &TraceCollector) {
         {
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(2));
     }
-    panic!("child socket must durably collect every normalized frame");
+    panic!("child socket must durably collect every pre- and post-idle frame");
 }
 
 pub(super) fn workspace_context() -> WorkspaceContext {
