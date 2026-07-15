@@ -18,7 +18,7 @@ use temper_protocol_agent::{
 
 use super::*;
 
-fn context() -> WorkspaceContext {
+pub(super) fn context() -> WorkspaceContext {
     WorkspaceContext {
         trace_context: None,
         repos: vec![WorkspaceRepository {
@@ -211,6 +211,13 @@ fn endpoint_accepts_bounded_frames_and_rejects_host_events_and_forged_identity()
     forged["job_id"] = serde_json::json!("forged-child-job");
     send(&endpoint, &serde_json::to_vec(&forged).unwrap());
     send(&endpoint, b"not-json");
+    send(&endpoint, b"");
+    send_unterminated(&endpoint, &serde_json::to_vec(&usage_frame(4)).unwrap());
+    let mut oversized_bare = serde_json::to_vec(&usage_frame(5)).unwrap();
+    oversized_bare.resize(MAX_CHILD_ACTIVITY_FRAME_BYTES + 1, b' ');
+    send(&endpoint, &oversized_bare);
+    let oversized_record = vec![b' '; MAX_CHILD_ACTIVITY_RECORD_BYTES + 1];
+    send(&endpoint, &oversized_record);
     thread::sleep(Duration::from_millis(80));
     endpoint.stop();
     run.finish_success(None).expect("finish");
@@ -592,7 +599,13 @@ fn spool_directories_and_files_are_owner_only() {
     }
 }
 
-fn send(endpoint: &ActivityEndpoint, payload: &[u8]) {
+fn send_unterminated(endpoint: &ActivityEndpoint, payload: &[u8]) {
+    let mut stream = TcpStream::connect(endpoint.address()).expect("connect endpoint");
+    stream.write_all(payload).expect("write unterminated frame");
+    stream.shutdown(Shutdown::Write).expect("shutdown writer");
+}
+
+pub(super) fn send(endpoint: &ActivityEndpoint, payload: &[u8]) {
     let mut stream = TcpStream::connect(endpoint.address()).expect("connect endpoint");
     stream.write_all(payload).expect("write frame");
     stream.write_all(b"\n").expect("write delimiter");

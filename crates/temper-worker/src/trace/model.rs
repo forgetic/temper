@@ -3,8 +3,8 @@ use std::time::Instant;
 use chrono::{SecondsFormat, Utc};
 use temper_protocol_activity::{
     AgentActivityCapturePolicyV1, AgentActivityEventV1, AgentAssignmentIdentityV1, AgentRunEventV1,
-    BlobReferenceV1, CaptureModeV1, CapturedContentV1, FailureCodeV1, FailureInfoV1, RunFailedV1,
-    RunFinishedV1, RunStatusV1, StopReasonV1,
+    BlobReferenceV1, CaptureModeV1, CapturedContentV1, FailureCodeV1, FailureInfoV1,
+    PromptCaptureDispositionV1, RunFailedV1, RunFinishedV1, RunStatusV1, StopReasonV1,
 };
 use temper_protocol_agent::{ArtifactType, WorkspaceContext};
 use temper_protocol_worker::FailureClass;
@@ -16,6 +16,16 @@ pub(super) fn validate_event_policy(
     event: &AgentActivityEventV1,
 ) -> Result<(), TraceError> {
     let content = match event {
+        AgentActivityEventV1::PromptPrepared(value) => {
+            match policy.capture {
+                CaptureModeV1::Metadata
+                    if value.disposition == PromptCaptureDispositionV1::OmittedPolicy => {}
+                CaptureModeV1::Transcript | CaptureModeV1::Diagnostic
+                    if value.disposition != PromptCaptureDispositionV1::OmittedPolicy => {}
+                _ => return Err(policy_rejection(event)),
+            }
+            value.content.as_ref()
+        }
         AgentActivityEventV1::AssistantMessage(value) => {
             if policy.capture == CaptureModeV1::Metadata {
                 return Err(policy_rejection(event));
@@ -75,6 +85,7 @@ fn policy_rejection(event: &AgentActivityEventV1) -> TraceError {
 pub(super) fn event_blob_references(event: &AgentActivityEventV1) -> Vec<&BlobReferenceV1> {
     use temper_protocol_activity::CapturedContentV1;
     let content = match event {
+        AgentActivityEventV1::PromptPrepared(value) => value.content.as_ref(),
         AgentActivityEventV1::AssistantMessage(value) => Some(&value.content),
         AgentActivityEventV1::ToolStarted(value) => value.arguments.as_ref(),
         AgentActivityEventV1::ToolFinished(value) => value.result.as_ref(),
