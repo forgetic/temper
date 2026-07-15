@@ -7,7 +7,7 @@ use super::{
 };
 use crate::agent_runner::AgentRunner;
 use crate::config::WorkerAgentTraceConfig;
-use crate::trace::TraceCollector;
+use crate::trace::{TraceCollector, WORKER_SPOOL_RUN_CAPACITY};
 
 #[test]
 #[cfg(unix)]
@@ -112,6 +112,57 @@ fn child_crash_leaves_host_failed_metadata_and_trace_storage_errors_are_non_fata
     let cwd = temp.path().to_path_buf();
     temper_worker_io::block_on(async move { runner.run("storage-error", &context, &cwd).await })
         .expect("trace storage failure does not alter child success");
+}
+
+#[test]
+#[cfg(unix)]
+fn aggregate_spool_exhaustion_does_not_change_the_agent_result() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = fake_agent_script(temp.path());
+    let trace_config = WorkerAgentTraceConfig {
+        policy: AgentActivityCapturePolicyV1 {
+            max_run_bytes: 5_000,
+            max_inline_bytes: 1,
+            max_blob_bytes: 1,
+            ..Default::default()
+        },
+        spool_root: Some(temp.path().join("aggregate-spool")),
+    };
+    let collector = TraceCollector::new(trace_config.clone());
+    let context = test_context_for_role("tester");
+    let mut reservations = Vec::new();
+    for index in 0..WORKER_SPOOL_RUN_CAPACITY {
+        reservations.push(
+            collector
+                .begin_run(&format!("held-{index}"), &context)
+                .expect("reserve spool run")
+                .expect("capture enabled"),
+        );
+    }
+
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_env(vec![
+            (
+                "TEMPER_ARGS_OUT".to_string(),
+                temp.path().join("aggregate-args.txt").display().to_string(),
+            ),
+            (
+                "TEMPER_TOOL_OUT".to_string(),
+                temp.path()
+                    .join("aggregate-tools.json")
+                    .display()
+                    .to_string(),
+            ),
+        ])
+        .with_trace_collector(trace_config);
+    let cwd = temp.path().to_path_buf();
+    temper_worker_io::block_on(async move {
+        runner
+            .run("product-work-still-succeeds", &context, &cwd)
+            .await
+    })
+    .expect("aggregate trace exhaustion cannot change product-work success");
+    assert_eq!(reservations.len() as u64, WORKER_SPOOL_RUN_CAPACITY);
 }
 
 #[test]

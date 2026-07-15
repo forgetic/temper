@@ -88,6 +88,8 @@ pub(super) enum DaemonCompletion {
     ReleaseAssignmentsForShutdown {
         reply: temper_engine_io::OneshotSender<()>,
     },
+    /// Snapshot the jobs whose terminal traces retention must not remove.
+    TraceRetentionProtection(temper_engine_io::OneshotSender<crate::RetentionProtection>),
     /// Stop the daemon loop without releasing durable assignments.
     Crash {
         reply: temper_engine_io::OneshotSender<()>,
@@ -702,6 +704,18 @@ impl Machine for DaemonMachine {
                     }
                 }
                 vec![DaemonRequest::RunShutdownRelease { assignments, reply }]
+            }
+            DaemonCompletion::TraceRetentionProtection(reply) => {
+                reply.send(crate::RetentionProtection {
+                    job_ids: self
+                        .core
+                        .in_flight_jobs()
+                        .into_iter()
+                        .map(|job| job.job_id)
+                        .collect(),
+                    ..crate::RetentionProtection::default()
+                });
+                Vec::new()
             }
             DaemonCompletion::Crash { reply } => {
                 self.stopped = true;

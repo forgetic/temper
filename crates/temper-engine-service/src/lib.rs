@@ -22,6 +22,7 @@
 mod adapt;
 mod applier;
 mod repositories;
+mod retention;
 mod runtime;
 mod startup_recovery;
 
@@ -30,5 +31,8 @@ pub use adapt::{
 };
 pub use applier::result_applier;
 pub use repositories::{ensure_workflow_labels, resolve_repositories, role_feed_targets};
+pub use retention::{
+    AGENT_TRACE_RETENTION_INTERVAL, TraceRetentionTask, spawn_trace_retention_task,
+};
 pub use runtime::{attach_trace_query, run, run_async, start_trace_journal};
 pub use startup_recovery::{RecoveredClaim, converge_startup_orphans, stage_startup_assignments};

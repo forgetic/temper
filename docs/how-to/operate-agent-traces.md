@@ -50,9 +50,10 @@ $STATE_DIR/agent-traces/
     blobs/
   worker-spool/<run-id>/
     manifest.json
-    events.jsonl
+    events.jsonl                 # truncated after terminal acknowledgement
     acknowledgement.json
-    blobs/
+    compacted.json               # durable terminal acknowledgement marker
+    blobs/                       # emptied after terminal acknowledgement
 ```
 
 Directories are created owner-only (`0700`) and files owner-only (`0600`) on
@@ -60,13 +61,27 @@ Unix. Keep the state directory on persistent local storage, back it up under the
 same access controls as source code, and do not place it below a workstream
 checkout. Workstream cleanup intentionally does not remove trace history.
 
-`max_run_bytes` bounds each run. Optional content is omitted before required
+`max_run_bytes` bounds each run. The worker additionally reserves each open or
+unacknowledged run's complete budget against an aggregate spool ceiling of 16 ×
+`max_run_bytes`; compact acknowledgement markers count only their actual bytes.
+When that aggregate ceiling is exhausted, new runs continue without durable
+tracing and emit an operator warning—the assigned job result and retry policy do
+not change. Partial acknowledgements only advance the durable cursor and retain
+the restart-readable payload. Once the engine acknowledges a terminal run's
+highest contiguous sequence, the worker atomically installs `compacted.json`
+before truncating `events.jsonl` and removing its blobs. That marker lets a
+terminal flush or restarted forwarder observe the durable acknowledgement
+without retaining the transcript indefinitely.
+
+Optional content is omitted before required
 run/scope/turn/model/tool/usage/error/terminal boundaries. Queue pressure drops
-or coalesces only low-priority deltas and journals `trace.gap` counts. Retention
-runs at startup and periodically; active runs and recovered in-flight
-assignments are never removed. A partial final JSONL fragment is truncated to
-the last complete record during recovery, while the readable partial run stays
-queryable.
+or coalesces only low-priority deltas and journals `trace.gap` counts. Engine
+retention runs at startup and every hour in both split and standalone services;
+each pass snapshots live daemon assignments, skips active and recovered
+in-flight runs, isolates per-run cleanup failures, and continues on the next
+cadence. Shutdown cancels and joins the retention component before releasing
+assignments. A partial final JSONL fragment is truncated to the last complete
+record during recovery, while the readable partial run stays queryable.
 
 ## Query and export JSONL
 

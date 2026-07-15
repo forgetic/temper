@@ -68,7 +68,7 @@ pub use temper_protocol_agent::{
 pub use temper_protocol_worker::WorkerAuth;
 pub use trace::{
     ActivityEndpoint, MAX_CHILD_ACTIVITY_FRAME_BYTES, RecoveredTraceRun, TraceCollector,
-    TraceError, TraceManifestV1, TraceRun,
+    TraceError, TraceManifestV1, TraceRun, WORKER_SPOOL_RUN_CAPACITY,
 };
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};

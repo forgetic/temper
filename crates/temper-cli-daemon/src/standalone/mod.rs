@@ -35,9 +35,10 @@ use temper_engine::{
     spawn_coordinated_poll_backstop,
 };
 use temper_engine_service::{
-    attach_trace_query, converge_startup_orphans, engine_config, ensure_workflow_labels,
-    resolve_repositories, result_applier, role_feed_targets, stage_startup_assignments,
-    start_trace_journal, worker_pool_auth_config, workflow_role_limits,
+    AGENT_TRACE_RETENTION_INTERVAL, attach_trace_query, converge_startup_orphans, engine_config,
+    ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
+    spawn_trace_retention_task, stage_startup_assignments, start_trace_journal,
+    worker_pool_auth_config, workflow_role_limits,
 };
 use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
@@ -200,6 +201,14 @@ async fn run_async(
         None => daemon,
     };
     let daemon = attach_trace_query(daemon, &engine_agent_traces, trace_journal.as_ref());
+    let trace_retention = trace_journal.as_ref().map(|journal| {
+        spawn_trace_retention_task(
+            &spawner,
+            daemon.clone(),
+            journal.clone(),
+            AGENT_TRACE_RETENTION_INTERVAL,
+        )
+    });
     let orphaned = daemon.collect_startup_orphans().await;
     converge_startup_orphans(
         forge.as_ref(),
@@ -431,6 +440,9 @@ async fn run_async(
         }
     })
     .await;
+    if let Some(trace_retention) = trace_retention {
+        trace_retention.stop().await;
+    }
     daemon.release_assignments_for_shutdown().await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
