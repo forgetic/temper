@@ -27,6 +27,8 @@ use crate::config::WorkerAgentTraceConfig;
 
 mod accept;
 mod endpoint;
+#[cfg(test)]
+mod endpoint_tests;
 mod forward;
 mod forwarder;
 mod model;
@@ -343,6 +345,8 @@ impl TraceRun {
     }
 
     /// Binds the per-run loopback endpoint used by first-party child agents.
+    /// One accepted connection carries a persistent newline-delimited record
+    /// stream and may remain idle while the run is active.
     pub fn bind_endpoint(&self) -> io::Result<ActivityEndpoint> {
         ActivityEndpoint::bind(self.clone())
     }
