@@ -10,13 +10,11 @@ use temper_verdict::{VerdictContract, VerdictContracts};
 /// Builds the role system prompt for a capability.
 ///
 /// `allowed_verdicts` is the workflow-declared verdict vocabulary surfaced by
-/// temper (W3). When non-empty it is rendered as an authoritative constraint:
-/// the role must emit exactly one of those verdicts (or, for the engineer, the
-/// no-verdict head path) and nothing else. This is the principled "the workflow
-/// defines the role's only options" mechanism — a single-outcome triage
-/// (`["ready_code"]`) thereby collapses to one choice. When empty the agent
-/// falls back to its built-in per-role verdict menu (back-compat with an older
-/// temper that does not surface the vocabulary).
+/// temper (W3). When non-empty, the prompt renders only those declared outcomes
+/// and the requirements supplied by their [`VerdictContract`] values. When
+/// empty, the agent falls back to its built-in per-role verdict menu for
+/// compatibility with older contexts. The engineer's no-verdict success path is
+/// invariant and remains available in either case.
 pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> String {
     system_prompt_with_contracts(capability, allowed_verdicts, &VerdictContracts::new())
 }
@@ -52,11 +50,10 @@ pub fn system_prompt_with_contracts(
              gate data, keep your in-session context, fix the workspace, and \
              call `submit_for_pr` again. Only after a host success response may \
              you emit the terminal JSON.\n\
-             - On success, emit NO verdict (the head path opens the PR). Only emit \
-             a declared decline verdict: `needs_architect` when the item is \
-             underspecified or unimplementable as written, or `needs_human` only \
-             when implementation requires non-agent judgment. Explain the reason \
-             in `summary`.\n\
+             - On success, emit NO verdict (the head path opens the PR). This \
+             no-verdict success path remains available regardless of the declared \
+             workflow outcome vocabulary.\n\
+             - For any declared decline outcome, explain the reason in `summary`.\n\
              - Report validation in `summary` when relevant. Keep `summary` short; \
              the durable PR handoff is the success-path `title` and `body`.\n\
              - For PR repair runs (`pull_request_writable` checkout), preserve and \
@@ -68,16 +65,8 @@ pub fn system_prompt_with_contracts(
             "ROLE: architect (triage_workspace capability).\n\
              - Read-only analysis: inspect the repository, but make NO edits to \
              the working tree.\n\
-             - Emit exactly one verdict:\n\
-             - `ready_code` with an authored `body` (a precise, implementable \
-             code spec) when the item is ready to be built;\n\
-             - `needs_design` with an authored `body` (a design proposal) when \
-             design work is required first;\n\
-             - `needs_breakdown` with a `children` list (each: slug, title, body, \
-             optional kind, labels, depends_on, and optional target_repo as an \
-             owner/name repository path when the intake plan names target \
-             repositories) when the item must be split into child issues. Omit \
-             child kind only for ordinary `code` children.\n",
+             - Analyze the work item and repository evidence carefully enough to \
+             produce the workflow outcome requested below.\n",
         ),
         Capability::ReviewWorkspace => prompt.push_str(
             "ROLE: reviewer (review_workspace capability).\n\
@@ -85,49 +74,15 @@ pub fn system_prompt_with_contracts(
              the PR summary. Make NO edits to the working tree.\n\
              - The working tree is checked out at the pull request's head. Compare \
              against the base branch from the context file (git diff \
-             origin/<base_branch>...HEAD, git log origin/<base_branch>..HEAD).\n\
-             - Emit exactly one verdict:\n\
-             - `approve` when the change satisfies the contract and has a \
-             meaningful, correct implementation diff;\n\
-             - `changes` with an authored `review_body` when the change is \
-             incomplete, unsafe, contradicts the contract, or is bookkeeping-only;\n\
-             - `escalate` when the decision exceeds a static review (explain in \
-             `summary`).\n",
+             origin/<base_branch>...HEAD, git log origin/<base_branch>..HEAD).\n",
         ),
     }
 
-    // W3: when temper surfaces the action's declared verdict vocabulary,
-    // constrain the role to exactly that option set. This overrides the broader
-    // per-role menu above so the role can never emit a verdict the engine would
-    // reject as undeclared. The engineer's head path (no verdict) is always
-    // allowed in addition to any declared verdicts.
-    if !allowed_verdicts.is_empty() {
-        let rendered = allowed_verdicts
-            .iter()
-            .map(|verdict| format!("`{verdict}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        prompt.push_str(&format!(
-            "\nVERDICT CONSTRAINT (authoritative): this workflow step declares \
-             exactly these verdicts: {rendered}. You MUST emit one of them and \
-             MUST NOT emit any other verdict, even if a verdict named above \
-             seems wrong — pick the closest declared option."
-        ));
-        if matches!(capability, Capability::CodingWorkspace) {
-            prompt.push_str(
-                " As the engineer you may also take the no-verdict head path \
-                 (leave a product diff and emit no verdict).",
-            );
-        } else if allowed_verdicts.len() == 1 {
-            prompt.push_str(&format!(
-                " This step has a SINGLE declared outcome, so your only choice is \
-                 to emit verdict `{}` (with the fields that verdict requires).",
-                allowed_verdicts[0]
-            ));
-        }
-        prompt.push('\n');
+    if allowed_verdicts.is_empty() {
+        render_legacy_outcomes(&mut prompt, capability);
+    } else {
+        render_workflow_outcomes(&mut prompt, capability, allowed_verdicts, verdict_contracts);
     }
-    render_verdict_contracts(&mut prompt, allowed_verdicts, verdict_contracts);
 
     prompt.push_str(
         "\nEFFICIENCY:\n\
@@ -165,40 +120,74 @@ pub fn system_prompt_with_contracts(
     prompt
 }
 
-fn render_verdict_contracts(
+fn render_legacy_outcomes(prompt: &mut String, capability: Capability) {
+    prompt.push_str("\nLEGACY FALLBACK OUTCOMES (no workflow outcomes were declared):\n");
+    match capability {
+        Capability::CodingWorkspace => prompt.push_str(
+            "The no-verdict success path above remains preferred after a successful implementation. Otherwise emit exactly one of the following and explain the reason in `summary`:\n\
+             - `needs_architect` when the item is underspecified or unimplementable as written;\n\
+             - `needs_human` only when implementation requires non-agent judgment.\n",
+        ),
+        Capability::TriageWorkspace => prompt.push_str(
+            "Emit exactly one verdict:\n\
+             - `ready_code` with an authored `body` (a precise, implementable code spec) when the item is ready to be built;\n\
+             - `needs_design` with an authored `body` (a design proposal) when design work is required first;\n\
+             - `needs_breakdown` with a `children` list (each: slug, title, body, optional kind, labels, depends_on, and optional target_repo as an owner/name repository path when the intake plan names target repositories) when the item must be split into child issues. Omit child kind only for ordinary `code` children.\n",
+        ),
+        Capability::ReviewWorkspace => prompt.push_str(
+            "Emit exactly one verdict:\n\
+             - `approve` when the change satisfies the contract and has a meaningful, correct implementation diff;\n\
+             - `changes` with an authored `review_body` when the change is incomplete, unsafe, contradicts the contract, or is bookkeeping-only;\n\
+             - `escalate` when the decision exceeds a static review (explain in `summary`).\n",
+        ),
+    }
+}
+
+fn render_workflow_outcomes(
     prompt: &mut String,
+    capability: Capability,
     allowed_verdicts: &[String],
     contracts: &VerdictContracts,
 ) {
+    prompt.push_str("\nWORKFLOW OUTCOMES:\n");
+    if matches!(capability, Capability::CodingWorkspace) {
+        prompt.push_str(
+            "The no-verdict engineer success path remains available. If emitting a verdict, emit exactly one workflow-declared verdict below and no other verdict.\n",
+        );
+    } else {
+        prompt.push_str("Emit exactly one workflow-declared verdict below and no other verdict.\n");
+    }
+
     for verdict in allowed_verdicts {
         let Some(contract) = contracts.get(verdict) else {
+            prompt.push_str(&format!("- Verdict `{verdict}`.\n"));
             continue;
         };
         prompt.push_str(&format!(
-            "\nVerdict `{verdict}` {}.\n",
+            "- Verdict `{verdict}` {}.\n",
             child_requirement(contract)
         ));
         if contract.min_children > 0 {
             prompt.push_str(
-                "Each child must include non-blank `slug`, `title`, and `body`; sibling slugs must be unique and `depends_on` must be acyclic.\n",
+                "  Each child must include non-blank `slug`, `title`, and `body`; sibling slugs must be unique and `depends_on` must be acyclic.\n",
             );
         }
         for key in &contract.required_child_metadata {
             prompt.push_str(&format!(
-                "Each child body must contain non-blank workflow metadata `{key}` inside a `<!-- temper:workflow ... -->` JSON block.\n"
+                "  Each child body must contain non-blank workflow metadata `{key}` inside a `<!-- temper:workflow ... -->` JSON block.\n"
             ));
         }
         if contract.requires_pr_title {
-            prompt.push_str("It requires a non-blank pull-request `title`.\n");
+            prompt.push_str("  It requires a non-blank pull-request `title`.\n");
         }
         if contract.requires_pr_body {
-            prompt.push_str("It requires a non-blank pull-request `body`.\n");
+            prompt.push_str("  It requires a non-blank pull-request `body`.\n");
         } else if contract.requires_body {
-            prompt.push_str("It requires a non-blank authored `body` (or `review_body`).\n");
+            prompt.push_str("  It requires a non-blank authored `body` (or `review_body`).\n");
         }
         for key in &contract.required_source_metadata {
             prompt.push_str(&format!(
-                "The source artifact must contain non-blank workflow metadata `{key}`.\n"
+                "  The source artifact must contain non-blank workflow metadata `{key}`.\n"
             ));
         }
     }
@@ -239,13 +228,24 @@ pub fn user_context(context: &WorkspaceContext) -> String {
     let mut text = String::new();
     if context.repos.len() > 1 {
         text.push_str(
-            "This is a COORDINATED multi-repo workspace. Your working directory is \
-             the workspace root, and each repository below is checked out into its \
-             own sibling subdirectory (the `dir:` path). Edit files inside the \
-             writable repos' directories; the read-only repos are present only so \
-             the combined build resolves — do not modify them. The repos are laid \
-             out as siblings so their inter-repo path dependencies resolve.\n\n\
-             Repositories:\n",
+            "This is a COORDINATED multi-repo workspace. Your working directory is the workspace root, and each repository below is checked out into its own sibling subdirectory (the `dir:` path). ",
+        );
+        match context.checkout.as_deref() {
+            Some("read_only" | "pull_request_read_only") => text.push_str(
+                "The effective checkout is read-only, so every repository is present only for inspection and build resolution; do not modify any repository, including repositories whose manifest policy is writable. ",
+            ),
+            Some("writable" | "pull_request_writable") => text.push_str(
+                "Edit files only inside repositories whose manifest access policy is writable; repositories whose manifest policy is read-only are present only for inspection and build resolution. ",
+            ),
+            None => text.push_str(
+                "Under this legacy context, edit files inside the manifest-writable repositories' directories; manifest-read-only repositories are present only for inspection and build resolution. ",
+            ),
+            Some(_) => text.push_str(
+                "Use the effective checkout authority rendered below, and never modify a repository whose manifest policy is read-only. ",
+            ),
+        }
+        text.push_str(
+            "The repositories are laid out as siblings so their inter-repo path dependencies resolve.\n\nRepositories:\n",
         );
     } else {
         text.push_str("Repository:\n");
@@ -256,7 +256,7 @@ pub fn user_context(context: &WorkspaceContext) -> String {
             .as_deref()
             .unwrap_or("(read-only — never pushed)");
         text.push_str(&format!(
-            "- {}/{} (dir: {}/, access: {}, default branch: {}, base branch: {}, work branch: {})\n",
+            "- {}/{} (dir: {}/, manifest/repository access policy: {}, default branch: {}, base branch: {}, work branch: {})\n",
             repo.owner, repo.name, repo.dir, repo.access, repo.default_branch, repo.base_branch, branch
         ));
     }
@@ -266,9 +266,7 @@ pub fn user_context(context: &WorkspaceContext) -> String {
     ));
     text.push_str(&format!("Target: {}\n", context.work_item.target));
     text.push_str(&format!("Correlation key: {}\n", context.correlation_key));
-    if let Some(checkout) = &context.checkout {
-        text.push_str(&format!("Checkout mode: {checkout}\n"));
-    }
+    render_checkout_authority(&mut text, context.checkout.as_deref());
 
     if let Some(role_guidance) = &context.guidance.role_guidance {
         text.push_str(&format!("\nRole guidance:\n{role_guidance}\n"));
@@ -295,6 +293,26 @@ pub fn user_context(context: &WorkspaceContext) -> String {
     }
 
     text
+}
+
+fn render_checkout_authority(text: &mut String, checkout: Option<&str>) {
+    match checkout {
+        Some("writable") => text.push_str(
+            "Checkout mode: writable\nEffective checkout authority: writable. Edits are permitted only in repositories whose manifest/repository access policy is `writable`; no other repository may be modified.\n",
+        ),
+        Some("pull_request_writable") => text.push_str(
+            "Checkout mode: pull_request_writable\nEffective checkout authority: pull-request writable. Edits are permitted only in repositories whose manifest/repository access policy is `writable`; no other repository may be modified.\n",
+        ),
+        Some(mode @ ("read_only" | "pull_request_read_only")) => text.push_str(&format!(
+            "Checkout mode: {mode}\nEffective checkout authority: read-only (`{mode}`). No repository may be modified. This overrides writable manifest/repository access policy and all branch or work-branch hints.\n"
+        )),
+        Some(mode) => text.push_str(&format!(
+            "Checkout mode: {mode}\nEffective checkout authority: checkout mode `{mode}`, subject to manifest/repository access policy. Never modify a repository whose policy is not `writable`.\n"
+        )),
+        None => text.push_str(
+            "Effective checkout authority: not supplied by this legacy context. Repository manifest/repository access policy and branch hints remain the available legacy authority signals.\n",
+        ),
+    }
 }
 
 fn render_artifact_context(text: &mut String, bundle: &ArtifactContextBundle) {
