@@ -65,6 +65,7 @@ fn event(seq: u64) -> AgentRunEventV1 {
         occurred_at: "2026-01-01T00:00:00Z".to_string(),
         elapsed_ms: seq,
         assignment: AgentAssignmentIdentityV1 {
+            trace_context: None,
             job_id: "job".to_string(),
             repository: "ai/temper".to_string(),
             artifact_ref: "ai/temper#312".to_string(),

@@ -1,13 +1,55 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::{JobArtifactSnapshot, JobContext, WorkspaceManifest};
+use crate::{JobArtifactSnapshot, JobContext, W3cTraceContext, WorkspaceManifest};
 use temper_verdict::{VerdictContract, VerdictContracts};
 
 use super::sample_manifest;
 
 #[test]
+fn assignment_trace_context_round_trips_and_stays_optional() {
+    let trace_context = W3cTraceContext {
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
+        tracestate: Some("vendor=opaque".into()),
+    };
+    let assign = crate::Assign {
+        protocol_version: crate::WORKER_PROTOCOL_VERSION,
+        trace_context: Some(trace_context.clone()),
+        job_id: "job-1".into(),
+        role: "engineer".into(),
+        repo: "ai/temper".into(),
+        artifact: crate::Artifact {
+            item: serde_json::json!(313),
+            kind: "issue".into(),
+        },
+        job_payload: serde_json::json!({}),
+    };
+    let encoded = serde_json::to_value(&assign).unwrap();
+    assert_eq!(
+        encoded["trace_context"]["traceparent"],
+        trace_context.traceparent
+    );
+    assert_eq!(
+        serde_json::from_value::<crate::Assign>(encoded).unwrap(),
+        assign
+    );
+
+    let legacy = serde_json::json!({
+        "protocol_version": crate::WORKER_PROTOCOL_VERSION,
+        "job_id": "legacy", "role": "engineer", "repo": "ai/temper",
+        "artifact": {"item": 1, "kind": "issue"}, "job_payload": {}
+    });
+    assert!(
+        serde_json::from_value::<crate::Assign>(legacy)
+            .unwrap()
+            .trace_context
+            .is_none()
+    );
+}
+
+#[test]
 fn full_job_context_round_trips_without_loss() {
     let context = JobContext {
+        trace_context: None,
         artifact_context: None,
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),
@@ -49,6 +91,7 @@ fn full_job_context_round_trips_without_loss() {
 #[test]
 fn job_context_omits_empty_optional_fields() {
     let context = JobContext {
+        trace_context: None,
         artifact_context: None,
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),
@@ -94,6 +137,7 @@ fn thin_pre_enrichment_job_context_omits_artifact_and_workspace() {
     // The daemon's pure work-item mapping has no Forge access, so it emits a
     // thin context; enrichment fills artifact + workspace before dispatch.
     let context = JobContext {
+        trace_context: None,
         artifact_context: None,
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),

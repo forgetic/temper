@@ -76,17 +76,13 @@
 //! `TEMPER_LOG_FORMAT` value, so the toggle is unit-tested without mutating the
 //! process environment.
 //!
-//! ## OpenTelemetry (`otel` feature, disabled by default)
+//! ## OpenTelemetry (`otel` and `otel-otlp`, disabled by default)
 //!
-//! temper adopts the OTel *semantic model* now (spans, dotted attributes, the
-//! `event` enum, numeric `duration_ms`) but ships **no exporter**: a
-//! single-process daemon writing to journald does not need one. The
-//! [`tracing-opentelemetry`][otel] layer therefore lives behind the
-//! disabled-by-default `otel` cargo feature (see the [`otel`](crate::otel)
-//! module). With the feature off nothing changes; with it on, an exporter-less
-//! OTel layer is installed next to the chosen sink — the seam a real collector
-//! (Tempo / Jaeger / Honeycomb) is wired into later, with **zero emit-site
-//! changes**.
+//! The `otel` feature installs the tracing layer and canonical activity
+//! projector. The `otel-otlp` feature additionally installs a batch OTLP/HTTP
+//! exporter configured by standard `OTEL_EXPORTER_OTLP_*` variables. Canonical
+//! run/scope/turn/model/tool spans are emitted only after durable journal
+//! ingestion; exporter failure has no return path into assigned work.
 //!
 //! [`init_logging`] is idempotent: it installs the subscriber with `try_init`
 //! and ignores the "a global default has already been set" error, so calling it
@@ -100,6 +96,7 @@
 //! [json]: tracing_subscriber::fmt::Layer::json
 //! [otel]: https://docs.rs/tracing-opentelemetry
 
+pub mod activity;
 pub mod duration;
 pub mod emit;
 pub mod event;

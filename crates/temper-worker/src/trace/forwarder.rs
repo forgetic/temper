@@ -219,6 +219,7 @@ mod tests {
 
     fn context() -> WorkspaceContext {
         WorkspaceContext {
+            trace_context: None,
             repos: vec![WorkspaceRepository {
                 id: "forgejo:ai/temper".to_string(),
                 owner: "ai".to_string(),

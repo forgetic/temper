@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 description = "The orchestration-worker service: wires a Resolved config into a long-polling worker that spawns out-of-process coding agents. Ships the slim `temper-worker` binary; reused by the unified binary's standalone mode."
 
+[features]
+default = []
+otel = ["temper-log/otel-otlp"]
+
 [dependencies]
 skein = { workspace = true }
 tracing = { workspace = true }

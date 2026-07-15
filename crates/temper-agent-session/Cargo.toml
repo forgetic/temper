@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 description = "The out-of-process coding-agent session: reads a workspace context, runs the native coding loop, writes the result. Ships the slim `temper-agent` binary; reused by the unified `temper agent` subcommand."
 
+[features]
+default = []
+otel = ["temper-log/otel-otlp"]
+
 [dependencies]
 async-trait = { workspace = true }
 serde_json = { workspace = true }

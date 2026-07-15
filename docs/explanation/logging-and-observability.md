@@ -192,7 +192,7 @@ Filtering is `RUST_LOG` (existing `EnvFilter`): `RUST_LOG=info` (default),
 
 ## 6. Sinks and OpenTelemetry posture
 
-Decided: **journald + JSON toggle now, OTel-shaped, exporter deferred.**
+Decided: **journald + JSON by default; canonical activity can additionally export OTLP.**
 
 - **Human:** journald (Linux/systemd) or stderr fmt fallback. journald records
   its own timestamps, so message bodies carry **no wall-clock time** — only
@@ -213,16 +213,15 @@ Decided: **journald + JSON toggle now, OTel-shaped, exporter deferred.**
   is set and reachable (the systemd default — and already machine-readable via
   `-o json`); (3) else the human stderr fmt fallback. `RUST_LOG` filtering
   applies to all three.
-- **OTel:** adopt the *semantic model* now (spans, dotted attributes, `event`
-  enum, `duration_ms`). Do **not** wire an exporter/collector — a single-process
-  standalone daemon writing to journald does not need one. `tracing-opentelemetry`
-  is present but optional, behind `temper-log`'s **disabled-by-default `otel`
-  cargo feature** (`--features otel`); the feature compiles a cfg-gated seam that
-  installs an exporter-less OTel layer next to the chosen sink. Shipping to a
-  collector (Tempo/Jaeger/Honeycomb) later is *adding one layer next to journald*
-  — swap the empty tracer provider for one with a batch/OTLP exporter, no
-  emit-site changes. Flip it the day temper goes multi-process/multi-host, which
-  is when cross-boundary trace propagation actually pays.
+- **OTel:** the disabled-by-default `temper-log` `otel` feature installs the
+  OpenTelemetry layer and canonical activity projector. Durable
+  `AgentRunEventV1` records open and close nested `agent.run`, `agent.scope`,
+  `agent.turn`, `llm.call`, and `tool.call` spans after journal ingestion; model
+  and tool call sites do not emit a second telemetry stream. The `otel-otlp`
+  feature adds a batch OTLP/HTTP exporter configured by standard
+  `OTEL_EXPORTER_OTLP_*` variables. The unified and slim service packages expose
+  this as their `otel` feature. Export failure has no path back to job execution.
+  See [the operator guide](../how-to/operate-agent-traces.md).
 
 ---
 

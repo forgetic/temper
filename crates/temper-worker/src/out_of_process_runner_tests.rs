@@ -476,6 +476,7 @@ pub(super) fn test_context() -> WorkspaceContext {
 pub(super) fn test_context_for_role(role: &str) -> WorkspaceContext {
     use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
     WorkspaceContext {
+        trace_context: None,
         artifact_context: None,
         repos: vec![WorkspaceRepository {
             id: "acme/svc".to_string(),

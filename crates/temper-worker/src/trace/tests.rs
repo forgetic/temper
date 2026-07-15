@@ -19,6 +19,7 @@ use super::*;
 
 fn context() -> WorkspaceContext {
     WorkspaceContext {
+        trace_context: None,
         repos: vec![WorkspaceRepository {
             id: "forgejo:acme/svc".to_string(),
             owner: "acme".to_string(),

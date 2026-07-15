@@ -57,6 +57,10 @@ members = [
 ]
 resolver = "2"
 
+[features]
+default = []
+otel = ["temper-cli/otel"]
+
 [package]
 name = "temper"
 version = "0.1.0"
@@ -174,14 +178,12 @@ tongs = { git = "https://git.ekanayaka.io/ai/tongs.git", rev = "9dcda27" }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 tracing-journald = "0.3"
-# OpenTelemetry seam (see crates/temper-log §6 "OTel posture"). These are wired
-# into temper-log as OPTIONAL deps behind its disabled-by-default `otel` feature:
-# the semantic model (dotted attributes, spans, the `event` enum) is adopted now,
-# but no exporter/collector is wired — flipping the feature on adds one OTel layer
-# next to journald with zero emit-site changes. Versions move in lockstep:
-# tracing-opentelemetry 0.33 tracks the opentelemetry 0.32 line.
+# Optional OpenTelemetry projection/export (see temper-log). Versions move in
+# lockstep: tracing-opentelemetry 0.33 tracks OpenTelemetry 0.32. OTLP uses
+# the blocking HTTP/protobuf client, so Temper does not integrate a Tokio runtime.
 opentelemetry = "0.32"
 opentelemetry_sdk = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 tracing-opentelemetry = "0.33"
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"

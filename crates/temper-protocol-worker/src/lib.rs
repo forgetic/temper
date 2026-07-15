@@ -50,6 +50,7 @@ pub use temper_protocol_context::{
     ArtifactSnapshot, ArtifactSummary, ArtifactType, ForgeContextErrorCode, ForgeContextOperation,
     ForgeContextResult, ForgeGetItemOperation, ForgeGetItemResult, ForgeItemComment,
     ForgeListRelatedOperation, ForgeListRelatedResult, ForgeRelatedEdge, ForgeRelationType,
+    W3cTraceContext, W3cTraceContextError,
 };
 pub use workspace::{RepoAccess, WorkspaceManifest, WorkspaceRepo};
 

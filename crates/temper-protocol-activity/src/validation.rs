@@ -34,6 +34,7 @@ pub enum ActivityValidationCode {
     InvalidBlobReference,
     BlobReferenceMismatch,
     InvalidCapturePolicy,
+    InvalidTraceContext,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,6 +78,15 @@ pub fn validate_run_event(event_value: &AgentRunEventV1) -> Result<(), ActivityV
     }
     timestamp(&event_value.occurred_at, "event.occurred_at")?;
     assignment(&event_value.assignment)?;
+    if let Some(trace_context) = &event_value.assignment.trace_context {
+        trace_context.validate().map_err(|source| {
+            error(
+                ActivityValidationCode::InvalidTraceContext,
+                "event.assignment.trace_context",
+                source.to_string(),
+            )
+        })?;
+    }
     if let Some(session_id) = &event_value.agent_session_id {
         identifier(session_id, "event.agent_session_id")?;
     }

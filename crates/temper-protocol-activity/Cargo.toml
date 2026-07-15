@@ -10,6 +10,7 @@ description = "Versioned serde DTOs and pure validation for Temper agent activit
 base64 = "0.22"
 serde.workspace = true
 sha2 = "0.10"
+temper-protocol-context = { path = "../temper-protocol-context" }
 
 [dev-dependencies]
 serde_json.workspace = true

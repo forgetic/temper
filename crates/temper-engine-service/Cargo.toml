@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 description = "The engine (orchestrator) service: wires a Resolved config into a running daemon. Ships the slim `temper-engine` binary; reused by the unified binary's standalone mode."
 
+[features]
+default = []
+otel = ["temper-log/otel-otlp"]
+
 [dependencies]
 skein = { workspace = true }
 chrono = { workspace = true }

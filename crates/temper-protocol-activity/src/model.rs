@@ -2,6 +2,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
+use temper_protocol_context::W3cTraceContext;
 
 use crate::{ACTIVITY_PROTOCOL_VERSION, ActivityValidationError};
 
@@ -15,6 +16,10 @@ pub struct AgentAssignmentIdentityV1 {
     pub role: String,
     pub action: String,
     pub correlation_key: String,
+    /// Optional assignment-delivery context. It is not reused as workstream
+    /// identity across later runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<W3cTraceContext>,
 }
 
 /// Scope identity supplied by the agent, independently of a display label.

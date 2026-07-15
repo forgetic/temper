@@ -60,7 +60,7 @@ temper-forge-model = []
 temper-protocol-context = []
 # Shared agent activity DTOs and pure validation. This stays separate from both
 # process protocols so every tier can consume it without coupling those planes.
-temper-protocol-activity = []
+temper-protocol-activity = ["temper-protocol-context"]
 temper-protocol-interaction = []
 # Shared serde contract + pure validation used independently by all three tiers.
 temper-verdict = []
@@ -136,10 +136,9 @@ temper-config = ["temper-protocol-activity"]
 # temper-scenario facade; it deliberately stays out of the engine/worker/agent tiers.
 temper-scenario-core = []
 
-# Process-wide logging init (tracing-subscriber setup). A shared leaf with no
-# internal deps that every binary calls once at startup; like temper-config it
-# crosses no tier.
-temper-log = []
+# Process-wide logging init and canonical activity-to-span projection. It may
+# consume the shared activity protocol but no implementation-tier crate.
+temper-log = ["temper-protocol-activity"]
 
 # Per-tier service crates. Each links ONLY its own tier + temper-config, and
 # ships its slim binary (temper-engine / temper-worker / temper-agent). These

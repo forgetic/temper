@@ -159,6 +159,7 @@ mod tests {
     fn assign(job_id: &str) -> Assign {
         Assign {
             protocol_version: WORKER_PROTOCOL_VERSION,
+            trace_context: None,
             job_id: job_id.to_string(),
             role: "coder".to_string(),
             repo: "ai/temper".to_string(),

@@ -193,6 +193,7 @@ mod tests {
     fn assign_for_log_line() -> Assign {
         Assign {
             protocol_version: WORKER_PROTOCOL_VERSION,
+            trace_context: None,
             job_id: "ai/temper/issue-147/engineer/code_ready".to_string(),
             role: "engineer".to_string(),
             repo: "ai/temper".to_string(),

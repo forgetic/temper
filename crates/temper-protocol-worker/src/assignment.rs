@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use temper_protocol_context::W3cTraceContext;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Capability {
@@ -45,6 +46,10 @@ pub struct Artifact {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Assign {
     pub protocol_version: u32,
+    /// Optional W3C context copied from the typed job payload so transports do
+    /// not need to inspect opaque assignment JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<W3cTraceContext>,
     pub job_id: String,
     pub role: String,
     /// Primary repository path (`owner/name`) -- the home of the coordinating

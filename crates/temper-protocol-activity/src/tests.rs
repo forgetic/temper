@@ -28,6 +28,7 @@ where
 
 fn assignment() -> AgentAssignmentIdentityV1 {
     AgentAssignmentIdentityV1 {
+        trace_context: None,
         job_id: "job-304".into(),
         repository: "ai/temper".into(),
         artifact_ref: "ai/temper#304".into(),
@@ -281,6 +282,15 @@ fn invalid_versions_ids_sequences_and_timestamps_are_rejected() {
     let mut event = usage_event(1);
     event.assignment.job_id = " ".into();
     assert_code(event.validate(), ActivityValidationCode::EmptyIdentifier);
+    let mut event = usage_event(1);
+    event.assignment.trace_context = Some(W3cTraceContext {
+        traceparent: "00-00000000000000000000000000000000-00f067aa0ba902b7-01".into(),
+        tracestate: None,
+    });
+    assert_code(
+        event.validate(),
+        ActivityValidationCode::InvalidTraceContext,
+    );
 
     let mut activity_batch = batch(vec![usage_event(1)]);
     activity_batch.version = 2;

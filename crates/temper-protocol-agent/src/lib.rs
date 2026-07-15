@@ -28,6 +28,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use temper_protocol_context::W3cTraceContext;
 pub use temper_protocol_context::{
     ARTIFACT_CONTEXT_VERSION, ArtifactContextBundle, ArtifactContextDiagnostic,
     ArtifactContextDiagnosticCode, ArtifactContextTruncation, ArtifactIndexEntry,
@@ -276,6 +277,10 @@ pub struct PullRequestFreshness {
 /// contract; the agent re-exports it. Serde shape is unchanged.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceContext {
+    /// Optional assignment-delivery context. Separate workstream runs do not
+    /// retain it as a long-lived parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<W3cTraceContext>,
     /// The repositories assembled into this workspace, laid out as siblings
     /// under the agent's working directory (ADR 0023). The first is the primary
     /// — home of the coordinating artifact. For a plain single-repo job this is
