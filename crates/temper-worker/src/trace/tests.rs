@@ -9,7 +9,7 @@ use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1,
     AgentScopeV1, AssistantMessageV1, BlobAttachmentV1, BlobMediaTypeV1, CaptureModeV1,
     CapturedContentV1, FailureCodeV1, InlineContentV1, RunFinishedV1, RunStartedV1, RunStatusV1,
-    UsageV1,
+    ToolStartedV1, UsageV1,
 };
 use temper_protocol_agent::{
     AgentSessionState, WorkspaceContext, WorkspaceRepository, WorkspaceWorkItem,
@@ -403,15 +403,15 @@ fn complete_malformed_record_is_not_silently_truncated() {
 }
 
 #[test]
-fn metadata_policy_rejects_child_transcript_content() {
+fn metadata_policy_rejects_forged_message_and_tool_argument_content() {
     let temp = tempfile::tempdir().expect("tempdir");
     let collector = collector(temp.path());
     let run = collector
         .begin_run("job-metadata-policy", &context())
         .expect("begin")
         .expect("enabled");
-    let mut frame = usage_frame(1);
-    frame.event = AgentActivityEventV1::AssistantMessage(AssistantMessageV1 {
+    let mut message = usage_frame(1);
+    message.event = AgentActivityEventV1::AssistantMessage(AssistantMessageV1 {
         message_id: "forbidden-message".to_string(),
         content: CapturedContentV1::Inline(InlineContentV1 {
             text: "must not be stored".to_string(),
@@ -419,9 +419,24 @@ fn metadata_policy_rejects_child_transcript_content() {
         }),
     });
     assert!(matches!(
-        run.accept_frame(frame),
+        run.accept_frame(message),
         Err(TraceError::InvalidSpool(_))
     ));
+
+    let mut tool = usage_frame(2);
+    tool.event = AgentActivityEventV1::ToolStarted(ToolStartedV1 {
+        call_id: "forged-call".to_string(),
+        name: "bash".to_string(),
+        arguments: Some(CapturedContentV1::Inline(InlineContentV1 {
+            text: "forged argument bytes".to_string(),
+            truncated: false,
+        })),
+    });
+    assert!(matches!(
+        run.accept_frame(tool),
+        Err(TraceError::InvalidSpool(_))
+    ));
+
     run.finish_success(None).expect("finish metadata run");
     drop(run);
 
@@ -429,6 +444,7 @@ fn metadata_policy_rejects_child_transcript_content() {
     assert_eq!(recovered[0].events.len(), 2);
     let serialized = serde_json::to_string(&recovered[0].events).unwrap();
     assert!(!serialized.contains("must not be stored"));
+    assert!(!serialized.contains("forged argument bytes"));
 }
 
 #[test]

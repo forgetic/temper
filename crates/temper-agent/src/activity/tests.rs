@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use temper_agent_core::{AgentEvent, ModelCallStatus, ModelIdentity, StreamDelta, ToolCallStatus};
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1,
-    AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1, CaptureModeV1, StopReasonV1,
-    TurnStartedV1,
+    AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1, CaptureModeV1, CapturedContentV1,
+    StopReasonV1, TurnStartedV1,
 };
 use tongs::model::{ContentBlock, StopReason};
 
@@ -194,6 +194,62 @@ fn concurrent_children_get_unique_ids_and_the_same_correct_parent() {
             .iter()
             .all(|frame| frame.scope.parent_id.as_deref() == Some(main.scope_id.as_str()))
     );
+}
+
+#[test]
+fn metadata_keeps_tool_start_identity_without_any_argument_bytes() {
+    const ARGUMENT: &str = "ARGUMENT-BYTES-350-keep-out-of-metadata";
+
+    for mode in [
+        CaptureModeV1::Metadata,
+        CaptureModeV1::Transcript,
+        CaptureModeV1::Diagnostic,
+    ] {
+        let recorder = Arc::new(Recorder::default());
+        let factory = ScopeFactory::with_parts(
+            AgentActivityCapturePolicyV1 {
+                capture: mode,
+                ..Default::default()
+            },
+            Arc::new(FakeClock::new(0..10)),
+            vec![recorder.clone()],
+        );
+        let run = factory.main("main", ModelIdentity::new("provider", "model"));
+        run.observability.events.emit(AgentEvent::ToolStart {
+            id: "call-350".to_string(),
+            name: "read".to_string(),
+            arg_preview: Some(ARGUMENT.to_string()),
+        });
+
+        let frames = recorder.0.lock().expect("frames");
+        let started = frames
+            .iter()
+            .find_map(|frame| match &frame.event {
+                AgentActivityEventV1::ToolStarted(started) => Some(started),
+                _ => None,
+            })
+            .expect("tool.started boundary");
+        assert_eq!(started.call_id, "call-350");
+        assert_eq!(started.name, "read");
+        if mode == CaptureModeV1::Metadata {
+            assert_eq!(started.arguments, None);
+            let wire = serde_json::to_vec(&*frames).expect("serialize metadata frames");
+            assert!(
+                !wire
+                    .windows(ARGUMENT.len())
+                    .any(|bytes| bytes == ARGUMENT.as_bytes())
+            );
+            assert!(!String::from_utf8(wire).unwrap().contains("arguments"));
+        } else {
+            let CapturedContentV1::Inline(arguments) =
+                started.arguments.as_ref().expect("captured arguments")
+            else {
+                panic!("tool arguments should remain bounded inline content");
+            };
+            assert_eq!(arguments.text, ARGUMENT);
+            assert!(!arguments.truncated);
+        }
+    }
 }
 
 #[test]
