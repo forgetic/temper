@@ -58,8 +58,12 @@ query pair per repository. Children are created atomically with final labels and
 each dependent child receives its complete sorted dependency list in one update,
 and all child references/wiring progress are aggregated in one parent update.
 Only then does activation clear `staged`. The final source update atomically
-records activation/completion progress and the routed transition, so a retry
-neither duplicates a child nor dispatches a partially wired child.
+records activation/completion progress and the routed transition. Retries resume
+the latest matching incomplete round, while a later execution whose payload or
+current source completion differs receives a new durable round and round-scoped
+child correlation keys. A retry therefore neither duplicates a child nor
+dispatches a partially wired child, and a later legitimate fan-out cannot alias
+or discard an earlier round's children.
 
 ## Workspace and repaired-PR convergence
 

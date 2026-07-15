@@ -3,6 +3,7 @@
 mod activation;
 mod create;
 mod intent;
+mod round;
 mod wiring;
 
 use super::verify::AppliedState;
@@ -29,6 +30,7 @@ pub(super) struct PreparedCreateIssues {
 
 /// Result of inserting or loading a durable create intent.
 struct PersistedCreateIntent {
+    key: String,
     newly_inserted: bool,
     intent: CreateIssuesIntent,
     parent: Issue,
@@ -165,7 +167,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             if !persisted.intent.completed {
                 recovery |= !persisted.newly_inserted;
                 pending.push((
-                    key,
+                    persisted.key,
                     persisted.intent,
                     if persisted.newly_inserted {
                         IntentExecutionMode::KnownFirst
@@ -223,6 +225,11 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             started.elapsed(),
         );
 
+        // `persist_create_intent` returns a completed intent only when this
+        // invocation's request and source completion match that durable round.
+        // Otherwise it inserts a fresh round, which is completed above. A
+        // returned state therefore always proves this execution's atomic source
+        // commit rather than merely observing an older completed fan-out.
         Ok(Some(AppliedState {
             labels: parent.labels,
             assignees: parent.assignees,

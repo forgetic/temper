@@ -1,6 +1,7 @@
 //! Parent-intent discovery and compare-and-swap pass checkpoints.
 
 use super::super::{ExecutionError, Executor};
+use super::round::{IntentRound, select_intent_round};
 use super::{
     FanOutMetrics, IntentExecutionMode, PendingIntent, PersistedCreateIntent, decode_intent_body,
     metadata_error,
@@ -129,13 +130,17 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         Ok(recovered)
     }
 
-    /// Inserts a durable intent and returns both insertion identity and the
-    /// committed source representation. Existing records are never rewritten:
-    /// an existing incomplete record is the caller's recovery signal.
+    /// Inserts or resumes the durable round for this fan-out request.
+    ///
+    /// An incomplete latest round is the caller's recovery signal and must
+    /// match the normalized request. A completed latest round is reused only
+    /// when both its request and its atomic source completion still match the
+    /// current source. Otherwise this is a later logical execution and receives
+    /// a fresh round key plus round-qualified child correlation keys.
     pub(super) async fn persist_create_intent(
         &self,
         mut parent: Issue,
-        key: &str,
+        base_key: &str,
         proposed: CreateIssuesIntent,
         metrics: &mut FanOutMetrics,
     ) -> Result<PersistedCreateIntent, ExecutionError> {
@@ -143,48 +148,48 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let mut metadata = parse_metadata_block(&parent.body)
                 .map_err(metadata_error)?
                 .unwrap_or_default();
-            if let Some(existing) = metadata.create_issue_intents.get(key) {
-                let mut existing = existing.clone();
-                // A worker retry can supply the routed completion that a
-                // boolean-era intent did not persist. Startup recovery has no
-                // such context and therefore leaves legacy completion absent.
-                if existing.completion.is_none() {
-                    existing.completion = proposed.completion.clone();
-                }
-                return Ok(PersistedCreateIntent {
-                    newly_inserted: false,
-                    intent: existing,
-                    parent,
-                });
-            }
-            metadata
-                .create_issue_intents
-                .insert(key.to_string(), proposed.clone());
-            let body = replace_metadata_block(&parent.body, &metadata).map_err(metadata_error)?;
-            metrics.write();
-            match self
-                .forge
-                .update_issue_from_snapshot(
-                    &parent,
-                    UpdateIssue {
-                        body: Some(body),
-                        expected_version: Some(parent.version),
-                        ..UpdateIssue::default()
-                    },
-                )
-                .await
-            {
-                Ok(committed) => {
+            match select_intent_round(&metadata, &parent, base_key, &proposed)? {
+                IntentRound::Existing { key, intent } => {
                     return Ok(PersistedCreateIntent {
-                        newly_inserted: true,
-                        intent: proposed,
-                        parent: committed,
+                        key,
+                        newly_inserted: false,
+                        intent,
+                        parent,
                     });
                 }
-                Err(ForgeError::Conflict(_)) => {
-                    parent = self.reload_parent(&parent, metrics).await?;
+                IntentRound::Insert { key, intent } => {
+                    metadata
+                        .create_issue_intents
+                        .insert(key.clone(), intent.clone());
+                    let body =
+                        replace_metadata_block(&parent.body, &metadata).map_err(metadata_error)?;
+                    metrics.write();
+                    match self
+                        .forge
+                        .update_issue_from_snapshot(
+                            &parent,
+                            UpdateIssue {
+                                body: Some(body),
+                                expected_version: Some(parent.version),
+                                ..UpdateIssue::default()
+                            },
+                        )
+                        .await
+                    {
+                        Ok(committed) => {
+                            return Ok(PersistedCreateIntent {
+                                key,
+                                newly_inserted: true,
+                                intent,
+                                parent: committed,
+                            });
+                        }
+                        Err(ForgeError::Conflict(_)) => {
+                            parent = self.reload_parent(&parent, metrics).await?;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
                 }
-                Err(error) => return Err(error.into()),
             }
         }
         Err(ExecutionError::Backend {
