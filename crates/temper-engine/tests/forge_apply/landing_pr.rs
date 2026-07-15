@@ -193,6 +193,28 @@ fn verdict_transition_creates_feature_landing_pr_from_plan_metadata() {
 }
 
 #[test]
+fn verdict_transition_treats_default_branch_source_as_satisfied_create() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let issue = create_plan_issue(&forge, &repo, Some("main")).await;
+        let workflow = Arc::new(landing_workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = plan_validation_job("acme/service", issue);
+        let result = passing_landing_result(&job);
+
+        applier.apply(job, result).await;
+
+        assert_pull_request_count_stays(&cx, &forge, &repo, 0).await;
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert!(has_label(&labels, "landing-opened"), "labels: {labels:?}");
+        assert!(!has_label(&labels, "ready"), "labels: {labels:?}");
+        assert!(!has_label(&labels, "needs-human"), "labels: {labels:?}");
+        assert!(issue_comment_bodies(&forge, &repo, issue).await.is_empty());
+    })
+}
+
+#[test]
 fn verdict_transition_carries_source_parents_into_feature_landing_pr_metadata() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());

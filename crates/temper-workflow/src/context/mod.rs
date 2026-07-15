@@ -31,7 +31,7 @@ mod child;
 pub use child::CreateIssuesChild;
 
 use crate::ids::{RoleId, TransitionId};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use temper_forge::{CreatePullRequest, UserId};
 
 /// Runtime context for a transition execution.
@@ -45,6 +45,7 @@ use temper_forge::{CreatePullRequest, UserId};
 pub struct ExecutionContext {
     assignees: BTreeMap<RoleId, UserId>,
     pull_request_creates: BTreeMap<(TransitionId, usize), CreatePullRequest>,
+    satisfied_pull_request_creates: BTreeSet<(TransitionId, usize)>,
     pull_request_correlation_keys: BTreeMap<(TransitionId, usize), String>,
     set_body_inputs: BTreeMap<(TransitionId, usize), String>,
     set_body_correlation_keys: BTreeMap<(TransitionId, usize), String>,
@@ -154,6 +155,29 @@ impl ExecutionContext {
         index: usize,
     ) -> Option<&CreatePullRequest> {
         self.pull_request_creates.get(&(transition.clone(), index))
+    }
+
+    /// Marks the `index`-th `CreatePullRequest` effect as already satisfied.
+    /// This lets a runtime binding commit the remaining transition effects when
+    /// source work was performed directly on the pull request's target branch.
+    pub fn set_pull_request_create_satisfied_at(
+        &mut self,
+        transition: TransitionId,
+        index: usize,
+    ) -> &mut Self {
+        self.satisfied_pull_request_creates
+            .insert((transition, index));
+        self
+    }
+
+    /// Reports whether the runtime has already satisfied the indexed create.
+    pub fn pull_request_create_is_satisfied(
+        &self,
+        transition: &TransitionId,
+        index: usize,
+    ) -> bool {
+        self.satisfied_pull_request_creates
+            .contains(&(transition.clone(), index))
     }
 
     /// Resolves the runtime correlation key bound for the `index`-th

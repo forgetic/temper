@@ -141,6 +141,12 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             } => {
                 let effect_index = counters.pull_request_create;
                 counters.pull_request_create += 1;
+                if self
+                    .context
+                    .pull_request_create_is_satisfied(&plan.transition, effect_index)
+                {
+                    return Ok(());
+                }
                 let correlation_key = correlation_key
                     .clone()
                     .or_else(|| {
