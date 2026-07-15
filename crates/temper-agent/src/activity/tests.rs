@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use temper_agent_core::{AgentEvent, ModelCallStatus, ModelIdentity, StreamDelta, ToolCallStatus};
 use temper_protocol_activity::{
-    ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1,
-    AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1, CaptureModeV1, CapturedContentV1,
-    MODEL_CALL_RETRY_FAILURE_MESSAGE, StopReasonV1, TurnStartedV1,
+    ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityChildRecordV1,
+    AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1, CaptureModeV1,
+    CapturedContentV1, MODEL_CALL_RETRY_FAILURE_MESSAGE, StopReasonV1, TurnStartedV1,
 };
 use tongs::model::{ContentBlock, StopReason};
 
@@ -51,15 +51,15 @@ impl ActivityClock for FakeClock {
 struct Recorder(Mutex<Vec<AgentActivityFrameV1>>);
 
 impl ActivityProjection for Recorder {
-    fn emit(&self, frame: &AgentActivityFrameV1) {
-        self.0.lock().expect("frames").push(frame.clone());
+    fn emit(&self, record: &AgentActivityChildRecordV1) {
+        self.0.lock().expect("frames").push(record.frame.clone());
     }
 }
 
 struct PanickingProjection;
 
 impl ActivityProjection for PanickingProjection {
-    fn emit(&self, _frame: &AgentActivityFrameV1) {
+    fn emit(&self, _record: &AgentActivityChildRecordV1) {
         panic!("projection failed");
     }
 }
@@ -552,7 +552,10 @@ fn terminal_scope_frame_gets_a_bounded_socket_flush() {
         }),
     };
 
-    client.emit(&frame);
+    client.emit(&AgentActivityChildRecordV1 {
+        frame: frame.clone(),
+        blobs: Vec::new(),
+    });
     let (stream, _) = listener.accept().expect("accept activity client");
     let mut line = String::new();
     BufReader::new(stream)
@@ -578,6 +581,9 @@ fn invalid_address_and_disconnected_queue_never_panic() {
         event: AgentActivityEventV1::TurnStarted(TurnStartedV1 {}),
     };
     for _ in 0..1_000 {
-        client.emit(&frame);
+        client.emit(&AgentActivityChildRecordV1 {
+            frame: frame.clone(),
+            blobs: Vec::new(),
+        });
     }
 }

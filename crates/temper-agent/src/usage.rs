@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 
 use temper_agent_core::ArgPreviewFn;
 use temper_protocol_activity::{
-    AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1, CapturedContentV1,
-    ModelCallStatusV1, ToolStatusV1,
+    AgentActivityChildRecordV1, AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1,
+    CapturedContentV1, ModelCallStatusV1, ToolStatusV1,
 };
 
 use crate::activity::ActivityProjection;
@@ -157,7 +157,10 @@ impl TracingProjection {
 }
 
 impl ActivityProjection for TracingProjection {
-    fn emit(&self, frame: &AgentActivityFrameV1) {
+    fn emit(&self, record: &AgentActivityChildRecordV1) {
+        // Prompt attachments are source-equivalent data and are intentionally
+        // outside operational tracing and usage accounting.
+        let frame = &record.frame;
         if let AgentActivityEventV1::ScopeStarted(started) = &frame.event {
             if let Some(name) = &started.display_name {
                 self.display_names
@@ -354,18 +357,21 @@ mod tests {
         ACTIVITY_PROTOCOL_VERSION, AgentActivityEventV1, AgentScopeV1, ScopeStartedV1, UsageV1,
     };
 
-    fn frame(event: AgentActivityEventV1) -> AgentActivityFrameV1 {
-        AgentActivityFrameV1 {
-            version: ACTIVITY_PROTOCOL_VERSION,
-            occurred_at: "2026-01-02T03:04:05.000Z".to_string(),
-            elapsed_ms: 1,
-            scope: AgentScopeV1 {
-                id: "scope-1".to_string(),
-                kind: AgentScopeKindV1::Main,
-                parent_id: None,
+    fn record(event: AgentActivityEventV1) -> AgentActivityChildRecordV1 {
+        AgentActivityChildRecordV1 {
+            frame: AgentActivityFrameV1 {
+                version: ACTIVITY_PROTOCOL_VERSION,
+                occurred_at: "2026-01-02T03:04:05.000Z".to_string(),
+                elapsed_ms: 1,
+                scope: AgentScopeV1 {
+                    id: "scope-1".to_string(),
+                    kind: AgentScopeKindV1::Main,
+                    parent_id: None,
+                },
+                turn: Some(0),
+                event,
             },
-            turn: Some(0),
-            event,
+            blobs: Vec::new(),
         }
     }
 
@@ -373,10 +379,12 @@ mod tests {
     fn normalized_usage_folds_into_totals() {
         let totals = Arc::new(UsageTotals::default());
         let projection = TracingProjection::new(Arc::clone(&totals));
-        projection.emit(&frame(AgentActivityEventV1::ScopeStarted(ScopeStartedV1 {
-            display_name: Some("main".to_string()),
-        })));
-        projection.emit(&frame(AgentActivityEventV1::Usage(UsageV1 {
+        projection.emit(&record(AgentActivityEventV1::ScopeStarted(
+            ScopeStartedV1 {
+                display_name: Some("main".to_string()),
+            },
+        )));
+        projection.emit(&record(AgentActivityEventV1::Usage(UsageV1 {
             input_tokens: 100,
             output_tokens: 20,
             cache_read_tokens: 5,

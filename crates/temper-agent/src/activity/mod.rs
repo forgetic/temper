@@ -16,7 +16,7 @@ use std::time::Instant;
 use chrono::{SecondsFormat, Utc};
 use temper_agent_core::{ModelIdentity, RunObservability};
 use temper_protocol_activity::{
-    AgentActivityCapturePolicyV1, AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1,
+    AgentActivityCapturePolicyV1, AgentActivityChildRecordV1, AgentScopeKindV1, AgentScopeV1,
     CaptureModeV1,
 };
 
@@ -64,11 +64,12 @@ impl ActivityClock for SystemActivityClock {
     }
 }
 
-/// Synchronous projection over the canonical child frame. Implementations must
-/// not report failures to the agent; the composite additionally catches panics
-/// so one broken projection cannot alter the assigned result.
+/// Synchronous projection over one canonical child record. Implementations
+/// must not report failures to the agent; the composite additionally catches
+/// panics so one broken projection cannot alter the assigned result. Frame-only
+/// projections deliberately inspect `record.frame` and ignore attachments.
 pub trait ActivityProjection: Send + Sync {
-    fn emit(&self, frame: &AgentActivityFrameV1);
+    fn emit(&self, record: &AgentActivityChildRecordV1);
 }
 
 pub(super) struct ProjectionSet {
@@ -76,9 +77,9 @@ pub(super) struct ProjectionSet {
 }
 
 impl ProjectionSet {
-    pub(super) fn emit(&self, frame: &AgentActivityFrameV1) {
+    pub(super) fn emit(&self, record: &AgentActivityChildRecordV1) {
         for projection in &self.projections {
-            let _ = catch_unwind(AssertUnwindSafe(|| projection.emit(frame)));
+            let _ = catch_unwind(AssertUnwindSafe(|| projection.emit(record)));
         }
     }
 }
@@ -184,5 +185,7 @@ impl ScopeFactory {
     }
 }
 
+#[cfg(test)]
+mod prompt_tests;
 #[cfg(test)]
 mod tests;

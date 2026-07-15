@@ -66,6 +66,25 @@ impl AgentActivityFrameV1 {
     }
 }
 
+/// An attachment-bearing child-to-worker record.
+///
+/// Producers keep bare [`AgentActivityFrameV1`] values on the wire when no
+/// attachment is needed. This envelope is reserved for a frame whose content
+/// references are transported in `blobs` as one atomic queue item.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentActivityChildRecordV1 {
+    pub frame: AgentActivityFrameV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blobs: Vec<BlobAttachmentV1>,
+}
+
+impl AgentActivityChildRecordV1 {
+    pub fn validate(&self) -> Result<(), ActivityValidationError> {
+        crate::validate_child_record(self)
+    }
+}
+
 /// Canonical, worker-stamped activity event.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

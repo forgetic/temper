@@ -22,8 +22,9 @@ pub use model::*;
 pub use temper_protocol_context::{W3cTraceContext, W3cTraceContextError};
 pub use validation::{
     ActivityValidationCode, ActivityValidationError, validate_acknowledgement, validate_batch,
-    validate_blob_attachment, validate_blob_reference, validate_capture_policy, validate_frame,
-    validate_run_event, validate_run_stream, validate_scope_ancestry,
+    validate_blob_attachment, validate_blob_reference, validate_capture_policy,
+    validate_child_record, validate_frame, validate_run_event, validate_run_stream,
+    validate_scope_ancestry,
 };
 
 /// CLI flag carrying a worker-written, non-secret capture policy JSON file to
@@ -46,5 +47,12 @@ pub const MODEL_CALL_RETRY_FAILURE_MESSAGE: &str = "model call failed; retry sch
 pub const MAX_INLINE_CONTENT_BYTES: usize = 16 * 1024;
 /// Absolute wire limit for a single transported blob attachment.
 pub const MAX_BLOB_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+/// Absolute JSON wire limit for one attachment-bearing child record.
+///
+/// Canonical base64 expands a legal blob by at most 4/3; the fixed allowance
+/// covers the bounded frame, blob reference, and JSON envelope. The trailing
+/// newline used by the socket transport is not included.
+pub const MAX_CHILD_ACTIVITY_RECORD_BYTES: usize =
+    ((MAX_BLOB_ATTACHMENT_BYTES + 2) / 3) * 4 + 64 * 1024;
 /// Limit for opaque identifiers and short provider/tool labels.
 pub const MAX_IDENTIFIER_BYTES: usize = 256;
