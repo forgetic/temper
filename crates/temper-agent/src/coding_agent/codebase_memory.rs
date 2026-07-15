@@ -42,24 +42,13 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
     tools: &[CodebaseMemoryToolMetadata],
     status: Option<&str>,
 ) -> Option<String> {
+    // The provider request already contains complete tool names, descriptions,
+    // and schemas. Registration metadata controls only whether this guidance is
+    // relevant; copying any of it into the prompt would duplicate the tool API.
     if tools.is_empty() {
         return None;
     }
 
-    let mut tools = tools.to_vec();
-    tools.sort_by(|left, right| left.name.cmp(&right.name));
-    let rendered_tools = tools
-        .iter()
-        .map(|tool| {
-            let summary = tool.description.lines().next().unwrap_or_default().trim();
-            if summary.is_empty() {
-                format!("- `{}`", tool.name)
-            } else {
-                format!("- `{}`: {summary}", tool.name)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
     let status = status
         .map(|status| format!("\nWorkspace/index status:\n{status}\n"))
         .unwrap_or_default();
@@ -74,8 +63,7 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          - reviewer: inspect impacted code paths and callers before verdicts.\n\n\
          Treat the graph as an index, not truth. Verify exact code with read/grep/git diff\n\
          before editing or making final claims.\n\
-{status}\n\
-         Registered codebase-memory tools:\n{rendered_tools}\n"
+{status}"
     ))
 }
 
@@ -90,6 +78,8 @@ mod tests {
     };
     use tongs::tools::ToolEffects;
 
+    const FAKE_MCP_DESCRIPTION_SENTINEL: &str = "FAKE-MCP-DESCRIPTION-SENTINEL-384";
+
     fn fake_server_script() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
         fs::write(
@@ -99,7 +89,7 @@ import json
 import sys
 
 TOOLS = [
-    {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
     {"name": "delete_project", "description": "Delete project", "inputSchema": {"type": "object", "properties": {}}},
 ]
 
@@ -245,10 +235,35 @@ for line in sys.stdin:
                 .prompt_section
                 .as_deref()
                 .expect("registered tools produce prompt section");
-            assert!(prompt.contains("CODEBASE MEMORY"));
-            assert!(prompt.contains("codebase_memory_search_code"));
-            assert!(prompt.contains("Search indexed code"));
-            assert!(!prompt.contains("codebase_memory_delete_project"));
+            for expected in [
+                "CODEBASE MEMORY",
+                "repository-index tools for architecture, symbol search, code search",
+                "Use them early for non-trivial tasks",
+                "- engineer: find relevant symbols/callers before editing;",
+                "Treat the graph as an index, not truth.",
+                "Default project: `acme/demo`",
+                "Project aliases accepted in `project`/`repo`",
+                "`acme/demo`",
+                "`demo`",
+                "`repo-1`",
+                "Filesystem paths are never accepted as project/repo values",
+                "Index setting: `off`",
+                "`acme/demo` status:",
+                "Note: index=off; no internal indexing was attempted",
+            ] {
+                assert!(prompt.contains(expected), "prompt omitted {expected:?}");
+            }
+            for duplicated_api_text in [
+                FAKE_MCP_DESCRIPTION_SENTINEL,
+                "codebase_memory_search_code",
+                "codebase_memory_delete_project",
+                "Registered codebase-memory tools:",
+            ] {
+                assert!(
+                    !prompt.contains(duplicated_api_text),
+                    "prompt duplicated tool API text {duplicated_api_text:?}"
+                );
+            }
 
             let mut registry = tongs::tools::ToolRegistry::new();
             prepared.toolset.append_to_registry(&mut registry);
