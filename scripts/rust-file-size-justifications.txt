@@ -116,3 +116,7 @@ crates/temper-config/src/resolve.rs
 # Config resolution tests cover cross-section defaults and validation matrices;
 # split when the next config test fixture cleanup lands.
 crates/temper-config/src/tests.rs
+
+# Agent trace capstones intentionally keep producer/process fixtures, worker
+# spools, engine query/export, web, and OTel assertions in one leak-detection path.
+crates/temper-worker/src/trace/full_path_tests.rs

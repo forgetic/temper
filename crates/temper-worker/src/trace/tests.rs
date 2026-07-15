@@ -251,8 +251,11 @@ fn restart_recovers_blobs_cursor_and_truncates_only_final_fragment() {
     assert_eq!(run.accept_frame(frame).expect("accept blob frame"), 2);
     run.acknowledge(2).expect("acknowledge");
     assert_eq!(
-        run.finish_failure(FailureCodeV1::ChildProcess, "child crashed", true)
-            .unwrap(),
+        run.finish_failure(
+            FailureCodeV1::ChildProcess,
+            temper_protocol_worker::FailureClass::Transient,
+        )
+        .unwrap(),
         3
     );
     assert!(matches!(
@@ -484,8 +487,11 @@ fn disabled_capture_creates_no_spool_and_quota_keeps_terminal_reserve() {
         }
     }
     assert!(accepted > 0);
-    run.finish_failure(FailureCodeV1::Internal, "x", false)
-        .expect("terminal reserve remains writable");
+    run.finish_failure(
+        FailureCodeV1::Internal,
+        temper_protocol_worker::FailureClass::Permanent,
+    )
+    .expect("terminal reserve remains writable");
 }
 
 #[test]

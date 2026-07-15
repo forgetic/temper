@@ -20,6 +20,7 @@ use temper_protocol_activity::{
     RunFailedV1, RunFinishedV1, RunStartedV1, RunStatusV1, StopReasonV1,
 };
 use temper_protocol_agent::WorkspaceContext;
+use temper_protocol_worker::FailureClass;
 use thiserror::Error;
 
 use crate::config::WorkerAgentTraceConfig;
@@ -46,7 +47,6 @@ pub const MAX_CHILD_ACTIVITY_FRAME_BYTES: usize = 256 * 1024;
 /// making their reservation available to later work.
 pub const WORKER_SPOOL_RUN_CAPACITY: u64 = 16;
 const ACK_CURSOR_GROWTH_RESERVE: u64 = 32;
-const MAX_TERMINAL_FAILURE_MESSAGE_BYTES: usize = 512;
 
 /// An immutable per-run spool manifest.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -424,19 +424,17 @@ impl TraceRun {
         }))
     }
 
-    /// Writes the sole failed/crashed terminal event for the run.
+    /// Writes the sole failed/crashed terminal event from trusted host classifications.
     pub fn finish_failure(
         &self,
         code: FailureCodeV1,
-        message: &str,
-        retryable: bool,
+        class: FailureClass,
     ) -> Result<u64, TraceError> {
-        let message = bounded_text(message, MAX_TERMINAL_FAILURE_MESSAGE_BYTES);
         self.finish(AgentActivityEventV1::RunFailed(RunFailedV1 {
             failure: FailureInfoV1 {
                 code,
-                message,
-                retryable,
+                message: host_failure_summary(class).to_string(),
+                retryable: class == FailureClass::Transient,
             },
         }))
     }

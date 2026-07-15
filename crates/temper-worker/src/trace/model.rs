@@ -7,8 +7,9 @@ use temper_protocol_activity::{
     RunFinishedV1, RunStatusV1, StopReasonV1,
 };
 use temper_protocol_agent::{ArtifactType, WorkspaceContext};
+use temper_protocol_worker::FailureClass;
 
-use super::{MAX_TERMINAL_FAILURE_MESSAGE_BYTES, TraceError, TraceManifestV1};
+use super::{TraceError, TraceManifestV1};
 
 pub(super) fn validate_event_policy(
     policy: &AgentActivityCapturePolicyV1,
@@ -161,16 +162,32 @@ pub(super) fn terminal_reserve_bytes(manifest: &TraceManifestV1) -> Result<u64, 
         duration_ms: u64::MAX,
         stop_reason: Some(StopReasonV1::Error),
     }));
-    let failure = base(AgentActivityEventV1::RunFailed(RunFailedV1 {
-        failure: FailureInfoV1 {
-            code: FailureCodeV1::Internal,
-            message: "x".repeat(MAX_TERMINAL_FAILURE_MESSAGE_BYTES),
-            retryable: true,
-        },
-    }));
-    let bytes = serde_json::to_vec(&success)?
-        .len()
-        .max(serde_json::to_vec(&failure)?.len());
+    let mut bytes = serde_json::to_vec(&success)?.len();
+    for code in [
+        FailureCodeV1::Provider,
+        FailureCodeV1::Timeout,
+        FailureCodeV1::Tool,
+        FailureCodeV1::ChildProcess,
+        FailureCodeV1::Cancelled,
+        FailureCodeV1::Policy,
+        FailureCodeV1::Internal,
+    ] {
+        for class in [
+            FailureClass::Transient,
+            FailureClass::Permanent,
+            FailureClass::Canceled,
+            FailureClass::Protocol,
+        ] {
+            let failure = base(AgentActivityEventV1::RunFailed(RunFailedV1 {
+                failure: FailureInfoV1 {
+                    code,
+                    message: host_failure_summary(class).to_string(),
+                    retryable: class == FailureClass::Transient,
+                },
+            }));
+            bytes = bytes.max(serde_json::to_vec(&failure)?.len());
+        }
+    }
     Ok(u64::try_from(bytes).unwrap_or(u64::MAX).saturating_add(1))
 }
 
@@ -182,16 +199,14 @@ pub(super) fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(super) fn bounded_text(value: &str, limit: usize) -> String {
-    if value.is_empty() {
-        return "agent run failed".to_string();
+/// Privacy-safe terminal text selected exclusively from the trusted host
+/// failure classification. Keep these static: provider/tool diagnostics and
+/// child stderr must never become inputs to canonical terminal events.
+pub(super) const fn host_failure_summary(class: FailureClass) -> &'static str {
+    match class {
+        FailureClass::Transient => "agent run failed with a transient error",
+        FailureClass::Permanent => "agent run failed with a permanent error",
+        FailureClass::Canceled => "agent run was cancelled",
+        FailureClass::Protocol => "agent run failed protocol validation",
     }
-    if value.len() <= limit {
-        return value.to_string();
-    }
-    let mut boundary = limit;
-    while boundary > 0 && !value.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    value[..boundary].to_string()
 }
