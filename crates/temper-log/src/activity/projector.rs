@@ -167,7 +167,8 @@ impl CanonicalActivityProjector {
                 );
                 self.runs.remove(&event.run_id);
             }
-            Event::AssistantMessage(_)
+            Event::PromptPrepared(_)
+            | Event::AssistantMessage(_)
             | Event::OutputTextDelta(_)
             | Event::OutputThinkingDelta(_)
             | Event::SteeringApplied(_) => {}
