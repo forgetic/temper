@@ -8,16 +8,18 @@
       "kind": "sub_agent",
       "parent_id": "main"
     },
-    "turn": 2,
+    "turn": 0,
     "event": {
-      "type": "steering.applied",
+      "type": "prompt.prepared",
       "data": {
-        "source": "user",
-        "instruction": {
-          "storage": "inline",
-          "text": "Focus on protocol validation.",
-          "truncated": false
-        }
+        "system_prompt_present": true,
+        "system_prompt_bytes": 14,
+        "initial_user_message_bytes": 14,
+        "tool_manifest_bytes": 168,
+        "tool_count": 1,
+        "original_snapshot_bytes": 251,
+        "captured_bytes": 0,
+        "disposition": "omitted_policy"
       }
     }
   },
@@ -45,17 +47,24 @@
           "id": "main",
           "kind": "main"
         },
-        "turn": 2,
+        "turn": 0,
         "event": {
-          "type": "assistant.message",
+          "type": "prompt.prepared",
           "data": {
-            "message_id": "message-7",
+            "system_prompt_present": true,
+            "system_prompt_bytes": 14,
+            "initial_user_message_bytes": 14,
+            "tool_manifest_bytes": 168,
+            "tool_count": 1,
+            "original_snapshot_bytes": 251,
+            "captured_bytes": 251,
+            "disposition": "captured",
             "content": {
               "storage": "blob",
               "blob": {
-                "digest": "sha256:686b4ceac796818f0488251765910d02af884328d702594a56c4b96b06407e4f",
-                "bytes": 16,
-                "media_type": "text_plain_utf8"
+                "digest": "sha256:c4e20ff65ba8d28670e420d0291907f49891495567a9070f468b5d2174e0c7ce",
+                "bytes": 251,
+                "media_type": "application_json"
               }
             }
           }
@@ -95,11 +104,11 @@
     "blobs": [
       {
         "blob": {
-          "digest": "sha256:686b4ceac796818f0488251765910d02af884328d702594a56c4b96b06407e4f",
-          "bytes": 16,
-          "media_type": "text_plain_utf8"
+          "digest": "sha256:c4e20ff65ba8d28670e420d0291907f49891495567a9070f468b5d2174e0c7ce",
+          "bytes": 251,
+          "media_type": "application_json"
         },
-        "data_base64": "aGVsbG8gdHJhbnNjcmlwdA=="
+        "data_base64": "eyJzeXN0ZW1fcHJvbXB0IjoiWW91IGFyZSBleGFjdC4iLCJpbml0aWFsX3VzZXJfbWVzc2FnZSI6Ikluc3BlY3QgY2Fmw6kuIiwidG9vbHMiOlt7Im5hbWUiOiJyZWFkIiwiZGVzY3JpcHRpb24iOiJSZWFkIGEgZmlsZS4iLCJpbnB1dF9zY2hlbWEiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsicGF0aCJdLCJ0eXBlIjoib2JqZWN0In19XX0="
       }
     ]
   },

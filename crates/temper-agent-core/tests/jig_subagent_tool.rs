@@ -9,15 +9,24 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_agent::ProviderConfig;
-use temper_agent_core::{AgentStop, SubAgent, SubAgentTool, run_sub_agent};
+use temper_agent_core::{AgentEvent, AgentStop, EventSink, SubAgent, SubAgentTool, run_sub_agent};
 use tongs::provider::StreamOptions;
 use tongs::tools::create_read_tool;
 use tongs::tools::{ToolEffects, ToolRegistry};
+
+#[derive(Default)]
+struct EventRecorder(Mutex<Vec<AgentEvent>>);
+
+impl EventSink for EventRecorder {
+    fn emit(&self, event: AgentEvent) {
+        self.0.lock().expect("event recorder").push(event);
+    }
+}
 
 #[test]
 fn parent_agent_delegates_to_a_sub_agent() {
@@ -98,6 +107,8 @@ fn parent_agent_delegates_to_a_sub_agent() {
     .build_provider()
     .expect("build parent provider");
 
+    let nested_events = Arc::new(EventRecorder::default());
+    let nested_events_for_run = Arc::clone(&nested_events);
     let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
         // The investigate tool is read-only ⇒ parallel-safe (a parent could fan
         // out several at once). Built inside the engine task so it holds the
@@ -108,7 +119,8 @@ fn parent_agent_delegates_to_a_sub_agent() {
             "Delegate a read-only investigation to a sub-agent. Input: { task }.",
             ToolEffects::read(),
             factory,
-        );
+        )
+        .with_events(nested_events_for_run);
         run_sub_agent(
             handle,
             SubAgent {
@@ -128,6 +140,26 @@ fn parent_agent_delegates_to_a_sub_agent() {
     .expect("parent agent runs");
 
     assert_eq!(outcome.stop, AgentStop::Completed);
+
+    let nested_events = nested_events.0.lock().expect("nested events");
+    let prompt_count = nested_events
+        .iter()
+        .filter(|event| matches!(event, AgentEvent::PromptPrepared { .. }))
+        .count();
+    assert_eq!(
+        prompt_count, 1,
+        "one prompt event for the nested invocation"
+    );
+    let prompt_position = nested_events
+        .iter()
+        .position(|event| matches!(event, AgentEvent::PromptPrepared { .. }))
+        .expect("nested prompt event");
+    let turn_position = nested_events
+        .iter()
+        .position(|event| matches!(event, AgentEvent::TurnStart { .. }))
+        .expect("nested turn event");
+    assert!(prompt_position < turn_position);
+    drop(nested_events);
 
     // The parent's conversation contains the sub-agent's finding as a tool
     // result.

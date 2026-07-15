@@ -84,6 +84,9 @@ impl NormalizingEventSink {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match event {
+            // Prompt policy normalization and attachment transport are owned by
+            // the agent-tier follow-up; the core event remains source-exact.
+            AgentEvent::PromptPrepared { .. } => {}
             AgentEvent::TurnStart { turn } => self.turn_started(&mut state, turn),
             AgentEvent::ModelCallStarted {
                 turn,

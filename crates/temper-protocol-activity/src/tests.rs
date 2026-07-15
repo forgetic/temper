@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod prompt;
+
 fn fixture(name: &str) -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures")
@@ -89,6 +91,7 @@ fn every_event_family_has_a_canonical_golden_round_trip() {
         "run.finished",
         "scope.started",
         "scope.finished",
+        "prompt.prepared",
         "turn.started",
         "turn.finished",
         "model.call.started",
@@ -114,6 +117,9 @@ fn every_event_family_has_a_canonical_golden_round_trip() {
 
     for (index, event) in events.into_iter().enumerate() {
         let mut canonical = usage_event(index as u64 + 1);
+        if matches!(event, AgentActivityEventV1::PromptPrepared(_)) {
+            canonical.turn = Some(0);
+        }
         canonical.event = event;
         canonical.validate().expect("golden event validates");
     }
@@ -123,7 +129,7 @@ fn every_event_family_has_a_canonical_golden_round_trip() {
 fn retry_failures_accept_only_the_fixed_allowlisted_summary() {
     let events: Vec<AgentActivityEventV1> = round_trip(&fixture("event-families.json"));
     let mut canonical = usage_event(1);
-    canonical.event = events[7].clone();
+    canonical.event = events[8].clone();
     let AgentActivityEventV1::ModelCallRetrying(retry) = &mut canonical.event else {
         panic!("retry fixture");
     };
@@ -165,12 +171,13 @@ fn event_classification_separates_boundaries_from_droppable_deltas() {
             assert!(event.is_boundary());
         }
     }
-    assert_eq!(events[6].classification(), EventClassificationV1::ModelCall);
-    assert_eq!(events[7].classification(), EventClassificationV1::Retry);
-    assert_eq!(events[15].classification(), EventClassificationV1::Usage);
-    assert_eq!(events[17].classification(), EventClassificationV1::Error);
+    assert_eq!(events[4].classification(), EventClassificationV1::Prompt);
+    assert_eq!(events[7].classification(), EventClassificationV1::ModelCall);
+    assert_eq!(events[8].classification(), EventClassificationV1::Retry);
+    assert_eq!(events[16].classification(), EventClassificationV1::Usage);
+    assert_eq!(events[18].classification(), EventClassificationV1::Error);
     assert!(events[1].is_terminal());
-    assert!(events[17].is_terminal());
+    assert!(events[18].is_terminal());
 }
 
 #[test]
@@ -181,6 +188,14 @@ fn transport_capture_and_blob_goldens_round_trip_and_validate() {
 
     let activity_batch: AgentActivityBatch = round_trip(&golden["batch"]);
     activity_batch.validate().expect("batch validates");
+    assert!(matches!(
+        activity_batch.events[0].event,
+        AgentActivityEventV1::PromptPrepared(_)
+    ));
+    assert_eq!(
+        activity_batch.blobs[0].blob.media_type,
+        BlobMediaTypeV1::ApplicationJson
+    );
 
     let acknowledgement: AgentActivityAcknowledgement = round_trip(&golden["acknowledgement"]);
     acknowledgement
@@ -264,6 +279,19 @@ fn child_frame_schema_rejects_trusted_sensitive_and_extension_fields() {
         assert!(
             serde_json::from_value::<AgentActivityFrameV1>(injected).is_err(),
             "child frame unexpectedly accepted {forbidden}"
+        );
+    }
+
+    let rendered_frame = serde_json::to_string(frame).unwrap();
+    for prompt_body in [
+        "You are exact.",
+        "Inspect café.",
+        "input_schema",
+        "Read a file.",
+    ] {
+        assert!(
+            !rendered_frame.contains(prompt_body),
+            "metadata frame leaks prompt body {prompt_body}"
         );
     }
 
