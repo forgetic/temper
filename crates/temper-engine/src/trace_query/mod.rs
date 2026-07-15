@@ -13,7 +13,10 @@ mod projection;
 mod request;
 mod service;
 
-pub use model::{TraceEventPage, TraceRunCounts, TraceRunIdentity, TraceRunPage, TraceRunSummary};
+pub use model::{
+    TraceEventPage, TraceExportRecordV1, TraceRunCounts, TraceRunIdentity, TraceRunPage,
+    TraceRunSummary,
+};
 pub(crate) use request::is_trace_uri;
 pub(crate) use service::{TraceQueryService, disabled_trace_response};
 

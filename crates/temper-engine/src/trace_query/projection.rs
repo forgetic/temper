@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use temper_protocol_activity::{AgentActivityEventV1, AgentRunEventV1, CapturedContentV1};
+use temper_protocol_activity::{
+    AgentActivityEventV1, AgentRunEventV1, CapturedContentV1, PromptCaptureDispositionV1,
+};
 
 use crate::trace_journal::AgentTraceRun;
 
@@ -66,6 +68,10 @@ pub(super) fn project_summary(run: &AgentTraceRun) -> TraceRunSummary {
 
 fn event_has_truncated_content(event: &AgentRunEventV1) -> bool {
     match &event.event {
+        AgentActivityEventV1::PromptPrepared(prompt) => matches!(
+            prompt.disposition,
+            PromptCaptureDispositionV1::OmittedLimit | PromptCaptureDispositionV1::OmittedQuota
+        ),
         AgentActivityEventV1::AssistantMessage(message) => content_is_truncated(&message.content),
         AgentActivityEventV1::OutputTextDelta(delta)
         | AgentActivityEventV1::OutputThinkingDelta(delta) => delta.delta.truncated,
@@ -85,4 +91,63 @@ fn event_has_truncated_content(event: &AgentRunEventV1) -> bool {
 
 fn content_is_truncated(content: &CapturedContentV1) -> bool {
     matches!(content, CapturedContentV1::Inline(inline) if inline.truncated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_protocol_activity::{
+        ACTIVITY_PROTOCOL_VERSION, AgentAssignmentIdentityV1, AgentScopeKindV1, AgentScopeV1,
+        PromptPreparedV1,
+    };
+
+    fn prompt_event(disposition: PromptCaptureDispositionV1) -> AgentRunEventV1 {
+        AgentRunEventV1 {
+            version: ACTIVITY_PROTOCOL_VERSION,
+            run_id: "run".to_string(),
+            seq: 1,
+            occurred_at: "2026-01-01T00:00:00Z".to_string(),
+            elapsed_ms: 0,
+            assignment: AgentAssignmentIdentityV1 {
+                job_id: "job".to_string(),
+                repository: "ai/temper".to_string(),
+                artifact_ref: "ai/temper#363".to_string(),
+                role: "engineer".to_string(),
+                action: "open_pr".to_string(),
+                correlation_key: "prompt-summary".to_string(),
+                trace_context: None,
+            },
+            agent_session_id: None,
+            scope: AgentScopeV1 {
+                id: "main".to_string(),
+                kind: AgentScopeKindV1::Main,
+                parent_id: None,
+            },
+            turn: Some(0),
+            event: AgentActivityEventV1::PromptPrepared(PromptPreparedV1 {
+                system_prompt_present: false,
+                system_prompt_bytes: 0,
+                initial_user_message_bytes: 1,
+                tool_manifest_bytes: 2,
+                tool_count: 0,
+                original_snapshot_bytes: 42,
+                captured_bytes: 0,
+                disposition,
+                content: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn prompt_policy_omission_is_expected_but_limit_and_quota_are_truncated() {
+        assert!(!event_has_truncated_content(&prompt_event(
+            PromptCaptureDispositionV1::OmittedPolicy,
+        )));
+        assert!(event_has_truncated_content(&prompt_event(
+            PromptCaptureDispositionV1::OmittedLimit,
+        )));
+        assert!(event_has_truncated_content(&prompt_event(
+            PromptCaptureDispositionV1::OmittedQuota,
+        )));
+    }
 }

@@ -23,10 +23,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, ActivityValidationError, AgentActivityAcknowledgement,
-    AgentActivityBatch, AgentActivityCapturePolicyV1, AgentActivityEventV1,
-    AgentAssignmentIdentityV1, AgentRunEventV1, BlobAttachmentV1, BlobReferenceV1, CaptureModeV1,
-    CapturedContentV1, DroppedEventKindV1, MAX_BLOB_ATTACHMENT_BYTES,
-    MODEL_CALL_RETRY_FAILURE_MESSAGE, TraceGapV1, UsageV1, validate_run_stream,
+    AgentActivityBatch, AgentActivityCapturePolicyV1, AgentActivityChildRecordV1,
+    AgentActivityEventV1, AgentActivityFrameV1, AgentAssignmentIdentityV1, AgentRunEventV1,
+    BlobAttachmentV1, BlobReferenceV1, CaptureModeV1, CapturedContentV1, DroppedEventKindV1,
+    MAX_BLOB_ATTACHMENT_BYTES, MODEL_CALL_RETRY_FAILURE_MESSAGE, PromptCaptureDispositionV1,
+    TraceGapV1, UsageV1, validate_run_stream,
 };
 
 use crate::{EngineAgentTraceConfig, WallClock, system_clock};
@@ -84,6 +85,9 @@ pub struct AgentTraceRun {
     pub manifest: AgentTraceManifest,
     pub summary: AgentTraceSummary,
     pub events: Vec<AgentRunEventV1>,
+    /// Fully re-read and content-address validated attachments referenced by
+    /// the canonical event stream. The vector is ordered by digest.
+    pub attachments: Vec<BlobAttachmentV1>,
 }
 
 /// Terminal or partial state rebuilt entirely from readable JSONL.
@@ -270,6 +274,7 @@ struct RunPaths {
 struct RecoveredRun {
     manifest: AgentTraceManifest,
     events: Vec<AgentRunEventV1>,
+    attachments: Vec<BlobAttachmentV1>,
     source_digests: BTreeMap<u64, String>,
     summary: AgentTraceSummary,
 }

@@ -279,7 +279,8 @@ impl AgentTraceJournal {
             return Ok(acknowledgement(&batch.run_id, durable_seq));
         }
 
-        let attachments = decode_attachments(&batch.blobs)?;
+        let capture = binding.capture_policy.capture;
+        let attachments = decode_attachments(&batch.blobs, capture, &batch.events)?;
         let mut durable_events = existing
             .as_ref()
             .map_or_else(Vec::new, |run| run.events.clone());
@@ -396,9 +397,8 @@ impl AgentTraceJournal {
             append_events(&paths.events, &new_events)?;
         }
 
-        // Re-read after the durable append. If the caller crashes before seeing
-        // this acknowledgement, a retransmit takes the same recovery path and
-        // compares against these records instead of appending duplicates.
+        // Re-read after the durable append so lost acknowledgements deduplicate
+        // against synced records instead of appending another sequence.
         let recovered = self.recover_run_locked(&paths, true)?;
         // OTel is a best-effort projection of the durable authority. Replaying
         // the complete run lets a restarted engine rebuild open span state;
@@ -466,7 +466,7 @@ impl AgentTraceJournal {
             ));
         }
         validate_stream_for_manifest(&events, &manifest)?;
-        verify_referenced_blobs(&paths.blobs, &events)?;
+        let attachments = load_referenced_blobs(&paths.blobs, &events)?;
         let summary = build_summary(paths, &manifest, &events)?;
         if rewrite_summary {
             write_atomic_json(&paths.summary, &summary)?;
@@ -475,6 +475,7 @@ impl AgentTraceJournal {
             RecoveredRun {
                 manifest,
                 events,
+                attachments,
                 source_digests,
                 summary,
             },

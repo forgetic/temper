@@ -14,6 +14,7 @@ impl AgentTraceJournal {
                 manifest: recovered.manifest,
                 summary: recovered.summary,
                 events: recovered.events,
+                attachments: recovered.attachments,
             }))
         })
     }
@@ -30,6 +31,7 @@ impl AgentTraceJournal {
                     manifest: recovered.manifest,
                     summary: recovered.summary,
                     events: recovered.events,
+                    attachments: recovered.attachments,
                 });
             }
             Ok(runs)

@@ -1,7 +1,9 @@
 fn decode_attachments(
     attachments: &[BlobAttachmentV1],
+    capture: CaptureModeV1,
+    events: &[AgentRunEventV1],
 ) -> Result<BTreeMap<String, (BlobReferenceV1, Vec<u8>)>, TraceJournalError> {
-    attachments
+    let decoded = attachments
         .iter()
         .map(|attachment| {
             let bytes = attachment.decode()?;
@@ -10,7 +12,62 @@ fn decode_attachments(
                 (attachment.blob.clone(), bytes),
             ))
         })
-        .collect()
+        .collect::<Result<BTreeMap<_, _>, TraceJournalError>>()?;
+    if capture != CaptureModeV1::Metadata {
+        validate_prompt_blob_attachments(events, &decoded)?;
+    }
+    Ok(decoded)
+}
+
+fn validate_prompt_blob_attachments(
+    events: &[AgentRunEventV1],
+    attachments: &BTreeMap<String, (BlobReferenceV1, Vec<u8>)>,
+) -> Result<(), TraceJournalError> {
+    for event in events {
+        let AgentActivityEventV1::PromptPrepared(prompt) = &event.event else {
+            continue;
+        };
+        let Some(CapturedContentV1::Blob { blob }) = &prompt.content else {
+            continue;
+        };
+        let (attached_reference, bytes) = attachments.get(&blob.digest).ok_or_else(|| {
+            TraceJournalError::PolicyViolation(format!(
+                "prompt references absent attachment {}",
+                blob.digest
+            ))
+        })?;
+        if attached_reference != blob {
+            return Err(TraceJournalError::PolicyViolation(format!(
+                "prompt attachment {} differs from its event reference",
+                blob.digest
+            )));
+        }
+        let attachment = BlobAttachmentV1::from_bytes(blob.media_type, bytes);
+        validate_prompt_attachment(event, &attachment)?;
+    }
+    Ok(())
+}
+
+fn validate_prompt_attachment(
+    event: &AgentRunEventV1,
+    attachment: &BlobAttachmentV1,
+) -> Result<(), TraceJournalError> {
+    let AgentActivityEventV1::PromptPrepared(_) = &event.event else {
+        return Ok(());
+    };
+    AgentActivityChildRecordV1 {
+        frame: AgentActivityFrameV1 {
+            version: event.version,
+            occurred_at: event.occurred_at.clone(),
+            elapsed_ms: event.elapsed_ms,
+            scope: event.scope.clone(),
+            turn: event.turn,
+            event: event.event.clone(),
+        },
+        blobs: vec![attachment.clone()],
+    }
+    .validate()?;
+    Ok(())
 }
 
 fn referenced_new_blob_bytes(
@@ -197,29 +254,52 @@ fn store_blob(
     write_atomic_bytes(&path, bytes, false)
 }
 
-fn verify_referenced_blobs(
+fn load_referenced_blobs(
     blobs_directory: &Path,
     events: &[AgentRunEventV1],
-) -> Result<(), TraceJournalError> {
-    let mut checked = BTreeSet::new();
+) -> Result<Vec<BlobAttachmentV1>, TraceJournalError> {
+    let mut attachments = BTreeMap::<String, BlobAttachmentV1>::new();
     for event in events {
         for reference in content_references(event) {
-            if !checked.insert(reference.digest.clone()) {
+            if let Some(existing) = attachments.get(&reference.digest) {
+                if &existing.blob != reference {
+                    return Err(TraceJournalError::CorruptRun(format!(
+                        "blob digest {} has conflicting metadata",
+                        reference.digest
+                    )));
+                }
+                if matches!(event.event, AgentActivityEventV1::PromptPrepared(_)) {
+                    validate_prompt_attachment(event, existing)?;
+                }
                 continue;
             }
-            let path = blob_path(blobs_directory, reference)?;
-            ensure_private_regular_file(&path)?;
-            let bytes = fs::read(&path)
-                .map_err(|error| io_error(format!("read blob {}", path.display()), error))?;
-            if BlobReferenceV1::for_bytes(reference.media_type, &bytes) != *reference {
-                return Err(TraceJournalError::CorruptRun(format!(
-                    "blob {} fails content-address validation",
-                    reference.digest
-                )));
+            let attachment = read_blob_attachment(blobs_directory, reference)?;
+            if matches!(event.event, AgentActivityEventV1::PromptPrepared(_)) {
+                validate_prompt_attachment(event, &attachment)?;
             }
+            attachments.insert(reference.digest.clone(), attachment);
         }
     }
-    Ok(())
+    Ok(attachments.into_values().collect())
+}
+
+fn read_blob_attachment(
+    blobs_directory: &Path,
+    reference: &BlobReferenceV1,
+) -> Result<BlobAttachmentV1, TraceJournalError> {
+    let path = blob_path(blobs_directory, reference)?;
+    ensure_private_regular_file(&path)?;
+    let bytes = fs::read(&path)
+        .map_err(|error| io_error(format!("read blob {}", path.display()), error))?;
+    let attachment = BlobAttachmentV1::from_bytes(reference.media_type, &bytes);
+    attachment.validate()?;
+    if attachment.blob != *reference {
+        return Err(TraceJournalError::CorruptRun(format!(
+            "blob {} fails content-address validation",
+            reference.digest
+        )));
+    }
+    Ok(attachment)
 }
 
 fn blob_path(directory: &Path, reference: &BlobReferenceV1) -> Result<PathBuf, TraceJournalError> {
