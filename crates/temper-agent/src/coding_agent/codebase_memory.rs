@@ -168,6 +168,7 @@ for line in sys.stdin:
         let repo_dir = cwd.join("demo");
         fs::create_dir_all(&repo_dir).expect("create repo dir");
         WorkspaceContext {
+            trace_context: None,
             artifact_context: None,
             repos: vec![WorkspaceRepository {
                 id: "repo-1".to_string(),

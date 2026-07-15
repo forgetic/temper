@@ -394,6 +394,11 @@ impl AgentTraceJournal {
         // this acknowledgement, a retransmit takes the same recovery path and
         // compares against these records instead of appending duplicates.
         let recovered = self.recover_run_locked(&paths, true)?;
+        // OTel is a best-effort projection of the durable authority. Replaying
+        // the complete run lets a restarted engine rebuild open span state;
+        // the projector deduplicates by canonical sequence and has no failure
+        // channel that could alter this durable acknowledgement.
+        temper_log::activity::project_agent_activity(&recovered.events);
         Ok(acknowledgement(
             &batch.run_id,
             recovered.summary.last_accepted_seq,

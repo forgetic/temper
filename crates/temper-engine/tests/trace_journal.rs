@@ -52,6 +52,7 @@ fn binding(policy: &AgentActivityCapturePolicyV1) -> AuthenticatedWorkerBinding 
         worker_id: "worker-a".to_string(),
         assignment_id: "assignment-a".to_string(),
         assignment: AgentAssignmentIdentityV1 {
+            trace_context: None,
             job_id: "job-a".to_string(),
             repository: "ai/temper".to_string(),
             artifact_ref: "ai/temper#309".to_string(),

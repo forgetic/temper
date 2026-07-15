@@ -191,6 +191,7 @@ fn run_kind_maps_roles_to_activities() {
 fn ctx(owner: &str, name: &str, kind: &str, target: &str) -> WorkspaceContext {
     use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
     WorkspaceContext {
+        trace_context: None,
         artifact_context: None,
         repos: vec![WorkspaceRepository {
             id: format!("forgejo:{owner}/{name}"),

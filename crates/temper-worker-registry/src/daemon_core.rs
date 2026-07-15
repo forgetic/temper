@@ -751,8 +751,13 @@ fn assignment_message(
     artifact: Artifact,
     job_payload: serde_json::Value,
 ) -> WorkerProtocolMessage {
+    let trace_context =
+        serde_json::from_value::<temper_protocol_worker::JobContext>(job_payload.clone())
+            .ok()
+            .and_then(|context| context.trace_context);
     WorkerProtocolMessage::Assign(Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context,
         job_id: assignment.job_id,
         role: assignment.role,
         repo: assignment.repo,

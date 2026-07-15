@@ -215,6 +215,7 @@ fn coding_agent_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
 
 fn workspace_context() -> WorkspaceContext {
     WorkspaceContext {
+        trace_context: None,
         artifact_context: None,
         repos: vec![WorkspaceRepository {
             id: "repo-1".to_string(),
@@ -365,6 +366,7 @@ fn multi_repo_context() -> WorkspaceContext {
         branch_hint: Some("agent/coord-for-code-7".to_string()),
     };
     WorkspaceContext {
+        trace_context: None,
         artifact_context: None,
         repos: vec![repo("alpha"), repo("beta")],
         work_item: WorkspaceWorkItem {

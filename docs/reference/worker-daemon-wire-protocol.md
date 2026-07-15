@@ -97,6 +97,9 @@ when known, is carried in the payload.
 | --- | --- | --- | --- |
 | `protocol_version` | integer | yes | Constant `1`. |
 | `type` | string | yes | Constant `assign`. |
+| `trace_context` | object | no | Validated W3C context for this assignment delivery. It is not persisted as a multi-run workstream parent. |
+| `trace_context.traceparent` | string | yes when `trace_context` is present | Canonical lowercase W3C `traceparent`. |
+| `trace_context.tracestate` | string | no | Bounded W3C `tracestate` (at most 512 bytes). |
 | `job_id` | string | yes | Daemon-generated unique job id. |
 | `role` | string | yes | Workflow role id for the assignment. |
 | `repo` | string | yes | Repository slug. |
@@ -119,6 +122,7 @@ workflow jobs so Smith-style workers can run without Forge API access:
 
 | Field | Type | Required | Semantics |
 | --- | --- | --- | --- |
+| `trace_context` | object | no | Same optional W3C assignment context as the envelope; the worker rejects conflicting copies and propagates the value into `WorkspaceContext`. |
 | `role` | string | yes | Workflow role id. |
 | `repo` | string | yes | `owner/name` repository slug used for worker routing. |
 | `queue` | string | yes | Workflow queue id. |

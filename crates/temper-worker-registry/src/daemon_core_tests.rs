@@ -690,6 +690,7 @@ fn inbound_assign_or_release_is_malformed_message() {
     let mut core = DaemonCore::new();
     let assign = WorkerProtocolMessage::Assign(Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: "job-1".to_string(),
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),

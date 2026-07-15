@@ -138,6 +138,7 @@ pub fn assert_no_branch(fixture: &Fixture, repo: &str, branch: &str) {
 fn assign_with_repos(correlation_key: &str, repos: Vec<Value>) -> Assign {
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: format!("acme/service/issue-7/engineer/{correlation_key}"),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),

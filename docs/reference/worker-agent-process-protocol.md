@@ -41,6 +41,10 @@ Abbreviated current shape:
 
 ```json
 {
+  "trace_context": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "tracestate": "vendor=opaque"
+  },
   "work_item": {
     "role": "engineer",
     "queue": "code_ready",
@@ -77,7 +81,11 @@ Abbreviated current shape:
 ```
 
 Omitting `artifact_context` is the explicit backward-compatible v1 form; the
-`work_item` shape does not change when the bundle is added.
+`work_item` shape does not change when the bundle is added. `trace_context` is
+also optional and contains only validated W3C `traceparent`/`tracestate` for this
+assignment. The agent does not render it into the model prompt. Separate later
+runs are linked by correlation/session identity rather than retaining this
+context as a multi-day parent.
 
 ## Forge context tool channel
 

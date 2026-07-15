@@ -28,6 +28,7 @@ pub(crate) fn plan_feature_in_flight_job(repo_path: &str, number: ItemNumber) ->
         number,
         "issue",
         JobContext {
+            trace_context: None,
             artifact_context: None,
             role: "architect".to_string(),
             repo: repo_path.to_string(),

@@ -85,6 +85,7 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
 
         // One enriched issue job, exactly what the daemon's scan feed enqueues.
         let context = JobContext {
+            trace_context: None,
             artifact_context: None,
             role: "engineer".to_string(),
             repo: "acme/service".to_string(),

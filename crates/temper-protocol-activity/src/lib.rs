@@ -19,6 +19,7 @@ mod validation;
 mod tests;
 
 pub use model::*;
+pub use temper_protocol_context::{W3cTraceContext, W3cTraceContextError};
 pub use validation::{
     ActivityValidationCode, ActivityValidationError, validate_acknowledgement, validate_batch,
     validate_blob_attachment, validate_blob_reference, validate_capture_policy, validate_frame,

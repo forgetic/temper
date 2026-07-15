@@ -56,6 +56,7 @@ async fn post_bearer(
 fn activity_message(worker_id: &str, run_id: &str) -> WorkerProtocolMessage {
     let policy = AgentActivityCapturePolicyV1::default();
     let assignment = AgentAssignmentIdentityV1 {
+        trace_context: None,
         job_id: "job-trace-1".to_string(),
         repository: "ai/temper".to_string(),
         artifact_ref: "ai/temper#310".to_string(),

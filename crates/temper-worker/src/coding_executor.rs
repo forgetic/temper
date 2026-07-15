@@ -87,6 +87,7 @@ async fn execute<R: AgentRunner>(
 ) -> JobOutcome {
     let artifact_item = assign.artifact.item.clone();
     let job_id = assign.job_id.clone();
+    let assignment_trace_context = assign.trace_context.clone();
     let context = match serde_json::from_value::<JobContext>(assign.job_payload) {
         Ok(context) => context,
         Err(error) => {
@@ -98,6 +99,7 @@ async fn execute<R: AgentRunner>(
     };
 
     let JobContext {
+        trace_context: payload_trace_context,
         role,
         repo: _primary_repo,
         queue,
@@ -113,6 +115,24 @@ async fn execute<R: AgentRunner>(
         guidance,
         pull_request_freshness,
     } = context;
+    if assignment_trace_context.is_some()
+        && payload_trace_context.is_some()
+        && assignment_trace_context != payload_trace_context
+    {
+        return failure(
+            FailureClass::Protocol,
+            "assignment and job payload carry different W3C trace contexts".to_string(),
+        );
+    }
+    let trace_context = assignment_trace_context.or(payload_trace_context);
+    if let Some(context) = &trace_context {
+        if let Err(error) = context.validate() {
+            return failure(
+                FailureClass::Protocol,
+                format!("assignment carries invalid W3C trace context: {error}"),
+            );
+        }
+    }
 
     let manifest = match require_enriched_field(manifest, "workspace") {
         Ok(manifest) => manifest,
@@ -196,6 +216,7 @@ async fn execute<R: AgentRunner>(
         &source_metadata,
         guidance.as_deref(),
         pull_request_freshness.as_ref(),
+        trace_context,
     );
     let agent_session = match attach_agent_session(
         &mut workspace_context,

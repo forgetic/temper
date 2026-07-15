@@ -56,6 +56,7 @@ fn assign_for(config: &WorkerConfig) -> Assign {
 fn assign_for_job(config: &WorkerConfig, job_id: &str) -> Assign {
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: job_id.to_string(),
         role: config.capabilities[0].role.clone(),
         repo: config.capabilities[0].repo.clone(),

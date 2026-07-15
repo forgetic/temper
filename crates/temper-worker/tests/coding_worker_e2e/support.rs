@@ -116,6 +116,7 @@ pub fn coding_assign(_fixture: &GitFixture) -> Assign {
     });
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: "acme/service/issue-7/engineer/pr-for-code-7".to_string(),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
@@ -169,6 +170,7 @@ pub fn coordinated_assign(_fixture: &GitFixture) -> Assign {
     });
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: "acme/service/issue-7/engineer/coord-for-code-7".to_string(),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),

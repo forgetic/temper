@@ -47,6 +47,7 @@ pub(super) fn parsed_fixture() -> WorkspaceContext {
 /// workspace root, for `validate_contract` tests.
 pub(super) fn context_with_writable_dir(dir: &str) -> WorkspaceContext {
     WorkspaceContext {
+        trace_context: None,
         artifact_context: None,
         repos: vec![WorkspaceRepository {
             id: "r".to_string(),

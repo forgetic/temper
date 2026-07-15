@@ -4,6 +4,8 @@
 //! build a bundle from any forge, while worker and agent protocols can carry it
 //! without coupling their independently-versioned wire contracts.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 /// Current [`ArtifactContextBundle`] schema version.
@@ -307,6 +309,136 @@ pub enum ForgeContextErrorCode {
     LimitExceeded,
 }
 
+/// Optional W3C Trace Context propagated with one assignment.
+///
+/// This is transport metadata, not durable workstream identity. A later run in
+/// the same workstream receives a fresh context and is linked by correlation
+/// and agent-session identifiers instead of becoming a child of a multi-day
+/// span.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct W3cTraceContext {
+    pub traceparent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracestate: Option<String>,
+}
+
+impl W3cTraceContext {
+    /// Validates the bounded W3C header values before they cross a trust boundary.
+    pub fn validate(&self) -> Result<(), W3cTraceContextError> {
+        validate_traceparent(&self.traceparent)?;
+        if let Some(tracestate) = &self.tracestate {
+            validate_tracestate(tracestate)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct W3cTraceContextError(&'static str);
+
+impl std::fmt::Display for W3cTraceContextError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for W3cTraceContextError {}
+
+fn validate_traceparent(value: &str) -> Result<(), W3cTraceContextError> {
+    let mut parts = value.split('-');
+    let version = parts.next();
+    let trace_id = parts.next();
+    let parent_id = parts.next();
+    let flags = parts.next();
+    if parts.next().is_some()
+        || version.is_none_or(|part| !lower_hex(part, 2) || part == "ff")
+        || trace_id.is_none_or(|part| !lower_hex(part, 32) || all_zero(part))
+        || parent_id.is_none_or(|part| !lower_hex(part, 16) || all_zero(part))
+        || flags.is_none_or(|part| !lower_hex(part, 2))
+    {
+        return Err(W3cTraceContextError(
+            "traceparent is not canonical W3C trace context",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tracestate(value: &str) -> Result<(), W3cTraceContextError> {
+    if value.is_empty()
+        || value.len() > 512
+        || value.bytes().any(|byte| !(0x20..=0x7e).contains(&byte))
+    {
+        return Err(W3cTraceContextError(
+            "tracestate is empty, oversized, or contains control characters",
+        ));
+    }
+
+    let mut keys = BTreeSet::new();
+    let members = value.split(',').collect::<Vec<_>>();
+    if members.len() > 32
+        || members.iter().any(|member| {
+            let member = member.trim_matches(' ');
+            let Some((key, member_value)) = member.split_once('=') else {
+                return true;
+            };
+            !valid_tracestate_key(key) || !keys.insert(key) || !valid_tracestate_value(member_value)
+        })
+    {
+        return Err(W3cTraceContextError(
+            "tracestate contains an invalid or duplicate member",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_tracestate_key(key: &str) -> bool {
+    if key.is_empty() || key.len() > 256 {
+        return false;
+    }
+    if let Some((tenant, system)) = key.split_once('@') {
+        !system.contains('@')
+            && valid_tracestate_key_part(tenant, true, 241)
+            && valid_tracestate_key_part(system, false, 14)
+    } else {
+        valid_tracestate_key_part(key, false, 256)
+    }
+}
+
+fn valid_tracestate_key_part(value: &str, digit_may_start: bool, max_len: usize) -> bool {
+    if value.is_empty() || value.len() > max_len {
+        return false;
+    }
+    let mut bytes = value.bytes();
+    let first = bytes.next().expect("non-empty checked above");
+    (first.is_ascii_lowercase() || (digit_may_start && first.is_ascii_digit()))
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'_' | b'-' | b'*' | b'/')
+        })
+}
+
+fn valid_tracestate_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value.ends_with(' ')
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, 0x20..=0x2b | 0x2d..=0x3c | 0x3e..=0x7e))
+}
+
+fn lower_hex(value: &str, len: usize) -> bool {
+    value.len() == len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn all_zero(value: &str) -> bool {
+    value.bytes().all(|byte| byte == b'0')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +545,58 @@ mod tests {
             serde_json::from_value::<ForgeContextOperation>(json).unwrap(),
             operation
         );
+    }
+
+    #[test]
+    fn w3c_trace_context_validation_is_strict_and_bounded() {
+        let context = W3cTraceContext {
+            traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
+            tracestate: Some("vendor=value,other=opaque".into()),
+        };
+        context.validate().unwrap();
+        assert_eq!(
+            serde_json::from_value::<W3cTraceContext>(serde_json::to_value(&context).unwrap())
+                .unwrap(),
+            context
+        );
+
+        for invalid in [
+            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+            "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
+            "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        ] {
+            let invalid = W3cTraceContext {
+                traceparent: invalid.into(),
+                tracestate: None,
+            };
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn w3c_tracestate_rejects_control_characters_and_unbounded_values() {
+        for tracestate in [
+            "vendor=ok\nsecret=value".to_string(),
+            "x".repeat(513),
+            "Vendor=value".to_string(),
+            "1vendor=value".to_string(),
+            "vendor=has=equals".to_string(),
+            "vendor=first,vendor=duplicate".to_string(),
+            "vendor;bad=value".to_string(),
+        ] {
+            let invalid = W3cTraceContext {
+                traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
+                tracestate: Some(tracestate),
+            };
+            assert!(invalid.validate().is_err());
+        }
+
+        W3cTraceContext {
+            traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
+            tracestate: Some("1tenant@vendor=value,other=opaque".into()),
+        }
+        .validate()
+        .unwrap();
     }
 
     #[test]

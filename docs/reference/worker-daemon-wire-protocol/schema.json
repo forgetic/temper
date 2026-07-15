@@ -42,6 +42,25 @@
   }
  ],
  "$defs": {
+  "traceContext": {
+   "type": "object",
+   "required": [
+    "traceparent"
+   ],
+   "properties": {
+    "traceparent": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    },
+    "tracestate": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 512,
+     "pattern": "^[ -~]+$"
+    }
+   },
+   "additionalProperties": false
+  },
   "capability": {
    "type": "object",
    "required": [
@@ -157,6 +176,9 @@
     "type": {
      "const": "assign"
     },
+    "trace_context": {
+     "$ref": "#/$defs/traceContext"
+    },
     "job_id": {
      "type": "string",
      "minLength": 1
@@ -191,6 +213,9 @@
     "job_payload": {
      "type": "object",
      "properties": {
+      "trace_context": {
+       "$ref": "#/$defs/traceContext"
+      },
       "role": {
        "type": "string",
        "minLength": 1

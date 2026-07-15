@@ -122,6 +122,7 @@ pub(super) fn assignment_from_context(
         },
     );
     AgentAssignmentIdentityV1 {
+        trace_context: context.trace_context.clone(),
         job_id: job_id.to_string(),
         repository,
         artifact_ref,

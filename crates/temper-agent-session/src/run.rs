@@ -160,6 +160,7 @@ mod tests {
 
     fn workspace_context(role: &str) -> WorkspaceContext {
         WorkspaceContext {
+            trace_context: None,
             artifact_context: None,
             repos: vec![WorkspaceRepository {
                 id: "repo-1".to_string(),

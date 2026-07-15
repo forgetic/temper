@@ -35,6 +35,7 @@ fn binding(
         worker_id: "worker-a".to_string(),
         assignment_id: format!("assignment-{run_id}"),
         assignment: AgentAssignmentIdentityV1 {
+            trace_context: None,
             job_id: format!("job-{run_id}"),
             repository: "ai/temper".to_string(),
             artifact_ref: "ai/temper#311".to_string(),
