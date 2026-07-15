@@ -178,7 +178,7 @@ fn prompt_prepared(
                             "an inline prompt snapshot must be complete and untruncated",
                         ));
                     }
-                    validate_inline_prompt_snapshot(value, inline, path)?;
+                    validate_prompt_snapshot_bytes(value, inline.text.as_bytes(), path)?;
                     inline.text.len() as u64
                 }
                 CapturedContentV1::Blob { blob } => {
@@ -215,32 +215,32 @@ fn prompt_prepared(
     }
 }
 
-fn validate_inline_prompt_snapshot(
+pub(super) fn validate_prompt_snapshot_bytes(
     metadata: &PromptPreparedV1,
-    inline: &InlineContentV1,
+    snapshot_bytes: &[u8],
     path: &str,
 ) -> Result<(), ActivityValidationError> {
-    let snapshot: PromptSnapshotV1 = serde_json::from_str(&inline.text).map_err(|source| {
+    let snapshot: PromptSnapshotV1 = serde_json::from_slice(snapshot_bytes).map_err(|source| {
         invalid_event(
-            &format!("{path}.data.content.text"),
+            &format!("{path}.data.content"),
             format!("must be a PromptSnapshotV1 JSON value: {source}"),
         )
     })?;
     let canonical = snapshot.to_canonical_json_bytes().map_err(|source| {
         invalid_event(
-            &format!("{path}.data.content.text"),
+            &format!("{path}.data.content"),
             format!("prompt snapshot serialization failed: {source}"),
         )
     })?;
-    if canonical != inline.text.as_bytes() {
+    if canonical != snapshot_bytes {
         return Err(invalid_event(
-            &format!("{path}.data.content.text"),
+            &format!("{path}.data.content"),
             "must use the protocol-owned compact canonical JSON representation",
         ));
     }
     let tools = snapshot.tools_to_canonical_json_bytes().map_err(|source| {
         invalid_event(
-            &format!("{path}.data.content.text"),
+            &format!("{path}.data.content"),
             format!("tool manifest serialization failed: {source}"),
         )
     })?;

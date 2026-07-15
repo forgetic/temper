@@ -5,15 +5,17 @@ use temper_agent_core::{
     AgentEvent, AgentStop, EventSink, ModelCallStatus, StreamDelta, ToolCallStatus,
 };
 use temper_protocol_activity::{
-    ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1,
-    AgentActivityFrameV1, AgentScopeV1, AssistantMessageV1, CaptureModeV1, CapturedContentV1,
-    FailureCodeV1, FailureInfoV1, InlineContentV1, MODEL_CALL_RETRY_FAILURE_MESSAGE,
-    ModelCallFinishedV1, ModelCallRetryingV1, ModelCallStartedV1, ModelCallStatusV1, OutputDeltaV1,
-    ScopeFinishedV1, ScopeStartedV1, ScopeStatusV1, SteeringAppliedV1, SteeringSourceV1,
-    StopReasonV1, ToolFinishedV1, ToolStartedV1, ToolStatusV1, TurnFinishedV1, TurnStartedV1,
-    UsageV1,
+    ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityChildRecordV1,
+    AgentActivityEventV1, AgentActivityFrameV1, AgentScopeV1, AssistantMessageV1, BlobAttachmentV1,
+    BlobMediaTypeV1, CaptureModeV1, CapturedContentV1, FailureCodeV1, FailureInfoV1,
+    InlineContentV1, MODEL_CALL_RETRY_FAILURE_MESSAGE, ModelCallFinishedV1, ModelCallRetryingV1,
+    ModelCallStartedV1, ModelCallStatusV1, OutputDeltaV1, PromptCaptureDispositionV1,
+    PromptPreparedV1, PromptSnapshotV1, PromptToolDefinitionV1, ScopeFinishedV1, ScopeStartedV1,
+    ScopeStatusV1, SteeringAppliedV1, SteeringSourceV1, StopReasonV1, ToolFinishedV1,
+    ToolStartedV1, ToolStatusV1, TurnFinishedV1, TurnStartedV1, UsageV1,
 };
 use tongs::model::{ContentBlock, StopReason};
+use tongs::provider::ToolDef;
 
 use super::{ActivityClock, ProjectionSet};
 
@@ -64,17 +66,34 @@ impl NormalizingEventSink {
     }
 
     fn project(&self, turn: Option<u32>, event: AgentActivityEventV1) {
+        self.project_with_blobs(turn, event, Vec::new());
+    }
+
+    fn project_with_blobs(
+        &self,
+        turn: Option<u32>,
+        event: AgentActivityEventV1,
+        blobs: Vec<BlobAttachmentV1>,
+    ) {
         let timestamp = self.clock.now();
-        let frame = AgentActivityFrameV1 {
-            version: ACTIVITY_PROTOCOL_VERSION,
-            occurred_at: timestamp.occurred_at,
-            elapsed_ms: timestamp.elapsed_ms,
-            scope: self.scope.clone(),
-            turn,
-            event,
+        let record = AgentActivityChildRecordV1 {
+            frame: AgentActivityFrameV1 {
+                version: ACTIVITY_PROTOCOL_VERSION,
+                occurred_at: timestamp.occurred_at,
+                elapsed_ms: timestamp.elapsed_ms,
+                scope: self.scope.clone(),
+                turn,
+                event,
+            },
+            blobs,
         };
-        if frame.validate().is_ok() {
-            self.projections.emit(&frame);
+        let valid = if record.blobs.is_empty() {
+            record.frame.validate()
+        } else {
+            record.validate()
+        };
+        if valid.is_ok() {
+            self.projections.emit(&record);
         }
     }
 
@@ -84,9 +103,11 @@ impl NormalizingEventSink {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match event {
-            // Prompt policy normalization and attachment transport are owned by
-            // the agent-tier follow-up; the core event remains source-exact.
-            AgentEvent::PromptPrepared { .. } => {}
+            AgentEvent::PromptPrepared {
+                system_prompt,
+                initial_user_message,
+                tools,
+            } => self.prompt_prepared(system_prompt, initial_user_message, tools),
             AgentEvent::TurnStart { turn } => self.turn_started(&mut state, turn),
             AgentEvent::ModelCallStarted {
                 turn,
@@ -164,6 +185,113 @@ impl NormalizingEventSink {
             ),
             AgentEvent::AgentEnd { reason } => self.agent_ended(&mut state, reason),
         }
+    }
+
+    fn prompt_prepared(
+        &self,
+        system_prompt: Option<String>,
+        initial_user_message: String,
+        tools: Vec<ToolDef>,
+    ) {
+        if self.policy.capture == CaptureModeV1::Off {
+            return;
+        }
+
+        let system_prompt_present = system_prompt.is_some();
+        let system_prompt_bytes = system_prompt
+            .as_ref()
+            .map_or(0, |prompt| prompt.len() as u64);
+        let initial_user_message_bytes = initial_user_message.len() as u64;
+        let tool_count = match u32::try_from(tools.len()) {
+            Ok(count) => count,
+            Err(_) => return,
+        };
+        let snapshot = PromptSnapshotV1 {
+            system_prompt,
+            initial_user_message,
+            tools: tools
+                .into_iter()
+                .map(|tool| PromptToolDefinitionV1 {
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema: tool.parameters,
+                })
+                .collect(),
+        };
+        let tool_manifest_bytes = match snapshot.tools_to_canonical_json_bytes() {
+            Ok(tools) => tools.len() as u64,
+            Err(_) => return,
+        };
+        // The complete source-equivalent snapshot is serialized exactly once.
+        // These bytes are moved unchanged into either inline JSON or the blob.
+        let canonical = match snapshot.to_canonical_json_bytes() {
+            Ok(canonical) => canonical,
+            Err(_) => return,
+        };
+        let original_snapshot_bytes = canonical.len() as u64;
+
+        let (disposition, captured_bytes, content, blobs) = match self.policy.capture {
+            CaptureModeV1::Off => unreachable!("off returned before prompt serialization"),
+            CaptureModeV1::Metadata => (
+                PromptCaptureDispositionV1::OmittedPolicy,
+                0,
+                None,
+                Vec::new(),
+            ),
+            CaptureModeV1::Transcript | CaptureModeV1::Diagnostic
+                if canonical.len() <= self.policy.max_inline_bytes as usize =>
+            {
+                let Ok(text) = String::from_utf8(canonical) else {
+                    return;
+                };
+                (
+                    PromptCaptureDispositionV1::Captured,
+                    original_snapshot_bytes,
+                    Some(CapturedContentV1::Inline(InlineContentV1 {
+                        text,
+                        truncated: false,
+                    })),
+                    Vec::new(),
+                )
+            }
+            CaptureModeV1::Transcript | CaptureModeV1::Diagnostic
+                if original_snapshot_bytes <= self.policy.max_blob_bytes =>
+            {
+                let attachment =
+                    BlobAttachmentV1::from_bytes(BlobMediaTypeV1::ApplicationJson, &canonical);
+                let content = Some(CapturedContentV1::Blob {
+                    blob: attachment.blob.clone(),
+                });
+                (
+                    PromptCaptureDispositionV1::Captured,
+                    original_snapshot_bytes,
+                    content,
+                    vec![attachment],
+                )
+            }
+            CaptureModeV1::Transcript | CaptureModeV1::Diagnostic => (
+                PromptCaptureDispositionV1::OmittedLimit,
+                0,
+                None,
+                Vec::new(),
+            ),
+        };
+
+        self.project_with_blobs(
+            Some(0),
+            AgentActivityEventV1::PromptPrepared(PromptPreparedV1 {
+                system_prompt_present,
+                system_prompt_bytes,
+                initial_user_message_bytes,
+                tool_manifest_bytes,
+                tool_count,
+                original_snapshot_bytes,
+                captured_bytes,
+                disposition,
+                content,
+            }),
+            blobs,
+        );
     }
 
     fn turn_started(&self, state: &mut NormalizerState, turn: usize) {

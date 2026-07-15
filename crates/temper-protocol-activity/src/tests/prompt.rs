@@ -42,6 +42,30 @@ fn prompt_event() -> AgentRunEventV1 {
     event
 }
 
+fn prompt_child_record() -> AgentActivityChildRecordV1 {
+    let snapshot = prompt_snapshot();
+    let canonical = snapshot.to_canonical_json_bytes().unwrap();
+    let attachment = BlobAttachmentV1::from_bytes(BlobMediaTypeV1::ApplicationJson, &canonical);
+    let event = prompt_event();
+    let AgentActivityEventV1::PromptPrepared(mut prompt) = event.event else {
+        unreachable!();
+    };
+    prompt.content = Some(CapturedContentV1::Blob {
+        blob: attachment.blob.clone(),
+    });
+    AgentActivityChildRecordV1 {
+        frame: AgentActivityFrameV1 {
+            version: ACTIVITY_PROTOCOL_VERSION,
+            occurred_at: event.occurred_at,
+            elapsed_ms: event.elapsed_ms,
+            scope: event.scope,
+            turn: Some(0),
+            event: AgentActivityEventV1::PromptPrepared(prompt),
+        },
+        blobs: vec![attachment],
+    }
+}
+
 #[test]
 fn prompt_snapshot_serialization_is_compact_deterministic_and_ordered() {
     let mut snapshot = prompt_snapshot();
@@ -152,6 +176,100 @@ fn prompt_inline_and_blob_validation_enforces_complete_canonical_snapshots() {
     };
     reference.media_type = BlobMediaTypeV1::TextPlainUtf8;
     assert_code(blob.validate(), ActivityValidationCode::InvalidEvent);
+}
+
+#[test]
+fn child_prompt_record_requires_exact_validated_attachments() {
+    let record = prompt_child_record();
+    record
+        .validate()
+        .expect("complete attachment-bearing prompt validates");
+
+    let mut missing = record.clone();
+    missing.blobs.clear();
+    assert_code(
+        missing.validate(),
+        ActivityValidationCode::BlobReferenceMismatch,
+    );
+
+    let mut duplicate = record.clone();
+    duplicate.blobs.push(record.blobs[0].clone());
+    assert_code(
+        duplicate.validate(),
+        ActivityValidationCode::BlobReferenceMismatch,
+    );
+
+    let mut conflicting = record.clone();
+    conflicting.blobs[0].blob.media_type = BlobMediaTypeV1::TextPlainUtf8;
+    assert_code(
+        conflicting.validate(),
+        ActivityValidationCode::BlobReferenceMismatch,
+    );
+
+    let mut unreferenced = record.clone();
+    unreferenced.blobs.push(BlobAttachmentV1::from_bytes(
+        BlobMediaTypeV1::ApplicationJson,
+        br#"{"unreferenced":true}"#,
+    ));
+    assert_code(
+        unreferenced.validate(),
+        ActivityValidationCode::BlobReferenceMismatch,
+    );
+
+    let mut corrupt = record.clone();
+    corrupt.blobs[0].data_base64.push('=');
+    assert_code(
+        corrupt.validate(),
+        ActivityValidationCode::InvalidBlobReference,
+    );
+}
+
+#[test]
+fn child_prompt_record_revalidates_decoded_json_and_metadata() {
+    let record = prompt_child_record();
+
+    let mut wrong_metadata = record.clone();
+    let AgentActivityEventV1::PromptPrepared(prompt) = &mut wrong_metadata.frame.event else {
+        unreachable!();
+    };
+    prompt.initial_user_message_bytes += 1;
+    assert_code(
+        wrong_metadata.validate(),
+        ActivityValidationCode::InvalidEvent,
+    );
+
+    let pretty = serde_json::to_vec_pretty(&prompt_snapshot()).unwrap();
+    let mut noncanonical = record;
+    let attachment = BlobAttachmentV1::from_bytes(BlobMediaTypeV1::ApplicationJson, &pretty);
+    let AgentActivityEventV1::PromptPrepared(prompt) = &mut noncanonical.frame.event else {
+        unreachable!();
+    };
+    prompt.original_snapshot_bytes = pretty.len() as u64;
+    prompt.captured_bytes = pretty.len() as u64;
+    prompt.content = Some(CapturedContentV1::Blob {
+        blob: attachment.blob.clone(),
+    });
+    noncanonical.blobs = vec![attachment];
+    assert_code(
+        noncanonical.validate(),
+        ActivityValidationCode::InvalidEvent,
+    );
+}
+
+#[test]
+fn child_record_wrapper_is_attachment_only_and_rejects_extensions() {
+    let record = prompt_child_record();
+    let wire = serde_json::to_value(&record).unwrap();
+    assert!(wire.get("frame").is_some());
+    assert!(wire.get("blobs").is_some());
+
+    let mut extended = wire;
+    extended["headers"] = json!({"authorization": "CREDENTIAL-CHILD-WIRE-SENTINEL"});
+    assert!(serde_json::from_value::<AgentActivityChildRecordV1>(extended).is_err());
+
+    let bare = serde_json::to_value(&record.frame).unwrap();
+    assert!(bare.get("frame").is_none());
+    assert!(bare.get("blobs").is_none());
 }
 
 #[test]

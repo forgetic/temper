@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use temper_protocol_activity::{
-    AgentActivityEventV1, AgentActivityFrameV1, DroppedEventKindV1, TraceGapV1,
+    AgentActivityChildRecordV1, AgentActivityEventV1, AgentActivityFrameV1, DroppedEventKindV1,
+    MAX_CHILD_ACTIVITY_RECORD_BYTES, TraceGapV1,
 };
 
 use super::ActivityProjection;
@@ -66,7 +67,7 @@ impl ActivityClient {
             }
         }
         if let Some(existing) = pending.take() {
-            self.enqueue(&existing.frame);
+            self.enqueue(&bare_record(existing.frame));
         }
         let id = self.next_delta_id.fetch_add(1, Ordering::Relaxed);
         *pending = Some(PendingDelta {
@@ -115,19 +116,26 @@ impl ActivityClient {
             .expect("activity delta lock")
             .take();
         if let Some(pending) = pending {
-            self.enqueue(&pending.frame);
+            self.enqueue(&bare_record(pending.frame));
         }
     }
 
-    fn enqueue(&self, frame: &AgentActivityFrameV1) {
+    fn enqueue(&self, record: &AgentActivityChildRecordV1) {
+        let frame = &record.frame;
         if frame.event.is_droppable() {
             self.flush_gap_before(frame);
         }
-        let Ok(mut bytes) = serde_json::to_vec(frame) else {
+        let (serialized, maximum) = if record.blobs.is_empty() {
+            (serde_json::to_vec(frame), frame_wire_limit())
+        } else {
+            if record.validate().is_err() {
+                return;
+            }
+            (serde_json::to_vec(record), MAX_CHILD_ACTIVITY_RECORD_BYTES)
+        };
+        let Ok(mut bytes) = serialized else {
             return;
         };
-        let maximum = temper_protocol_activity::MAX_INLINE_CONTENT_BYTES
-            .saturating_add(ACTIVITY_FRAME_OVERHEAD_BYTES);
         if bytes.len().saturating_add(1) > maximum {
             self.record_drop(frame, bytes.len() as u64);
             return;
@@ -171,11 +179,17 @@ impl ActivityClient {
             &self.dropped_thinking,
             frame,
         ) {
-            self.enqueue(&gap);
+            self.enqueue(&bare_record(gap));
         }
     }
 
     fn record_drop(&self, frame: &AgentActivityFrameV1, bytes: u64) {
+        // Only deltas are intentionally shed and represented by trace.gap.
+        // Required prompt records can fail best-effort transport, but are never
+        // rewritten as a misleading delta gap.
+        if !frame.event.is_droppable() {
+            return;
+        }
         record_drop_counters(
             &self.dropped_events,
             &self.dropped_bytes,
@@ -188,20 +202,32 @@ impl ActivityClient {
 }
 
 impl ActivityProjection for ActivityClient {
-    fn emit(&self, frame: &AgentActivityFrameV1) {
+    fn emit(&self, record: &AgentActivityChildRecordV1) {
+        let frame = &record.frame;
         if frame.event.is_droppable() {
             self.emit_delta(frame);
             return;
         }
         self.flush_delta();
         self.flush_gap_before(frame);
-        self.enqueue(frame);
+        self.enqueue(record);
     }
 }
 
 impl Drop for ActivityClient {
     fn drop(&mut self) {
         self.flush_delta();
+    }
+}
+
+fn frame_wire_limit() -> usize {
+    temper_protocol_activity::MAX_INLINE_CONTENT_BYTES.saturating_add(ACTIVITY_FRAME_OVERHEAD_BYTES)
+}
+
+fn bare_record(frame: AgentActivityFrameV1) -> AgentActivityChildRecordV1 {
+    AgentActivityChildRecordV1 {
+        frame,
+        blobs: Vec::new(),
     }
 }
 
@@ -237,8 +263,7 @@ fn enqueue_timed_delta(
     let Ok(mut bytes) = serde_json::to_vec(frame) else {
         return;
     };
-    let maximum = temper_protocol_activity::MAX_INLINE_CONTENT_BYTES
-        .saturating_add(ACTIVITY_FRAME_OVERHEAD_BYTES);
+    let maximum = frame_wire_limit();
     if bytes.len().saturating_add(1) > maximum {
         record_drop_counters(
             dropped_events,
