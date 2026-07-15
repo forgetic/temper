@@ -171,6 +171,10 @@ impl ActivityProjection for TracingProjection {
         }
         let scope = self.scope_label(frame);
         match &frame.event {
+            // Prompt snapshots are source-equivalent content. Operational
+            // tracing deliberately emits no event and reads no body fields;
+            // durable authorized trace query/export is their only projection.
+            AgentActivityEventV1::PromptPrepared(_) => {}
             AgentActivityEventV1::Usage(usage) => {
                 self.totals.add_turn(
                     frame.scope.kind,

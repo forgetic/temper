@@ -15,12 +15,10 @@ use temper_engine::{
     AgentTraceJournal, Daemon, NoopApplier, TraceJournalConfig, WorkerPoolAuthConfig,
     WorkerPoolPolicy,
 };
-use temper_log::activity::{
-    ActivitySpanKind, CanonicalActivityProjector, InMemoryActivitySpanExporter,
-};
+use temper_log::activity::{CanonicalActivityProjector, InMemoryActivitySpanExporter};
 use temper_protocol_activity::{
     AgentActivityCapturePolicyV1, AgentActivityEventV1, AgentScopeKindV1, CaptureModeV1,
-    FailureCodeV1, RunFailedV1, RunFinishedV1, RunStatusV1,
+    FailureCodeV1, RunFailedV1,
 };
 use temper_protocol_worker::{
     Capability, Capacity, FailureClass, Register, WORKER_PROTOCOL_VERSION, WorkerActivityBatch,
@@ -31,20 +29,16 @@ use temper_worker_io::{HttpCall, build_http_client, http_call};
 
 use super::forwarder::forward_pending;
 use super::full_path_fixture::{
-    ARGUMENT_SENTINEL, DELTA_SENTINEL, MESSAGE_SENTINEL, produce_first_party_run, workspace_context,
+    expected_main_prompt, full_path_policy, produce_first_party_run, workspace_context,
+};
+use super::full_path_observation::{
+    DISTRIBUTED_BEARER_SENTINEL, Observation, READ_TOKEN, REJECTED_BEARER_SENTINEL,
+    assert_exact_prompt_snapshots, assert_large_main_prompt_snapshot,
+    assert_outside_prompt_sentinels_absent, observe_authorized_query,
 };
 use super::*;
 use crate::config::WorkerAgentTraceConfig;
 use crate::{AgentRunner, HttpTransport, OutOfProcessRunner, Transport};
-
-const READ_TOKEN: &str = "full-path-read-token";
-
-#[derive(Debug)]
-struct Observation {
-    vocabulary: Vec<String>,
-    scope_shape: Vec<(AgentScopeKindV1, bool)>,
-    span_names: Vec<&'static str>,
-}
 
 struct TrustedInProcessTransport {
     daemon: Daemon,
@@ -208,7 +202,7 @@ async fn exercise_sanitized_child_failure(
         &serde_json::to_vec(&batch).expect("serialize worker batch"),
     );
 
-    let journal = journal(temporary.path(), &policy);
+    let journal = journal(&temporary.path().join("journal"), &policy);
     let daemon = Daemon::new(Arc::new(handle.clone()))
         .with_trace_journal(journal.clone())
         .with_agent_trace_query(journal.clone(), SecretString::from(READ_TOKEN));
@@ -357,8 +351,9 @@ fn directory_bytes(root: &std::path::Path) -> Vec<u8> {
 
 async fn run_standalone(cx: Cx, handle: &skein::runtime::RuntimeHandle) -> Observation {
     let temporary = tempfile::tempdir().expect("standalone temporary directory");
-    let policy = AgentActivityCapturePolicyV1::default();
-    let journal = journal(temporary.path(), &policy);
+    let policy = full_path_policy();
+    let journal_root = temporary.path().join("journal");
+    let journal = journal(&journal_root, &policy);
     let daemon = Daemon::new(Arc::new(handle.clone()))
         .with_trace_journal(journal.clone())
         .with_agent_trace_query(journal.clone(), SecretString::from(READ_TOKEN));
@@ -377,6 +372,7 @@ async fn run_standalone(cx: Cx, handle: &skein::runtime::RuntimeHandle) -> Obser
         carrier,
         &base_url,
         &journal,
+        &journal_root,
         WorkerAgentTraceConfig {
             policy,
             spool_root: Some(temporary.path().join("spool")),
@@ -391,10 +387,14 @@ async fn run_standalone(cx: Cx, handle: &skein::runtime::RuntimeHandle) -> Obser
 
 async fn run_distributed(cx: Cx, handle: &skein::runtime::RuntimeHandle) -> Observation {
     let temporary = tempfile::tempdir().expect("distributed temporary directory");
-    let policy = AgentActivityCapturePolicyV1::default();
-    let journal = journal(temporary.path(), &policy);
+    let policy = full_path_policy();
+    let journal_root = temporary.path().join("journal");
+    let journal = journal(&journal_root, &policy);
     let mut pool_auth = WorkerPoolAuthConfig::new();
-    pool_auth.insert_pool("builders", Some(WorkerAuth::bearer("builder-secret")));
+    pool_auth.insert_pool(
+        "builders",
+        Some(WorkerAuth::bearer(DISTRIBUTED_BEARER_SENTINEL)),
+    );
     let daemon = Daemon::with_applier_and_worker_pools(
         Arc::new(handle.clone()),
         Arc::new(NoopApplier),
@@ -423,24 +423,25 @@ async fn run_distributed(cx: Cx, handle: &skein::runtime::RuntimeHandle) -> Obse
         carrier,
         &base_url,
         &journal,
+        &journal_root,
         WorkerAgentTraceConfig {
             policy,
             spool_root: Some(temporary.path().join("spool")),
         },
         "distributed-worker",
         Some("builders"),
-        Some(WorkerAuth::bearer("builder-secret")),
-        Some(WorkerAuth::bearer("wrong-secret")),
+        Some(WorkerAuth::bearer(DISTRIBUTED_BEARER_SENTINEL)),
+        Some(WorkerAuth::bearer(REJECTED_BEARER_SENTINEL)),
     )
     .await
 }
 
 fn journal(
-    temporary_root: &std::path::Path,
+    journal_root: &std::path::Path,
     policy: &AgentActivityCapturePolicyV1,
 ) -> AgentTraceJournal {
     AgentTraceJournal::open(TraceJournalConfig {
-        root: temporary_root.join("journal"),
+        root: journal_root.to_path_buf(),
         policy: policy.clone(),
     })
     .expect("open trace journal")
@@ -452,6 +453,7 @@ async fn exercise_path<T: Transport>(
     carrier: Arc<T>,
     base_url: &str,
     journal: &AgentTraceJournal,
+    journal_root: &std::path::Path,
     collector_config: WorkerAgentTraceConfig,
     worker_id: &str,
     pool: Option<&str>,
@@ -463,13 +465,32 @@ async fn exercise_path<T: Transport>(
         .await
         .expect("worker registration");
 
+    let capture_policy = collector_config.policy.clone();
+    let spool_root = collector_config
+        .spool_root
+        .clone()
+        .expect("full-path spool root");
     let collector = TraceCollector::new(collector_config.clone());
     let (run_id, generated_batch) = produce_first_party_run(&collector);
     generated_batch
         .validate()
         .expect("generated batch validates");
     let event_count = generated_batch.events.len();
-    assert_eq!(event_count, 13);
+    assert_eq!(event_count, 19);
+    assert!(
+        expected_main_prompt()
+            .to_canonical_json_bytes()
+            .expect("canonical main prompt")
+            .len()
+            > temper_protocol_activity::MAX_INLINE_CONTENT_BYTES,
+        "the capstone must exercise attachment transport rather than inline content"
+    );
+    assert_exact_prompt_snapshots(&generated_batch.events, &generated_batch.blobs);
+    assert_outside_prompt_sentinels_absent(
+        "worker batch",
+        &serde_json::to_vec(&generated_batch).expect("serialize worker batch"),
+    );
+    assert_outside_prompt_sentinels_absent("worker spool", &directory_bytes(&spool_root));
 
     if let Some(rejected_auth) = rejected_auth {
         assert!(
@@ -503,14 +524,34 @@ async fn exercise_path<T: Transport>(
             .is_err(),
         "a lost acknowledgement is visible only to the trace forwarder"
     );
-    assert_eq!(
-        journal.events(&run_id).expect("durable lost reply").len(),
-        event_count
+    let durable_after_lost = journal.events(&run_id).expect("durable lost reply");
+    assert!(
+        durable_after_lost.len() < event_count,
+        "the injected lost reply stops before a later bounded batch"
     );
-    assert_eq!(
-        collector.recover().expect("unacknowledged spool")[0].acknowledged_seq,
-        0
-    );
+    assert!(durable_after_lost.iter().any(|event| {
+        event.scope.kind == AgentScopeKindV1::Main
+            && matches!(event.event, AgentActivityEventV1::PromptPrepared(_))
+    }));
+    let unacknowledged = collector.recover().expect("unacknowledged spool");
+    assert_eq!(unacknowledged[0].acknowledged_seq, 0);
+    assert_exact_prompt_snapshots(&unacknowledged[0].events, &unacknowledged[0].blobs);
+
+    // Re-open the durable journal before retransmission to model engine
+    // recovery after the acknowledgement was lost. Prompt attachments must be
+    // available and byte-exact without consulting the worker spool.
+    let recovered_journal = AgentTraceJournal::open(TraceJournalConfig {
+        root: journal_root.to_path_buf(),
+        policy: capture_policy.clone(),
+    })
+    .expect("reopen engine journal");
+    let recovered_run = recovered_journal
+        .run(&run_id)
+        .expect("recover engine journal")
+        .expect("durable prompt run");
+    assert_large_main_prompt_snapshot(&recovered_run.events, &recovered_run.attachments);
+    assert_outside_prompt_sentinels_absent("engine journal", &directory_bytes(journal_root));
+    drop(recovered_journal);
 
     // Recreate the collector to model a worker restart. The same producer-made
     // batch is retransmitted; the engine converges by (run_id, seq).
@@ -537,7 +578,7 @@ async fn exercise_path<T: Transport>(
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         assignment_id: generated_batch.events[0].assignment.job_id.clone(),
-        capture_policy: AgentActivityCapturePolicyV1::default(),
+        capture_policy,
         batch: generated_batch,
     });
     assert!(matches!(
@@ -571,167 +612,7 @@ fn register(worker_id: &str, pool: Option<&str>) -> WorkerProtocolMessage {
     })
 }
 
-async fn observe_authorized_query(
-    cx: Cx,
-    base_url: &str,
-    worker_id: &str,
-    run_id: &str,
-) -> Observation {
-    let events_path = format!("/v1/agent-runs/{run_id}/events?after_seq=0&limit=100");
-    assert_eq!(get(&cx, base_url, &events_path, None).await.status, 401);
-    assert_eq!(
-        get(&cx, base_url, &events_path, Some("Bearer wrong-read-token"))
-            .await
-            .status,
-        403
-    );
-    let summary: TraceRunSummary = response_json(
-        get(
-            &cx,
-            base_url,
-            &format!("/v1/agent-runs/{run_id}"),
-            Some(&format!("Bearer {READ_TOKEN}")),
-        )
-        .await,
-    );
-    let page: TraceEventPage = response_json(
-        get(
-            &cx,
-            base_url,
-            &events_path,
-            Some(&format!("Bearer {READ_TOKEN}")),
-        )
-        .await,
-    );
-    assert!(!page.has_more);
-    assert_eq!(page.next_after_seq, 13);
-    assert_eq!(summary.status, TraceRunStatus::Succeeded);
-    assert_eq!(summary.identity.worker_id, worker_id);
-    assert_eq!(summary.identity.job_id, "job-full-path-350");
-    assert_eq!(summary.identity.repository, "ai/temper");
-    assert_eq!(summary.identity.artifact_ref, "ai/temper#350");
-    assert_eq!(summary.identity.role, "engineer");
-    assert_eq!(summary.identity.action, "open_pr");
-    assert_eq!(summary.identity.correlation_key, "pr-for-code-350");
-    assert_eq!(
-        summary.identity.agent_session_id.as_deref(),
-        Some("session-350")
-    );
-    assert_eq!(summary.capture_mode, CaptureModeV1::Metadata);
-    assert_eq!(summary.counts.events, 13);
-    assert_eq!(summary.counts.scopes, 2);
-    assert_eq!(summary.counts.turns, 1);
-    assert_eq!(summary.counts.model_calls, 1);
-    assert_eq!(summary.counts.tool_calls, 1);
-
-    let events = page.events;
-    assert_eq!(
-        events.iter().map(|event| event.seq).collect::<Vec<_>>(),
-        (1..=13).collect::<Vec<_>>()
-    );
-    assert!(events.iter().all(|event| {
-        event.run_id == run_id
-            && event.assignment.job_id == "job-full-path-350"
-            && event.agent_session_id.as_deref() == Some("session-350")
-    }));
-    assert!(matches!(
-        events.last().map(|event| &event.event),
-        Some(AgentActivityEventV1::RunFinished(RunFinishedV1 {
-            status: RunStatusV1::Succeeded,
-            ..
-        }))
-    ));
-
-    let tool = events
-        .iter()
-        .find_map(|event| match &event.event {
-            AgentActivityEventV1::ToolStarted(tool) => Some(tool),
-            _ => None,
-        })
-        .expect("queried tool.started boundary");
-    assert_eq!(tool.call_id, "tool-call-350");
-    assert_eq!(tool.name, "read");
-    assert_eq!(tool.arguments, None);
-    let canonical_json = serde_json::to_string(&events).expect("canonical JSON");
-    for excluded in [ARGUMENT_SENTINEL, MESSAGE_SENTINEL, DELTA_SENTINEL] {
-        assert!(!canonical_json.contains(excluded));
-    }
-
-    let main_scope = &events[0].scope.id;
-    let scope_shape = events
-        .iter()
-        .filter_map(|event| match event.event {
-            AgentActivityEventV1::ScopeStarted(_) => {
-                Some((event.scope.kind, event.scope.parent_id.is_some()))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        scope_shape,
-        vec![
-            (AgentScopeKindV1::Main, false),
-            (AgentScopeKindV1::SubAgent, true)
-        ]
-    );
-    let child_scope = events
-        .iter()
-        .find(|event| {
-            matches!(event.event, AgentActivityEventV1::ScopeStarted(_))
-                && event.scope.kind == AgentScopeKindV1::SubAgent
-        })
-        .expect("child scope");
-    assert_ne!(&child_scope.scope.id, main_scope);
-    assert_eq!(
-        child_scope.scope.parent_id.as_deref(),
-        Some(main_scope.as_str())
-    );
-
-    let projected = events
-        .iter()
-        .filter_map(board_projection)
-        .collect::<Vec<_>>();
-    assert_eq!(projected.len(), 10);
-    let web_json = serde_json::to_string(&projected).expect("web projection JSON");
-    assert!(web_json.contains("tool"));
-    assert!(!web_json.contains(ARGUMENT_SENTINEL));
-
-    let exporter = InMemoryActivitySpanExporter::default();
-    let mut projector = CanonicalActivityProjector::new(Arc::new(exporter.clone()));
-    projector.project_all(&events);
-    projector.project_all(&events);
-    let spans = exporter.finished_spans();
-    assert_eq!(spans.len(), 6, "replay must not duplicate projected spans");
-    let run_span = spans
-        .iter()
-        .find(|span| span.start.kind == ActivitySpanKind::Run)
-        .expect("run span");
-    assert_eq!(
-        run_span
-            .start
-            .remote_parent
-            .as_ref()
-            .map(|context| context.traceparent.as_str()),
-        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
-    );
-    assert!(!format!("{spans:?}").contains(ARGUMENT_SENTINEL));
-    let mut span_names = spans
-        .iter()
-        .map(|span| span.start.kind.name())
-        .collect::<Vec<_>>();
-    span_names.sort_unstable();
-
-    Observation {
-        vocabulary: events
-            .iter()
-            .map(|event| event.event.event_type().to_string())
-            .collect(),
-        scope_shape,
-        span_names,
-    }
-}
-
-async fn get(
+pub(super) async fn get(
     cx: &Cx,
     base_url: &str,
     path: &str,
@@ -754,7 +635,7 @@ async fn get(
     .expect("query request")
 }
 
-fn response_json<T: serde::de::DeserializeOwned>(
+pub(super) fn response_json<T: serde::de::DeserializeOwned>(
     response: temper_worker_io::HttpResponseData,
 ) -> T {
     assert_eq!(response.status, 200, "query response status");
