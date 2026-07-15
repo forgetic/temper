@@ -4,12 +4,50 @@ use crate::codebase_memory::{
 use std::path::Path;
 
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
+use tongs::tools::ToolRegistry;
 
 use super::CodingAgentError;
 
 pub(super) struct PreparedCodebaseMemoryTools {
-    pub(super) prompt_section: Option<String>,
+    prompt_section: Option<String>,
     pub(super) toolset: CodebaseMemoryToolset,
+}
+
+pub(super) struct PreparedCodebaseMemoryGuidance {
+    prompt_section: Option<String>,
+    registered_safe_names: Vec<String>,
+}
+
+impl PreparedCodebaseMemoryTools {
+    /// Appends the prepared safe tools and retains only the metadata needed to
+    /// check the finalized registry before rendering guidance.
+    pub(super) fn append_to_registry(
+        self,
+        registry: &mut ToolRegistry,
+    ) -> PreparedCodebaseMemoryGuidance {
+        let registered_safe_names = self.toolset.registered_tool_names().to_vec();
+        self.toolset.append_to_registry(registry);
+        PreparedCodebaseMemoryGuidance {
+            prompt_section: self.prompt_section,
+            registered_safe_names,
+        }
+    }
+}
+
+impl PreparedCodebaseMemoryGuidance {
+    /// Returns guidance only when at least one safe tool from this prepared
+    /// toolset survived into the finalized provider registry.
+    pub(super) fn prompt_section_for_registry(&self, registry: &ToolRegistry) -> Option<&str> {
+        if self
+            .registered_safe_names
+            .iter()
+            .any(|name| registry.get(name).is_some())
+        {
+            self.prompt_section.as_deref()
+        } else {
+            None
+        }
+    }
 }
 
 pub(super) async fn prepare_codebase_memory_tools(
@@ -233,7 +271,7 @@ for line in sys.stdin:
                     .expect("required fake server starts");
             let prompt = prepared
                 .prompt_section
-                .as_deref()
+                .clone()
                 .expect("registered tools produce prompt section");
             for expected in [
                 "CODEBASE MEMORY",
@@ -265,8 +303,20 @@ for line in sys.stdin:
                 );
             }
 
+            let empty_registry = tongs::tools::ToolRegistry::new();
             let mut registry = tongs::tools::ToolRegistry::new();
-            prepared.toolset.append_to_registry(&mut registry);
+            let guidance = prepared.append_to_registry(&mut registry);
+            assert!(
+                guidance
+                    .prompt_section_for_registry(&empty_registry)
+                    .is_none(),
+                "memory guidance requires a safe tool in the finalized registry"
+            );
+            assert_eq!(
+                guidance.prompt_section_for_registry(&registry),
+                Some(prompt.as_str()),
+                "the finalized registry retains memory guidance"
+            );
             let tool = registry
                 .get("codebase_memory_search_code")
                 .expect("safe tool registered");

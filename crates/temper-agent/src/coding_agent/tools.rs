@@ -61,32 +61,40 @@ fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::to
     tools
 }
 
-/// Guidance appended to the role prompt when the sub-agent tools are
-/// registered: tells the model which sub-agent to delegate to, that several run
-/// concurrently, and how to write a self-contained task. Mirrors Claude Code,
-/// which offers a cheap read-only `Explore` sub-agent and a heavier
-/// `general-purpose` one and lets the orchestrator pick by *type* — the type
-/// then transitively selects the model (here: `investigate` → sub-agent tier,
-/// `delegate` → main model).
-pub(super) const SUBAGENT_GUIDANCE: &str = "\nSUB-AGENTS:\n\
-    - You have two sub-agent tools. Both read and search the repository and \
-    return a focused report; neither can edit the working tree, and several of \
-    either can run concurrently (emit several calls in ONE response when the \
-    questions are independent).\n\
-    - `investigate`: a fast, cheap read-only searcher (read/ls/grep/find). Use \
-    it for the common case — sweeping many files or directories to answer a \
-    question (architecture mapping, finding all usages/conventions, locating \
-    code). You get the conclusion without filling your own context with file \
-    dumps.\n\
-    - `delegate`: a heavier reviewer that also has `bash` (for read-only \
-    inspection like `git diff`/`git log`/running a check) and runs on the full \
-    model. Use it for self-contained analysis that needs judgement, not just \
-    search — auditing a module for bugs, reviewing a diff, assessing a design.\n\
-    - Give each sub-agent a self-contained task: what to find, where to look \
-    first, and what the report must answer. Sub-agents cannot see your \
-    conversation.\n\
-    - For a single-fact lookup (one known file or symbol), use read/grep \
-    directly instead of a sub-agent.\n";
+/// Whether the finalized provider tool registry contains `name`.
+///
+/// Prompt assembly uses this instead of configuration flags so optional named
+/// guidance and the provider's tool manifest always describe the same surface.
+pub(super) fn registry_has_tool(registry: &ToolRegistry, name: &str) -> bool {
+    registry.tools().iter().any(|tool| tool.name() == name)
+}
+
+/// Concise guidance for exactly the sub-agent tools in the finalized registry.
+/// Tool descriptions and schemas remain in the provider tool manifest.
+pub(super) fn subagent_guidance(registry: &ToolRegistry) -> Option<String> {
+    let investigate = registry_has_tool(registry, "investigate");
+    let delegate = registry_has_tool(registry, "delegate");
+    if !investigate && !delegate {
+        return None;
+    }
+
+    let mut guidance = String::from(
+        "\nSUB-AGENTS:\n\
+         - Available sub-agents are read-only, can run concurrently for independent questions, \
+         and need self-contained tasks because they cannot see your conversation.\n",
+    );
+    if investigate {
+        guidance.push_str(
+            "- Use `investigate` for fast repository mapping, broad searches, and usage discovery.\n",
+        );
+    }
+    if delegate {
+        guidance.push_str(
+            "- Use `delegate` for self-contained analysis or review that needs judgement or read-only shell inspection.\n",
+        );
+    }
+    Some(guidance)
+}
 
 /// System prompt for the read-only `investigate` sub-agent (the cheap-tier
 /// searcher; Claude's `Explore` analog).

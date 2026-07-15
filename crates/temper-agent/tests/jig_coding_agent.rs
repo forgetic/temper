@@ -203,6 +203,25 @@ fn coding_agent_prompt_snapshot_equals_anthropic_provider_startup_context() {
         provider_tools,
         "prompt tool names, descriptions, schemas, and order equal the provider ToolDef slice"
     );
+    let tool_names = snapshot
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let effective_prompt = &snapshot.initial_user_message;
+    for optional_name in [
+        "submit_for_pr",
+        "forge_get_item",
+        "forge_list_related",
+        "investigate",
+        "delegate",
+    ] {
+        assert_eq!(
+            effective_prompt.contains(optional_name),
+            tool_names.contains(optional_name),
+            "guidance availability disagreed with the tool manifest for {optional_name}"
+        );
+    }
     for required in [
         "ROLE: engineer",
         "SUB-AGENT",

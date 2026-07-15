@@ -9,15 +9,15 @@ use crate::usage::RunTotals;
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext, WorkspaceResult};
 
 use super::codebase_memory::prepare_codebase_memory_tools;
+use super::prompt::{system_prompt_with_registry, user_context_with_registry};
 use super::result::{
     collect_text, parse_result, validate_contract, validate_verdict_contract,
     validate_verdict_vocabulary,
 };
-use super::tools::{SUBAGENT_GUIDANCE, add_subagents, tool_registry_for_context};
+use super::tools::{add_subagents, tool_registry_for_context};
 use super::{
     Capability, CodingAgentError, ForgeContextHost, SubmitForPrCallback, SubmitForPrHost,
-    bind_submit_for_pr_host, default_submit_for_pr_host, system_prompt_with_contracts,
-    user_context,
+    bind_submit_for_pr_host, default_submit_for_pr_host,
 };
 
 /// Runs one capability/role-aware coding-workspace turn on anvil's native
@@ -306,25 +306,6 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     );
     let provider = provider_config.build_provider()?;
 
-    let mut role_prompt = system_prompt_with_contracts(
-        capability,
-        &context.allowed_verdicts,
-        &context.verdict_contracts,
-    );
-    if let Some(section) = &codebase_memory.prompt_section {
-        role_prompt.push_str(section);
-    }
-    if enable_subagents {
-        role_prompt.push_str(SUBAGENT_GUIDANCE);
-    }
-    let user = user_context(context);
-    let overlays = PromptOverlays::load(config_dir, cwd, capability);
-    let turns = overlays.compose_turns(
-        &role_prompt,
-        &user,
-        provider_config.required_system_identity(),
-    );
-
     // Same per-request stream options the pi path sets.
     let stream_options = tongs::provider::StreamOptions {
         api_key: Some(provider_config.resolve_bearer().await?),
@@ -347,7 +328,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
         .map(|host| bind_submit_for_pr_host(host, context, cwd));
     let mut tools =
         tool_registry_for_context(capability, context, cwd, submit_for_pr, forge_context);
-    codebase_memory.toolset.append_to_registry(&mut tools);
+    let codebase_memory_guidance = codebase_memory.append_to_registry(&mut tools);
     if enable_subagents {
         tools = add_subagents(
             handle.clone(),
@@ -359,6 +340,26 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
             &main_scope_id,
         );
     }
+
+    // Compose both prompt turns only after the provider registry is final. All
+    // optional named guidance is derived from this exact registry, which is
+    // moved unchanged into SubAgent below.
+    let mut role_prompt = system_prompt_with_registry(
+        capability,
+        &context.allowed_verdicts,
+        &context.verdict_contracts,
+        &tools,
+    );
+    if let Some(section) = codebase_memory_guidance.prompt_section_for_registry(&tools) {
+        role_prompt.push_str(section);
+    }
+    let user = user_context_with_registry(context, &tools);
+    let overlays = PromptOverlays::load(config_dir, cwd, capability);
+    let turns = overlays.compose_turns(
+        &role_prompt,
+        &user,
+        provider_config.required_system_identity(),
+    );
 
     let sub_agent = temper_agent_core::SubAgent {
         system_prompt: Some(turns.system),

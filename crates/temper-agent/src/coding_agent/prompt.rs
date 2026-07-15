@@ -1,11 +1,13 @@
 //! Role system-prompt and user-turn context construction.
 
 use super::Capability;
+use super::tools::{registry_has_tool, subagent_guidance};
 use temper_protocol_agent::{
     ArtifactContextBundle, ArtifactReference, ArtifactRelationType, ArtifactSnapshot,
     ArtifactSummary, ArtifactType, WorkspaceContext,
 };
 use temper_verdict::{VerdictContract, VerdictContracts};
+use tongs::tools::ToolRegistry;
 
 /// Builds the role system prompt for a capability.
 ///
@@ -45,11 +47,6 @@ pub fn system_prompt_with_contracts(
              changes.\n\
              - Do NOT run git commit, git push, or open a PR: the harness commits, \
              pushes, and opens the PR from your working-tree diff.\n\
-             - Before emitting the final WorkspaceResult JSON on the success path, \
-             call the `submit_for_pr` tool. If the host responds with failure \
-             gate data, keep your in-session context, fix the workspace, and \
-             call `submit_for_pr` again. Only after a host success response may \
-             you emit the terminal JSON.\n\
              - On success, emit NO verdict (the head path opens the PR). This \
              no-verdict success path remains available regardless of the declared \
              workflow outcome vocabulary.\n\
@@ -86,16 +83,15 @@ pub fn system_prompt_with_contracts(
 
     prompt.push_str(
         "\nEFFICIENCY:\n\
-         - Batch independent tool calls into a single response: read-only tools \
-         (read, ls, grep, find, investigate) run in parallel when emitted \
-         together, which is much faster than one call per turn.\n\
-         - Write each new file completely in one `write` call instead of many \
-         incremental edits.\n\
-         - Verify with one focused command (e.g. run the test suite once after \
-         the implementation is in place) rather than re-checking after every \
+         - Batch independent read-only calls into a single response when the \
+         available tools support parallel execution.\n\
+         - When mutation tools are available, prefer creating a complete new file \
+         in one operation over many incremental changes.\n\
+         - Verify with one focused command (for example, run the relevant test \
+         suite once after implementation) rather than re-checking after every \
          small step; do not re-run checks when nothing has changed.\n\
-         - Do not re-read files you just wrote, and do not use bash for things \
-         a dedicated tool already does.\n",
+         - Avoid re-reading content just produced, and prefer a specialized \
+         available tool over a general shell command for the same operation.\n",
     );
 
     prompt.push_str(
@@ -116,6 +112,32 @@ pub fn system_prompt_with_contracts(
          Do NOT wrap the JSON in prose or code fences. Do NOT narrate what you \
          are about to do — just emit the JSON result as your final message.",
     );
+
+    prompt
+}
+
+/// Builds the role prompt plus guidance for exactly the tools in the finalized
+/// registry that will be sent to the provider.
+pub(crate) fn system_prompt_with_registry(
+    capability: Capability,
+    allowed_verdicts: &[String],
+    verdict_contracts: &VerdictContracts,
+    registry: &ToolRegistry,
+) -> String {
+    let mut prompt = system_prompt_with_contracts(capability, allowed_verdicts, verdict_contracts);
+
+    if registry_has_tool(registry, "submit_for_pr") {
+        prompt.push_str(
+            "\n\nSUBMIT GATE:\n\
+             Before emitting the final WorkspaceResult JSON on the success path, call \
+             `submit_for_pr`. If the host rejects the submission, keep the current \
+             session context, fix the reported problems, and call `submit_for_pr` \
+             again. Emit the terminal JSON only after the host accepts.\n",
+        );
+    }
+    if let Some(guidance) = subagent_guidance(registry) {
+        prompt.push_str(&guidance);
+    }
 
     prompt
 }
@@ -224,7 +246,23 @@ fn child_requirement(contract: &VerdictContract) -> String {
 }
 
 /// Builds the user-turn context describing the concrete work item.
+///
+/// This compatibility wrapper has no provider registry, so it omits all
+/// optional named tool guidance. Production assembly uses
+/// [`user_context_with_registry`].
 pub fn user_context(context: &WorkspaceContext) -> String {
+    user_context_inner(context, None)
+}
+
+/// Registry-aware user context used by the production run path.
+pub(crate) fn user_context_with_registry(
+    context: &WorkspaceContext,
+    registry: &ToolRegistry,
+) -> String {
+    user_context_inner(context, Some(registry))
+}
+
+fn user_context_inner(context: &WorkspaceContext, registry: Option<&ToolRegistry>) -> String {
     let mut text = String::new();
     if context.repos.len() > 1 {
         text.push_str(
@@ -282,7 +320,7 @@ pub fn user_context(context: &WorkspaceContext) -> String {
     }
 
     match &context.artifact_context {
-        Some(bundle) => render_artifact_context(&mut text, bundle),
+        Some(bundle) => render_artifact_context(&mut text, bundle, registry),
         None => {
             // Backward compatibility for contexts emitted before artifact bundles:
             // preserve the historical heading and singular JSON verbatim.
@@ -315,7 +353,11 @@ fn render_checkout_authority(text: &mut String, checkout: Option<&str>) {
     }
 }
 
-fn render_artifact_context(text: &mut String, bundle: &ArtifactContextBundle) {
+fn render_artifact_context(
+    text: &mut String,
+    bundle: &ArtifactContextBundle,
+    registry: Option<&ToolRegistry>,
+) {
     text.push_str(&format!(
         "\nArtifact context bundle (version {}):\nRepository: {} ({})\n",
         bundle.version, bundle.repository.path, bundle.repository.id
@@ -375,14 +417,25 @@ fn render_artifact_context(text: &mut String, bundle: &ArtifactContextBundle) {
         bundle.truncation.content_truncated
     ));
 
-    text.push_str(
-        "\nForge context tools:\n\
-         If `forge_get_item` and `forge_list_related` are available, use them for \
-         bounded read-only follow-up when a body is omitted, diagnostics report \
-         missing context, or an indirect relation must be followed. Pass only a \
-         configured owner/name repository and artifact identity; the host binds \
-         assignment credentials. Repeated calls may follow indirect relations.\n",
-    );
+    let forge_get_item = registry.is_some_and(|tools| registry_has_tool(tools, "forge_get_item"));
+    let forge_list_related =
+        registry.is_some_and(|tools| registry_has_tool(tools, "forge_list_related"));
+    if forge_get_item || forge_list_related {
+        text.push_str("\nForge context follow-up:\n");
+        if forge_get_item {
+            text.push_str(
+                "- Use `forge_get_item` for bounded read-only follow-up when an artifact body or comments are missing.\n",
+            );
+        }
+        if forge_list_related {
+            text.push_str(
+                "- Use `forge_list_related` when an indirect typed relation must be followed.\n",
+            );
+        }
+        text.push_str(
+            "Pass only a configured owner/name repository and artifact identity; the host binds assignment credentials.\n",
+        );
+    }
 }
 
 fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
