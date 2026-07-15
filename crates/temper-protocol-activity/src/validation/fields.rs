@@ -1,7 +1,7 @@
 use crate::{
     AgentActivityEventV1, AgentAssignmentIdentityV1, AgentScopeKindV1, AgentScopeV1,
     CapturedContentV1, FailureInfoV1, InlineContentV1, MAX_IDENTIFIER_BYTES,
-    MAX_INLINE_CONTENT_BYTES,
+    MAX_INLINE_CONTENT_BYTES, MODEL_CALL_RETRY_FAILURE_MESSAGE,
 };
 
 use super::{ActivityValidationCode, ActivityValidationError, error, validate_blob_reference};
@@ -79,7 +79,14 @@ pub(super) fn event(
                     "must be greater than zero",
                 ));
             }
-            failure(&value.failure, &format!("{path}.data.failure"))
+            failure(&value.failure, &format!("{path}.data.failure"))?;
+            if value.failure.message != MODEL_CALL_RETRY_FAILURE_MESSAGE {
+                return Err(invalid_event(
+                    &format!("{path}.data.failure.message"),
+                    "must use the allowlisted model retry summary",
+                ));
+            }
+            Ok(())
         }
         Event::ModelCallFinished(value) => {
             identifier(&value.call_id, &format!("{path}.data.call_id"))?;

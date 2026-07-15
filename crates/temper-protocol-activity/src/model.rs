@@ -370,6 +370,15 @@ impl AgentActivityEventV1 {
         matches!(self.priority(), EventPriorityV1::Required)
     }
 
+    /// Replaces untrusted provider/model retry diagnostics with the sole
+    /// allowlisted canonical summary. Failure code and retryability are typed
+    /// facts and intentionally remain unchanged.
+    pub fn sanitize_retry_failure_message(&mut self) {
+        if let Self::ModelCallRetrying(retry) = self {
+            retry.failure.message = crate::MODEL_CALL_RETRY_FAILURE_MESSAGE.to_string();
+        }
+    }
+
     pub(crate) const fn is_host_only(&self) -> bool {
         matches!(
             self,

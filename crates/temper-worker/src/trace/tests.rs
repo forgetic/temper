@@ -8,8 +8,9 @@ use std::time::Duration;
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1,
     AgentScopeV1, AssistantMessageV1, BlobAttachmentV1, BlobMediaTypeV1, CaptureModeV1,
-    CapturedContentV1, FailureCodeV1, InlineContentV1, RunFinishedV1, RunStartedV1, RunStatusV1,
-    ToolStartedV1, UsageV1,
+    CapturedContentV1, FailureCodeV1, FailureInfoV1, InlineContentV1,
+    MODEL_CALL_RETRY_FAILURE_MESSAGE, ModelCallRetryingV1, RunFinishedV1, RunStartedV1,
+    RunStatusV1, ToolStartedV1, UsageV1,
 };
 use temper_protocol_agent::{
     AgentSessionState, WorkspaceContext, WorkspaceRepository, WorkspaceWorkItem,
@@ -448,6 +449,77 @@ fn metadata_policy_rejects_forged_message_and_tool_argument_content() {
     let serialized = serde_json::to_string(&recovered[0].events).unwrap();
     assert!(!serialized.contains("must not be stored"));
     assert!(!serialized.contains("forged argument bytes"));
+}
+
+#[test]
+fn forged_child_retry_diagnostics_are_sanitized_before_spooling() {
+    const SENTINELS: [&str; 4] = [
+        "CREDENTIAL-FORGED-RETRY-SENTINEL-355",
+        "HEADER-FORGED-RETRY-SENTINEL-355",
+        "ENVIRONMENT-FORGED-RETRY-SENTINEL-355",
+        "PROVIDER-RESPONSE-FORGED-RETRY-SENTINEL-355",
+    ];
+    let diagnostics = SENTINELS.join(" ");
+
+    for mode in [
+        CaptureModeV1::Metadata,
+        CaptureModeV1::Transcript,
+        CaptureModeV1::Diagnostic,
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let collector = TraceCollector::new(WorkerAgentTraceConfig {
+            policy: AgentActivityCapturePolicyV1 {
+                capture: mode,
+                capture_thinking: mode == CaptureModeV1::Diagnostic,
+                ..Default::default()
+            },
+            spool_root: Some(temp.path().join("spool")),
+        });
+        let run = collector
+            .begin_run("job-forged-retry-355", &context())
+            .expect("begin")
+            .expect("capture enabled");
+        let mut frame = usage_frame(1);
+        frame.event = AgentActivityEventV1::ModelCallRetrying(ModelCallRetryingV1 {
+            call_id: "forged-call-355".to_string(),
+            next_attempt: 6,
+            delay_ms: 1_250,
+            failure: FailureInfoV1 {
+                code: FailureCodeV1::Timeout,
+                message: diagnostics.clone(),
+                retryable: false,
+            },
+        });
+
+        run.accept_frame(frame)
+            .expect("forged retry is normalized at the trust boundary");
+        run.finish_success(None).expect("finish run");
+        let spool_bytes =
+            std::fs::read(run.spool_dir().join("events.jsonl")).expect("read worker spool");
+        for sentinel in SENTINELS {
+            assert!(
+                !String::from_utf8_lossy(&spool_bytes).contains(sentinel),
+                "{mode:?} worker spool leaked {sentinel}"
+            );
+        }
+        drop(run);
+
+        let recovered = collector.recover().expect("recover sanitized spool");
+        let retry = recovered[0]
+            .events
+            .iter()
+            .find_map(|event| match &event.event {
+                AgentActivityEventV1::ModelCallRetrying(retry) => Some(retry),
+                _ => None,
+            })
+            .expect("canonical retry boundary");
+        assert_eq!(retry.call_id, "forged-call-355");
+        assert_eq!(retry.next_attempt, 6);
+        assert_eq!(retry.delay_ms, 1_250);
+        assert_eq!(retry.failure.code, FailureCodeV1::Timeout);
+        assert!(!retry.failure.retryable);
+        assert_eq!(retry.failure.message, MODEL_CALL_RETRY_FAILURE_MESSAGE);
+    }
 }
 
 #[test]

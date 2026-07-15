@@ -35,6 +35,13 @@ pub const ACTIVITY_ADDRESS_FLAG: &str = "--activity-address";
 /// Current agent activity wire-contract version.
 pub const ACTIVITY_PROTOCOL_VERSION: u32 = 1;
 
+/// Fixed allowlisted summary for model-call retries.
+///
+/// Provider diagnostics are untrusted and must never enter the canonical
+/// activity plane. Producers and trust boundaries normalize retry messages to
+/// this value while retaining the typed failure code and retryability.
+pub const MODEL_CALL_RETRY_FAILURE_MESSAGE: &str = "model call failed; retry scheduled";
+
 /// Absolute wire limit for any inline captured value.
 pub const MAX_INLINE_CONTENT_BYTES: usize = 16 * 1024;
 /// Absolute wire limit for a single transported blob attachment.

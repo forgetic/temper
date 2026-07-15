@@ -120,6 +120,32 @@ fn every_event_family_has_a_canonical_golden_round_trip() {
 }
 
 #[test]
+fn retry_failures_accept_only_the_fixed_allowlisted_summary() {
+    let events: Vec<AgentActivityEventV1> = round_trip(&fixture("event-families.json"));
+    let mut canonical = usage_event(1);
+    canonical.event = events[7].clone();
+    let AgentActivityEventV1::ModelCallRetrying(retry) = &mut canonical.event else {
+        panic!("retry fixture");
+    };
+    let expected_code = retry.failure.code;
+    let expected_retryable = retry.failure.retryable;
+    retry.failure.message =
+        "Authorization: Bearer CREDENTIAL-PROTOCOL-RETRY-SENTINEL-355".to_string();
+
+    assert_code(canonical.validate(), ActivityValidationCode::InvalidEvent);
+    canonical.event.sanitize_retry_failure_message();
+    canonical
+        .validate()
+        .expect("sanitized retry event validates");
+    let AgentActivityEventV1::ModelCallRetrying(retry) = &canonical.event else {
+        unreachable!();
+    };
+    assert_eq!(retry.failure.message, MODEL_CALL_RETRY_FAILURE_MESSAGE);
+    assert_eq!(retry.failure.code, expected_code);
+    assert_eq!(retry.failure.retryable, expected_retryable);
+}
+
+#[test]
 fn event_classification_separates_boundaries_from_droppable_deltas() {
     let events: Vec<AgentActivityEventV1> = round_trip(&fixture("event-families.json"));
     let delta_types = events

@@ -7,7 +7,7 @@ use temper_agent_core::{AgentEvent, ModelCallStatus, ModelIdentity, StreamDelta,
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1,
     AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1, CaptureModeV1, CapturedContentV1,
-    StopReasonV1, TurnStartedV1,
+    MODEL_CALL_RETRY_FAILURE_MESSAGE, StopReasonV1, TurnStartedV1,
 };
 use tongs::model::{ContentBlock, StopReason};
 
@@ -367,6 +367,67 @@ fn projection_panics_are_contained() {
         .events
         .emit(AgentEvent::TurnStart { turn: 0 });
     assert_eq!(recorder.0.lock().expect("frames").len(), 2);
+}
+
+#[test]
+fn provider_retry_diagnostics_are_fixed_in_every_capture_mode() {
+    const SENTINELS: [&str; 4] = [
+        "CREDENTIAL-RETRY-SENTINEL-355",
+        "HEADER-RETRY-SENTINEL-355",
+        "ENVIRONMENT-RETRY-SENTINEL-355",
+        "PROVIDER-RESPONSE-RETRY-SENTINEL-355",
+    ];
+    let diagnostics = SENTINELS.join(" ");
+
+    for mode in [
+        CaptureModeV1::Off,
+        CaptureModeV1::Metadata,
+        CaptureModeV1::Transcript,
+        CaptureModeV1::Diagnostic,
+    ] {
+        let recorder = Arc::new(Recorder::default());
+        let factory = ScopeFactory::with_parts(
+            AgentActivityCapturePolicyV1 {
+                capture: mode,
+                capture_thinking: mode == CaptureModeV1::Diagnostic,
+                ..Default::default()
+            },
+            Arc::new(FakeClock::new(0..10)),
+            vec![recorder.clone()],
+        );
+        let run = factory.main("main", ModelIdentity::new("provider", "model"));
+        run.observability
+            .events
+            .emit(AgentEvent::ModelCallRetrying {
+                turn: 3,
+                call_id: "model-call-355".to_string(),
+                next_attempt: 4,
+                delay_ms: 750,
+                reason: diagnostics.clone(),
+            });
+
+        let frames = recorder.0.lock().expect("frames");
+        let retry = frames
+            .iter()
+            .find_map(|frame| match &frame.event {
+                AgentActivityEventV1::ModelCallRetrying(retry) => Some(retry),
+                _ => None,
+            })
+            .expect("retry boundary");
+        assert_eq!(retry.call_id, "model-call-355");
+        assert_eq!(retry.next_attempt, 4);
+        assert_eq!(retry.delay_ms, 750);
+        assert_eq!(
+            retry.failure.code,
+            temper_protocol_activity::FailureCodeV1::Provider
+        );
+        assert!(retry.failure.retryable);
+        assert_eq!(retry.failure.message, MODEL_CALL_RETRY_FAILURE_MESSAGE);
+        let wire = serde_json::to_string(&*frames).expect("serialize retry frames");
+        for sentinel in SENTINELS {
+            assert!(!wire.contains(sentinel), "{mode:?} leaked {sentinel}");
+        }
+    }
 }
 
 #[test]

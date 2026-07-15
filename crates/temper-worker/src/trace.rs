@@ -329,15 +329,15 @@ impl TraceRun {
         ActivityEndpoint::bind(self.clone())
     }
 
-    /// Validates and durably accepts one untrusted child frame.
     pub fn accept_frame(&self, mut frame: AgentActivityFrameV1) -> Result<u64, TraceError> {
-        frame.validate()?;
         let encoded_len = serde_json::to_vec(&frame)?.len();
         if encoded_len > MAX_CHILD_ACTIVITY_FRAME_BYTES {
             return Err(TraceError::InvalidSpool(format!(
                 "child frame exceeds {MAX_CHILD_ACTIVITY_FRAME_BYTES} bytes"
             )));
         }
+        frame.event.sanitize_retry_failure_message();
+        frame.validate()?;
         let mut state = self.inner.state.lock().expect("trace run state lock");
         ensure_accepting(&state)?;
         frame.scope = canonicalize_child_scope(
@@ -633,6 +633,9 @@ fn validate_blob_references(
 
 #[cfg(test)]
 mod full_path_fixture;
+
+#[cfg(test)]
+mod full_path_retry_tests;
 
 #[cfg(test)]
 mod full_path_tests;
