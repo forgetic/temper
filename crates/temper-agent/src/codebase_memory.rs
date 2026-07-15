@@ -3,7 +3,9 @@
 //! The public entry point is [`build_codebase_memory_toolset`]: pass the parsed
 //! worker→agent [`temper_protocol_agent::AgentToolConfig`], the current role,
 //! and the prepared workspace scope, and it returns safe, prefixed, read-only
-//! tools plus metadata for prompt generation.
+//! tools plus registration metadata used to decide whether concise prompt
+//! guidance is relevant. Complete tool names, descriptions, and schemas remain
+//! on the actual provider tool definitions and are not copied into prompts.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -70,7 +72,11 @@ pub struct CodebaseMemoryToolset {
     tools: Vec<Box<dyn Tool>>,
 }
 
-/// Agent-facing metadata for one registered safe codebase-memory tool.
+/// Registration metadata for one safe codebase-memory tool.
+///
+/// The description mirrors the actual provider tool definition for callers
+/// that inspect the toolset. Prompt rendering treats this metadata only as
+/// evidence that at least one safe tool was registered.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CodebaseMemoryToolMetadata {
     pub name: String,
@@ -116,7 +122,9 @@ impl CodebaseMemoryToolset {
         &self.registered_tool_names
     }
 
-    /// Agent-facing tool names and descriptions registered from the MCP server.
+    /// Registration metadata for the safe tools exposed to the provider.
+    /// Prompt rendering uses only whether this slice is empty; provider tool
+    /// definitions remain the sole model-facing source of names/descriptions.
     pub fn registered_tool_metadata(&self) -> &[CodebaseMemoryToolMetadata] {
         &self.registered_tool_metadata
     }
