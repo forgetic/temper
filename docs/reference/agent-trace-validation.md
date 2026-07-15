@@ -12,6 +12,7 @@ requires a live collector, Forgejo, or model provider.
 | Canonical run/scope/turn/model/tool OTel tree, timestamp/duration/status/provider/usage/gap attributes | `temper-log::activity::tests::canonical_boundaries_form_a_nested_privacy_safe_span_tree` |
 | Parallel sub-agent scope uniqueness and parentage | `temper-worker::trace::tests::parallel_frames_get_one_gap_free_sequence_and_trusted_identity`, `child_root_is_mapped_to_one_unique_canonical_scope_with_correct_parentage`, and `temper-log::activity::tests::parallel_sub_agent_scopes_keep_unique_ids_and_parentage` |
 | Child crash with host terminal failure; storage failure does not alter job result | `temper-worker::out_of_process_runner_trace_tests::child_crash_leaves_host_failed_metadata_and_trace_storage_errors_are_non_fatal` |
+| Raw child stderr and in-process provider/tool errors stay outside terminal activity in every capture mode | `temper-worker::trace::full_path_tests::raw_child_failures_never_cross_the_canonical_trace_plane` injects credential/header/environment/stderr sentinels and checks worker spools, engine journals, authorized query/export, web, and OTel surfaces; `temper-cli-daemon::standalone::agent_runner::tests::in_process_terminal_failures_never_capture_tool_diagnostics` covers the standalone carrier and capture-off behavior |
 | Worker restart, partial spool, blob/cursor recovery | `temper-worker::trace::tests::restart_recovers_blobs_cursor_and_truncates_only_final_fragment` |
 | Lost acknowledgement and forwarding restart | `temper-worker::trace::forwarder::tests::lost_reply_retransmits_and_restart_observes_the_durable_cursor` |
 | Engine restart, partial journal, duplicate/conflicting retransmit | `temper-engine/tests/trace_journal.rs::recovery_truncates_only_a_partial_tail_and_acknowledges_a_lost_reply` and `duplicate_gap_binding_and_conflicting_retransmit_are_isolated` |
@@ -41,4 +42,8 @@ cargo check -p temper --features otel
 
 The validation invariant is that a scenario may lose telemetry, but it may not
 change the `JobResult`, create a product-work retry, or make a web/OTel projection
-more authoritative than the canonical journal.
+more authoritative than the canonical journal. Host-generated `run.failed`
+events contain only the trusted failure code and retryability plus a fixed
+summary selected from the trusted failure classification; raw agent errors and
+bounded child stderr remain available only to job reporting and worker
+diagnostics.

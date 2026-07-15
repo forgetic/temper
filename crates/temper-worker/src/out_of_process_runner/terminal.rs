@@ -15,11 +15,7 @@ pub(super) async fn finish_and_flush(
 ) {
     let terminal = match outcome {
         Ok(_) => trace.finish_success(None),
-        Err(error) => trace.finish_failure(
-            FailureCodeV1::ChildProcess,
-            &error.message,
-            error.class == temper_protocol_worker::FailureClass::Transient,
-        ),
+        Err(error) => trace.finish_failure(FailureCodeV1::ChildProcess, error.class),
     };
     match terminal {
         Ok(sequence) => {

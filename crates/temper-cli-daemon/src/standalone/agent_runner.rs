@@ -232,11 +232,7 @@ impl AgentRunner for InProcessAgentRunner {
             if let Some(trace) = trace {
                 let terminal = match &outcome {
                     Ok(_) => trace.finish_success(None),
-                    Err(error) => trace.finish_failure(
-                        FailureCodeV1::Internal,
-                        &error.message,
-                        error.class == temper_protocol_worker::FailureClass::Transient,
-                    ),
+                    Err(error) => trace.finish_failure(FailureCodeV1::Internal, error.class),
                 };
                 match terminal {
                     Ok(sequence) => {

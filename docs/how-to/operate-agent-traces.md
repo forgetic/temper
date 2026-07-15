@@ -74,7 +74,12 @@ terminal flush or restarted forwarder observe the durable acknowledgement
 without retaining the transcript indefinitely.
 
 Optional content is omitted before required
-run/scope/turn/model/tool/usage/error/terminal boundaries. Queue pressure drops
+run/scope/turn/model/tool/usage/error/terminal boundaries. Host-generated
+`run.failed` events never copy provider/tool errors or child stderr: they carry
+only the trusted failure code, retryability, and a fixed allowlisted summary.
+The bounded stderr tail remains available in worker diagnostics and job failure
+reporting, outside spools, journals, queries, exports, web activity, and OTel.
+Queue pressure drops
 or coalesces only low-priority deltas and journals `trace.gap` counts. Engine
 retention runs at startup and every hour in both split and standalone services;
 each pass snapshots live daemon assignments, skips active and recovered
