@@ -4,12 +4,18 @@ use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1 as Event,
     AgentAssignmentIdentityV1, AgentRunEventV1, AgentScopeKindV1, AgentScopeV1, CaptureModeV1,
     CapturedContentV1, DroppedEventKindV1, InlineContentV1, ModelCallFinishedV1,
-    ModelCallStartedV1, ModelCallStatusV1, RunFinishedV1, RunStartedV1, RunStatusV1,
+    ModelCallStartedV1, ModelCallStatusV1, PromptCaptureDispositionV1, PromptPreparedV1,
+    PromptSnapshotV1, PromptToolDefinitionV1, RunFinishedV1, RunStartedV1, RunStatusV1,
     ScopeFinishedV1, ScopeStartedV1, ScopeStatusV1, StopReasonV1, ToolFinishedV1, ToolStartedV1,
     ToolStatusV1, TraceGapV1, TurnFinishedV1, TurnStartedV1, UsageV1, W3cTraceContext,
 };
 
 use super::*;
+
+const PROMPT_SYSTEM_SENTINEL: &str = "LOG-PROMPT-SYSTEM-SENTINEL-364";
+const PROMPT_USER_SENTINEL: &str = "LOG-PROMPT-USER-SENTINEL-364";
+const PROMPT_TOOL_SENTINEL: &str = "LOG-PROMPT-TOOL-SENTINEL-364";
+const PROMPT_SCHEMA_SENTINEL: &str = "LOG-PROMPT-SCHEMA-SENTINEL-364";
 
 fn assignment() -> AgentAssignmentIdentityV1 {
     AgentAssignmentIdentityV1 {
@@ -55,9 +61,42 @@ fn event(
     }
 }
 
+fn prompt_prepared() -> Event {
+    let snapshot = PromptSnapshotV1 {
+        system_prompt: Some(PROMPT_SYSTEM_SENTINEL.to_string()),
+        initial_user_message: PROMPT_USER_SENTINEL.to_string(),
+        tools: vec![PromptToolDefinitionV1 {
+            name: "private_prompt_tool".to_string(),
+            description: PROMPT_TOOL_SENTINEL.to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"secret": {"const": PROMPT_SCHEMA_SENTINEL}}
+            }),
+        }],
+    };
+    let canonical = snapshot.to_canonical_json_bytes().expect("prompt JSON");
+    let tools = snapshot
+        .tools_to_canonical_json_bytes()
+        .expect("tool manifest JSON");
+    Event::PromptPrepared(PromptPreparedV1 {
+        system_prompt_present: true,
+        system_prompt_bytes: PROMPT_SYSTEM_SENTINEL.len() as u64,
+        initial_user_message_bytes: PROMPT_USER_SENTINEL.len() as u64,
+        tool_manifest_bytes: tools.len() as u64,
+        tool_count: 1,
+        original_snapshot_bytes: canonical.len() as u64,
+        captured_bytes: canonical.len() as u64,
+        disposition: PromptCaptureDispositionV1::Captured,
+        content: Some(CapturedContentV1::Inline(InlineContentV1 {
+            text: String::from_utf8(canonical).expect("prompt UTF-8"),
+            truncated: false,
+        })),
+    })
+}
+
 fn canonical_run() -> Vec<AgentRunEventV1> {
     let main = scope("main-1", AgentScopeKindV1::Main, None);
-    vec![
+    let mut events = vec![
         event(
             1,
             0,
@@ -185,7 +224,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
         event(
             12,
             200,
-            main,
+            main.clone(),
             None,
             Event::RunFinished(RunFinishedV1 {
                 status: RunStatusV1::Succeeded,
@@ -193,7 +232,15 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
                 stop_reason: Some(StopReasonV1::EndTurn),
             }),
         ),
-    ]
+    ];
+    // Insert source-equivalent prompt content after scope start and before the
+    // first turn. Span projection must treat this event as invisible.
+    for event in events.iter_mut().skip(2) {
+        event.seq += 1;
+        event.occurred_at = format!("2026-07-13T14:28:{:02}.000Z", event.seq);
+    }
+    events.insert(2, event(3, 7, main, Some(0), prompt_prepared()));
+    events
 }
 
 #[test]
@@ -232,7 +279,15 @@ fn canonical_boundaries_form_a_nested_privacy_safe_span_tree() {
     assert_eq!(run.status, ActivitySpanStatus::Ok);
 
     let rendered = format!("{spans:?}");
-    for forbidden in ["Bearer secret", "PRIVATE_TOKEN", "Authorization:"] {
+    for forbidden in [
+        "Bearer secret",
+        "PRIVATE_TOKEN",
+        "Authorization:",
+        PROMPT_SYSTEM_SENTINEL,
+        PROMPT_USER_SENTINEL,
+        PROMPT_TOOL_SENTINEL,
+        PROMPT_SCHEMA_SENTINEL,
+    ] {
         assert!(
             !rendered.contains(forbidden),
             "span projection leaked {forbidden}"
@@ -449,7 +504,15 @@ fn tracing_bridge_exports_nested_w3c_parented_privacy_safe_spans() {
     assert!(model_attributes.contains("gen_ai.provider.name"));
     assert!(model_attributes.contains("usage.input_tokens"));
     let rendered = format!("{spans:?}");
-    for forbidden in ["Bearer secret", "PRIVATE_TOKEN", "Authorization:"] {
+    for forbidden in [
+        "Bearer secret",
+        "PRIVATE_TOKEN",
+        "Authorization:",
+        PROMPT_SYSTEM_SENTINEL,
+        PROMPT_USER_SENTINEL,
+        PROMPT_TOOL_SENTINEL,
+        PROMPT_SCHEMA_SENTINEL,
+    ] {
         assert!(
             !rendered.contains(forbidden),
             "OTel span leaked {forbidden}"

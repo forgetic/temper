@@ -601,6 +601,9 @@ fn ensure_quota(
 mod full_path_fixture;
 
 #[cfg(test)]
+mod full_path_observation;
+
+#[cfg(test)]
 mod full_path_retry_tests;
 
 #[cfg(test)]

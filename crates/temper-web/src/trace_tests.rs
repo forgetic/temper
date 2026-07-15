@@ -8,8 +8,9 @@ use crate::server::AppState;
 use std::sync::Mutex;
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentAssignmentIdentityV1, AgentScopeKindV1, AgentScopeV1,
-    FailureCodeV1, FailureInfoV1, InlineContentV1, ModelCallRetryingV1, OutputDeltaV1, RunFailedV1,
-    RunFinishedV1, RunStartedV1, RunStatusV1,
+    FailureCodeV1, FailureInfoV1, InlineContentV1, ModelCallRetryingV1, OutputDeltaV1,
+    PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1, PromptToolDefinitionV1,
+    RunFailedV1, RunFinishedV1, RunStartedV1, RunStatusV1,
 };
 
 const RAW_SNAPSHOT: &str = r#"{
@@ -287,6 +288,41 @@ fn engine_outage_retains_cursor_and_the_next_poll_recovers() {
 
 #[test]
 fn transcript_content_and_failure_messages_have_no_global_projection() {
+    let snapshot = PromptSnapshotV1 {
+        system_prompt: Some("WEB-PROMPT-SYSTEM-SENTINEL-364".to_string()),
+        initial_user_message: "WEB-PROMPT-USER-SENTINEL-364".to_string(),
+        tools: vec![PromptToolDefinitionV1 {
+            name: "private_tool".to_string(),
+            description: "WEB-PROMPT-TOOL-SENTINEL-364".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"value": {"const": "WEB-PROMPT-SCHEMA-SENTINEL-364"}}
+            }),
+        }],
+    };
+    let canonical = snapshot.to_canonical_json_bytes().expect("prompt JSON");
+    let tools = snapshot
+        .tools_to_canonical_json_bytes()
+        .expect("tool manifest JSON");
+    let prompt = event(
+        1,
+        AgentActivityEventV1::PromptPrepared(PromptPreparedV1 {
+            system_prompt_present: true,
+            system_prompt_bytes: snapshot.system_prompt.as_ref().unwrap().len() as u64,
+            initial_user_message_bytes: snapshot.initial_user_message.len() as u64,
+            tool_manifest_bytes: tools.len() as u64,
+            tool_count: 1,
+            original_snapshot_bytes: canonical.len() as u64,
+            captured_bytes: canonical.len() as u64,
+            disposition: PromptCaptureDispositionV1::Captured,
+            content: Some(CapturedContentV1::Inline(InlineContentV1 {
+                text: String::from_utf8(canonical).expect("prompt UTF-8"),
+                truncated: false,
+            })),
+        }),
+    );
+    assert!(board_projection(&prompt).is_none());
+
     let delta = event(
         2,
         AgentActivityEventV1::OutputThinkingDelta(OutputDeltaV1 {

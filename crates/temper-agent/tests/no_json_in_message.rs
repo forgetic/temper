@@ -25,6 +25,7 @@ use temper_agent_core::{
     AgentEvent, AgentStop, ModelCallStatus, ModelIdentity, ToolCallStatus, ToolResultMetadata,
 };
 use tongs::model::Usage;
+use tongs::provider::ToolDef;
 use tracing::Level;
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
@@ -40,6 +41,7 @@ struct Captured {
     target: String,
     message: Option<String>,
     event: Option<String>,
+    fields: Vec<String>,
 }
 
 impl Captured {
@@ -55,11 +57,13 @@ impl Captured {
 struct Visitor {
     message: Option<String>,
     event: Option<String>,
+    fields: Vec<String>,
 }
 
 impl Visit for Visitor {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         let rendered = format!("{value:?}");
+        self.fields.push(format!("{}={rendered}", field.name()));
         match field.name() {
             "message" => self.message = Some(rendered),
             "event" => self.event = Some(trim_debug_quotes(&rendered)),
@@ -68,6 +72,7 @@ impl Visit for Visitor {
     }
 
     fn record_str(&mut self, field: &Field, value: &str) {
+        self.fields.push(format!("{}={value}", field.name()));
         match field.name() {
             "message" => self.message = Some(value.to_string()),
             "event" => self.event = Some(value.to_string()),
@@ -101,6 +106,7 @@ impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
             target: metadata.target().to_string(),
             message: visitor.message,
             event: visitor.event,
+            fields: visitor.fields,
         });
     }
 }
@@ -125,6 +131,22 @@ fn capture_representative_run() -> Vec<Captured> {
             .observability
             .events;
 
+        logger.emit(AgentEvent::PromptPrepared {
+            system_prompt: Some("OPERATIONAL-PROMPT-SYSTEM-SENTINEL-364".to_string()),
+            initial_user_message: "OPERATIONAL-PROMPT-USER-SENTINEL-364".to_string(),
+            tools: vec![ToolDef {
+                name: "sentinel_tool".to_string(),
+                description: "OPERATIONAL-PROMPT-TOOL-DESCRIPTION-SENTINEL-364".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "secret_schema_field": {
+                            "const": "OPERATIONAL-PROMPT-SCHEMA-SENTINEL-364"
+                        }
+                    }
+                }),
+            }],
+        });
         logger.emit(AgentEvent::TurnUsage {
             turn: 0,
             usage: Usage {
@@ -189,6 +211,30 @@ fn capture_representative_run() -> Vec<Captured> {
         .expect("no outstanding layer references after run")
         .into_inner()
         .expect("capture mutex not poisoned")
+}
+
+#[test]
+fn prompt_snapshots_have_no_operational_log_projection() {
+    let captured = capture_representative_run();
+    let rendered = format!("{captured:?}");
+    for forbidden in [
+        "OPERATIONAL-PROMPT-SYSTEM-SENTINEL-364",
+        "OPERATIONAL-PROMPT-USER-SENTINEL-364",
+        "OPERATIONAL-PROMPT-TOOL-DESCRIPTION-SENTINEL-364",
+        "OPERATIONAL-PROMPT-SCHEMA-SENTINEL-364",
+        "prompt.prepared",
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "operational tracing leaked {forbidden}: {rendered}"
+        );
+    }
+    assert!(captured.iter().all(|event| {
+        event
+            .fields
+            .iter()
+            .all(|field| !field.contains("OPERATIONAL-PROMPT"))
+    }));
 }
 
 #[test]
