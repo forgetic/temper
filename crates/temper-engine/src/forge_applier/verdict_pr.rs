@@ -82,6 +82,21 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 );
                 return false;
             }
+            if source_branch == target_branch {
+                tracing::info!(
+                    target: "temper_daemon",
+                    job_id = %binding.job.job_id,
+                    repo = %binding.job.repo,
+                    issue = %binding.number,
+                    routed = %binding.routed,
+                    branch = %source_branch,
+                    "forge applier treated same-branch pull-request create as already satisfied"
+                );
+                binding
+                    .context
+                    .set_pull_request_create_satisfied_at(binding.routed.clone(), *effect_index);
+                continue;
+            }
 
             let metadata = WorkflowMetadata {
                 kind: Some(artifact_kind.clone()),
