@@ -41,6 +41,13 @@ use spool::*;
 
 /// Maximum encoded bytes accepted from one child connection.
 pub const MAX_CHILD_ACTIVITY_FRAME_BYTES: usize = 256 * 1024;
+/// Aggregate worker spool capacity, expressed as full per-run reservations.
+///
+/// Reserving the complete `max_run_bytes` budget when a run starts guarantees
+/// that concurrent runs cannot consume one another's terminal-event space.
+/// Fully acknowledged terminal runs are compacted to their actual marker size,
+/// making their reservation available to later work.
+pub const WORKER_SPOOL_RUN_CAPACITY: u64 = 16;
 const ACK_CURSOR_GROWTH_RESERVE: u64 = 32;
 const MAX_TERMINAL_FAILURE_MESSAGE_BYTES: usize = 512;
 
@@ -87,6 +94,8 @@ pub enum TraceError {
     Disabled,
     #[error("activity run byte quota exceeded")]
     QuotaExceeded,
+    #[error("aggregate activity spool quota of {limit} bytes exceeded")]
+    AggregateQuotaExceeded { limit: u64 },
     #[error("activity run already has a terminal event")]
     AlreadyTerminal,
     #[error("acknowledgement {acknowledged} exceeds last durable sequence {last_seq}")]
@@ -197,91 +206,117 @@ impl TraceRun {
         context: &WorkspaceContext,
     ) -> Result<Self, TraceError> {
         create_private_dir_all(root)?;
+        let (root_lock_path, root_lock_file) = open_spool_root_lock(root)?;
+        root_lock_file
+            .lock_exclusive()
+            .map_err(|source| io_error("lock aggregate trace spool", &root_lock_path, source))?;
+        let aggregate_limit = policy
+            .max_run_bytes
+            .saturating_mul(WORKER_SPOOL_RUN_CAPACITY);
+        let aggregate_result =
+            ensure_aggregate_spool_capacity(root, policy.max_run_bytes, aggregate_limit);
+        if let Err(error) = aggregate_result {
+            let _ = fs2::FileExt::unlock(&root_lock_file);
+            return Err(error);
+        }
+
         let run_id = uuid::Uuid::new_v4().to_string();
         let run_dir = root.join(&run_id);
-        create_private_dir(&run_dir)?;
-        let (lock_path, lock_file) = open_spool_lock(&run_dir)?;
-        lock_file
-            .lock_exclusive()
-            .map_err(|source| io_error("lock new trace spool", &lock_path, source))?;
-        let blobs_dir = run_dir.join("blobs");
-        create_private_dir(&blobs_dir)?;
+        let creation = (|| {
+            create_private_dir(&run_dir)?;
+            let (lock_path, lock_file) = open_spool_lock(&run_dir)?;
+            lock_file
+                .lock_exclusive()
+                .map_err(|source| io_error("lock new trace spool", &lock_path, source))?;
+            let blobs_dir = run_dir.join("blobs");
+            create_private_dir(&blobs_dir)?;
 
-        let started_at = now_rfc3339();
-        let assignment = assignment_from_context(job_id, context);
-        let agent_session_id = context
-            .agent_session
-            .as_ref()
-            .map(|session| session.session_id.clone());
-        let main_scope = AgentScopeV1 {
-            id: format!("main-{}", uuid::Uuid::new_v4()),
-            kind: AgentScopeKindV1::Main,
-            parent_id: None,
-        };
-        let manifest = TraceManifestV1 {
-            version: ACTIVITY_PROTOCOL_VERSION,
-            run_id,
-            started_at: started_at.clone(),
-            assignment,
-            agent_session_id,
-            policy,
-            main_scope: main_scope.clone(),
-        };
-        validate_manifest(&manifest)?;
+            let started_at = now_rfc3339();
+            let assignment = assignment_from_context(job_id, context);
+            let agent_session_id = context
+                .agent_session
+                .as_ref()
+                .map(|session| session.session_id.clone());
+            let main_scope = AgentScopeV1 {
+                id: format!("main-{}", uuid::Uuid::new_v4()),
+                kind: AgentScopeKindV1::Main,
+                parent_id: None,
+            };
+            let manifest = TraceManifestV1 {
+                version: ACTIVITY_PROTOCOL_VERSION,
+                run_id,
+                started_at: started_at.clone(),
+                assignment,
+                agent_session_id,
+                policy,
+                main_scope: main_scope.clone(),
+            };
+            validate_manifest(&manifest)?;
 
-        let manifest_path = run_dir.join("manifest.json");
-        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-        atomic_write(&manifest_path, &manifest_bytes, false)?;
+            let manifest_path = run_dir.join("manifest.json");
+            let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+            atomic_write(&manifest_path, &manifest_bytes, false)?;
 
-        let cursor_path = run_dir.join("acknowledgement.json");
-        let cursor = TraceAckCursorV1::new(&manifest.run_id, 0);
-        let cursor_bytes = serde_json::to_vec_pretty(&cursor)?;
-        atomic_write(&cursor_path, &cursor_bytes, false)?;
+            let cursor_path = run_dir.join("acknowledgement.json");
+            let cursor = TraceAckCursorV1::new(&manifest.run_id, 0);
+            let cursor_bytes = serde_json::to_vec_pretty(&cursor)?;
+            atomic_write(&cursor_path, &cursor_bytes, false)?;
 
-        let events_path = run_dir.join("events.jsonl");
-        let event_file = create_private_file(&events_path, true)?;
-        let terminal_reserve = terminal_reserve_bytes(&manifest)?;
-        let used_bytes = u64::try_from(manifest_bytes.len())
-            .unwrap_or(u64::MAX)
-            .saturating_add(u64::try_from(cursor_bytes.len()).unwrap_or(u64::MAX))
-            .saturating_add(ACK_CURSOR_GROWTH_RESERVE);
-        let mut scopes = BTreeMap::new();
-        scopes.insert(main_scope.id.clone(), main_scope);
-        let run = Self {
-            inner: Arc::new(TraceRunInner {
-                manifest,
-                run_dir,
-                blobs_dir,
-                events_path,
-                cursor_path,
-                lock_path: lock_path.clone(),
-                lock_file,
-                started: Instant::now(),
-                state: Mutex::new(RunState {
-                    event_file,
-                    next_seq: 1,
-                    used_bytes,
-                    terminal_reserve,
-                    acknowledged_seq: 0,
-                    terminal: false,
-                    disabled: false,
-                    scopes,
-                    source_main_scope_id: None,
-                    blobs: BTreeMap::new(),
+            let events_path = run_dir.join("events.jsonl");
+            let event_file = create_private_file(&events_path, true)?;
+            let terminal_reserve = terminal_reserve_bytes(&manifest)?;
+            let used_bytes = u64::try_from(manifest_bytes.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(u64::try_from(cursor_bytes.len()).unwrap_or(u64::MAX))
+                .saturating_add(ACK_CURSOR_GROWTH_RESERVE);
+            let mut scopes = BTreeMap::new();
+            scopes.insert(main_scope.id.clone(), main_scope);
+            let run = Self {
+                inner: Arc::new(TraceRunInner {
+                    manifest,
+                    run_dir: run_dir.clone(),
+                    blobs_dir,
+                    events_path,
+                    cursor_path,
+                    lock_path: lock_path.clone(),
+                    lock_file,
+                    started: Instant::now(),
+                    state: Mutex::new(RunState {
+                        event_file,
+                        next_seq: 1,
+                        used_bytes,
+                        terminal_reserve,
+                        acknowledged_seq: 0,
+                        terminal: false,
+                        disabled: false,
+                        scopes,
+                        source_main_scope_id: None,
+                        blobs: BTreeMap::new(),
+                    }),
                 }),
-            }),
-        };
-        fs2::FileExt::unlock(&run.inner.lock_file)
-            .map_err(|source| io_error("unlock new trace spool", &lock_path, source))?;
-        run.append_host_event(
-            started_at,
-            0,
-            AgentActivityEventV1::RunStarted(RunStartedV1 {
-                capture: run.inner.manifest.policy.capture,
-            }),
-            true,
-        )?;
-        Ok(run)
+            };
+            fs2::FileExt::unlock(&run.inner.lock_file)
+                .map_err(|source| io_error("unlock new trace spool", &lock_path, source))?;
+            run.append_host_event(
+                started_at,
+                0,
+                AgentActivityEventV1::RunStarted(RunStartedV1 {
+                    capture: run.inner.manifest.policy.capture,
+                }),
+                true,
+            )?;
+            Ok(run)
+        })();
+        let root_unlock = fs2::FileExt::unlock(&root_lock_file)
+            .map_err(|source| io_error("unlock aggregate trace spool", &root_lock_path, source));
+        match (creation, root_unlock) {
+            (Err(error), _) => {
+                let _ = std::fs::remove_dir_all(&run_dir);
+                Err(error)
+            }
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(run), Ok(())) => Ok(run),
+        }
     }
 
     pub fn run_id(&self) -> &str {
@@ -436,6 +471,11 @@ impl TraceRun {
         }
         unlock_spool(&self.inner)?;
         state.acknowledged_seq = highest_contiguous_seq;
+        let compact_terminal = state.terminal && highest_contiguous_seq == last_seq;
+        drop(state);
+        if compact_terminal {
+            acknowledge_recovered_run(&self.inner.run_dir, highest_contiguous_seq)?;
+        }
         Ok(())
     }
 

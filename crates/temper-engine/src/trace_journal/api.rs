@@ -514,13 +514,16 @@ impl AgentTraceJournal {
                 report.preserved_incomplete += 1;
                 continue;
             };
-            let completed_at = DateTime::parse_from_rfc3339(completed_at)
-                .map_err(|error| {
-                    TraceJournalError::CorruptRun(format!(
-                        "invalid summary completion time: {error}"
-                    ))
-                })?
-                .with_timezone(&Utc);
+            let completed_at = match DateTime::parse_from_rfc3339(completed_at) {
+                Ok(completed_at) => completed_at.with_timezone(&Utc),
+                Err(error) => {
+                    report.failures.push(TraceRecoveryFailure {
+                        run_directory: directory.display().to_string(),
+                        error: format!("invalid summary completion time: {error}"),
+                    });
+                    continue;
+                }
+            };
             let age = now.signed_duration_since(completed_at);
             if age
                 < chrono::Duration::days(i64::from(
@@ -529,8 +532,16 @@ impl AgentTraceJournal {
             {
                 continue;
             }
-            let metadata = fs::symlink_metadata(&directory)
-                .map_err(|error| io_error(format!("inspect {}", directory.display()), error))?;
+            let metadata = match fs::symlink_metadata(&directory) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    report.failures.push(TraceRecoveryFailure {
+                        run_directory: directory.display().to_string(),
+                        error: format!("inspect retention target: {error}"),
+                    });
+                    continue;
+                }
+            };
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 report.failures.push(TraceRecoveryFailure {
                     run_directory: directory.display().to_string(),
@@ -538,13 +549,20 @@ impl AgentTraceJournal {
                 });
                 continue;
             }
-            fs::remove_dir_all(&directory).map_err(|error| {
-                io_error(
-                    format!("remove retained run {}", directory.display()),
-                    error,
-                )
-            })?;
-            sync_directory(&self.inner.runs_root)?;
+            if let Err(error) = fs::remove_dir_all(&directory) {
+                report.failures.push(TraceRecoveryFailure {
+                    run_directory: directory.display().to_string(),
+                    error: format!("remove retained run: {error}"),
+                });
+                continue;
+            }
+            if let Err(error) = sync_directory(&self.inner.runs_root) {
+                report.failures.push(TraceRecoveryFailure {
+                    run_directory: directory.display().to_string(),
+                    error: format!("sync retained runs root: {error}"),
+                });
+                continue;
+            }
             report.removed += 1;
         }
         Ok(report)

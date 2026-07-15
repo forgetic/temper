@@ -105,9 +105,10 @@ impl TraceCollector {
         Ok(runs)
     }
 
-    /// Advances one recovered run's durable forwarding cursor. The complete
-    /// spool is retained for crash diagnosis; the cursor is the compaction
-    /// boundary and never advances beyond records verified on disk.
+    /// Advances one recovered run's durable forwarding cursor. Partial
+    /// acknowledgements retain the complete restart-readable spool. Once the
+    /// terminal sequence is acknowledged, the event/blob payload is replaced
+    /// by a compact durable acknowledgement marker.
     pub fn acknowledge(&self, run_id: &str, highest_contiguous_seq: u64) -> Result<(), TraceError> {
         let root = self
             .config

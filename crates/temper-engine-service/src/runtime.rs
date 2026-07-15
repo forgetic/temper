@@ -16,8 +16,9 @@ use temper_forge::{Forge, RepositoryId, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
-    converge_startup_orphans, engine_config, ensure_workflow_labels, resolve_repositories,
-    result_applier, role_feed_targets, stage_startup_assignments, worker_pool_auth_config,
+    AGENT_TRACE_RETENTION_INTERVAL, TraceRetentionTask, converge_startup_orphans, engine_config,
+    ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
+    spawn_trace_retention_task, stage_startup_assignments, worker_pool_auth_config,
     workflow_role_limits,
 };
 
@@ -118,6 +119,14 @@ pub async fn run_async(
         None => daemon,
     };
     let daemon = attach_trace_query(daemon, &agent_traces, trace_journal.as_ref());
+    let trace_retention = trace_journal.as_ref().map(|journal| {
+        spawn_trace_retention_task(
+            &spawner,
+            daemon.clone(),
+            journal.clone(),
+            AGENT_TRACE_RETENTION_INTERVAL,
+        )
+    });
     let server = temper_engine::serve(&handle, &daemon, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
@@ -163,7 +172,7 @@ pub async fn run_async(
         wake_targets,
     )?;
 
-    drain_after_signal(&daemon, server).await
+    drain_after_signal(&daemon, server, trace_retention).await
 }
 
 pub fn start_trace_journal(
@@ -344,6 +353,7 @@ fn attach_webhook(
 async fn drain_after_signal(
     daemon_guard: &Daemon,
     server: temper_engine_io::http::EngineHttpServer,
+    trace_retention: Option<TraceRetentionTask>,
 ) -> Result<(), String> {
     let mut sigint = skein::signal::sigint()
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
@@ -358,6 +368,9 @@ async fn drain_after_signal(
         }
     })
     .await;
+    if let Some(trace_retention) = trace_retention {
+        trace_retention.stop().await;
+    }
     daemon_guard.release_assignments_for_shutdown().await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())

@@ -300,6 +300,8 @@ mod tests {
                 let recovered = collector.recover().expect("recover acked");
                 assert_eq!(recovered[0].manifest.run_id, run_id);
                 assert_eq!(recovered[0].acknowledged_seq, 2);
+                assert!(recovered[0].events.is_empty());
+                assert!(temp.path().join(&run_id).join("compacted.json").is_file());
                 assert_eq!(transport.sent.lock().expect("sent").len(), 2);
 
                 // A new collector models a worker restart. The old spool is

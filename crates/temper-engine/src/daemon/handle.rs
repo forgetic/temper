@@ -344,6 +344,21 @@ impl Daemon {
         }
     }
 
+    /// Returns the live protection set used by periodic trace retention.
+    /// Recovered assignments remain in this snapshot while they are staged or
+    /// reattached, and ordinary assignments remain until result completion.
+    pub async fn trace_retention_protection(&self) -> Option<crate::RetentionProtection> {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::TraceRetentionProtection(reply))
+            .is_err()
+        {
+            return None;
+        }
+        rx.recv().await
+    }
+
     pub async fn enqueue_job(
         &self,
         job_id: impl Into<String>,
