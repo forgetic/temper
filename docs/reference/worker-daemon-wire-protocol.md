@@ -34,8 +34,9 @@ semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.allowed_verdicts`, `JobContext.verdict_contracts`,
 `JobContext.source_metadata`, `JobContext.artifact_context`, `JobResult.verdict`, `JobResult.body`,
 `JobResult.children`, and `JobResult.children[].kind` are all optional, and the
-protocol version remains `1`. The `fetch-context`/`context-response` pair is an
-additive assignment-scoped capability in the same v1 envelope.
+protocol version remains `1`. The `fetch-context`/`context-response` pair and
+`activity-batch`/`activity-ack` pair are additive capabilities in the same v1
+envelope.
 
 ## Envelope
 
@@ -96,6 +97,9 @@ when known, is carried in the payload.
 | --- | --- | --- | --- |
 | `protocol_version` | integer | yes | Constant `1`. |
 | `type` | string | yes | Constant `assign`. |
+| `trace_context` | object | no | Validated W3C context for this assignment delivery. It is not persisted as a multi-run workstream parent. |
+| `trace_context.traceparent` | string | yes when `trace_context` is present | Canonical lowercase W3C `traceparent`. |
+| `trace_context.tracestate` | string | no | Bounded W3C `tracestate` (at most 512 bytes). |
 | `job_id` | string | yes | Daemon-generated unique job id. |
 | `role` | string | yes | Workflow role id for the assignment. |
 | `repo` | string | yes | Repository slug. |
@@ -118,6 +122,7 @@ workflow jobs so Smith-style workers can run without Forge API access:
 
 | Field | Type | Required | Semantics |
 | --- | --- | --- | --- |
+| `trace_context` | object | no | Same optional W3C assignment context as the envelope; the worker rejects conflicting copies and propagates the value into `WorkspaceContext`. |
 | `role` | string | yes | Workflow role id. |
 | `repo` | string | yes | `owner/name` repository slug used for worker routing. |
 | `queue` | string | yes | Workflow queue id. |
@@ -212,6 +217,50 @@ predictably, with truncation dimensions reported in the result. See
 [`context-response.json`](worker-daemon-wire-protocol/examples/context-response.json),
 and the stable error example
 [`context-response-error.json`](worker-daemon-wire-protocol/examples/context-response-error.json).
+
+### `activity-batch` — worker → daemon
+
+The worker forwards one contiguous, durably spooled canonical activity batch.
+The shared activity DTO remains owned by `temper-protocol-activity`; this
+worker-protocol envelope adds authenticated transport identity and the immutable
+assignment binding used by the engine journal.
+
+| Field | Type | Required | Semantics |
+| --- | --- | --- | --- |
+| `protocol_version` | integer | yes | Constant `1`. |
+| `type` | string | yes | Constant `activity-batch`. |
+| `worker_id` | string | yes | Registered worker that stamped and spooled the canonical events. |
+| `assignment_id` | string | yes | Durable assignment/attempt identity; currently the worker job id. |
+| `capture_policy` | object | yes | Versioned capture/quota policy used when the spool was written. |
+| `batch` | object | yes | Shared `AgentActivityBatch`: one run id, contiguous events, and exactly the referenced blob attachments. |
+
+Split HTTP delivery uses `POST /v1/message` and is disabled unless worker-pool
+authentication is configured. The daemon verifies the bearer credential,
+registration, worker capability for the event role/repository, envelope worker
+identity, and immutable event identity before journal ingestion. The co-resident
+carrier is trusted but still requires a registered, capable worker. Forwarding
+continues independently of job-result delivery, so a restarted worker can drain
+old terminal spools without rerunning an agent.
+
+### `activity-ack` — daemon → worker
+
+The daemon returns this response only after the journal has appended and synced
+all newly accepted contiguous records. Lost replies are safe: the worker resends
+the same batch and the journal deduplicates by `(run_id, seq)`.
+
+| Field | Type | Required | Semantics |
+| --- | --- | --- | --- |
+| `protocol_version` | integer | yes | Constant `1`. |
+| `type` | string | yes | Constant `activity-ack`. |
+| `worker_id` | string | yes | Echo of the authenticated worker identity. |
+| `acknowledgement` | object | yes | Shared acknowledgement containing `version`, `run_id`, and `highest_contiguous_seq`. |
+
+The worker rejects mismatched or out-of-range acknowledgements and advances its
+atomic spool cursor only through `highest_contiguous_seq`. Count and encoded-byte
+batch limits, capped retry backoff, and a bounded terminal flush keep trace
+outages non-fatal to product work. See
+[`activity-batch.json`](worker-daemon-wire-protocol/examples/activity-batch.json)
+and [`activity-ack.json`](worker-daemon-wire-protocol/examples/activity-ack.json).
 
 ### `heartbeat` — worker → daemon
 
@@ -362,5 +411,5 @@ assignment remains active.
 - Readers must ignore unknown fields in otherwise valid messages.
 - Additive optional fields and message capabilities do not require a version bump.
 - `artifact_context` is additive. The singular `artifact` remains valid and unchanged for backward compatibility.
-- `fetch-context`/`context-response` are optional v1 capabilities; workers that do not use them continue to interoperate.
+- `fetch-context`/`context-response` and `activity-batch`/`activity-ack` are optional v1 capabilities; workers that do not use them continue to interoperate.
 - Context operations and public errors are closed vocabularies even though readers ignore unknown fields elsewhere.

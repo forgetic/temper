@@ -3,7 +3,7 @@ use temper_protocol_agent::{
 };
 use temper_protocol_worker::{
     ArtifactContextBundle, JobArtifactSnapshot, PullRequestFreshness as WorkerPullRequestFreshness,
-    RepoAccess, WorkspaceManifest,
+    RepoAccess, W3cTraceContext, WorkspaceManifest,
 };
 use temper_verdict::{SourceMetadata, VerdictContracts};
 
@@ -31,6 +31,7 @@ pub(super) fn build_workspace_context(
     source_metadata: &SourceMetadata,
     guidance: Option<&str>,
     pull_request_freshness: Option<&WorkerPullRequestFreshness>,
+    trace_context: Option<W3cTraceContext>,
 ) -> WorkspaceContext {
     let (artifact_type, target_kind) = match artifact_wire_kind {
         "pull_request" => ("pull_request", "PullRequest"),
@@ -84,6 +85,7 @@ pub(super) fn build_workspace_context(
         .collect();
 
     WorkspaceContext {
+        trace_context,
         repos,
         work_item: WorkspaceWorkItem {
             role: role.to_string(),

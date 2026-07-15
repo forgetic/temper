@@ -29,7 +29,10 @@ mod core;
 mod protocol;
 
 pub use core::{AgentMachine, ArgPreviewFn};
-pub use protocol::{AgentCompletion, AgentEvent, AgentRequest, AgentStop, StreamDelta};
+pub use protocol::{
+    AgentCompletion, AgentEvent, AgentRequest, AgentStop, ModelCallStatus, StreamDelta,
+    ToolCallStatus, ToolResultMetadata,
+};
 
 #[cfg(test)]
 mod tests;

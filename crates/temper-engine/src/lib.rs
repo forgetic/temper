@@ -39,6 +39,8 @@ pub mod forge_applier;
 pub mod lease_applier;
 pub mod mechanical;
 pub mod pr_freshness;
+pub mod trace_journal;
+pub mod trace_query;
 mod verdict_contract;
 mod verdict_validation;
 mod webhook;
@@ -64,7 +66,7 @@ pub use artifact_context::{
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
-pub use engine_config::EngineConfig;
+pub use engine_config::{EngineAgentTraceConfig, EngineConfig};
 pub use feed::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, TargetedRoleFeedResult, WorkItemJob,
     enqueue_targeted_role_work, job_from_work_item,
@@ -79,6 +81,16 @@ pub use mechanical::{
     spawn_coordinated_mechanical_backstop, spawn_mechanical_backstop,
 };
 pub use pr_freshness::check_pull_request_freshness;
+pub use trace_journal::{
+    AgentTraceJournal, AgentTraceManifest, AgentTraceRun, AgentTraceRunStatus, AgentTraceSummary,
+    AuthenticatedWorkerBinding, RetentionProtection, RetentionReport, TraceAuditRecord,
+    TraceJournalConfig, TraceJournalError, TraceRecoveryFailure, TraceRecoveryReport,
+};
+pub use trace_query::{
+    AGENT_RUNS_PATH, DEFAULT_EVENT_PAGE_LIMIT, DEFAULT_RUN_PAGE_LIMIT, MAX_EVENT_PAGE_LIMIT,
+    MAX_RUN_PAGE_LIMIT, TraceEventPage, TraceRunCounts, TraceRunIdentity, TraceRunPage,
+    TraceRunSummary,
+};
 // Public so out-of-crate `ResultApplier` implementations can name the job type
 // the trait passes them.
 pub use temper_protocol_worker::{JobArtifactSnapshot, JobContext, RepoOutcome, WorkerAuth};

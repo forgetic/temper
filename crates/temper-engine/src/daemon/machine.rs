@@ -15,7 +15,8 @@ use temper_engine_io::{EngineTime, Machine};
 use temper_forge::RepositoryPath;
 use temper_protocol_worker::{
     Artifact, Assign, ContextResponse, ErrorCode, FetchContext, JobResult, Poll, ProtocolError,
-    PullRequestFreshness, WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
+    PullRequestFreshness, WORKER_PROTOCOL_VERSION, WorkerActivityBatch, WorkerAuth,
+    WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -39,6 +40,8 @@ pub(super) enum DaemonCompletion {
     Http {
         request: HttpRequestData,
         responder: HttpResponder,
+        /// Set only by the co-resident carrier; public HTTP is always false.
+        trusted_transport: bool,
     },
     /// A long-poll waiter's max-wait deadline elapsed.
     PollDeadline { id: u64 },
@@ -85,6 +88,8 @@ pub(super) enum DaemonCompletion {
     ReleaseAssignmentsForShutdown {
         reply: temper_engine_io::OneshotSender<()>,
     },
+    /// Snapshot the jobs whose terminal traces retention must not remove.
+    TraceRetentionProtection(temper_engine_io::OneshotSender<crate::RetentionProtection>),
     /// Stop the daemon loop without releasing durable assignments.
     Crash {
         reply: temper_engine_io::OneshotSender<()>,
@@ -219,6 +224,18 @@ pub(super) enum DaemonRequest {
     RunFetchContext {
         request: FetchContext,
         role: String,
+        responder: HttpResponder,
+    },
+    /// Execute an authenticated finite trace query off the pure machine. The
+    /// request remains opaque here so credentials and filesystem state never
+    /// enter daemon snapshots or transitions.
+    RunTraceQuery {
+        request: HttpRequestData,
+        responder: HttpResponder,
+    },
+    IngestActivity {
+        request: WorkerActivityBatch,
+        binding: crate::AuthenticatedWorkerBinding,
         responder: HttpResponder,
     },
     RespondContext {
@@ -493,7 +510,11 @@ impl Machine for DaemonMachine {
     ) -> Vec<DaemonRequest> {
         self.now = now;
         match completion {
-            DaemonCompletion::Http { request, responder } => self.handle_http(request, responder),
+            DaemonCompletion::Http {
+                request,
+                responder,
+                trusted_transport,
+            } => self.handle_http(request, responder, trusted_transport),
             DaemonCompletion::PollDeadline { id } => {
                 if self.startup_recovery {
                     return Vec::new();
@@ -683,6 +704,18 @@ impl Machine for DaemonMachine {
                     }
                 }
                 vec![DaemonRequest::RunShutdownRelease { assignments, reply }]
+            }
+            DaemonCompletion::TraceRetentionProtection(reply) => {
+                reply.send(crate::RetentionProtection {
+                    job_ids: self
+                        .core
+                        .in_flight_jobs()
+                        .into_iter()
+                        .map(|job| job.job_id)
+                        .collect(),
+                    ..crate::RetentionProtection::default()
+                });
+                Vec::new()
             }
             DaemonCompletion::Crash { reply } => {
                 self.stopped = true;

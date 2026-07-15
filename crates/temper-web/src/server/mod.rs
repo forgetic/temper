@@ -29,6 +29,12 @@
 pub mod request;
 pub mod sse;
 pub mod static_files;
+mod trace_proxy;
+
+pub use trace_proxy::route_trace_get;
+#[cfg(test)]
+use trace_proxy::{parse_event_query, parse_trace_query};
+use trace_proxy::{parse_trace_stream_target, serve_trace_events};
 
 use std::io::{BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -42,7 +48,8 @@ use crate::feeds::logtail::{LogLineSource, LogTailAdapter};
 use crate::feeds::snapshot_source::SnapshotSource;
 use crate::project::lanes::LaneMap;
 use crate::project::snapshot::project_snapshot;
-use crate::readmodel::ReadModel;
+use crate::readmodel::{Delta, ReadModel};
+use crate::trace::TraceApiClient;
 use sse::Broadcaster;
 
 /// A buffered HTTP response for the non-SSE endpoints.
@@ -83,6 +90,24 @@ impl Response {
         }
     }
 
+    fn bad_request(message: &'static str) -> Self {
+        Self {
+            status: 400,
+            reason: "Bad Request",
+            content_type: "text/plain; charset=utf-8",
+            body: message.as_bytes().to_vec(),
+        }
+    }
+
+    fn trace_bad_gateway() -> Self {
+        Self {
+            status: 502,
+            reason: "Bad Gateway",
+            content_type: "text/plain; charset=utf-8",
+            body: b"engine trace API unavailable".to_vec(),
+        }
+    }
+
     /// A 502 used when the upstream interaction-service is unreachable.
     fn bad_gateway() -> Self {
         Self {
@@ -114,6 +139,7 @@ pub struct AppState {
     broadcaster: Broadcaster,
     ui_dir: std::path::PathBuf,
     conversation: Option<Arc<ConversationProxy>>,
+    trace_client: Option<Arc<dyn TraceApiClient>>,
 }
 
 impl AppState {
@@ -135,6 +161,7 @@ impl AppState {
             broadcaster: Broadcaster::new(),
             ui_dir,
             conversation: None,
+            trace_client: None,
         }
     }
 
@@ -150,6 +177,58 @@ impl AppState {
     #[must_use]
     pub fn conversation(&self) -> Option<&Arc<ConversationProxy>> {
         self.conversation.as_ref()
+    }
+
+    /// Attach the server-side engine trace client. Its credential remains
+    /// encapsulated by the client and is never serialized into board state.
+    #[must_use]
+    pub fn with_trace_client(mut self, client: Arc<dyn TraceApiClient>) -> Self {
+        self.trace_client = Some(client);
+        self
+    }
+
+    #[must_use]
+    pub fn trace_client(&self) -> Option<&Arc<dyn TraceApiClient>> {
+        self.trace_client.as_ref()
+    }
+
+    /// Distinct artifacts currently represented by cards. Global trace polling
+    /// queries only these filters, avoiding journal scans and transcript reads
+    /// for unrelated or already-retained runs.
+    #[must_use]
+    pub(crate) fn trace_artifact_refs(&self) -> Vec<String> {
+        let mut artifacts = self
+            .model
+            .lock()
+            .expect("read-model mutex not poisoned")
+            .cards()
+            .values()
+            .map(|card| card.artifact_ref.clone())
+            .collect::<Vec<_>>();
+        artifacts.sort();
+        artifacts.dedup();
+        artifacts
+    }
+
+    /// Project one low-rate canonical boundary onto a real card. Unknown or
+    /// already-removed artifacts are ignored without consuming board sequence
+    /// space, preventing irrelevant trace history from reaching subscribers.
+    pub fn ingest_trace_activity(
+        &self,
+        artifact_ref: &str,
+        event: crate::board::StreamEvent,
+    ) -> bool {
+        let id = {
+            let model = self.model.lock().expect("read-model mutex not poisoned");
+            model
+                .cards()
+                .values()
+                .find(|card| card.artifact_ref == artifact_ref)
+                .map(|card| card.id.clone())
+        };
+        let Some(id) = id else { return false };
+        self.ingest(Delta::PushStream { id, event });
+        true
     }
 
     /// The board SSE hub (the `/events` board feed; the conversation proxy owns
@@ -333,6 +412,7 @@ fn handle_connection(
         return Ok(()); // closed/empty connection
     };
     let method = request.line.method.as_str();
+    let target = request.line.path.as_str();
     let path_only = request.line.path_only();
 
     if method == "GET" && path_only == "/events" {
@@ -341,8 +421,51 @@ fn handle_connection(
     if method == "GET" && path_only == "/conversations/events" {
         return serve_conversation_events(stream, state, keep_alive);
     }
+    if method == "GET" {
+        match parse_trace_stream_target(target) {
+            Ok(Some((run_id, after_seq))) => {
+                let last_event_id = request
+                    .headers
+                    .get("last-event-id")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                if state.trace_client().is_none() {
+                    let response = Response::service_unavailable("agent trace API disabled");
+                    return request::write_response(
+                        &mut stream,
+                        response.status,
+                        response.reason,
+                        response.content_type,
+                        &response.body,
+                    );
+                }
+                return serve_trace_events(
+                    stream,
+                    state,
+                    &run_id,
+                    after_seq.max(last_event_id),
+                    keep_alive
+                        .min(Duration::from_secs(1))
+                        .max(Duration::from_millis(50)),
+                );
+            }
+            Err(message) => {
+                let response = Response::bad_request(message);
+                return request::write_response(
+                    &mut stream,
+                    response.status,
+                    response.reason,
+                    response.content_type,
+                    &response.body,
+                );
+            }
+            Ok(None) => {}
+        }
+    }
 
-    let response = if method == "POST" && path_only.starts_with("/conversations") {
+    let response = if method == "GET" && path_only.starts_with("/api/agent-runs") {
+        route_trace_get(state, target)
+    } else if method == "POST" && path_only.starts_with("/conversations") {
         route_conversation_post(state, path_only, &request.body)
     } else {
         route(state, method, path_only)

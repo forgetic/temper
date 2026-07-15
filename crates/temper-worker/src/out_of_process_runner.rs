@@ -24,19 +24,29 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use temper_protocol_activity::{
+    ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, TRACE_POLICY_FLAG,
+};
 use temper_protocol_agent::{
     AgentToolConfig, FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, SUBMIT_FOR_PR_ADDRESS_FLAG,
     SubmitForPrRequest, SubmitForPrResponse, TOOL_CONFIG_FLAG, WorkspaceContext,
 };
 
+use crate::WorkerAgentTraceConfig;
 use crate::agent_runner::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
     WorkspaceResult,
 };
 use crate::pre_push::submit_for_pr_pre_push_response_blocking;
+use crate::trace::{TraceCollector, TraceRun};
 
 mod side_channel;
+mod stderr;
+mod terminal;
 use side_channel::{ForgeSideChannelRequest, start_forge_server, start_submit_server};
+#[cfg(test)]
+use stderr::stderr_tail;
+use stderr::{DiagnosticIdentity, emit_reader_unavailable, stream as stream_stderr};
 
 /// Host-side submit gate used by the out-of-process carrier.
 type SubmitForPrHandler =
@@ -64,11 +74,21 @@ pub struct OutOfProcessRunner {
     /// current workflow role, these are written to a per-run JSON file and
     /// passed as `--tool-config <file>`.
     tool_config: Option<AgentToolConfig>,
+    /// Shared, non-secret capture policy written to a per-run JSON file for the
+    /// first-party agent process. `None` preserves third-party agent compatibility.
+    trace_policy: Option<AgentActivityCapturePolicyV1>,
+    /// Worker-owned durable collector. It runs for every invocation, including
+    /// third-party children that never connect to an activity endpoint.
+    trace_collector: TraceCollector,
     /// Host-controlled submit gate serviced over a worker-owned local channel
     /// while the child process remains alive.
     submit_for_pr: SubmitForPrHandler,
     /// Optional authenticated, assignment-bound read-only Forge host.
     forge_context: Option<AgentForgeContextHost>,
+    /// Unit-test override used to verify diagnostics emitted from the blocking
+    /// pool without installing a process-global subscriber.
+    #[cfg(test)]
+    diagnostic_dispatch: Option<tracing::Dispatch>,
 }
 
 impl std::fmt::Debug for OutOfProcessRunner {
@@ -81,6 +101,8 @@ impl std::fmt::Debug for OutOfProcessRunner {
                 &self.env.iter().map(|(key, _)| key).collect::<Vec<_>>(),
             )
             .field("tool_config", &self.tool_config)
+            .field("trace_policy", &self.trace_policy)
+            .field("trace_collector", &self.trace_collector)
             .field("submit_for_pr", &"<handler>")
             .field(
                 "forge_context",
@@ -97,8 +119,12 @@ impl OutOfProcessRunner {
             command,
             env: Vec::new(),
             tool_config: None,
+            trace_policy: None,
+            trace_collector: TraceCollector::default(),
             submit_for_pr: default_submit_for_pr_handler(),
             forge_context: None,
+            #[cfg(test)]
+            diagnostic_dispatch: None,
         }
     }
 
@@ -114,6 +140,20 @@ impl OutOfProcessRunner {
     #[must_use]
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
+        self
+    }
+
+    /// Sets the non-secret trace capture policy written for first-party agents.
+    #[must_use]
+    pub fn with_trace_policy(mut self, trace_policy: Option<AgentActivityCapturePolicyV1>) -> Self {
+        self.trace_policy = trace_policy;
+        self
+    }
+
+    /// Configures worker-owned run collection and its durable spool.
+    #[must_use]
+    pub fn with_trace_collector(mut self, config: WorkerAgentTraceConfig) -> Self {
+        self.trace_collector = TraceCollector::new(config);
         self
     }
 
@@ -137,6 +177,20 @@ impl OutOfProcessRunner {
         self.forge_context = Some(host);
         self
     }
+
+    #[cfg(test)]
+    fn with_diagnostic_dispatch(mut self, dispatch: tracing::Dispatch) -> Self {
+        self.diagnostic_dispatch = Some(dispatch);
+        self
+    }
+
+    fn diagnostic_dispatch(&self) -> tracing::Dispatch {
+        #[cfg(test)]
+        if let Some(dispatch) = &self.diagnostic_dispatch {
+            return dispatch.clone();
+        }
+        tracing::dispatcher::get_default(|dispatch| dispatch.clone())
+    }
 }
 
 impl AgentRunner for OutOfProcessRunner {
@@ -145,6 +199,37 @@ impl AgentRunner for OutOfProcessRunner {
         job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
+    ) -> Result<AgentRunOutput, AgentRunError> {
+        let trace = match self.trace_collector.begin_run(job_id, context) {
+            Ok(trace) => trace,
+            Err(error) => {
+                tracing::warn!(
+                    target: "temper::worker",
+                    service = "worker",
+                    event = "agent.activity.start_failed",
+                    job_id,
+                    correlation_key = context.correlation_key.as_str(),
+                    %error,
+                    "worker could not start durable agent tracing; continuing without it"
+                );
+                None
+            }
+        };
+        let outcome = self.run_agent(job_id, context, cwd, trace.as_ref()).await;
+        if let Some(trace) = trace {
+            terminal::finish_and_flush(&trace, &self.trace_collector, &outcome, job_id).await;
+        }
+        outcome
+    }
+}
+
+impl OutOfProcessRunner {
+    async fn run_agent(
+        &self,
+        job_id: &str,
+        context: &WorkspaceContext,
+        cwd: &Path,
+        trace: Option<&TraceRun>,
     ) -> Result<AgentRunOutput, AgentRunError> {
         let Some((program, args)) = self.command.split_first() else {
             return Err(AgentRunError::permanent("agent command is empty"));
@@ -179,6 +264,37 @@ impl AgentRunner for OutOfProcessRunner {
             }
             None => None,
         };
+        let trace_policy_path = self.trace_policy.as_ref().and_then(|policy| {
+            let path = temp.path().join("trace-policy.json");
+            let bytes = match serde_json::to_vec_pretty(policy) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper::worker",
+                        service = "worker",
+                        event = "agent.activity.policy_serialize_failed",
+                        job_id,
+                        %error,
+                        "worker could not serialize agent trace policy; continuing without child activity"
+                    );
+                    return None;
+                }
+            };
+            if let Err(error) = std::fs::write(&path, bytes) {
+                tracing::warn!(
+                    target: "temper::worker",
+                    service = "worker",
+                    event = "agent.activity.policy_write_failed",
+                    job_id,
+                    path = %path.display(),
+                    %error,
+                    "worker could not write agent trace policy; continuing without child activity"
+                );
+                None
+            } else {
+                Some(path)
+            }
+        });
 
         let submit_listener = if submit_for_pr_available(context) {
             let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
@@ -208,6 +324,29 @@ impl AgentRunner for OutOfProcessRunner {
             None
         };
 
+        let activity_endpoint = if self.trace_policy.is_some() {
+            trace.and_then(|trace| match trace.bind_endpoint() {
+                Ok(endpoint) => Some(endpoint),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "temper::worker",
+                        service = "worker",
+                        event = "agent.activity.endpoint_failed",
+                        run_id = trace.run_id(),
+                        job_id,
+                        %error,
+                        "worker could not bind the child activity endpoint; continuing without child activity"
+                    );
+                    None
+                }
+            })
+        } else {
+            None
+        };
+        let activity_address = activity_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.address().to_string());
+
         let accepted_submit = AcceptedSubmitProofStore::new();
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
@@ -218,28 +357,39 @@ impl AgentRunner for OutOfProcessRunner {
         let context_path_owned = context_path.clone();
         let result_path_owned = result_path.clone();
         let tool_config_path_owned = tool_config_path.clone();
+        let trace_policy_path_owned = trace_policy_path.clone();
+        let activity_address_owned = activity_address.clone();
         let accepted_submit_for_child = accepted_submit.clone();
         let (forge_requests, mut forge_request_rx) = temper_worker_io::channel();
         let forge_context = self.forge_context.clone();
         let job_id = job_id.to_string();
+        let child_job_id = job_id.clone();
+        // Carry the caller's tracing dispatch onto the blocking pool so scoped
+        // subscribers and worker log routing see child diagnostics there too.
+        let tracing_dispatch = self.diagnostic_dispatch();
         // `skein::runtime::spawn_blocking` returns the closure's value
         // directly (no JoinError wrapper), so the closure's own
         // `Result<ChildOutcome, AgentRunError>` is what comes back.
         let mut child = Box::pin(skein::runtime::spawn_blocking(move || {
-            run_child(ChildRunRequest {
-                program: &program_owned,
-                args: &args_owned,
-                env: &env_owned,
-                cwd: &cwd_owned,
-                context: &context_owned,
-                context_path: &context_path_owned,
-                result_path: &result_path_owned,
-                tool_config_path: tool_config_path_owned.as_deref(),
-                submit_listener,
-                forge_listener,
-                forge_requests,
-                submit_for_pr,
-                accepted_submit: accepted_submit_for_child,
+            tracing::dispatcher::with_default(&tracing_dispatch, || {
+                run_child(ChildRunRequest {
+                    program: &program_owned,
+                    args: &args_owned,
+                    env: &env_owned,
+                    cwd: &cwd_owned,
+                    context: &context_owned,
+                    job_id: &child_job_id,
+                    context_path: &context_path_owned,
+                    result_path: &result_path_owned,
+                    tool_config_path: tool_config_path_owned.as_deref(),
+                    trace_policy_path: trace_policy_path_owned.as_deref(),
+                    activity_address: activity_address_owned.as_deref(),
+                    submit_listener,
+                    forge_listener,
+                    forge_requests,
+                    submit_for_pr,
+                    accepted_submit: accepted_submit_for_child,
+                })
             })
         }));
         let outcome = loop {
@@ -281,6 +431,10 @@ impl AgentRunner for OutOfProcessRunner {
                 Next::Forge(None) => break child.as_mut().await,
             }
         };
+
+        if let Some(endpoint) = activity_endpoint {
+            endpoint.stop();
+        }
 
         let ChildOutcome {
             status_code,
@@ -325,9 +479,12 @@ struct ChildRunRequest<'a> {
     env: &'a [(String, String)],
     cwd: &'a Path,
     context: &'a WorkspaceContext,
+    job_id: &'a str,
     context_path: &'a Path,
     result_path: &'a Path,
     tool_config_path: Option<&'a Path>,
+    trace_policy_path: Option<&'a Path>,
+    activity_address: Option<&'a str>,
     submit_listener: Option<(TcpListener, String)>,
     forge_listener: Option<(TcpListener, String)>,
     forge_requests: temper_worker_io::CqSender<ForgeSideChannelRequest>,
@@ -336,9 +493,10 @@ struct ChildRunRequest<'a> {
 }
 
 /// Runs the child to completion on the blocking pool: spawn with stdout
-/// discarded, collect stderr, and return the exit outcome. Returns a
-/// [`transient`](AgentRunError::transient) error only for spawn/IO failures that
-/// a re-dispatch might survive.
+/// discarded, stream bounded stderr diagnostics, and return the exit outcome.
+/// Returns a [`transient`](AgentRunError::transient) error only for spawn/wait
+/// failures that a re-dispatch might survive. Stderr reader failures are logged
+/// and never replace the child's exit classification.
 fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError> {
     let ChildRunRequest {
         program,
@@ -346,9 +504,12 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         env,
         cwd,
         context,
+        job_id,
         context_path,
         result_path,
         tool_config_path,
+        trace_policy_path,
+        activity_address,
         submit_listener,
         forge_listener,
         forge_requests,
@@ -371,6 +532,12 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
     if let Some(path) = tool_config_path {
         command.arg(TOOL_CONFIG_FLAG).arg(path);
     }
+    if let Some(path) = trace_policy_path {
+        command.arg(TRACE_POLICY_FLAG).arg(path);
+    }
+    if let Some(address) = activity_address {
+        command.arg(ACTIVITY_ADDRESS_FLAG).arg(address);
+    }
     let submit_server = submit_listener.map(|(listener, address)| {
         command.arg(SUBMIT_FOR_PR_ADDRESS_FLAG).arg(&address);
         start_submit_server(
@@ -391,15 +558,31 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
     for (key, value) in env {
         command.env(key, value);
     }
-    let output = match command
+    let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child.wait_with_output().map_err(|error| {
-            AgentRunError::transient(format!("wait for agent command `{program}`: {error}"))
-        }),
+        .spawn();
+    let outcome = match child {
+        Ok(mut child) => {
+            let identity = DiagnosticIdentity::from_context(job_id, context);
+            let stderr_tail = match child.stderr.take() {
+                Some(stderr) => stream_stderr(stderr, &identity),
+                None => {
+                    emit_reader_unavailable(&identity);
+                    String::new()
+                }
+            };
+            child
+                .wait()
+                .map(|status| ChildOutcome {
+                    status_code: status.code(),
+                    stderr_tail,
+                })
+                .map_err(|error| {
+                    AgentRunError::transient(format!("wait for agent command `{program}`: {error}"))
+                })
+        }
         Err(error) => Err(AgentRunError::transient(format!(
             "spawn agent command `{program}`: {error}"
         ))),
@@ -410,12 +593,7 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
     if let Some(server) = forge_server {
         server.stop();
     }
-    let output = output?;
-
-    Ok(ChildOutcome {
-        status_code: output.status.code(),
-        stderr_tail: stderr_tail(&output.stderr, 2_000),
-    })
+    outcome
 }
 
 fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
@@ -427,22 +605,14 @@ fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
         )
 }
 
-/// Last `max_len` bytes of captured stderr, on a char boundary, for error
-/// messages. The push token is never embedded in a command label or remote URL
-/// (it is passed via a separate `-c http.extraheader` arg), so captured stderr
-/// does not carry it.
-fn stderr_tail(stderr: &[u8], max_len: usize) -> String {
-    let text = String::from_utf8_lossy(stderr).into_owned();
-    if text.len() <= max_len {
-        return text;
-    }
-    let mut start = text.len() - max_len;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    text[start..].to_string()
-}
-
 #[cfg(test)]
 #[path = "out_of_process_runner_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "out_of_process_runner_trace_tests.rs"]
+mod trace_tests;
+
+#[cfg(test)]
+#[path = "out_of_process_runner_stderr_tests.rs"]
+mod stderr_tests;

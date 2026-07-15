@@ -155,6 +155,7 @@ impl Fixture {
 pub fn assign(branch_hint: &str, correlation_key: &str) -> Assign {
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: format!("acme/service/issue-7/engineer/{correlation_key}"),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
@@ -174,6 +175,7 @@ pub fn pr_assign(
     let context = context_builder(branch_hint, correlation_key);
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: format!("acme/service/pull-7/reviewer/{correlation_key}"),
         role: "reviewer".to_string(),
         repo: "acme/service".to_string(),
@@ -359,6 +361,7 @@ pub fn pr_fix_assign(branch_hint: &str, correlation_key: &str) -> Assign {
     let context = pr_fix_job_context(branch_hint, correlation_key);
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: "acme/service/pull_request-7/engineer/pr_ci_failed".to_string(),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
@@ -374,6 +377,7 @@ pub fn pr_merge_conflict_assign(branch_hint: &str, correlation_key: &str) -> Ass
     let context = pr_merge_conflict_job_context(branch_hint, correlation_key);
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: "acme/service/pull_request-7/engineer/pr_merge_conflict".to_string(),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
@@ -389,6 +393,7 @@ pub fn assign_with_context(correlation_key: &str, context: TestJobContext) -> As
     let role = context.role.clone();
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: format!("acme/service/issue-7/{role}/{correlation_key}"),
         role,
         repo: "acme/service".to_string(),

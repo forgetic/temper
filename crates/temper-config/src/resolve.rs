@@ -20,6 +20,7 @@ use std::time::Duration;
 use secrecy::SecretString;
 
 use crate::agent_resolve::{parse_provider_kind, resolve_provider_credential};
+use crate::agent_trace_resolve::resolve_observability;
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
@@ -99,6 +100,13 @@ pub fn resolve_with_options(
         options,
         &agent.profiles,
     )?;
+    let observability = resolve_observability(
+        config,
+        credentials,
+        state_dir.as_deref(),
+        &worker.workspace_root,
+        options,
+    )?;
     let paths = PathSettings {
         state_dir,
         workspace_dir: worker.workspace_root.clone(),
@@ -114,6 +122,7 @@ pub fn resolve_with_options(
     Ok(Resolved {
         deployment,
         paths,
+        observability,
         forge,
         engine,
         worker,

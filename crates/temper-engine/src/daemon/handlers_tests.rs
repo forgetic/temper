@@ -36,6 +36,7 @@ fn verified_webhook_acks_before_wake_scan_finishes() {
             body,
         },
         HttpResponder::from_oneshot(reply),
+        false,
     );
 
     assert_eq!(requests.len(), 4);
@@ -104,6 +105,7 @@ fn proven_heartbeat_is_acknowledged_before_suppression_accounting() {
             body,
         },
         HttpResponder::from_oneshot(reply),
+        false,
     );
 
     assert_eq!(requests.len(), 3);
@@ -225,6 +227,7 @@ fn forgejo_action_run_success_webhook_is_accepted() {
             body,
         },
         HttpResponder::from_oneshot(reply),
+        false,
     );
 
     assert_eq!(requests.len(), 4);

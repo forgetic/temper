@@ -114,6 +114,7 @@ fn standalone_worker_config_uses_resolved_capacity() {
             repo: "ai/temper".to_string(),
         }],
         BTreeMap::new(),
+        temper_worker::WorkerAgentTraceConfig::default(),
     )
     .expect("standalone worker config builds");
 

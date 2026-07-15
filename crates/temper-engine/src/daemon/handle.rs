@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use secrecy::SecretString;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
 use temper_forge::{Forge, Repository, RepositoryId, RepositoryPath};
@@ -117,6 +118,14 @@ impl Daemon {
         self
     }
 
+    /// Installs the durable activity journal used by authenticated worker
+    /// batches. The shared slot lets startup recovery finish before the journal
+    /// is opened without rebuilding the daemon machine.
+    pub fn with_trace_journal(self, journal: crate::AgentTraceJournal) -> Self {
+        *self.trace_journal_slot.lock().expect("trace journal slot") = Some(journal);
+        self
+    }
+
     /// Installs the immutable configured-repository catalog used to authorize
     /// bounded worker context reads.
     pub fn with_artifact_context_catalog(
@@ -163,6 +172,20 @@ impl Daemon {
             .context_reader_slot
             .lock()
             .expect("context reader slot") = Some(Arc::new(reader));
+        self
+    }
+
+    /// Enables every protected agent-trace query route with one runtime-only
+    /// bearer credential. The secret remains in the executor capability and is
+    /// never submitted to the daemon state machine.
+    pub fn with_agent_trace_query(
+        self,
+        journal: crate::AgentTraceJournal,
+        read_token: SecretString,
+    ) -> Self {
+        *self.trace_query_slot.lock().expect("trace query slot") = Some(
+            crate::trace_query::TraceQueryService::new(journal, read_token),
+        );
         self
     }
 
@@ -265,12 +288,16 @@ impl Daemon {
         let context_reader_slot: Arc<
             std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>,
         > = Arc::new(std::sync::Mutex::new(None));
+        let trace_query_slot = Arc::new(std::sync::Mutex::new(None));
+        let trace_journal_slot = Arc::new(std::sync::Mutex::new(None));
         let executor = DaemonExecutor {
             spawner: Arc::clone(&spawner),
             cq: cq_tx.clone(),
             applier,
             wake_executor_slot: Arc::clone(&wake_executor_slot),
             context_reader_slot: Arc::clone(&context_reader_slot),
+            trace_query_slot: Arc::clone(&trace_query_slot),
+            trace_journal_slot: Arc::clone(&trace_journal_slot),
         };
         let machine = DaemonMachine::default_machine_with_worker_pools_and_role_limits(
             apply_grace,
@@ -285,6 +312,8 @@ impl Daemon {
             cq: cq_tx,
             wake_executor_slot,
             context_reader_slot,
+            trace_query_slot,
+            trace_journal_slot,
             change_source_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
             artifact_catalog: Arc::new(crate::ConfiguredRepositoryCatalog::default()),
             artifact_context: None,
@@ -313,6 +342,21 @@ impl Daemon {
         {
             let _ = rx.recv().await;
         }
+    }
+
+    /// Returns the live protection set used by periodic trace retention.
+    /// Recovered assignments remain in this snapshot while they are staged or
+    /// reattached, and ordinary assignments remain until result completion.
+    pub async fn trace_retention_protection(&self) -> Option<crate::RetentionProtection> {
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::TraceRetentionProtection(reply))
+            .is_err()
+        {
+            return None;
+        }
+        rx.recv().await
     }
 
     pub async fn enqueue_job(
@@ -409,6 +453,7 @@ impl Daemon {
         let _ = self.cq.send(DaemonCompletion::Http {
             request,
             responder: HttpResponder::from_oneshot(reply_tx),
+            trusted_transport: true,
         });
         match reply_rx.recv().await {
             Some(response) => decode_in_process_reply(response),
@@ -431,6 +476,7 @@ impl Daemon {
         let _ = self.cq.send(DaemonCompletion::Http {
             request,
             responder: HttpResponder::from_oneshot(reply_tx),
+            trusted_transport: true,
         });
         let response = reply_rx
             .recv()
@@ -601,7 +647,11 @@ pub async fn serve(
         handle,
         bind,
         daemon.cq.clone(),
-        |request, responder| DaemonCompletion::Http { request, responder },
+        |request, responder| DaemonCompletion::Http {
+            request,
+            responder,
+            trusted_transport: false,
+        },
     )
     .await?;
     // §5: WI-3's `trigger: webhook listener up …` banner is the operator-facing
@@ -629,7 +679,11 @@ fn serving_debug_message(addr: impl std::fmt::Display) -> String {
 /// gateways can serve connections against the daemon's queue.
 pub fn h1_handler(daemon: &Daemon) -> temper_engine_io::http::H1CompletionHandler {
     temper_engine_io::http::h1_completion_handler(daemon.cq.clone(), |request, responder| {
-        DaemonCompletion::Http { request, responder }
+        DaemonCompletion::Http {
+            request,
+            responder,
+            trusted_transport: false,
+        }
     })
 }
 

@@ -9,7 +9,10 @@
 
 use std::path::{Path, PathBuf};
 
-use temper_agent::{CodingAgentError, run_coding_agent_native_with_totals_tool_config_and_hosts};
+use temper_agent::{
+    AgentActivityConfig, CodingAgentError,
+    run_coding_agent_native_with_totals_tool_config_and_hosts,
+};
 use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 
 use crate::config::AgentConfig;
@@ -53,6 +56,10 @@ fn drive_coding_loop(
     let tool_config = config.tool_config.clone();
     let submit_for_pr = config.submit_for_pr.clone();
     let forge_context = config.forge_context.clone();
+    let activity_config = AgentActivityConfig {
+        policy: config.trace_policy.clone(),
+        address: config.activity_address.clone(),
+    };
     temper_agent_io::block_on_with(move |_cx, handle| async move {
         let (result, _totals) = run_coding_agent_native_with_totals_tool_config_and_hosts(
             handle,
@@ -65,6 +72,7 @@ fn drive_coding_loop(
             tool_config.as_ref(),
             submit_for_pr,
             forge_context,
+            activity_config,
         )
         .await?;
         Ok(result)
@@ -152,6 +160,7 @@ mod tests {
 
     fn workspace_context(role: &str) -> WorkspaceContext {
         WorkspaceContext {
+            trace_context: None,
             artifact_context: None,
             repos: vec![WorkspaceRepository {
                 id: "repo-1".to_string(),

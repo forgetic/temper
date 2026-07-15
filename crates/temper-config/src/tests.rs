@@ -501,6 +501,18 @@ fn config_template_enables_codebase_memory_auto_defaults() {
     assert!(tool.args.is_empty());
     assert_eq!(tool.roles, vec!["*".to_string()]);
     assert_eq!(tool.index, CodebaseMemoryIndex::Background);
+    assert_eq!(
+        resolved.observability.agent_traces.policy.capture,
+        crate::CaptureModeV1::Metadata
+    );
+    assert_eq!(
+        resolved.observability.agent_traces.policy.retention_days,
+        14
+    );
+    assert_eq!(
+        resolved.observability.agent_traces.policy.max_run_bytes,
+        50_000_000
+    );
 }
 
 #[test]
@@ -673,6 +685,7 @@ workspace = "~/.local/state/temper/workspace"
     );
 }
 
+mod agent_traces;
 mod secret_references;
 mod target_sections;
 

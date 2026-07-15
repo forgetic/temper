@@ -19,6 +19,8 @@ use crate::{
     WorkerPoolPolicies, WorkerPoolPolicy,
 };
 
+mod activity;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueuedJob {
     pub job_id: String,
@@ -505,6 +507,13 @@ impl DaemonCore {
                     None,
                 )))
             }
+            WorkerProtocolMessage::ActivityBatch(_) | WorkerProtocolMessage::ActivityAck(_) => {
+                Ok(Some(error_response(
+                    ErrorCode::MalformedMessage,
+                    "activity messages are handled by the daemon transport",
+                    None,
+                )))
+            }
             WorkerProtocolMessage::Error(_) => Ok(None),
         }
     }
@@ -731,8 +740,13 @@ fn assignment_message(
     artifact: Artifact,
     job_payload: serde_json::Value,
 ) -> WorkerProtocolMessage {
+    let trace_context =
+        serde_json::from_value::<temper_protocol_worker::JobContext>(job_payload.clone())
+            .ok()
+            .and_then(|context| context.trace_context);
     WorkerProtocolMessage::Assign(Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context,
         job_id: assignment.job_id,
         role: assignment.role,
         repo: assignment.repo,
@@ -784,6 +798,8 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::FetchContext(msg) => msg.protocol_version,
         WorkerProtocolMessage::ContextResponse(msg) => msg.protocol_version,
+        WorkerProtocolMessage::ActivityBatch(msg) => msg.protocol_version,
+        WorkerProtocolMessage::ActivityAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,
     }
 }

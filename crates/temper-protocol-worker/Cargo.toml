@@ -10,6 +10,7 @@ description = "Serialization-only DTOs for the Temper worker/daemon wire protoco
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+temper-protocol-activity = { path = "../temper-protocol-activity" }
 temper-protocol-context = { path = "../temper-protocol-context" }
 temper-verdict = { path = "../temper-verdict" }
 

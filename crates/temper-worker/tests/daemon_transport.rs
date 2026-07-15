@@ -44,6 +44,7 @@ fn worker_config_with_capacity(max_concurrent_jobs: u32) -> WorkerConfig {
         max_concurrent_jobs,
         poll_wait: Duration::from_millis(25),
         heartbeat_interval: Duration::from_millis(25),
+        agent_traces: Default::default(),
         executor: ExecutorSelection::Stub,
     }
 }
@@ -55,6 +56,7 @@ fn assign_for(config: &WorkerConfig) -> Assign {
 fn assign_for_job(config: &WorkerConfig, job_id: &str) -> Assign {
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
+        trace_context: None,
         job_id: job_id.to_string(),
         role: config.capabilities[0].role.clone(),
         repo: config.capabilities[0].repo.clone(),

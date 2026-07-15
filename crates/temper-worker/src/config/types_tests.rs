@@ -31,6 +31,7 @@ fn in_memory_worker_config() -> WorkerConfig {
         max_concurrent_jobs: 1,
         poll_wait: Duration::from_millis(10),
         heartbeat_interval: Duration::from_millis(10),
+        agent_traces: Default::default(),
         executor: ExecutorSelection::Stub,
     }
 }
@@ -45,6 +46,16 @@ fn worker_config_carries_role_identities() {
             .map(|id| id.user.as_str()),
         Some("Engineer"),
     );
+}
+
+#[test]
+fn in_memory_worker_config_disables_unconfigured_trace_storage() {
+    let config = in_memory_worker_config();
+    assert_eq!(
+        config.agent_traces.policy.capture,
+        temper_protocol_activity::CaptureModeV1::Off
+    );
+    assert!(config.agent_traces.spool_root.is_none());
 }
 
 #[test]

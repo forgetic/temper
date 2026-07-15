@@ -1,70 +1,45 @@
-//! Token-usage accounting and stderr observability for coding-agent runs.
+//! Usage accounting and operational tracing projected from canonical activity.
 //!
-//! The coding agent attaches a [`UsageLogger`] to the main run and to every
-//! nested `investigate` sub-agent run. Each logger emits **real-field** tracing
-//! events on the `temper::agent` target — one per model turn (`event=turn.usage`)
-//! and per tool boundary (`event=tool.start` / `tool.end` / `tool.error`) — and
-//! folds the per-turn token counts into a shared [`UsageTotals`], which the run
-//! reports once at the end (`event=usage.total`). All of these are `debug`-level
-//! "causes between state changes" per the level policy in
-//! `docs/explanation/logging-and-observability.md` §5; the info-level totals are
-//! carried by the runner's `agent.finished` line (plan piece C).
-//!
-//! These events deliberately sit **off** the closed `temper-log` `Event` catalog
-//! (the info contract): their `event=` values are plain dot-namespaced strings on
-//! `target: "temper::agent"`, never `temper-log` enum variants.
+//! The machine event stream is normalized exactly once in [`crate::activity`].
+//! This module does not implement `temper_agent_core::EventSink`; it consumes
+//! the shared typed frames alongside the optional activity transport.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
-use temper_agent_core::{AgentEvent, ArgPreviewFn, EventSink};
-use tongs::model::Usage;
+use temper_agent_core::ArgPreviewFn;
+use temper_protocol_activity::{
+    AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1, CapturedContentV1,
+    ModelCallStatusV1, ToolStatusV1,
+};
 
+use crate::activity::ActivityProjection;
 use crate::tool_preview::tool_arg_preview;
 
-/// The tracing target every agent observability line is emitted on. The `::`
-/// namespace (not the legacy `temper_agent` underscore) is what `RUST_LOG` and
-/// the §2 service map key off.
+/// The tracing target every agent observability line is emitted on.
 const AGENT_TARGET: &str = "temper::agent";
-
-/// Character budget handed to [`tool_arg_preview`] so the rendered human line —
-/// `agent:   [repo#n] tool <name> <preview>` — stays within ~80 columns once the
-/// service prefix, correlation tag, and tool name are accounted for. Generous
-/// enough for a typical repo-relative path; longer values truncate with `…`.
 const ARG_PREVIEW_BUDGET: usize = 48;
 
 /// Builds the shell-supplied [`ArgPreviewFn`] that fills `ToolStart.arg_preview`
 /// in the pure core, capturing the workspace `cwd` for repo-relative paths.
-///
-/// The pure machine cannot compute the preview itself (it neither knows the
-/// per-tool rendering rules nor depends on this crate's `tool_preview` module),
-/// so the shell injects this closure; the core calls it with each call's name +
-/// parsed arguments. See the agent-log-cleanup plan (pieces B/D).
 pub fn tool_arg_preview_hook(cwd: PathBuf) -> ArgPreviewFn {
     Arc::new(move |name: &str, args: &serde_json::Value| {
         tool_arg_preview(name, args, &cwd, ARG_PREVIEW_BUDGET)
     })
 }
 
-/// A plain-`u64` snapshot of a run's [`UsageTotals`] for callers outside this
-/// crate (the standalone runner enriches the `agent.finished` info line from
-/// these). Decoupled from the atomic ledger so the reader gets a coherent,
-/// non-aliasing copy with no lock or `Ordering` concerns.
+/// A plain-`u64` snapshot of a run's [`UsageTotals`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RunTotals {
-    /// Total input (prompt) tokens across the main run and all sub-agents.
     pub input: u64,
-    /// Total output (completion) tokens.
     pub output: u64,
-    /// Total tool calls issued.
     pub tool_calls: u64,
 }
 
 /// Aggregated token/tool counters for one coding-agent run (main run plus all
-/// nested sub-agent runs).
+/// nested sub-agent scopes).
 #[derive(Default)]
 pub struct UsageTotals {
     input: AtomicU64,
@@ -77,23 +52,24 @@ pub struct UsageTotals {
 }
 
 impl UsageTotals {
-    fn add_turn(&self, scope: &str, usage: &Usage) {
-        self.input.fetch_add(usage.input, Ordering::Relaxed);
-        self.output.fetch_add(usage.output, Ordering::Relaxed);
-        self.cache_read
-            .fetch_add(usage.cache_read, Ordering::Relaxed);
-        self.cache_write
-            .fetch_add(usage.cache_write, Ordering::Relaxed);
+    fn add_turn(
+        &self,
+        scope_kind: AgentScopeKindV1,
+        input: u64,
+        output: u64,
+        cache_read: u64,
+        cache_write: u64,
+    ) {
+        self.input.fetch_add(input, Ordering::Relaxed);
+        self.output.fetch_add(output, Ordering::Relaxed);
+        self.cache_read.fetch_add(cache_read, Ordering::Relaxed);
+        self.cache_write.fetch_add(cache_write, Ordering::Relaxed);
         self.turns.fetch_add(1, Ordering::Relaxed);
-        if scope != MAIN_SCOPE {
+        if scope_kind == AgentScopeKindV1::SubAgent {
             self.sub_agent_turns.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Reads the input/output/tool-call counters into a plain [`RunTotals`].
-    ///
-    /// Call once at end-of-run (after the drive loop has folded every turn);
-    /// the loads are `Relaxed` because the run is quiesced by then.
     pub fn snapshot(&self) -> RunTotals {
         RunTotals {
             input: self.input.load(Ordering::Relaxed),
@@ -102,8 +78,6 @@ impl UsageTotals {
         }
     }
 
-    /// Emits the end-of-run `usage.total` line on stderr at **debug** (the
-    /// info-level totals ride the runner's `agent.finished` line; plan piece C).
     pub fn emit_summary(&self) {
         let input = self.input.load(Ordering::Relaxed);
         let output = self.output.load(Ordering::Relaxed);
@@ -128,31 +102,52 @@ impl UsageTotals {
     }
 }
 
-/// The scope label of the top-level agent run.
+/// Display label retained separately from the unique main scope ID.
 pub const MAIN_SCOPE: &str = "main";
 
-/// An [`EventSink`] that logs turn usage and tool boundaries as real-field
-/// `temper::agent` tracing events and accumulates token counts into a shared
-/// [`UsageTotals`].
-pub struct UsageLogger {
-    scope: String,
+/// Operational tracing and totals projection over canonical activity frames.
+pub(crate) struct TracingProjection {
     totals: Arc<UsageTotals>,
-    /// `id` -> `(tool name, arg_preview)` recorded at `ToolStart` so a later
-    /// `ToolEnd` (which only carries the id) can name the tool it ended.
-    in_flight: Mutex<HashMap<String, (String, Option<String>)>>,
+    display_names: Mutex<HashMap<String, String>>,
+    in_flight: Mutex<HashMap<(String, String), Option<String>>>,
+    pending_model_failures: Mutex<HashMap<(String, String), PendingModelFailure>>,
 }
 
-impl UsageLogger {
-    pub fn new(scope: impl Into<String>, totals: Arc<UsageTotals>) -> Self {
+#[derive(Clone, Copy)]
+struct PendingModelFailure {
+    attempt: u32,
+    duration_ms: u64,
+}
+
+impl TracingProjection {
+    pub(crate) fn new(totals: Arc<UsageTotals>) -> Self {
         Self {
-            scope: scope.into(),
             totals,
+            display_names: Mutex::new(HashMap::new()),
             in_flight: Mutex::new(HashMap::new()),
+            pending_model_failures: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Renders the trailing ` <preview>` segment of a tool human line, or an
-    /// empty string when there is no salient argument to show.
+    fn scope_label(&self, frame: &AgentActivityFrameV1) -> String {
+        self.display_names
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&frame.scope.id)
+            .cloned()
+            .unwrap_or_else(|| match frame.scope.kind {
+                AgentScopeKindV1::Main => MAIN_SCOPE.to_string(),
+                AgentScopeKindV1::SubAgent => "sub-agent".to_string(),
+            })
+    }
+
+    fn content_text(content: &CapturedContentV1) -> Option<&str> {
+        match content {
+            CapturedContentV1::Inline(inline) => Some(inline.text.as_str()),
+            CapturedContentV1::Blob { .. } => None,
+        }
+    }
+
     fn arg_suffix(arg_preview: Option<&str>) -> String {
         match arg_preview {
             Some(preview) if !preview.is_empty() => format!(" {preview}"),
@@ -161,19 +156,36 @@ impl UsageLogger {
     }
 }
 
-impl EventSink for UsageLogger {
-    fn emit(&self, event: AgentEvent) {
-        match event {
-            AgentEvent::TurnUsage { turn, usage } => {
-                self.totals.add_turn(&self.scope, &usage);
-                let input = usage.input;
-                let output = usage.output;
-                let cache_read = usage.cache_read;
-                let cache_write = usage.cache_write;
+impl ActivityProjection for TracingProjection {
+    fn emit(&self, frame: &AgentActivityFrameV1) {
+        if let AgentActivityEventV1::ScopeStarted(started) = &frame.event {
+            if let Some(name) = &started.display_name {
+                self.display_names
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(frame.scope.id.clone(), name.clone());
+            }
+        }
+        let scope = self.scope_label(frame);
+        match &frame.event {
+            AgentActivityEventV1::Usage(usage) => {
+                self.totals.add_turn(
+                    frame.scope.kind,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    usage.cache_write_tokens,
+                );
+                let turn = frame.turn.unwrap_or_default();
+                let input = usage.input_tokens;
+                let output = usage.output_tokens;
+                let cache_read = usage.cache_read_tokens;
+                let cache_write = usage.cache_write_tokens;
                 tracing::debug!(
                     target: AGENT_TARGET,
                     event = "turn.usage",
-                    scope = %self.scope,
+                    scope = %scope,
+                    scope_id = %frame.scope.id,
                     turn,
                     input,
                     output,
@@ -183,33 +195,38 @@ impl EventSink for UsageLogger {
                      (cache {cache_read}r/{cache_write}w)",
                 );
             }
-            AgentEvent::ToolStart {
-                id,
-                name,
-                arg_preview,
-            } => {
+            AgentActivityEventV1::ToolStarted(tool) => {
                 self.totals.tool_calls.fetch_add(1, Ordering::Relaxed);
+                let preview = tool
+                    .arguments
+                    .as_ref()
+                    .and_then(Self::content_text)
+                    .map(str::to_string);
                 self.in_flight
                     .lock()
-                    .expect("usage logger in-flight map")
-                    .insert(id.clone(), (name.clone(), arg_preview.clone()));
-                let suffix = Self::arg_suffix(arg_preview.as_deref());
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(
+                        (frame.scope.id.clone(), tool.call_id.clone()),
+                        preview.clone(),
+                    );
+                let suffix = Self::arg_suffix(preview.as_deref());
+                let name = &tool.name;
+                let id = &tool.call_id;
                 tracing::debug!(
                     target: AGENT_TARGET,
                     event = "tool.start",
-                    scope = %self.scope,
+                    scope = %scope,
+                    scope_id = %frame.scope.id,
                     tool = %name,
                     id = %id,
                     "agent: tool {name}{suffix}",
                 );
-                // The richest argument detail the shell has for this call is the
-                // already-bounded, already-redacted preview (the raw args never
-                // reach the sink). Carry it at trace for the wire-level view.
-                if let Some(preview) = arg_preview {
+                if let Some(preview) = preview {
                     tracing::trace!(
                         target: AGENT_TARGET,
                         event = "tool.start.args",
-                        scope = %self.scope,
+                        scope = %scope,
+                        scope_id = %frame.scope.id,
                         tool = %name,
                         id = %id,
                         args = %preview,
@@ -217,52 +234,112 @@ impl EventSink for UsageLogger {
                     );
                 }
             }
-            AgentEvent::ToolEnd { id, is_error } => {
-                let recalled = self
+            AgentActivityEventV1::ToolFinished(tool) => {
+                let preview = self
                     .in_flight
                     .lock()
-                    .expect("usage logger in-flight map")
-                    .remove(&id);
-                let (tool, arg_preview) = recalled.unwrap_or_default();
-                let suffix = Self::arg_suffix(arg_preview.as_deref());
-                if is_error {
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&(frame.scope.id.clone(), tool.call_id.clone()))
+                    .flatten();
+                let suffix = Self::arg_suffix(preview.as_deref());
+                let name = &tool.name;
+                let id = &tool.call_id;
+                let duration_ms = tool.duration_ms;
+                if tool.status == ToolStatusV1::Failed {
                     tracing::debug!(
                         target: AGENT_TARGET,
                         event = "tool.error",
-                        scope = %self.scope,
-                        tool = %tool,
+                        scope = %scope,
+                        scope_id = %frame.scope.id,
+                        tool = %name,
                         id = %id,
-                        "agent: tool {tool}{suffix} error",
+                        duration_ms,
+                        "agent: tool {name}{suffix} error",
                     );
                 } else {
                     tracing::debug!(
                         target: AGENT_TARGET,
                         event = "tool.end",
-                        scope = %self.scope,
-                        tool = %tool,
+                        scope = %scope,
+                        scope_id = %frame.scope.id,
+                        tool = %name,
                         id = %id,
-                        "agent: tool {tool}{suffix} done",
+                        duration_ms,
+                        "agent: tool {name}{suffix} done",
                     );
                 }
             }
-            AgentEvent::ModelCallFailed { reason, will_retry } => {
-                let reason = crate::observability::redacted_preview(&reason, 300);
+            AgentActivityEventV1::ModelCallRetrying(retry) => {
+                self.pending_model_failures
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&(frame.scope.id.clone(), retry.call_id.clone()));
+                let reason = &retry.failure.message;
                 tracing::debug!(
                     target: AGENT_TARGET,
                     event = "model.call_failed",
-                    scope = %self.scope,
-                    will_retry,
+                    scope = %scope,
+                    scope_id = %frame.scope.id,
+                    will_retry = true,
                     reason = %reason,
-                    "agent: model call failed (will_retry={will_retry}): {reason}",
+                    next_attempt = retry.next_attempt,
+                    delay_ms = retry.delay_ms,
+                    "agent: model call failed (will_retry=true): {reason}",
                 );
             }
-            AgentEvent::AgentEnd { reason } => {
+            AgentActivityEventV1::ModelCallFinished(finished)
+                if finished.status == ModelCallStatusV1::Failed =>
+            {
+                self.pending_model_failures
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(
+                        (frame.scope.id.clone(), finished.call_id.clone()),
+                        PendingModelFailure {
+                            attempt: finished.attempt,
+                            duration_ms: finished.duration_ms,
+                        },
+                    );
+            }
+            AgentActivityEventV1::ModelCallFinished(finished) => {
+                self.pending_model_failures
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&(frame.scope.id.clone(), finished.call_id.clone()));
+            }
+            AgentActivityEventV1::ScopeFinished(finished) => {
+                let mut failures = self
+                    .pending_model_failures
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let pending = failures
+                    .iter()
+                    .filter(|((scope_id, _), _)| scope_id == &frame.scope.id)
+                    .map(|(key, failure)| (key.clone(), *failure))
+                    .collect::<Vec<_>>();
+                for (key, failure) in pending {
+                    failures.remove(&key);
+                    tracing::debug!(
+                        target: AGENT_TARGET,
+                        event = "model.call_failed",
+                        scope = %scope,
+                        scope_id = %frame.scope.id,
+                        will_retry = false,
+                        attempt = failure.attempt,
+                        duration_ms = failure.duration_ms,
+                        "agent: model call failed (will_retry=false)",
+                    );
+                }
+                drop(failures);
+                let reason = format!("{:?}", finished.status);
                 tracing::debug!(
                     target: AGENT_TARGET,
                     event = "agent.end",
-                    scope = %self.scope,
-                    reason = ?reason,
-                    "agent: run ended ({reason:?})",
+                    scope = %scope,
+                    scope_id = %frame.scope.id,
+                    reason = %reason,
+                    duration_ms = finished.duration_ms,
+                    "agent: run ended ({reason})",
                 );
             }
             _ => {}
@@ -273,74 +350,41 @@ impl EventSink for UsageLogger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temper_protocol_activity::{
+        ACTIVITY_PROTOCOL_VERSION, AgentActivityEventV1, AgentScopeV1, ScopeStartedV1, UsageV1,
+    };
 
-    fn logger() -> UsageLogger {
-        UsageLogger::new(MAIN_SCOPE, Arc::new(UsageTotals::default()))
-    }
-
-    #[test]
-    fn arg_suffix_renders_space_prefixed_preview_or_empty() {
-        assert_eq!(UsageLogger::arg_suffix(Some("src/main.rs")), " src/main.rs");
-        assert_eq!(UsageLogger::arg_suffix(Some("")), "");
-        assert_eq!(UsageLogger::arg_suffix(None), "");
-    }
-
-    #[test]
-    fn tool_start_records_name_and_preview_for_later_tool_end() {
-        let logger = logger();
-        logger.emit(AgentEvent::ToolStart {
-            id: "call_1".to_string(),
-            name: "read".to_string(),
-            arg_preview: Some("crates/x/src/y.rs".to_string()),
-        });
-        let recalled = logger.in_flight.lock().expect("map").get("call_1").cloned();
-        assert_eq!(
-            recalled,
-            Some(("read".to_string(), Some("crates/x/src/y.rs".to_string())))
-        );
-        // tool_calls counter advanced exactly once.
-        assert_eq!(logger.totals.tool_calls.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn tool_end_consumes_the_in_flight_entry() {
-        let logger = logger();
-        logger.emit(AgentEvent::ToolStart {
-            id: "call_2".to_string(),
-            name: "bash".to_string(),
-            arg_preview: None,
-        });
-        logger.emit(AgentEvent::ToolEnd {
-            id: "call_2".to_string(),
-            is_error: true,
-        });
-        assert!(
-            logger
-                .in_flight
-                .lock()
-                .expect("map")
-                .get("call_2")
-                .is_none(),
-            "ToolEnd should remove the in-flight entry",
-        );
-    }
-
-    #[test]
-    fn turn_usage_folds_into_totals() {
-        let logger = logger();
-        logger.emit(AgentEvent::TurnUsage {
-            turn: 0,
-            usage: Usage {
-                input: 100,
-                output: 20,
-                cache_read: 5,
-                cache_write: 1,
-                ..Usage::default()
+    fn frame(event: AgentActivityEventV1) -> AgentActivityFrameV1 {
+        AgentActivityFrameV1 {
+            version: ACTIVITY_PROTOCOL_VERSION,
+            occurred_at: "2026-01-02T03:04:05.000Z".to_string(),
+            elapsed_ms: 1,
+            scope: AgentScopeV1 {
+                id: "scope-1".to_string(),
+                kind: AgentScopeKindV1::Main,
+                parent_id: None,
             },
-        });
-        assert_eq!(logger.totals.input.load(Ordering::Relaxed), 100);
-        assert_eq!(logger.totals.output.load(Ordering::Relaxed), 20);
-        assert_eq!(logger.totals.turns.load(Ordering::Relaxed), 1);
+            turn: Some(0),
+            event,
+        }
+    }
+
+    #[test]
+    fn normalized_usage_folds_into_totals() {
+        let totals = Arc::new(UsageTotals::default());
+        let projection = TracingProjection::new(Arc::clone(&totals));
+        projection.emit(&frame(AgentActivityEventV1::ScopeStarted(ScopeStartedV1 {
+            display_name: Some("main".to_string()),
+        })));
+        projection.emit(&frame(AgentActivityEventV1::Usage(UsageV1 {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_tokens: 5,
+            cache_write_tokens: 1,
+        })));
+        assert_eq!(totals.snapshot().input, 100);
+        assert_eq!(totals.snapshot().output, 20);
+        assert_eq!(totals.turns.load(Ordering::Relaxed), 1);
     }
 
     #[test]

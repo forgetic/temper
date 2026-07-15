@@ -11,6 +11,9 @@ async-trait = { workspace = true }
 skein = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+base64 = "0.22"
+fs2 = { workspace = true }
+getrandom = "0.3"
 hmac = "0.12"
 secrecy = { workspace = true }
 serde = { workspace = true }
@@ -20,6 +23,7 @@ temper-forge = { path = "../temper-forge" }
 temper-engine-io = { path = "../temper-engine-io" }
 temper-log = { path = "../temper-log" }
 temper-runner = { path = "../temper-runner" }
+temper-protocol-activity = { path = "../temper-protocol-activity" }
 temper-protocol-context = { path = "../temper-protocol-context" }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-verdict = { path = "../temper-verdict" }
@@ -28,6 +32,7 @@ temper-workflow = { path = "../temper-workflow" }
 
 [dev-dependencies]
 temper-forge-memory = { path = "../temper-forge-memory" }
+tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lints]

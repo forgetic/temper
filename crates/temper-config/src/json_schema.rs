@@ -48,6 +48,7 @@ pub fn config_json_schema() -> Value {
                 ("deployment", deployment_config_schema()),
                 ("workflow", workflow_config_schema()),
                 ("paths", paths_config_schema()),
+                ("observability", observability_config_schema()),
                 ("forge", forge_config_schema()),
                 ("engine", engine_config_schema()),
                 ("worker", worker_config_schema()),
@@ -131,6 +132,52 @@ fn paths_config_schema() -> Value {
             (
                 "workspace_dir",
                 string_schema("Top-level worker workspace root, resolved relative to config.toml."),
+            ),
+        ],
+    )
+}
+
+fn observability_config_schema() -> Value {
+    closed_object_schema(
+        "Operator-visible telemetry and durable activity settings.",
+        [("agent_traces", agent_trace_config_schema())],
+    )
+}
+
+fn agent_trace_config_schema() -> Value {
+    closed_object_schema(
+        "Agent-session trace capture, retention, quota, and query authorization.",
+        [
+            (
+                "capture",
+                enum_string_schema(
+                    "Trace capture level.",
+                    ["off", "metadata", "transcript", "diagnostic"],
+                ),
+            ),
+            (
+                "retention_days",
+                bounded_positive_integer_schema(
+                    "Number of days completed traces remain eligible for retention.",
+                    u32::MAX as u64,
+                ),
+            ),
+            (
+                "max_run_bytes",
+                bounded_positive_integer_schema(
+                    "Hard byte budget for one canonical run.",
+                    i64::MAX as u64,
+                ),
+            ),
+            (
+                "capture_thinking",
+                bool_schema("Allow bounded thinking deltas in diagnostic capture only."),
+            ),
+            (
+                "read_token",
+                string_schema(
+                    "Named secret reference authorizing transcript-bearing query routes.",
+                ),
             ),
         ],
     )
@@ -508,6 +555,15 @@ fn positive_integer_schema(description: &'static str) -> Value {
         ("description", Value::from(description)),
         ("type", Value::from("integer")),
         ("minimum", Value::from(1)),
+    ])
+}
+
+fn bounded_positive_integer_schema(description: &'static str, maximum: u64) -> Value {
+    schema_object([
+        ("description", Value::from(description)),
+        ("type", Value::from("integer")),
+        ("minimum", Value::from(1)),
+        ("maximum", Value::from(maximum)),
     ])
 }
 

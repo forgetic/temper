@@ -9,6 +9,7 @@ description = "Temper worker process: long-polls a Temper daemon and runs role/c
 [dependencies]
 skein.workspace = true
 temper-protocol-agent = { path = "../temper-protocol-agent" }
+temper-protocol-activity = { path = "../temper-protocol-activity" }
 tracing = { workspace = true }
 temper-worker-io = { path = "../temper-worker-io" }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
@@ -19,6 +20,8 @@ tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 uuid.workspace = true
+chrono.workspace = true
+fs2.workspace = true
 # NOTE: no tokio, anywhere. Production code and tests both run on the skein
 # runtime; the transport e2e tests drive the real daemon through its in-process
 # carrier rather than a tokio/axum fake. Keeping tokio out of the graph means
@@ -26,7 +29,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 async-trait = { workspace = true }
-chrono = { workspace = true }
 # Test-only cross-tier glue: proves the reusable in-process Daemon transport
 # without making temper-worker depend on temper-engine in normal builds.
 temper-daemon-transport = { path = "../temper-daemon-transport" }
@@ -36,10 +38,17 @@ temper-protocol-agent = { path = "../temper-protocol-agent" }
 # workspace, so tests run the real thing and tap the worker's posted result.
 temper-engine = { path = "../temper-engine" }
 temper-engine-io = { path = "../temper-engine-io" }
+temper-agent = { path = "../temper-agent" }
+temper-agent-core = { path = "../temper-agent-core" }
+temper-log = { path = "../temper-log" }
+temper-web = { path = "../temper-web" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-worker-io = { path = "../temper-worker-io" }
+tracing-subscriber = { workspace = true }
 temper-workflow = { path = "../temper-workflow" }
+secrecy.workspace = true
+tongs.workspace = true
 
 # A deterministic, hermetic agent that speaks the temper-protocol-agent: writes
 # a product file and a terminal result. Lets the worker e2e drive the real

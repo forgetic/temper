@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 description = "The unified `temper` command line: a thin dispatcher over the per-subcommand crates (init/config/daemon/agent) plus the hidden operator/responder tools."
 
+[features]
+default = []
+otel = ["temper-log/otel-otlp"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

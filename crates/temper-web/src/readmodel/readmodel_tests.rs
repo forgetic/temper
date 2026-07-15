@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
-use crate::board::{ActivityKind, Sev};
+use crate::board::{ActivityKind, Sev, StreamEvent, StreamEventKind};
 
 fn card(id: &str, lane: Lane) -> Card {
     Card {
@@ -149,6 +149,31 @@ fn set_activity_and_steps_update_card() {
     assert_eq!(
         c.activity.as_ref().map(|a| a.text.as_str()),
         Some("cargo test")
+    );
+}
+
+#[test]
+fn push_stream_shares_the_board_cursor_without_persisting_ephemeral_content() {
+    let mut model = ReadModel::new();
+    model.apply(Delta::UpsertCard(card("i39", Lane::Implement)));
+    let before = model.seq();
+    let event = model
+        .apply(Delta::PushStream {
+            id: "i39".to_string(),
+            event: StreamEvent {
+                kind: StreamEventKind::Tool,
+                k: Some("bash".to_string()),
+                v: "started".to_string(),
+            },
+        })
+        .expect("stream emits");
+    assert_eq!(model.seq(), before + 1);
+    assert_eq!(event.seq(), model.seq());
+    assert!(matches!(event, BoardEvent::CardStream { .. }));
+    let snapshot = serde_json::to_value(model.snapshot_event()).expect("snapshot serializes");
+    assert!(
+        snapshot["state"]["cards"]["i39"].get("stream").is_none(),
+        "ephemeral ring is browser-only and reloads from engine history"
     );
 }
 

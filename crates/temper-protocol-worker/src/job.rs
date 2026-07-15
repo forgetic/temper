@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use temper_protocol_context::ArtifactContextBundle;
+use temper_protocol_context::{ArtifactContextBundle, W3cTraceContext};
 use temper_verdict::VerdictContracts;
 
 use crate::WorkspaceManifest;
@@ -94,6 +94,9 @@ pub struct JobArtifactSnapshot {
 /// the worker treats their absence as a protocol error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobContext {
+    /// Optional W3C context for this assignment delivery only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<W3cTraceContext>,
     pub role: String,
     /// Primary repository path (`owner/name`) -- home of the coordinating
     /// artifact. Equal to `workspace.repos[0].repo`.

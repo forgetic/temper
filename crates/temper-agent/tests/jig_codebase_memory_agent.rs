@@ -182,6 +182,7 @@ fn fake_codebase_memory_mcp_path(dir: &tempfile::TempDir) -> PathBuf {
 
 fn workspace_context() -> WorkspaceContext {
     WorkspaceContext {
+        trace_context: None,
         artifact_context: None,
         repos: vec![WorkspaceRepository {
             id: "repo-1".to_string(),

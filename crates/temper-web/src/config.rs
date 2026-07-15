@@ -7,8 +7,35 @@
 //! boundary) snapshots argv/env into a [`WebConfig`] and threads it in; every
 //! field here is set explicitly by that composition root.
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
+/// Server-only bearer credential for engine trace reads. Its `Debug` output is
+/// always redacted, and the type is intentionally not serializable.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TraceReadToken(String);
+
+impl TraceReadToken {
+    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if value.is_empty() || value.contains(['\r', '\n']) {
+            return Err("trace read token must be non-empty and contain no newlines");
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for TraceReadToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TraceReadToken([REDACTED])")
+    }
+}
 
 /// All configuration the temper-web server needs, constructed at the binary
 /// entry from explicit inputs (flags / env snapshot) — never read ambiently.
@@ -24,6 +51,16 @@ pub struct WebConfig {
     /// configured. `None` runs the board standalone against an empty/fixture
     /// snapshot (so the server boots and tests pass with no daemon).
     pub daemon_url: Option<String>,
+    /// Base URL for the engine's authorized trace query API. Kept separate
+    /// from `daemon_url` so deployments can route state and trace reads through
+    /// different server-side addresses.
+    pub trace_url: Option<String>,
+    /// Server-only trace query credential. It is held by the injected HTTP
+    /// client and is never included in board DTOs or browser configuration.
+    pub trace_read_token: Option<TraceReadToken>,
+    /// Poll cadence for the low-rate global trace projection. `None`/`0`
+    /// disables global polling; drawer-specific reads remain available.
+    pub trace_poll_ms: Option<u64>,
     /// Path to the `temper-log` JSON-lines file to tail for live deltas, if any.
     /// `None` serves the cold-start snapshot without live updates.
     pub log_path: Option<PathBuf>,
@@ -55,6 +92,9 @@ impl WebConfig {
             bind,
             ui_dir,
             daemon_url: None,
+            trace_url: None,
+            trace_read_token: None,
+            trace_poll_ms: None,
             log_path: None,
             interaction_url: None,
             keep_alive_ms: Self::DEFAULT_KEEP_ALIVE_MS,
@@ -72,9 +112,20 @@ mod tests {
         let cfg =
             WebConfig::standalone("127.0.0.1:8080".parse().unwrap(), PathBuf::from("/srv/ui"));
         assert!(cfg.daemon_url.is_none());
+        assert!(cfg.trace_url.is_none());
+        assert!(cfg.trace_read_token.is_none());
+        assert!(cfg.trace_poll_ms.is_none());
         assert!(cfg.log_path.is_none());
         assert!(cfg.interaction_url.is_none());
         assert_eq!(cfg.keep_alive_ms, WebConfig::DEFAULT_KEEP_ALIVE_MS);
         assert!(cfg.snapshot_poll_ms.is_none());
+    }
+
+    #[test]
+    fn trace_token_debug_is_redacted_and_newlines_are_rejected() {
+        let token = TraceReadToken::new("server-secret").expect("valid token");
+        assert_eq!(format!("{token:?}"), "TraceReadToken([REDACTED])");
+        assert!(!format!("{token:?}").contains("server-secret"));
+        assert!(TraceReadToken::new("bad\r\ntoken").is_err());
     }
 }

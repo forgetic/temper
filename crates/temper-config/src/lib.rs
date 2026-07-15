@@ -21,6 +21,7 @@
 //! without pulling in the engine/worker/agent stacks.
 
 mod agent_resolve;
+mod agent_trace_resolve;
 mod build;
 mod cli;
 mod env;
@@ -71,19 +72,21 @@ pub use paths::{
 };
 pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
-    AgentProfileSettings, AgentSettings, AgentToolSettings, Capability, CodebaseMemoryIndex,
-    CodebaseMemoryMode, CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology,
-    EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, SecretReference, WebUiCreds,
-    WorkerPoolSettings, WorkerSettings,
+    AgentProfileSettings, AgentSettings, AgentToolSettings, AgentTraceSettings, Capability,
+    CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolSettings, DeploymentSettings,
+    DeploymentTopology, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
+    ObservabilitySettings, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
+    RepoPath, Resolved, SecretReference, WebUiCreds, WorkerPoolSettings, WorkerSettings,
 };
 pub use schema::{
     AgentConfig, AgentCredentials, AgentProfileConfig, AgentProviderConfig, AgentToolsConfig,
-    CodebaseMemoryToolConfig, Config, Credentials, DeploymentConfig, EngineConfig, ForgeConfig,
-    ForgeCredentials, ForgeUser, ModelMap, NamedSecret, NamedSecretEntry, PathsConfig,
+    AgentTraceConfig, CodebaseMemoryToolConfig, Config, Credentials, DeploymentConfig,
+    EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap, NamedSecret,
+    NamedSecretEntry, ObservabilityConfig, PathsConfig,
     ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
     WorkerPoolConfig, WorkflowConfig,
 };
+pub use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
 pub use template::{config_template, credentials_template};
 
 /// Where to find the config file and selected secret source. `None` config

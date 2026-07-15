@@ -56,6 +56,26 @@ pub enum ActivityKind {
     Tool,
 }
 
+/// One low-rate line in a card's bounded client-side activity ring. Detailed
+/// transcript events use the run-specific SSE endpoint instead of this global
+/// board contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamEvent {
+    pub kind: StreamEventKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k: Option<String>,
+    pub v: String,
+}
+
+/// Existing TypeScript `StreamEvent.kind` wire tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamEventKind {
+    Think,
+    Text,
+    Tool,
+}
+
 /// Step progress affordance (`▓▓▓░ 3/4`); `model.ts` `Card.steps`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Steps {
@@ -156,6 +176,13 @@ pub enum BoardEvent {
     /// A card's step progress changed.
     #[serde(rename = "card.step")]
     CardStep { seq: u64, id: String, steps: Steps },
+    /// Append one low-rate line to the client's bounded per-card ring.
+    #[serde(rename = "card.stream")]
+    CardStream {
+        seq: u64,
+        id: String,
+        event: StreamEvent,
+    },
     /// A problem row appeared/updated, keyed by `id`.
     #[serde(rename = "problem.add")]
     ProblemAdd {
@@ -177,6 +204,7 @@ impl BoardEvent {
             | BoardEvent::CardMove { seq, .. }
             | BoardEvent::CardActivity { seq, .. }
             | BoardEvent::CardStep { seq, .. }
+            | BoardEvent::CardStream { seq, .. }
             | BoardEvent::ProblemAdd { seq, .. }
             | BoardEvent::ProblemClear { seq, .. } => *seq,
         }

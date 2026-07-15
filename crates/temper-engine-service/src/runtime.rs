@@ -7,16 +7,18 @@ use std::sync::Arc;
 
 use temper_config::{ExposeSecret, Resolved};
 use temper_engine::{
-    Daemon, DaemonRunConfig, EngineConfig, HintedMechanical, MechanicalBackstopConfig,
-    MechanicalTrigger, PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget,
-    WebhookConfig, spawn_coordinated_mechanical_backstop, spawn_coordinated_poll_backstop,
+    AgentTraceJournal, Daemon, DaemonRunConfig, EngineAgentTraceConfig, EngineConfig,
+    HintedMechanical, MechanicalBackstopConfig, MechanicalTrigger, PollBackstopConfig,
+    RepositorySet, RetentionProtection, RoleFeedMode, RoleFeedTarget, WebhookConfig,
+    spawn_coordinated_mechanical_backstop, spawn_coordinated_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
-    converge_startup_orphans, engine_config, ensure_workflow_labels, resolve_repositories,
-    result_applier, role_feed_targets, stage_startup_assignments, worker_pool_auth_config,
+    AGENT_TRACE_RETENTION_INTERVAL, TraceRetentionTask, converge_startup_orphans, engine_config,
+    ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
+    spawn_trace_retention_task, stage_startup_assignments, worker_pool_auth_config,
     workflow_role_limits,
 };
 
@@ -42,7 +44,17 @@ pub async fn run_async(
         daemon: config,
         forge: forge_config,
         role_tokens,
+        agent_traces,
     } = engine_config(resolved)?;
+    if resolved.observability.agent_traces.capture_requested()
+        && agent_traces.journal_root.is_none()
+    {
+        tracing::warn!(
+            target: "temper::engine",
+            service = "engine",
+            "agent tracing disabled: no durable paths.state_dir is available for the engine journal"
+        );
+    }
     let forge_config_for_roles = forge_config.clone();
     let forge_url = forge_config.base_url.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);
@@ -98,6 +110,23 @@ pub async fn run_async(
         (temper_engine::system_clock())(),
     )
     .await?;
+    // Trace storage is intentionally best-effort: startup recovery and
+    // retention run before transport opens, but a journal failure can never
+    // prevent assignment execution.
+    let trace_journal = start_trace_journal(&agent_traces, recovered.keys().cloned());
+    let daemon = match trace_journal.as_ref() {
+        Some(journal) => daemon.with_trace_journal(journal.clone()),
+        None => daemon,
+    };
+    let daemon = attach_trace_query(daemon, &agent_traces, trace_journal.as_ref());
+    let trace_retention = trace_journal.as_ref().map(|journal| {
+        spawn_trace_retention_task(
+            &spawner,
+            daemon.clone(),
+            journal.clone(),
+            AGENT_TRACE_RETENTION_INTERVAL,
+        )
+    });
     let server = temper_engine::serve(&handle, &daemon, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
@@ -143,7 +172,48 @@ pub async fn run_async(
         wake_targets,
     )?;
 
-    drain_after_signal(&daemon, server).await
+    drain_after_signal(&daemon, server, trace_retention).await
+}
+
+pub fn start_trace_journal(
+    config: &EngineAgentTraceConfig,
+    recovered_job_ids: impl IntoIterator<Item = String>,
+) -> Option<AgentTraceJournal> {
+    let protection = RetentionProtection {
+        job_ids: recovered_job_ids.into_iter().collect(),
+        ..RetentionProtection::default()
+    };
+    match AgentTraceJournal::from_engine_config_with_clock_and_protection(
+        config,
+        temper_engine::system_clock(),
+        &protection,
+    ) {
+        Ok(journal) => journal,
+        Err(error) => {
+            tracing::error!(
+                target: "temper::engine",
+                error = %error,
+                "agent trace journal unavailable; assignment execution will continue"
+            );
+            None
+        }
+    }
+}
+
+/// Attaches the journal-backed query executor only when the named read token
+/// resolved. Keeping this composition helper shared gives split and standalone
+/// deployments identical disabled-route behavior.
+pub fn attach_trace_query(
+    daemon: Daemon,
+    config: &EngineAgentTraceConfig,
+    journal: Option<&AgentTraceJournal>,
+) -> Daemon {
+    match (journal, config.read_token.as_ref()) {
+        (Some(journal), Some(read_token)) => {
+            daemon.with_agent_trace_query(journal.clone(), read_token.clone())
+        }
+        _ => daemon,
+    }
 }
 
 fn load_workflow(
@@ -283,6 +353,7 @@ fn attach_webhook(
 async fn drain_after_signal(
     daemon_guard: &Daemon,
     server: temper_engine_io::http::EngineHttpServer,
+    trace_retention: Option<TraceRetentionTask>,
 ) -> Result<(), String> {
     let mut sigint = skein::signal::sigint()
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
@@ -297,6 +368,9 @@ async fn drain_after_signal(
         }
     })
     .await;
+    if let Some(trace_retention) = trace_retention {
+        trace_retention.stop().await;
+    }
     daemon_guard.release_assignments_for_shutdown().await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())

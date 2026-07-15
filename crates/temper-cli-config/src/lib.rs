@@ -219,6 +219,15 @@ fn render_secret_reference(reference: Option<&SecretReference>) -> String {
     }
 }
 
+fn render_capture_mode(mode: temper_config::CaptureModeV1) -> &'static str {
+    match mode {
+        temper_config::CaptureModeV1::Off => "off",
+        temper_config::CaptureModeV1::Metadata => "metadata",
+        temper_config::CaptureModeV1::Transcript => "transcript",
+        temper_config::CaptureModeV1::Diagnostic => "diagnostic",
+    }
+}
+
 /// Renders the resolved deployment for `config show`, redacting every secret.
 fn render(resolved: &Resolved) -> String {
     use std::fmt::Write;
@@ -398,6 +407,53 @@ fn render(resolved: &Resolved) -> String {
             .as_deref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(bundled reference-delivery)".to_string())
+    );
+
+    let traces = &resolved.observability.agent_traces;
+    let _ = writeln!(out, "\n[observability.agent_traces]");
+    let _ = writeln!(
+        out,
+        "  capture       = {}",
+        render_capture_mode(traces.policy.capture)
+    );
+    let _ = writeln!(out, "  retention_days = {}", traces.policy.retention_days);
+    let _ = writeln!(out, "  max_run_bytes = {}", traces.policy.max_run_bytes);
+    let _ = writeln!(
+        out,
+        "  capture_thinking = {}",
+        traces.policy.capture_thinking
+    );
+    let _ = writeln!(
+        out,
+        "  read_token    = {}",
+        render_secret_reference(traces.read_token.as_ref())
+    );
+    let _ = writeln!(
+        out,
+        "  transcript_queries = {}",
+        if traces.transcript_queries_enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    let _ = writeln!(
+        out,
+        "  engine_journal = {}",
+        traces
+            .engine_journal_root
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "(unavailable; tracing disabled)".to_string())
+    );
+    let _ = writeln!(
+        out,
+        "  worker_spool = {}",
+        traces
+            .worker_spool_root
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "(unavailable; tracing disabled)".to_string())
     );
 
     let _ = writeln!(out, "\n[agent]");

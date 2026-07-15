@@ -21,7 +21,9 @@ use tongs::tools::ToolRegistry;
 use tongs::tools::tool_to_definition;
 
 use crate::machine::{AgentCompletion, AgentMachine, ArgPreviewFn};
-use crate::shell::{AgentOutcome, AgentShell, EventSink, NullEventSink, TurnHook};
+use crate::shell::{
+    AgentOutcome, AgentShell, EventSink, ModelIdentity, NullEventSink, RunObservability, TurnHook,
+};
 
 /// A live control handle for a running sub-agent: inject steering messages or
 /// abort it from outside the run.
@@ -199,6 +201,33 @@ pub fn run_sub_agent_controllable_with_hooks(
     ),
     SubAgentError,
 > {
+    let model = ModelIdentity::new(sub_agent.provider.api(), "unknown");
+    run_sub_agent_controllable_with_observability(
+        handle,
+        sub_agent,
+        RunObservability::new(events, model),
+        turn_hook,
+        arg_preview,
+    )
+}
+
+/// Full run builder with explicit model identity, event sink, and monotonic
+/// timing clock. Agent-tier callers use this seam to produce canonical activity;
+/// legacy callers retain the default observer through
+/// [`run_sub_agent_controllable_with_hooks`].
+pub fn run_sub_agent_controllable_with_observability(
+    handle: RuntimeHandle,
+    sub_agent: SubAgent,
+    observability: RunObservability,
+    turn_hook: Option<Arc<dyn TurnHook>>,
+    arg_preview: Option<ArgPreviewFn>,
+) -> Result<
+    (
+        SubAgentControl,
+        impl std::future::Future<Output = Result<AgentOutcome, SubAgentError>>,
+    ),
+    SubAgentError,
+> {
     let tool_defs: Vec<ToolDef> = sub_agent
         .tools
         .tools()
@@ -235,7 +264,7 @@ pub fn run_sub_agent_controllable_with_hooks(
         sub_agent.system_prompt,
         Arc::new(tool_defs),
         Arc::new(sub_agent.stream_options),
-        events,
+        observability,
         outcome_tx,
     );
     if let Some(turn_hook) = turn_hook {

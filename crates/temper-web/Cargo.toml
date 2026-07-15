@@ -19,6 +19,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 temper-log = { path = "../temper-log" }
+temper-protocol-activity = { path = "../temper-protocol-activity" }
 temper-workflow = { path = "../temper-workflow" }
 # PR E (conversation SSE proxy): reuse the conversation wire types directly
 # instead of re-declaring parallel ones. The `ConversationEvent` envelope and

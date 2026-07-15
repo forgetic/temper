@@ -30,6 +30,25 @@ fn artifact_context_bundle_is_copied_without_reconstruction() {
 }
 
 #[test]
+fn w3c_trace_context_propagates_from_assignment_to_agent_workspace() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
+        let mut assignment = assign("agent/pr-for-code-7", "trace-context-7");
+        let trace_context = temper_protocol_worker::W3cTraceContext {
+            traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
+            tracestate: Some("vendor=opaque".into()),
+        };
+        assignment.trace_context = Some(trace_context.clone());
+
+        expect_success(executor.execute(assignment).await);
+
+        assert_eq!(agent.captured_context().trace_context, Some(trace_context));
+    });
+}
+
+#[test]
 fn context_shape_matches_temper_coding_agent_contract() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

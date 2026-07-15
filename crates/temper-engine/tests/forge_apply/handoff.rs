@@ -232,6 +232,7 @@ fn pr_repair_in_flight_job(
         pull_request.number,
         "pull_request",
         JobContext {
+            trace_context: None,
             artifact_context: None,
             role: "engineer".to_string(),
             repo: repo_path.to_string(),

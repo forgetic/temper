@@ -11,6 +11,9 @@
 //!   --bind <addr>            (env TEMPER_WEB_BIND)             default 127.0.0.1:8080
 //!   --ui-dir <path>          (env TEMPER_WEB_UI_DIR)           default ./crates/temper-web/ui
 //!   --daemon-url <url>       (env TEMPER_WEB_DAEMON_URL)       default none (standalone)
+//!   --trace-url <url>        (env TEMPER_WEB_TRACE_URL)        defaults to daemon URL
+//!   --trace-read-token <tok> (env TEMPER_WEB_TRACE_READ_TOKEN) default none (traces off)
+//!   --trace-poll-ms <ms>     (env TEMPER_WEB_TRACE_POLL_MS)    default 1000 when enabled
 //!   --log-path <path>        (env TEMPER_WEB_LOG_PATH)         default none (no live tail)
 //!   --interaction-url <url>  (env TEMPER_WEB_INTERACTION_URL)  default none (chat proxy off)
 //!   --snapshot-poll-ms <ms>  (env TEMPER_WEB_SNAPSHOT_POLL_MS) default none (no re-poll)
@@ -21,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use temper_web::FileLogSource;
-use temper_web::config::WebConfig;
+use temper_web::config::{TraceReadToken, WebConfig};
 use temper_web::conversation::{ConversationProxy, spawn_poller};
 use temper_web::feeds::logtail::LogTailAdapter;
 use temper_web::feeds::snapshot_source::{
@@ -29,10 +32,15 @@ use temper_web::feeds::snapshot_source::{
 };
 use temper_web::project::lanes::LaneMap;
 use temper_web::server::{AppState, pump_log_source, pump_snapshot_source, serve};
+use temper_web::trace::{TraceApiClient, pump_trace_activity};
 
 #[path = "temper-web/daemon_client.rs"]
 mod daemon_client;
 use daemon_client::HttpSnapshotSource;
+
+#[path = "temper-web/trace_client.rs"]
+mod trace_client;
+use trace_client::HttpTraceClient;
 
 #[path = "temper-web/interaction_client.rs"]
 mod interaction_client;
@@ -84,6 +92,17 @@ fn run() -> Result<(), String> {
         state = state.with_conversation_proxy(proxy);
     }
 
+    // Trace reads are explicitly server-side. The token is moved into this
+    // client and no browser-facing DTO has a credential field.
+    let trace_client: Option<Arc<dyn TraceApiClient>> =
+        match (config.trace_url.clone(), config.trace_read_token.clone()) {
+            (Some(url), Some(token)) => Some(Arc::new(HttpTraceClient::new(url, token))),
+            _ => None,
+        };
+    if let Some(client) = trace_client.clone() {
+        state = state.with_trace_client(client);
+    }
+
     let state = Arc::new(state);
 
     // Drive the conversation poll loop: drain each tracked conversation's events
@@ -125,6 +144,12 @@ fn run() -> Result<(), String> {
         );
     }
 
+    if let Some(poll_ms) = config.trace_poll_ms.filter(|ms| *ms > 0) {
+        if let Some(client) = trace_client {
+            pump_trace_activity(Arc::clone(&state), client, Duration::from_millis(poll_ms));
+        }
+    }
+
     serve(state, &config).map_err(|error| format!("serve failed: {error}"))
 }
 
@@ -142,6 +167,22 @@ fn parse_config(args: &[String]) -> Result<WebConfig, String> {
         .unwrap_or_else(|| PathBuf::from("crates/temper-web/ui"));
 
     let daemon_url = flag(args, "--daemon-url").or_else(|| env("TEMPER_WEB_DAEMON_URL"));
+    let trace_url = flag(args, "--trace-url")
+        .or_else(|| env("TEMPER_WEB_TRACE_URL"))
+        .or_else(|| daemon_url.clone());
+    let trace_read_token = flag(args, "--trace-read-token")
+        .or_else(|| env("TEMPER_WEB_TRACE_READ_TOKEN"))
+        .map(TraceReadToken::new)
+        .transpose()
+        .map_err(|error| format!("invalid --trace-read-token: {error}"))?;
+    let trace_poll_ms = flag(args, "--trace-poll-ms")
+        .or_else(|| env("TEMPER_WEB_TRACE_POLL_MS"))
+        .map(|raw| {
+            raw.parse::<u64>()
+                .map_err(|error| format!("invalid --trace-poll-ms {raw}: {error}"))
+        })
+        .transpose()?
+        .or_else(|| trace_read_token.as_ref().map(|_| 1_000));
     let log_path = flag(args, "--log-path")
         .or_else(|| env("TEMPER_WEB_LOG_PATH"))
         .map(PathBuf::from);
@@ -160,6 +201,9 @@ fn parse_config(args: &[String]) -> Result<WebConfig, String> {
         bind,
         ui_dir,
         daemon_url,
+        trace_url,
+        trace_read_token,
+        trace_poll_ms,
         log_path,
         interaction_url,
         keep_alive_ms: WebConfig::DEFAULT_KEEP_ALIVE_MS,
@@ -205,9 +249,27 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_numeric_snapshot_poll_flag() {
-        let error = parse_config(&args(&["--snapshot-poll-ms", "soon"]))
-            .expect_err("non-numeric is rejected");
-        assert!(error.contains("--snapshot-poll-ms"), "got: {error}");
+    fn parses_trace_configuration_without_exposing_token_in_debug() {
+        let config = parse_config(&args(&[
+            "--daemon-url",
+            "http://127.0.0.1:9000",
+            "--trace-read-token",
+            "server-secret",
+            "--trace-poll-ms",
+            "250",
+        ]))
+        .expect("parses");
+        assert_eq!(config.trace_url.as_deref(), Some("http://127.0.0.1:9000"));
+        assert_eq!(config.trace_poll_ms, Some(250));
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("server-secret"));
+        assert!(rendered.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn rejects_newlines_in_trace_token() {
+        let error = parse_config(&args(&["--trace-read-token", "bad\ntoken"]))
+            .expect_err("header injection is rejected");
+        assert!(error.contains("trace-read-token"));
     }
 }

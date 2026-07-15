@@ -7,7 +7,8 @@
 
 use temper_config::{ExposeSecret, Resolved, WorkerPoolSettings};
 use temper_engine::{
-    DaemonRunConfig, EngineConfig, WorkerAuth, WorkerPoolAuthConfig, WorkerPoolPolicy,
+    DaemonRunConfig, EngineAgentTraceConfig, EngineConfig, WorkerAuth, WorkerPoolAuthConfig,
+    WorkerPoolPolicy,
 };
 use temper_forge::RepositoryPath;
 use temper_forge::config::ForgejoConfig;
@@ -110,7 +111,13 @@ pub fn engine_config(resolved: &Resolved) -> Result<EngineConfig, String> {
     let forge = forgejo_config(resolved)?;
     let daemon = daemon_run_config(resolved)?;
     let role_tokens = resolved.forge.role_tokens.clone();
-    Ok(EngineConfig::new(daemon, forge, role_tokens))
+    let traces = &resolved.observability.agent_traces;
+    let agent_traces = EngineAgentTraceConfig {
+        policy: traces.policy_for_storage(traces.engine_journal_root.as_deref()),
+        journal_root: traces.engine_journal_root.clone(),
+        read_token: traces.read_token_value.clone(),
+    };
+    Ok(EngineConfig::new(daemon, forge, role_tokens).with_agent_traces(agent_traces))
 }
 
 /// Builds the daemon's worker-pool authentication policy from resolved pools.

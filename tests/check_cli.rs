@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#[path = "check_cli/agent_traces.rs"]
+mod agent_traces;
 #[path = "check_cli/compat.rs"]
 mod compat;
 #[path = "check_cli/help.rs"]

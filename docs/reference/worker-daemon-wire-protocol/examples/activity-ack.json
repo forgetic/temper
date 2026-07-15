@@ -1,0 +1,10 @@
+{
+  "type": "activity-ack",
+  "protocol_version": 1,
+  "worker_id": "worker-1",
+  "acknowledgement": {
+    "version": 1,
+    "run_id": "run-310",
+    "highest_contiguous_seq": 1
+  }
+}

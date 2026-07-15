@@ -26,6 +26,10 @@ crates/temper-engine/src/daemon/wake_coordinator.rs
 # transitions; keeping these states together prevents dispatch bypass paths.
 crates/temper-engine/src/daemon/machine.rs
 
+# The daemon handle composes shared executor capabilities for wake execution,
+# artifact context, and trace storage/query wiring at one construction boundary.
+crates/temper-engine/src/daemon/handle.rs
+
 # Startup recovery inventory and orphan convergence share the service boundary
 # with daemon construction so no feed can bypass durable claim reconstruction.
 crates/temper-engine-service/src/runtime.rs
@@ -112,3 +116,7 @@ crates/temper-config/src/resolve.rs
 # Config resolution tests cover cross-section defaults and validation matrices;
 # split when the next config test fixture cleanup lands.
 crates/temper-config/src/tests.rs
+
+# Agent trace capstones intentionally keep producer/process fixtures, worker
+# spools, engine query/export, web, and OTel assertions in one leak-detection path.
+crates/temper-worker/src/trace/full_path_tests.rs

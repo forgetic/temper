@@ -1,4 +1,5 @@
 use super::*;
+use temper_protocol_activity::{AgentActivityEventV1, CaptureModeV1, RunFailedV1};
 use temper_protocol_worker::FailureClass;
 
 #[test]
@@ -71,6 +72,106 @@ fn in_process_runner_passes_tool_config_to_native_loop() {
     });
 }
 
+#[test]
+fn in_process_terminal_failures_never_capture_tool_diagnostics() {
+    const RAW_ERROR_SENTINELS: [&str; 4] = [
+        "CREDENTIAL-IN-PROCESS-SENTINEL-353",
+        "HEADER-IN-PROCESS-SENTINEL-353",
+        "ENVIRONMENT-IN-PROCESS-SENTINEL-353",
+        "TOOL-IN-PROCESS-SENTINEL-353",
+    ];
+    let command = RAW_ERROR_SENTINELS.join("-");
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
+        for capture in [
+            CaptureModeV1::Off,
+            CaptureModeV1::Metadata,
+            CaptureModeV1::Transcript,
+            CaptureModeV1::Diagnostic,
+        ] {
+            let temp = tempfile::tempdir().expect("in-process failure tempdir");
+            std::fs::create_dir_all(temp.path().join("temper")).expect("prepared repo dir");
+            let spool_root = temp.path().join("spool");
+            let policy = AgentActivityCapturePolicyV1 {
+                capture,
+                capture_thinking: capture == CaptureModeV1::Diagnostic,
+                ..Default::default()
+            };
+            let provider = ProviderConfig::new(
+                "test-provider",
+                "test-model",
+                "https://llm.example",
+                "provider-credential-must-stay-outside-activity",
+            );
+            let runner = InProcessAgentRunner::new(handle.clone(), provider, 1, None, false)
+                .with_tool_config(Some(required_bad_tool_config_with_command(
+                    "architect",
+                    &command,
+                )))
+                .with_trace_policy(policy.clone())
+                .with_trace_collector(WorkerAgentTraceConfig {
+                    policy,
+                    spool_root: Some(spool_root.clone()),
+                });
+            let context = ctx("ai", "temper", "issue", "Issue { number: ItemNumber(353) }");
+            let error = runner
+                .run("job-in-process-failure-353", &context, temp.path())
+                .await
+                .expect_err("tool startup fixture remains an agent failure");
+            assert_eq!(error.class, FailureClass::Transient);
+            for sentinel in RAW_ERROR_SENTINELS {
+                assert!(
+                    error.message.contains(sentinel),
+                    "job diagnostics retain {sentinel}"
+                );
+            }
+
+            if capture == CaptureModeV1::Off {
+                assert!(!spool_root.exists());
+                continue;
+            }
+            let recovered = TraceCollector::new(WorkerAgentTraceConfig {
+                policy: AgentActivityCapturePolicyV1 {
+                    capture,
+                    capture_thinking: capture == CaptureModeV1::Diagnostic,
+                    ..Default::default()
+                },
+                spool_root: Some(spool_root.clone()),
+            })
+            .recover()
+            .expect("recover in-process failure trace");
+            assert_eq!(recovered.len(), 1);
+            let stored = directory_bytes(&spool_root);
+            let canonical = String::from_utf8_lossy(&stored);
+            for sentinel in RAW_ERROR_SENTINELS {
+                assert!(!canonical.contains(sentinel), "trace leaked {sentinel}");
+            }
+            let terminal = recovered[0].events.last().expect("terminal event");
+            let AgentActivityEventV1::RunFailed(RunFailedV1 { failure }) = &terminal.event else {
+                panic!("in-process failure must end with run.failed");
+            };
+            assert_eq!(failure.code, FailureCodeV1::Internal);
+            assert_eq!(failure.message, "agent run failed with a transient error");
+            assert!(failure.retryable);
+        }
+    });
+}
+
+fn directory_bytes(root: &std::path::Path) -> Vec<u8> {
+    if root.is_file() {
+        return std::fs::read(root).expect("read trace file");
+    }
+    let mut bytes = Vec::new();
+    let mut entries = std::fs::read_dir(root)
+        .expect("read trace directory")
+        .map(|entry| entry.expect("trace directory entry").path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for entry in entries {
+        bytes.extend(directory_bytes(&entry));
+    }
+    bytes
+}
+
 fn test_tool_config() -> AgentToolConfig {
     use temper_protocol_agent::{
         CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
@@ -90,6 +191,10 @@ fn test_tool_config() -> AgentToolConfig {
 }
 
 fn required_bad_tool_config_for_role(role: &str) -> AgentToolConfig {
+    required_bad_tool_config_with_command(role, "definitely-not-a-temper-codebase-memory-mcp")
+}
+
+fn required_bad_tool_config_with_command(role: &str, command: &str) -> AgentToolConfig {
     use temper_protocol_agent::{
         CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
     };
@@ -97,7 +202,7 @@ fn required_bad_tool_config_for_role(role: &str) -> AgentToolConfig {
     AgentToolConfig {
         codebase_memory: Some(CodebaseMemoryToolConfig {
             mode: CodebaseMemoryMode::Required,
-            command: "definitely-not-a-temper-codebase-memory-mcp".to_string(),
+            command: command.to_string(),
             args: Vec::new(),
             roles: vec![role.to_string()],
             index: CodebaseMemoryIndex::Off,
@@ -191,6 +296,7 @@ fn run_kind_maps_roles_to_activities() {
 fn ctx(owner: &str, name: &str, kind: &str, target: &str) -> WorkspaceContext {
     use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
     WorkspaceContext {
+        trace_context: None,
         artifact_context: None,
         repos: vec![WorkspaceRepository {
             id: format!("forgejo:{owner}/{name}"),

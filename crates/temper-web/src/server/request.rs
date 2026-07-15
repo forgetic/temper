@@ -33,6 +33,9 @@ impl RequestLine {
 pub struct Request {
     /// The parsed request line (method + target).
     pub line: RequestLine,
+    /// Lower-cased request headers. Trace SSE uses `last-event-id` to resume
+    /// native EventSource reconnects without replaying the previous event.
+    pub headers: std::collections::BTreeMap<String, String>,
     /// The request body bytes (empty for bodyless requests).
     pub body: Vec<u8>,
 }
@@ -57,6 +60,7 @@ pub fn read_request<R: Read>(reader: &mut BufReader<R>) -> Option<Request> {
 
     // Read headers; we only need Content-Length, to size the body read.
     let mut content_length = 0usize;
+    let mut headers = std::collections::BTreeMap::new();
     loop {
         let mut header = String::new();
         if reader.read_line(&mut header).ok()? == 0 {
@@ -66,9 +70,12 @@ pub fn read_request<R: Read>(reader: &mut BufReader<R>) -> Option<Request> {
             break;
         }
         if let Some((name, value)) = header.split_once(':') {
-            if name.trim().eq_ignore_ascii_case("content-length") {
-                content_length = value.trim().parse().unwrap_or(0);
+            let name = name.trim().to_ascii_lowercase();
+            let value = value.trim().to_string();
+            if name == "content-length" {
+                content_length = value.parse().unwrap_or(0);
             }
+            headers.insert(name, value);
         }
     }
 
@@ -78,6 +85,7 @@ pub fn read_request<R: Read>(reader: &mut BufReader<R>) -> Option<Request> {
     }
     Some(Request {
         line: request_line,
+        headers,
         body,
     })
 }
@@ -170,6 +178,18 @@ mod tests {
         let request = read_request(&mut reader).expect("reads");
         assert!(request.body.is_empty());
         assert_eq!(request.line.path_only(), "/conversations/events");
+        assert_eq!(request.headers["host"], "x");
+    }
+
+    #[test]
+    fn captures_last_event_id_case_insensitively() {
+        let raw = "GET /api/agent-runs/r/stream HTTP/1.1\r\nLast-Event-ID: 42\r\n\r\n";
+        let mut reader = BufReader::new(raw.as_bytes());
+        let request = read_request(&mut reader).expect("reads");
+        assert_eq!(
+            request.headers.get("last-event-id").map(String::as_str),
+            Some("42")
+        );
     }
 
     #[test]
