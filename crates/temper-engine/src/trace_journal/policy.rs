@@ -177,10 +177,10 @@ fn validate_event_policy(
             ));
         }
         AgentActivityEventV1::ModelCallRetrying(value)
-            if value.failure.message.len() > policy.max_inline_bytes as usize =>
+            if value.failure.message != MODEL_CALL_RETRY_FAILURE_MESSAGE =>
         {
             return Err(TraceJournalError::PolicyViolation(
-                "retry failure detail exceeds the bound manifest policy".to_string(),
+                "retry failure message is not the allowlisted summary".to_string(),
             ));
         }
         AgentActivityEventV1::RunFailed(value)
@@ -199,6 +199,9 @@ fn sanitize_for_policy(
     mut event: AgentRunEventV1,
     policy: &AgentActivityCapturePolicyV1,
 ) -> AgentRunEventV1 {
+    // Re-establish the privacy invariant at the engine boundary. This runs for
+    // every capture mode and for direct/forged batches that bypass the worker.
+    event.event.sanitize_retry_failure_message();
     match policy.capture {
         CaptureModeV1::Off => {}
         CaptureModeV1::Metadata => match &mut event.event {
@@ -291,10 +294,8 @@ fn sanitize_for_policy(
                 value.delta.text.len() as u64,
             );
         }
-        AgentActivityEventV1::ModelCallRetrying(value)
-            if value.failure.message.len() > policy.max_inline_bytes as usize =>
-        {
-            value.failure.message = omission_message(policy.max_inline_bytes);
+        AgentActivityEventV1::ModelCallRetrying(value) => {
+            value.failure.message = MODEL_CALL_RETRY_FAILURE_MESSAGE.to_string();
         }
         AgentActivityEventV1::RunFailed(value)
             if value.failure.message.len() > policy.max_inline_bytes as usize =>
@@ -326,7 +327,7 @@ fn strip_optional_content(mut event: AgentRunEventV1) -> AgentRunEventV1 {
         AgentActivityEventV1::ToolFinished(value) => value.result = None,
         AgentActivityEventV1::SteeringApplied(value) => value.instruction = None,
         AgentActivityEventV1::ModelCallRetrying(value) => {
-            value.failure.message = omission_message(1);
+            value.failure.message = MODEL_CALL_RETRY_FAILURE_MESSAGE.to_string();
         }
         AgentActivityEventV1::RunFailed(value) => {
             value.failure.message = omission_message(1);

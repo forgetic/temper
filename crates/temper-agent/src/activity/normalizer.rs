@@ -7,10 +7,11 @@ use temper_agent_core::{
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1,
     AgentActivityFrameV1, AgentScopeV1, AssistantMessageV1, CaptureModeV1, CapturedContentV1,
-    FailureCodeV1, FailureInfoV1, InlineContentV1, ModelCallFinishedV1, ModelCallRetryingV1,
-    ModelCallStartedV1, ModelCallStatusV1, OutputDeltaV1, ScopeFinishedV1, ScopeStartedV1,
-    ScopeStatusV1, SteeringAppliedV1, SteeringSourceV1, StopReasonV1, ToolFinishedV1,
-    ToolStartedV1, ToolStatusV1, TurnFinishedV1, TurnStartedV1, UsageV1,
+    FailureCodeV1, FailureInfoV1, InlineContentV1, MODEL_CALL_RETRY_FAILURE_MESSAGE,
+    ModelCallFinishedV1, ModelCallRetryingV1, ModelCallStartedV1, ModelCallStatusV1, OutputDeltaV1,
+    ScopeFinishedV1, ScopeStartedV1, ScopeStatusV1, SteeringAppliedV1, SteeringSourceV1,
+    StopReasonV1, ToolFinishedV1, ToolStartedV1, ToolStatusV1, TurnFinishedV1, TurnStartedV1,
+    UsageV1,
 };
 use tongs::model::{ContentBlock, StopReason};
 
@@ -124,8 +125,8 @@ impl NormalizingEventSink {
                 call_id,
                 next_attempt,
                 delay_ms,
-                reason,
-            } => self.model_retrying(&mut state, turn, call_id, next_attempt, delay_ms, reason),
+                reason: _,
+            } => self.model_retrying(&mut state, turn, call_id, next_attempt, delay_ms),
             AgentEvent::StreamDelta(delta) => self.stream_delta(&state, delta),
             AgentEvent::AssistantMessage { content } => {
                 self.assistant_message(&mut state, &content)
@@ -214,7 +215,6 @@ impl NormalizingEventSink {
         call_id: String,
         next_attempt: u32,
         delay_ms: u64,
-        reason: String,
     ) {
         // A failed attempt looked terminal until the shell decided to retry it.
         // Keep the model-attempt boundary, but do not close the enclosing turn.
@@ -227,7 +227,7 @@ impl NormalizingEventSink {
                 delay_ms,
                 failure: FailureInfoV1 {
                     code: FailureCodeV1::Provider,
-                    message: sanitized_text(&reason, self.policy.max_inline_bytes as usize).text,
+                    message: MODEL_CALL_RETRY_FAILURE_MESSAGE.to_string(),
                     retryable: true,
                 },
             }),

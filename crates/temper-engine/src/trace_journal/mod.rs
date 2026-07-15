@@ -25,8 +25,8 @@ use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, ActivityValidationError, AgentActivityAcknowledgement,
     AgentActivityBatch, AgentActivityCapturePolicyV1, AgentActivityEventV1,
     AgentAssignmentIdentityV1, AgentRunEventV1, BlobAttachmentV1, BlobReferenceV1, CaptureModeV1,
-    CapturedContentV1, DroppedEventKindV1, MAX_BLOB_ATTACHMENT_BYTES, TraceGapV1, UsageV1,
-    validate_run_stream,
+    CapturedContentV1, DroppedEventKindV1, MAX_BLOB_ATTACHMENT_BYTES,
+    MODEL_CALL_RETRY_FAILURE_MESSAGE, TraceGapV1, UsageV1, validate_run_stream,
 };
 
 use crate::{EngineAgentTraceConfig, WallClock, system_clock};

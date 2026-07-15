@@ -143,7 +143,9 @@ fn source_event_digest(
     key: &[u8; 32],
     event: &AgentRunEventV1,
 ) -> Result<String, TraceJournalError> {
-    let bytes = serde_json::to_vec(event)
+    let mut canonical_source = event.clone();
+    canonical_source.event.sanitize_retry_failure_message();
+    let bytes = serde_json::to_vec(&canonical_source)
         .map_err(|error| TraceJournalError::Serialization(error.to_string()))?;
     let mut digest = Hmac::<Sha256>::new_from_slice(key)
         .map_err(|error| TraceJournalError::Serialization(error.to_string()))?;

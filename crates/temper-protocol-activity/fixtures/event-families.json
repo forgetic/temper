@@ -44,7 +44,7 @@
       "delay_ms": 250,
       "failure": {
         "code": "timeout",
-        "message": "provider timed out",
+        "message": "model call failed; retry scheduled",
         "retryable": true
       }
     }
