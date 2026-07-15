@@ -2,6 +2,7 @@ use super::*;
 use crate::trigger_args::NamedSocket;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use temper_forge::{HintArtifactKind, HintTarget};
 
 fn request(body: &[u8], secret: &str, event: &str) -> HttpRequest {
     let mut headers = BTreeMap::new();
@@ -24,8 +25,14 @@ fn verifies_signature_and_parses_pull_request_hint() {
     let hint =
         accept_webhook(&request(body, "secret", "pull_request"), "secret").expect("valid webhook");
     assert_eq!(hint.repo, RepositoryPath::new("acme", "service"));
-    assert_eq!(hint.item, Some(ItemNumber::new(42)));
-    assert_eq!(hint.kind, ChangeKind::PullRequest);
+    assert_eq!(
+        hint.target,
+        HintTarget::Artifact {
+            kind: HintArtifactKind::PullRequest,
+            number: ItemNumber::new(42)
+        }
+    );
+    assert_eq!(hint.change, ChangeKind::Edited);
 }
 
 #[test]
@@ -47,8 +54,14 @@ fn selected_forgejo_contract_accepts_forgejo_headers_and_sha256_prefix() {
     let hint = accept_webhook(&request, "secret").expect("Forgejo webhook contract is accepted");
 
     assert_eq!(hint.repo, RepositoryPath::new("acme", "service"));
-    assert_eq!(hint.item, Some(ItemNumber::new(192)));
-    assert_eq!(hint.kind, ChangeKind::Issue);
+    assert_eq!(
+        hint.target,
+        HintTarget::Artifact {
+            kind: HintArtifactKind::Issue,
+            number: ItemNumber::new(192)
+        }
+    );
+    assert_eq!(hint.change, ChangeKind::Edited);
 }
 
 #[test]
@@ -73,7 +86,8 @@ fn workflow_events_are_ci_hints() {
     ] {
         let hint = accept_webhook(&request(body, "secret", event), "secret")
             .expect("CI events wake workers");
-        assert_eq!(hint.kind, ChangeKind::Ci, "event {event}");
+        assert_eq!(hint.change, ChangeKind::Ci, "event {event}");
+        assert_eq!(hint.target, HintTarget::Repository, "event {event}");
     }
 }
 
@@ -83,8 +97,14 @@ fn forgejo_pull_request_review_events_are_review_hints() {
     for event in ["pull_request_approved", "pull_request_rejected"] {
         let hint = accept_webhook(&request(body, "secret", event), "secret")
             .expect("review events wake workers");
-        assert_eq!(hint.kind, ChangeKind::Review, "event {event}");
-        assert_eq!(hint.item, Some(ItemNumber::new(7)));
+        assert_eq!(hint.change, ChangeKind::Review, "event {event}");
+        assert_eq!(
+            hint.target,
+            HintTarget::Artifact {
+                kind: HintArtifactKind::PullRequest,
+                number: ItemNumber::new(7)
+            }
+        );
     }
 }
 
@@ -93,7 +113,8 @@ fn unknown_event_still_yields_hint() {
     let body = br#"{"repository":{"owner":{"login":"acme"},"name":"service"}}"#;
     let hint = accept_webhook(&request(body, "secret", "mystery"), "secret")
         .expect("unknown events wake broadly");
-    assert_eq!(hint.kind, ChangeKind::Unknown);
+    assert_eq!(hint.change, ChangeKind::Unknown);
+    assert_eq!(hint.target, HintTarget::Repository);
 }
 
 fn trigger_args_with_dir(dir: PathBuf) -> TriggerArgs {
@@ -205,7 +226,7 @@ fn missing_socket_paths_are_reported_but_webhook_is_accepted() {
     };
     let body = br#"{"repository":{"full_name":"acme/service"},"issue":{"number":7}}"#;
 
-    let hint = ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
+    let hint = ChangeHint::repository(RepositoryPath::new("acme", "service"), ChangeKind::Edited);
     let report = deliver_wakes(&args, None, &hint);
     let response = handle_request(&request(body, "secret", "issues"), &args, "secret", None);
 
@@ -224,7 +245,7 @@ fn no_sockets_found_is_a_distinct_delivery_outcome() {
     let dir = temp_dir("no-sockets");
     let args = trigger_args_with_dir(dir.clone());
 
-    let hint = ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
+    let hint = ChangeHint::repository(RepositoryPath::new("acme", "service"), ChangeKind::Edited);
     let report = deliver_wakes(&args, None, &hint);
 
     assert_eq!(report.targets, 0);

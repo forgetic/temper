@@ -97,6 +97,7 @@ fn webhook_config(repo: RepositoryId) -> WebhookConfig {
         secret: "s3cret".into(),
         targets: vec![RoleFeedTarget {
             repo,
+            path: temper_forge::RepositoryPath::new("acme", "service"),
             role: RoleId::new("engineer"),
             mode: RoleFeedMode::Wake,
         }],

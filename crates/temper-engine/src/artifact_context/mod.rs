@@ -24,8 +24,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use temper_forge::{Forge, RepositoryId};
-use temper_protocol_worker::{ArtifactContextBundle, ArtifactContextDiagnosticCode};
-use temper_workflow::{ArtifactSource, ValidatedWorkflow};
+use temper_protocol_worker::{
+    ArtifactContextBundle, ArtifactContextDiagnosticCode, ArtifactSnapshot,
+};
+use temper_workflow::{ArtifactSource, ClassifiedArtifact, ValidatedWorkflow};
 
 pub use catalog::ConfiguredRepositoryCatalog;
 pub use forge::ArtifactContextForge;
@@ -80,6 +82,28 @@ impl ArtifactContextBundleService {
             repository,
             source,
             action,
+            self.policy,
+        )
+        .await
+    }
+
+    /// Resolves an action-selected bundle while reusing the exact primary
+    /// representation validated by an item-scoped scan.
+    pub async fn resolve_with_primary(
+        &self,
+        repository: &RepositoryId,
+        action: &str,
+        primary: ArtifactSnapshot,
+        classified: ClassifiedArtifact,
+    ) -> Result<ArtifactContextBundle, ArtifactContextError> {
+        resolve_initial_artifact_context_for_action_with_primary(
+            self.forge.as_ref(),
+            &self.catalog,
+            self.workflow.as_ref(),
+            repository,
+            action,
+            primary,
+            classified,
             self.policy,
         )
         .await
@@ -196,6 +220,34 @@ pub async fn resolve_initial_artifact_context_for_action_with_policy<F: Forge + 
     .await
 }
 
+/// Resolves an action-selected bundle from an already validated primary
+/// snapshot. Lineage, declared dependency, and reference expansion retain the
+/// ordinary bounds, but the coordinating artifact is not fetched again.
+#[allow(clippy::too_many_arguments)]
+pub async fn resolve_initial_artifact_context_for_action_with_primary<F: Forge + ?Sized>(
+    forge: &F,
+    catalog: &ConfiguredRepositoryCatalog,
+    workflow: &ValidatedWorkflow,
+    repository: &RepositoryId,
+    action: &str,
+    primary: ArtifactSnapshot,
+    classified: ClassifiedArtifact,
+    policy: ArtifactContextPolicy,
+) -> Result<ArtifactContextBundle, ArtifactContextError> {
+    let source = classified.source;
+    resolve_initial_artifact_context_selected_with_primary(
+        forge,
+        catalog,
+        workflow,
+        repository,
+        source,
+        policy,
+        action == "validate_plan",
+        Some((primary, classified)),
+    )
+    .await
+}
+
 async fn resolve_initial_artifact_context_selected<F: Forge + ?Sized>(
     forge: &F,
     catalog: &ConfiguredRepositoryCatalog,
@@ -205,8 +257,41 @@ async fn resolve_initial_artifact_context_selected<F: Forge + ?Sized>(
     policy: ArtifactContextPolicy,
     include_validation_aggregates: bool,
 ) -> Result<ArtifactContextBundle, ArtifactContextError> {
-    let collection =
-        lineage::collect_lineage(forge, catalog, workflow, repository, source, policy).await?;
+    resolve_initial_artifact_context_selected_with_primary(
+        forge,
+        catalog,
+        workflow,
+        repository,
+        source,
+        policy,
+        include_validation_aggregates,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn resolve_initial_artifact_context_selected_with_primary<F: Forge + ?Sized>(
+    forge: &F,
+    catalog: &ConfiguredRepositoryCatalog,
+    workflow: &ValidatedWorkflow,
+    repository: &RepositoryId,
+    source: ArtifactSource,
+    policy: ArtifactContextPolicy,
+    include_validation_aggregates: bool,
+    primary: Option<(ArtifactSnapshot, ClassifiedArtifact)>,
+) -> Result<ArtifactContextBundle, ArtifactContextError> {
+    let collection = match primary {
+        Some((snapshot, classified)) => {
+            lineage::collect_lineage_from_primary(
+                forge, catalog, workflow, repository, snapshot, classified, policy,
+            )
+            .await?
+        }
+        None => {
+            lineage::collect_lineage(forge, catalog, workflow, repository, source, policy).await?
+        }
+    };
     let mut references = extras::collect_references(forge, catalog, workflow, &collection).await;
     let mut validation = if include_validation_aggregates {
         extras::collect_validation_aggregates(forge, catalog, workflow, &collection).await

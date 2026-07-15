@@ -1,20 +1,22 @@
 //! Durable, idempotent multi-artifact issue fan-out for the [`Executor`].
 
+mod activation;
+mod create;
 mod intent;
+mod wiring;
 
+use super::verify::AppliedState;
 use super::{ChildIssueCheckpoint, ExecutionError, Executor};
-use crate::artifact::ArtifactRef;
 use crate::classify::ArtifactSource;
 use crate::context::CreateIssuesChild;
 use crate::ids::TransitionId;
 use crate::metadata::{
-    CreateIssueIntentChild, CreateIssuesIntent, global_child_correlation_key, parse_metadata_block,
-    replace_metadata_block,
+    CreateIssueIntentChild, CreateIssuesCompletion, CreateIssuesIntent,
+    global_child_correlation_key,
 };
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use temper_forge::{
-    CreateIssue, Forge, ForgeError, IssueState, ItemNumber, RepositoryId, UpdateIssue,
-};
+use std::collections::{BTreeSet, HashSet};
+use std::time::{Duration, Instant};
+use temper_forge::{Forge, Issue, ItemNumber, RepositoryId, UserId};
 
 /// A concrete multi-artifact request prepared from a `CreateIssues` effect.
 pub(super) struct PreparedCreateIssues {
@@ -25,26 +27,108 @@ pub(super) struct PreparedCreateIssues {
     pub(super) record_parent_dependencies: bool,
 }
 
+/// Result of inserting or loading a durable create intent.
+struct PersistedCreateIntent {
+    newly_inserted: bool,
+    intent: CreateIssuesIntent,
+    parent: Issue,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IntentExecutionMode {
+    KnownFirst,
+    Recovery,
+}
+
+struct PendingIntent {
+    key: String,
+    intent: CreateIssuesIntent,
+}
+
+struct ResumedIntent {
+    key: String,
+    intent: CreateIssuesIntent,
+    parent: Issue,
+}
+
 #[derive(Clone, Copy)]
 enum ParentDependencyStyle {
     LegacyRepoQualified,
     Natural,
 }
 
+#[derive(Default)]
+struct FanOutMetrics {
+    forge_reads: u64,
+    forge_writes: u64,
+}
+
+impl FanOutMetrics {
+    fn read(&mut self) {
+        self.forge_reads = self.forge_reads.saturating_add(1);
+    }
+
+    fn write(&mut self) {
+        self.forge_writes = self.forge_writes.saturating_add(1);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_fan_out_completion(
+    repo_id: &RepositoryId,
+    parent_number: ItemNumber,
+    child_count: usize,
+    dependency_edge_count: usize,
+    metrics: &FanOutMetrics,
+    provider_requests: Option<u64>,
+    recovery: bool,
+    duration: Duration,
+) {
+    tracing::debug!(
+        target: "temper::workflow",
+        measurement = "fan_out.completed",
+        parent.ref = %format!("{}#{}", repo_id.as_str(), parent_number.get()),
+        child_count,
+        dependency_edge_count,
+        forge.read_total = metrics.forge_reads,
+        forge.write_total = metrics.forge_writes,
+        provider.request_total = provider_requests.unwrap_or(0),
+        provider.requests_available = provider_requests.is_some(),
+        recovery,
+        duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+        "workflow: issue fan-out completed"
+    );
+}
+
 impl<F: Forge + ?Sized> Executor<'_, F> {
-    /// Persists each complete fan-out before creating its first child, then
-    /// drives the durable intent to completion. Child issues are created with a
-    /// metadata staging bit and no labels, so neither label races nor process
-    /// death can make a partially-wired child dispatchable.
+    /// Persists every fan-out before creating its first child, then executes
+    /// explicit create, wiring/aggregation, activation, and completion passes.
+    ///
+    /// A newly inserted intent takes the known-first path and performs no
+    /// correlation-history query. Existing incomplete intents take recovery,
+    /// where unresolved keys are searched in one open/closed pair per target
+    /// repository before any missing children are created.
     pub(super) async fn apply_issue_creates(
         &self,
         repo_id: &RepositoryId,
         target: ArtifactSource,
+        parent_snapshot: Option<Issue>,
         creates: &[PreparedCreateIssues],
-    ) -> Result<(), ExecutionError> {
+        completion: &CreateIssuesCompletion,
+    ) -> Result<Option<AppliedState>, ExecutionError> {
         if creates.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
+        let started = Instant::now();
+        let provider_requests_before = self.forge.provider_request_count();
+        let child_count = creates.iter().map(|create| create.children.len()).sum();
+        let dependency_edge_count = creates
+            .iter()
+            .flat_map(|create| &create.children)
+            .map(|child| child.dependencies.len())
+            .sum();
+        let mut fan_out_metrics = FanOutMetrics::default();
+        let mut recovery = false;
         let ArtifactSource::Issue {
             number: parent_number,
         } = target
@@ -53,7 +137,18 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 message: "create_issues durability requires an issue source artifact".into(),
             });
         };
+        let mut parent = parent_snapshot.ok_or_else(|| ExecutionError::Backend {
+            message: "create_issues durability requires a validated source issue snapshot".into(),
+        })?;
+        if parent.repo_id != *repo_id || parent.number != parent_number {
+            return Err(ExecutionError::Backend {
+                message: "create_issues source snapshot does not match its target".into(),
+            });
+        }
 
+        // Persist all sibling effects before any child mutation. This keeps a
+        // multi-effect transition recoverable from the source artifact alone.
+        let mut pending = Vec::new();
         for create in creates {
             let key = create_intent_key(
                 target,
@@ -61,16 +156,77 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 create.effect_index,
                 &create.base_correlation_key,
             );
-            let proposed = self.intent_from_create(repo_id, parent_number, create);
-            let intent = self
-                .persist_create_intent(repo_id, parent_number, &key, proposed)
+            let proposed =
+                self.intent_from_create(repo_id, parent_number, create, completion.clone());
+            let persisted = self
+                .persist_create_intent(parent, &key, proposed, &mut fan_out_metrics)
                 .await?;
-            if !intent.completed {
-                self.resume_create_intent(repo_id, parent_number, &key, intent)
-                    .await?;
+            parent = persisted.parent;
+            if !persisted.intent.completed {
+                recovery |= !persisted.newly_inserted;
+                pending.push((
+                    key,
+                    persisted.intent,
+                    if persisted.newly_inserted {
+                        IntentExecutionMode::KnownFirst
+                    } else {
+                        IntentExecutionMode::Recovery
+                    },
+                ));
             }
         }
-        Ok(())
+
+        let mut completed = Vec::new();
+        for (key, intent, mode) in pending {
+            let resumed = self
+                .resume_create_intent(
+                    repo_id,
+                    parent_number,
+                    &key,
+                    intent,
+                    mode,
+                    parent,
+                    &mut fan_out_metrics,
+                )
+                .await?;
+            parent = resumed.parent;
+            completed.push(PendingIntent {
+                key: resumed.key,
+                intent: resumed.intent,
+            });
+        }
+
+        if !completed.is_empty() {
+            let (committed, changed) = self
+                .complete_create_intents(parent, &completed, &mut fan_out_metrics)
+                .await?;
+            parent = committed;
+            if changed {
+                self.child_issue_checkpoint(ChildIssueCheckpoint::Completed)
+                    .await;
+            }
+        }
+
+        let provider_requests = provider_requests_before.and_then(|before| {
+            self.forge
+                .provider_request_count()
+                .map(|after| after.saturating_sub(before))
+        });
+        emit_fan_out_completion(
+            repo_id,
+            parent_number,
+            child_count,
+            dependency_edge_count,
+            &fan_out_metrics,
+            provider_requests,
+            recovery,
+            started.elapsed(),
+        );
+
+        Ok(Some(AppliedState {
+            labels: parent.labels,
+            assignees: parent.assignees,
+        }))
     }
 
     fn intent_from_create(
@@ -78,6 +234,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         repo_id: &RepositoryId,
         parent_number: ItemNumber,
         create: &PreparedCreateIssues,
+        completion: CreateIssuesCompletion,
     ) -> CreateIssuesIntent {
         let children = create
             .children
@@ -109,359 +266,60 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             correlation_key: create.base_correlation_key.clone(),
             record_parent_dependencies: create.record_parent_dependencies,
             children,
+            completion: Some(completion),
             parent_wired: false,
             completed: false,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn resume_create_intent(
         &self,
         repo_id: &RepositoryId,
         parent_number: ItemNumber,
         key: &str,
-        mut intent: CreateIssuesIntent,
-    ) -> Result<(), ExecutionError> {
+        intent: CreateIssuesIntent,
+        mode: IntentExecutionMode,
+        parent: Issue,
+        metrics: &mut FanOutMetrics,
+    ) -> Result<ResumedIntent, ExecutionError> {
         if intent.completed {
-            return Ok(());
+            return Ok(ResumedIntent {
+                key: key.to_string(),
+                intent,
+                parent,
+            });
         }
 
-        // Pass 1: every staged child exists and carries its parent reference.
-        for index in 0..intent.children.len() {
-            let child = intent.children[index].clone();
-            let same_repo = child.repository_id == *repo_id;
-            let parent = if same_repo {
-                ArtifactRef::same_repo(parent_number)
-            } else {
-                ArtifactRef::in_repo(repo_id.clone(), parent_number)
-            };
-            let body = decode_intent_body(&child.body_hex)?;
-            let outcome = self
-                .ensure_staged_issue_with_parent(
-                    &child.repository_id,
-                    &child.correlation_key,
-                    parent,
-                    CreateIssue {
-                        title: child.title,
-                        body,
-                        labels: Vec::new(),
-                        assignees: Vec::new(),
-                    },
-                )
-                .await
-                .map_err(|error| {
-                    if same_repo {
-                        error
-                    } else {
-                        annotate_target_repo_error(&child.repository_id, error)
-                    }
-                })?;
-            let was_created = matches!(&outcome, super::EnsureOutcome::Created(_));
-            intent.children[index].number = Some(outcome.into_artifact().number);
-            if was_created {
-                self.child_issue_checkpoint(ChildIssueCheckpoint::Created)
-                    .await;
-            }
-            self.save_create_intent(repo_id, parent_number, key, &intent)
-                .await?;
-        }
-
-        let child_numbers = intent
-            .children
-            .iter()
-            .map(|child| {
-                Ok((
-                    child.slug.clone(),
-                    (
-                        child.repository_id.clone(),
-                        child.number.ok_or_else(|| ExecutionError::Backend {
-                            message: format!(
-                                "intent child `{}` has no persisted number",
-                                child.slug
-                            ),
-                        })?,
-                    ),
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, ExecutionError>>()?;
-
-        // Pass 2: write every sibling dependency. Progress may lag a landed
-        // write; the metadata operation itself is idempotent on replay.
-        for index in 0..intent.children.len() {
-            let child = intent.children[index].clone();
-            let child_number = child.number.expect("numbers checked above");
-            let child_issue = self
-                .forge
-                .get_issue_by_number(&child.repository_id, child_number)
-                .await?
-                .ok_or(ExecutionError::TargetMissing {
-                    target: ArtifactSource::Issue {
-                        number: child_number,
-                    },
-                })?;
-            for dependency_slug in &child.dependencies {
-                let (dependency_repo, dependency_number) = &child_numbers[dependency_slug];
-                let dependency = if dependency_repo == &child.repository_id {
-                    ArtifactRef::same_repo(*dependency_number)
-                } else {
-                    ArtifactRef::in_repo(dependency_repo.clone(), *dependency_number)
-                };
-                self.ensure_issue_dependency_metadata(&child_issue.id, &dependency)
-                    .await?;
-            }
-            self.child_issue_checkpoint(ChildIssueCheckpoint::Wired)
-                .await;
-            intent.children[index].wired = true;
-            self.save_create_intent(repo_id, parent_number, key, &intent)
-                .await?;
-        }
-
-        let any_cross_repo = intent
-            .children
-            .iter()
-            .any(|child| child.repository_id != *repo_id);
-        if any_cross_repo || intent.record_parent_dependencies {
-            let style = if intent.record_parent_dependencies {
-                ParentDependencyStyle::Natural
-            } else {
-                ParentDependencyStyle::LegacyRepoQualified
-            };
-            self.link_intent_parent_dependencies(repo_id, parent_number, &intent, style)
-                .await?;
-        }
-        intent.parent_wired = true;
-        self.save_create_intent(repo_id, parent_number, key, &intent)
+        let (intent, parent, children) = self
+            .create_pass(repo_id, parent_number, key, intent, mode, parent, metrics)
             .await?;
-
-        // Pass 3: only after all children and relations are safe, atomically
-        // project each child's lifecycle labels and clear its staging marker.
-        for index in 0..intent.children.len() {
-            let child = intent.children[index].clone();
-            let unresolved = self
-                .intent_dependencies_unresolved(&child, &child_numbers)
-                .await?;
-            let labels = self.activation_labels(&child, unresolved);
-            self.activate_staged_issue(
-                &child.repository_id,
-                child.number.expect("numbers checked above"),
-                &child.correlation_key,
-                &labels,
-            )
+        let (intent, parent, children) = self
+            .wiring_and_aggregation_pass(repo_id, key, intent, parent, children, metrics)
             .await?;
-            self.child_issue_checkpoint(ChildIssueCheckpoint::Activated)
-                .await;
-            intent.children[index].activated = true;
-            self.save_create_intent(repo_id, parent_number, key, &intent)
-                .await?;
-        }
-
-        intent.completed = intent.parent_wired
-            && intent
-                .children
-                .iter()
-                .all(|child| child.number.is_some() && child.wired && child.activated);
-        self.save_create_intent(repo_id, parent_number, key, &intent)
-            .await?;
-        Ok(())
-    }
-
-    async fn ensure_staged_issue_with_parent(
-        &self,
-        repo_id: &RepositoryId,
-        correlation_key: &str,
-        parent: ArtifactRef,
-        input: CreateIssue,
-    ) -> Result<super::EnsureOutcome<temper_forge::Issue>, ExecutionError> {
-        if let Some(existing) = self
-            .find_issue_by_correlation(repo_id, correlation_key, &[])
-            .await?
-        {
-            let existing = self.ensure_issue_parent(existing, Some(parent)).await?;
-            return Ok(super::EnsureOutcome::Existing(existing));
-        }
-        let mut metadata = parse_metadata_block(&input.body)
-            .map_err(metadata_error)?
-            .unwrap_or_default();
-        metadata.correlation_key = Some(correlation_key.to_string());
-        if !metadata.parents.contains(&parent) {
-            metadata.parents.push(parent);
-        }
-        metadata.staged = true;
-        let body = replace_metadata_block(&input.body, &metadata).map_err(metadata_error)?;
-        let created = self
-            .forge
-            .create_issue(repo_id, CreateIssue { body, ..input })
-            .await?;
-        Ok(super::EnsureOutcome::Created(created))
-    }
-
-    async fn activate_staged_issue(
-        &self,
-        repo_id: &RepositoryId,
-        number: ItemNumber,
-        correlation_key: &str,
-        labels: &[String],
-    ) -> Result<(), ExecutionError> {
-        for _ in 0..3 {
-            let issue = self
-                .forge
-                .get_issue_by_number(repo_id, number)
-                .await?
-                .ok_or(ExecutionError::TargetMissing {
-                    target: ArtifactSource::Issue { number },
-                })?;
-            let mut metadata = parse_metadata_block(&issue.body)
-                .map_err(metadata_error)?
-                .unwrap_or_default();
-            if metadata.correlation_key.as_deref() != Some(correlation_key) {
-                return Err(ExecutionError::Backend {
-                    message: format!("intent child #{number} has an unexpected correlation key"),
-                });
-            }
-            if !metadata.staged {
-                // Activation already committed. Do not regress legitimate
-                // lifecycle changes that may have happened after the child
-                // became dispatchable but before parent progress was saved.
-                return Ok(());
-            }
-            let add_labels = labels
-                .iter()
-                .filter(|label| !issue.labels.contains(label))
-                .cloned()
-                .collect::<Vec<_>>();
-            let remove_labels = issue
-                .labels
-                .iter()
-                .filter(|label| !labels.contains(label))
-                .cloned()
-                .collect::<Vec<_>>();
-            metadata.staged = false;
-            let body = replace_metadata_block(&issue.body, &metadata).map_err(metadata_error)?;
-            match self
-                .forge
-                .update_issue(
-                    &issue.id,
-                    UpdateIssue {
-                        body: Some(body),
-                        add_labels,
-                        remove_labels,
-                        expected_version: Some(issue.version),
-                        ..UpdateIssue::default()
-                    },
-                )
-                .await
-            {
-                Ok(_) => return Ok(()),
-                Err(ForgeError::Conflict(_)) => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
-        Err(ExecutionError::Backend {
-            message: format!("could not activate staged issue #{number} after concurrent updates"),
+        let (intent, children) = self.activation_pass(intent, children, metrics).await?;
+        debug_assert_eq!(children.len(), intent.children.len());
+        Ok(ResumedIntent {
+            key: key.to_string(),
+            intent,
+            parent,
         })
     }
+}
 
-    async fn intent_dependencies_unresolved(
-        &self,
-        child: &CreateIssueIntentChild,
-        child_numbers: &BTreeMap<String, (RepositoryId, ItemNumber)>,
-    ) -> Result<bool, ExecutionError> {
-        for dependency_slug in &child.dependencies {
-            let (repository_id, number) = &child_numbers[dependency_slug];
-            let issue = self
-                .forge
-                .get_issue_by_number(repository_id, *number)
-                .await?
-                .ok_or(ExecutionError::TargetMissing {
-                    target: ArtifactSource::Issue { number: *number },
-                })?;
-            if issue.state != IssueState::Closed {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn activation_labels(
-        &self,
-        child: &CreateIssueIntentChild,
-        dependencies_unresolved: bool,
-    ) -> Vec<String> {
-        let mut labels = child.final_labels.clone();
-        if child.dependencies.is_empty() {
-            return labels;
-        }
-        let kind = decode_intent_body(&child.body_hex)
-            .ok()
-            .and_then(|body| parse_metadata_block(&body).ok().flatten())
-            .and_then(|metadata| metadata.kind);
-        for dimension in self
-            .workflow
-            .state_dimensions()
-            .iter()
-            .filter(|d| d.exclusive)
-        {
-            let ready = dimension.states.iter().find(|state| {
-                state.id.as_str() == "ready"
-                    && kind.as_ref().is_none_or(|kind| state.allows_artifact(kind))
-            });
-            let blocked = dimension.states.iter().find(|state| {
-                state.id.as_str() == "blocked"
-                    && kind.as_ref().is_none_or(|kind| state.allows_artifact(kind))
-            });
-            if let (Some(ready), Some(blocked)) = (ready, blocked) {
-                let ready_label = ready.label.as_ref().map(|label| label.as_str());
-                let blocked_label = blocked.label.as_ref().map(|label| label.as_str());
-                if let Some(label) = ready_label {
-                    labels.retain(|candidate| candidate != label);
-                }
-                if let Some(label) = blocked_label {
-                    labels.retain(|candidate| candidate != label);
-                }
-                let desired = if dependencies_unresolved {
-                    blocked_label
-                } else {
-                    ready_label
-                };
-                if let Some(label) = desired {
-                    labels.push(label.to_string());
-                }
-            }
-        }
-        normalized_labels(&labels)
-    }
-
-    async fn link_intent_parent_dependencies(
-        &self,
-        repo_id: &RepositoryId,
-        parent_number: ItemNumber,
-        intent: &CreateIssuesIntent,
-        style: ParentDependencyStyle,
-    ) -> Result<(), ExecutionError> {
-        let parent_issue = self
-            .forge
-            .get_issue_by_number(repo_id, parent_number)
-            .await?
-            .ok_or(ExecutionError::TargetMissing {
-                target: ArtifactSource::Issue {
-                    number: parent_number,
-                },
-            })?;
-        for child in &intent.children {
-            let number = child.number.ok_or_else(|| ExecutionError::Backend {
-                message: format!("intent child `{}` has no number", child.slug),
-            })?;
-            let dependency = match style {
-                ParentDependencyStyle::Natural if child.repository_id == *repo_id => {
-                    ArtifactRef::same_repo(number)
-                }
-                ParentDependencyStyle::Natural | ParentDependencyStyle::LegacyRepoQualified => {
-                    ArtifactRef::in_repo(child.repository_id.clone(), number)
-                }
-            };
-            self.ensure_issue_dependency_metadata(&parent_issue.id, &dependency)
-                .await?;
-        }
-        Ok(())
+pub(super) fn create_issues_completion(
+    body: Option<&str>,
+    add_labels: &[String],
+    remove_labels: &[String],
+    add_assignees: &[UserId],
+    remove_assignees: &[UserId],
+) -> CreateIssuesCompletion {
+    CreateIssuesCompletion {
+        body_hex: body.map(|body| hex_encode(body.as_bytes())),
+        add_labels: add_labels.to_vec(),
+        remove_labels: remove_labels.to_vec(),
+        add_assignees: add_assignees.to_vec(),
+        remove_assignees: remove_assignees.to_vec(),
     }
 }
 
@@ -521,22 +379,22 @@ fn hex_encode(bytes: &[u8]) -> String {
 fn decode_intent_body(encoded: &str) -> Result<String, ExecutionError> {
     if encoded.len() % 2 != 0 {
         return Err(ExecutionError::Backend {
-            message: "intent child body has invalid hex encoding".into(),
+            message: "intent body has invalid hex encoding".into(),
         });
     }
     let bytes = encoded.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len() / 2);
     for pair in bytes.chunks_exact(2) {
         let high = hex_digit(pair[0]).ok_or_else(|| ExecutionError::Backend {
-            message: "intent child body has invalid hex encoding".into(),
+            message: "intent body has invalid hex encoding".into(),
         })?;
         let low = hex_digit(pair[1]).ok_or_else(|| ExecutionError::Backend {
-            message: "intent child body has invalid hex encoding".into(),
+            message: "intent body has invalid hex encoding".into(),
         })?;
         decoded.push((high << 4) | low);
     }
     String::from_utf8(decoded).map_err(|error| ExecutionError::Backend {
-        message: format!("intent child body is not UTF-8: {error}"),
+        message: format!("intent body is not UTF-8: {error}"),
     })
 }
 

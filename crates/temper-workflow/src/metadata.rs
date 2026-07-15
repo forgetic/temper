@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use temper_forge::{ItemNumber, RepositoryId};
+use temper_forge::{ItemNumber, RepositoryId, UserId};
 
 /// Marker that opens a workflow metadata block.
 pub const METADATA_BEGIN: &str = "<!-- temper:workflow";
@@ -149,10 +149,35 @@ pub struct CreateIssuesIntent {
     pub record_parent_dependencies: bool,
     #[serde(default)]
     pub children: Vec<CreateIssueIntentChild>,
+    /// Source-artifact mutation that commits the routed transition after every
+    /// child is wired and activated. Legacy intents omit this field; recovery
+    /// still finishes their boolean progress without inventing a transition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<CreateIssuesCompletion>,
     #[serde(default)]
     pub parent_wired: bool,
     #[serde(default)]
     pub completed: bool,
+}
+
+/// Durable source-artifact update committed together with fan-out completion.
+///
+/// Bodies are hex encoded for the same reason as child bodies: an authored body
+/// can contain the HTML-comment terminator and must not truncate the intent
+/// embedded in the source artifact's metadata block.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateIssuesCompletion {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_assignees: Vec<UserId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_assignees: Vec<UserId>,
 }
 
 /// Persisted normalized input and progress for one intended child issue.
@@ -330,6 +355,69 @@ pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, Meta
     let metadata =
         serde_json::from_str(json).map_err(|err| MetadataError::InvalidJson(err.to_string()))?;
     Ok(Some(metadata))
+}
+
+/// Returns whether two complete artifact bodies differ only in lease-heartbeat
+/// expiry fields.
+///
+/// This comparison is intentionally strict enough for webhook suppression. Both
+/// bodies must contain valid workflow metadata, all prose outside the metadata
+/// block must be byte-for-byte identical, and every metadata field must compare
+/// equal after normalizing `lease.heartbeat_at`, `lease.expires_at`, and
+/// `assignment.expires_at`. At least one of those three values must have
+/// changed. Missing or malformed metadata is never classified as a heartbeat.
+pub fn is_heartbeat_only_body_change(old_body: &str, new_body: &str) -> bool {
+    let Ok(Some((old_prose, old_metadata))) = body_parts(old_body) else {
+        return false;
+    };
+    let Ok(Some((new_prose, mut normalized_new))) = body_parts(new_body) else {
+        return false;
+    };
+    if old_prose != new_prose
+        || old_metadata.lease.is_some() != normalized_new.lease.is_some()
+        || old_metadata.assignment.is_some() != normalized_new.assignment.is_some()
+    {
+        return false;
+    }
+
+    let lease_changed = old_metadata
+        .lease
+        .as_ref()
+        .zip(normalized_new.lease.as_ref())
+        .is_some_and(|(old, new)| {
+            old.heartbeat_at != new.heartbeat_at || old.expires_at != new.expires_at
+        });
+    let assignment_changed = old_metadata
+        .assignment
+        .as_ref()
+        .zip(normalized_new.assignment.as_ref())
+        .is_some_and(|(old, new)| old.expires_at != new.expires_at);
+    if !lease_changed && !assignment_changed {
+        return false;
+    }
+
+    if let (Some(old), Some(new)) = (&old_metadata.lease, &mut normalized_new.lease) {
+        new.heartbeat_at = old.heartbeat_at;
+        new.expires_at = old.expires_at;
+    }
+    if let (Some(old), Some(new)) = (&old_metadata.assignment, &mut normalized_new.assignment) {
+        new.expires_at = old.expires_at;
+    }
+
+    normalized_new == old_metadata
+}
+
+fn body_parts(body: &str) -> Result<Option<(String, WorkflowMetadata)>, MetadataError> {
+    let Some((start, block_end)) = block_span(body)? else {
+        return Ok(None);
+    };
+    let Some(metadata) = parse_metadata_block(body)? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        format!("{}{}", &body[..start], &body[block_end..]),
+        metadata,
+    )))
 }
 
 /// Returns `body` with its workflow metadata block set to `metadata`.

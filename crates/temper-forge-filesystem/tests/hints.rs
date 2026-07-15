@@ -4,7 +4,8 @@ use std::time::Duration;
 use support::{TestRoot, block_on, issue, pull_request, repository, timestamp};
 use temper_forge_model::{
     ChangeKind, ChangeSource, ChangeSourceEvent, CiJob, CiJobConclusion, CiJobId, CiJobStatus,
-    CreatePullRequestReview, Forge, ForgeError, ReviewDecision, UpdateIssue, Version,
+    CreatePullRequestReview, Forge, ForgeError, HintArtifactKind, ReviewDecision, UpdateIssue,
+    Version,
 };
 
 fn completed_ci_job(repo_id: &temper_forge_model::RepositoryId) -> CiJob {
@@ -44,8 +45,11 @@ fn distinct_handle_issue_mutation_publishes_item_hint() {
     let hint = expect_hint(&mut hints);
     assert_eq!(hint.repo.owner, "alice");
     assert_eq!(hint.repo.name, "project");
-    assert_eq!(hint.item, Some(issue.number));
-    assert_eq!(hint.kind, ChangeKind::Issue);
+    assert_eq!(
+        hint.artifact_target(),
+        Some((HintArtifactKind::Issue, issue.number))
+    );
+    assert_eq!(hint.change, ChangeKind::Created);
 }
 
 #[test]
@@ -85,8 +89,11 @@ fn pull_request_review_and_ci_mutations_publish_broad_hints() {
     ))
     .unwrap();
     let pr_hint = expect_hint(&mut hints);
-    assert_eq!(pr_hint.item, Some(pr.number));
-    assert_eq!(pr_hint.kind, ChangeKind::PullRequest);
+    assert_eq!(
+        pr_hint.artifact_target(),
+        Some((HintArtifactKind::PullRequest, pr.number))
+    );
+    assert_eq!(pr_hint.change, ChangeKind::Created);
 
     block_on(writer.submit_pull_request_review(
         &pr.id,
@@ -97,15 +104,18 @@ fn pull_request_review_and_ci_mutations_publish_broad_hints() {
     ))
     .unwrap();
     let review_hint = expect_hint(&mut hints);
-    assert_eq!(review_hint.item, Some(pr.number));
-    assert_eq!(review_hint.kind, ChangeKind::Review);
+    assert_eq!(
+        review_hint.artifact_target(),
+        Some((HintArtifactKind::PullRequest, pr.number))
+    );
+    assert_eq!(review_hint.change, ChangeKind::Review);
 
     writer
         .seed_ci_jobs(&repository.id, vec![completed_ci_job(&repository.id)])
         .unwrap();
     let ci_hint = expect_hint(&mut hints);
-    assert_eq!(ci_hint.item, None);
-    assert_eq!(ci_hint.kind, ChangeKind::Ci);
+    assert_eq!(ci_hint.artifact_target(), None);
+    assert_eq!(ci_hint.change, ChangeKind::Ci);
 }
 
 #[test]
@@ -123,5 +133,5 @@ fn restarted_listener_starts_at_tail_and_misses_old_hints() {
     );
 
     block_on(writer.create_issue(&repository.id, issue("Second"))).unwrap();
-    assert_eq!(expect_hint(&mut restarted).kind, ChangeKind::Issue);
+    assert_eq!(expect_hint(&mut restarted).change, ChangeKind::Created);
 }

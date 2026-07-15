@@ -188,6 +188,56 @@ DEBUG temper::engine  {artifact.ref=acme/widgets#42} lease renew ttl=10m (held 4
 Filtering is `RUST_LOG` (existing `EnvFilter`): `RUST_LOG=info` (default),
 `RUST_LOG=temper::worker=debug,info` (one subsystem), `RUST_LOG=temper=trace`.
 
+### Wake, apply, and Forge operation measurements
+
+Wake scheduling is operational debug data, not an extension of the stable
+`info` event vocabulary. With `RUST_LOG=temper=debug`, every coordinator
+decision emits these structured fields:
+
+| Field | Meaning |
+| --- | --- |
+| `repo`, optional `role` | configured repository and role/mechanical lane |
+| `wake.run_id` | stable `{owner}/{repo}:{generation}` join key once a run exists |
+| `wake.reason` | targeted change (`label`, `review`, `ci`, …) or broad cause (`push`, `startup`, `poll`, `recovery`, `target_overflow`) |
+| `wake.scope` | `targeted`, `broad`, or `mixed` for a compacted follow-up |
+| `wake.outcome` | `accepted`, `suppressed`, `deferred`, `coalesced`, `promoted`, `started`, `dirty_follow_up`, or `failed` |
+| `wake.pending_target_count` | bounded artifact addresses still pending for the repository |
+| `wake.in_flight_repository_count` | repository runs currently holding the global permits |
+| `wake.queue_latency_ms`, `wake.execution_duration_ms` | numeric queue and execution latency |
+
+A successful completion retains `wake.outcome=started` and sets
+`wake.phase=finish`; failures use `wake.outcome=failed` with `error`. Result
+application runs carry `apply.id=<job_id>` and emit a numeric `duration_ms` at
+completion. Forgejo HTTP events inherit the current `wake.run_id` or `apply.id`
+span and expose `method`, normalized `path`, `operation`, `status`, and numeric
+`duration_ms`. Fan-out completion emits one
+`measurement=fan_out.completed` record with `parent.ref`, child/dependency-edge
+counts, Forge read/write totals, an optional provider request delta, recovery,
+and total duration.
+
+Useful JSON-log queries (the explicit JSON sink avoids parsing human prose):
+
+```sh
+# Decisions and latency for one repository.
+journalctl -u temper -o cat | jq -c \
+  'select(.repo=="acme/widgets" and ."wake.outcome" != null) |
+   {run:."wake.run_id",role,outcome:."wake.outcome",scope:."wake.scope",q:."wake.queue_latency_ms",exec:."wake.execution_duration_ms"}'
+
+# Forge operation count and slowest calls for one wake.
+journalctl -u temper -o cat | jq -s \
+  '[.[] | select((.span."wake.run_id" // ."wake.run_id")=="acme/widgets:17" and .operation != null)] |
+   {count:length, slowest:(sort_by(.duration_ms) | reverse | .[:10])}'
+
+# A result apply and its fan-out summary.
+journalctl -u temper -o cat | jq -c \
+  'select((.span."apply.id" // ."apply.id")=="job-42" or .measurement=="fan_out.completed")'
+```
+
+If accepted deliveries have no `started` decision, first inspect `deferred`
+(apply active), `coalesced` (already represented), and global in-flight counts.
+A missing delivery is not a liveness incident by itself: startup and poll broad
+recovery are mandatory and should appear as `wake.reason=startup|poll`.
+
 ---
 
 ## 6. Sinks and OpenTelemetry posture

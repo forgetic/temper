@@ -76,15 +76,19 @@ metadata key because the filter is only a narrowing hint.
 
 ### Issue and pull-request detail levels
 
-Issue and pull-request queries also carry `ItemListDetails`. The default is full
-detail (`dependencies=true`), preserving the historical contract that list
-results populate native dependency links and provider detail fields.
+Issue and pull-request list queries, plus the `get_issue_with_details` /
+`get_issue_by_number_with_details` exact variants, carry `ItemListDetails`. The
+default is full detail (`dependencies=true`), preserving the historical
+contract that results populate native dependency links and provider detail
+fields.
 
 Callers that only need scan-summary fields may set `details.dependencies=false`.
 Backends may then skip dependency-link enrichment and must return an empty
 `dependencies` vector in each listed item. Summary callers should rely only on
 artifact identity, number, title/body, state, author, labels, assignees,
-timestamps, version, and the empty dependency vector.
+timestamps, version, and the empty dependency vector. Exact issue summary reads
+have the same guarantee and are intended for workflow metadata/checkpoint
+recovery that does not inspect native dependency state.
 
 Pull-request fields that commonly require provider detail rendering — branch
 refs, head/base SHAs, requested reviewers, and merge records — may be absent or

@@ -179,6 +179,24 @@ fn get_issue_parses_backend_id() {
 }
 
 #[test]
+fn exact_issue_summary_uses_one_provider_read() {
+    let client = MockHttpClient::new();
+    client.push_response(200, issue_json(7, "found", "open"));
+    let forge = forge(client.clone());
+
+    let issue = block_on(forge.get_issue_by_number_with_details(
+        &repo_id(),
+        ItemNumber::new(7),
+        ItemListDetails::summary(),
+    ))
+    .unwrap()
+    .unwrap();
+
+    assert!(issue.dependencies.is_empty());
+    assert_eq!(client.call_count(), 1);
+}
+
+#[test]
 fn create_issue_sends_labels_and_assignees_in_one_call() {
     let client = MockHttpClient::new();
     client.push_response(201, issue_json(7, "new issue", "open")); // create
@@ -205,6 +223,40 @@ fn create_issue_sends_labels_and_assignees_in_one_call() {
     assert_eq!(payload["title"], "new issue");
     assert_eq!(payload["labels"], serde_json::json!(["task"]));
     assert_eq!(payload["assignees"], serde_json::json!(["bob"]));
+}
+
+#[test]
+fn snapshot_update_uses_one_cas_read_and_returns_patch_representation() {
+    let client = MockHttpClient::new();
+    client.push_response_with_etag(issue_json(7, "old", "open"), "etag-a");
+    client.push_response_with_etag(issue_json(7, "old", "open"), "etag-a");
+    client.push_response(200, r#"[{"id": 2, "name": "done"}]"#);
+    client.push_response_with_etag(issue_json(7, "new", "closed"), "etag-b");
+    let forge = forge(client.clone());
+    let current = block_on(forge.get_issue_with_details(&issue_id(7), ItemListDetails::summary()))
+        .unwrap()
+        .unwrap();
+
+    let committed = block_on(forge.update_issue_from_snapshot(
+        &current,
+        UpdateIssue {
+            title: Some("new".into()),
+            state: Some(IssueState::Closed),
+            set_labels: Some(vec!["done".into()]),
+            expected_version: Some(current.version),
+            ..UpdateIssue::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(committed.title, "new");
+    assert_eq!(committed.state, IssueState::Closed);
+    assert_eq!(committed.labels, vec!["done"]);
+    let requests = client.recorded();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[1].method, HttpMethod::Get);
+    assert_eq!(requests[2].method, HttpMethod::Put);
+    assert_eq!(requests[3].method, HttpMethod::Patch);
 }
 
 #[test]

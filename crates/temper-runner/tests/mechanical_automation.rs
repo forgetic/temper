@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
-    BranchRef, ChangeKind, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery,
-    IssueState, ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState,
-    PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
+    BranchRef, ChangeKind, CreateIssue, CreatePullRequest, CreateRepository, Forge,
+    HintArtifactKind, IssueQuery, IssueState, ItemListDetails, ItemNumber, PullRequestQuery,
+    PullRequestState, PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Progress, Worker};
@@ -444,9 +444,13 @@ fn targeted_ci_wake_lands_pr_without_terminal_list_queries() {
     let journal = InMemoryJournal::new();
     let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
 
-    let progress =
-        block_on(worker.tick_artifact(ts("2026-05-29T00:00:00Z"), ready, ChangeKind::Ci))
-            .expect("targeted CI tick succeeds");
+    let progress = block_on(worker.tick_artifact(
+        ts("2026-05-29T00:00:00Z"),
+        ready,
+        HintArtifactKind::PullRequest,
+        ChangeKind::Ci,
+    ))
+    .expect("targeted CI tick succeeds");
 
     assert_eq!(
         progress,

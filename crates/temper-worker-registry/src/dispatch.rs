@@ -351,11 +351,27 @@ impl DispatchCoordinator {
         role: &str,
         current_job_ids: &BTreeSet<String>,
     ) -> Vec<WorkItem> {
+        self.retain_pending_by_scope_matching(repo, role, current_job_ids, |_| true)
+    }
+
+    /// Artifact-aware form of [`Self::retain_pending_by_scope`]. Only pending
+    /// jobs accepted by `matches` participate in reconciliation.
+    pub fn retain_pending_by_scope_matching(
+        &mut self,
+        repo: &str,
+        role: &str,
+        current_job_ids: &BTreeSet<String>,
+        mut matches: impl FnMut(&WorkItem) -> bool,
+    ) -> Vec<WorkItem> {
         let mut retained = VecDeque::with_capacity(self.pending.len());
         let mut removed = Vec::new();
 
         while let Some(item) = self.pending.pop_front() {
-            if item.repo == repo && item.role == role && !current_job_ids.contains(&item.job_id) {
+            if item.repo == repo
+                && item.role == role
+                && matches(&item)
+                && !current_job_ids.contains(&item.job_id)
+            {
                 removed.push(item);
             } else {
                 retained.push_back(item);

@@ -11,17 +11,19 @@ use temper_protocol_worker::{
     ContextResponse, ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult,
     WORKER_PROTOCOL_VERSION, WorkerActivityAcknowledgement, WorkerProtocolMessage,
 };
+use tracing::Instrument;
 
-use crate::applier::ResultApplier;
+use crate::applier::{ApplyOutcome, ResultApplier};
 
-use super::WakeScanner;
+use super::WakeExecutor;
 use super::machine::{DaemonCompletion, DaemonMachine, DaemonRequest};
+use super::wake_coordinator::WakeOutcome;
 
 pub(super) struct DaemonExecutor {
     pub(super) spawner: Arc<dyn Spawner>,
     pub(super) cq: CqSender<DaemonCompletion>,
     pub(super) applier: Arc<dyn ResultApplier>,
-    pub(super) scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
+    pub(super) wake_executor_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeExecutor>>>>,
     pub(super) context_reader_slot:
         Arc<std::sync::Mutex<Option<Arc<dyn super::context_reader::ContextReader>>>>,
     pub(super) trace_query_slot:
@@ -60,6 +62,56 @@ fn context_result_metrics(
     }
 }
 
+fn apply_outcome_name(outcome: &ApplyOutcome) -> &'static str {
+    match outcome {
+        ApplyOutcome::Applied => "applied",
+        ApplyOutcome::Stale => "stale",
+        ApplyOutcome::Retryable { .. } => "retryable",
+        ApplyOutcome::Rejected { .. } => "rejected",
+    }
+}
+
+fn emit_wake_measurement(measurement: &super::machine::WakeMeasurement) {
+    let run_id = measurement.run_id.as_deref().unwrap_or("");
+    let error = measurement.error.as_deref().unwrap_or("");
+    if let Some(role) = measurement.role.as_deref() {
+        tracing::debug!(
+            target: "temper::engine",
+            service = "engine",
+            repo = %measurement.repo,
+            role,
+            wake.run_id = run_id,
+            wake.reason = %measurement.reason,
+            wake.scope = %measurement.scope,
+            wake.outcome = measurement.outcome,
+            wake.phase = measurement.phase,
+            wake.pending_target_count = measurement.pending_target_count,
+            wake.in_flight_repository_count = measurement.in_flight_repository_count,
+            wake.queue_latency_ms = measurement.queue_latency_ms,
+            wake.execution_duration_ms = measurement.execution_duration_ms,
+            error,
+            "engine: wake decision"
+        );
+    } else {
+        tracing::debug!(
+            target: "temper::engine",
+            service = "engine",
+            repo = %measurement.repo,
+            wake.run_id = run_id,
+            wake.reason = %measurement.reason,
+            wake.scope = %measurement.scope,
+            wake.outcome = measurement.outcome,
+            wake.phase = measurement.phase,
+            wake.pending_target_count = measurement.pending_target_count,
+            wake.in_flight_repository_count = measurement.in_flight_repository_count,
+            wake.queue_latency_ms = measurement.queue_latency_ms,
+            wake.execution_duration_ms = measurement.execution_duration_ms,
+            error,
+            "engine: wake decision"
+        );
+    }
+}
+
 impl EngineExecutor<DaemonMachine> for DaemonExecutor {
     fn execute(&self, request: DaemonRequest) {
         match request {
@@ -95,9 +147,27 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 let applier = Arc::clone(&self.applier);
                 let cq = self.cq.clone();
                 let job_id = job.job_id.clone();
-                self.spawner.spawn_with_cx(move |_cx| async move {
-                    let outcome = applier.apply(job, result).await;
-                    let _ = cq.send(DaemonCompletion::ApplyFinished { job_id, outcome });
+                let span = tracing::debug_span!(
+                    target: "temper::engine",
+                    "apply",
+                    apply.id = %job_id
+                );
+                self.spawner.spawn_with_cx(move |_cx| {
+                    async move {
+                        let started = Instant::now();
+                        let outcome = applier.apply(job, result).await;
+                        tracing::debug!(
+                            target: "temper::engine",
+                            service = "engine",
+                            apply.id = %job_id,
+                            apply.outcome = apply_outcome_name(&outcome),
+                            duration_ms = u64::try_from(started.elapsed().as_millis())
+                                .unwrap_or(u64::MAX),
+                            "engine: result apply finished"
+                        );
+                        let _ = cq.send(DaemonCompletion::ApplyFinished { job_id, outcome });
+                    }
+                    .instrument(span)
                 });
             }
             DaemonRequest::RunApplyAndRespond {
@@ -109,10 +179,28 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 let applier = Arc::clone(&self.applier);
                 let cq = self.cq.clone();
                 let job_id = job.job_id.clone();
-                self.spawner.spawn_with_cx(move |_cx| async move {
-                    let outcome = applier.apply(job, result).await;
-                    let _ = cq.send(DaemonCompletion::ApplyFinished { job_id, outcome });
-                    responder.respond(response);
+                let span = tracing::debug_span!(
+                    target: "temper::engine",
+                    "apply",
+                    apply.id = %job_id
+                );
+                self.spawner.spawn_with_cx(move |_cx| {
+                    async move {
+                        let started = Instant::now();
+                        let outcome = applier.apply(job, result).await;
+                        tracing::debug!(
+                            target: "temper::engine",
+                            service = "engine",
+                            apply.id = %job_id,
+                            apply.outcome = apply_outcome_name(&outcome),
+                            duration_ms = u64::try_from(started.elapsed().as_millis())
+                                .unwrap_or(u64::MAX),
+                            "engine: result apply finished"
+                        );
+                        let _ = cq.send(DaemonCompletion::ApplyFinished { job_id, outcome });
+                        responder.respond(response);
+                    }
+                    .instrument(span)
                 });
             }
             DaemonRequest::RunClaim {
@@ -302,18 +390,47 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     WorkerProtocolMessage::ContextResponse(response),
                 )));
             }
-            DaemonRequest::RunWakeScan { token, hint } => {
-                let scanner = self.scanner_slot.lock().expect("scanner slot").clone();
+            DaemonRequest::StartWakeTimer {
+                repo,
+                generation,
+                delay,
+            } => {
+                arm_timer(&*self.spawner, &self.cq, delay, move || {
+                    DaemonCompletion::WakeTimerElapsed { repo, generation }
+                });
+            }
+            DaemonRequest::RunWake { work } => {
+                let executor = self
+                    .wake_executor_slot
+                    .lock()
+                    .expect("wake executor slot")
+                    .clone();
                 let cq = self.cq.clone();
-                match scanner {
-                    Some(scanner) => {
-                        self.spawner.spawn_with_cx(move |_cx| async move {
-                            scanner.scan(hint).await;
-                            let _ = cq.send(DaemonCompletion::WakeScanFinished { token });
+                match executor {
+                    Some(executor) => {
+                        let run_id = work.run_id();
+                        let repo = format!("{}/{}", work.repo.owner, work.repo.name);
+                        let span = tracing::debug_span!(
+                            target: "temper::engine",
+                            "wake",
+                            wake.run_id = %run_id,
+                            repo = %repo
+                        );
+                        self.spawner.spawn_with_cx(move |_cx| {
+                            async move {
+                                let outcome = executor.run(work.clone()).await;
+                                let _ = cq.send(DaemonCompletion::WakeFinished { work, outcome });
+                            }
+                            .instrument(span)
                         });
                     }
                     None => {
-                        let _ = cq.send(DaemonCompletion::WakeScanFinished { token });
+                        let _ = cq.send(DaemonCompletion::WakeFinished {
+                            work,
+                            outcome: WakeOutcome::Failed {
+                                reason: "no wake executor is configured".to_string(),
+                            },
+                        });
                     }
                 }
             }
@@ -327,6 +444,9 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     concurrency,
                     waiting: &waiting,
                 });
+            }
+            DaemonRequest::WakeMeasurement(measurement) => {
+                emit_wake_measurement(&measurement);
             }
             // Per-job daemon-protocol traces (`engine: assigned`, `engine:
             // result received`, webhook/enqueue book-keeping).

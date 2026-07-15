@@ -291,7 +291,13 @@ fn web_ui_combined_pr_and_commit_returns_only_current_queued_run() {
     client.push_response(404, "{}");
     client.push_result(Ok(login_page()));
     client.push_result(Ok(login_success()));
-    client.push_result(Ok(actions_page_many(&[2, 1])));
+    client.push_result(Ok(actions_page_many(&[3, 2, 1])));
+    client.push_result(Ok(live_view_on_branch(
+        "skipped",
+        &[("basic-delivery validation report", "skipped")],
+        "bbbbbbb2222",
+        "#8",
+    )));
     client.push_result(Ok(live_view_on_branch(
         "queued",
         &[("build", "queued")],

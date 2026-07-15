@@ -19,6 +19,8 @@ use crate::{
     WorkerPoolPolicies, WorkerPoolPolicy,
 };
 
+mod activity;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueuedJob {
     pub job_id: String,
@@ -292,6 +294,34 @@ impl DaemonCore {
         job_ids
     }
 
+    /// Reconcile pending daemon jobs for exactly one `(repo, role, artifact)`
+    /// partial scan view, without pruning unrelated artifacts.
+    pub fn retain_pending_jobs_for_artifact(
+        &mut self,
+        repo: &str,
+        role: &str,
+        artifact: &Artifact,
+        current_job_ids: &BTreeSet<String>,
+    ) -> Vec<String> {
+        let job_context = &self.job_context;
+        let removed = self.coordinator.retain_pending_by_scope_matching(
+            repo,
+            role,
+            current_job_ids,
+            |item| {
+                job_context
+                    .get(&item.job_id)
+                    .is_some_and(|(pending_artifact, _)| pending_artifact == artifact)
+            },
+        );
+        let mut job_ids = Vec::with_capacity(removed.len());
+        for item in removed {
+            self.job_context.remove(&item.job_id);
+            job_ids.push(item.job_id);
+        }
+        job_ids
+    }
+
     /// Reports finite configured saturation for `role` and the work waiting
     /// behind that limit.
     ///
@@ -352,47 +382,6 @@ impl DaemonCore {
             return Ok(None);
         }
         Ok(self.in_flight_job(job_id))
-    }
-
-    /// Authenticates a worker for durable activity ingestion. Network carriers
-    /// require configured pool authentication; a co-resident trusted carrier
-    /// may bypass the credential requirement, but never registration/health.
-    pub fn authorize_activity_worker(
-        &self,
-        worker_id: &str,
-        role: &str,
-        repository: &str,
-        auth: Option<&WorkerAuth>,
-        trusted_transport: bool,
-    ) -> Result<(), WorkerAuthError> {
-        if worker_id.trim().is_empty() {
-            return Err(WorkerAuthError::new(
-                "activity batch worker_id must not be empty",
-            ));
-        }
-        if !trusted_transport {
-            if !self.worker_auth.is_enabled() {
-                return Err(WorkerAuthError::new(
-                    "distributed activity ingestion requires configured worker authentication",
-                ));
-            }
-            self.authenticate_registered_worker(worker_id, None, auth)?;
-        }
-        if !self.coordinator.registry().is_healthy(worker_id) {
-            return Err(WorkerAuthError::new(format!(
-                "worker `{worker_id}` is not registered and healthy"
-            )));
-        }
-        if !self
-            .coordinator
-            .registry()
-            .can_handle(worker_id, role, repository)
-        {
-            return Err(WorkerAuthError::new(format!(
-                "worker `{worker_id}` is not authorized for activity role `{role}` in `{repository}`"
-            )));
-        }
-        Ok(())
     }
 
     /// Reserve one job for a poller without making it externally in-flight.

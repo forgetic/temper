@@ -264,4 +264,3 @@ fn existing_blob_digests(directory: &Path) -> Result<BTreeSet<String>, TraceJour
     }
     Ok(digests)
 }
-

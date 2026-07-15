@@ -172,6 +172,7 @@ impl Drop for TempRoot {
 fn role_target(repo: RepositoryId) -> RoleFeedTarget {
     RoleFeedTarget {
         repo,
+        path: temper_forge::RepositoryPath::new("acme", "service"),
         role: RoleId::new("engineer"),
         mode: RoleFeedMode::Wake,
     }
@@ -180,6 +181,7 @@ fn role_target(repo: RepositoryId) -> RoleFeedTarget {
 fn normal_role_target(repo: RepositoryId) -> RoleFeedTarget {
     RoleFeedTarget {
         repo,
+        path: temper_forge::RepositoryPath::new("acme", "service"),
         role: RoleId::new("engineer"),
         mode: RoleFeedMode::Normal,
     }

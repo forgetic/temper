@@ -158,6 +158,7 @@ fn run_poll_backstop_tick_enqueues_scanned_work_then_dispatches() {
         let config = PollBackstopConfig {
             targets: vec![RoleFeedTarget {
                 repo: repo.clone(),
+                path: temper_forge::RepositoryPath::new("acme", "service"),
                 role: RoleId::new("engineer"),
                 mode: RoleFeedMode::Normal,
             }],
@@ -246,11 +247,13 @@ fn run_poll_backstop_tick_skips_failing_target_and_continues() {
             targets: vec![
                 RoleFeedTarget {
                     repo: RepositoryId::new("missing-repo"),
+                    path: temper_forge::RepositoryPath::new("missing", "repo"),
                     role: RoleId::new("engineer"),
                     mode: RoleFeedMode::Normal,
                 },
                 RoleFeedTarget {
                     repo: repo.clone(),
+                    path: temper_forge::RepositoryPath::new("acme", "service"),
                     role: RoleId::new("engineer"),
                     mode: RoleFeedMode::Normal,
                 },

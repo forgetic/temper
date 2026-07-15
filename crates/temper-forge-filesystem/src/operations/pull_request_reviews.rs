@@ -16,7 +16,7 @@ pub(crate) fn request_pull_request_reviewers(
 ) -> ForgeResult<PullRequest> {
     let _guard = forge.write_lock()?;
     let pull_request = request_reviewers(forge, id, input)?;
-    forge.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+    forge.publish_pull_request_hint(&pull_request, ChangeKind::Review);
     Ok(pull_request)
 }
 

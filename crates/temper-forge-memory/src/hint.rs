@@ -4,8 +4,8 @@ use crate::Inner;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::Duration;
 use temper_forge_model::{
-    ChangeHint, ChangeKind, ChangeSource, ChangeSourceEvent, ItemNumber, PullRequest, RepositoryId,
-    RepositoryPath,
+    ChangeHint, ChangeKind, ChangeSource, ChangeSourceEvent, HintArtifactKind, ItemNumber,
+    PullRequest, RepositoryId, RepositoryPath,
 };
 
 /// In-process hint receiver returned by [`MemoryForge::subscribe_hints`].
@@ -60,30 +60,50 @@ impl Inner {
         self.hints.subscribe()
     }
 
-    pub(crate) fn publish_repo_hint(&mut self, repo_id: &RepositoryId, kind: ChangeKind) {
+    pub(crate) fn publish_repo_hint(&mut self, repo_id: &RepositoryId, change: ChangeKind) {
         if let Some(repo) = self.state.find_repository_by_id(repo_id) {
-            self.hints.publish(ChangeHint::repo(repo_path(&repo), kind));
+            self.hints
+                .publish(ChangeHint::repository(repo_path(&repo), change));
         }
     }
 
-    pub(crate) fn publish_path_hint(&mut self, path: RepositoryPath, kind: ChangeKind) {
-        self.hints.publish(ChangeHint::repo(path, kind));
+    pub(crate) fn publish_path_hint(&mut self, path: RepositoryPath, change: ChangeKind) {
+        self.hints.publish(ChangeHint::repository(path, change));
     }
 
-    pub(crate) fn publish_item_hint(
+    fn publish_artifact_hint(
         &mut self,
         repo_id: &RepositoryId,
-        item: ItemNumber,
-        kind: ChangeKind,
+        kind: HintArtifactKind,
+        number: ItemNumber,
+        change: ChangeKind,
     ) {
         if let Some(repo) = self.state.find_repository_by_id(repo_id) {
             self.hints
-                .publish(ChangeHint::item(repo_path(&repo), item, kind));
+                .publish(ChangeHint::artifact(repo_path(&repo), kind, number, change));
         }
     }
 
-    pub(crate) fn publish_pull_request_hint(&mut self, pr: &PullRequest, kind: ChangeKind) {
-        self.publish_item_hint(&pr.repo_id, pr.number, kind);
+    pub(crate) fn publish_issue_hint(
+        &mut self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        change: ChangeKind,
+    ) {
+        self.publish_artifact_hint(repo_id, HintArtifactKind::Issue, number, change);
+    }
+
+    pub(crate) fn publish_pull_request_number_hint(
+        &mut self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        change: ChangeKind,
+    ) {
+        self.publish_artifact_hint(repo_id, HintArtifactKind::PullRequest, number, change);
+    }
+
+    pub(crate) fn publish_pull_request_hint(&mut self, pr: &PullRequest, change: ChangeKind) {
+        self.publish_pull_request_number_hint(&pr.repo_id, pr.number, change);
     }
 }
 

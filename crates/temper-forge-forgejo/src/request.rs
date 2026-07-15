@@ -44,6 +44,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         body: Option<String>,
     ) -> ForgeResult<HttpResponse> {
         let request = client::build_request(&self.config().token, method, path, query, body);
+        self.record_provider_request();
         self.http_client()
             .execute(request)
             .await

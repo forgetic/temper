@@ -25,7 +25,8 @@ impl Worker for BurstWorker {
     async fn tick(&self, _now: DateTime<Utc>) -> Result<Progress, WorkerError> {
         let tick = self.ticks.fetch_add(1, Ordering::SeqCst) + 1;
         if tick == 1 {
-            let hint = ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
+            let hint =
+                ChangeHint::repository(RepositoryPath::new("acme", "service"), ChangeKind::Edited);
             for _ in 0..3 {
                 send_wake_with_hint(&self.socket, Some("wake-secret"), &hint).expect("wake sends");
             }

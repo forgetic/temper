@@ -389,4 +389,3 @@ fn content_references(event: &AgentRunEventV1) -> Vec<&BlobReferenceV1> {
         })
         .collect()
 }
-
