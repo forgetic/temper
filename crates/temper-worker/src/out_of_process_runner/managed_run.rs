@@ -1,8 +1,10 @@
 //! Per-attempt orchestration around the joined process supervisor.
 
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::path::Path;
+use std::time::Duration;
 
+use crate::executor::{JobCancellationRequest, JobCleanup};
+use crate::managed_effect::JoinedBlocking;
 use crate::trace::ActivityEndpoint;
 
 use super::*;
@@ -19,9 +21,9 @@ struct SubmitHostTask {
 
 const LIFECYCLE_CONNECT_GRACE: Duration = Duration::from_millis(100);
 
-/// Every blocking or threaded resource owned by one attempt. Drop is the
-/// cancellation boundary used when the worker watchdog or component owner
-/// drops the run future.
+/// Every blocking or threaded resource owned by one attempt. The explicit
+/// cancellation path drives this owner to `finish`; Drop is only the abrupt
+/// component-loss hard-kill fallback.
 struct RunResources {
     job_id: String,
     fence: AttemptFence,
@@ -32,7 +34,6 @@ struct RunResources {
     trace: Option<TraceRun>,
     submit: Option<LocalServer>,
     forge: Option<LocalServer>,
-    limits: WorkerLivenessLimits,
     finished: bool,
 }
 
@@ -43,14 +44,20 @@ impl RunResources {
             .expect("run resources always own a process until quiescence")
     }
 
-    fn finish(mut self, result: SupervisorResult) -> SupervisorResult {
+    fn finish(mut self, result: SupervisorResult, cancelled: bool) -> SupervisorResult {
         if let Some(process) = self.process.as_mut() {
             process.join_completed();
         }
         self.process.take();
         self.stop_endpoints();
+        if cancelled {
+            self.finish_cancelled_activity();
+            // Clear again after joining accepted handlers. A submit gate that
+            // was already running when the fence closed cannot leave proof.
+            self.accepted_submit.clear();
+        }
         self.finished = true;
-        emit_quiesced(&self.job_id, &result.quiesced, false);
+        emit_quiesced(&self.job_id, &result.quiesced, cancelled);
         result
     }
 
@@ -94,39 +101,15 @@ impl Drop for RunResources {
             return;
         }
 
-        // Fence first: no late side-channel completion or result file can
-        // become authoritative after cancellation starts.
+        // Abrupt owner loss is a last-resort safety path. Watchdog
+        // cancellation stays in the async run loop below and never waits for
+        // the process supervisor from Drop.
         self.fence.close();
         self.accepted_submit.clear();
-        let cancellation_started = Instant::now();
-        let connection_grace = self
-            .limits
-            .graceful_cancellation_grace
-            .min(LIFECYCLE_CONNECT_GRACE);
-        let first_party_connected = self.lifecycle.as_ref().is_some_and(|endpoint| {
-            endpoint.request_cancel("worker cancelled agent attempt", connection_grace)
-        });
-        let graceful_grace = self
-            .limits
-            .graceful_cancellation_grace
-            .saturating_sub(cancellation_started.elapsed());
-
-        let result = self
-            .process
-            .as_mut()
-            .expect("process exists")
-            .cancel_and_join(
-                first_party_connected,
-                graceful_grace,
-                self.limits.forced_termination_grace,
-            );
         self.process.take();
         self.stop_endpoints();
         self.finish_cancelled_activity();
-        // Clear again after joining accepted handlers. A submit gate that was
-        // already running when the fence closed cannot leave proof behind.
         self.accepted_submit.clear();
-        emit_quiesced(&self.job_id, &result.quiesced, true);
         self.finished = true;
     }
 }
@@ -256,6 +239,7 @@ impl OutOfProcessRunner {
         });
         let identity = DiagnosticIdentity::from_context(job_id, context);
         let process = ManagedAgentProcess::spawn(command, identity, self.diagnostic_dispatch())?;
+        let _cancellation_owner = cancellation.register_async_owner();
         let mut resources = RunResources {
             job_id: job_id.to_string(),
             fence: fence.clone(),
@@ -266,7 +250,6 @@ impl OutOfProcessRunner {
             trace: trace.cloned(),
             submit: submit_server,
             forge: forge_server,
-            limits: self.liveness_limits,
             finished: false,
         };
 
@@ -281,8 +264,11 @@ impl OutOfProcessRunner {
         let mut pending_submit: Option<SubmitHostTask> = None;
         let mut forge_closed = false;
         let mut submit_closed = false;
+        let mut observed_cancellation = None;
+        let mut _lifecycle_cancel = None;
         let supervisor_result = loop {
             enum Next {
+                Cancellation(JobCancellationRequest),
                 Child(SupervisorResult),
                 ForgeRequest(Option<ForgeSideChannelRequest>),
                 ForgeCompleted(
@@ -296,6 +282,14 @@ impl OutOfProcessRunner {
             }
 
             let next = std::future::poll_fn(|task_cx| {
+                // Cancellation wins a same-poll race with natural child exit:
+                // once WorkerMachine closes the attempt fence it must receive
+                // one cancellation report, never a normal result.
+                if let Poll::Ready(request) =
+                    cancellation.poll_request(observed_cancellation, task_cx)
+                {
+                    return Poll::Ready(Next::Cancellation(request));
+                }
                 if let Poll::Ready(outcome) = resources.process_mut().poll_outcome(task_cx) {
                     return Poll::Ready(Next::Child(outcome));
                 }
@@ -324,7 +318,48 @@ impl OutOfProcessRunner {
             .await;
 
             match next {
-                Next::Child(outcome) => {
+                Next::Cancellation(request) => {
+                    if observed_cancellation.is_none() {
+                        // Fence before touching the child. No late host response
+                        // or result file can become authoritative after this
+                        // point.
+                        fence.close();
+                        accepted_submit.clear();
+                        if let Some(task) = pending_forge.take() {
+                            let _ = task.response.send(forge_unavailable());
+                        }
+                        if let Some(task) = pending_submit.take() {
+                            let _ = task
+                                .response
+                                .send(SubmitForPrResponse::rejected("agent attempt was cancelled"));
+                        }
+                    }
+                    observed_cancellation = Some(request);
+                    match request {
+                        JobCancellationRequest::Graceful => {
+                            if let Some(endpoint) = resources.lifecycle.as_ref() {
+                                let handle = endpoint.cancellation_handle();
+                                _lifecycle_cancel = Some(JoinedBlocking::spawn(
+                                    "agent-lifecycle-cancel",
+                                    move || {
+                                        handle.request_cancel(
+                                            "worker cancelled agent attempt",
+                                            LIFECYCLE_CONNECT_GRACE,
+                                        )
+                                    },
+                                ));
+                            }
+                            let _ = resources.process_mut().request_cancel();
+                        }
+                        JobCancellationRequest::ForcedTermination => {
+                            let _ = resources.process_mut().force_terminate();
+                        }
+                        JobCancellationRequest::HardKill => {
+                            let _ = resources.process_mut().hard_kill();
+                        }
+                    }
+                }
+                Next::Child(mut outcome) => {
                     if let Some(task) = pending_forge.take() {
                         let _ = task.response.send(forge_unavailable());
                     }
@@ -332,6 +367,13 @@ impl OutOfProcessRunner {
                         let _ = task.response.send(SubmitForPrResponse::rejected(
                             "agent attempt ended before submit_for_pr completed",
                         ));
+                    }
+                    // A natural exit may race command receipt after the attempt
+                    // fence has closed. Project that as the cooperative outcome
+                    // that actually won, rather than losing the cancellation
+                    // completion entirely.
+                    if outcome.quiesced.cancellation.is_none() && cancellation.is_cancelled() {
+                        outcome.quiesced.cancellation = Some(CancellationOutcome::Graceful);
                     }
                     break outcome;
                 }
@@ -405,7 +447,15 @@ impl OutOfProcessRunner {
             }
         };
 
-        let supervisor_result = resources.finish(supervisor_result);
+        let cancelled =
+            cancellation.is_cancelled() || supervisor_result.quiesced.cancellation.is_some();
+        let supervisor_result = resources.finish(supervisor_result, cancelled);
+        if let Some(outcome) = supervisor_result.quiesced.cancellation {
+            let _ = cancellation.record_cleanup(JobCleanup {
+                cancellation: outcome,
+                descendants: supervisor_result.quiesced.descendants.clone(),
+            });
+        }
         let ChildOutcome {
             status_code,
             stderr_tail,
@@ -444,117 +494,6 @@ impl OutOfProcessRunner {
             result,
             accepted_submit: fence.is_open().then(|| accepted_submit.latest()).flatten(),
         })
-    }
-
-    fn write_tool_config(
-        &self,
-        directory: &Path,
-        context: &WorkspaceContext,
-    ) -> Result<Option<PathBuf>, AgentRunError> {
-        let Some(tool_config) = self
-            .tool_config
-            .as_ref()
-            .filter(|config| config.enabled_for_role(&context.work_item.role))
-        else {
-            return Ok(None);
-        };
-        let path = directory.join("tool-config.json");
-        let bytes = serde_json::to_vec_pretty(tool_config).map_err(|error| {
-            AgentRunError::transient(format!("serialize agent tool config: {error}"))
-        })?;
-        std::fs::write(&path, bytes).map_err(|error| {
-            AgentRunError::transient(format!("write agent tool config file: {error}"))
-        })?;
-        Ok(Some(path))
-    }
-
-    fn write_trace_policy(&self, directory: &Path, job_id: &str) -> Option<PathBuf> {
-        let policy = self.trace_policy.as_ref()?;
-        let path = directory.join("trace-policy.json");
-        let bytes = match serde_json::to_vec_pretty(policy) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                tracing::warn!(
-                    target: "temper::worker",
-                    service = "worker",
-                    event = "agent.activity.policy_serialize_failed",
-                    job_id,
-                    %error,
-                    "worker could not serialize agent trace policy; continuing without child activity"
-                );
-                return None;
-            }
-        };
-        if let Err(error) = std::fs::write(&path, bytes) {
-            tracing::warn!(
-                target: "temper::worker",
-                service = "worker",
-                event = "agent.activity.policy_write_failed",
-                job_id,
-                path = %path.display(),
-                %error,
-                "worker could not write agent trace policy; continuing without child activity"
-            );
-            None
-        } else {
-            Some(path)
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn child_command(
-        &self,
-        program: &str,
-        args: &[String],
-        cwd: &Path,
-        context_path: &Path,
-        result_path: &Path,
-        tool_config_path: Option<&Path>,
-        runtime_limits_path: Option<&Path>,
-        trace_policy_path: Option<&Path>,
-        lifecycle_address: Option<&str>,
-        activity_address: Option<&str>,
-        submit_address: Option<&str>,
-        forge_address: Option<&str>,
-    ) -> Command {
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .current_dir(cwd)
-            .arg("--context")
-            .arg(context_path)
-            .arg("--result")
-            .arg(result_path)
-            .arg("--workspace")
-            .arg(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        if let Some(path) = tool_config_path {
-            command.arg(TOOL_CONFIG_FLAG).arg(path);
-        }
-        if let Some(path) = runtime_limits_path {
-            command.arg(RUNTIME_LIMITS_FLAG).arg(path);
-        }
-        if let Some(path) = trace_policy_path {
-            command.arg(TRACE_POLICY_FLAG).arg(path);
-        }
-        if let Some(address) = lifecycle_address {
-            command.arg(AGENT_LIFECYCLE_ADDRESS_FLAG).arg(address);
-        }
-        if let Some(address) = activity_address {
-            command.arg(ACTIVITY_ADDRESS_FLAG).arg(address);
-        }
-        if let Some(address) = submit_address {
-            command.arg(SUBMIT_FOR_PR_ADDRESS_FLAG).arg(address);
-        }
-        if let Some(address) = forge_address {
-            command.arg(FORGE_CONTEXT_ADDRESS_FLAG).arg(address);
-        }
-        for (key, value) in &self.env {
-            command.env(key, value);
-        }
-        command
     }
 }
 

@@ -18,10 +18,10 @@ pub use crate::config::WorkerParams;
 
 mod delivery;
 mod watchdog;
+pub use crate::executor::JobCleanup;
 pub use watchdog::{
-    ActiveOperation, CancellationStatus, JobCleanup, JobPhase, JobWatchState, OperationId,
-    OperationKind, ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState,
-    WatchdogTimerKind,
+    ActiveOperation, CancellationStatus, JobPhase, JobWatchState, OperationId, OperationKind,
+    ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState, WatchdogTimerKind,
 };
 
 /// Read-only compatibility view over occupied job IDs.
@@ -412,21 +412,17 @@ impl Machine for WorkerMachine {
                 state.phase = JobPhase::Quiesced;
                 state.cancellation = CancellationStatus::Quiesced;
                 let state = state.clone();
-                let forced = state.escalation_requested
-                    || cleanup.cancellation.contains("forced")
-                    || cleanup.cancellation.contains("kill");
-                let cleanup = JobCleanup {
-                    cancellation: if forced { "forced" } else { "graceful" }.to_string(),
-                    descendants: cleanup.descendants,
-                };
+                let outcome = cleanup.cancellation.as_str().to_string();
+                let descendant_cleanup = cleanup.descendants.as_str().to_string();
+                let forced = cleanup.cancellation.forced();
                 let result = self.timeout_result(&job_id, &state, now, &cleanup);
                 let mut requests = vec![WorkerRequest::Observe(
                     crate::observability::WorkerEvent::CancellationCompleted {
                         worker_id: self.params.worker_id.clone(),
                         job_id: job_id.clone(),
                         attempt_id: attempt_id.clone(),
-                        outcome: cleanup.cancellation.clone(),
-                        descendant_cleanup: cleanup.descendants.clone(),
+                        outcome,
+                        descendant_cleanup,
                         forced,
                     },
                 )];
@@ -600,3 +596,7 @@ mod tests;
 #[cfg(test)]
 #[path = "worker_machine_watchdog_tests.rs"]
 mod watchdog_tests;
+
+#[cfg(test)]
+#[path = "worker_machine_cancellation_projection_tests.rs"]
+mod cancellation_projection_tests;

@@ -31,7 +31,9 @@ use temper_protocol_worker::{
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_worker::config::{CapabilitySpec, WorkerParams};
-use temper_worker::executor::{JobOutcome, job_result_for_attempt};
+use temper_worker::executor::{
+    CancellationOutcome, DescendantCleanupStatus, JobOutcome, job_result_for_attempt,
+};
 use temper_worker::result_outbox::ResultOutboxEntry;
 use temper_worker::worker_machine::{
     JobCleanup, JobPhase, WatchdogTimerKind, WorkerCompletion, WorkerMachine, WorkerRequest,
@@ -285,8 +287,8 @@ impl Sim {
                     attempt_id: state.attempt_id.clone(),
                     generation: state.generation,
                     cleanup: JobCleanup {
-                        cancellation: "simulated".to_string(),
-                        descendants: "joined".to_string(),
+                        cancellation: CancellationOutcome::Graceful,
+                        descendants: DescendantCleanupStatus::Clean,
                     },
                 }
             }

@@ -11,10 +11,15 @@ use temper_protocol_activity::{
 };
 use temper_protocol_agent::{AgentRuntimeLimitsV1, SubmitForPrResponse};
 
-use super::supervisor::{CancellationOutcome, DescendantCleanupStatus, ManagedAgentProcess};
+use super::supervisor::{ManagedAgentProcess, SupervisorResult};
 use super::{DiagnosticIdentity, OutOfProcessRunner, tests::test_context};
-use crate::agent_runner::{AgentForgeContextHost, AgentRunner};
+use crate::agent_runner::{
+    AgentForgeContextHost, AgentRunRequest, AgentRunner, JobProgressReporter,
+};
 use crate::config::{WorkerAgentTraceConfig, WorkerLivenessLimits};
+use crate::executor::{
+    AttemptFence, CancellationOutcome, DescendantCleanupStatus, JobCancellation,
+};
 use crate::trace::TraceCollector;
 
 fn executable_script(directory: &Path, name: &str, body: &str) -> PathBuf {
@@ -52,8 +57,8 @@ fn cooperative_window_observes_a_graceful_child_exit_and_joins_stderr() {
         "printf 'joined stderr marker\\n' >&2\nsleep 0.05\nexit 0",
     );
     let mut process = managed(&script);
-    let result =
-        process.cancel_and_join(true, Duration::from_millis(500), Duration::from_millis(50));
+    assert!(process.request_cancel());
+    let result = wait_for_supervisor(&mut process);
 
     assert_eq!(
         result.quiesced.cancellation,
@@ -80,8 +85,10 @@ fn unresponsive_child_escalates_to_hard_kill_without_a_lingering_waiter() {
     let mut process = managed(&script);
     wait_for_file(&ready);
     let started = Instant::now();
-    let result =
-        process.cancel_and_join(false, Duration::from_millis(20), Duration::from_millis(40));
+    assert!(process.request_cancel());
+    assert!(process.force_terminate());
+    assert!(process.hard_kill());
+    let result = wait_for_supervisor(&mut process);
 
     assert_eq!(
         result.quiesced.cancellation,
@@ -118,7 +125,10 @@ fn cancellation_kills_and_reaps_a_child_process_group_grandchild() {
     wait_for_file(&pid_file);
     let pid = std::fs::read_to_string(&pid_file).unwrap();
     let pid = pid.trim();
-    let _ = process.cancel_and_join(false, Duration::from_millis(10), Duration::from_millis(40));
+    assert!(process.request_cancel());
+    assert!(process.force_terminate());
+    assert!(process.hard_kill());
+    let _ = wait_for_supervisor(&mut process);
 
     for _ in 0..50 {
         if !process_exists(pid) {
@@ -339,7 +349,18 @@ PY
         });
     let context = test_context();
     let cwd = temp.path().to_path_buf();
-    let mut future = Box::pin(runner.run("cooperative-cancel", &context, &cwd));
+    let cancellation = JobCancellation::default();
+    let fence = AttemptFence::open();
+    let request = AgentRunRequest::new_controlled(
+        "cooperative-cancel",
+        "attempt-cooperative-cancel",
+        &context,
+        &cwd,
+        fence.clone(),
+        cancellation.clone(),
+        JobProgressReporter::noop("attempt-cooperative-cancel"),
+    );
+    let mut future = Box::pin(runner.run_request(request));
     let mut task_context = Context::from_waker(Waker::noop());
     assert!(matches!(
         future.as_mut().poll(&mut task_context),
@@ -348,15 +369,21 @@ PY
     wait_for_file(&ready);
 
     let started = Instant::now();
-    drop(future);
+    fence.close();
+    cancellation.cancel();
+    let _ = poll_until_ready(future.as_mut());
     assert!(cancelled.exists(), "child did not receive lifecycle Cancel");
+    assert_eq!(
+        cancellation.cleanup().unwrap().cancellation,
+        CancellationOutcome::Graceful
+    );
     assert!(started.elapsed() < Duration::from_millis(500));
     assert_cancelled_terminal(&trace_config);
 }
 
 #[test]
 #[cfg(unix)]
-fn forced_termination_writes_synthetic_cancelled_terminal_activity() {
+fn hard_kill_writes_synthetic_cancelled_terminal_activity_and_reports_cleanup() {
     let temp = tempfile::tempdir().unwrap();
     let ready = temp.path().join("forced-ready");
     let script = executable_script(
@@ -376,20 +403,41 @@ fn forced_termination_writes_synthetic_cancelled_terminal_activity() {
         .with_liveness_limits(short_limits());
     let context = test_context();
     let cwd = temp.path().to_path_buf();
-    let mut future = Box::pin(runner.run("forced-cancel", &context, &cwd));
+    let cancellation = JobCancellation::default();
+    let fence = AttemptFence::open();
+    let request = AgentRunRequest::new_controlled(
+        "forced-cancel",
+        "attempt-forced-cancel",
+        &context,
+        &cwd,
+        fence.clone(),
+        cancellation.clone(),
+        JobProgressReporter::noop("attempt-forced-cancel"),
+    );
+    let mut future = Box::pin(runner.run_request(request));
     let mut task_context = Context::from_waker(Waker::noop());
     assert!(matches!(
         future.as_mut().poll(&mut task_context),
         Poll::Pending
     ));
     wait_for_file(&ready);
-    drop(future);
+    fence.close();
+    cancellation.cancel();
+    cancellation.force_terminate();
+    cancellation.hard_kill();
+    let _ = poll_until_ready(future.as_mut());
+    let cleanup = cancellation.cleanup().expect("supervisor cleanup report");
+    assert_eq!(cleanup.cancellation, CancellationOutcome::HardKill);
+    assert!(matches!(
+        cleanup.descendants,
+        DescendantCleanupStatus::HardKilled
+    ));
     assert_cancelled_terminal(&trace_config);
 }
 
 #[test]
 #[cfg(unix)]
-fn result_written_during_cancellation_is_fenced_and_the_future_joins_on_drop() {
+fn forced_termination_fences_late_result_and_reports_cleanup() {
     let temp = tempfile::tempdir().unwrap();
     let ready = temp.path().join("ready");
     let late_copy = temp.path().join("late-result-copy.json");
@@ -421,7 +469,18 @@ while :; do sleep 1; done
         .with_liveness_limits(short_limits());
     let context = test_context();
     let cwd = temp.path().to_path_buf();
-    let mut future = Box::pin(runner.run("late-result", &context, &cwd));
+    let cancellation = JobCancellation::default();
+    let fence = AttemptFence::open();
+    let request = AgentRunRequest::new_controlled(
+        "late-result",
+        "attempt-late-result",
+        &context,
+        &cwd,
+        fence.clone(),
+        cancellation.clone(),
+        JobProgressReporter::noop("attempt-late-result"),
+    );
+    let mut future = Box::pin(runner.run_request(request));
     let mut task_context = Context::from_waker(Waker::noop());
     assert!(matches!(
         future.as_mut().poll(&mut task_context),
@@ -429,13 +488,49 @@ while :; do sleep 1; done
     ));
     wait_for_file(&ready);
 
-    // Dropping is the watchdog/component cancellation seam. It closes the
-    // attempt fence before signalling and synchronously joins every resource.
-    drop(future);
+    fence.close();
+    cancellation.cancel();
+    cancellation.force_terminate();
+    let _ = poll_until_ready(future.as_mut());
+    assert_eq!(
+        cancellation.cleanup().unwrap().cancellation,
+        CancellationOutcome::ForcedTermination
+    );
     assert_eq!(
         std::fs::read_to_string(late_copy).unwrap(),
         "{\"summary\":\"late\"}"
     );
+}
+
+fn poll_until_ready<F: Future>(mut future: std::pin::Pin<&mut F>) -> F::Output {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut task_context = Context::from_waker(Waker::noop());
+        if let Poll::Ready(output) = future.as_mut().poll(&mut task_context) {
+            return output;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for controlled agent cancellation"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn wait_for_supervisor(process: &mut ManagedAgentProcess) -> SupervisorResult {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut task_context = Context::from_waker(Waker::noop());
+        if let Poll::Ready(result) = process.poll_outcome(&mut task_context) {
+            process.join_completed();
+            return result;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for managed process supervisor"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 fn assert_cancelled_terminal(config: &WorkerAgentTraceConfig) {

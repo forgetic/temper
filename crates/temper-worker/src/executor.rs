@@ -1,7 +1,7 @@
 use std::future::Future;
-use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+#[cfg(test)]
 use std::task::{Poll, Waker};
 
 use serde_json::Value;
@@ -74,56 +74,11 @@ impl AttemptFence {
     }
 }
 
-/// Attempt-local cancellation signal used by the worker shell to destroy the
-/// executor future. Dropping that future is the quiescence boundary: managed
-/// runners synchronously terminate and join their process tree on drop.
-#[derive(Clone, Debug, Default)]
-pub struct JobCancellation {
-    cancelled: Arc<AtomicBool>,
-    waiters: Arc<Mutex<Vec<Waker>>>,
-}
-
-impl JobCancellation {
-    pub fn cancel(&self) {
-        if self.cancelled.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        for waiter in std::mem::take(
-            &mut *self
-                .waiters
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        ) {
-            waiter.wake();
-        }
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-
-    pub(crate) async fn run<F: Future>(&self, future: F) -> Option<F::Output> {
-        let mut future = std::pin::pin!(future);
-        std::future::poll_fn(|cx| {
-            if self.is_cancelled() {
-                return Poll::Ready(None);
-            }
-            if let Poll::Ready(output) = Pin::new(&mut future).poll(cx) {
-                return Poll::Ready(Some(output));
-            }
-            let mut waiters = self
-                .waiters
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if self.is_cancelled() {
-                return Poll::Ready(None);
-            }
-            waiters.push(cx.waker().clone());
-            Poll::Pending
-        })
-        .await
-    }
-}
+mod cancellation;
+pub use cancellation::{
+    CancellationOutcome, DescendantCleanupStatus, JobCancellation, JobCancellationRequest,
+    JobCleanup,
+};
 
 /// Worker-owned controls supplied to every layer of one job execution.
 #[derive(Clone, Debug)]
@@ -314,6 +269,44 @@ mod tests {
             },
             job_payload: json!({}),
         }
+    }
+
+    #[test]
+    fn cancellation_handshake_preserves_every_escalation_and_one_cleanup() {
+        let cancellation = JobCancellation::default();
+        cancellation.hard_kill();
+        let waker = Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        assert_eq!(
+            cancellation.poll_request(None, &mut cx),
+            Poll::Ready(JobCancellationRequest::Graceful)
+        );
+        assert_eq!(
+            cancellation.poll_request(Some(JobCancellationRequest::Graceful), &mut cx),
+            Poll::Ready(JobCancellationRequest::ForcedTermination)
+        );
+        assert_eq!(
+            cancellation.poll_request(Some(JobCancellationRequest::ForcedTermination), &mut cx),
+            Poll::Ready(JobCancellationRequest::HardKill)
+        );
+        let cleanup = JobCleanup {
+            cancellation: CancellationOutcome::HardKill,
+            descendants: DescendantCleanupStatus::HardKilled,
+        };
+        assert!(cancellation.record_cleanup(cleanup.clone()));
+        assert!(!cancellation.record_cleanup(JobCleanup {
+            cancellation: CancellationOutcome::Graceful,
+            descendants: DescendantCleanupStatus::Clean,
+        }));
+        assert_eq!(cancellation.cleanup(), Some(cleanup));
+
+        let owned = JobCancellation::default();
+        let owner = owned.register_async_owner();
+        let mut run = Box::pin(owned.run_to_quiescence(std::future::pending::<()>()));
+        owned.cancel();
+        assert!(run.as_mut().poll(&mut cx).is_pending());
+        drop(owner);
+        assert_eq!(run.as_mut().poll(&mut cx), Poll::Ready(None));
     }
 
     #[test]
