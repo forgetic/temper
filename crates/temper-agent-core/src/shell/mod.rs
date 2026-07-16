@@ -14,9 +14,11 @@
 //! Split by domain responsibility:
 //! - [`executor`] — the public shell types and the `Executor` dispatch.
 //! - [`streaming`] — model streaming with liveness timeouts and retry.
+//! - [`task_group`] — per-run cancellation and quiescence tracking.
 
 mod executor;
 mod streaming;
+mod task_group;
 
 pub use executor::{
     AgentOutcome, AgentShell, EventClock, EventSink, ModelIdentity, NullEventSink,

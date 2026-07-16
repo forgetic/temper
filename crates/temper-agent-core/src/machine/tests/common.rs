@@ -128,14 +128,72 @@ pub(super) fn machine() -> AgentMachine {
     AgentMachine::new(vec![user("do the thing")], 10)
 }
 
+pub(super) enum TestCompletion {
+    LlmResponded(AssistantMessage),
+    LlmFailed(String),
+    ToolFinished { id: String, output: ToolOutput },
+}
+
+pub(super) fn llm_responded(message: AssistantMessage) -> TestCompletion {
+    TestCompletion::LlmResponded(message)
+}
+
+pub(super) fn llm_failed(message: impl Into<String>) -> TestCompletion {
+    TestCompletion::LlmFailed(message.into())
+}
+
+pub(super) fn tool_finished(id: impl Into<String>, output: ToolOutput) -> TestCompletion {
+    TestCompletion::ToolFinished {
+        id: id.into(),
+        output,
+    }
+}
+
+/// Deliver a synthetic completion stamped with the operation identity the
+/// machine most recently requested.
+pub(super) fn complete(m: &mut AgentMachine, completion: TestCompletion) -> Vec<AgentRequest> {
+    let completion = match completion {
+        TestCompletion::LlmResponded(message) => {
+            let (operation_generation, batch_generation) =
+                m.active_generations().expect("active model operation");
+            AgentCompletion::LlmResponded {
+                operation_generation,
+                batch_generation,
+                message,
+            }
+        }
+        TestCompletion::LlmFailed(message) => {
+            let (operation_generation, batch_generation) =
+                m.active_generations().expect("active model operation");
+            AgentCompletion::LlmFailed {
+                operation_generation,
+                batch_generation,
+                message,
+            }
+        }
+        TestCompletion::ToolFinished { id, output } => {
+            let (operation_generation, batch_generation) = m
+                .active_tool_generations(&id)
+                .expect("active tool operation");
+            AgentCompletion::ToolFinished {
+                operation_generation,
+                batch_generation,
+                id,
+                output,
+            }
+        }
+    };
+    m.on_completion(EngineTime::ZERO, completion)
+}
+
 /// Drive the machine over a completion sequence, returning all emitted requests.
-pub(super) fn run(m: &mut AgentMachine, completions: Vec<AgentCompletion>) -> Vec<AgentRequest> {
+pub(super) fn run(m: &mut AgentMachine, completions: Vec<TestCompletion>) -> Vec<AgentRequest> {
     let mut requests = m.on_start(EngineTime::ZERO);
     for completion in completions {
         if m.is_stopped() {
             break;
         }
-        requests.extend(m.on_completion(EngineTime::ZERO, completion));
+        requests.extend(complete(m, completion));
     }
     requests
 }
@@ -151,7 +209,7 @@ pub(super) fn run_tools(requests: &[AgentRequest]) -> Vec<String> {
     requests
         .iter()
         .filter_map(|r| match r {
-            AgentRequest::RunTool(call) => Some(call.id.clone()),
+            AgentRequest::RunTool { call, .. } => Some(call.id.clone()),
             _ => None,
         })
         .collect()
