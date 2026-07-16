@@ -258,6 +258,18 @@ fn bounded_service_reads_items_comments_and_every_relation_direction() {
             .await
             .unwrap();
         assert_eq!(item.item.artifact.artifact_type, ArtifactType::Issue);
+        assert_eq!(
+            item.item.body,
+            format!("See #{}\n", dependency.number.get())
+        );
+        assert_eq!(item.item.workflow_kind.as_deref(), Some("code"));
+        let projected = item.item.workflow.as_ref().expect("workflow projection");
+        assert_eq!(projected.kind.as_deref(), Some("code"));
+        assert_eq!(
+            projected.parents[0].repository_id,
+            repository.id.to_string()
+        );
+        assert_eq!(projected.parents[0].number, design.number.get());
         assert_eq!(item.comments.len(), MAX_ITEM_COMMENTS);
         assert!(
             item.comments
@@ -448,13 +460,27 @@ fn bounded_service_reads_items_comments_and_every_relation_direction() {
                 &repository.id,
                 CreateIssue {
                     title: "malformed".into(),
-                    body: "<!-- temper:workflow\n{broken}\n-->".into(),
+                    body: format!("{}\n{{broken}}\n-->", temper_workflow::METADATA_BEGIN),
                     labels: vec!["code".into()],
                     assignees: Vec::new(),
                 },
             )
             .await
             .unwrap();
+        let malformed_item = service
+            .forge_get_item(ForgeGetItemOperation {
+                repo: "ai/temper".into(),
+                number: malformed.number.get(),
+                artifact_type: Some(ArtifactType::Issue),
+                include_comments: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            malformed_item.item.body,
+            format!("{}\n{{broken}}\n-->", temper_workflow::METADATA_BEGIN)
+        );
+        assert!(malformed_item.item.workflow.is_none());
         assert_eq!(
             service
                 .forge_list_related(ForgeListRelatedOperation {
