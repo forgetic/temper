@@ -31,6 +31,7 @@ use temper_protocol_worker::{
     FailureClass, ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult,
 };
 
+use crate::executor::{AttemptFence, JobCancellation};
 use crate::pre_push::{WorkspaceFingerprint, fingerprint_writable_repos_blocking};
 pub use temper_protocol_agent::WorkspaceResult;
 use temper_worker_io::EngineTime;
@@ -170,6 +171,8 @@ pub struct AgentRunRequest<'a> {
     pub attempt_id: String,
     pub context: &'a WorkspaceContext,
     pub cwd: &'a Path,
+    pub fence: AttemptFence,
+    pub cancellation: JobCancellation,
     pub progress: JobProgressReporter,
 }
 
@@ -181,11 +184,34 @@ impl<'a> AgentRunRequest<'a> {
         cwd: &'a Path,
         progress: JobProgressReporter,
     ) -> Self {
+        Self::new_controlled(
+            job_id,
+            attempt_id,
+            context,
+            cwd,
+            AttemptFence::open(),
+            JobCancellation::default(),
+            progress,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_controlled(
+        job_id: &'a str,
+        attempt_id: impl Into<String>,
+        context: &'a WorkspaceContext,
+        cwd: &'a Path,
+        fence: AttemptFence,
+        cancellation: JobCancellation,
+        progress: JobProgressReporter,
+    ) -> Self {
         Self {
             job_id,
             attempt_id: attempt_id.into(),
             context,
             cwd,
+            fence,
+            cancellation,
             progress,
         }
     }

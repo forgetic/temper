@@ -145,6 +145,7 @@ impl OutOfProcessRunner {
         cwd: &Path,
         trace: Option<&TraceRun>,
         progress: crate::JobProgressReporter,
+        fence: AttemptFence,
     ) -> Result<AgentRunOutput, AgentRunError> {
         let Some((program, args)) = self.command.split_first() else {
             return Err(AgentRunError::permanent("agent command is empty"));
@@ -203,7 +204,6 @@ impl OutOfProcessRunner {
             None
         };
 
-        let fence = AttemptFence::open();
         let accepted_submit = AcceptedSubmitProofStore::new();
         let (submit_requests, mut submit_request_rx) = temper_worker_io::channel();
         let (forge_requests, mut forge_request_rx) = temper_worker_io::channel();
