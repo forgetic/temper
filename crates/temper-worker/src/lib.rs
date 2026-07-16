@@ -21,6 +21,7 @@ pub mod coding_executor;
 pub mod config;
 pub mod context_client;
 pub mod executor;
+mod managed_effect;
 pub mod observability;
 pub mod out_of_process_runner;
 pub mod pr_freshness;

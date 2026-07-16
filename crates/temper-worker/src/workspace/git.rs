@@ -2,6 +2,8 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output};
 
+use crate::managed_effect::ManagedCommand;
+
 use super::{Workspace, WorkspaceError};
 
 impl Workspace {
@@ -64,20 +66,9 @@ impl Workspace {
         command: String,
         args: Vec<OsString>,
     ) -> Result<Output, WorkspaceError> {
-        // Assemble the full argument vector up front so the actual `git`
-        // invocation can run on the blocking pool. The worker runs on the
-        // skein runtime (single-threaded, no tokio reactor), so git -- a
-        // blocking subprocess -- must go through `spawn_blocking`.
-        let full_args =
-            git_invocation_args(&self.identity, current_dir, include_remote_header, args);
-
-        let output = skein::runtime::spawn_blocking(move || {
-            Command::new("git")
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .args(&full_args)
-                .output()
-        })
-        .await?;
+        let output = self
+            .run_git_unchecked(current_dir, include_remote_header, args)
+            .await?;
         if output.status.success() {
             Ok(output)
         } else {
@@ -91,6 +82,36 @@ impl Workspace {
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             })
         }
+    }
+
+    pub(super) async fn run_workspace_git_unchecked(
+        &self,
+        include_remote_header: bool,
+        args: Vec<OsString>,
+    ) -> Result<Output, WorkspaceError> {
+        self.run_git_unchecked(Some(&self.path), include_remote_header, args)
+            .await
+    }
+
+    async fn run_git_unchecked(
+        &self,
+        current_dir: Option<&Path>,
+        include_remote_header: bool,
+        args: Vec<OsString>,
+    ) -> Result<Output, WorkspaceError> {
+        // Each invocation has a dedicated process-tree owner. Dropping this
+        // future (the watchdog path) kills git and any credential/remote helper,
+        // joins its waiter and output readers, and only then lets the executor
+        // report quiescence.
+        let full_args =
+            git_invocation_args(&self.identity, current_dir, include_remote_header, args);
+        let mut git = Command::new("git");
+        git.env("GIT_TERMINAL_PROMPT", "0").args(&full_args);
+        self.cancellation
+            .run(ManagedCommand::spawn(git))
+            .await
+            .ok_or(WorkspaceError::Cancelled)?
+            .map_err(WorkspaceError::Io)
     }
 }
 

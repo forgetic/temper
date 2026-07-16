@@ -158,6 +158,7 @@ fn emit_quiesced(job_id: &str, outcome: &JobQuiesced, cancelled: bool) {
 }
 
 impl OutOfProcessRunner {
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_agent(
         &self,
         job_id: &str,
@@ -166,6 +167,7 @@ impl OutOfProcessRunner {
         trace: Option<&TraceRun>,
         progress: crate::JobProgressReporter,
         fence: AttemptFence,
+        cancellation: JobCancellation,
     ) -> Result<AgentRunOutput, AgentRunError> {
         let Some((program, args)) = self.command.split_first() else {
             return Err(AgentRunError::permanent("agent command is empty"));
@@ -391,7 +393,9 @@ impl OutOfProcessRunner {
                         .take()
                         .expect("completed submit task remains attempt-bound");
                     let response = if fence.is_open() {
-                        accepted_submit.record_response(response, context, cwd)
+                        accepted_submit
+                            .record_response_controlled(response, context, cwd, &cancellation)
+                            .await
                     } else {
                         accepted_submit.clear();
                         SubmitForPrResponse::rejected("agent attempt is no longer available")

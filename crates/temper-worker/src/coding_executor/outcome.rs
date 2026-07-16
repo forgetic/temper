@@ -4,9 +4,9 @@ use temper_protocol_worker::{
 };
 
 use crate::agent_runner::AcceptedSubmitProof;
-use crate::executor::{AttemptFence, JobOutcome};
+use crate::executor::{AttemptFence, JobCancellation, JobOutcome};
 use crate::pr_freshness::{PrFreshnessFailure, PrFreshnessGuard};
-use crate::pre_push::fingerprint_writable_repos;
+use crate::pre_push::fingerprint::fingerprint_writable_repos_controlled;
 
 use super::{PreparedRepo, cancelled_attempt, failure, workspace_failure};
 
@@ -49,6 +49,7 @@ pub(super) struct WritableOutcomeRequest<'a> {
     pub(super) latest_self_pushed_sha: Option<&'a str>,
     pub(super) accepted_submit: Option<&'a AcceptedSubmitProof>,
     pub(super) fence: &'a AttemptFence,
+    pub(super) cancellation: &'a JobCancellation,
 }
 
 pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> JobOutcome {
@@ -67,6 +68,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         latest_self_pushed_sha,
         accepted_submit,
         fence,
+        cancellation,
     } = request;
     if !fence.is_open() {
         return cancelled_attempt();
@@ -89,6 +91,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         freshness_guard,
         latest_self_pushed_sha,
         fence,
+        cancellation,
     )
     .await
     {
@@ -102,6 +105,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         workspace_context,
         workspace_root,
         fence,
+        cancellation,
     )
     .await
     {
@@ -265,6 +269,7 @@ async fn ensure_fresh_before_pr_push(
     freshness_guard: Option<&dyn PrFreshnessGuard>,
     latest_self_pushed_sha: Option<&str>,
     fence: &AttemptFence,
+    cancellation: &JobCancellation,
 ) -> Result<(), JobOutcome> {
     if !fence.is_open() {
         return Err(cancelled_attempt());
@@ -278,17 +283,18 @@ async fn ensure_fresh_before_pr_push(
     let Some(guard) = freshness_guard else {
         return Ok(());
     };
-    match guard
-        .check(&agent_freshness(freshness, latest_self_pushed_sha))
-        .await
-    {
-        Ok(()) if fence.is_open() => Ok(()),
-        Ok(()) => Err(cancelled_attempt()),
-        Err(PrFreshnessFailure::Stale(reason)) => Err(failure(
+    let checked = cancellation
+        .run(guard.check(&agent_freshness(freshness, latest_self_pushed_sha)))
+        .await;
+    match checked {
+        None => Err(cancelled_attempt()),
+        Some(Ok(())) if fence.is_open() => Ok(()),
+        Some(Ok(())) => Err(cancelled_attempt()),
+        Some(Err(PrFreshnessFailure::Stale(reason))) => Err(failure(
             FailureClass::Canceled,
             format!("stale pull request job canceled before push: {reason}"),
         )),
-        Err(PrFreshnessFailure::Unavailable(reason)) => Err(failure(
+        Some(Err(PrFreshnessFailure::Unavailable(reason))) => Err(failure(
             FailureClass::Transient,
             format!("could not revalidate pull request before push: {reason}"),
         )),
@@ -300,6 +306,7 @@ async fn ensure_accepted_submit_before_pr_push(
     context: &WorkspaceContext,
     workspace_root: &std::path::Path,
     fence: &AttemptFence,
+    cancellation: &JobCancellation,
 ) -> Result<(), JobOutcome> {
     if !fence.is_open() {
         return Err(cancelled_attempt());
@@ -317,7 +324,7 @@ async fn ensure_accepted_submit_before_pr_push(
         ));
     }
 
-    let current = fingerprint_writable_repos(context, workspace_root)
+    let current = fingerprint_writable_repos_controlled(context, workspace_root, cancellation)
         .await
         .map_err(|error| {
             failure(

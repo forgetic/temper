@@ -41,7 +41,7 @@ use crate::agent_runner::{
     AcceptedSubmitProofStore, AgentForgeContextFuture, AgentForgeContextHost, AgentRunError,
     AgentRunOutput, WorkspaceResult,
 };
-use crate::executor::AttemptFence;
+use crate::executor::{AttemptFence, JobCancellation};
 use crate::pre_push::submit_for_pr_pre_push_response;
 use crate::trace::{TraceCollector, TraceRun};
 use crate::{WorkerAgentTraceConfig, WorkerLivenessLimits};

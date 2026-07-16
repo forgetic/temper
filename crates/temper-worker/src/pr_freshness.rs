@@ -5,12 +5,14 @@
 
 use std::future::Future;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::pin::Pin;
 use std::time::Duration;
 
 use temper_protocol_agent::PullRequestFreshness;
 use temper_protocol_worker::{PullRequestFreshnessResponse, PullRequestFreshnessStatus};
+
+use crate::managed_effect::JoinedBlocking;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrFreshnessFailure {
@@ -49,7 +51,11 @@ impl PrFreshnessGuard for HttpPrFreshnessGuard {
                 PrFreshnessFailure::Unavailable(format!("serialize PR freshness check: {error}"))
             })?;
             let response =
-                skein::runtime::spawn_blocking(move || post_json(&endpoint, &body)).await;
+                JoinedBlocking::spawn("temper-pr-freshness", move || post_json(&endpoint, &body))
+                    .await
+                    .map_err(|error| {
+                        PrFreshnessFailure::Unavailable(format!("join PR freshness owner: {error}"))
+                    })?;
             map_response(response)
         })
     }
@@ -78,7 +84,12 @@ pub fn map_response(
 
 fn post_json(endpoint: &str, body: &[u8]) -> Result<PullRequestFreshnessResponse, String> {
     let (host, port, path) = parse_http_url(endpoint)?;
-    let mut stream = TcpStream::connect((host.as_str(), port))
+    let address = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("resolve {host}:{port}: {error}"))?
+        .next()
+        .ok_or_else(|| format!("resolve {host}:{port}: no addresses"))?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
         .map_err(|error| format!("connect {host}:{port}: {error}"))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
