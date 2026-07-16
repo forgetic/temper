@@ -1,5 +1,5 @@
-//! `system_prompt` (role contract + verdict-vocabulary constraint) and
-//! `user_context` rendering.
+//! `system_prompt` (invariant role contract + workflow/fallback outcomes) and
+//! `user_context` authority rendering.
 
 use super::common::*;
 use crate::coding_agent::*;
@@ -10,8 +10,8 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("ROLE: engineer"));
     assert!(engineer.contains("product diff"));
     assert!(engineer.contains("Do NOT run git commit"));
-    assert!(engineer.contains("submit_for_pr"));
-    assert!(engineer.contains("host responds with failure"));
+    assert!(!engineer.contains("submit_for_pr"));
+    assert!(!engineer.contains("investigate"));
     assert!(engineer.contains("needs_architect"));
     assert!(engineer.contains("needs_human"));
     assert!(engineer.contains("PR repair runs"));
@@ -20,6 +20,8 @@ fn system_prompt_is_role_specific() {
     assert!(!engineer.contains("checkpoint(label)"));
     assert!(!engineer.contains("CHECKPOINTS:"));
     assert!(!engineer.contains("CODEBASE MEMORY"));
+    assert!(!engineer.contains("`write`"));
+    assert!(!engineer.contains("`edit`"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(architect.contains("ROLE: architect"));
@@ -64,23 +66,41 @@ fn system_prompt_engineer_omits_checkpoint_guidance_by_default() {
 }
 
 #[test]
-fn system_prompt_without_allowed_verdicts_has_no_constraint_block() {
-    // Back-compat: an empty vocabulary leaves the built-in per-role menu and adds
-    // no constraint section.
+fn system_prompt_without_allowed_verdicts_uses_legacy_fallback() {
+    // Back-compat: an empty vocabulary retains the built-in per-role menu.
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
-    assert!(!architect.contains("VERDICT CONSTRAINT"));
+    assert!(architect.contains("LEGACY FALLBACK OUTCOMES"));
+    assert!(!architect.contains("WORKFLOW OUTCOMES"));
+    assert!(architect.contains("`ready_code`"));
+    assert!(architect.contains("`needs_design`"));
+    assert!(architect.contains("`needs_breakdown`"));
 }
 
 #[test]
-fn system_prompt_constrains_to_allowed_verdicts() {
-    // A multi-outcome triage: the constraint names exactly the declared set.
+fn declared_outcomes_without_contracts_do_not_render_fallback_requirements() {
+    let allowed = vec!["ship_it".to_string(), "hold_it".to_string()];
+    let architect = system_prompt(Capability::TriageWorkspace, &allowed);
+    assert!(architect.contains("WORKFLOW OUTCOMES"));
+    assert!(architect.contains("- Verdict `ship_it`."));
+    assert!(architect.contains("- Verdict `hold_it`."));
+    assert!(!architect.contains("LEGACY FALLBACK OUTCOMES"));
+    assert!(!architect.contains("ready_code"));
+    assert!(!architect.contains("needs_design"));
+    assert!(!architect.contains("needs_breakdown"));
+    assert!(!architect.contains("child product(s)"));
+    assert!(!architect.contains("authored `body`"));
+    assert!(!architect.contains("pull-request `title`"));
+}
+
+#[test]
+fn system_prompt_renders_only_declared_outcomes() {
     let allowed = vec!["ready_code".to_string(), "needs_design".to_string()];
     let architect = system_prompt(Capability::TriageWorkspace, &allowed);
-    assert!(architect.contains("VERDICT CONSTRAINT"));
+    assert!(architect.contains("WORKFLOW OUTCOMES"));
     assert!(architect.contains("`ready_code`"));
     assert!(architect.contains("`needs_design`"));
-    // It must not suggest the single-outcome collapse for a 2-element set.
-    assert!(!architect.contains("SINGLE declared outcome"));
+    assert!(!architect.contains("`needs_breakdown`"));
+    assert!(!architect.contains("LEGACY FALLBACK OUTCOMES"));
 }
 
 #[test]
@@ -118,33 +138,31 @@ fn system_prompt_renders_exact_workflow_product_contract() {
         prompt.contains("Each child body must contain non-blank workflow metadata `target_branch`")
     );
     assert!(prompt.contains("`<!-- temper:workflow ... -->` JSON block"));
+    assert!(prompt.contains("Verdict `validated` requires exactly 0 child product(s)"));
     assert!(prompt.contains("requires a non-blank pull-request `title`"));
     assert!(prompt.contains("requires a non-blank pull-request `body`"));
     assert!(prompt.contains("workflow metadata `target_branch`"));
 }
 
 #[test]
-fn system_prompt_single_outcome_collapses_to_one_choice() {
-    // The basic-delivery architect: a single declared outcome ⇒ exactly one
-    // choice. This is the deterministic single-outcome triage the example relies
-    // on.
+fn system_prompt_single_declared_outcome_is_the_only_verdict() {
     let allowed = vec!["ready_code".to_string()];
     let architect = system_prompt(Capability::TriageWorkspace, &allowed);
-    assert!(architect.contains("VERDICT CONSTRAINT"));
-    assert!(architect.contains("SINGLE declared outcome"));
-    assert!(architect.contains("verdict `ready_code`"));
+    assert!(architect.contains("WORKFLOW OUTCOMES"));
+    assert!(architect.contains("- Verdict `ready_code`."));
+    assert!(!architect.contains("needs_design"));
+    assert!(!architect.contains("needs_breakdown"));
 }
 
 #[test]
-fn system_prompt_engineer_keeps_head_path_under_constraint() {
-    // Even with declared decline verdicts, the engineer may still take the
-    // no-verdict head path.
-    let allowed = vec!["needs_architect".to_string(), "needs_human".to_string()];
+fn system_prompt_engineer_keeps_head_path_with_declared_outcomes() {
+    let allowed = vec!["external_blocker".to_string()];
     let engineer = system_prompt(Capability::CodingWorkspace, &allowed);
-    assert!(engineer.contains("VERDICT CONSTRAINT"));
-    assert!(engineer.contains("head path"));
-    // The single-outcome collapse line is engineer-inapplicable.
-    assert!(!engineer.contains("SINGLE declared outcome"));
+    assert!(engineer.contains("WORKFLOW OUTCOMES"));
+    assert!(engineer.contains("no-verdict engineer success path remains available"));
+    assert!(engineer.contains("- Verdict `external_blocker`."));
+    assert!(!engineer.contains("needs_architect"));
+    assert!(!engineer.contains("needs_human"));
 }
 
 #[test]
@@ -153,7 +171,7 @@ fn user_context_includes_work_item_and_guidance() {
     let rendered = user_context(&context);
     assert!(rendered.contains("acme/service"));
     assert!(rendered.contains("dir: service/"));
-    assert!(rendered.contains("access: writable"));
+    assert!(rendered.contains("manifest/repository access policy: writable"));
     assert!(rendered.contains("Role: engineer"));
     assert!(rendered.contains("Action: open_pr"));
     assert!(rendered.contains("Target: Issue { number: ItemNumber(7) }"));
@@ -161,11 +179,89 @@ fn user_context_includes_work_item_and_guidance() {
     assert!(rendered.contains("work branch: agent/pr-for-code-7"));
     assert!(rendered.contains("Correlation key: pr-for-code-7"));
     assert!(rendered.contains("Checkout mode: writable"));
+    assert!(rendered.contains("Effective checkout authority: writable"));
+    assert!(rendered.contains("Edits are permitted only in repositories whose manifest/repository access policy is `writable`"));
     assert!(rendered.contains("Make a real product change."));
     assert!(rendered.contains("Use docs/product-change.md"));
     assert!(rendered.contains("No .temper-only diffs."));
     assert!(rendered.contains(r#"{"artifact":{"title":"Implement docs"}}"#));
     assert!(rendered.contains("Work item context (JSON):"));
+}
+
+#[test]
+fn read_only_checkout_overrides_writable_manifest_policy() {
+    for (role, checkout) in [
+        ("architect", "read_only"),
+        ("reviewer", "pull_request_read_only"),
+    ] {
+        let mut context = parsed_fixture();
+        context.work_item.role = role.to_string();
+        context.checkout = Some(checkout.to_string());
+        context.guidance = WorkspaceGuidance::default();
+
+        let rendered = user_context(&context);
+        assert!(rendered.contains("manifest/repository access policy: writable"));
+        assert!(rendered.contains(&format!(
+            "Effective checkout authority: read-only (`{checkout}`)"
+        )));
+        assert!(rendered.contains("No repository may be modified"));
+        assert!(rendered.contains(
+            "overrides writable manifest/repository access policy and all branch or work-branch hints"
+        ));
+        assert!(!rendered.contains("Edit files"));
+        assert!(!rendered.contains("Edits are permitted"));
+    }
+}
+
+#[test]
+fn writable_and_legacy_contexts_render_effective_authority() {
+    let mut context = parsed_fixture();
+
+    let writable = user_context(&context);
+    assert!(writable.contains("Effective checkout authority: writable"));
+    assert!(writable.contains("Edits are permitted only in repositories whose manifest/repository access policy is `writable`"));
+
+    context.checkout = Some("pull_request_writable".to_string());
+    let pull_request_writable = user_context(&context);
+    assert!(pull_request_writable.contains("Effective checkout authority: pull-request writable"));
+    assert!(pull_request_writable.contains("no other repository may be modified"));
+
+    context.checkout = None;
+    let legacy = user_context(&context);
+    assert!(legacy.contains("Effective checkout authority: not supplied by this legacy context"));
+    assert!(legacy.contains("branch hints remain the available legacy authority signals"));
+    assert!(!legacy.contains("Checkout mode:"));
+}
+
+#[test]
+fn multi_repo_preamble_obeys_checkout_authority() {
+    let mut context = parsed_fixture();
+    let mut dependency = context.repos[0].clone();
+    dependency.id = "repo-2".to_string();
+    dependency.name = "dependency".to_string();
+    dependency.dir = "dependency".to_string();
+    dependency.access = "read_only".to_string();
+    dependency.branch_hint = None;
+    context.repos.push(dependency);
+    context.guidance = WorkspaceGuidance::default();
+
+    let writable = user_context(&context);
+    assert!(writable.contains("COORDINATED multi-repo workspace"));
+    assert!(
+        writable.contains(
+            "Edit files only inside repositories whose manifest access policy is writable"
+        )
+    );
+    assert!(writable.contains("manifest/repository access policy: read_only"));
+
+    context.checkout = Some("read_only".to_string());
+    let read_only = user_context(&context);
+    assert!(read_only.contains(
+        "do not modify any repository, including repositories whose manifest policy is writable"
+    ));
+    assert!(read_only.contains("No repository may be modified"));
+    assert!(!read_only.contains("Edit files only"));
+    assert!(!read_only.contains("edit files inside"));
 }
 
 #[test]
@@ -282,14 +378,14 @@ fn artifact_bundle_renders_only_explicit_members_in_each_section() {
     assert!(!optional.contains("Code child"));
     assert!(!optional.contains("Implementation PR"));
 
-    let diagnostics = artifact_section(
-        &rendered,
-        "Diagnostics and truncation:",
-        "Forge context tools:",
-    );
+    let diagnostics = rendered
+        .split_once("Diagnostics and truncation:")
+        .expect("diagnostics heading")
+        .1
+        .trim();
     assert!(diagnostics.contains("content_truncated (issue acme/service#7): body bounded"));
     assert!(diagnostics.contains("content_truncated=true"));
-    assert!(rendered.contains("Repeated calls may follow indirect relations"));
+    assert!(!rendered.contains("Forge context follow-up:"));
     assert!(!rendered.contains("Work item context (JSON):"));
 }
 

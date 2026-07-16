@@ -23,23 +23,25 @@
 //!
 //! The three reference-delivery roles map to distinct capabilities:
 //!
-//! - **engineer** (`coding_workspace`): edit tools; implement the issue, leaving
-//!   a real product diff in the working tree. No verdict on success (the head
-//!   path ⇒ `open_pr`); verdict `needs_architect` when underspecified or
-//!   unimplementable as written; verdict `needs_human` only for non-agent
-//!   judgment.
-//! - **architect** (`triage_workspace`): read-only analysis; verdict
-//!   `ready_code` / `needs_design` with an authored `body`, or `needs_breakdown`
-//!   with `children`.
-//! - **reviewer** (`review_workspace`): read-only diff + CI; verdict `approve`,
-//!   or `changes` with an authored `review_body`, or `escalate`.
+//! - **engineer** (`coding_workspace`): use edit tools to implement the issue,
+//!   leaving a real product diff in the working tree. Successful implementation
+//!   follows the no-verdict head path to `open_pr`.
+//! - **architect** (`triage_workspace`): perform read-only repository analysis
+//!   and author the workflow product required by the declared outcome.
+//! - **reviewer** (`review_workspace`): perform a read-only review of the actual
+//!   diff and CI evidence against the base branch.
 //!
-//! When temper surfaces the action's declared verdict vocabulary
-//! (`allowed_verdicts`, W3), the role is constrained to exactly that option set
-//! instead of the broad per-role menu above, and a verdict outside it is
-//! rejected with a clear message. A single-outcome triage (e.g.
-//! `["ready_code"]`, as in the `basic-delivery` example) thereby has exactly one
-//! choice. An empty vocabulary falls back to the per-role menu (back-compat).
+//! Role duties are invariant, while outcome vocabulary is workflow-dependent.
+//! When temper supplies `allowed_verdicts` (W3), the prompt names only those
+//! outcomes and renders product requirements only from their `VerdictContract`
+//! entries. When no outcomes are supplied, the prompt uses the legacy per-role
+//! menus (`needs_architect` / `needs_human`; `ready_code` / `needs_design` /
+//! `needs_breakdown`; or `approve` / `changes` / `escalate`) for compatibility.
+//! Optional named guidance is added only after the provider tool registry is
+//! finalized, so submit, Forge, codebase-memory, and sub-agent prose cannot
+//! advertise an unavailable tool. The engineer's no-verdict success path
+//! remains available in both outcome modes, and
+//! any emitted verdict outside a non-empty declared vocabulary is rejected.
 //!
 //! This file is a thin facade: the role→capability mapping, errors, prompt
 //! construction, tool/sub-agent wiring, and the agent run + parse/validate logic
@@ -79,6 +81,8 @@ pub use tools::tool_registry;
 // Internal items the unit tests reach through `super::*`.
 #[cfg(test)]
 pub(crate) use codebase_memory::codebase_memory_prompt_section;
+#[cfg(test)]
+pub(crate) use prompt::{system_prompt_with_registry, user_context_with_registry};
 #[cfg(test)]
 pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabulary};
 #[cfg(test)]

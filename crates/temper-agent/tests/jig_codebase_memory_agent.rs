@@ -18,6 +18,8 @@ use temper_protocol_agent::{
 mod coding_agent_workspace;
 use coding_agent_workspace::{REPO_DIR, TempCheckout};
 
+const FAKE_MCP_DESCRIPTION_SENTINEL: &str = "FAKE-MCP-DESCRIPTION-SENTINEL-384";
+
 #[test]
 fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     let checkout = TempCheckout::new("jig-codebase-memory-tool-call");
@@ -66,16 +68,67 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     );
     assert_eq!(observed_memory_result.load(Ordering::SeqCst), 1);
     let requests = fake.requests();
-    let first_view = requests
-        .first()
-        .and_then(|request| request.view.as_ref())
-        .expect("fake LLM saw first request");
+    let first_request = requests.first().expect("fake LLM saw first request");
+    let first_view = first_request
+        .view
+        .as_ref()
+        .expect("fake LLM first request was normalized");
+    let prompt = first_view
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        first_view
-            .messages
-            .iter()
-            .any(|message| message.content.contains("CODEBASE MEMORY")),
+        prompt.contains("CODEBASE MEMORY"),
         "first request should include prompt guidance only because tools registered"
+    );
+    assert!(prompt.contains("Use them early for non-trivial tasks"));
+    for duplicated_api_text in [
+        FAKE_MCP_DESCRIPTION_SENTINEL,
+        "codebase_memory_search_code",
+        "Registered codebase-memory tools:",
+    ] {
+        assert!(
+            !prompt.contains(duplicated_api_text),
+            "provider prompt duplicated tool API text {duplicated_api_text:?}"
+        );
+    }
+
+    let request_json: serde_json::Value =
+        serde_json::from_slice(&first_request.body).expect("provider request JSON");
+    let memory_tools = request_json["tools"]
+        .as_array()
+        .expect("provider tools array")
+        .iter()
+        .filter(|tool| {
+            tool.get("name")
+                .or_else(|| tool.pointer("/function/name"))
+                .and_then(serde_json::Value::as_str)
+                == Some("codebase_memory_search_code")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(memory_tools.len(), 1, "memory tool registered exactly once");
+    let expected_description = format!(
+        "{FAKE_MCP_DESCRIPTION_SENTINEL}\n\n\
+         Workspace scoped: default project `acme/demo`; accepted `project`/`repo` aliases: acme/demo, demo, repo-1. Unknown aliases and filesystem paths are rejected.\n\n\
+         Read-only wrapper around codebase-memory MCP tool `search_code`."
+    );
+    let provider_description = memory_tools[0]
+        .get("description")
+        .or_else(|| memory_tools[0].pointer("/function/description"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(
+        provider_description,
+        Some(expected_description.as_str()),
+        "provider retains the complete wrapped MCP description"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&first_request.body)
+            .matches(FAKE_MCP_DESCRIPTION_SENTINEL)
+            .count(),
+        1,
+        "fake MCP description appears exactly once in the provider tool definition"
     );
 }
 
@@ -128,7 +181,7 @@ import json
 import sys
 
 TOOLS = [
-    {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
 ]
 
 def send(value):

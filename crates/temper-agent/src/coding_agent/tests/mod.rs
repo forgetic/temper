@@ -10,6 +10,7 @@ mod common;
 
 mod capability;
 mod context;
+mod effective_prompts;
 mod overlays;
 mod prompt;
 mod result;

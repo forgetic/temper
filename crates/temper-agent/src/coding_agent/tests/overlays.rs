@@ -97,7 +97,7 @@ fn compose_turns_folds_codebase_memory_guidance_under_anthropic_identity() {
     let cwd = overlay_temp_dir("fold-codebase-memory-cwd");
     let section = codebase_memory_prompt_section(&[CodebaseMemoryToolMetadata {
         name: "codebase_memory_search_code".to_string(),
-        description: "Search indexed code".to_string(),
+        description: "OVERLAY-MCP-DESCRIPTION-SENTINEL-384".to_string(),
     }])
     .expect("metadata renders a codebase-memory prompt section");
     let role_prompt = format!(
@@ -113,7 +113,15 @@ fn compose_turns_folds_codebase_memory_guidance_under_anthropic_identity() {
     assert!(!turns.system.contains("CODEBASE MEMORY"));
     assert!(turns.user.contains("ROLE: engineer"));
     assert!(turns.user.contains("CODEBASE MEMORY"));
-    assert!(turns.user.contains("codebase_memory_search_code"));
+    assert!(turns.user.contains("Use them early for non-trivial tasks"));
+    assert!(
+        turns
+            .user
+            .contains("Treat the graph as an index, not truth")
+    );
+    assert!(!turns.user.contains("codebase_memory_search_code"));
+    assert!(!turns.user.contains("OVERLAY-MCP-DESCRIPTION-SENTINEL-384"));
+    assert!(!turns.user.contains("Registered codebase-memory tools:"));
     assert!(turns.user.contains("Work item context"));
 
     let _ = std::fs::remove_dir_all(&cwd);
