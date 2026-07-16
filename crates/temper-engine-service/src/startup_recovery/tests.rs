@@ -34,10 +34,23 @@ fn startup_quarantine_records_one_idempotent_audit_comment() {
             number: issue.number,
         };
 
-        quarantine_target(&forge, &repo, target, "malformed assignment")
+        let workflow = temper_workflow::parse_workflow_spec(
+            "reference-delivery.json",
+            include_str!("../../../temper-workflow/fixtures/reference-delivery.json"),
+        )
+        .expect("workflow parses");
+        let workflow = workflow.validate().expect("workflow validates");
+        let converger = AssignmentConverger::new(
+            &workflow,
+            &forge,
+            LeasePolicy::new(chrono::Duration::minutes(5)),
+        );
+        converger
+            .quarantine_target(&repo, target, "malformed assignment")
             .await
             .expect("first quarantine succeeds");
-        quarantine_target(&forge, &repo, target, "malformed assignment")
+        converger
+            .quarantine_target(&repo, target, "malformed assignment")
             .await
             .expect("replayed quarantine succeeds");
 
@@ -49,7 +62,11 @@ fn startup_quarantine_records_one_idempotent_audit_comment() {
         assert!(issue.labels.contains(&"needs-human".to_string()));
         let comments = forge.list_issue_comments(&issue.id).await.unwrap();
         assert_eq!(comments.len(), 1);
-        assert!(comments[0].body.contains(STARTUP_RECOVERY_AUDIT_MARKER));
+        assert!(
+            comments[0]
+                .body
+                .contains(temper_workflow::ASSIGNMENT_RECOVERY_AUDIT_MARKER)
+        );
     });
 }
 

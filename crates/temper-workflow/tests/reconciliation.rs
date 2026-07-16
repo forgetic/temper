@@ -13,9 +13,10 @@ use support::{
 use temper_forge::{CreateRepository, Forge, ItemNumber};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSnapshot, ArtifactSource, CommandId, CommandJournal,
-    CommandRecord, CommandState, DefaultRecoveryPolicy, DependencyStatus, InMemoryJournal, Lease,
-    Postcondition, ReconcileFinding, RecoveryAction, RecoveryPolicy, RoleId, StateDimensionId,
-    StateId, TransitionId, WorkflowEffect, WorkflowMetadata, render_metadata_block,
+    CommandRecord, CommandState, DefaultRecoveryPolicy, DependencyStatus, DurableAssignment,
+    InMemoryJournal, Lease, Postcondition, ReconcileFinding, RecoveryAction, RecoveryPolicy,
+    RoleId, StateDimensionId, StateId, TransitionId, WorkflowEffect, WorkflowMetadata,
+    render_metadata_block,
 };
 
 fn issue_source(number: u64) -> ArtifactSource {
@@ -42,6 +43,55 @@ fn leased_body(worker: &str, expires_at: &str) -> String {
         ..WorkflowMetadata::default()
     };
     render_metadata_block(&metadata)
+}
+
+#[test]
+fn expired_assignment_preserves_exact_durable_identity_for_convergence() {
+    let workflow = workflow();
+    let policy = DefaultRecoveryPolicy;
+    let assignment = DurableAssignment {
+        job_id: Some("job-1".to_string()),
+        role: Some(RoleId::new("engineer")),
+        queue: Some("code_ready".to_string()),
+        action: Some("open_pr".to_string()),
+        worker_id: Some("worker-1".to_string()),
+        daemon_boot_id: Some("boot-1".to_string()),
+        expires_at: Some(ts("2026-05-29T00:30:00Z")),
+        ..DurableAssignment::default()
+    };
+    let snapshot = ArtifactSnapshot {
+        source: issue_source(1),
+        labels: vec!["code".into(), "in-progress".into()],
+        body: render_metadata_block(&WorkflowMetadata {
+            kind: Some(ArtifactKindId::new("code")),
+            assignment: Some(assignment.clone()),
+            lease: Some(lease("run-1", "2026-05-29T00:30:00Z")),
+            ..WorkflowMetadata::default()
+        }),
+        dependencies: Vec::new(),
+    };
+
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[],
+        &DependencyStatus::default(),
+        ts("2026-05-29T01:00:00Z"),
+    );
+
+    assert_eq!(
+        report.findings,
+        vec![ReconcileFinding::ExpiredAssignment {
+            target: issue_source(1),
+            assignment: Box::new(assignment.clone()),
+        }]
+    );
+    assert_eq!(
+        report.actions,
+        vec![RecoveryAction::ConvergeAssignment {
+            target: issue_source(1),
+            assignment: Box::new(assignment),
+        }]
+    );
 }
 
 #[test]

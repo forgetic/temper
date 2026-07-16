@@ -7,7 +7,10 @@
 //! decisions, routing each action through the existing component that already
 //! owns the matching mutation path rather than re-implementing one:
 //!
-//! - [`RecoveryAction::RequeueLease`] clears the lease through
+//! - [`RecoveryAction::ConvergeAssignment`] validates and converges the exact
+//!   durable assignment through the shared startup/live [`AssignmentConverger`],
+//!   including dependency-aware issue projection and advanced PR-head recovery.
+//! - [`RecoveryAction::RequeueLease`] clears a legacy lease through
 //!   [`LeaseManager::clear`](crate::lease::LeaseManager::clear) — the
 //!   reconciler is the authority that force-clears a presumed-gone holder's
 //!   lease, so it uses the post-CAS clear rather than the peer-checked release.
@@ -27,8 +30,8 @@
 //! # Safety
 //!
 //! Every mutating action loads fresh state before it writes, applies at most
-//! once, and is safe to re-run on the same report: clearing an already-clear
-//! lease is a no-op, re-applying realized labels issues no backend update, and
+//! once, and is safe to re-run on the same report: a stale assignment snapshot
+//! is a no-op, clearing an already-clear lease is a no-op, re-applying realized labels issues no backend update, and
 //! a completed unblock is skipped on a second pass. Repairs and unblocks are
 //! journaled, so a crash between the mutation and the terminal journal update
 //! leaves the command incomplete for the next [`crate::reconcile`] pass to
@@ -43,6 +46,9 @@
 //! wants escalation to project a label or post a comment can do so in its own
 //! adapter on top of the advisory list.
 
+use crate::assignment_convergence::{
+    AssignmentConvergenceError, AssignmentConvergenceOutcome, AssignmentConverger,
+};
 use crate::classify::ArtifactSource;
 use crate::execute::{ExecutionError, Executor};
 use crate::ids::TransitionId;
@@ -89,6 +95,11 @@ pub enum ApplyError {
     Lease(LeaseError),
     /// A journal write failed.
     Journal(JournalError),
+    /// Full durable-assignment convergence failed.
+    Assignment(String),
+    /// The report contains a durable assignment action but no shared converger
+    /// was supplied by the runtime.
+    AssignmentConvergerRequired,
     /// The report's `findings` and `actions` were not parallel, so an action
     /// could not be paired with its finding. A well-formed [`ReconcileReport`]
     /// never trips this.
@@ -101,6 +112,11 @@ impl fmt::Display for ApplyError {
             ApplyError::Execution(error) => write!(formatter, "apply failed: {error}"),
             ApplyError::Lease(error) => write!(formatter, "lease clear failed: {error}"),
             ApplyError::Journal(error) => write!(formatter, "journal update failed: {error}"),
+            ApplyError::Assignment(error) => {
+                write!(formatter, "assignment convergence failed: {error}")
+            }
+            ApplyError::AssignmentConvergerRequired => formatter
+                .write_str("reconcile report requires the shared durable assignment converger"),
             ApplyError::MalformedReport => {
                 write!(
                     formatter,
@@ -128,6 +144,12 @@ impl From<LeaseError> for ApplyError {
 impl From<JournalError> for ApplyError {
     fn from(error: JournalError) -> Self {
         ApplyError::Journal(error)
+    }
+}
+
+impl From<AssignmentConvergenceError> for ApplyError {
+    fn from(error: AssignmentConvergenceError) -> Self {
+        ApplyError::Assignment(error.to_string())
     }
 }
 
@@ -171,12 +193,34 @@ impl<'a, F: Forge + ?Sized, J: CommandJournal> Applier<'a, F, J> {
         report: &ReconcileReport,
         now: DateTime<Utc>,
     ) -> Result<ApplyOutcome, ApplyError> {
+        self.apply_report_inner(repo_id, report, now, None).await
+    }
+
+    /// Applies a report with the shared startup/live assignment converger.
+    pub async fn apply_report_with_assignment_converger(
+        &self,
+        repo_id: &RepositoryId,
+        report: &ReconcileReport,
+        now: DateTime<Utc>,
+        assignments: &AssignmentConverger<'_, F>,
+    ) -> Result<ApplyOutcome, ApplyError> {
+        self.apply_report_inner(repo_id, report, now, Some(assignments))
+            .await
+    }
+
+    async fn apply_report_inner(
+        &self,
+        repo_id: &RepositoryId,
+        report: &ReconcileReport,
+        now: DateTime<Utc>,
+        assignments: Option<&AssignmentConverger<'_, F>>,
+    ) -> Result<ApplyOutcome, ApplyError> {
         if report.findings.len() != report.actions.len() {
             return Err(ApplyError::MalformedReport);
         }
         let mut outcome = ApplyOutcome::default();
         for (finding, action) in report.findings.iter().zip(report.actions.iter()) {
-            self.apply_action(repo_id, finding, action, now, &mut outcome)
+            self.apply_action(repo_id, finding, action, now, assignments, &mut outcome)
                 .await?;
         }
         Ok(outcome)
@@ -189,9 +233,17 @@ impl<'a, F: Forge + ?Sized, J: CommandJournal> Applier<'a, F, J> {
         finding: &ReconcileFinding,
         action: &RecoveryAction,
         now: DateTime<Utc>,
+        assignments: Option<&AssignmentConverger<'_, F>>,
         outcome: &mut ApplyOutcome,
     ) -> Result<(), ApplyError> {
         match action {
+            RecoveryAction::ConvergeAssignment { target, assignment } => {
+                let assignments = assignments.ok_or(ApplyError::AssignmentConvergerRequired)?;
+                let result = assignments.converge(repo_id, *target, assignment).await?;
+                if !matches!(result, AssignmentConvergenceOutcome::Stale) {
+                    outcome.applied.push(action.clone());
+                }
+            }
             RecoveryAction::RequeueLease { target } => {
                 self.leases.clear(repo_id, *target).await?;
                 outcome.applied.push(action.clone());

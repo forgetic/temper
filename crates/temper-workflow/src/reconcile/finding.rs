@@ -1,7 +1,7 @@
 use crate::classify::{ArtifactSource, ClassificationDiagnostic};
 use crate::ids::{StateDimensionId, StateId, TransitionId};
 use crate::journal::{CommandId, CommandState, JournalError};
-use crate::metadata::Lease;
+use crate::metadata::{DurableAssignment, Lease};
 use crate::plan::{Postcondition, WorkflowEffect};
 use std::error::Error;
 use std::fmt;
@@ -10,7 +10,15 @@ use temper_forge::ForgeError;
 /// A single problem reconciliation found in durable state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReconcileFinding {
-    /// An artifact's lease has expired and its holder is presumed gone.
+    /// An artifact's durable assignment and matching lease have expired.
+    ///
+    /// The complete assignment snapshot fences live recovery: application must
+    /// no-op when fresh state names a newer assignment or heartbeat.
+    ExpiredAssignment {
+        target: ArtifactSource,
+        assignment: Box<DurableAssignment>,
+    },
+    /// A legacy artifact lease without a durable assignment has expired.
     ExpiredLease {
         target: ArtifactSource,
         lease: Lease,
@@ -58,7 +66,12 @@ pub enum ReconcileFinding {
 /// What the policy decided to do about a [`ReconcileFinding`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryAction {
-    /// Clear the lease so the artifact returns to its queue.
+    /// Fully converge an expired durable assignment from fresh Forge state.
+    ConvergeAssignment {
+        target: ArtifactSource,
+        assignment: Box<DurableAssignment>,
+    },
+    /// Clear a legacy lease so the artifact returns to its queue.
     RequeueLease { target: ArtifactSource },
     /// Route the artifact to an owner or operator for human judgement.
     Escalate {
@@ -85,12 +98,14 @@ pub enum RecoveryAction {
     },
 }
 
-/// Policy hooks deciding the recovery action for each finding class.
+/// Policy hooks deciding recovery actions for configurable finding classes.
 ///
-/// Every method has a safe default (see [`DefaultRecoveryPolicy`]), so a custom
-/// policy overrides only the hooks it wants to change.
+/// Durable assignments always use [`RecoveryAction::ConvergeAssignment`]; a
+/// policy cannot downgrade them to legacy lease-only clearing. Every hook here
+/// has a safe default (see [`DefaultRecoveryPolicy`]), so a custom policy overrides only the hooks it wants to change.
 pub trait RecoveryPolicy {
-    /// Decides what to do with an expired lease. Default: requeue the artifact.
+    /// Decides what to do with an expired legacy lease that has no durable
+    /// assignment. Default: requeue the artifact.
     fn on_expired_lease(&self, target: ArtifactSource, _lease: &Lease) -> RecoveryAction {
         RecoveryAction::RequeueLease { target }
     }

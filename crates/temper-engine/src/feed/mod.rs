@@ -14,17 +14,15 @@ use self::targeted::TargetedEnrichment;
 use std::collections::BTreeSet;
 
 use serde_json::json;
-use temper_forge::{
-    Forge, ForgeError, PullRequestState, RepositoryId, RequestReviewers, UpdatePullRequest, UserId,
-};
+use temper_forge::{Forge, ForgeError, PullRequestState, RepositoryId};
 use temper_protocol_worker::{Artifact, JobContext};
 use temper_runner::{
     ScanError, TargetedArtifactSnapshot, WorkItem, pr_branch_hint, pr_correlation_key, scan_role,
     scan_role_wake,
 };
 use temper_workflow::{
-    ArtifactSource, CompiledWorkflow, Effect, RoleId, ValidatedWorkflow,
-    find_pull_request_by_correlation, parse_metadata_block, replace_metadata_block,
+    ArtifactSource, CompiledWorkflow, RoleId, ValidatedWorkflow, find_pull_request_by_correlation,
+    parse_metadata_block,
 };
 
 use crate::workflow_meta::implementation_pr_labels;
@@ -410,9 +408,8 @@ fn issue_metadata_target_branch(item: &WorkItem, artifact_body: &str) -> Option<
 }
 
 /// Recovers a worker-pushed PR head that became visible before its result was
-/// published. The declared assignment transition is committed atomically with
-/// `repaired_head` and assignment/lease removal, so the old repair action is
-/// never redispatched after restart.
+/// published. Durable assignment fencing and atomic transition publication are
+/// owned by the workflow layer so startup and live recovery use the same path.
 pub async fn recover_advanced_pull_request_assignment_from_durable<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
@@ -421,16 +418,11 @@ pub async fn recover_advanced_pull_request_assignment_from_durable<F: Forge + ?S
     kind: temper_workflow::ArtifactKindId,
     workflow: &ValidatedWorkflow,
 ) -> Result<bool, ScanError> {
-    let (Some(queue), Some(role)) = (assignment.queue.as_deref(), assignment.role.clone()) else {
-        return Ok(false);
-    };
-    let item = WorkItem {
-        queue: temper_workflow::QueueId::new(queue),
-        role,
-        target,
-        kind,
-    };
-    recover_advanced_pull_request_assignment(forge, repo, &item, workflow).await
+    temper_workflow::recover_advanced_pull_request_assignment_from_durable(
+        forge, repo, target, assignment, kind, workflow,
+    )
+    .await
+    .map_err(assignment_convergence_scan_error)
 }
 
 async fn recover_advanced_pull_request_assignment<F: Forge + ?Sized>(
@@ -442,176 +434,37 @@ async fn recover_advanced_pull_request_assignment<F: Forge + ?Sized>(
     let ArtifactSource::PullRequest { number } = item.target else {
         return Ok(false);
     };
-    let current_user = forge.current_user().await.ok().map(|user| user.id);
-    for _ in 0..3 {
-        let Some(pull_request) = forge.get_pull_request_by_number(repo, number).await? else {
-            return Ok(false);
-        };
-        if pull_request.state != PullRequestState::Open {
-            return Ok(false);
-        }
-        let Some(current_head) = pull_request
-            .head_sha
-            .as_deref()
-            .map(str::trim)
-            .filter(|head| !head.is_empty())
-        else {
-            return Ok(false);
-        };
-        let mut metadata = parse_metadata_block(&pull_request.body)
-            .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))?
-            .unwrap_or_default();
-        let Some(assignment) = metadata.assignment.as_ref() else {
-            return Ok(false);
-        };
-        let Some(assignment_head) = assignment
-            .assignment_pr_head
-            .as_deref()
-            .map(str::trim)
-            .filter(|head| !head.is_empty())
-        else {
-            return Ok(false);
-        };
-        if assignment_head == current_head {
-            return Ok(false);
-        }
-        if assignment.queue.as_deref() != Some(item.queue.as_str())
-            || assignment.role.as_ref() != Some(&item.role)
-        {
-            return Ok(false);
-        }
-        let Some(action) = assignment.action.as_deref() else {
-            return Ok(false);
-        };
-        let transition = workflow
-            .transitions()
-            .iter()
-            .find(|transition| transition.id.as_str() == action)
-            .ok_or_else(|| {
-                ScanError::InvalidWorkflow(format!(
-                    "durable PR repair assignment names unknown action `{action}`"
-                ))
-            })?;
-        if transition.artifact != item.kind
-            || !transition.roles.iter().any(|role| role == &item.role)
-        {
-            return Err(ScanError::InvalidWorkflow(format!(
-                "durable PR repair assignment is not authorized for action `{action}`"
-            )));
-        }
-
-        let mut add_labels = Vec::new();
-        let mut remove_labels = Vec::new();
-        let mut add_assignees = Vec::new();
-        let mut remove_assignees = Vec::new();
-        let mut reviewer_roles = Vec::new();
-        for effect in &transition.effects {
-            if !effect.supports_pull_request_repair_publication() {
-                return Err(ScanError::InvalidWorkflow(format!(
-                    "durable PR repair action `{action}` cannot be recovered atomically"
-                )));
-            }
-            match effect {
-                Effect::AddLabel(label) => push_unique_string(&mut add_labels, label.as_str()),
-                Effect::RemoveLabel(label) | Effect::RemoveLabelIfPresent(label) => {
-                    if label.as_str() != "landing" {
-                        push_unique_string(&mut remove_labels, label.as_str());
-                    }
-                }
-                Effect::SetAssignee(role) => push_unique_user(
-                    &mut add_assignees,
-                    assignment_role_user(role, &item.role, current_user.as_ref()),
-                ),
-                Effect::RemoveAssignee(role) => push_unique_user(
-                    &mut remove_assignees,
-                    assignment_role_user(role, &item.role, current_user.as_ref()),
-                ),
-                Effect::RequestReviewers { roles } => {
-                    for role in roles {
-                        if !reviewer_roles.contains(role) {
-                            reviewer_roles.push(role.clone());
-                        }
-                    }
-                }
-                _ => unreachable!("unsupported repair effect was rejected before recovery"),
-            }
-        }
-
-        metadata.assignment = None;
-        metadata.lease = None;
-        metadata.repaired_head = Some(current_head.to_string());
-        let body = replace_metadata_block(&pull_request.body, &metadata)
-            .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))?;
-        match forge
-            .update_pull_request(
-                &pull_request.id,
-                UpdatePullRequest {
-                    body: Some(body),
-                    add_labels,
-                    remove_labels,
-                    add_assignees,
-                    remove_assignees,
-                    expected_version: Some(pull_request.version),
-                    ..UpdatePullRequest::default()
-                },
-            )
-            .await
-        {
-            Ok(committed) => {
-                let reviewers = reviewer_roles
-                    .into_iter()
-                    .map(|role| UserId::new(role.as_str()))
-                    .filter(|reviewer| !committed.requested_reviewers.contains(reviewer))
-                    .collect::<Vec<_>>();
-                if !reviewers.is_empty() {
-                    if let Err(error) = forge
-                        .request_pull_request_reviewers(
-                            &committed.id,
-                            RequestReviewers { reviewers },
-                        )
-                        .await
-                    {
-                        tracing::warn!(
-                            pull_request = %committed.number,
-                            %error,
-                            "recovered PR repair transition but could not request reviewers"
-                        );
-                    }
-                }
-                return Ok(true);
-            }
-            Err(ForgeError::Conflict(_)) => continue,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Err(ScanError::Forge(ForgeError::Conflict(format!(
-        "pull request #{number} changed during repair recovery"
-    ))))
+    let Some(pull_request) = forge.get_pull_request_by_number(repo, number).await? else {
+        return Ok(false);
+    };
+    let assignment = parse_metadata_block(&pull_request.body)
+        .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))?
+        .and_then(|metadata| metadata.assignment);
+    let Some(assignment) = assignment else {
+        return Ok(false);
+    };
+    recover_advanced_pull_request_assignment_from_durable(
+        forge,
+        repo,
+        item.target,
+        &assignment,
+        item.kind.clone(),
+        workflow,
+    )
+    .await
 }
 
-fn assignment_role_user(
-    role: &RoleId,
-    assignment_role: &RoleId,
-    current_user: Option<&UserId>,
-) -> UserId {
-    if role == assignment_role {
-        current_user
-            .cloned()
-            .unwrap_or_else(|| UserId::new(role.as_str()))
-    } else {
-        UserId::new(role.as_str())
-    }
-}
-
-fn push_unique_string(values: &mut Vec<String>, value: &str) {
-    if !values.iter().any(|existing| existing == value) {
-        values.push(value.to_string());
-    }
-}
-
-fn push_unique_user(values: &mut Vec<UserId>, value: UserId) {
-    if !values.contains(&value) {
-        values.push(value);
+fn assignment_convergence_scan_error(
+    error: temper_workflow::AssignmentConvergenceError,
+) -> ScanError {
+    match error {
+        temper_workflow::AssignmentConvergenceError::Forge(error) => ScanError::Forge(error),
+        temper_workflow::AssignmentConvergenceError::Lease(error) => {
+            ScanError::InvalidWorkflow(error.to_string())
+        }
+        temper_workflow::AssignmentConvergenceError::InvalidContract(reason) => {
+            ScanError::InvalidWorkflow(reason)
+        }
     }
 }
 
