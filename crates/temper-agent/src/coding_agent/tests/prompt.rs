@@ -347,13 +347,13 @@ fn artifact_bundle_renders_only_explicit_members_in_each_section() {
     let primary = artifact_section(&rendered, "Primary artifact:", "Mandatory lineage:");
     assert_eq!(
         primary,
-        "- issue acme/service#7 — Validation plan [open] kind=plan labels=needs-validation, plan\n  Body:\nplan body"
+        "- issue acme/service#7 — Validation plan [open] labels=needs-validation, plan\n  Body:\nplan body\n  Workflow context:\n    kind: plan"
     );
 
     let lineage = artifact_section(&rendered, "Mandatory lineage:", "Validation summaries:");
     assert_eq!(
         lineage,
-        "- issue acme/service#1 — Feature root [open] kind=feature labels=feature\n  Body:\nfeature body\n- issue acme/service#3 — Design parent [open] kind=design labels=design\n  Body:\ndesign body"
+        "- issue acme/service#1 — Feature root [open] labels=feature\n  Body:\nfeature body\n  Workflow context:\n    kind: feature\n- issue acme/service#3 — Design parent [open] labels=design\n  Body:\ndesign body\n  Workflow context:\n    kind: design"
     );
 
     let validation = artifact_section(
