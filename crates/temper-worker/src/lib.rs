@@ -21,6 +21,7 @@ pub mod coding_executor;
 pub mod config;
 pub mod context_client;
 pub mod executor;
+mod lifecycle_hook;
 mod managed_effect;
 pub mod observability;
 pub mod out_of_process_runner;
@@ -54,6 +55,7 @@ pub use executor::{
     JobCancellationRequest, JobCleanup, JobExecutionContext, JobExecutor, JobOutcome, StubExecutor,
     job_result, job_result_for_attempt,
 };
+pub use lifecycle_hook::{WorkerLifecycleCheckpoint, WorkerLifecycleHook};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
 pub use out_of_process_runner::{JobQuiesced, OutOfProcessRunner};
 pub use pr_freshness::{
@@ -71,6 +73,7 @@ pub use result_outbox::{
 };
 pub use run::{
     WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
+    start_worker_with_transport_and_hook,
 };
 pub use temper_protocol_agent::{
     AGENT_LIFECYCLE_ADDRESS_FLAG, AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleAgentStatusV1,

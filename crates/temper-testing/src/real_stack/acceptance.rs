@@ -1,18 +1,74 @@
 //! Restart-acceptance fixture operations over the durable real-stack world.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
+
+use skein::runtime::RuntimeHandle;
 
 use temper_engine::{MechanicalBackstopConfig, MechanicalScope, run_mechanical_backstop_tick};
 use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus, Forge, ItemNumber,
 };
 use temper_runner::{Progress, RepositorySet, RepositoryTarget};
+use temper_worker::{WorkerLivenessLimits, start_worker_with_transport_and_hook};
 
 use super::git::{git_output_trim, path_str};
 use super::stack::HermeticRealStack;
 
 impl HermeticRealStack {
+    /// Starts the real worker loop once and retains explicit crash/join control.
+    pub fn start_worker(&mut self, handle: &RuntimeHandle) {
+        if self.components.worker.is_some() {
+            return;
+        }
+        let transport = self.transport();
+        self.components.worker = Some(start_worker_with_transport_and_hook(
+            handle.clone(),
+            self.worker_config.clone(),
+            self.components.executor.clone(),
+            transport,
+            Arc::new(self.hooks.clone()),
+        ));
+    }
+
+    /// Abruptly stops and joins the worker machine. Durable workspaces and its
+    /// stable worker identity remain in the world for [`start_worker`](Self::start_worker).
+    pub async fn crash_worker(&mut self) {
+        if let Some(worker) = self.components.worker.take() {
+            worker.crash().await;
+        }
+    }
+
+    /// Changes liveness limits used by the next worker incarnation. This is
+    /// useful when a Running-phase crash must happen before watchdog expiry but
+    /// its replacement attempt should time out immediately.
+    pub fn set_worker_liveness_limits(&mut self, limits: WorkerLivenessLimits) {
+        assert!(
+            self.components.worker.is_none(),
+            "liveness limits can change only while the worker is stopped"
+        );
+        self.worker_config.liveness_limits = limits;
+    }
+
+    /// Exact, attempt-keyed results observed at the worker publication boundary.
+    pub fn published_results(&self) -> Vec<temper_protocol_worker::JobResult> {
+        self.published_results
+            .lock()
+            .expect("published result lock")
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// Number of exact terminal payloads still awaiting durable compaction.
+    pub fn pending_result_count(&self) -> Result<usize, String> {
+        temper_worker::ResultOutbox::new(&self.worker_config.result_root)
+            .load()
+            .map(|entries| entries.len())
+            .map_err(|error| format!("load worker result outbox: {error}"))
+    }
+
     /// Runs one production mechanical reconciliation pass over the durable
     /// primary repository. Restart scenarios call this while the replacement
     /// daemon's dispatch barrier is still closed to model startup ordering.

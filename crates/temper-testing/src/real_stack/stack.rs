@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,6 @@ use temper_forge_model::{Forge, ItemNumber, PullRequest, PullRequestQuery, Repos
 use temper_protocol_worker::{JobResult, ResultStatus, WorkerAuth, WorkerProtocolMessage};
 use temper_worker::{
     CodingExecutor, CodingExecutorConfig, Transport, WorkerComponentHandle, WorkerConfig,
-    start_worker_with_transport,
 };
 use temper_workflow::InMemoryJournal;
 use temper_workflow::{
@@ -30,7 +29,7 @@ use super::pause::{PauseHooks, PausePoint};
 use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
 
 pub(crate) type PublishedResultKey = (String, Option<String>);
-pub(crate) type PublishedResults = Arc<Mutex<BTreeSet<PublishedResultKey>>>;
+pub(crate) type PublishedResults = Arc<Mutex<BTreeMap<PublishedResultKey, JobResult>>>;
 
 /// Built hermetic stack. Durable state and replaceable process handles are
 /// intentionally different values so tests cannot accidentally rebuild the
@@ -176,28 +175,6 @@ impl HermeticRealStack {
     /// Real daemon handle used by the current fixture component.
     pub fn daemon(&self) -> &Daemon {
         self.components.daemon.as_ref()
-    }
-
-    /// Starts the real worker loop once and retains explicit crash/join control.
-    pub fn start_worker(&mut self, handle: &RuntimeHandle) {
-        if self.components.worker.is_some() {
-            return;
-        }
-        let transport = self.transport();
-        self.components.worker = Some(start_worker_with_transport(
-            handle.clone(),
-            self.worker_config.clone(),
-            self.components.executor.clone(),
-            transport,
-        ));
-    }
-
-    /// Abruptly stops and joins the worker machine. Durable workspaces and its
-    /// stable worker identity remain in the world for [`start_worker`](Self::start_worker).
-    pub async fn crash_worker(&mut self) {
-        if let Some(worker) = self.components.worker.take() {
-            worker.crash().await;
-        }
     }
 
     /// Abruptly stops the daemon and installs a fresh daemon over the same
@@ -523,7 +500,7 @@ impl HermeticRealStack {
             .ok_or_else(|| format!("unknown seeded repository `{repo}`"))
     }
 
-    fn transport(&self) -> Arc<ResultTappingTransport> {
+    pub(super) fn transport(&self) -> Arc<ResultTappingTransport> {
         Arc::new(ResultTappingTransport {
             router: self.router.clone(),
             result_tx: self.result_tx.clone(),
@@ -599,10 +576,22 @@ impl Transport for ResultTappingTransport {
                 _ => None,
             };
             let first_publication = recorded.as_ref().is_some_and(|result| {
-                published_results
-                    .lock()
-                    .expect("published result lock")
-                    .insert((result.job_id.clone(), result.attempt_id.clone()))
+                let key = (result.job_id.clone(), result.attempt_id.clone());
+                let mut published = published_results.lock().expect("published result lock");
+                match published.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(result.clone());
+                        true
+                    }
+                    std::collections::btree_map::Entry::Occupied(slot) => {
+                        assert_eq!(
+                            slot.get(),
+                            result,
+                            "one assignment attempt published conflicting terminal payloads"
+                        );
+                        false
+                    }
+                }
             });
             if first_publication {
                 // A first publication follows the coding executor's commit and

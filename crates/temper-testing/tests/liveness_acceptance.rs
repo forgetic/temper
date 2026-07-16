@@ -26,7 +26,6 @@ const WORKER_CANCELLATION_PROJECTION: &str =
     include_str!("../../temper-worker/src/worker_machine_cancellation_projection_tests.rs");
 const OUT_OF_PROCESS: &str =
     include_str!("../../temper-worker/src/out_of_process_runner_supervisor_tests.rs");
-const RESULT_OUTBOX: &str = include_str!("../../temper-worker/src/result_outbox.rs");
 const STREAMING: &str = include_str!("../../temper-agent-core/src/shell/streaming_tests.rs");
 const TOOL_EXECUTOR: &str = include_str!("../../temper-agent-core/src/shell/executor_tests.rs");
 const TOOL_BATCHING: &str = include_str!("../../temper-agent-core/src/machine/tests/batching.rs");
@@ -39,8 +38,7 @@ const ENGINE_DELIVERY: &str = include_str!("../../temper-engine/tests/apply/resu
 const FORGE_FAILURE: &str = include_str!("../../temper-engine/tests/forge_apply/failure.rs");
 const ASSIGNMENT_CONVERGENCE: &str =
     include_str!("../../temper-runner/tests/assignment_convergence.rs");
-const RESTART_ACCEPTANCE: &str = include_str!("hermetic_real_stack/restart_acceptance.rs");
-const RESTART_RECOVERY: &str = include_str!("hermetic_real_stack/restart_recovery.rs");
+const RESTART_CANCELLATION: &str = include_str!("hermetic_real_stack/restart_cancellation.rs");
 const CONFIG_DEADLINES: &str = include_str!("../../temper-config/src/tests/deadlines.rs");
 const CONFIG_SHOW: &str = include_str!("../../../tests/config_show_cli.rs");
 const PROTOCOL_LIFECYCLE: &str =
@@ -234,24 +232,34 @@ const MATRIX: &[Criterion] = &[
         ],
         evidence: &[
             Evidence {
-                crate_path: "temper-testing::hermetic_real_stack::restart_acceptance",
-                source: RESTART_ACCEPTANCE,
-                test: "dirty_workspace_replays_after_target_advance_and_component_replacement",
+                crate_path: "temper-testing::hermetic_real_stack::restart_cancellation",
+                source: RESTART_CANCELLATION,
+                test: "restart_at_running_reuses_dirty_workspace_and_session_once",
             },
             Evidence {
-                crate_path: "temper-testing::hermetic_real_stack::restart_acceptance",
-                source: RESTART_ACCEPTANCE,
-                test: "matching_worker_heartbeat_reattaches_exact_durable_job_once",
+                crate_path: "temper-testing::hermetic_real_stack::restart_cancellation",
+                source: RESTART_CANCELLATION,
+                test: "restart_at_cancel_requested_reuses_dirty_workspace_and_session_once",
             },
             Evidence {
-                crate_path: "temper-testing::hermetic_real_stack::restart_recovery",
-                source: RESTART_RECOVERY,
-                test: "daemon_loss_after_child_create_replays_wiring_and_activation_once",
+                crate_path: "temper-testing::hermetic_real_stack::restart_cancellation",
+                source: RESTART_CANCELLATION,
+                test: "restart_at_quiesced_reuses_dirty_workspace_and_session_once",
             },
             Evidence {
-                crate_path: "temper-worker::result_outbox",
-                source: RESULT_OUTBOX,
-                test: "record_is_restart_readable_private_and_compacts_idempotently",
+                crate_path: "temper-testing::hermetic_real_stack::restart_cancellation",
+                source: RESTART_CANCELLATION,
+                test: "restart_at_result_recorded_replays_one_retryable_result",
+            },
+            Evidence {
+                crate_path: "temper-testing::hermetic_real_stack::restart_cancellation",
+                source: RESTART_CANCELLATION,
+                test: "restart_with_uncertain_delivery_converges_idempotently",
+            },
+            Evidence {
+                crate_path: "temper-testing::hermetic_real_stack::restart_cancellation",
+                source: RESTART_CANCELLATION,
+                test: "restart_post_ack_pre_compaction_replays_and_compacts_once",
             },
         ],
     },

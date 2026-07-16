@@ -16,6 +16,18 @@ pub enum PausePoint {
     /// The daemon has accepted a heartbeat naming at least one in-flight job.
     WorkerHeartbeatCompleted,
     WorkerPushCompleted,
+    /// WorkerMachine has selected timeout cancellation, before the attempt is notified.
+    WorkerCancelRequested,
+    /// Attempt resources have joined, before the retryable result is recorded.
+    WorkerQuiesced,
+    /// The retryable result is durable, before transport delivery.
+    WorkerResultRecorded,
+    /// Daemon delivery resolved, before the worker observes its acknowledgement.
+    WorkerResultDeliveryResolved,
+    /// A matching acknowledgement arrived, before durable outbox compaction.
+    WorkerResultAcknowledged,
+    /// A durable terminal record released the local permit.
+    WorkerCapacityReleased,
     ResultApplicationStarted,
     ResultApplicationCompleted,
     ChildCreated,
@@ -36,6 +48,7 @@ struct ArmedPause {
 #[derive(Clone, Default)]
 pub struct PauseHooks {
     armed: Arc<Mutex<BTreeMap<PausePoint, ArmedPause>>>,
+    reached: Arc<Mutex<BTreeMap<PausePoint, usize>>>,
 }
 
 impl PauseHooks {
@@ -59,11 +72,27 @@ impl PauseHooks {
 
     /// Announces a point and blocks only when that point was armed.
     pub async fn reach(&self, point: PausePoint) {
+        *self
+            .reached
+            .lock()
+            .expect("pause hook count lock")
+            .entry(point)
+            .or_default() += 1;
         let armed = self.armed.lock().expect("pause hook lock").remove(&point);
         if let Some(armed) = armed {
             armed.arrived.send(());
             let _ = armed.release.recv().await;
         }
+    }
+
+    /// Number of times a component announced this point, whether armed or not.
+    pub fn reached_count(&self, point: PausePoint) -> usize {
+        self.reached
+            .lock()
+            .expect("pause hook count lock")
+            .get(&point)
+            .copied()
+            .unwrap_or_default()
     }
 }
 
@@ -78,6 +107,33 @@ impl ChildIssueLifecycleHook for PauseHooks {
             ChildIssueCheckpoint::Completed => PausePoint::ChildCreationCompleted,
         };
         self.reach(point).await;
+    }
+}
+
+impl temper_worker::WorkerLifecycleHook for PauseHooks {
+    fn reached(
+        &self,
+        checkpoint: temper_worker::WorkerLifecycleCheckpoint,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let point = match checkpoint {
+            temper_worker::WorkerLifecycleCheckpoint::CancelRequested => {
+                PausePoint::WorkerCancelRequested
+            }
+            temper_worker::WorkerLifecycleCheckpoint::Quiesced => PausePoint::WorkerQuiesced,
+            temper_worker::WorkerLifecycleCheckpoint::ResultRecorded => {
+                PausePoint::WorkerResultRecorded
+            }
+            temper_worker::WorkerLifecycleCheckpoint::ResultDeliveryResolved => {
+                PausePoint::WorkerResultDeliveryResolved
+            }
+            temper_worker::WorkerLifecycleCheckpoint::ResultAcknowledged => {
+                PausePoint::WorkerResultAcknowledged
+            }
+            temper_worker::WorkerLifecycleCheckpoint::CapacityReleased => {
+                PausePoint::WorkerCapacityReleased
+            }
+        };
+        Box::pin(async move { self.reach(point).await })
     }
 }
 
