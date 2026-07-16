@@ -96,7 +96,7 @@ fn exact_boundary_progress_wins_and_stale_no_progress_timers_are_ignored() {
             name: "forge_list_related".to_string(),
         },
     );
-    machine.on_completion(
+    let progress_requests = machine.on_completion(
         EngineTime::from_nanos(10),
         WorkerCompletion::JobProgress {
             job_id: "job-boundary".to_string(),
@@ -105,6 +105,14 @@ fn exact_boundary_progress_wins_and_stale_no_progress_timers_are_ignored() {
             progress,
         },
     );
+    assert!(progress_requests.iter().any(|request| matches!(
+        request,
+        WorkerRequest::Observe(crate::observability::WorkerEvent::JobProgress {
+            active_parallel_operation_count: 1,
+            operation: Some(operation),
+            ..
+        }) if operation.name == "forge_list_related"
+    )));
     let state = machine.job_state("job-boundary").unwrap();
     assert_eq!(state.last_agent_progress, EngineTime::from_nanos(10));
     assert_eq!(state.timer_generation, initial_timer_generation + 1);
@@ -176,10 +184,25 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
         }
         _ => None,
     });
-    assert!(finishing.unwrap().jobs.iter().any(|job| {
+    let finishing = finishing.unwrap();
+    assert!(finishing.jobs.iter().any(|job| {
         job.job_id == "job-timeout"
             && job.state == temper_protocol_worker::HeartbeatState::Finishing
     }));
+    let report = finishing
+        .jobs
+        .iter()
+        .find(|job| job.job_id == "job-timeout")
+        .and_then(|job| job.liveness.as_ref())
+        .expect("structured timeout liveness");
+    assert_eq!(
+        report.phase,
+        temper_protocol_worker::JobHeartbeatPhase::CancelRequested
+    );
+    assert_eq!(
+        report.timeout.as_ref().unwrap().reason,
+        temper_protocol_worker::JobTimeoutReason::NoProgress
+    );
 
     // Re-delivery of the winning timer cannot request cancellation twice.
     let duplicate = machine.on_completion(
@@ -225,6 +248,15 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
         },
     );
     assert_eq!(machine.free_capacity(), 0, "recording precedes release");
+    assert!(record.iter().any(|request| matches!(
+        request,
+        WorkerRequest::Observe(crate::observability::WorkerEvent::CancellationCompleted {
+            outcome,
+            forced: true,
+            descendant_cleanup,
+            ..
+        }) if outcome == "forced" && descendant_cleanup == "joined"
+    )));
     let result = record
         .iter()
         .find_map(|request| match request {
@@ -463,4 +495,50 @@ fn max_run_is_independent_of_progress_and_releasing_one_of_many_preserves_member
         .unwrap();
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].job_id, "job-b");
+}
+
+#[test]
+fn heartbeat_reports_full_parallel_count_with_bounded_operation_summaries() {
+    let mut machine = WorkerMachine::new(params());
+    dispatch_at(&mut machine, "job-parallel", EngineTime::ZERO);
+    let generation = machine.job_state("job-parallel").unwrap().generation;
+    for sequence in 1..=10 {
+        machine.on_completion(
+            EngineTime::from_nanos(sequence),
+            WorkerCompletion::JobProgress {
+                job_id: "job-parallel".to_string(),
+                attempt_id: "attempt-job-parallel".to_string(),
+                generation,
+                progress: lifecycle_progress(
+                    "attempt-job-parallel",
+                    EngineTime::from_nanos(sequence),
+                    sequence,
+                    AgentLifecycleEventV1::ToolStarted {
+                        call_id: format!("tool-{sequence}"),
+                        name: "read".to_string(),
+                    },
+                ),
+            },
+        );
+    }
+
+    let requests =
+        machine.on_completion(EngineTime::from_nanos(11), WorkerCompletion::HeartbeatTimer);
+    let report = requests
+        .iter()
+        .find_map(|request| match request {
+            WorkerRequest::SendHeartbeat(WorkerProtocolMessage::Heartbeat(heartbeat)) => {
+                heartbeat.jobs[0].liveness.as_ref()
+            }
+            _ => None,
+        })
+        .expect("structured liveness");
+    assert_eq!(report.active_operation_count, 10);
+    assert_eq!(
+        report.active_operations.len(),
+        temper_protocol_worker::MAX_ACTIVE_OPERATION_SUMMARIES
+    );
+    let encoded = serde_json::to_string(report).unwrap();
+    assert!(!encoded.contains("arguments"));
+    assert!(!encoded.contains("result_body"));
 }

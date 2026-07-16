@@ -156,6 +156,40 @@ creates one stable quarantine manifest with recovery refs and commands. PR
 repair similarly converges monotonically: `repaired_head` rejects stale CI and
 suppresses repeated repair until current-head CI succeeds.
 
+## Worker liveness, result durability, and live claim convergence
+
+The worker permit owner, not lease renewal, is the authority for agent
+progress. Every accepted lifecycle boundary advances a generation-tagged
+monotonic deadline. Equality at the deadline rearms for the minimum tick so a
+progress/completion stamped exactly at the limit wins; stale timer generations
+cannot cancel newer work. On a no-progress or maximum-run timeout the attempt
+moves once through `CancelRequested -> Quiesced -> ResultRecorded`, and an
+attempt fence blocks late result-file acceptance, validation, push, or duplicate
+publication.
+
+Capacity is released only after the transient timeout result is durably recorded
+in the restart-readable outbox. Delivery and exact release acknowledgement then
+replay independently, so a daemon/Forge outage does not retain the local permit.
+Expired durable assignments are converged from fresh Forge state by the shared
+startup/live `AssignmentConverger`; a newer claim is a stale no-op and an outage
+leaves the exact assignment available for a later pass. Structured
+`worker.result.delivery` and `assignment.convergence` events distinguish pending,
+converged, stale, quarantined, and unreconciled outcomes.
+
+The daemon heartbeat/state report is intentionally not part of this proof. It
+stores only the latest exact-attempt observation for operators. The authoritative
+inputs remain worker monotonic time, the attempt fence/outbox, and durable Forge
+assignment/lease metadata.
+
+Deterministic machine tests cover exact-boundary progress, stale timers,
+completion-versus-timeout, one durable record, one capacity release, heartbeat
+membership, and capacity greater than one
+(`temper-worker::worker_machine_watchdog_tests`). Unix supervisor tests prove
+that graceful and forced cancellation join owned resources and synthesize a
+terminal `run.finished(status=cancelled)` record. Live convergence tests cover
+Forge outage, retry, idempotence, and newer-claim fencing
+(`temper-runner/tests/assignment_convergence.rs`).
+
 ## Limitations discovered by the tests
 
 These are real gaps the robustness tests exposed; they are documented here

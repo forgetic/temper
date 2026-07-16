@@ -188,6 +188,35 @@ DEBUG temper::engine  {artifact.ref=acme/widgets#42} lease renew ttl=10m (held 4
 Filtering is `RUST_LOG` (existing `EnvFilter`): `RUST_LOG=info` (default),
 `RUST_LOG=temper::worker=debug,info` (one subsystem), `RUST_LOG=temper=trace`.
 
+### Job liveness and convergence events
+
+The worker watchdog and durable-result path expose the following content-free
+catalog. These events always carry `worker_id`, `job_id`, and `attempt_id` when
+an attempt exists. Numeric elapsed/limit fields remain milliseconds.
+
+| Event | Level | Additional fields |
+| --- | --- | --- |
+| `worker.job.progress` | debug | `phase`, current `operation_kind`/`operation_name`/`operation_id`, `operation_elapsed_ms`, `run_elapsed_ms`, `last_progress_elapsed_ms`, `no_progress_elapsed_ms`, `active_parallel_operation_count` |
+| `worker.job.timeout` | warn | progress fields plus `timeout_reason`, `timeout_limit_ms` |
+| `worker.job.cancellation_requested` | warn | timeout reason/limit |
+| `worker.job.cancellation_completed` | warn | `cancellation_outcome`, `forced`, `descendant_cleanup` |
+| `worker.result.recorded` | debug on success, error on failure | `outbox_state`, `delivery_state` |
+| `worker.result.delivery` | debug on acknowledgement, warn on retry/stale/rejection | outbox/delivery state and `claim_convergence` |
+| `worker.capacity.released` | debug | `permit_released`, `free_capacity` |
+| `assignment.convergence` | debug on converged/stale, warn on quarantine/unreconciled | repository/artifact identity, attempt identity, `convergence_result`, `claim_converged`, safe `error_kind` |
+
+Progress events contain operation identity only. Tool arguments, result bodies,
+prompt/model content, credentials, child stderr, and backend error text are not
+fields in this catalog. `active_parallel_operation_count` is the full count;
+wire/state reports include at most eight operation summaries. Timeout and
+cancellation warnings are operator-visible at the default production filter,
+while ordinary lifecycle volume requires worker debug logging.
+
+The heartbeat/state projection is a compatible snapshot of the same worker
+state, not an alternate watchdog. The daemon stores one latest report per exact
+assignment and does not infer progress, renew leases, or reclaim claims from the
+reported elapsed values.
+
 ### Wake, apply, and Forge operation measurements
 
 Wake scheduling is operational debug data, not an extension of the stable

@@ -29,6 +29,7 @@ struct RunResources {
     process: Option<ManagedAgentProcess>,
     lifecycle: Option<lifecycle::LifecycleEndpoint>,
     activity: Option<ActivityEndpoint>,
+    trace: Option<TraceRun>,
     submit: Option<LocalServer>,
     forge: Option<LocalServer>,
     limits: WorkerLivenessLimits,
@@ -51,6 +52,24 @@ impl RunResources {
         self.finished = true;
         emit_quiesced(&self.job_id, &result.quiesced, false);
         result
+    }
+
+    fn finish_cancelled_activity(&self) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        match trace.finish_cancelled() {
+            Ok(_) | Err(crate::trace::TraceError::AlreadyTerminal) => {}
+            Err(error) => tracing::warn!(
+                target: "temper::worker",
+                service = "worker",
+                event = "agent.activity.terminal_failed",
+                run_id = trace.run_id(),
+                job_id = self.job_id,
+                %error,
+                "worker could not persist synthetic cancelled terminal activity"
+            ),
+        }
     }
 
     fn stop_endpoints(&mut self) {
@@ -103,6 +122,7 @@ impl Drop for RunResources {
             );
         self.process.take();
         self.stop_endpoints();
+        self.finish_cancelled_activity();
         // Clear again after joining accepted handlers. A submit gate that was
         // already running when the fence closed cannot leave proof behind.
         self.accepted_submit.clear();
@@ -241,6 +261,7 @@ impl OutOfProcessRunner {
             process: Some(process),
             lifecycle: lifecycle_endpoint,
             activity: activity_endpoint,
+            trace: trace.cloned(),
             submit: submit_server,
             forge: forge_server,
             limits: self.liveness_limits,

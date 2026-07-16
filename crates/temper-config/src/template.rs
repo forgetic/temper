@@ -69,7 +69,8 @@ lease_ttl_secs = 300
 # Defaults to the cross-product of engine.repos x engine.roles.
 # capabilities = [\"acme/widgets:engineer\"]
 # Agent progress must arrive within this interval. Heartbeats do not count as
-# progress and must remain strictly more frequent than this deadline.
+# progress and must remain strictly more frequent than this deadline. Inspect
+# effective values with `temper config show`; inspect live reports at /v1/state.
 max_no_progress_secs = 900
 # max_run_secs = 7200       # optional independent whole-run ceiling
 # Cooperative cancellation is followed by bounded forced process termination.

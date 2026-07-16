@@ -2,7 +2,8 @@
 
 use chrono::{DateTime, Duration, Utc};
 use std::future::Future;
-use std::sync::Arc;
+use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use temper_forge::{
     CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UpdateIssue, UserId,
@@ -13,6 +14,46 @@ use temper_workflow::{
     ArtifactKindId, ArtifactSnapshot, DurableAssignment, InMemoryJournal, Lease, LeasePolicy,
     RawWorkflowSpec, RoleId, WorkflowMetadata, parse_metadata_block, render_metadata_block,
 };
+use tracing_subscriber::fmt::MakeWriter;
+
+#[derive(Clone, Default)]
+struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for SharedBuffer {
+    type Writer = SharedBuffer;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+fn capture_logs<T>(run: impl FnOnce() -> T) -> (T, Vec<serde_json::Value>) {
+    let buffer = SharedBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(buffer.clone())
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    let outcome = tracing::subscriber::with_default(subscriber, run);
+    let bytes = buffer.0.lock().unwrap().clone();
+    let events = String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    (outcome, events)
+}
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
@@ -203,7 +244,16 @@ fn live_reconciliation_retries_release_after_forge_outage() {
     let worker = worker(&forge, &repo, &workflow, &journal);
 
     forge.fail_next(FaultOp::UpdateIssue, "Forge unavailable during release");
-    assert!(block_on(worker.tick(ts("2026-05-29T00:20:00Z"))).is_err());
+    let (failed, events) = capture_logs(|| block_on(worker.tick(ts("2026-05-29T00:20:00Z"))));
+    assert!(failed.is_err());
+    let convergence = events
+        .iter()
+        .find(|event| event["fields"]["event"] == "assignment.convergence")
+        .expect("unreconciled convergence warning");
+    assert_eq!(convergence["level"], "WARN");
+    assert_eq!(convergence["fields"]["convergence_result"], "unreconciled");
+    assert_eq!(convergence["fields"]["claim_converged"], false);
+    assert_eq!(convergence["fields"]["job_id"], "job-outage");
     let claimed = parse_metadata_block(&issue_body(&forge, &repo, issue.number))
         .unwrap()
         .unwrap();

@@ -7,7 +7,26 @@
       "job_id": "job-123",
       "attempt_id": "attempt-01JEXAMPLE",
       "state": "running",
-      "message": "coding"
+      "message": "running",
+      "liveness": {
+        "phase": "running",
+        "run_elapsed_ms": 42000,
+        "no_progress_elapsed_ms": 1200,
+        "active_operation_count": 1,
+        "active_operations": [
+          {
+            "scope": "main",
+            "kind": "tool",
+            "name": "forge_list_related",
+            "operation_id": "call-4",
+            "elapsed_ms": 1200
+          }
+        ],
+        "cancellation": "not_requested",
+        "result_durability": "none",
+        "result_delivery": "not_ready",
+        "pending_result": false
+      }
     }
   ],
   "free_capacity": 0,

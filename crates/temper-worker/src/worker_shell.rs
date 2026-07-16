@@ -416,6 +416,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     WorkerCompletion::HeartbeatTimer
                 });
             }
+            WorkerRequest::Observe(event) => event.emit(),
             WorkerRequest::Warn(line) => {
                 tracing::warn!(target: "temper_worker", "{line}");
             }

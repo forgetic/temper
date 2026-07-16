@@ -11,7 +11,10 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-use temper_protocol_worker::{Artifact, Capability, Capacity, Register, WORKER_PROTOCOL_VERSION};
+use temper_protocol_worker::{
+    Artifact, Capability, Capacity, Heartbeat, Poll, Register, WORKER_PROTOCOL_VERSION,
+    WorkerProtocolMessage,
+};
 use temper_worker_registry::DaemonCore;
 
 use super::{ArtifactDto, DaemonStateSnapshot, JobDto};
@@ -247,6 +250,112 @@ fn unlimited_role_exhaustion_does_not_appear_as_role_saturation() {
 
     let value = DaemonStateSnapshot::from_core(&core).to_json();
     assert_eq!(value["role_saturation"], json!([]));
+}
+
+#[test]
+fn latest_structured_worker_report_is_visible_on_worker_and_job_views() {
+    let mut core = DaemonCore::new();
+    core.coordinator_mut()
+        .register(&register("worker-live", "code", "acme/widgets"));
+    core.enqueue_job("job-live", "code", "acme/widgets", issue(51), json!({}));
+    let assign = match core.handle(WorkerProtocolMessage::Poll(Poll {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: "worker-live".to_string(),
+        free_capacity: 1,
+        max_wait_ms: None,
+    })) {
+        Some(WorkerProtocolMessage::Assign(assign)) => assign,
+        other => panic!("expected assignment, got {other:?}"),
+    };
+    let heartbeat: Heartbeat = serde_json::from_value(json!({
+        "protocol_version": WORKER_PROTOCOL_VERSION,
+        "worker_id": "worker-live",
+        "jobs": [{
+            "job_id": "job-live",
+            "attempt_id": assign.attempt_id.clone(),
+            "state": "running",
+            "message": "running",
+            "liveness": {
+                "phase": "running",
+                "run_elapsed_ms": 42_000,
+                "no_progress_elapsed_ms": 1_200,
+                "active_operation_count": 1,
+                "active_operations": [{
+                    "scope": "main",
+                    "kind": "tool",
+                    "name": "forge_list_related",
+                    "operation_id": "call-4",
+                    "elapsed_ms": 1_200
+                }],
+                "cancellation": "not_requested",
+                "result_durability": "none",
+                "result_delivery": "not_ready",
+                "pending_result": false
+            }
+        }]
+    }))
+    .unwrap();
+    assert!(
+        core.handle(WorkerProtocolMessage::Heartbeat(heartbeat))
+            .is_none()
+    );
+    let replacement: Heartbeat = serde_json::from_value(json!({
+        "protocol_version": WORKER_PROTOCOL_VERSION,
+        "worker_id": "worker-live",
+        "jobs": [{
+            "job_id": "job-live",
+            "attempt_id": assign.attempt_id.clone(),
+            "state": "running",
+            "message": "running",
+            "liveness": {
+                "phase": "running",
+                "run_elapsed_ms": 43_000,
+                "no_progress_elapsed_ms": 0,
+                "active_operation_count": 0,
+                "cancellation": "not_requested",
+                "result_durability": "none",
+                "result_delivery": "not_ready",
+                "pending_result": false
+            }
+        }]
+    }))
+    .unwrap();
+    assert!(
+        core.handle(WorkerProtocolMessage::Heartbeat(replacement))
+            .is_none()
+    );
+
+    let value = DaemonStateSnapshot::from_core(&core).to_json();
+    assert_eq!(
+        value["workers"]["registered"][0]["jobs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        value["workers"]["registered"][0]["jobs"][0]["liveness"]["run_elapsed_ms"],
+        43_000
+    );
+    assert_eq!(
+        value["workers"]["registered"][0]["jobs"][0]["job_id"],
+        "job-live"
+    );
+    assert_eq!(
+        value["in_flight"][0]["worker_report"]["liveness"]["active_operation_count"],
+        0
+    );
+    assert_eq!(
+        value["in_flight"][0]["attempt_id"],
+        assign.attempt_id.unwrap()
+    );
+    let encoded = serde_json::to_string(&value).unwrap();
+    for forbidden in ["arguments", "result_body", "credentials", "prompt"] {
+        assert!(
+            !encoded.contains(forbidden),
+            "state projection leaked {forbidden}"
+        );
+    }
 }
 
 #[test]

@@ -277,12 +277,34 @@ stalls and reclaim leases.
 | `jobs[].job_id` | string | yes | Assigned job id. |
 | `jobs[].attempt_id` | string | yes | Exact attempt fence from the assignment. Omission is tolerated only for legacy recovered metadata. |
 | `jobs[].state` | string | yes | Job state: `running`, `waiting`, or `finishing`. |
-| `jobs[].message` | string | yes | Short human-readable progress text. |
+| `jobs[].message` | string | yes | Short human-readable phase text; consumers should prefer `liveness` when present. |
+| `jobs[].liveness` | object | no | Additive worker-owned structured report. Omitted by legacy/third-party workers. |
+| `jobs[].liveness.phase` | string | yes when `liveness` is present | `running`, `cancel_requested`, `quiesced`, or `result_recorded`. |
+| `jobs[].liveness.run_elapsed_ms` | integer | yes when `liveness` is present | Monotonic elapsed time since this attempt acquired its local permit. |
+| `jobs[].liveness.no_progress_elapsed_ms` | integer | yes when `liveness` is present | Monotonic elapsed time since the last accepted agent lifecycle boundary. Lease heartbeats do not reset it. |
+| `jobs[].liveness.active_operation_count` | integer | yes when `liveness` is present | Full number of parallel model/tool operations. |
+| `jobs[].liveness.active_operations` | array | no | At most eight content-free summaries (`scope`, `kind`, `name`, `operation_id`, `elapsed_ms`). The count may exceed the array length. |
+| `jobs[].liveness.timeout` | object | no | Winning timeout `reason` (`no_progress` or `max_run`) and configured `limit_ms`. |
+| `jobs[].liveness.cancellation` | string | yes when `liveness` is present | `not_requested`, `requested`, `escalated`, or `quiesced`. |
+| `jobs[].liveness.result_durability` | string | yes when `liveness` is present | `none`, `pending`, or `durable`. |
+| `jobs[].liveness.result_delivery` | string | yes when `liveness` is present | `not_ready` or `pending`; delivery continues independently after permit release. |
+| `jobs[].liveness.pending_result` | boolean | yes when `liveness` is present | Whether a terminal result is waiting for durable recording or delivery. |
 | `free_capacity` | integer | no | Current free capacity; must be at least `0` when present. |
 
 Heartbeat interval and missed-heartbeat threshold are deployment-configured
 daemon policy, not fixed wire constants. If a worker misses the threshold, the
 daemon may mark the worker unhealthy, reclaim leases, and reassign eligible work.
+The structured report is observability only: the worker watchdog remains the
+no-progress authority and durable Forge assignment metadata remains claim
+authority. The daemon registry retains only the latest accepted report for each
+exact `(worker_id, job_id, attempt_id)` and never renews a lease from its elapsed
+values.
+
+The operator `GET /v1/state` and `GET /v1/state/job/{job_id}` projections expose
+the report additively. Registered workers have a `jobs` array of latest reports;
+in-flight jobs include `attempt_id` and optional `worker_report`. An absent
+report means unknown/legacy, not healthy or idle. Tool arguments, result bodies,
+prompts, credentials, and model content cannot appear in these DTOs.
 
 ### `result` — worker → daemon
 

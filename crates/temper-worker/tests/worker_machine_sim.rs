@@ -370,7 +370,7 @@ impl Sim {
                 WorkerRequest::CancelJob { .. } | WorkerRequest::EscalateJob { .. } => {
                     emitted_progress = true;
                 }
-                WorkerRequest::Warn(_) | WorkerRequest::Log(_) => {}
+                WorkerRequest::Observe(_) | WorkerRequest::Warn(_) | WorkerRequest::Log(_) => {}
             }
         }
 

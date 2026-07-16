@@ -6,12 +6,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
+use temper_protocol_activity::{
+    AgentActivityCapturePolicyV1, AgentActivityEventV1, RunFinishedV1, RunStatusV1,
+};
 use temper_protocol_agent::{AgentRuntimeLimitsV1, SubmitForPrResponse};
 
 use super::supervisor::{CancellationOutcome, DescendantCleanupStatus, ManagedAgentProcess};
 use super::{DiagnosticIdentity, OutOfProcessRunner, tests::test_context};
 use crate::agent_runner::{AgentForgeContextHost, AgentRunner};
-use crate::config::WorkerLivenessLimits;
+use crate::config::{WorkerAgentTraceConfig, WorkerLivenessLimits};
+use crate::trace::TraceCollector;
 
 fn executable_script(directory: &Path, name: &str, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
@@ -314,6 +318,10 @@ stream.shutdown(socket.SHUT_WR)
 PY
 "#,
     );
+    let trace_config = WorkerAgentTraceConfig {
+        policy: AgentActivityCapturePolicyV1::default(),
+        spool_root: Some(temp.path().join("graceful-cancel-spool")),
+    };
     let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
         .with_env(vec![
             ("TEMPER_READY".to_string(), ready.display().to_string()),
@@ -323,6 +331,7 @@ PY
             ),
         ])
         .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()))
+        .with_trace_collector(trace_config.clone())
         .with_liveness_limits(WorkerLivenessLimits {
             graceful_cancellation_grace: Duration::from_millis(500),
             forced_termination_grace: Duration::from_millis(50),
@@ -342,6 +351,40 @@ PY
     drop(future);
     assert!(cancelled.exists(), "child did not receive lifecycle Cancel");
     assert!(started.elapsed() < Duration::from_millis(500));
+    assert_cancelled_terminal(&trace_config);
+}
+
+#[test]
+#[cfg(unix)]
+fn forced_termination_writes_synthetic_cancelled_terminal_activity() {
+    let temp = tempfile::tempdir().unwrap();
+    let ready = temp.path().join("forced-ready");
+    let script = executable_script(
+        temp.path(),
+        "forced-cancel.sh",
+        &format!(
+            "trap '' TERM\n: > '{}'\nwhile :; do sleep 1; done",
+            ready.display()
+        ),
+    );
+    let trace_config = WorkerAgentTraceConfig {
+        policy: AgentActivityCapturePolicyV1::default(),
+        spool_root: Some(temp.path().join("forced-cancel-spool")),
+    };
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_trace_collector(trace_config.clone())
+        .with_liveness_limits(short_limits());
+    let context = test_context();
+    let cwd = temp.path().to_path_buf();
+    let mut future = Box::pin(runner.run("forced-cancel", &context, &cwd));
+    let mut task_context = Context::from_waker(Waker::noop());
+    assert!(matches!(
+        future.as_mut().poll(&mut task_context),
+        Poll::Pending
+    ));
+    wait_for_file(&ready);
+    drop(future);
+    assert_cancelled_terminal(&trace_config);
 }
 
 #[test]
@@ -393,6 +436,18 @@ while :; do sleep 1; done
         std::fs::read_to_string(late_copy).unwrap(),
         "{\"summary\":\"late\"}"
     );
+}
+
+fn assert_cancelled_terminal(config: &WorkerAgentTraceConfig) {
+    let recovered = TraceCollector::new(config.clone()).recover().unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert!(matches!(
+        recovered[0].events.last().map(|event| &event.event),
+        Some(AgentActivityEventV1::RunFinished(RunFinishedV1 {
+            status: RunStatusV1::Cancelled,
+            ..
+        }))
+    ));
 }
 
 fn short_limits() -> WorkerLivenessLimits {

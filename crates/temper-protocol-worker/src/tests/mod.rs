@@ -6,6 +6,7 @@ mod activity;
 mod context;
 mod fixtures;
 mod job_context;
+mod lifecycle;
 mod result;
 mod workspace;
 
