@@ -13,6 +13,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::time::Duration;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent_io::{CqSender, channel, drive, oneshot};
@@ -72,6 +73,27 @@ impl SubAgentControl {
     }
 }
 
+/// Complete operation deadlines carried by every main or nested agent run.
+/// Deadline enforcement is owned by the shell; this type keeps the resolved
+/// contract beside the run definition without coupling the core to config or
+/// process-protocol crates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AgentOperationLimits {
+    pub tool_timeout: Duration,
+    pub model_connect_timeout: Duration,
+    pub model_idle_timeout: Duration,
+}
+
+impl Default for AgentOperationLimits {
+    fn default() -> Self {
+        Self {
+            tool_timeout: Duration::from_secs(600),
+            model_connect_timeout: Duration::from_secs(120),
+            model_idle_timeout: Duration::from_secs(120),
+        }
+    }
+}
+
 /// The definition of one sub-agent run.
 pub struct SubAgent {
     /// The role/system prompt that frames the run.
@@ -83,6 +105,8 @@ pub struct SubAgent {
     pub tools: ToolRegistry,
     /// Ceiling on tool-using iterations.
     pub max_iterations: usize,
+    /// Complete model/tool operation deadlines inherited by nested runs.
+    pub operation_limits: AgentOperationLimits,
     /// The model provider.
     pub provider: Arc<dyn Provider>,
     /// Per-request stream options (api key/bearer, headers, temperature,

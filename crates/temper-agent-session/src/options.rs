@@ -14,6 +14,7 @@
 //!                             worker-owned local submit_for_pr side channel
 //! --activity-address <ADDR>  worker-owned local agent activity endpoint
 //! --tool-config <FILE>       optional worker-written non-secret tool config JSON
+//! --runtime-limits <FILE>    resolved first-party model/tool deadlines
 //! --trace-policy <FILE>      optional worker-written capture policy JSON
 //! --provider <anthropic|chatgpt|deepseek>
 //! --model <ID>                main model id
@@ -29,7 +30,7 @@ use std::path::PathBuf;
 use temper_agent::{AuthChoice, DEFAULT_MAX_ITERATIONS};
 use temper_protocol_activity::{ACTIVITY_ADDRESS_FLAG, TRACE_POLICY_FLAG};
 use temper_protocol_agent::{
-    FORGE_CONTEXT_ADDRESS_FLAG, SUBMIT_FOR_PR_ADDRESS_FLAG, TOOL_CONFIG_FLAG,
+    FORGE_CONTEXT_ADDRESS_FLAG, RUNTIME_LIMITS_FLAG, SUBMIT_FOR_PR_ADDRESS_FLAG, TOOL_CONFIG_FLAG,
 };
 
 /// The fully-parsed agent command line. Every field originates from a flag; the
@@ -59,6 +60,8 @@ pub(crate) struct Options {
     pub(crate) activity_address: Option<String>,
     /// Optional worker-written non-secret tool config JSON (`--tool-config`).
     pub(crate) tool_config: Option<PathBuf>,
+    /// Optional worker-written complete operation limits (`--runtime-limits`).
+    pub(crate) runtime_limits: Option<PathBuf>,
     /// Optional worker-written shared trace capture policy JSON.
     pub(crate) trace_policy: Option<PathBuf>,
     /// Optional debug capture / prompt-overlay dir (`--capture-dir`).
@@ -82,6 +85,7 @@ impl Options {
         let mut forge_context_address = None;
         let mut activity_address = None;
         let mut tool_config = None;
+        let mut runtime_limits = None;
         let mut trace_policy = None;
         let mut capture_dir = None;
         let mut max_iterations = DEFAULT_MAX_ITERATIONS;
@@ -110,6 +114,9 @@ impl Options {
                 }
                 flag if flag == TOOL_CONFIG_FLAG => {
                     tool_config = Some(PathBuf::from(value(&mut iter, TOOL_CONFIG_FLAG)?))
+                }
+                flag if flag == RUNTIME_LIMITS_FLAG => {
+                    runtime_limits = Some(PathBuf::from(value(&mut iter, RUNTIME_LIMITS_FLAG)?))
                 }
                 flag if flag == TRACE_POLICY_FLAG => {
                     trace_policy = Some(PathBuf::from(value(&mut iter, TRACE_POLICY_FLAG)?))
@@ -147,6 +154,7 @@ impl Options {
             forge_context_address,
             activity_address,
             tool_config,
+            runtime_limits,
             trace_policy,
             capture_dir,
             max_iterations,
@@ -156,7 +164,7 @@ impl Options {
 }
 
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
-[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--activity-address <ADDR>] [--tool-config <FILE>] [--trace-policy <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
+[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--activity-address <ADDR>] [--tool-config <FILE>] [--runtime-limits <FILE>] [--trace-policy <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
 --workspace (default cwd), writes the result to --result";
@@ -208,6 +216,7 @@ mod tests {
         assert!(parse_raw(&["-h"]).expect("help parses").is_none());
         assert!(USAGE.contains("temper agent --context <FILE> --result <FILE>"));
         assert!(USAGE.contains("--tool-config <FILE>"));
+        assert!(USAGE.contains("--runtime-limits <FILE>"));
         assert!(USAGE.contains("--trace-policy <FILE>"));
         assert!(USAGE.contains("--activity-address <ADDR>"));
         assert!(USAGE.contains("TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON"));
@@ -224,6 +233,7 @@ mod tests {
         assert!(options.forge_context_address.is_none());
         assert!(options.activity_address.is_none());
         assert!(options.tool_config.is_none());
+        assert!(options.runtime_limits.is_none());
         assert!(options.trace_policy.is_none());
         assert_eq!(options.provider, AuthChoice::ChatGptOAuth);
         assert!(!options.subagents);
@@ -241,6 +251,10 @@ mod tests {
             .err()
             .expect("missing value fails");
         assert!(error.contains("--tool-config requires a value"));
+        let error = parse_raw(&["--runtime-limits"])
+            .err()
+            .expect("missing value fails");
+        assert!(error.contains("--runtime-limits requires a value"));
     }
 
     #[test]
@@ -260,6 +274,8 @@ mod tests {
             "127.0.0.1:34567",
             "--tool-config",
             "/tools.json",
+            "--runtime-limits",
+            "/runtime-limits.json",
             "--trace-policy",
             "/trace-policy.json",
             "--provider",
@@ -296,6 +312,10 @@ mod tests {
         );
         assert_eq!(options.activity_address.as_deref(), Some("127.0.0.1:34567"));
         assert_eq!(options.tool_config, Some(PathBuf::from("/tools.json")));
+        assert_eq!(
+            options.runtime_limits,
+            Some(PathBuf::from("/runtime-limits.json"))
+        );
         assert_eq!(
             options.trace_policy,
             Some(PathBuf::from("/trace-policy.json"))

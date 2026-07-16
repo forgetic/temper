@@ -7,9 +7,13 @@ use std::collections::BTreeMap;
 
 use temper_config::provider;
 use temper_config::{
-    AgentProfileSettings, ExposeSecret, ProviderKind, Resolved, WorkerPoolSettings, WorkerSettings,
+    AgentOperationLimits, AgentProfileSettings, ExposeSecret, ProviderKind, Resolved,
+    WorkerPoolSettings, WorkerSettings,
 };
-use temper_worker::config::{CapabilitySpec, ExecutorSelection, WorkerConfig};
+use temper_worker::config::{
+    CapabilitySpec, ExecutorSelection, WorkerConfig,
+    WorkerLivenessLimits as RuntimeWorkerLivenessLimits,
+};
 use temper_worker::workspace::RoleGitIdentity;
 use temper_worker::{
     AgentToolConfig, CodebaseMemoryIndex as ProtocolCodebaseMemoryIndex,
@@ -44,6 +48,7 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
             role: capability.role.clone(),
         })
         .collect();
+    temper_worker::prepare_result_root(&worker.result_root)?;
     Ok(WorkerConfig {
         daemon_url: worker.daemon_url.clone(),
         worker_id: worker.worker_id.clone(),
@@ -54,6 +59,13 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
         max_concurrent_jobs: worker.max_concurrent_jobs,
         poll_wait: worker.poll_wait,
         heartbeat_interval: worker.heartbeat_interval,
+        liveness_limits: RuntimeWorkerLivenessLimits {
+            max_no_progress: worker.liveness_limits.max_no_progress,
+            max_run: worker.liveness_limits.max_run,
+            graceful_cancellation_grace: worker.liveness_limits.graceful_cancellation_grace,
+            forced_termination_grace: worker.liveness_limits.forced_termination_grace,
+        },
+        result_root: worker.result_root.clone(),
         agent_traces: worker_agent_trace_config(resolved),
         executor: ExecutorSelection::Stub,
     })
@@ -132,11 +144,22 @@ pub fn role_identities(resolved: &Resolved) -> BTreeMap<String, RoleGitIdentity>
 
 type AgentCommandEnv = (Vec<String>, Vec<(String, String)>);
 
+/// How the worker supervises an agent invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentSupervisionKind {
+    FirstParty,
+    ThirdParty,
+}
+
 /// The agent invocation: the spawn command and the environment injected into it.
 pub struct AgentInvocation {
     pub command: Vec<String>,
     pub env: Vec<(String, String)>,
     pub tool_config: Option<AgentToolConfig>,
+    pub supervision: AgentSupervisionKind,
+    /// Resolved operation limits for known first-party agents. Third-party
+    /// commands receive no Temper-specific limits flag.
+    pub runtime_limits: Option<temper_worker::AgentRuntimeLimitsV1>,
     /// Effective shared capture policy for a known first-party agent command.
     /// `None` keeps explicit third-party profile commands flag-compatible.
     pub trace_policy: Option<temper_config::AgentActivityCapturePolicyV1>,
@@ -158,26 +181,49 @@ pub fn agent_invocation(
     resolved: &Resolved,
     program: &[String],
 ) -> Result<AgentInvocation, String> {
-    let (command, env, first_party) =
+    let (command, env, first_party, operation_limits) =
         if let Some((pool, profile)) = selected_agent_profile(resolved)? {
             let first_party =
                 profile.command.is_empty() || is_first_party_agent_command(&profile.command);
             let (command, env) = profile_agent_command_and_env(pool, profile, program)?;
-            (command, env, first_party)
+            (command, env, first_party, profile.operation_limits)
         } else {
             let (command, env) = legacy_agent_command_and_env(resolved, program);
-            (command, env, true)
+            (command, env, true, resolved.agent.operation_limits)
         };
 
     Ok(AgentInvocation {
         command,
         env,
         tool_config: agent_tool_config(resolved),
+        supervision: if first_party {
+            AgentSupervisionKind::FirstParty
+        } else {
+            AgentSupervisionKind::ThirdParty
+        },
+        runtime_limits: first_party.then(|| agent_runtime_limits(operation_limits)),
         trace_policy: first_party.then(|| {
             let traces = &resolved.observability.agent_traces;
             traces.policy_for_storage(traces.worker_spool_root.as_deref())
         }),
     })
+}
+
+pub fn agent_runtime_limits(limits: AgentOperationLimits) -> temper_worker::AgentRuntimeLimitsV1 {
+    temper_worker::AgentRuntimeLimitsV1 {
+        tool_timeout_secs: limits.tool_timeout.as_secs(),
+        model_connect_timeout_secs: limits.model_connect_timeout.as_secs(),
+        model_idle_timeout_secs: limits.model_idle_timeout.as_secs(),
+    }
+}
+
+pub fn selected_agent_runtime_limits(
+    resolved: &Resolved,
+) -> Result<temper_worker::AgentRuntimeLimitsV1, String> {
+    let limits = selected_agent_profile(resolved)?
+        .map(|(_, profile)| profile.operation_limits)
+        .unwrap_or(resolved.agent.operation_limits);
+    Ok(agent_runtime_limits(limits))
 }
 
 fn legacy_agent_command_and_env(resolved: &Resolved, program: &[String]) -> AgentCommandEnv {
@@ -334,303 +380,5 @@ pub fn agent_tool_config(resolved: &Resolved) -> Option<AgentToolConfig> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::*;
-    use temper_config::{
-        AgentConfig as FileAgentConfig, AgentProfileConfig, AgentProviderConfig, AgentToolsConfig,
-        CodebaseMemoryToolConfig, Config, Credentials, EngineConfig, ModelMap, NamedSecret,
-        NamedSecretEntry, NoEnv, ProviderCredentialFile, WorkerFileConfig, WorkerPoolConfig,
-        resolve,
-    };
-    use temper_worker::{CodebaseMemoryIndex, CodebaseMemoryMode};
-
-    #[test]
-    fn agent_invocation_carries_resolved_tool_config_when_enabled() {
-        let resolved = resolved_with_codebase_memory(Some(CodebaseMemoryToolConfig {
-            mode: Some("required".to_string()),
-            command: Some(" codebase-memory-mcp ".to_string()),
-            args: Some(vec![" --cache ".to_string(), "local".to_string()]),
-            roles: Some(vec![" engineer ".to_string()]),
-            index: Some("blocking".to_string()),
-            startup_timeout_secs: Some(7),
-            index_timeout_secs: Some(90),
-        }));
-
-        let invocation =
-            agent_invocation(&resolved, &["temper-agent".to_string()]).expect("invocation builds");
-        let tool_config = invocation.tool_config.expect("tool config present");
-        let codebase_memory = tool_config.codebase_memory.expect("codebase memory config");
-        assert_eq!(codebase_memory.mode, CodebaseMemoryMode::Required);
-        assert_eq!(codebase_memory.command, "codebase-memory-mcp");
-        assert_eq!(codebase_memory.args, vec!["--cache", "local"]);
-        assert_eq!(codebase_memory.roles, vec!["engineer"]);
-        assert_eq!(codebase_memory.index, CodebaseMemoryIndex::Blocking);
-        assert_eq!(codebase_memory.startup_timeout_secs, 7);
-        assert_eq!(codebase_memory.index_timeout_secs, 90);
-    }
-
-    #[test]
-    fn agent_invocation_omits_tool_config_when_absent_or_off() {
-        let absent = resolved_with_codebase_memory(None);
-        assert!(agent_tool_config(&absent).is_none());
-        assert!(
-            agent_invocation(&absent, &["temper-agent".to_string()])
-                .expect("invocation builds")
-                .tool_config
-                .is_none()
-        );
-
-        let off = resolved_with_codebase_memory(Some(CodebaseMemoryToolConfig {
-            mode: Some("off".to_string()),
-            ..Default::default()
-        }));
-        assert!(agent_tool_config(&off).is_none());
-    }
-
-    #[test]
-    fn selected_pool_agent_profile_controls_command_and_env() {
-        let mut resolved = resolved_with_profile_pool();
-        resolved.worker.selected_pool = Some("engineers".to_string());
-
-        let invocation =
-            agent_invocation(&resolved, &["default-agent".to_string()]).expect("invocation");
-
-        assert_eq!(
-            invocation.command,
-            vec![
-                "temper",
-                "agent",
-                "--provider",
-                "anthropic",
-                "--model",
-                "claude-opus-profile",
-                "--investigate-model",
-                "claude-haiku-profile",
-                "--provider-url",
-                "http://profile-llm",
-                "--max-iterations",
-                "123",
-                "--subagents",
-                "on",
-            ]
-        );
-        assert_eq!(invocation.env.len(), 1);
-        assert_eq!(invocation.env[0].0, provider::PROVIDER_CREDENTIALS_ENV);
-        assert!(
-            invocation.env[0].1.contains("sk-profile"),
-            "profile credential JSON missing secret payload"
-        );
-        assert!(
-            !invocation
-                .command
-                .iter()
-                .any(|part| part.contains("sk-profile")),
-            "profile credential must not be passed on argv"
-        );
-        assert!(
-            invocation.trace_policy.is_some(),
-            "explicit first-party profile commands receive capture policy"
-        );
-    }
-
-    #[test]
-    fn explicit_third_party_profile_command_omits_first_party_trace_flag() {
-        let mut resolved = resolved_with_profile_pool();
-        resolved.worker.selected_pool = Some("engineers".to_string());
-        resolved
-            .agent
-            .profiles
-            .get_mut("profiled")
-            .expect("profiled profile")
-            .command = vec!["vendor-agent".to_string()];
-
-        let invocation =
-            agent_invocation(&resolved, &["default-agent".to_string()]).expect("invocation");
-
-        assert_eq!(
-            invocation.command.first().map(String::as_str),
-            Some("vendor-agent")
-        );
-        assert!(invocation.trace_policy.is_none());
-    }
-
-    #[test]
-    fn pool_without_agent_profile_uses_legacy_provider_fallback() {
-        let mut resolved = resolved_with_profile_pool();
-        resolved.worker.selected_pool = Some("legacy".to_string());
-
-        let invocation =
-            agent_invocation(&resolved, &["temper-agent".to_string()]).expect("invocation");
-
-        assert_eq!(
-            invocation.command,
-            vec![
-                "temper-agent",
-                "--provider",
-                "deepseek",
-                "--model",
-                "deepseek-main",
-                "--investigate-model",
-                "deepseek-investigate",
-                "--provider-url",
-                "http://legacy-llm",
-                "--max-iterations",
-                "77",
-                "--subagents",
-                "off",
-                "--capture-dir",
-                "/legacy-capture",
-            ]
-        );
-        assert_eq!(invocation.env.len(), 1);
-        assert_eq!(invocation.env[0].0, provider::PROVIDER_CREDENTIALS_ENV);
-        assert!(invocation.env[0].1.contains("sk-legacy"));
-        assert!(invocation.trace_policy.is_some());
-        assert!(
-            !invocation
-                .command
-                .iter()
-                .any(|part| part.contains("sk-legacy")),
-            "legacy credential must not be passed on argv"
-        );
-    }
-
-    fn resolved_with_profile_pool() -> Resolved {
-        let config = Config {
-            engine: EngineConfig {
-                repos: Some(vec!["acme/widgets".to_string()]),
-                roles: Some(vec!["engineer".to_string()]),
-                ..Default::default()
-            },
-            worker: WorkerFileConfig {
-                pools: vec![
-                    WorkerPoolConfig {
-                        name: Some("engineers".to_string()),
-                        roles: Some(vec!["engineer".to_string()]),
-                        repos: Some(vec!["acme/widgets".to_string()]),
-                        max_concurrent_jobs: Some(1),
-                        agent_profile: Some("profiled".to_string()),
-                        ..Default::default()
-                    },
-                    WorkerPoolConfig {
-                        name: Some("legacy".to_string()),
-                        roles: Some(vec!["engineer".to_string()]),
-                        repos: Some(vec!["acme/widgets".to_string()]),
-                        max_concurrent_jobs: Some(1),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
-            agent: FileAgentConfig {
-                provider: Some("deepseek".to_string()),
-                max_iterations: Some(77),
-                enable_subagents: Some(false),
-                config_dir: Some("/legacy-capture".to_string()),
-                providers: BTreeMap::from([(
-                    "deepseek".to_string(),
-                    AgentProviderConfig {
-                        url: Some("http://legacy-llm".to_string()),
-                        models: Some(ModelMap {
-                            main: Some("deepseek-main".to_string()),
-                            investigate: Some("deepseek-investigate".to_string()),
-                        }),
-                    },
-                )]),
-                profiles: BTreeMap::from([(
-                    "profiled".to_string(),
-                    AgentProfileConfig {
-                        command: Some(vec!["temper".to_string(), "agent".to_string()]),
-                        provider: Some("anthropic".to_string()),
-                        model: Some("claude-opus-profile".to_string()),
-                        investigate_model: Some("claude-haiku-profile".to_string()),
-                        provider_url: Some("http://profile-llm".to_string()),
-                        max_iterations: Some(123),
-                        subagents: Some(true),
-                        credential: Some("profile-secret".to_string()),
-                    },
-                )]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let credentials = Credentials {
-            agent: temper_config::AgentCredentials {
-                providers: BTreeMap::from([(
-                    "deepseek".to_string(),
-                    ProviderCredentialFile {
-                        kind: Some("api-key".to_string()),
-                        key: Some("sk-legacy".to_string()),
-                        ..Default::default()
-                    },
-                )]),
-            },
-            secrets: BTreeMap::from([(
-                "profile-secret".to_string(),
-                NamedSecret::Structured(NamedSecretEntry {
-                    kind: Some("provider-credentials".to_string()),
-                    provider: Some("anthropic".to_string()),
-                    auth: Some("api-key".to_string()),
-                    api_key: Some("sk-profile".to_string()),
-                    ..Default::default()
-                }),
-            )]),
-            ..Default::default()
-        };
-        resolve(&config, &credentials, &NoEnv).expect("config resolves")
-    }
-
-    #[test]
-    fn worker_config_selected_pool_requires_non_empty_worker_token() {
-        let config = Config {
-            engine: EngineConfig {
-                repos: Some(vec!["acme/widgets".to_string()]),
-                roles: Some(vec!["engineer".to_string()]),
-                ..Default::default()
-            },
-            worker: WorkerFileConfig {
-                pools: vec![WorkerPoolConfig {
-                    name: Some("builders".to_string()),
-                    roles: Some(vec!["engineer".to_string()]),
-                    repos: Some(vec!["acme/widgets".to_string()]),
-                    max_concurrent_jobs: Some(1),
-                    worker_token: Some("pool-token".to_string()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut credentials = Credentials::default();
-        credentials
-            .secrets
-            .insert("pool-token".to_string(), NamedSecret::Raw(" ".to_string()));
-        let mut resolved = resolve(&config, &credentials, &NoEnv).expect("config resolves");
-        resolved.worker.selected_pool = Some("builders".to_string());
-
-        let error = worker_config(&resolved).expect_err("empty pool token should fail");
-        assert!(error.contains("builders"), "{error}");
-        assert!(error.contains("pool-token"), "{error}");
-        assert!(error.contains("no non-empty text value"), "{error}");
-    }
-
-    fn resolved_with_codebase_memory(tool: Option<CodebaseMemoryToolConfig>) -> Resolved {
-        let config = Config {
-            engine: EngineConfig {
-                repos: Some(vec!["acme/widgets".to_string()]),
-                roles: Some(vec!["engineer".to_string()]),
-                ..Default::default()
-            },
-            agent: FileAgentConfig {
-                tools: AgentToolsConfig {
-                    codebase_memory: tool,
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        resolve(&config, &Credentials::default(), &NoEnv).expect("config resolves")
-    }
-}
+#[path = "adapt_tests.rs"]
+mod tests;

@@ -229,11 +229,15 @@ pub struct WorkerSettings {
     pub worker_id: String,
     pub daemon_url: String,
     pub workspace_root: PathBuf,
+    /// Durable worker result/outbox root. It is below `paths.state_dir` when
+    /// available and otherwise below `workspace_root`.
+    pub result_root: PathBuf,
     /// Git base URL; `None` falls back to `forge.url` at use.
     pub git_base_url: Option<String>,
     pub max_concurrent_jobs: u32,
     pub poll_wait: Duration,
     pub heartbeat_interval: Duration,
+    pub liveness_limits: WorkerLivenessLimits,
     pub capabilities: Vec<Capability>,
     /// Target-era named worker pools available for runtime selection.
     pub pools: Vec<WorkerPoolSettings>,
@@ -245,6 +249,15 @@ pub struct WorkerSettings {
     /// Pool selected by runtime shaping (`temper serve worker --pool`, or the
     /// standalone local/default pool). `None` preserves legacy worker behavior.
     pub selected_pool: Option<String>,
+}
+
+/// Resolved worker-owned run supervision limits.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct WorkerLivenessLimits {
+    pub max_no_progress: Duration,
+    pub max_run: Option<Duration>,
+    pub graceful_cancellation_grace: Duration,
+    pub forced_termination_grace: Duration,
 }
 
 /// A target-era `[[worker.pools]]` capability class.
@@ -273,6 +286,8 @@ pub struct AgentSettings {
     pub max_iterations: usize,
     pub enable_subagents: bool,
     pub config_dir: Option<PathBuf>,
+    /// Complete operation deadlines for the legacy/top-level first-party agent.
+    pub operation_limits: AgentOperationLimits,
     /// Non-secret agent-local tool settings to pass across the worker→agent
     /// boundary. Empty when no tool section is configured or codebase-memory is
     /// `mode = "off"`.
@@ -280,6 +295,14 @@ pub struct AgentSettings {
     /// Target-era named agent profiles. A worker whose selected pool names an
     /// `agent_profile` uses the matching profile for its spawned agent command.
     pub profiles: BTreeMap<String, AgentProfileSettings>,
+}
+
+/// Complete resolved first-party agent operation deadlines.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct AgentOperationLimits {
+    pub tool_timeout: Duration,
+    pub model_connect_timeout: Duration,
+    pub model_idle_timeout: Duration,
 }
 
 /// Resolved agent-local tool settings.
@@ -356,6 +379,8 @@ pub struct AgentProfileSettings {
     pub provider_url: Option<String>,
     pub max_iterations: Option<usize>,
     pub subagents: Option<bool>,
+    /// Complete operation deadlines after field-by-field top-level inheritance.
+    pub operation_limits: AgentOperationLimits,
     /// Secret-name reference for inspection output.
     pub credential: Option<SecretReference>,
     /// Provider credential JSON resolved from [`credential`](Self::credential)

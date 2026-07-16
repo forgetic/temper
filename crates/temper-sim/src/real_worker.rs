@@ -70,6 +70,8 @@ impl RealWorkerProfile {
             max_concurrent_jobs: self.max_concurrent_jobs,
             poll_wait: self.poll_wait,
             heartbeat_interval: self.heartbeat_interval,
+            liveness_limits: Default::default(),
+            result_root: std::path::PathBuf::from(".temper/worker-results"),
             agent_traces: Default::default(),
             executor: ExecutorSelection::Stub,
         }

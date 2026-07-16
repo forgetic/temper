@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
@@ -53,6 +53,10 @@ pub struct WorkerConfig {
     pub max_concurrent_jobs: u32,
     pub poll_wait: Duration,
     pub heartbeat_interval: Duration,
+    /// Worker-owned job supervision limits.
+    pub liveness_limits: WorkerLivenessLimits,
+    /// Private durable root for terminal result/outbox state.
+    pub result_root: PathBuf,
     /// Effective capture policy and durable worker spool root.
     pub agent_traces: WorkerAgentTraceConfig,
     pub executor: ExecutorSelection,
@@ -78,6 +82,45 @@ impl Default for WorkerAgentTraceConfig {
     }
 }
 
+/// Worker-owned job liveness and process-termination limits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkerLivenessLimits {
+    pub max_no_progress: Duration,
+    pub max_run: Option<Duration>,
+    pub graceful_cancellation_grace: Duration,
+    pub forced_termination_grace: Duration,
+}
+
+impl Default for WorkerLivenessLimits {
+    fn default() -> Self {
+        Self {
+            max_no_progress: Duration::from_secs(900),
+            max_run: None,
+            graceful_cancellation_grace: Duration::from_secs(10),
+            forced_termination_grace: Duration::from_secs(5),
+        }
+    }
+}
+
+/// Creates the durable result root and restricts it to the worker account.
+pub fn prepare_result_root(path: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(path)
+        .map_err(|error| format!("create worker result root {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(
+            |error| {
+                format!(
+                    "set private permissions on worker result root {}: {error}",
+                    path.display()
+                )
+            },
+        )?;
+    }
+    Ok(())
+}
+
 /// Default backoff before re-polling after the daemon returned no work, the
 /// long-poll timed out, a transport error occurred, or the worker was at
 /// capacity. Small so a freed slot is picked up promptly, but non-zero so an
@@ -97,6 +140,8 @@ pub struct WorkerParams {
     pub poll_wait: Duration,
     pub heartbeat_interval: Duration,
     pub poll_backoff: Duration,
+    pub liveness_limits: WorkerLivenessLimits,
+    pub result_root: PathBuf,
 }
 
 impl WorkerParams {
@@ -111,6 +156,8 @@ impl WorkerParams {
             poll_wait: config.poll_wait,
             heartbeat_interval: config.heartbeat_interval,
             poll_backoff: DEFAULT_POLL_BACKOFF,
+            liveness_limits: config.liveness_limits,
+            result_root: config.result_root.clone(),
         }
     }
 }

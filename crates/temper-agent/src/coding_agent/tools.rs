@@ -179,6 +179,7 @@ pub(crate) fn subagent_specs() -> &'static [SubAgentSpec] {
 /// working tree (the read-only ones cannot at all; the bash-capable `delegate`
 /// is prompt-constrained to read-only inspection, matching Claude's parallel
 /// `general-purpose` reviewers).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn add_subagents(
     handle: skein::runtime::RuntimeHandle,
     mut base: ToolRegistry,
@@ -187,6 +188,7 @@ pub(crate) fn add_subagents(
     cwd: &Path,
     scope_factory: &crate::activity::ScopeFactory,
     parent_scope_id: &str,
+    operation_limits: temper_agent_core::AgentOperationLimits,
 ) -> ToolRegistry {
     for spec in subagent_specs() {
         base = add_one_subagent(
@@ -197,12 +199,14 @@ pub(crate) fn add_subagents(
             stream_options,
             cwd,
             (scope_factory, parent_scope_id),
+            operation_limits,
         );
     }
     base
 }
 
 /// Wires a single sub-agent role into the registry.
+#[allow(clippy::too_many_arguments)]
 fn add_one_subagent(
     handle: skein::runtime::RuntimeHandle,
     mut base: ToolRegistry,
@@ -211,6 +215,7 @@ fn add_one_subagent(
     stream_options: &tongs::provider::StreamOptions,
     cwd: &Path,
     scope: (&crate::activity::ScopeFactory, &str),
+    operation_limits: temper_agent_core::AgentOperationLimits,
 ) -> ToolRegistry {
     // The role's model tier. The cheap tier (e.g. Haiku) is for the read-only
     // searcher whose product is a focused report and which dominates token spend
@@ -257,6 +262,7 @@ fn add_one_subagent(
             user_message: task,
             tools: ToolRegistry::from_tools(tools),
             max_iterations,
+            operation_limits,
             provider,
             stream_options: stream_options.clone(),
         }

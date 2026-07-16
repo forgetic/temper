@@ -28,8 +28,9 @@ use temper_protocol_activity::{
     ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, TRACE_POLICY_FLAG,
 };
 use temper_protocol_agent::{
-    AgentToolConfig, FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, SUBMIT_FOR_PR_ADDRESS_FLAG,
-    SubmitForPrRequest, SubmitForPrResponse, TOOL_CONFIG_FLAG, WorkspaceContext,
+    AgentRuntimeLimitsV1, AgentToolConfig, FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse,
+    RUNTIME_LIMITS_FLAG, SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest, SubmitForPrResponse,
+    TOOL_CONFIG_FLAG, WorkspaceContext,
 };
 
 use crate::WorkerAgentTraceConfig;
@@ -40,10 +41,13 @@ use crate::agent_runner::{
 use crate::pre_push::submit_for_pr_pre_push_response_blocking;
 use crate::trace::{TraceCollector, TraceRun};
 
+mod runtime_limits;
 mod side_channel;
 mod stderr;
 mod terminal;
-use side_channel::{ForgeSideChannelRequest, start_forge_server, start_submit_server};
+use side_channel::{
+    ForgeSideChannelRequest, start_forge_server, start_submit_server, submit_for_pr_available,
+};
 #[cfg(test)]
 use stderr::stderr_tail;
 use stderr::{DiagnosticIdentity, emit_reader_unavailable, stream as stream_stderr};
@@ -74,6 +78,8 @@ pub struct OutOfProcessRunner {
     /// current workflow role, these are written to a per-run JSON file and
     /// passed as `--tool-config <file>`.
     tool_config: Option<AgentToolConfig>,
+    /// Complete operation limits supplied only to known first-party agents.
+    runtime_limits: Option<AgentRuntimeLimitsV1>,
     /// Shared, non-secret capture policy written to a per-run JSON file for the
     /// first-party agent process. `None` preserves third-party agent compatibility.
     trace_policy: Option<AgentActivityCapturePolicyV1>,
@@ -101,6 +107,7 @@ impl std::fmt::Debug for OutOfProcessRunner {
                 &self.env.iter().map(|(key, _)| key).collect::<Vec<_>>(),
             )
             .field("tool_config", &self.tool_config)
+            .field("runtime_limits", &self.runtime_limits)
             .field("trace_policy", &self.trace_policy)
             .field("trace_collector", &self.trace_collector)
             .field("submit_for_pr", &"<handler>")
@@ -119,6 +126,7 @@ impl OutOfProcessRunner {
             command,
             env: Vec::new(),
             tool_config: None,
+            runtime_limits: None,
             trace_policy: None,
             trace_collector: TraceCollector::default(),
             submit_for_pr: default_submit_for_pr_handler(),
@@ -140,6 +148,14 @@ impl OutOfProcessRunner {
     #[must_use]
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
+        self
+    }
+
+    /// Sets complete operation limits for a known first-party agent. Leaving
+    /// this unset preserves third-party command compatibility.
+    #[must_use]
+    pub fn with_runtime_limits(mut self, runtime_limits: Option<AgentRuntimeLimitsV1>) -> Self {
+        self.runtime_limits = runtime_limits;
         self
     }
 
@@ -264,6 +280,7 @@ impl OutOfProcessRunner {
             }
             None => None,
         };
+        let runtime_limits_path = runtime_limits::write(temp.path(), self.runtime_limits)?;
         let trace_policy_path = self.trace_policy.as_ref().and_then(|policy| {
             let path = temp.path().join("trace-policy.json");
             let bytes = match serde_json::to_vec_pretty(policy) {
@@ -357,6 +374,7 @@ impl OutOfProcessRunner {
         let context_path_owned = context_path.clone();
         let result_path_owned = result_path.clone();
         let tool_config_path_owned = tool_config_path.clone();
+        let runtime_limits_path_owned = runtime_limits_path.clone();
         let trace_policy_path_owned = trace_policy_path.clone();
         let activity_address_owned = activity_address.clone();
         let accepted_submit_for_child = accepted_submit.clone();
@@ -382,6 +400,7 @@ impl OutOfProcessRunner {
                     context_path: &context_path_owned,
                     result_path: &result_path_owned,
                     tool_config_path: tool_config_path_owned.as_deref(),
+                    runtime_limits_path: runtime_limits_path_owned.as_deref(),
                     trace_policy_path: trace_policy_path_owned.as_deref(),
                     activity_address: activity_address_owned.as_deref(),
                     submit_listener,
@@ -483,6 +502,7 @@ struct ChildRunRequest<'a> {
     context_path: &'a Path,
     result_path: &'a Path,
     tool_config_path: Option<&'a Path>,
+    runtime_limits_path: Option<&'a Path>,
     trace_policy_path: Option<&'a Path>,
     activity_address: Option<&'a str>,
     submit_listener: Option<(TcpListener, String)>,
@@ -508,6 +528,7 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         context_path,
         result_path,
         tool_config_path,
+        runtime_limits_path,
         trace_policy_path,
         activity_address,
         submit_listener,
@@ -531,6 +552,9 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         .arg(cwd);
     if let Some(path) = tool_config_path {
         command.arg(TOOL_CONFIG_FLAG).arg(path);
+    }
+    if let Some(path) = runtime_limits_path {
+        command.arg(RUNTIME_LIMITS_FLAG).arg(path);
     }
     if let Some(path) = trace_policy_path {
         command.arg(TRACE_POLICY_FLAG).arg(path);
@@ -594,15 +618,6 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         server.stop();
     }
     outcome
-}
-
-fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
-    context.work_item.role == "engineer"
-        && context.repos.iter().any(|repo| repo.is_writable())
-        && !matches!(
-            context.checkout.as_deref(),
-            Some("read_only" | "pull_request_read_only")
-        )
 }
 
 #[cfg(test)]

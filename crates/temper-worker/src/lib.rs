@@ -40,8 +40,8 @@ pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
 pub use config::{
     AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
-    ExecutorSelection, ParseOutcome, USAGE, WorkerAgentTraceConfig, WorkerConfig, WorkerParams,
-    parse, role_identities_from_env,
+    ExecutorSelection, ParseOutcome, USAGE, WorkerAgentTraceConfig, WorkerConfig,
+    WorkerLivenessLimits, WorkerParams, parse, prepare_result_root, role_identities_from_env,
 };
 pub use context_client::{
     ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,
@@ -63,7 +63,8 @@ pub use run::{
     WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
 };
 pub use temper_protocol_agent::{
-    AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
+    AgentRuntimeLimitsV1, AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode,
+    CodebaseMemoryToolConfig, RUNTIME_LIMITS_FLAG,
 };
 pub use temper_protocol_worker::WorkerAuth;
 pub use trace::{

@@ -129,6 +129,7 @@ fn coding_agent_prompt_snapshot_equals_anthropic_provider_startup_context() {
             None,
             None,
             activity_config,
+            temper_protocol_agent::AgentRuntimeLimitsV1::default(),
         )
         .await
     })

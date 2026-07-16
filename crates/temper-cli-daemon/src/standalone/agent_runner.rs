@@ -23,7 +23,7 @@ use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
 use temper_protocol_activity::FailureCodeV1;
-use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
+use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext};
 use temper_worker::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
     TraceCollector, WorkerAgentTraceConfig,
@@ -39,6 +39,7 @@ pub struct InProcessAgentRunner {
     config_dir: Option<PathBuf>,
     enable_subagents: bool,
     tool_config: Option<AgentToolConfig>,
+    runtime_limits: AgentRuntimeLimitsV1,
     trace_policy: AgentActivityCapturePolicyV1,
     trace_collector: TraceCollector,
     submit_for_pr: SubmitForPrHost,
@@ -60,6 +61,7 @@ impl InProcessAgentRunner {
             config_dir,
             enable_subagents,
             tool_config: None,
+            runtime_limits: AgentRuntimeLimitsV1::default(),
             trace_policy: AgentActivityCapturePolicyV1::default(),
             trace_collector: TraceCollector::default(),
             submit_for_pr: std::sync::Arc::new(|request, context, cwd| {
@@ -75,6 +77,14 @@ impl InProcessAgentRunner {
     #[must_use]
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
+        self
+    }
+
+    /// Stores complete first-party operation limits for the native loop and
+    /// every nested subagent.
+    #[must_use]
+    pub fn with_runtime_limits(mut self, runtime_limits: AgentRuntimeLimitsV1) -> Self {
+        self.runtime_limits = runtime_limits;
         self
     }
 
@@ -183,6 +193,7 @@ impl AgentRunner for InProcessAgentRunner {
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
         let tool_config = self.tool_config.clone();
+        let runtime_limits = self.runtime_limits;
         let trace_policy = self.trace_policy.clone();
         let trace_collector = self.trace_collector.clone();
         let submit_for_pr = self.submit_for_pr.clone();
@@ -222,6 +233,7 @@ impl AgentRunner for InProcessAgentRunner {
                     policy: trace_policy,
                     address: activity_address,
                 },
+                runtime_limits,
             )
             .await
             .map_err(classify_coding_agent_error);

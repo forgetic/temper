@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn runtime_limits_round_trip_and_reject_zero() {
+    let limits = AgentRuntimeLimitsV1 {
+        tool_timeout_secs: 45,
+        model_connect_timeout_secs: 12,
+        model_idle_timeout_secs: 9,
+    };
+    let json = limits.to_json().expect("serialize runtime limits");
+    assert_eq!(AgentRuntimeLimitsV1::from_json(&json).unwrap(), limits);
+    assert!(
+        AgentRuntimeLimitsV1::from_json(
+            r#"{"tool_timeout_secs":0,"model_connect_timeout_secs":1,"model_idle_timeout_secs":1}"#
+        )
+        .is_err()
+    );
+    assert_eq!(RUNTIME_LIMITS_FLAG, "--runtime-limits");
+}
+
+#[test]
 fn forge_side_channel_rejects_child_selected_identity_and_mutations() {
     let with_identity = serde_json::json!({
         "protocol_version": PROTOCOL_VERSION,

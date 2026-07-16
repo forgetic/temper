@@ -335,6 +335,40 @@ fn render(resolved: &Resolved) -> String {
     );
     let _ = writeln!(
         out,
+        "  result_root  = {}",
+        resolved.worker.result_root.display()
+    );
+    let _ = writeln!(
+        out,
+        "  max_no_progress_secs = {}",
+        resolved.worker.liveness_limits.max_no_progress.as_secs()
+    );
+    let _ = writeln!(
+        out,
+        "  max_run_secs = {}",
+        resolved
+            .worker
+            .liveness_limits
+            .max_run
+            .map(|duration| duration.as_secs().to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    );
+    let _ = writeln!(
+        out,
+        "  cancellation_graces_secs = {} graceful + {} forced",
+        resolved
+            .worker
+            .liveness_limits
+            .graceful_cancellation_grace
+            .as_secs(),
+        resolved
+            .worker
+            .liveness_limits
+            .forced_termination_grace
+            .as_secs()
+    );
+    let _ = writeln!(
+        out,
         "  capabilities = [{}]",
         resolved
             .worker
@@ -504,6 +538,17 @@ fn render(resolved: &Resolved) -> String {
     );
     let _ = writeln!(out, "  max_iters    = {}", resolved.agent.max_iterations);
     let _ = writeln!(out, "  subagents    = {}", resolved.agent.enable_subagents);
+    let _ = writeln!(
+        out,
+        "  deadlines_secs = tool {}, model_connect {}, model_idle {}",
+        resolved.agent.operation_limits.tool_timeout.as_secs(),
+        resolved
+            .agent
+            .operation_limits
+            .model_connect_timeout
+            .as_secs(),
+        resolved.agent.operation_limits.model_idle_timeout.as_secs()
+    );
     let _ = writeln!(out, "  profiles     = {}", resolved.agent.profiles.len());
     for (name, profile) in &resolved.agent.profiles {
         let command = if profile.command.is_empty() {
@@ -513,7 +558,7 @@ fn render(resolved: &Resolved) -> String {
         };
         let _ = writeln!(
             out,
-            "    - {}: command={}, provider={}, model={}, investigate={}, url={}, max_iters={}, subagents={}, credential={}",
+            "    - {}: command={}, provider={}, model={}, investigate={}, url={}, max_iters={}, subagents={}, deadlines_secs=tool {}/connect {}/idle {}, credential={}",
             name,
             command,
             profile
@@ -531,6 +576,9 @@ fn render(resolved: &Resolved) -> String {
                 .subagents
                 .map(|enabled| enabled.to_string())
                 .unwrap_or_else(|| "(unset)".to_string()),
+            profile.operation_limits.tool_timeout.as_secs(),
+            profile.operation_limits.model_connect_timeout.as_secs(),
+            profile.operation_limits.model_idle_timeout.as_secs(),
             render_secret_reference(profile.credential.as_ref())
         );
     }

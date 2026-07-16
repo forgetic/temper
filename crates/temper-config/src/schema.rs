@@ -287,6 +287,18 @@ pub struct WorkerConfig {
     /// Heartbeat interval in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeat_interval_ms: Option<u64>,
+    /// Maximum time a running job may produce no agent progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_no_progress_secs: Option<u64>,
+    /// Optional independent maximum duration for one job run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_run_secs: Option<u64>,
+    /// Time allowed for cooperative agent cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graceful_cancellation_grace_secs: Option<u64>,
+    /// Time allowed for forced termination and process reaping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_termination_grace_secs: Option<u64>,
     /// Explicit `owner/name:role` capabilities. Defaults to the cross-product of
     /// `engine.repos` and `engine.roles` (one worker covers the whole feed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,6 +320,10 @@ impl WorkerConfig {
             && self.max_concurrent_jobs.is_none()
             && self.poll_wait_ms.is_none()
             && self.heartbeat_interval_ms.is_none()
+            && self.max_no_progress_secs.is_none()
+            && self.max_run_secs.is_none()
+            && self.graceful_cancellation_grace_secs.is_none()
+            && self.forced_termination_grace_secs.is_none()
             && self.capabilities.is_none()
             && self.pools.is_empty()
     }
@@ -354,6 +370,9 @@ pub struct AgentConfig {
     /// Optional agent config directory (prompt overlays).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
+    /// Operation deadlines inherited by every first-party agent profile.
+    #[serde(default, skip_serializing_if = "AgentDeadlineConfig::is_empty")]
+    pub deadlines: AgentDeadlineConfig,
     /// Target-era agent-local tool configuration. Parsed/resolved for the
     /// worker→agent boundary; individual tool runtimes are registered in later
     /// slices.
@@ -376,9 +395,35 @@ impl AgentConfig {
             && self.max_iterations.is_none()
             && self.enable_subagents.is_none()
             && self.config_dir.is_none()
+            && self.deadlines.is_empty()
             && self.tools.is_empty()
             && self.providers.is_empty()
             && self.profiles.is_empty()
+    }
+}
+
+/// `[agent.deadlines]` or `[agent.profiles.<name>.deadlines]` — operation
+/// deadlines for first-party coding agents. Profile fields inherit separately
+/// from the top-level section during resolution.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentDeadlineConfig {
+    /// Maximum duration of one tool invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_timeout_secs: Option<u64>,
+    /// Maximum wait for a model connection and first event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_connect_timeout_secs: Option<u64>,
+    /// Maximum wait between model stream events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_idle_timeout_secs: Option<u64>,
+}
+
+impl AgentDeadlineConfig {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.tool_timeout_secs.is_none()
+            && self.model_connect_timeout_secs.is_none()
+            && self.model_idle_timeout_secs.is_none()
     }
 }
 
@@ -454,6 +499,10 @@ pub struct AgentProfileConfig {
     /// Secret-name reference for provider credentials used by this profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
+    /// Per-operation deadline overrides. Every omitted field inherits from
+    /// `[agent.deadlines]`.
+    #[serde(default, skip_serializing_if = "AgentDeadlineConfig::is_empty")]
+    pub deadlines: AgentDeadlineConfig,
 }
 
 /// `[agent.providers.<name>]` — non-secret provider wiring.

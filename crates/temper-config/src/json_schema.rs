@@ -1,16 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! JSON Schema export for the current non-secret Temper config model.
-
 use crate::schema::SCHEMA_VERSION;
 use serde_json::Value;
 
-/// Returns the canonical JSON Schema for the current Temper `config.toml` model.
+/// Returns the canonical JSON Schema for the current non-secret Temper config.
 ///
-/// The schema mirrors [`crate::Config`] and its nested non-secret sections. Object
-/// sections use `additionalProperties: false` wherever serde currently applies
-/// `deny_unknown_fields`; provider maps keep arbitrary provider names while
-/// constraining each provider profile's value shape.
+/// Objects are closed except for provider maps, whose values remain constrained.
 pub fn config_json_schema() -> Value {
     schema_object([
         (
@@ -295,7 +290,23 @@ fn worker_config_schema() -> Value {
             ),
             (
                 "heartbeat_interval_ms",
-                integer_schema("Heartbeat interval in milliseconds.", None),
+                positive_integer_schema("Heartbeat interval in milliseconds."),
+            ),
+            (
+                "max_no_progress_secs",
+                positive_integer_schema("Maximum seconds without agent progress."),
+            ),
+            (
+                "max_run_secs",
+                positive_integer_schema("Optional independent maximum run duration in seconds."),
+            ),
+            (
+                "graceful_cancellation_grace_secs",
+                positive_integer_schema("Cooperative cancellation grace period in seconds."),
+            ),
+            (
+                "forced_termination_grace_secs",
+                positive_integer_schema("Forced termination grace period in seconds."),
             ),
             (
                 "capabilities",
@@ -361,6 +372,7 @@ fn agent_config_schema() -> Value {
                 "config_dir",
                 string_schema("Optional agent config directory for prompt overlays."),
             ),
+            ("deadlines", agent_deadline_config_schema()),
             ("tools", agent_tools_config_schema()),
             (
                 "providers",
@@ -377,6 +389,26 @@ fn agent_config_schema() -> Value {
                     Vec::<(&'static str, Value)>::new(),
                     agent_profile_config_schema(),
                 ),
+            ),
+        ],
+    )
+}
+
+fn agent_deadline_config_schema() -> Value {
+    closed_object_schema(
+        "First-party model and tool operation deadlines.",
+        [
+            (
+                "tool_timeout_secs",
+                positive_integer_schema("Maximum duration of one tool invocation in seconds."),
+            ),
+            (
+                "model_connect_timeout_secs",
+                positive_integer_schema("Maximum model connect/first-event wait in seconds."),
+            ),
+            (
+                "model_idle_timeout_secs",
+                positive_integer_schema("Maximum wait between model stream events in seconds."),
             ),
         ],
     )
@@ -462,6 +494,7 @@ fn agent_profile_config_schema() -> Value {
                     "Secret-name reference for provider credentials used by this profile.",
                 ),
             ),
+            ("deadlines", agent_deadline_config_schema()),
         ],
     )
 }

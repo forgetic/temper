@@ -57,6 +57,7 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
                     .to_string(),
                 tools,
                 max_iterations: 6,
+                operation_limits: temper_agent_core::AgentOperationLimits::default(),
                 provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),
@@ -155,6 +156,7 @@ fn turn_hook_runs_before_every_model_call() {
                         .to_string(),
                     tools,
                     max_iterations: 6,
+                    operation_limits: temper_agent_core::AgentOperationLimits::default(),
                     provider,
                     stream_options: StreamOptions {
                         api_key: Some("sk-jig-test".to_string()),
@@ -221,6 +223,7 @@ fn sub_agent_reports_budget_exhaustion_when_model_loops_forever() {
                 user_message: "read forever".to_string(),
                 tools,
                 max_iterations: 3,
+                operation_limits: temper_agent_core::AgentOperationLimits::default(),
                 provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),
@@ -287,6 +290,7 @@ fn sub_agent_forwards_live_events_to_the_sink() {
                 user_message: expected_user.to_string(),
                 tools,
                 max_iterations: 6,
+                operation_limits: temper_agent_core::AgentOperationLimits::default(),
                 provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),
@@ -420,6 +424,7 @@ fn panicking_event_sink_does_not_change_the_run_result() {
                 user_message: "Finish normally".to_string(),
                 tools: ToolRegistry::new(),
                 max_iterations: 2,
+                operation_limits: temper_agent_core::AgentOperationLimits::default(),
                 provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),
@@ -480,6 +485,7 @@ fn sub_agent_can_be_aborted_mid_run() {
                 user_message: "loop".to_string(),
                 tools,
                 max_iterations: 100,
+                operation_limits: temper_agent_core::AgentOperationLimits::default(),
                 provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),
@@ -578,6 +584,7 @@ fn sub_agent_steering_reaches_the_model() {
                 user_message: "do a thing".to_string(),
                 tools,
                 max_iterations: 10,
+                operation_limits: temper_agent_core::AgentOperationLimits::default(),
                 provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),

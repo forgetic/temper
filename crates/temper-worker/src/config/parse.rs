@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::agent::agent_surface;
-use super::types::{CapabilitySpec, CodingSurface, ExecutorSelection, ParseOutcome, WorkerConfig};
+use super::types::{
+    CapabilitySpec, CodingSurface, ExecutorSelection, ParseOutcome, WorkerConfig,
+    WorkerLivenessLimits,
+};
 
 pub const USAGE: &str = "smith-worker --daemon-url <url> --worker-id <id> --capability <owner/name>:<role> [--capability ...] [--max-concurrent <n>] [--poll-wait-ms <n>] [--heartbeat-interval-ms <n>] [--executor <stub|coding>] [--workspace-root <path>] [--git-base-url <url>] [--agent-command <anvil-native|program>] [--agent-arg <arg> ...]\n  --agent-command anvil-native spawns the out-of-process temper-agent; its --agent-arg values (--agent-program, --provider, --model, --capture-dir, --max-iterations, --subagents) become the agent's flags. Any other --agent-command is spawned verbatim over the same protocol.";
 
@@ -92,6 +95,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome, Str
     if capabilities.is_empty() {
         return Err("--capability is required at least once".to_string());
     }
+    let result_root = workspace_root
+        .as_ref()
+        .map(|root| root.join(".temper").join("worker-results"))
+        .unwrap_or_else(|| PathBuf::from(".temper/worker-results"));
     let executor = executor_selection(
         executor,
         workspace_root,
@@ -113,6 +120,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome, Str
         max_concurrent_jobs,
         poll_wait: Duration::from_millis(poll_wait_ms),
         heartbeat_interval: Duration::from_millis(heartbeat_interval_ms),
+        liveness_limits: WorkerLivenessLimits::default(),
+        result_root,
         agent_traces: Default::default(),
         executor,
     }))
