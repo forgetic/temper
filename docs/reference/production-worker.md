@@ -63,6 +63,9 @@ correctness backstops.
 
 ## Agent liveness supervision
 
+The deterministic cross-component and restart evidence is indexed in the
+[agent-run liveness acceptance matrix](agent-run-liveness-acceptance.md).
+
 `temper serve worker` owns one watchdog state per occupied permit. The effective
 settings are visible in the generated configuration template and in
 `temper config show`:

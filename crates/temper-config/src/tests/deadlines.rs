@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::{parse_config, parse_credentials};
-use crate::{Credentials, NoEnv, config_json_schema, resolve};
+use crate::{Credentials, NoEnv, config_json_schema, config_template, resolve};
 
 fn resolve_text(text: &str) -> Result<crate::Resolved, crate::ConfigError> {
     resolve(&parse_config(text), &Credentials::default(), &NoEnv)
@@ -41,6 +41,31 @@ fn deadline_and_liveness_defaults_apply_without_new_toml() {
     assert_eq!(
         resolved.worker.result_root,
         std::path::PathBuf::from(".temper/workspace/.temper/worker-results")
+    );
+}
+
+#[test]
+fn config_template_resolves_the_documented_liveness_contract() {
+    let template = config_template();
+    for documented in [
+        "max_no_progress_secs = 900",
+        "graceful_cancellation_grace_secs = 10",
+        "forced_termination_grace_secs = 5",
+        "tool_timeout_secs = 600",
+        "model_connect_timeout_secs = 120",
+        "model_idle_timeout_secs = 120",
+    ] {
+        assert!(template.contains(documented), "missing `{documented}`");
+    }
+
+    let resolved = resolve_text(&template).expect("starter template resolves");
+    assert_eq!(
+        resolved.worker.liveness_limits.max_no_progress,
+        Duration::from_secs(900)
+    );
+    assert_eq!(
+        resolved.agent.operation_limits.tool_timeout,
+        Duration::from_secs(600)
     );
 }
 
