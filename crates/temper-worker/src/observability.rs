@@ -8,6 +8,8 @@
 use temper_protocol_worker::{Assign, FailureClass, JobResult, ResultStatus};
 
 use crate::config::CapabilitySpec;
+mod liveness;
+pub use liveness::{ObservedOperation, WorkerEvent};
 
 pub fn registered_worker_line(
     worker_id: &str,
@@ -71,8 +73,12 @@ fn result_status_display(result: &JobResult) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
     use serde_json::json;
     use temper_protocol_worker::{Artifact, Branch, Failure, WORKER_PROTOCOL_VERSION};
+    use tracing_subscriber::fmt::MakeWriter;
 
     use crate::config::CapabilitySpec;
 
@@ -195,6 +201,147 @@ mod tests {
             result_sent_line(&result),
             "worker: result sent job_id=job-789 status=failure(unknown)"
         );
+    }
+
+    #[test]
+    fn liveness_catalog_emits_structured_levels_without_sensitive_fields() {
+        let events = vec![
+            WorkerEvent::JobProgress {
+                worker_id: "worker-1".into(),
+                job_id: "job-1".into(),
+                attempt_id: "attempt-1".into(),
+                phase: "running",
+                run_elapsed_ms: 10,
+                last_progress_elapsed_ms: 0,
+                no_progress_elapsed_ms: 0,
+                active_parallel_operation_count: 1,
+                operation: Some(ObservedOperation {
+                    kind: "tool",
+                    name: "forge_list_related".into(),
+                    operation_id: "call-1".into(),
+                    elapsed_ms: 3,
+                }),
+            },
+            WorkerEvent::JobTimeout {
+                worker_id: "worker-1".into(),
+                job_id: "job-1".into(),
+                attempt_id: "attempt-1".into(),
+                phase: "cancel_requested",
+                reason: "no_progress",
+                limit_ms: 30_000,
+                run_elapsed_ms: 90_000,
+                last_progress_elapsed_ms: 30_001,
+                no_progress_elapsed_ms: 30_001,
+                active_parallel_operation_count: 1,
+                operation: None,
+            },
+            WorkerEvent::CancellationRequested {
+                worker_id: "worker-1".into(),
+                job_id: "job-1".into(),
+                attempt_id: "attempt-1".into(),
+                reason: "no_progress",
+                limit_ms: 30_000,
+            },
+            WorkerEvent::CancellationCompleted {
+                worker_id: "worker-1".into(),
+                job_id: "job-1".into(),
+                attempt_id: "attempt-1".into(),
+                outcome: "hard_kill".into(),
+                descendant_cleanup: "joined".into(),
+                forced: true,
+            },
+            WorkerEvent::ResultRecorded {
+                worker_id: "worker-1".into(),
+                job_id: "job-1".into(),
+                attempt_id: "attempt-1".into(),
+                outbox_state: "durable",
+                delivery_state: "pending",
+                success: true,
+            },
+            WorkerEvent::ResultDelivery {
+                worker_id: "worker-1".into(),
+                job_id: "job-1".into(),
+                attempt_id: "attempt-1".into(),
+                outbox_state: "durable",
+                delivery_state: "retrying",
+                claim_convergence: "pending",
+                warning: true,
+            },
+            WorkerEvent::CapacityReleased {
+                worker_id: "worker-1".into(),
+                job_id: "job-1".into(),
+                attempt_id: "attempt-1".into(),
+                permit_released: true,
+                free_capacity: 1,
+            },
+        ];
+        let captured = capture_events(|| {
+            for event in &events {
+                event.emit();
+            }
+        });
+        assert_eq!(captured.len(), events.len());
+        for (captured, expected) in captured.iter().zip(events.iter()) {
+            assert_eq!(captured["fields"]["event"], expected.name());
+            assert_eq!(captured["fields"]["worker_id"], "worker-1");
+            assert_eq!(captured["fields"]["job_id"], "job-1");
+            assert_eq!(captured["fields"]["attempt_id"], "attempt-1");
+        }
+        assert_eq!(captured[0]["level"], "DEBUG");
+        assert_eq!(captured[1]["level"], "WARN");
+        assert_eq!(captured[2]["level"], "WARN");
+        assert_eq!(captured[3]["level"], "WARN");
+        assert_eq!(captured[4]["level"], "DEBUG");
+        assert_eq!(captured[5]["level"], "WARN");
+        assert_eq!(captured[6]["level"], "DEBUG");
+        let encoded = serde_json::to_string(&captured).unwrap();
+        for forbidden in [
+            "tool_arguments",
+            "result_body",
+            "prompt_content",
+            "credentials",
+            "secret-token-sentinel",
+        ] {
+            assert!(!encoded.contains(forbidden), "event leaked {forbidden}");
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedBuffer {
+        type Writer = SharedBuffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn capture_events(run: impl FnOnce()) -> Vec<serde_json::Value> {
+        let buffer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(buffer.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let bytes = buffer.0.lock().unwrap().clone();
+        String::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     fn test_job_result(value: serde_json::Value) -> JobResult {

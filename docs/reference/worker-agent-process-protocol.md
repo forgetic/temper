@@ -62,6 +62,14 @@ ignores duplicate sequence numbers and stale attempts, and closes a connection
 on malformed, oversized, or gapped input. Fakes and the standalone runner use
 the same typed `JobProgressReporter` without opening a socket.
 
+Cancellation does not depend on a child-authored terminal frame. After the
+joined supervisor has completed graceful exit or forced process-group
+termination and descendant cleanup, the worker appends one synthetic canonical
+`run.finished` activity with `status=cancelled` and
+`stop_reason=cancelled`. The host-only record is durable even when the child
+never connected, stopped responding, or was killed; terminal insertion is
+idempotent if a terminal host record already exists.
+
 The producer maps model attempt boundaries, tool boundaries, steering, and
 agent termination directly from `AgentEvent`. Non-empty text deltas and
 completed streamed tool calls produce content-free `model_progress`, coalesced

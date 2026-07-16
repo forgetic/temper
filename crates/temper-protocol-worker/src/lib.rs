@@ -38,8 +38,10 @@ pub use job::{
     PullRequestFreshnessStatus,
 };
 pub use lifecycle::{
-    ErrorCode, Heartbeat, HeartbeatState, JobHeartbeat, LeaseAck, LeaseAckDisposition,
-    ProtocolError, Release, ReleaseDisposition,
+    ErrorCode, Heartbeat, HeartbeatState, JobCancellationState, JobHeartbeat, JobHeartbeatPhase,
+    JobLiveness, JobOperationKind, JobOperationSummary, JobResultDeliveryState,
+    JobResultDurabilityState, JobTimeoutReason, JobTimeoutSummary, LeaseAck, LeaseAckDisposition,
+    MAX_ACTIVE_OPERATION_SUMMARIES, ProtocolError, Release, ReleaseDisposition,
 };
 pub use message::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 pub use result::{Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus};

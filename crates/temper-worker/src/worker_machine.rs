@@ -159,6 +159,7 @@ pub enum WorkerRequest {
     },
     ArmPollTimer(Duration),
     ArmHeartbeatTimer(Duration),
+    Observe(crate::observability::WorkerEvent),
     Warn(String),
     Log(String),
 }
@@ -390,7 +391,9 @@ impl Machine for WorkerMachine {
                 }
                 state.phase = JobPhase::Quiesced;
                 state.cancellation = CancellationStatus::Quiesced;
-                self.record_terminal(&job_id, &attempt_id, generation, result)
+                let mut requests = self.record_terminal(&job_id, &attempt_id, generation, result);
+                requests.push(self.heartbeat_request(now));
+                requests
             }
             WorkerCompletion::JobQuiesced {
                 job_id,
@@ -409,8 +412,27 @@ impl Machine for WorkerMachine {
                 state.phase = JobPhase::Quiesced;
                 state.cancellation = CancellationStatus::Quiesced;
                 let state = state.clone();
+                let forced = state.escalation_requested
+                    || cleanup.cancellation.contains("forced")
+                    || cleanup.cancellation.contains("kill");
+                let cleanup = JobCleanup {
+                    cancellation: if forced { "forced" } else { "graceful" }.to_string(),
+                    descendants: cleanup.descendants,
+                };
                 let result = self.timeout_result(&job_id, &state, now, &cleanup);
-                self.record_terminal(&job_id, &attempt_id, generation, result)
+                let mut requests = vec![WorkerRequest::Observe(
+                    crate::observability::WorkerEvent::CancellationCompleted {
+                        worker_id: self.params.worker_id.clone(),
+                        job_id: job_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        outcome: cleanup.cancellation.clone(),
+                        descendant_cleanup: cleanup.descendants.clone(),
+                        forced,
+                    },
+                )];
+                requests.extend(self.record_terminal(&job_id, &attempt_id, generation, result));
+                requests.push(self.heartbeat_request(now));
+                requests
             }
             WorkerCompletion::ResultRecorded {
                 job_id,
@@ -441,6 +463,36 @@ impl Machine for WorkerMachine {
                             .min(self.params.max_concurrent_jobs);
                         self.outbox.insert(entry.entry_id.clone(), entry.clone());
                         let mut requests = vec![
+                            WorkerRequest::Observe(
+                                crate::observability::WorkerEvent::ResultRecorded {
+                                    worker_id: self.params.worker_id.clone(),
+                                    job_id: job_id.clone(),
+                                    attempt_id: attempt_id.clone(),
+                                    outbox_state: "durable",
+                                    delivery_state: "pending",
+                                    success: true,
+                                },
+                            ),
+                            WorkerRequest::Observe(
+                                crate::observability::WorkerEvent::CapacityReleased {
+                                    worker_id: self.params.worker_id.clone(),
+                                    job_id: job_id.clone(),
+                                    attempt_id: attempt_id.clone(),
+                                    permit_released: true,
+                                    free_capacity: self.free_capacity,
+                                },
+                            ),
+                            WorkerRequest::Observe(
+                                crate::observability::WorkerEvent::ResultDelivery {
+                                    worker_id: self.params.worker_id.clone(),
+                                    job_id: job_id.clone(),
+                                    attempt_id: attempt_id.clone(),
+                                    outbox_state: "durable",
+                                    delivery_state: "pending",
+                                    claim_convergence: "pending",
+                                    warning: false,
+                                },
+                            ),
                             WorkerRequest::Log(crate::observability::result_sent_line(
                                 &entry.result,
                             )),
@@ -450,6 +502,14 @@ impl Machine for WorkerMachine {
                         requests
                     }
                     Err(error) => vec![
+                        WorkerRequest::Observe(crate::observability::WorkerEvent::ResultRecorded {
+                            worker_id: self.params.worker_id.clone(),
+                            job_id: job_id.clone(),
+                            attempt_id: attempt_id.clone(),
+                            outbox_state: "record_failed",
+                            delivery_state: "not_ready",
+                            success: false,
+                        }),
                         WorkerRequest::Log(format!(
                             "worker: durable result recording failed for job {job_id}: {error}"
                         )),
@@ -504,7 +564,7 @@ impl Machine for WorkerMachine {
             WorkerCompletion::HeartbeatTimer => {
                 let mut requests = Vec::new();
                 if !self.jobs.is_empty() {
-                    requests.push(self.heartbeat_request());
+                    requests.push(self.heartbeat_request(now));
                 }
                 requests.push(WorkerRequest::ArmHeartbeatTimer(
                     self.params.heartbeat_interval,

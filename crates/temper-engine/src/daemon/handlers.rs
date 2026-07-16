@@ -73,7 +73,10 @@ impl DaemonMachine {
     /// the job is pending, unknown, or already completed.
     fn handle_state_job(&self, job_id: &str, responder: HttpResponder) -> Vec<DaemonRequest> {
         let response = match self.core.in_flight_job(job_id) {
-            Some(job) => HttpResponseData::json(200, &JobDto::from(&job).to_json()),
+            Some(job) => HttpResponseData::json(
+                200,
+                &JobDto::from_in_flight(&job, self.core.worker_job_report(job_id)).to_json(),
+            ),
             None => HttpResponseData::status_only(404),
         };
         vec![DaemonRequest::Respond {

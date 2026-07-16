@@ -97,6 +97,23 @@ pub fn heartbeat_message_params_attempts(
     )
 }
 
+/// Builds an exact heartbeat from worker-owned structured reports.
+pub fn heartbeat_message_params_reports(
+    params: &crate::config::WorkerParams,
+    jobs: Vec<JobHeartbeat>,
+    free_capacity: u32,
+) -> WorkerProtocolMessage {
+    WorkerProtocolMessage::Heartbeat(Heartbeat {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: params.worker_id.clone(),
+        jobs,
+        free_capacity: Some(free_capacity),
+        worker_pool: params.worker_pool.clone(),
+        max_concurrent_jobs: Some(params.max_concurrent_jobs),
+        capabilities: protocol_capabilities(params),
+    })
+}
+
 /// Builds an exact heartbeat projection for running and finishing attempts.
 pub fn heartbeat_message_params_states<'a>(
     params: &crate::config::WorkerParams,
@@ -117,6 +134,7 @@ pub fn heartbeat_message_params_states<'a>(
                     HeartbeatState::Finishing => "finishing",
                 }
                 .to_string(),
+                liveness: None,
             })
             .collect(),
         free_capacity: Some(free_capacity),
@@ -140,6 +158,7 @@ fn heartbeat_message_params_with_attempts<'a>(
                 attempt_id: attempt_id.map(str::to_string),
                 state: HeartbeatState::Running,
                 message: "running".to_string(),
+                liveness: None,
             })
             .collect(),
         free_capacity: Some(free_capacity),

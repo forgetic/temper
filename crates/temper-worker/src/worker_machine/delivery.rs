@@ -9,6 +9,23 @@ use crate::result_outbox::ResultOutboxEntry;
 use super::{WorkerMachine, WorkerRequest};
 
 impl WorkerMachine {
+    fn delivery_event(
+        entry: &ResultOutboxEntry,
+        delivery_state: &'static str,
+        claim_convergence: &'static str,
+        warning: bool,
+    ) -> WorkerRequest {
+        WorkerRequest::Observe(crate::observability::WorkerEvent::ResultDelivery {
+            worker_id: entry.assignment.worker_id.clone(),
+            job_id: entry.assignment.job_id.clone(),
+            attempt_id: entry.assignment.attempt_id.clone(),
+            outbox_state: "durable",
+            delivery_state,
+            claim_convergence,
+            warning,
+        })
+    }
+
     pub(super) fn send_entry(entry: &ResultOutboxEntry) -> WorkerRequest {
         WorkerRequest::SendResult {
             entry_id: entry.entry_id.clone(),
@@ -27,7 +44,13 @@ impl WorkerMachine {
         *attempt = attempt.saturating_add(1);
         let exponent = attempt.saturating_sub(1).min(8);
         let delay = Duration::from_secs(2_u64.saturating_pow(exponent).min(300));
+        let entry = self
+            .outbox
+            .get(entry_id)
+            .expect("checked outbox entry exists")
+            .clone();
         vec![
+            Self::delivery_event(&entry, "retrying", "pending", true),
             WorkerRequest::Log(format!(
                 "worker: retaining durable result entry_id={entry_id} retry={} backoff_ms={} reason={reason}",
                 *attempt,
@@ -57,6 +80,7 @@ impl WorkerMachine {
                     ReleaseDisposition::Superseded | ReleaseDisposition::Reclaimed
                 ) {
                     return vec![
+                        Self::delivery_event(&entry, "acknowledged_stale", "stale", true),
                         WorkerRequest::Warn(format!(
                             "worker: durable result became stale entry_id={} job_id={} attempt_id={} disposition={:?}",
                             entry.entry_id,
@@ -67,7 +91,10 @@ impl WorkerMachine {
                         WorkerRequest::AcknowledgeResult { entry, release },
                     ];
                 }
-                vec![WorkerRequest::AcknowledgeResult { entry, release }]
+                vec![
+                    Self::delivery_event(&entry, "acknowledged", "converged", false),
+                    WorkerRequest::AcknowledgeResult { entry, release },
+                ]
             }
             Ok(Some(WorkerProtocolMessage::Error(error)))
                 if matches!(
@@ -79,6 +106,7 @@ impl WorkerMachine {
                 ) =>
             {
                 vec![
+                    Self::delivery_event(&entry, "rejected", "unreconciled", true),
                     WorkerRequest::Warn(format!(
                         "worker: permanently rejecting durable result entry_id={} job_id={} attempt_id={} code={:?}",
                         entry.entry_id,
@@ -101,6 +129,7 @@ impl WorkerMachine {
                 "daemon returned no release acknowledgement".to_string(),
             ),
             Err(error) if permanent_transport_rejection(&error) => vec![
+                Self::delivery_event(&entry, "rejected", "unreconciled", true),
                 WorkerRequest::Warn(format!(
                     "worker: permanently rejecting durable result entry_id={} job_id={} attempt_id={} reason={error}",
                     entry.entry_id, entry.assignment.job_id, entry.assignment.attempt_id,

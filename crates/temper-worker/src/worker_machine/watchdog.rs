@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use temper_protocol_agent::AgentLifecycleEventV1;
 use temper_protocol_worker::{
-    Failure, FailureClass, HeartbeatState, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION,
+    Failure, FailureClass, HeartbeatState, JobCancellationState, JobHeartbeat, JobHeartbeatPhase,
+    JobLiveness, JobOperationKind, JobOperationSummary, JobResult, JobResultDeliveryState,
+    JobResultDurabilityState, JobTimeoutReason, JobTimeoutSummary, MAX_ACTIVE_OPERATION_SUMMARIES,
+    ResultStatus, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_io::EngineTime;
 
@@ -51,7 +54,7 @@ pub enum TimeoutReason {
 }
 
 impl TimeoutReason {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::NoProgress => "no_progress",
             Self::MaxRun => "max_run",
@@ -120,6 +123,78 @@ impl JobWatchState {
 
     pub(super) fn accepts(&self, attempt_id: &str, generation: u64) -> bool {
         self.attempt_id == attempt_id && self.generation == generation
+    }
+
+    fn heartbeat(&self, job_id: &str, now: EngineTime) -> JobHeartbeat {
+        let state = if self.phase == JobPhase::Running {
+            HeartbeatState::Running
+        } else {
+            HeartbeatState::Finishing
+        };
+        let active_operation_count =
+            u32::try_from(self.active_operations.len()).unwrap_or(u32::MAX);
+        let active_operations = self
+            .active_operations
+            .values()
+            .take(MAX_ACTIVE_OPERATION_SUMMARIES)
+            .map(|operation| JobOperationSummary {
+                scope: operation.scope.clone(),
+                kind: match operation.kind {
+                    OperationKind::Model => JobOperationKind::Model,
+                    OperationKind::Tool => JobOperationKind::Tool,
+                },
+                name: operation.name.clone(),
+                operation_id: operation.id.clone(),
+                elapsed_ms: elapsed_ms(now, operation.started_at),
+            })
+            .collect();
+        JobHeartbeat {
+            job_id: job_id.to_string(),
+            attempt_id: Some(self.attempt_id.clone()),
+            state,
+            message: match self.phase {
+                JobPhase::Running => "running",
+                JobPhase::CancelRequested => "cancelling",
+                JobPhase::Quiesced => "recording_result",
+                JobPhase::ResultRecorded => "result_recorded",
+            }
+            .to_string(),
+            liveness: Some(JobLiveness {
+                phase: match self.phase {
+                    JobPhase::Running => JobHeartbeatPhase::Running,
+                    JobPhase::CancelRequested => JobHeartbeatPhase::CancelRequested,
+                    JobPhase::Quiesced => JobHeartbeatPhase::Quiesced,
+                    JobPhase::ResultRecorded => JobHeartbeatPhase::ResultRecorded,
+                },
+                run_elapsed_ms: elapsed_ms(now, self.run_started_at),
+                no_progress_elapsed_ms: elapsed_ms(now, self.last_agent_progress),
+                active_operation_count,
+                active_operations,
+                timeout: self.timeout.as_ref().map(|timeout| JobTimeoutSummary {
+                    reason: match timeout.reason {
+                        TimeoutReason::NoProgress => JobTimeoutReason::NoProgress,
+                        TimeoutReason::MaxRun => JobTimeoutReason::MaxRun,
+                    },
+                    limit_ms: duration_ms(timeout.limit),
+                }),
+                cancellation: match self.cancellation {
+                    CancellationStatus::NotRequested => JobCancellationState::NotRequested,
+                    CancellationStatus::Requested => JobCancellationState::Requested,
+                    CancellationStatus::Escalated => JobCancellationState::Escalated,
+                    CancellationStatus::Quiesced => JobCancellationState::Quiesced,
+                },
+                result_durability: match self.result_durability {
+                    ResultDurabilityStatus::None => JobResultDurabilityState::None,
+                    ResultDurabilityStatus::Pending => JobResultDurabilityState::Pending,
+                    ResultDurabilityStatus::Durable => JobResultDurabilityState::Durable,
+                },
+                result_delivery: match self.result_delivery {
+                    ResultDeliveryStatus::NotReady => JobResultDeliveryState::NotReady,
+                    ResultDeliveryStatus::Pending => JobResultDeliveryState::Pending,
+                },
+                pending_result: self.pending_result.is_some(),
+            }),
+        }
     }
 
     fn update_operations(&mut self, progress: &JobProgress) {
@@ -195,23 +270,20 @@ impl WorkerMachine {
         }
     }
 
-    pub(super) fn heartbeat_request(&self) -> WorkerRequest {
-        WorkerRequest::SendHeartbeat(crate::client::heartbeat_message_params_states(
+    pub(super) fn heartbeat_request(&self, now: EngineTime) -> WorkerRequest {
+        WorkerRequest::SendHeartbeat(crate::client::heartbeat_message_params_reports(
             &self.params,
-            self.jobs.iter().map(|(job_id, state)| {
-                let heartbeat_state = if state.phase == JobPhase::Running {
-                    HeartbeatState::Running
-                } else {
-                    HeartbeatState::Finishing
-                };
-                (job_id.as_str(), state.attempt_id.as_str(), heartbeat_state)
-            }),
+            self.jobs
+                .iter()
+                .map(|(job_id, state)| state.heartbeat(job_id, now))
+                .collect(),
             self.free_capacity,
         ))
     }
 
     pub(super) fn begin_timeout(
         &mut self,
+        now: EngineTime,
         job_id: String,
         reason: TimeoutReason,
         limit: Duration,
@@ -224,20 +296,47 @@ impl WorkerMachine {
         }
         state.phase = JobPhase::CancelRequested;
         state.cancellation = CancellationStatus::Requested;
+        let operation = state.current_operation();
         state.timeout = Some(TimeoutState {
             reason,
             limit,
-            operation: state.current_operation(),
+            operation: operation.clone(),
         });
         let attempt_id = state.attempt_id.clone();
         let generation = state.generation;
+        let run_elapsed_ms = elapsed_ms(now, state.run_started_at);
+        let no_progress_elapsed_ms = elapsed_ms(now, state.last_agent_progress);
+        let active_parallel_operation_count =
+            u32::try_from(state.active_operations.len()).unwrap_or(u32::MAX);
         let reason_text = format!(
             "worker watchdog {} timeout after {}ms",
             reason.as_str(),
             limit.as_millis()
         );
         vec![
-            self.heartbeat_request(),
+            WorkerRequest::Observe(crate::observability::WorkerEvent::JobTimeout {
+                worker_id: self.params.worker_id.clone(),
+                job_id: job_id.clone(),
+                attempt_id: attempt_id.clone(),
+                phase: "cancel_requested",
+                reason: reason.as_str(),
+                limit_ms: duration_ms(limit),
+                run_elapsed_ms,
+                last_progress_elapsed_ms: no_progress_elapsed_ms,
+                no_progress_elapsed_ms,
+                active_parallel_operation_count,
+                operation: operation.as_ref().map(|operation| {
+                    crate::observability::ObservedOperation::from_active(operation, now.as_nanos())
+                }),
+            }),
+            WorkerRequest::Observe(crate::observability::WorkerEvent::CancellationRequested {
+                worker_id: self.params.worker_id.clone(),
+                job_id: job_id.clone(),
+                attempt_id: attempt_id.clone(),
+                reason: reason.as_str(),
+                limit_ms: duration_ms(limit),
+            }),
+            self.heartbeat_request(now),
             WorkerRequest::CancelJob {
                 job_id: job_id.clone(),
                 attempt_id: attempt_id.clone(),
@@ -281,7 +380,26 @@ impl WorkerMachine {
         state.last_agent_progress = now;
         state.timer_generation = state.timer_generation.saturating_add(1);
         state.update_operations(&progress);
-        vec![self.no_progress_timer(&job_id, now)]
+        let operation = state.current_operation();
+        let run_elapsed_ms = elapsed_ms(now, state.run_started_at);
+        let active_parallel_operation_count =
+            u32::try_from(state.active_operations.len()).unwrap_or(u32::MAX);
+        vec![
+            WorkerRequest::Observe(crate::observability::WorkerEvent::JobProgress {
+                worker_id: self.params.worker_id.clone(),
+                job_id: job_id.clone(),
+                attempt_id,
+                phase: "running",
+                run_elapsed_ms,
+                last_progress_elapsed_ms: 0,
+                no_progress_elapsed_ms: 0,
+                active_parallel_operation_count,
+                operation: operation.as_ref().map(|operation| {
+                    crate::observability::ObservedOperation::from_active(operation, now.as_nanos())
+                }),
+            }),
+            self.no_progress_timer(&job_id, now),
+        ]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -311,6 +429,7 @@ impl WorkerMachine {
                     return vec![self.no_progress_timer(&job_id, now)];
                 }
                 self.begin_timeout(
+                    now,
                     job_id,
                     TimeoutReason::NoProgress,
                     self.params.liveness_limits.max_no_progress,
@@ -334,7 +453,7 @@ impl WorkerMachine {
                         delay: delay_until(now, deadline),
                     }];
                 }
-                self.begin_timeout(job_id, TimeoutReason::MaxRun, limit)
+                self.begin_timeout(now, job_id, TimeoutReason::MaxRun, limit)
             }
             WatchdogTimerKind::CancellationGrace => {
                 if state.phase != JobPhase::CancelRequested
@@ -469,6 +588,14 @@ impl WorkerMachine {
             details: Some(details),
         }
     }
+}
+
+fn elapsed_ms(now: EngineTime, started: EngineTime) -> u64 {
+    now.as_nanos().saturating_sub(started.as_nanos()) / 1_000_000
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn delay_until(now: EngineTime, deadline: EngineTime) -> Duration {

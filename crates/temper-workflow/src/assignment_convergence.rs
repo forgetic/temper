@@ -21,7 +21,9 @@ use crate::metadata::{DurableAssignment, WorkflowMetadata, parse_metadata_block}
 use crate::relation::RelationKind;
 use crate::validated::{Effect, ValidatedWorkflow};
 
+mod observability;
 mod pr;
+use observability::emit_assignment_convergence;
 pub use pr::recover_advanced_pull_request_assignment_from_durable;
 
 /// Stable marker used to make assignment-recovery audit comments idempotent.
@@ -136,6 +138,17 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
     /// require the complete captured assignment snapshot, including expiry, so
     /// a heartbeat or newer assignment cannot be cleared by an old report.
     pub async fn converge(
+        &self,
+        repo: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+    ) -> Result<AssignmentConvergenceOutcome, AssignmentConvergenceError> {
+        let result = self.converge_inner(repo, target, expected).await;
+        emit_assignment_convergence(repo, target, expected, &result);
+        result
+    }
+
+    async fn converge_inner(
         &self,
         repo: &RepositoryId,
         target: ArtifactSource,

@@ -2138,6 +2138,7 @@ dependencies = [
  "temper-testing",
  "temper-workflow",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

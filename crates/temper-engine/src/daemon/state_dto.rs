@@ -31,7 +31,7 @@
 
 use serde::Serialize;
 use temper_log::{WorkItemRef, strip_provider_scheme};
-use temper_protocol_worker::{Artifact, Capability};
+use temper_protocol_worker::{Artifact, Capability, JobHeartbeat};
 use temper_worker_registry::daemon_core::QueuedJob;
 use temper_worker_registry::{DaemonCore, InFlightJob, WorkerSnapshot};
 
@@ -68,6 +68,10 @@ pub struct WorkerDto {
     pub max_concurrent_jobs: u32,
     pub free_capacity: u32,
     pub capabilities: Vec<WorkerCapabilityDto>,
+    /// Latest accepted per-job reports. These are observability only and are
+    /// never daemon watchdog authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jobs: Vec<JobHeartbeat>,
 }
 
 impl From<&WorkerSnapshot> for WorkerDto {
@@ -83,6 +87,7 @@ impl From<&WorkerSnapshot> for WorkerDto {
                 .iter()
                 .map(WorkerCapabilityDto::from)
                 .collect(),
+            jobs: worker.job_reports.clone(),
         }
     }
 }
@@ -109,6 +114,8 @@ impl From<&Artifact> for ArtifactDto {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct JobDto {
     pub job_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     pub role: String,
     /// Bare `owner/repo` path of the coordinating artifact's home repository.
     pub repo: String,
@@ -119,6 +126,9 @@ pub struct JobDto {
     /// deltas onto.
     #[serde(rename = "ref")]
     pub artifact_ref: Option<String>,
+    /// Latest worker report for this assignment, when one has arrived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_report: Option<JobHeartbeat>,
 }
 
 impl JobDto {
@@ -127,26 +137,46 @@ impl JobDto {
         serde_json::to_value(self).expect("JobDto serializes")
     }
 
-    fn new(job_id: &str, role: &str, repo: &str, artifact: &Artifact) -> Self {
+    fn new(
+        job_id: &str,
+        attempt_id: Option<&str>,
+        role: &str,
+        repo: &str,
+        artifact: &Artifact,
+        worker_report: Option<&JobHeartbeat>,
+    ) -> Self {
         Self {
             job_id: job_id.to_string(),
+            attempt_id: attempt_id.map(str::to_string),
             role: role.to_string(),
             repo: repo.to_string(),
             artifact: ArtifactDto::from(artifact),
             artifact_ref: artifact_ref_string(repo, artifact),
+            worker_report: worker_report.cloned(),
         }
+    }
+
+    pub(crate) fn from_in_flight(job: &InFlightJob, worker_report: Option<&JobHeartbeat>) -> Self {
+        Self::new(
+            &job.job_id,
+            job.attempt_id.as_deref(),
+            &job.role,
+            &job.repo,
+            &job.artifact,
+            worker_report,
+        )
     }
 }
 
 impl From<&QueuedJob> for JobDto {
     fn from(job: &QueuedJob) -> Self {
-        Self::new(&job.job_id, &job.role, &job.repo, &job.artifact)
+        Self::new(&job.job_id, None, &job.role, &job.repo, &job.artifact, None)
     }
 }
 
 impl From<&InFlightJob> for JobDto {
     fn from(job: &InFlightJob) -> Self {
-        Self::new(&job.job_id, &job.role, &job.repo, &job.artifact)
+        Self::from_in_flight(job, None)
     }
 }
 
@@ -181,7 +211,10 @@ impl DaemonStateSnapshot {
             .coordinator()
             .assigned_work_items()
             .filter_map(|item| core.in_flight_job(&item.job_id))
-            .map(|job| JobDto::from(&job))
+            .map(|job| {
+                let report = core.worker_job_report(&job.job_id);
+                JobDto::from_in_flight(&job, report)
+            })
             .collect();
         let role_saturation = role_saturation_dtos(core, &queued_jobs);
 

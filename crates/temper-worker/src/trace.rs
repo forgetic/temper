@@ -409,6 +409,18 @@ impl TraceRun {
         }))
     }
 
+    /// Writes the sole synthetic cancelled terminal event. The worker uses this
+    /// after graceful or forced process termination when the child cannot emit
+    /// its own terminal frame.
+    pub fn finish_cancelled(&self) -> Result<u64, TraceError> {
+        let duration_ms = elapsed_ms(self.inner.started);
+        self.finish(AgentActivityEventV1::RunFinished(RunFinishedV1 {
+            status: RunStatusV1::Cancelled,
+            duration_ms,
+            stop_reason: Some(StopReasonV1::Cancelled),
+        }))
+    }
+
     /// Writes the sole failed/crashed terminal event from trusted host classifications.
     pub fn finish_failure(
         &self,

@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_worker::{
-    Artifact, Assign, ErrorCode, Heartbeat, LeaseAck, Poll, ProtocolError, Register,
+    Artifact, Assign, ErrorCode, JobHeartbeat, LeaseAck, Poll, ProtocolError, Register,
     WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 
@@ -20,6 +20,7 @@ use crate::{
 };
 
 mod activity;
+mod heartbeat;
 mod result;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -442,6 +443,11 @@ impl DaemonCore {
     /// Full context of a currently in-flight (assigned, not yet completed) job,
     /// recoverable until `handle(Result)` completes it. `None` if the job is
     /// pending (not yet dispatched), unknown, or already completed.
+    pub fn worker_job_report(&self, job_id: &str) -> Option<&JobHeartbeat> {
+        let worker_id = self.coordinator.assigned_worker(job_id)?;
+        self.coordinator.registry().job_report(worker_id, job_id)
+    }
+
     pub fn in_flight_job(&self, job_id: &str) -> Option<InFlightJob> {
         let item = self.coordinator.assigned_work_item(job_id)?;
         let (artifact, job_payload) = self.job_context.get(job_id)?.clone();
@@ -674,83 +680,6 @@ impl DaemonCore {
             );
         }
         response
-    }
-
-    /// Authenticates and applies a heartbeat while exposing exact durable-job
-    /// matches to the daemon lease handler.
-    pub fn handle_authenticated_heartbeat(
-        &mut self,
-        heartbeat: Heartbeat,
-        auth: Option<&WorkerAuth>,
-    ) -> Result<(Option<WorkerProtocolMessage>, HeartbeatRecovery), WorkerAuthError> {
-        self.authenticate_registered_worker(
-            &heartbeat.worker_id,
-            heartbeat.worker_pool.as_deref(),
-            auth,
-        )?;
-        Ok(self.handle_heartbeat(heartbeat))
-    }
-
-    fn handle_heartbeat(
-        &mut self,
-        heartbeat: Heartbeat,
-    ) -> (Option<WorkerProtocolMessage>, HeartbeatRecovery) {
-        if self
-            .coordinator
-            .registry_mut()
-            .heartbeat(&heartbeat.worker_id)
-            .is_err()
-        {
-            return (
-                Some(error_response(
-                    ErrorCode::UnknownWorker,
-                    "unknown worker",
-                    None,
-                )),
-                HeartbeatRecovery::default(),
-            );
-        }
-
-        let mut recovery = HeartbeatRecovery::default();
-        for reported in heartbeat.jobs {
-            if self.coordinator.assigned_worker(&reported.job_id)
-                == Some(heartbeat.worker_id.as_str())
-                && self
-                    .assignment_attempts
-                    .get(&reported.job_id)
-                    .map(String::as_str)
-                    == reported.attempt_id.as_deref()
-            {
-                recovery.matched_job_ids.push(reported.job_id);
-                continue;
-            }
-
-            let Some(staged) = self.staged_recovery.get(&reported.job_id).cloned() else {
-                recovery.rejected_job_ids.push(reported.job_id);
-                continue;
-            };
-            if staged.worker_id != heartbeat.worker_id
-                || staged.attempt_id.as_deref() != reported.attempt_id.as_deref()
-            {
-                recovery.rejected_job_ids.push(reported.job_id);
-                continue;
-            }
-            match self
-                .coordinator
-                .restore_assignment(&staged.worker_id, staged.item)
-            {
-                Ok(_) => {
-                    self.staged_recovery.remove(&reported.job_id);
-                    if let Some(attempt_id) = staged.attempt_id {
-                        self.assignment_attempts
-                            .insert(reported.job_id.clone(), attempt_id);
-                    }
-                    recovery.matched_job_ids.push(reported.job_id);
-                }
-                Err(_) => recovery.rejected_job_ids.push(reported.job_id),
-            }
-        }
-        (None, recovery)
     }
 
     fn handle_lease_ack(&mut self, _lease_ack: LeaseAck) -> Option<WorkerProtocolMessage> {

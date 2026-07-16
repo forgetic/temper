@@ -621,6 +621,7 @@ fn matching_heartbeat_reattaches_staged_assignment_and_rejects_other_ids() {
                 attempt_id: None,
                 state: HeartbeatState::Running,
                 message: String::new(),
+                liveness: None,
             })
             .collect(),
         free_capacity: Some(0),
