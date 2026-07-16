@@ -19,7 +19,7 @@
 //! calls the forge API. The executor owns the final branch push.
 
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -284,18 +284,19 @@ impl AcceptedSubmitProofStore {
     }
 }
 
-pub fn handle_submit_for_pr_with_proof<F>(
+pub async fn handle_submit_for_pr_with_proof<F, Fut>(
     store: &AcceptedSubmitProofStore,
     handler: F,
     request: SubmitForPrRequest,
-    context: &WorkspaceContext,
-    cwd: &Path,
+    context: WorkspaceContext,
+    cwd: PathBuf,
 ) -> SubmitForPrResponse
 where
-    F: FnOnce(SubmitForPrRequest, &WorkspaceContext, &Path) -> SubmitForPrResponse,
+    F: FnOnce(SubmitForPrRequest, WorkspaceContext, PathBuf) -> Fut,
+    Fut: Future<Output = SubmitForPrResponse>,
 {
-    let response = handler(request, context, cwd);
-    store.record_response(response, context, cwd)
+    let response = handler(request, context.clone(), cwd.clone()).await;
+    store.record_response(response, &context, &cwd)
 }
 
 /// Why an agent turn could not produce a [`WorkspaceResult`].

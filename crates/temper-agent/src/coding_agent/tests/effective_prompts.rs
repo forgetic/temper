@@ -125,8 +125,9 @@ fn host_guidance_follows_filtered_submit_and_forge_registry() {
     context.checkout = Some("writable".to_string());
     context.allowed_verdicts.clear();
 
-    let submit: SubmitForPrCallback =
-        std::sync::Arc::new(|_| temper_protocol_agent::SubmitForPrResponse::accepted("ok"));
+    let submit: SubmitForPrCallback = std::sync::Arc::new(|_| {
+        Box::pin(async { temper_protocol_agent::SubmitForPrResponse::accepted("ok") })
+    });
     let forge: ForgeContextHost = std::sync::Arc::new(|_| {
         Box::pin(async { Err(temper_protocol_agent::ForgeContextErrorCode::NotFound) })
     });
@@ -248,8 +249,10 @@ fn stable_effective_action_prompt_snapshots() {
 
     for (name, context, capability) in cases {
         let submit = (name == "open_pr").then(|| {
-            std::sync::Arc::new(|_| temper_protocol_agent::SubmitForPrResponse::accepted("ok"))
-                as SubmitForPrCallback
+            std::sync::Arc::new(|_| {
+                Box::pin(async { temper_protocol_agent::SubmitForPrResponse::accepted("ok") })
+                    as SubmitForPrFuture
+            }) as SubmitForPrCallback
         });
         let registry = tool_registry_for_context(
             capability,

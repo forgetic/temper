@@ -2,7 +2,6 @@
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -13,8 +12,7 @@ use temper_protocol_agent::{
     SubmitForPrResponse, WorkspaceContext,
 };
 
-use super::{AttemptFence, SubmitForPrHandler};
-use crate::agent_runner::{AcceptedSubmitProofStore, handle_submit_for_pr_with_proof};
+use super::AttemptFence;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -24,6 +22,11 @@ const ATTEMPT_UNAVAILABLE: &str = "agent attempt is no longer available";
 pub(super) struct ForgeSideChannelRequest {
     pub(super) operation: temper_protocol_agent::ForgeContextOperation,
     pub(super) response: std::sync::mpsc::SyncSender<ForgeContextResponse>,
+}
+
+pub(super) struct SubmitSideChannelRequest {
+    pub(super) request: SubmitForPrRequest,
+    pub(super) response: std::sync::mpsc::SyncSender<SubmitForPrResponse>,
 }
 
 /// One listener plus at most one accepted stream. Both are explicitly stopped
@@ -66,22 +69,11 @@ impl Drop for LocalServer {
 pub(super) fn start_submit_server(
     listener: TcpListener,
     address: String,
-    handler: SubmitForPrHandler,
-    accepted_submit: AcceptedSubmitProofStore,
-    context: WorkspaceContext,
-    cwd: PathBuf,
+    requests: temper_worker_io::CqSender<SubmitSideChannelRequest>,
     fence: AttemptFence,
 ) -> LocalServer {
     start_server(listener, address, move |stream, stopping| {
-        handle_submit_stream(
-            stream,
-            &handler,
-            &accepted_submit,
-            &context,
-            &cwd,
-            &fence,
-            stopping,
-        );
+        handle_submit_stream(stream, &requests, &fence, stopping);
     })
 }
 
@@ -212,10 +204,7 @@ fn forge_unavailable() -> ForgeContextResponse {
 
 fn handle_submit_stream(
     mut stream: TcpStream,
-    handler: &SubmitForPrHandler,
-    accepted_submit: &AcceptedSubmitProofStore,
-    context: &WorkspaceContext,
-    cwd: &Path,
+    requests: &temper_worker_io::CqSender<SubmitSideChannelRequest>,
     fence: &AttemptFence,
     stopping: &AtomicBool,
 ) {
@@ -231,13 +220,18 @@ fn handle_submit_stream(
             Ok(_) if request_bytes.len() as u64 <= MAX_MESSAGE_BYTES => {
                 match serde_json::from_slice::<SubmitForPrRequest>(&request_bytes) {
                     Ok(request) if request.protocol_version == PROTOCOL_VERSION => {
-                        handle_submit_for_pr_with_proof(
-                            accepted_submit,
-                            |request, context, cwd| handler(request, context, cwd),
-                            request,
-                            context,
-                            cwd,
-                        )
+                        let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
+                        if requests
+                            .send(SubmitSideChannelRequest {
+                                request,
+                                response: response_tx,
+                            })
+                            .is_err()
+                        {
+                            SubmitForPrResponse::rejected(ATTEMPT_UNAVAILABLE)
+                        } else {
+                            wait_for_submit_response(response_rx, fence, stopping)
+                        }
                     }
                     Ok(request) => SubmitForPrResponse::rejected(format!(
                         "submit_for_pr protocol version mismatch: got {}, expected {}",
@@ -255,10 +249,28 @@ fn handle_submit_stream(
         }
     };
     if !fence.is_open() || stopping.load(Ordering::Acquire) {
-        accepted_submit.clear();
         response = SubmitForPrResponse::rejected(ATTEMPT_UNAVAILABLE);
     }
     write_bounded(&mut stream, &response);
+}
+
+fn wait_for_submit_response(
+    response: std::sync::mpsc::Receiver<SubmitForPrResponse>,
+    fence: &AttemptFence,
+    stopping: &AtomicBool,
+) -> SubmitForPrResponse {
+    loop {
+        if !fence.is_open() || stopping.load(Ordering::Acquire) {
+            return SubmitForPrResponse::rejected(ATTEMPT_UNAVAILABLE);
+        }
+        match response.recv_timeout(RESPONSE_POLL_INTERVAL) {
+            Ok(response) if fence.is_open() => return response,
+            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return SubmitForPrResponse::rejected(ATTEMPT_UNAVAILABLE);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
 }
 
 fn set_timeouts(stream: &TcpStream) {

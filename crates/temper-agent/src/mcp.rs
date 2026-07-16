@@ -9,7 +9,7 @@ mod client;
 mod connection;
 mod protocol;
 
-pub use client::{McpError, StdioMcpClient, StdioMcpServerConfig};
+pub use client::{McpCancellationHandle, McpError, StdioMcpClient, StdioMcpServerConfig};
 pub use protocol::{McpToolCallResult, McpToolDescriptor};
 
 #[cfg(test)]

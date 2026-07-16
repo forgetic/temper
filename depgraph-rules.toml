@@ -117,7 +117,9 @@ temper-worker = ["temper-process-containment", "temper-protocol-activity", "temp
 # ===========================================================================
 temper-agent-io = []
 temper-protocol-agent = ["temper-protocol-context", "temper-verdict"]
-temper-agent-core = ["temper-agent-io"]
+# Shared OS leaf used by the agent shell's managed process tools; it has no
+# worker/engine dependency and keeps unsafe platform containment out of core.
+temper-agent-core = ["temper-agent-io", "temper-process-containment"]
 # NOTE / DIVERGENCE from rule 3: besides temper-protocol-agent (the protocol the
 # worker exposes), the agent also depends on the engine-owned conversation /
 # proposal responder contract it implements. It is a leaf serde contract with

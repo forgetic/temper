@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use temper_protocol_agent::AgentRuntimeLimitsV1;
+use temper_protocol_agent::{AgentRuntimeLimitsV1, SubmitForPrResponse};
 
 use super::supervisor::{CancellationOutcome, DescendantCleanupStatus, ManagedAgentProcess};
 use super::{DiagnosticIdentity, OutOfProcessRunner, tests::test_context};
@@ -183,6 +183,100 @@ printf '{"summary":"ok"}' > "$result"
     assert_eq!(output.result.summary.as_deref(), Some("ok"));
     assert!(host_started.load(Ordering::Acquire));
     assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+struct PendingSubmit {
+    dropped: Arc<AtomicBool>,
+}
+
+impl Future for PendingSubmit {
+    type Output = SubmitForPrResponse;
+
+    fn poll(self: std::pin::Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+
+impl Drop for PendingSubmit {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Release);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn hung_submit_host_is_dropped_and_joined_before_run_cancellation_returns() {
+    let temp = tempfile::tempdir().unwrap();
+    let requested = temp.path().join("submit-requested");
+    let script = executable_script(
+        temp.path(),
+        "hung-submit.sh",
+        r#"
+submit=""
+while [ "$#" -gt 0 ]; do
+  arg="$1"; shift
+  case "$arg" in
+    --submit-for-pr-address) submit="$1"; shift ;;
+    --context|--result|--workspace|--runtime-limits|--agent-lifecycle-address|--activity-address|--trace-policy|--tool-config|--forge-context-address) shift ;;
+  esac
+done
+python3 - "$submit" "${TEMPER_REQUESTED:?}" <<'PY'
+import json, socket, sys
+address, requested = sys.argv[1:]
+host, port = address.rsplit(':', 1)
+stream = socket.create_connection((host, int(port)), timeout=5)
+request = {"protocol_version":1,"correlation_key":"test-key","role":"engineer","action":"open_pr","summary":"ready"}
+stream.sendall(json.dumps(request).encode())
+stream.shutdown(socket.SHUT_WR)
+open(requested, 'w').close()
+while stream.recv(1024): pass
+PY
+"#,
+    );
+    let host_dropped = Arc::new(AtomicBool::new(false));
+    let host_started = Arc::new(AtomicBool::new(false));
+    let dropped_for_host = Arc::clone(&host_dropped);
+    let started_for_host = Arc::clone(&host_started);
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_env(vec![(
+            "TEMPER_REQUESTED".to_string(),
+            requested.display().to_string(),
+        )])
+        .with_async_submit_for_pr_handler(move |_request, _context, _cwd| {
+            started_for_host.store(true, Ordering::Release);
+            PendingSubmit {
+                dropped: Arc::clone(&dropped_for_host),
+            }
+        })
+        .with_liveness_limits(short_limits());
+    let context = test_context();
+    let cwd = temp.path().to_path_buf();
+    let mut future = Box::pin(runner.run("hung-submit", &context, &cwd));
+    let mut task_context = Context::from_waker(Waker::noop());
+    assert!(matches!(
+        future.as_mut().poll(&mut task_context),
+        Poll::Pending
+    ));
+    wait_for_file(&requested);
+    for _ in 0..100 {
+        if host_started.load(Ordering::Acquire) {
+            break;
+        }
+        assert!(matches!(
+            future.as_mut().poll(&mut task_context),
+            Poll::Pending
+        ));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        host_started.load(Ordering::Acquire),
+        "submit host did not start"
+    );
+
+    let started = Instant::now();
+    drop(future);
+    assert!(host_dropped.load(Ordering::Acquire));
+    assert!(started.elapsed() < Duration::from_secs(1));
 }
 
 #[test]

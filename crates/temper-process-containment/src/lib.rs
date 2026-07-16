@@ -20,13 +20,24 @@ pub enum ContainmentKind {
 /// Configures attributes that must be applied between fork and exec.
 pub fn configure_command(command: &mut Command) {
     #[cfg(unix)]
-    configure_unix(command);
+    configure_unix(command, libc::SIGKILL);
+    #[cfg(not(any(unix, windows)))]
+    let _ = command;
+}
+
+/// Configures an isolated tool/server subtree whose leader can relay abrupt
+/// owner loss to its process group. On Linux the leader receives SIGTERM; the
+/// caller must install a TERM handler that hard-kills its own group. Windows
+/// relies on the kill-on-close Job Object attached after spawn.
+pub fn configure_descendant_command(command: &mut Command) {
+    #[cfg(unix)]
+    configure_unix(command, libc::SIGTERM);
     #[cfg(not(any(unix, windows)))]
     let _ = command;
 }
 
 #[cfg(unix)]
-fn configure_unix(command: &mut Command) {
+fn configure_unix(command: &mut Command, parent_death_signal: i32) {
     use std::os::unix::process::CommandExt as _;
 
     // A fresh process group gives the supervisor one signal target for the
@@ -41,7 +52,7 @@ fn configure_unix(command: &mut Command) {
         unsafe {
             let expected_parent = libc::getpid();
             command.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, parent_death_signal) == -1 {
                     return Err(io::Error::last_os_error());
                 }
                 if libc::getppid() != expected_parent {

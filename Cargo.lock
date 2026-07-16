@@ -1648,6 +1648,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "futures",
  "jig-core",
  "jig-record",
  "jig-runtime",
@@ -1682,6 +1683,8 @@ dependencies = [
  "skein",
  "temper-agent",
  "temper-agent-io",
+ "temper-process-containment",
+ "tempfile",
  "tongs",
 ]
 

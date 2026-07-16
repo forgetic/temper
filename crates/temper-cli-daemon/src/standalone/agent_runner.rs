@@ -65,7 +65,9 @@ impl InProcessAgentRunner {
             trace_policy: AgentActivityCapturePolicyV1::default(),
             trace_collector: TraceCollector::default(),
             submit_for_pr: std::sync::Arc::new(|request, context, cwd| {
-                temper_worker::submit_for_pr_pre_push_response_blocking(request, context, cwd)
+                Box::pin(async move {
+                    temper_worker::submit_for_pr_pre_push_response(&request, &context, cwd).await
+                })
             }),
             forge_context: None,
         }
@@ -226,13 +228,18 @@ impl InProcessAgentRunner {
         let accepted_submit = AcceptedSubmitProofStore::new();
         let accepted_submit_for_host = accepted_submit.clone();
         let submit_for_pr: SubmitForPrHost = std::sync::Arc::new(move |request, context, cwd| {
-            temper_worker::handle_submit_for_pr_with_proof(
-                &accepted_submit_for_host,
-                |request, context, cwd| submit_for_pr(request, context, cwd),
-                request,
-                context,
-                cwd,
-            )
+            let accepted_submit = accepted_submit_for_host.clone();
+            let submit_for_pr = submit_for_pr.clone();
+            Box::pin(async move {
+                temper_worker::handle_submit_for_pr_with_proof(
+                    &accepted_submit,
+                    move |request, context, cwd| submit_for_pr(request, context, cwd),
+                    request,
+                    context,
+                    cwd,
+                )
+                .await
+            })
         });
         let submit_for_pr = Some(submit_for_pr);
         let forge_context: Option<ForgeContextHost> = self.forge_context.clone().map(|host| {

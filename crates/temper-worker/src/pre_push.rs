@@ -105,21 +105,6 @@ pub async fn submit_for_pr_pre_push_response(
     response_from_reports(&request.correlation_key, reports)
 }
 
-/// Synchronous wrapper for the out-of-process `submit_for_pr` side-channel
-/// thread. It runs the async checker on a short-lived worker runtime so the
-/// child agent receives a normal structured tool response on the same request.
-pub fn submit_for_pr_pre_push_response_blocking(
-    request: SubmitForPrRequest,
-    context: &WorkspaceContext,
-    workspace_root: &Path,
-) -> SubmitForPrResponse {
-    let context = context.clone();
-    let workspace_root = workspace_root.to_path_buf();
-    temper_worker_io::block_on(async move {
-        submit_for_pr_pre_push_response(&request, &context, &workspace_root).await
-    })
-}
-
 /// Builds a terminal pre-push response for callers that deliberately rerun the
 /// repository gates at the end of a turn.
 ///

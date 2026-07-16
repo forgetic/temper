@@ -141,8 +141,10 @@ fn tool_registry_writability_matches_capability() {
 fn submit_for_pr_tool_exposed_only_to_writable_engineer_sessions() {
     let cwd = std::env::temp_dir();
     let callback = || {
-        std::sync::Arc::new(|_| temper_protocol_agent::SubmitForPrResponse::accepted("ok"))
-            as SubmitForPrCallback
+        std::sync::Arc::new(|_| {
+            Box::pin(async { temper_protocol_agent::SubmitForPrResponse::accepted("ok") })
+                as SubmitForPrFuture
+        }) as SubmitForPrCallback
     };
 
     let engineer = super::common::parsed_fixture();
