@@ -264,6 +264,7 @@ impl InProcessAgentRunner {
                     address: activity_address,
                     lifecycle_address: None,
                     lifecycle_reporter: Some(lifecycle_reporter),
+                    cancellation: Default::default(),
                 },
                 runtime_limits,
             )

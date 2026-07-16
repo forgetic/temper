@@ -1,0 +1,18 @@
+[package]
+name = "temper-process-containment"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Small OS process-containment boundary used by the Temper worker"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+# This leaf is the sole OS FFI boundary and therefore cannot inherit the
+# workspace-wide `unsafe_code = "forbid"`. Keep unsafe operations explicit.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"

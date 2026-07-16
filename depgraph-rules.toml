@@ -108,7 +108,8 @@ temper-engine = ["temper-forge", "temper-engine-io", "temper-log", "temper-runne
 # Never depends on an engine- or agent-implementation crate (rule 2).
 # ===========================================================================
 temper-worker-io = []
-temper-worker = ["temper-protocol-activity", "temper-protocol-worker", "temper-worker-io", "temper-protocol-agent", "temper-verdict"]
+temper-process-containment = []
+temper-worker = ["temper-process-containment", "temper-protocol-activity", "temper-protocol-worker", "temper-worker-io", "temper-protocol-agent", "temper-verdict"]
 
 # ===========================================================================
 # AGENT layer (formerly anvil). Consumes the worker-exposed agent protocol.

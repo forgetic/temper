@@ -49,6 +49,7 @@ members = [
     # Merged from smith (the orchestration worker):
     "crates/temper-protocol-agent",
     "crates/temper-worker-io",
+    "crates/temper-process-containment",
     "crates/temper-worker",
     # Merged from anvil (the coding/decision agent):
     "crates/temper-agent-core",
@@ -158,6 +159,7 @@ skein = { git = "https://git.ekanayaka.io/ai/skein.git", rev = "50c7719", featur
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 fs2 = "0.4"
+libc = "0.2"
 # Type-level secrets for config: SecretString redacts in Debug, has no Display,
 # is not Serialize (so a token cannot leak via a struct dump or accidental
 # serialization), and zeroizes on drop. The `serde` feature is deliberately NOT
@@ -186,6 +188,7 @@ opentelemetry_sdk = "0.32"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 tracing-opentelemetry = "0.33"
 uuid = { version = "1", features = ["v4"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 futures = "0.3"
 tempfile = "3"
 

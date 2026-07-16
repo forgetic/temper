@@ -2007,6 +2007,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-process-containment"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "temper-protocol-activity"
 version = "0.1.0"
 dependencies = [
@@ -2282,6 +2290,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-memory",
  "temper-log",
+ "temper-process-containment",
  "temper-protocol-activity",
  "temper-protocol-agent",
  "temper-protocol-worker",

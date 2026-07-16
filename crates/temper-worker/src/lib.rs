@@ -49,7 +49,9 @@ pub use context_client::{
 };
 pub use executor::{JobExecutor, JobOutcome, StubExecutor, job_result};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
-pub use out_of_process_runner::OutOfProcessRunner;
+pub use out_of_process_runner::{
+    CancellationOutcome, DescendantCleanupStatus, JobQuiesced, OutOfProcessRunner,
+};
 pub use pr_freshness::{
     HttpPrFreshnessGuard, PrFreshnessFailure, PrFreshnessGuard,
     map_response as map_pr_freshness_response,

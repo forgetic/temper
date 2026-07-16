@@ -12,6 +12,7 @@ temper-protocol-agent = { path = "../temper-protocol-agent" }
 temper-protocol-activity = { path = "../temper-protocol-activity" }
 tracing = { workspace = true }
 temper-worker-io = { path = "../temper-worker-io" }
+temper-process-containment = { path = "../temper-process-containment" }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-verdict = { path = "../temper-verdict" }
 serde.workspace = true

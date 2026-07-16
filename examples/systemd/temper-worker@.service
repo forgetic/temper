@@ -15,6 +15,9 @@ LoadCredential=credentials.toml:/etc/temper/credentials.toml
 ExecStart=/usr/local/bin/temper --config /etc/temper/config.toml serve worker --pool %i --id %H-%i
 Restart=on-failure
 RestartSec=5s
+# Backstop for abrupt worker death; ordinary run cancellation is joined by the
+# worker's per-agent process-group supervisor.
+KillMode=control-group
 
 # Workers need writable workspace state for prepared checkouts and agent runs.
 NoNewPrivileges=true

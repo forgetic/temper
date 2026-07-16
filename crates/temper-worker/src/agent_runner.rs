@@ -247,6 +247,13 @@ impl AcceptedSubmitProofStore {
             .clone()
     }
 
+    /// Removes proof when its attempt fence closes. Side-channel handlers call
+    /// this both before and after joining so a late gate completion cannot be
+    /// accepted by a cancelled run.
+    pub(crate) fn clear(&self) {
+        *self.inner.lock().expect("accepted submit proof lock") = None;
+    }
+
     /// Records an accepted host response with a fresh worker-owned fingerprint.
     ///
     /// If fingerprinting fails, the response is converted to a rejection so the

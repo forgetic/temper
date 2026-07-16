@@ -1,0 +1,329 @@
+use std::future::Future as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Waker};
+use std::time::{Duration, Instant};
+
+use temper_protocol_agent::AgentRuntimeLimitsV1;
+
+use super::supervisor::{CancellationOutcome, DescendantCleanupStatus, ManagedAgentProcess};
+use super::{DiagnosticIdentity, OutOfProcessRunner, tests::test_context};
+use crate::agent_runner::{AgentForgeContextHost, AgentRunner};
+use crate::config::WorkerLivenessLimits;
+
+fn executable_script(directory: &Path, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let path = directory.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+fn managed(script: &Path) -> ManagedAgentProcess {
+    let mut command = Command::new(script);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    ManagedAgentProcess::spawn(
+        command,
+        DiagnosticIdentity::from_context("supervisor-test", &test_context()),
+        tracing::dispatcher::get_default(|dispatch| dispatch.clone()),
+    )
+    .expect("spawn managed child")
+}
+
+#[test]
+#[cfg(unix)]
+fn cooperative_window_observes_a_graceful_child_exit_and_joins_stderr() {
+    let temp = tempfile::tempdir().unwrap();
+    let script = executable_script(
+        temp.path(),
+        "graceful.sh",
+        "printf 'joined stderr marker\\n' >&2\nsleep 0.05\nexit 0",
+    );
+    let mut process = managed(&script);
+    let result =
+        process.cancel_and_join(true, Duration::from_millis(500), Duration::from_millis(50));
+
+    assert_eq!(
+        result.quiesced.cancellation,
+        Some(CancellationOutcome::Graceful)
+    );
+    let outcome = result.outcome.unwrap();
+    assert_eq!(outcome.status_code, Some(0));
+    assert!(outcome.stderr_tail.contains("joined stderr marker"));
+}
+
+#[test]
+#[cfg(unix)]
+fn unresponsive_child_escalates_to_hard_kill_without_a_lingering_waiter() {
+    let temp = tempfile::tempdir().unwrap();
+    let ready = temp.path().join("ready");
+    let script = executable_script(
+        temp.path(),
+        "hard-kill.sh",
+        &format!(
+            "trap '' TERM\n: > '{}'\nwhile :; do sleep 1; done",
+            ready.display()
+        ),
+    );
+    let mut process = managed(&script);
+    wait_for_file(&ready);
+    let started = Instant::now();
+    let result =
+        process.cancel_and_join(false, Duration::from_millis(20), Duration::from_millis(40));
+
+    assert_eq!(
+        result.quiesced.cancellation,
+        Some(CancellationOutcome::HardKill)
+    );
+    assert!(
+        matches!(
+            result.quiesced.descendants,
+            DescendantCleanupStatus::HardKilled
+        ),
+        "{:?}",
+        result.quiesced
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    // cancel_and_join consumed the supervisor thread's result and joined it;
+    // dropping the owner cannot leave a blocking Child::wait behind.
+    drop(process);
+}
+
+#[test]
+#[cfg(unix)]
+fn cancellation_kills_and_reaps_a_child_process_group_grandchild() {
+    let temp = tempfile::tempdir().unwrap();
+    let pid_file = temp.path().join("grandchild.pid");
+    let script = executable_script(
+        temp.path(),
+        "grandchild.sh",
+        &format!(
+            "trap '' TERM\n(sleep 30) &\necho $! > '{}'\nwait",
+            pid_file.display()
+        ),
+    );
+    let mut process = managed(&script);
+    wait_for_file(&pid_file);
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    let pid = pid.trim();
+    let _ = process.cancel_and_join(false, Duration::from_millis(10), Duration::from_millis(40));
+
+    for _ in 0..50 {
+        if !process_exists(pid) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("grandchild {pid} survived process-group hard kill");
+}
+
+#[test]
+#[cfg(unix)]
+fn hung_forge_host_does_not_block_child_exit_or_accepted_socket_shutdown() {
+    let temp = tempfile::tempdir().unwrap();
+    let connected = temp.path().join("forge-connected");
+    let script = executable_script(
+        temp.path(),
+        "hung-forge.sh",
+        r#"
+forge=""; result=""
+while [ "$#" -gt 0 ]; do
+  arg="$1"; shift
+  case "$arg" in
+    --forge-context-address) forge="$1"; shift ;;
+    --result) result="$1"; shift ;;
+    --context|--workspace|--runtime-limits|--agent-lifecycle-address|--activity-address|--trace-policy|--tool-config|--submit-for-pr-address) shift ;;
+  esac
+done
+python3 - "$forge" <<'PY' &
+import json, socket, sys
+address = sys.argv[1]
+host, port = address.rsplit(':', 1)
+stream = socket.create_connection((host, int(port)), timeout=5)
+request = {"protocol_version":1,"operation":{"operation":"forge_get_item","repo":"acme/svc","number":7,"type":"issue","include_comments":False}}
+stream.sendall(json.dumps(request).encode())
+stream.shutdown(socket.SHUT_WR)
+while stream.recv(1024): pass
+PY
+while [ ! -e "${TEMPER_CONNECTED:?}" ]; do sleep 0.01; done
+printf '{"summary":"ok"}' > "$result"
+"#,
+    );
+    let host_started = Arc::new(AtomicBool::new(false));
+    let host_started_for_call = Arc::clone(&host_started);
+    let connected_for_host = connected.clone();
+    let host: AgentForgeContextHost = Arc::new(move |_job_id, _operation| {
+        host_started_for_call.store(true, Ordering::Release);
+        std::fs::write(&connected_for_host, b"").expect("mark host invocation");
+        Box::pin(std::future::pending())
+    });
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_env(vec![(
+            "TEMPER_CONNECTED".to_string(),
+            connected.display().to_string(),
+        )])
+        .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()))
+        .with_forge_context_host(host)
+        .with_liveness_limits(short_limits());
+    let context = test_context();
+    let cwd = temp.path().to_path_buf();
+    let started = Instant::now();
+    let output =
+        temper_worker_io::block_on(async move { runner.run("hung-forge", &context, &cwd).await })
+            .expect("child exit wins over a hung Forge host");
+
+    assert_eq!(output.result.summary.as_deref(), Some("ok"));
+    assert!(host_started.load(Ordering::Acquire));
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+#[cfg(unix)]
+fn connected_first_party_child_receives_cancel_before_process_escalation() {
+    let temp = tempfile::tempdir().unwrap();
+    let ready = temp.path().join("lifecycle-ready");
+    let cancelled = temp.path().join("lifecycle-cancelled");
+    let script = executable_script(
+        temp.path(),
+        "cooperative-cancel.sh",
+        r#"
+lifecycle=""
+while [ "$#" -gt 0 ]; do
+  arg="$1"; shift
+  case "$arg" in
+    --agent-lifecycle-address) lifecycle="$1"; shift ;;
+    --context|--result|--workspace|--runtime-limits|--tool-config|--trace-policy|--activity-address|--submit-for-pr-address|--forge-context-address) shift ;;
+  esac
+done
+python3 - "$lifecycle" "${TEMPER_READY:?}" "${TEMPER_CANCELLED:?}" <<'PY'
+import json, socket, sys
+address, ready, cancelled = sys.argv[1:]
+host, port = address.rsplit(':', 1)
+stream = socket.create_connection((host, int(port)), timeout=5)
+stream.sendall(b'{"version":1}\n')
+open(ready, 'w').close()
+command = b''
+while not command.endswith(b'\n'):
+    command += stream.recv(1024)
+assert json.loads(command)['command'] == 'cancel'
+stream.sendall(b'{"version":1}\n')
+open(cancelled, 'w').close()
+stream.shutdown(socket.SHUT_WR)
+PY
+"#,
+    );
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_env(vec![
+            ("TEMPER_READY".to_string(), ready.display().to_string()),
+            (
+                "TEMPER_CANCELLED".to_string(),
+                cancelled.display().to_string(),
+            ),
+        ])
+        .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()))
+        .with_liveness_limits(WorkerLivenessLimits {
+            graceful_cancellation_grace: Duration::from_millis(500),
+            forced_termination_grace: Duration::from_millis(50),
+            ..Default::default()
+        });
+    let context = test_context();
+    let cwd = temp.path().to_path_buf();
+    let mut future = Box::pin(runner.run("cooperative-cancel", &context, &cwd));
+    let mut task_context = Context::from_waker(Waker::noop());
+    assert!(matches!(
+        future.as_mut().poll(&mut task_context),
+        Poll::Pending
+    ));
+    wait_for_file(&ready);
+
+    let started = Instant::now();
+    drop(future);
+    assert!(cancelled.exists(), "child did not receive lifecycle Cancel");
+    assert!(started.elapsed() < Duration::from_millis(500));
+}
+
+#[test]
+#[cfg(unix)]
+fn result_written_during_cancellation_is_fenced_and_the_future_joins_on_drop() {
+    let temp = tempfile::tempdir().unwrap();
+    let ready = temp.path().join("ready");
+    let late_copy = temp.path().join("late-result-copy.json");
+    let script = executable_script(
+        temp.path(),
+        "late-result.sh",
+        r#"
+result=""
+while [ "$#" -gt 0 ]; do
+  arg="$1"; shift
+  case "$arg" in
+    --result) result="$1"; shift ;;
+    --context|--workspace|--tool-config|--trace-policy|--activity-address|--submit-for-pr-address|--forge-context-address) shift ;;
+  esac
+done
+trap 'printf "{\"summary\":\"late\"}" > "$result"; cp "$result" "${TEMPER_LATE_COPY:?}"; exit 0' TERM
+: > "${TEMPER_READY:?}"
+while :; do sleep 1; done
+"#,
+    );
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_env(vec![
+            ("TEMPER_READY".to_string(), ready.display().to_string()),
+            (
+                "TEMPER_LATE_COPY".to_string(),
+                late_copy.display().to_string(),
+            ),
+        ])
+        .with_liveness_limits(short_limits());
+    let context = test_context();
+    let cwd = temp.path().to_path_buf();
+    let mut future = Box::pin(runner.run("late-result", &context, &cwd));
+    let mut task_context = Context::from_waker(Waker::noop());
+    assert!(matches!(
+        future.as_mut().poll(&mut task_context),
+        Poll::Pending
+    ));
+    wait_for_file(&ready);
+
+    // Dropping is the watchdog/component cancellation seam. It closes the
+    // attempt fence before signalling and synchronously joins every resource.
+    drop(future);
+    assert_eq!(
+        std::fs::read_to_string(late_copy).unwrap(),
+        "{\"summary\":\"late\"}"
+    );
+}
+
+fn short_limits() -> WorkerLivenessLimits {
+    WorkerLivenessLimits {
+        graceful_cancellation_grace: Duration::from_millis(50),
+        forced_termination_grace: Duration::from_millis(50),
+        ..Default::default()
+    }
+}
+
+fn wait_for_file(path: &Path) {
+    for _ in 0..100 {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
+fn process_exists(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
