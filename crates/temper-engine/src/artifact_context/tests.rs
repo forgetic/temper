@@ -20,6 +20,8 @@ const WORKFLOW: &str = include_str!("../../../temper-workflow/fixtures/reference
 const PLAN_WORKFLOW: &str =
     include_str!("../../../../scenarios/plan-centric-feature-branch/config/workflow.json");
 
+mod projection;
+
 fn issue(title: &str, body: String, labels: &[&str]) -> CreateIssue {
     CreateIssue {
         title: title.into(),

@@ -15,7 +15,7 @@ use temper_workflow::{
 
 use super::catalog::ConfiguredRepositoryCatalog;
 use super::forge::ArtifactContextForge;
-use super::{ArtifactContextError, ArtifactContextPolicy};
+use super::{ArtifactContextError, ArtifactContextPolicy, SnapshotInput, project_snapshot};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ArtifactKey(pub String, pub u8, pub u64);
@@ -268,7 +268,12 @@ async fn follow_parent<F: ArtifactContextForge + ?Sized>(
             return;
         }
     };
-    let mut snapshot = item.snapshot(repository, None);
+    let classified_item = classify(workflow, &item);
+    let snapshot_kind = classified_item
+        .as_ref()
+        .ok()
+        .map(|classified| classified.kind.to_string());
+    let snapshot = item.snapshot(repository, snapshot_kind);
     if item.closed() {
         collection.diagnostics.push(diagnostic(
             ArtifactContextDiagnosticCode::ClosedAncestor,
@@ -276,11 +281,8 @@ async fn follow_parent<F: ArtifactContextForge + ?Sized>(
             Some(snapshot.artifact.clone()),
         ));
     }
-    let classified = match classify(workflow, &item) {
-        Ok(classified) if relation.target_kinds.contains(&classified.kind) => {
-            snapshot.workflow_kind = Some(classified.kind.to_string());
-            Some(classified)
-        }
+    let classified = match classified_item {
+        Ok(classified) if relation.target_kinds.contains(&classified.kind) => Some(classified),
         Ok(_) => {
             collection.diagnostics.push(diagnostic(
                 ArtifactContextDiagnosticCode::MalformedMetadata,
@@ -383,26 +385,26 @@ impl ForgeItem {
         workflow_kind: Option<String>,
     ) -> ArtifactSnapshot {
         match self {
-            Self::Issue(issue) => ArtifactSnapshot {
-                artifact: reference(repository, ArtifactType::Issue, issue.number.get()),
+            Self::Issue(issue) => project_snapshot(SnapshotInput {
+                repository,
+                artifact_type: ArtifactType::Issue,
+                number: issue.number.get(),
                 title: issue.title.clone(),
                 body: issue.body.clone(),
-                labels: sorted_labels(&issue.labels),
+                labels: issue.labels.clone(),
                 state: format!("{:?}", issue.state).to_lowercase(),
                 workflow_kind,
-            },
-            Self::PullRequest(pull_request) => ArtifactSnapshot {
-                artifact: reference(
-                    repository,
-                    ArtifactType::PullRequest,
-                    pull_request.number.get(),
-                ),
+            }),
+            Self::PullRequest(pull_request) => project_snapshot(SnapshotInput {
+                repository,
+                artifact_type: ArtifactType::PullRequest,
+                number: pull_request.number.get(),
                 title: pull_request.title.clone(),
                 body: pull_request.body.clone(),
-                labels: sorted_labels(&pull_request.labels),
+                labels: pull_request.labels.clone(),
                 state: format!("{:?}", pull_request.state).to_lowercase(),
                 workflow_kind,
-            },
+            }),
         }
     }
 
@@ -523,11 +525,4 @@ fn source_type(source: ArtifactSource) -> ArtifactType {
         ArtifactSource::Issue { .. } => ArtifactType::Issue,
         ArtifactSource::PullRequest { .. } => ArtifactType::PullRequest,
     }
-}
-
-fn sorted_labels(labels: &[String]) -> Vec<String> {
-    let mut labels = labels.to_vec();
-    labels.sort();
-    labels.dedup();
-    labels
 }

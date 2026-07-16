@@ -3,57 +3,23 @@
 //! Pull-request body merging for implementation PR finalization.
 
 use temper_workflow::{
-    METADATA_BEGIN, METADATA_END, MetadataError, WorkflowMetadata, parse_metadata_block,
-    render_metadata_block,
+    MetadataError, WorkflowMetadata, render_metadata_block, split_metadata_block,
 };
 
 pub(super) fn merge_implementation_pr_body(
     current: &str,
     desired: &str,
 ) -> Result<Option<String>, MetadataError> {
-    let desired_parts = DesiredBodyParts::parse(desired)?;
-    split_metadata_block(current)?;
-    let metadata = parse_metadata_block(current)?.unwrap_or(desired_parts.metadata);
+    let (desired_prose, desired_metadata) = split_metadata_block(desired)?;
+    let (_, current_metadata) = split_metadata_block(current)?;
+    let metadata = current_metadata.or(desired_metadata).unwrap_or_default();
 
-    let updated = join_body(desired_parts.prose, &metadata);
+    let updated = join_body(&desired_prose, &metadata);
     if updated == current {
         Ok(None)
     } else {
         Ok(Some(updated))
     }
-}
-
-struct DesiredBodyParts<'a> {
-    prose: &'a str,
-    metadata: WorkflowMetadata,
-}
-
-impl<'a> DesiredBodyParts<'a> {
-    fn parse(body: &'a str) -> Result<Self, MetadataError> {
-        let split = split_metadata_block(body)?;
-        let metadata = parse_metadata_block(body)?.unwrap_or_default();
-        Ok(Self {
-            prose: split.before,
-            metadata,
-        })
-    }
-}
-
-struct BodySplit<'a> {
-    before: &'a str,
-}
-
-fn split_metadata_block(body: &str) -> Result<BodySplit<'_>, MetadataError> {
-    let Some(start) = body.find(METADATA_BEGIN) else {
-        return Ok(BodySplit { before: body });
-    };
-    let after_begin = start + METADATA_BEGIN.len();
-    let Some(_relative_end) = body[after_begin..].find(METADATA_END) else {
-        return Err(MetadataError::Unterminated);
-    };
-    Ok(BodySplit {
-        before: &body[..start],
-    })
 }
 
 fn join_body(prose: &str, metadata: &WorkflowMetadata) -> String {
@@ -68,7 +34,9 @@ fn join_body(prose: &str, metadata: &WorkflowMetadata) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_workflow::{ArtifactKindId, WorkflowMetadata, render_metadata_block};
+    use temper_workflow::{
+        ArtifactKindId, WorkflowMetadata, parse_metadata_block, render_metadata_block,
+    };
 
     fn metadata() -> WorkflowMetadata {
         WorkflowMetadata {
@@ -97,6 +65,27 @@ mod tests {
         assert!(updated.contains("Implemented the final fix."));
         assert!(!updated.contains("Old report"));
         assert!(!updated.contains("Implementation plan"));
+        assert_eq!(parse_metadata_block(&updated).unwrap(), Some(metadata()));
+    }
+
+    #[test]
+    fn canonical_split_preserves_examples_before_desired_metadata() {
+        let current = format!("Old report.\n\n{}", render_metadata_block(&metadata()));
+        let desired = format!(
+            "Inline example: `{}`.\n\n# Implementation report\n\nNew report.\n\n{}",
+            temper_workflow::METADATA_BEGIN,
+            render_metadata_block(&metadata())
+        );
+
+        let updated = merge_implementation_pr_body(&current, &desired)
+            .expect("merge succeeds")
+            .expect("body changes");
+
+        assert!(updated.contains(&format!(
+            "Inline example: `{}`.",
+            temper_workflow::METADATA_BEGIN
+        )));
+        assert!(updated.contains("New report."));
         assert_eq!(parse_metadata_block(&updated).unwrap(), Some(metadata()));
     }
 

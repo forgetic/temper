@@ -6,9 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use temper_forge::{Forge, Repository, RepositoryId};
 use temper_protocol_context::{
-    ArtifactContextBundle, ArtifactReference as ContextArtifactReference,
-    ArtifactRepository as ContextRepository, ArtifactSnapshot as ContextArtifactSnapshot,
-    ArtifactType as ContextArtifactType,
+    ArtifactContextBundle, ArtifactRepository as ContextRepository,
+    ArtifactSnapshot as ContextArtifactSnapshot, ArtifactType as ContextArtifactType,
 };
 use temper_protocol_worker::JobArtifactSnapshot;
 use temper_runner::{
@@ -65,7 +64,7 @@ pub(super) fn context_snapshot(
     snapshot: &TargetedArtifactSnapshot,
     classified: &ClassifiedArtifact,
 ) -> ContextArtifactSnapshot {
-    let (artifact_type, number, title, body, labels, state) = match snapshot {
+    let (artifact_type, number, title, body, labels, state, repository_id) = match snapshot {
         TargetedArtifactSnapshot::Issue(issue) => (
             ContextArtifactType::Issue,
             issue.number.get(),
@@ -73,6 +72,7 @@ pub(super) fn context_snapshot(
             issue.body.clone(),
             issue.labels.clone(),
             format!("{:?}", issue.state).to_lowercase(),
+            issue.repo_id.to_string(),
         ),
         TargetedArtifactSnapshot::PullRequest(pull_request) => (
             ContextArtifactType::PullRequest,
@@ -81,31 +81,22 @@ pub(super) fn context_snapshot(
             pull_request.body.clone(),
             pull_request.labels.clone(),
             format!("{:?}", pull_request.state).to_lowercase(),
+            pull_request.repo_id.to_string(),
         ),
     };
-    let mut labels = labels;
-    labels.sort();
-    labels.dedup();
-    ContextArtifactSnapshot {
-        artifact: ContextArtifactReference {
-            repository: ContextRepository {
-                id: match snapshot {
-                    TargetedArtifactSnapshot::Issue(issue) => issue.repo_id.to_string(),
-                    TargetedArtifactSnapshot::PullRequest(pull_request) => {
-                        pull_request.repo_id.to_string()
-                    }
-                },
-                path: repo_label.to_string(),
-            },
-            artifact_type,
-            number,
+    crate::artifact_context::project_snapshot(crate::artifact_context::SnapshotInput {
+        repository: ContextRepository {
+            id: repository_id,
+            path: repo_label.to_string(),
         },
+        artifact_type,
+        number,
         title,
         body,
         labels,
         state,
         workflow_kind: Some(classified.kind.to_string()),
-    }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

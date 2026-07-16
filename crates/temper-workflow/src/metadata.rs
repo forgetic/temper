@@ -8,10 +8,11 @@
 //!
 //! # Format choice
 //!
-//! The block is JSON wrapped in an HTML comment:
+//! The block is JSON wrapped in an HTML comment. Its opening marker is exposed
+//! as `temper_workflow::METADATA_BEGIN`:
 //!
 //! ```text
-//! <!-- temper:workflow
+//! temper_workflow::METADATA_BEGIN
 //! {
 //!   "kind": "code",
 //!   "parents": [12],
@@ -326,38 +327,237 @@ pub fn render_metadata_block(metadata: &WorkflowMetadata) -> String {
     format!("{METADATA_BEGIN}\n{json}\n{METADATA_END}")
 }
 
-/// Locates the byte span of the first metadata block in a body.
-///
-/// Returns `Ok(Some((start, end)))` with the inclusive-start, exclusive-end
-/// byte offsets of the whole `<!-- ... -->` block when one is present and
-/// terminated, `Ok(None)` when no block opens, and `Err(Unterminated)` when a
-/// block opens but never closes. Shared by [`parse_metadata_block`] and
-/// [`replace_metadata_block`] so both agree on where a block starts and ends.
-fn block_span(body: &str) -> Result<Option<(usize, usize)>, MetadataError> {
-    let Some(start) = body.find(METADATA_BEGIN) else {
-        return Ok(None);
-    };
-    let after = &body[start + METADATA_BEGIN.len()..];
-    let Some(end) = after.find(METADATA_END) else {
-        return Err(MetadataError::Unterminated);
-    };
-    let block_end = start + METADATA_BEGIN.len() + end + METADATA_END.len();
-    Ok(Some((start, block_end)))
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MetadataBlockSpan {
+    start: usize,
+    end: usize,
 }
 
-/// Parses the first workflow metadata block found in an artifact body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MarkdownFence {
+    marker: u8,
+    length: usize,
+}
+
+/// Locates the byte span of the first managed metadata block in a body.
 ///
-/// Returns `Ok(None)` when the body contains no block at all, `Ok(Some(_))`
-/// when a block parses, and `Err(_)` when a block is present but malformed.
-/// Surrounding prose is ignored, so a block can be embedded among human text.
-pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, MetadataError> {
-    let Some((start, block_end)) = block_span(body)? else {
+/// Inline code spans and fenced code blocks are authored examples, not managed
+/// metadata. Keeping that distinction in this locator makes parsing, splitting,
+/// replacement, and heartbeat comparison agree on the exact same boundary.
+fn locate_metadata_block(body: &str) -> Result<Option<MetadataBlockSpan>, MetadataError> {
+    let Some(start) = first_metadata_begin_outside_code(body) else {
         return Ok(None);
     };
-    let json = body[start + METADATA_BEGIN.len()..block_end - METADATA_END.len()].trim();
-    let metadata =
-        serde_json::from_str(json).map_err(|err| MetadataError::InvalidJson(err.to_string()))?;
-    Ok(Some(metadata))
+    let after_begin = start + METADATA_BEGIN.len();
+    let Some(relative_end) = body[after_begin..].find(METADATA_END) else {
+        return Err(MetadataError::Unterminated);
+    };
+    Ok(Some(MetadataBlockSpan {
+        start,
+        end: after_begin + relative_end + METADATA_END.len(),
+    }))
+}
+
+fn first_metadata_begin_outside_code(body: &str) -> Option<usize> {
+    let fenced_ranges = fenced_code_ranges(body);
+    let mut text_start = 0;
+    for (fence_start, fence_end) in fenced_ranges {
+        if let Some(start) = find_metadata_begin_in_text(&body[text_start..fence_start]) {
+            return Some(text_start + start);
+        }
+        text_start = fence_end;
+    }
+    find_metadata_begin_in_text(&body[text_start..]).map(|start| text_start + start)
+}
+
+fn fenced_code_ranges(body: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut active: Option<(usize, MarkdownFence)> = None;
+    let mut offset = 0;
+
+    for line_with_ending in body.split_inclusive('\n') {
+        let line = line_with_ending
+            .strip_suffix('\n')
+            .unwrap_or(line_with_ending);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+
+        if let Some((start, fence)) = active {
+            if is_closing_fence(line, fence) {
+                ranges.push((start, offset + line_with_ending.len()));
+                active = None;
+            }
+        } else if let Some(fence) = opening_fence(line) {
+            active = Some((offset, fence));
+        }
+
+        offset += line_with_ending.len();
+    }
+
+    if let Some((start, _)) = active {
+        ranges.push((start, body.len()));
+    }
+    ranges
+}
+
+fn opening_fence(line: &str) -> Option<MarkdownFence> {
+    let bytes = line.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && bytes[start] == b' ' && start < 4 {
+        start += 1;
+    }
+    if start > 3 {
+        return None;
+    }
+
+    let marker = *bytes.get(start)?;
+    if marker != b'`' && marker != b'~' {
+        return None;
+    }
+    let length = bytes[start..]
+        .iter()
+        .take_while(|byte| **byte == marker)
+        .count();
+    if length < 3 {
+        return None;
+    }
+    if marker == b'`' && bytes[start + length..].contains(&b'`') {
+        return None;
+    }
+    Some(MarkdownFence { marker, length })
+}
+
+fn is_closing_fence(line: &str, fence: MarkdownFence) -> bool {
+    let bytes = line.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && bytes[start] == b' ' && start < 4 {
+        start += 1;
+    }
+    if start > 3 || bytes.get(start) != Some(&fence.marker) {
+        return false;
+    }
+
+    let length = bytes[start..]
+        .iter()
+        .take_while(|byte| **byte == fence.marker)
+        .count();
+    length >= fence.length
+        && bytes[start + length..]
+            .iter()
+            .all(|byte| *byte == b' ' || *byte == b'\t')
+}
+
+fn find_metadata_begin_in_text(text: &str) -> Option<usize> {
+    let mut cursor = 0;
+    while cursor < text.len() {
+        let marker = text[cursor..]
+            .find(METADATA_BEGIN)
+            .map(|relative| cursor + relative);
+        let backticks = text[cursor..].find('`').map(|relative| cursor + relative);
+
+        match (marker, backticks) {
+            (Some(marker), Some(backticks)) if marker < backticks => {
+                if metadata_begin_has_boundary(text, marker) {
+                    return Some(marker);
+                }
+                cursor = marker + METADATA_BEGIN.len();
+            }
+            (Some(marker), None) => {
+                if metadata_begin_has_boundary(text, marker) {
+                    return Some(marker);
+                }
+                cursor = marker + METADATA_BEGIN.len();
+            }
+            (_, Some(backticks)) => {
+                let length = backtick_run_length(text, backticks);
+                let after_open = backticks + length;
+                if !is_escaped(text, backticks) {
+                    if let Some(after_close) = matching_backtick_close(text, after_open, length) {
+                        cursor = after_close;
+                        continue;
+                    }
+                }
+                cursor = after_open;
+            }
+            (None, None) => return None,
+        }
+    }
+    None
+}
+
+fn metadata_begin_has_boundary(text: &str, start: usize) -> bool {
+    text[start + METADATA_BEGIN.len()..]
+        .chars()
+        .next()
+        .is_none_or(char::is_whitespace)
+}
+
+fn backtick_run_length(text: &str, start: usize) -> usize {
+    text.as_bytes()[start..]
+        .iter()
+        .take_while(|byte| **byte == b'`')
+        .count()
+}
+
+fn is_escaped(text: &str, start: usize) -> bool {
+    text.as_bytes()[..start]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
+fn matching_backtick_close(text: &str, mut cursor: usize, length: usize) -> Option<usize> {
+    while let Some(relative) = text[cursor..].find('`') {
+        let start = cursor + relative;
+        let candidate_length = backtick_run_length(text, start);
+        if candidate_length == length {
+            return Some(start + candidate_length);
+        }
+        cursor = start + candidate_length;
+    }
+    None
+}
+
+fn parse_metadata_in_span(
+    body: &str,
+    span: MetadataBlockSpan,
+) -> Result<WorkflowMetadata, MetadataError> {
+    let json = body[span.start + METADATA_BEGIN.len()..span.end - METADATA_END.len()].trim();
+    serde_json::from_str(json).map_err(|err| MetadataError::InvalidJson(err.to_string()))
+}
+
+/// Parses the first managed workflow metadata block found in an artifact body.
+///
+/// Returns `Ok(None)` when the body contains no managed block, `Ok(Some(_))`
+/// when a block parses, and `Err(_)` when a real block is malformed. Surrounding
+/// prose is ignored. Occurrences in inline and fenced code are authored examples
+/// and do not count as managed blocks.
+pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, MetadataError> {
+    let Some(span) = locate_metadata_block(body)? else {
+        return Ok(None);
+    };
+    parse_metadata_in_span(body, span).map(Some)
+}
+
+/// Separates exact authored body bytes from managed workflow metadata.
+///
+/// A valid managed block is removed in place by concatenating its unmodified
+/// prefix and suffix. When no managed block exists, the returned body equals the
+/// input exactly and metadata is `None`. Malformed or unterminated real blocks
+/// return the same diagnostics as [`parse_metadata_block`] and are never removed.
+pub fn split_metadata_block(
+    body: &str,
+) -> Result<(String, Option<WorkflowMetadata>), MetadataError> {
+    let Some(span) = locate_metadata_block(body)? else {
+        return Ok((body.to_string(), None));
+    };
+    let metadata = parse_metadata_in_span(body, span)?;
+    Ok((
+        format!("{}{}", &body[..span.start], &body[span.end..]),
+        Some(metadata),
+    ))
 }
 
 /// Returns whether two complete artifact bodies differ only in lease-heartbeat
@@ -370,10 +570,10 @@ pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, Meta
 /// `assignment.expires_at`. At least one of those three values must have
 /// changed. Missing or malformed metadata is never classified as a heartbeat.
 pub fn is_heartbeat_only_body_change(old_body: &str, new_body: &str) -> bool {
-    let Ok(Some((old_prose, old_metadata))) = body_parts(old_body) else {
+    let Ok((old_prose, Some(old_metadata))) = split_metadata_block(old_body) else {
         return false;
     };
-    let Ok(Some((new_prose, mut normalized_new))) = body_parts(new_body) else {
+    let Ok((new_prose, Some(mut normalized_new))) = split_metadata_block(new_body) else {
         return false;
     };
     if old_prose != new_prose
@@ -410,35 +610,28 @@ pub fn is_heartbeat_only_body_change(old_body: &str, new_body: &str) -> bool {
     normalized_new == old_metadata
 }
 
-fn body_parts(body: &str) -> Result<Option<(String, WorkflowMetadata)>, MetadataError> {
-    let Some((start, block_end)) = block_span(body)? else {
-        return Ok(None);
-    };
-    let Some(metadata) = parse_metadata_block(body)? else {
-        return Ok(None);
-    };
-    Ok(Some((
-        format!("{}{}", &body[..start], &body[block_end..]),
-        metadata,
-    )))
-}
-
 /// Returns `body` with its workflow metadata block set to `metadata`.
 ///
 /// If the body already contains a block, it is replaced in place so surrounding
 /// prose is preserved; otherwise a fresh block is appended (separated by a blank
 /// line when the body is non-empty). The result round-trips through
-/// [`parse_metadata_block`]. An unterminated existing block is an error rather
-/// than being silently overwritten, so malformed bodies are surfaced, not
-/// clobbered.
+/// [`parse_metadata_block`]. A malformed or unterminated existing block is an
+/// error rather than being silently overwritten, so authored-visible diagnostic
+/// content is surfaced, not clobbered.
 pub fn replace_metadata_block(
     body: &str,
     metadata: &WorkflowMetadata,
 ) -> Result<String, MetadataError> {
     let block = render_metadata_block(metadata);
-    match block_span(body)? {
-        Some((start, block_end)) => {
-            Ok(format!("{}{}{}", &body[..start], block, &body[block_end..]))
+    match locate_metadata_block(body)? {
+        Some(span) => {
+            parse_metadata_in_span(body, span)?;
+            Ok(format!(
+                "{}{}{}",
+                &body[..span.start],
+                block,
+                &body[span.end..]
+            ))
         }
         None if body.is_empty() => Ok(block),
         None => Ok(format!("{body}\n\n{block}")),

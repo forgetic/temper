@@ -1,10 +1,13 @@
 //! Role system-prompt and user-turn context construction.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::Capability;
 use super::tools::{registry_has_tool, subagent_guidance};
 use temper_protocol_agent::{
     ArtifactContextBundle, ArtifactReference, ArtifactRelationType, ArtifactSnapshot,
-    ArtifactSummary, ArtifactType, WorkspaceContext,
+    ArtifactSummary, ArtifactType, WorkflowArtifactReference, WorkflowChildIdentity,
+    WorkspaceContext,
 };
 use temper_verdict::{VerdictContract, VerdictContracts};
 use tongs::tools::ToolRegistry;
@@ -440,18 +443,115 @@ fn render_artifact_context(
 
 fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
     text.push_str(&format!(
-        "- {} — {} [{}] kind={} labels={}\n  Body:\n{}\n",
+        "- {} — {} [{}] labels={}\n  Body:\n",
         reference_name(&snapshot.artifact),
         snapshot.title,
         snapshot.state,
-        snapshot.workflow_kind.as_deref().unwrap_or("(unknown)"),
         if snapshot.labels.is_empty() {
             "(none)".to_string()
         } else {
             snapshot.labels.join(", ")
         },
-        snapshot.body
     ));
+    // Keep authored Markdown byte-for-byte intact. The conditional newline is
+    // only a delimiter for the renderer-owned section that follows it.
+    text.push_str(&snapshot.body);
+    if !snapshot.body.ends_with('\n') {
+        text.push('\n');
+    }
+
+    let mut workflow_text = String::new();
+    let projected = snapshot.workflow.as_ref();
+    if let Some(kind) = projected
+        .and_then(|workflow| populated(workflow.kind.as_deref()))
+        .or_else(|| populated(snapshot.workflow_kind.as_deref()))
+    {
+        workflow_text.push_str(&format!("    kind: {kind}\n"));
+    }
+    if let Some(workflow) = projected {
+        render_workflow_references(&mut workflow_text, "parents", &workflow.parents);
+        render_workflow_references(&mut workflow_text, "dependencies", &workflow.dependencies);
+        if let Some(target_branch) = populated(workflow.target_branch.as_deref()) {
+            workflow_text.push_str(&format!("    target branch: {target_branch}\n"));
+        }
+        if let Some(correlation_key) = populated(workflow.correlation_key.as_deref()) {
+            workflow_text.push_str(&format!("    correlation key: {correlation_key}\n"));
+        }
+        render_workflow_children(&mut workflow_text, &workflow.children);
+    }
+    if !workflow_text.is_empty() {
+        text.push_str("  Workflow context:\n");
+        text.push_str(&workflow_text);
+    }
+}
+
+fn render_workflow_references(
+    text: &mut String,
+    label: &str,
+    references: &[WorkflowArtifactReference],
+) {
+    let references = references
+        .iter()
+        .filter_map(|reference| {
+            populated(Some(&reference.repository_id))
+                .map(|repository_id| (repository_id.to_string(), reference.number))
+        })
+        .collect::<BTreeSet<_>>();
+    if references.is_empty() {
+        return;
+    }
+    let references = references
+        .into_iter()
+        .map(|(repository_id, number)| format!("{repository_id}#{number}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    text.push_str(&format!("    {label}: {references}\n"));
+}
+
+fn render_workflow_children(text: &mut String, children: &[WorkflowChildIdentity]) {
+    let mut canonical = BTreeMap::<(String, u64), (String, Option<String>)>::new();
+    for child in children {
+        let Some(repository_id) = populated(Some(&child.repository_id)) else {
+            continue;
+        };
+        let title = child.title.trim().to_string();
+        let state = populated(child.state.as_deref()).map(str::to_string);
+        canonical
+            .entry((repository_id.to_string(), child.number))
+            .and_modify(|(canonical_title, canonical_state)| {
+                if canonical_title.is_empty() || (!title.is_empty() && title < *canonical_title) {
+                    *canonical_title = title.clone();
+                }
+                if let Some(state) = &state {
+                    if canonical_state
+                        .as_ref()
+                        .is_none_or(|canonical_state| state < canonical_state)
+                    {
+                        *canonical_state = Some(state.clone());
+                    }
+                }
+            })
+            .or_insert((title, state));
+    }
+    if canonical.is_empty() {
+        return;
+    }
+
+    text.push_str("    children:\n");
+    for ((repository_id, number), (title, state)) in canonical {
+        text.push_str(&format!("      - {repository_id}#{number}"));
+        if !title.is_empty() {
+            text.push_str(&format!(" — {title}"));
+        }
+        if let Some(state) = state {
+            text.push_str(&format!(" [{state}]"));
+        }
+        text.push('\n');
+    }
+}
+
+fn populated(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn render_summary(text: &mut String, summary: &ArtifactSummary) {

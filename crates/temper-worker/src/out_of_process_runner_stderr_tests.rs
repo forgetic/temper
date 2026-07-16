@@ -152,6 +152,7 @@ fn add_artifact_context(context: &mut temper_protocol_agent::WorkspaceContext) {
         labels: vec!["code".to_string()],
         state: "open".to_string(),
         workflow_kind: Some("code".to_string()),
+        workflow: None,
     }));
 }
 

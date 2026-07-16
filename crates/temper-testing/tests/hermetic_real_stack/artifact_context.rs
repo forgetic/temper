@@ -30,7 +30,8 @@ fn hermetic_real_stack_delivers_bundle_and_services_repeated_forge_reads() {
                 let lineage =
                     prompt_section(&prompt, "Mandatory lineage:", "Validation summaries:");
                 assert!(lineage.contains("Cross-repository architecture parent"));
-                assert!(lineage.contains("kind=design labels=design, ready"));
+                assert!(lineage.contains("[open] labels=design, ready"));
+                assert!(lineage.contains("Workflow context:\n    kind: design"));
                 assert!(!lineage.contains("Plan lineage delivery"));
                 assert!(!lineage.contains("Markdown-only background"));
 

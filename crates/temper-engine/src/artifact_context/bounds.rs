@@ -6,6 +6,10 @@ use temper_protocol_worker::{
 
 use super::ArtifactContextPolicy;
 use super::lineage::diagnostic;
+use super::projection::{
+    attach_available_child_states, drop_optional_child as drop_snapshot_child,
+    drop_optional_child_state as drop_snapshot_child_state,
+};
 
 pub(super) fn enforce_bounds(bundle: &mut ArtifactContextBundle, policy: ArtifactContextPolicy) {
     if bundle.primary.body.len() > policy.body_bytes {
@@ -46,6 +50,27 @@ pub(super) fn enforce_bounds(bundle: &mut ArtifactContextBundle, policy: Artifac
         ));
     }
 
+    // A summary removed by aggregate pressure can no longer be the source of
+    // child state in the final bounded collection.
+    attach_available_child_states(bundle);
+
+    let mut child_context_dropped = false;
+    while serialized_len(bundle) > policy.bundle_bytes {
+        let removed = drop_optional_child_state(bundle).or_else(|| drop_optional_child(bundle));
+        let Some(source) = removed else {
+            break;
+        };
+        bundle.truncation.count_exceeded = true;
+        if !child_context_dropped {
+            bundle.diagnostics.push(diagnostic(
+                ArtifactContextDiagnosticCode::CountExceeded,
+                "optional child context dropped to satisfy serialized bundle limit",
+                Some(source),
+            ));
+            child_context_dropped = true;
+        }
+    }
+
     if serialized_len(bundle) > policy.bundle_bytes {
         let source = bundle
             .lineage
@@ -80,6 +105,24 @@ pub(super) fn enforce_bounds(bundle: &mut ArtifactContextBundle, policy: Artifac
     }
 }
 
+fn drop_optional_child_state(bundle: &mut ArtifactContextBundle) -> Option<ArtifactReference> {
+    for index in (0..bundle.lineage.len()).rev() {
+        if drop_snapshot_child_state(&mut bundle.lineage[index]) {
+            return Some(bundle.lineage[index].artifact.clone());
+        }
+    }
+    drop_snapshot_child_state(&mut bundle.primary).then(|| bundle.primary.artifact.clone())
+}
+
+fn drop_optional_child(bundle: &mut ArtifactContextBundle) -> Option<ArtifactReference> {
+    for index in (0..bundle.lineage.len()).rev() {
+        if drop_snapshot_child(&mut bundle.lineage[index]) {
+            return Some(bundle.lineage[index].artifact.clone());
+        }
+    }
+    drop_snapshot_child(&mut bundle.primary).then(|| bundle.primary.artifact.clone())
+}
+
 fn note_content_loss(
     bundle: &mut ArtifactContextBundle,
     message: &str,
@@ -112,7 +155,10 @@ fn serialized_len(bundle: &ArtifactContextBundle) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use temper_protocol_worker::{ArtifactRepository, ArtifactSnapshot, ArtifactType};
+    use temper_protocol_worker::{
+        ArtifactRepository, ArtifactSnapshot, ArtifactType, ArtifactWorkflowContext,
+        WorkflowChildIdentity,
+    };
 
     use super::*;
 
@@ -140,6 +186,7 @@ mod tests {
             labels: Vec::new(),
             state: "open".into(),
             workflow_kind: Some("code".into()),
+            workflow: None,
         });
         bundle.lineage.push(ArtifactSnapshot {
             artifact: ArtifactReference {
@@ -152,6 +199,7 @@ mod tests {
             labels: Vec::new(),
             state: "open".into(),
             workflow_kind: Some("feature".into()),
+            workflow: None,
         });
 
         enforce_bounds(
@@ -183,6 +231,7 @@ mod tests {
             labels: Vec::new(),
             state: "open".into(),
             workflow_kind: Some("code".into()),
+            workflow: None,
         });
 
         enforce_bounds(
@@ -196,6 +245,65 @@ mod tests {
 
         assert!(serialized_len(&bundle) <= 2_000);
         assert!(bundle.truncation.content_truncated);
+    }
+
+    #[test]
+    fn aggregate_bounds_drop_optional_children_before_authored_body() {
+        let children = (0..8)
+            .map(|number| WorkflowChildIdentity {
+                repository_id: "forge:ai/temper".into(),
+                number,
+                title: format!("child-{number}-{}", "x".repeat(1_024)),
+                state: Some("open".into()),
+            })
+            .collect();
+        let mut bundle = ArtifactContextBundle::new(ArtifactSnapshot {
+            artifact: ArtifactReference {
+                repository: ArtifactRepository {
+                    id: "forge:ai/temper".into(),
+                    path: "ai/temper".into(),
+                },
+                artifact_type: ArtifactType::Issue,
+                number: 1,
+            },
+            title: "primary".into(),
+            body: "mandatory authored body".into(),
+            labels: Vec::new(),
+            state: "open".into(),
+            workflow_kind: Some("plan".into()),
+            workflow: Some(ArtifactWorkflowContext {
+                kind: Some("plan".into()),
+                children,
+                ..Default::default()
+            }),
+        });
+        let mut without_children = bundle.clone();
+        without_children
+            .primary
+            .workflow
+            .as_mut()
+            .unwrap()
+            .children
+            .clear();
+        let limit = serialized_len(&without_children) + 512;
+
+        enforce_bounds(
+            &mut bundle,
+            ArtifactContextPolicy {
+                body_bytes: 10_000,
+                bundle_bytes: limit,
+                ..ArtifactContextPolicy::default()
+            },
+        );
+
+        assert_eq!(bundle.primary.body, "mandatory authored body");
+        assert!(!bundle.truncation.content_truncated);
+        assert!(bundle.truncation.count_exceeded);
+        assert!(
+            bundle.primary.workflow.as_ref().unwrap().children.len() < 8,
+            "child projection should yield before authored content"
+        );
+        assert!(serialized_len(&bundle) <= limit);
     }
 
     #[test]
@@ -214,6 +322,7 @@ mod tests {
             labels: Vec::new(),
             state: "open".into(),
             workflow_kind: None,
+            workflow: None,
         });
         assert!(serialized_len(&bundle) < ArtifactContextPolicy::default().bundle_bytes);
     }

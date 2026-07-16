@@ -5,11 +5,29 @@ use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, DurableAssignment, Lease, MetadataError, RoleId, WorkflowMetadata,
     global_child_correlation_key, is_heartbeat_only_body_change, parse_metadata_block,
-    render_metadata_block,
+    render_metadata_block, replace_metadata_block, split_metadata_block,
 };
 
 fn ts(value: &str) -> DateTime<Utc> {
     value.parse().expect("valid RFC 3339 timestamp")
+}
+
+fn metadata_fixture(json: &str) -> String {
+    format!(
+        "{}\n{json}\n{}",
+        temper_workflow::METADATA_BEGIN,
+        temper_workflow::METADATA_END
+    )
+}
+
+fn authored_metadata_examples() -> String {
+    format!(
+        "Inline example: `{} {{}} {}`.\n\n```text\n{}\n{{}}\n{}\n```\n",
+        temper_workflow::METADATA_BEGIN,
+        temper_workflow::METADATA_END,
+        temper_workflow::METADATA_BEGIN,
+        temper_workflow::METADATA_END
+    )
 }
 
 fn full_metadata() -> WorkflowMetadata {
@@ -146,15 +164,126 @@ fn missing_metadata_block_returns_none() {
 
 #[test]
 fn malformed_metadata_json_is_reported() {
-    let body = "<!-- temper:workflow\n{ not valid json }\n-->";
-    let error = parse_metadata_block(body).expect_err("invalid json must fail");
+    let body = metadata_fixture("{ not valid json }");
+    let error = parse_metadata_block(&body).expect_err("invalid json must fail");
     assert!(matches!(error, MetadataError::InvalidJson(_)));
 }
 
 #[test]
 fn unterminated_metadata_block_is_reported() {
-    let body = "<!-- temper:workflow\n{}";
-    assert_eq!(parse_metadata_block(body), Err(MetadataError::Unterminated));
+    let body = format!("{}\n{{}}", temper_workflow::METADATA_BEGIN);
+    assert_eq!(
+        parse_metadata_block(&body),
+        Err(MetadataError::Unterminated)
+    );
+}
+
+#[test]
+fn split_preserves_exact_prefix_and_suffix_bytes() {
+    let metadata = WorkflowMetadata {
+        correlation_key: Some("split-key".to_string()),
+        ..WorkflowMetadata::default()
+    };
+    let prefix = "\u{feff}Authored\r\n\r\n<!-- ordinary comment -->\n";
+    let suffix = "\n  trailing spaces stay  \r\n";
+    let body = format!("{prefix}{}{suffix}", render_metadata_block(&metadata));
+
+    let (authored, parsed) = split_metadata_block(&body).expect("valid block splits");
+
+    assert_eq!(authored.as_bytes(), format!("{prefix}{suffix}").as_bytes());
+    assert_eq!(parsed, Some(metadata));
+}
+
+#[test]
+fn split_without_managed_metadata_returns_body_unchanged() {
+    let body = format!(
+        "Authored.\n<!-- ordinary comment -->\n{}-example\n<!-- workflow:temper -->\n",
+        temper_workflow::METADATA_BEGIN
+    );
+
+    let (authored, metadata) = split_metadata_block(&body).expect("no managed block");
+
+    assert_eq!(authored.as_bytes(), body.as_bytes());
+    assert_eq!(metadata, None);
+    assert_eq!(parse_metadata_block(&body), Ok(None));
+}
+
+#[test]
+fn inline_and_fenced_examples_remain_authored_visible() {
+    let body = authored_metadata_examples();
+
+    let (authored, metadata) = split_metadata_block(&body).expect("examples are not managed");
+
+    assert_eq!(authored.as_bytes(), body.as_bytes());
+    assert_eq!(metadata, None);
+    assert_eq!(parse_metadata_block(&body), Ok(None));
+}
+
+#[test]
+fn examples_before_real_metadata_are_preserved_and_real_block_is_split() {
+    let examples = authored_metadata_examples();
+    let metadata = WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        correlation_key: Some("real-block".to_string()),
+        ..WorkflowMetadata::default()
+    };
+    let body = format!(
+        "{examples}\nProse before.\n{}\nProse after.\n",
+        render_metadata_block(&metadata)
+    );
+    let expected_authored = format!("{examples}\nProse before.\n\nProse after.\n");
+
+    let (authored, parsed) = split_metadata_block(&body).expect("real block splits");
+
+    assert_eq!(authored.as_bytes(), expected_authored.as_bytes());
+    assert_eq!(parsed, Some(metadata));
+}
+
+#[test]
+fn replacement_ignores_examples_and_replaces_the_real_block() {
+    let examples = authored_metadata_examples();
+    let original = WorkflowMetadata {
+        correlation_key: Some("old".to_string()),
+        ..WorkflowMetadata::default()
+    };
+    let replacement = WorkflowMetadata {
+        correlation_key: Some("new".to_string()),
+        ..WorkflowMetadata::default()
+    };
+    let body = format!(
+        "{examples}\nBefore.\n{}\nAfter.",
+        render_metadata_block(&original)
+    );
+
+    let replaced = replace_metadata_block(&body, &replacement).expect("replacement succeeds");
+    let (authored, parsed) = split_metadata_block(&replaced).expect("replacement stays valid");
+
+    assert_eq!(authored, format!("{examples}\nBefore.\n\nAfter."));
+    assert_eq!(parsed, Some(replacement));
+}
+
+#[test]
+fn malformed_and_unterminated_real_blocks_are_never_removed_or_replaced() {
+    let malformed = metadata_fixture("{ not valid json }");
+    let unterminated = format!("{}\n{{}}", temper_workflow::METADATA_BEGIN);
+    let replacement = WorkflowMetadata::default();
+
+    assert!(matches!(
+        split_metadata_block(&malformed),
+        Err(MetadataError::InvalidJson(_))
+    ));
+    assert!(matches!(
+        replace_metadata_block(&malformed, &replacement),
+        Err(MetadataError::InvalidJson(_))
+    ));
+    assert_eq!(
+        split_metadata_block(&unterminated),
+        Err(MetadataError::Unterminated)
+    );
+    assert_eq!(
+        replace_metadata_block(&unterminated, &replacement),
+        Err(MetadataError::Unterminated)
+    );
 }
 
 #[test]
@@ -173,11 +302,9 @@ fn lease_expiry_is_detected() {
 
 #[test]
 fn repaired_head_marker_round_trips_and_legacy_metadata_defaults_to_none() {
-    let legacy = r#"<!-- temper:workflow
-{"kind":"implementation_pr"}
--->"#;
+    let legacy = metadata_fixture(r#"{"kind":"implementation_pr"}"#);
     assert!(
-        parse_metadata_block(legacy)
+        parse_metadata_block(&legacy)
             .unwrap()
             .unwrap()
             .repaired_head
@@ -197,10 +324,10 @@ fn repaired_head_marker_round_trips_and_legacy_metadata_defaults_to_none() {
 
 #[test]
 fn legacy_metadata_and_optional_assignment_fields_are_compatible() {
-    let legacy = r#"<!-- temper:workflow
-{"kind":"code","lease":{"role":"engineer","worker":"old","claimed_at":"2026-05-29T00:00:00Z","heartbeat_at":"2026-05-29T00:00:00Z","expires_at":"2026-05-29T00:30:00Z"}}
--->"#;
-    let parsed = parse_metadata_block(legacy).unwrap().unwrap();
+    let legacy = metadata_fixture(
+        r#"{"kind":"code","lease":{"role":"engineer","worker":"old","claimed_at":"2026-05-29T00:00:00Z","heartbeat_at":"2026-05-29T00:00:00Z","expires_at":"2026-05-29T00:30:00Z"}}"#,
+    );
+    let parsed = parse_metadata_block(&legacy).unwrap().unwrap();
     assert!(parsed.assignment.is_none());
 
     let metadata = WorkflowMetadata {
@@ -250,7 +377,7 @@ fn heartbeat_only_body_change_requires_exact_structural_delta() {
         &heartbeat_body
     ));
     assert!(!is_heartbeat_only_body_change(
-        "<!-- temper:workflow\n{bad}\n-->",
+        &metadata_fixture("{bad}"),
         &heartbeat_body
     ));
 }

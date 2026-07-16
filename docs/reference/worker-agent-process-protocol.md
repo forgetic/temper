@@ -91,9 +91,12 @@ supervision remains authoritative for them.
 `WorkspaceContext.artifact_context` is an optional versioned
 `ArtifactContextBundle`. It contains the primary artifact, mandatory ancestry,
 compact related indexes, directed relations, diagnostics, and explicit
-truncation flags. The agent renders the bundle into stable sections (primary,
-lineage, validation summaries, optional references, and diagnostics) instead of
-asking a model to interpret raw graph JSON.
+truncation flags. Each full snapshot may also carry an optional `workflow`
+projection containing only normalized parent/dependency references, branch and
+correlation values, and persisted child identities. The agent renders the bundle
+into stable sections (primary, lineage, validation summaries, optional
+references, and diagnostics) instead of asking a model to interpret raw graph
+JSON.
 
 The historical singular carrier is still present at
 `WorkspaceContext.work_item.context`. It remains the original inner work-item
@@ -131,7 +134,26 @@ Abbreviated current shape:
       "body": "Full coordinating artifact body.",
       "labels": ["code", "ready"],
       "state": "open",
-      "workflow_kind": "code"
+      "workflow_kind": "code",
+      "workflow": {
+        "kind": "code",
+        "parents": [
+          {"repository_id": "repo-1", "number": 277}
+        ],
+        "dependencies": [
+          {"repository_id": "repo-2", "number": 88}
+        ],
+        "target_branch": "main",
+        "correlation_key": "context-for-code-285",
+        "children": [
+          {
+            "repository_id": "repo-1",
+            "number": 286,
+            "title": "Render compact workflow context",
+            "state": "open"
+          }
+        ]
+      }
     },
     "lineage": [],
     "validation_scope": [],
@@ -146,11 +168,15 @@ Abbreviated current shape:
 ```
 
 Omitting `artifact_context` is the explicit backward-compatible v1 form; the
-`work_item` shape does not change when the bundle is added. `trace_context` is
-also optional and contains only validated W3C `traceparent`/`tracestate` for this
-assignment. The agent does not render it into the model prompt. Separate later
-runs are linked by correlation/session identity rather than retaining this
-context as a multi-day parent.
+`work_item` shape does not change when the bundle is added. Within a full
+snapshot, `workflow` is also optional and `workflow_kind` remains available for
+legacy producers and consumers. A workflow projection has no generic payload or
+nested metadata field: leases, assignments, create intents, source bodies,
+completion/staging/wiring state, and encoded body payloads cannot cross this
+boundary. `trace_context` is also optional and contains only validated W3C
+`traceparent`/`tracestate` for this assignment. The agent does not render it into
+the model prompt. Separate later runs are linked by correlation/session identity
+rather than retaining this context as a multi-day parent.
 
 ## Forge context tool channel
 

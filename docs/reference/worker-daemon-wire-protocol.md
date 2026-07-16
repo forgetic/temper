@@ -140,7 +140,13 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `artifact_context.version` | integer | yes when `artifact_context` is present | Artifact-context schema version, currently `1` and independent of the worker protocol version. |
 | `artifact_context.repository` | object | yes when `artifact_context` is present | Stable id and configured `owner/name` path of the coordinating repository. |
 | `artifact_context.artifact_type` | string | yes when `artifact_context` is present | `issue` or `pull_request`. |
-| `artifact_context.primary` | object | yes when `artifact_context` is present | Full coordinating snapshot; primary identity never depends on a vector position. |
+| `artifact_context.primary` | object | yes when `artifact_context` is present | Full coordinating snapshot; primary identity never depends on a vector position. Its optional `workflow` projection is compact and protocol-owned; `workflow_kind` remains for compatibility. |
+| `artifact_context.primary.workflow.kind` | string | no | Normalized workflow artifact kind. |
+| `artifact_context.primary.workflow.parents` | array | no | Fully qualified `{repository_id, number}` parent references. |
+| `artifact_context.primary.workflow.dependencies` | array | no | Fully qualified `{repository_id, number}` dependency references. |
+| `artifact_context.primary.workflow.target_branch` | string | no | Workflow-selected implementation target branch. |
+| `artifact_context.primary.workflow.correlation_key` | string | no | Workflow correlation key. |
+| `artifact_context.primary.workflow.children` | array | no | Persisted child identities containing only stable repository id, artifact number, title, and optional state. |
 | `artifact_context.lineage` | array | no | Full mandatory ancestor snapshots in deterministic root-to-leaf order, excluding the primary. |
 | `artifact_context.validation_scope` | array | no | Body-omitted declared dependencies and verified implementation PRs. Each summary retains labels, state, optional workflow kind, relation type, and the source artifact that exposed it. |
 | `artifact_context.optional_references` | array | no | Body-omitted Markdown references, with the same self-describing summary metadata. |
