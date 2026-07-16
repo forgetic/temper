@@ -13,5 +13,6 @@ mod context;
 mod effective_prompts;
 mod overlays;
 mod prompt;
+mod prompt_artifact_context;
 mod result;
 mod run_errors;
