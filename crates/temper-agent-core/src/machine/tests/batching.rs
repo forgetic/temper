@@ -10,8 +10,8 @@ use tongs::model::Message;
 use tongs::tools::ToolEffects;
 
 use super::common::{
-    assistant_text, assistant_tool_calls, calls_llm, machine, machine_read_tools, run, run_tools,
-    tool_output, user,
+    assistant_text, assistant_tool_calls, calls_llm, complete, llm_responded, machine,
+    machine_read_tools, run, run_tools, tool_finished, tool_output, user,
 };
 use crate::machine::{AgentCompletion, AgentMachine, AgentRequest};
 
@@ -21,21 +21,15 @@ fn parallel_batch_runs_concurrently_and_waits_for_all_before_next_call() {
     // model is not re-called until BOTH finish.
     let mut m = machine_read_tools(&["read", "grep"]);
     let mut requests = m.on_start(EngineTime::ZERO);
-    requests.extend(m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::LlmResponded(assistant_tool_calls(&[("a", "read"), ("b", "grep")])),
+    requests.extend(complete(
+        &mut m,
+        llm_responded(assistant_tool_calls(&[("a", "read"), ("b", "grep")])),
     ));
     // Both run together (one batch).
     assert_eq!(run_tools(&requests), vec!["a".to_string(), "b".to_string()]);
 
     // First tool finishes — must NOT call the model yet (batch incomplete).
-    let after_first = m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::ToolFinished {
-            id: "a".to_string(),
-            output: tool_output("a out", false),
-        },
-    );
+    let after_first = complete(&mut m, tool_finished("a", tool_output("a out", false)));
     assert_eq!(
         calls_llm(&after_first),
         0,
@@ -45,13 +39,7 @@ fn parallel_batch_runs_concurrently_and_waits_for_all_before_next_call() {
     assert!(run_tools(&after_first).is_empty());
 
     // Second tool finishes — now the model is called again.
-    let after_second = m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::ToolFinished {
-            id: "b".to_string(),
-            output: tool_output("b out", false),
-        },
-    );
+    let after_second = complete(&mut m, tool_finished("b", tool_output("b out", false)));
     assert_eq!(calls_llm(&after_second), 1);
 }
 
@@ -64,16 +52,10 @@ fn final_conversation_has_tool_results_in_order() {
     let requests = run(
         &mut m,
         vec![
-            AgentCompletion::LlmResponded(assistant_tool_calls(&[("x", "read"), ("y", "grep")])),
-            AgentCompletion::ToolFinished {
-                id: "y".to_string(),
-                output: tool_output("y", false),
-            },
-            AgentCompletion::ToolFinished {
-                id: "x".to_string(),
-                output: tool_output("x", false),
-            },
-            AgentCompletion::LlmResponded(assistant_text("done")),
+            llm_responded(assistant_tool_calls(&[("x", "read"), ("y", "grep")])),
+            tool_finished("y", tool_output("y", false)),
+            tool_finished("x", tool_output("x", false)),
+            llm_responded(assistant_text("done")),
         ],
     );
     let messages = requests
@@ -107,9 +89,9 @@ fn mixed_effects_serialize_into_ordered_batches() {
     let mut m = AgentMachine::with_effects(vec![user("mix")], 10, effects);
 
     let mut requests = m.on_start(EngineTime::ZERO);
-    requests.extend(m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::LlmResponded(assistant_tool_calls(&[
+    requests.extend(complete(
+        &mut m,
+        llm_responded(assistant_tool_calls(&[
             ("r1", "read"),
             ("w", "write"),
             ("r2", "read"),
@@ -119,35 +101,17 @@ fn mixed_effects_serialize_into_ordered_batches() {
     assert_eq!(run_tools(&requests), vec!["r1".to_string()]);
 
     // r1 finishes ⇒ dispatch the write batch (w), still no model call.
-    let after_r1 = m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::ToolFinished {
-            id: "r1".to_string(),
-            output: tool_output("r1", false),
-        },
-    );
+    let after_r1 = complete(&mut m, tool_finished("r1", tool_output("r1", false)));
     assert_eq!(run_tools(&after_r1), vec!["w".to_string()]);
     assert_eq!(calls_llm(&after_r1), 0);
 
     // w finishes ⇒ dispatch the last read batch (r2).
-    let after_w = m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::ToolFinished {
-            id: "w".to_string(),
-            output: tool_output("w", false),
-        },
-    );
+    let after_w = complete(&mut m, tool_finished("w", tool_output("w", false)));
     assert_eq!(run_tools(&after_w), vec!["r2".to_string()]);
     assert_eq!(calls_llm(&after_w), 0);
 
     // r2 finishes ⇒ all batches done ⇒ the model is re-called.
-    let after_r2 = m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::ToolFinished {
-            id: "r2".to_string(),
-            output: tool_output("r2", false),
-        },
-    );
+    let after_r2 = complete(&mut m, tool_finished("r2", tool_output("r2", false)));
     assert_eq!(calls_llm(&after_r2), 1);
 }
 
@@ -158,21 +122,92 @@ fn unknown_tools_are_serialized_fail_closed() {
     // is not dispatched until the first finishes.
     let mut m = machine();
     let mut requests = m.on_start(EngineTime::ZERO);
-    requests.extend(m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::LlmResponded(assistant_tool_calls(&[("a", "mystery"), ("b", "mystery")])),
+    requests.extend(complete(
+        &mut m,
+        llm_responded(assistant_tool_calls(&[("a", "mystery"), ("b", "mystery")])),
     ));
     assert_eq!(run_tools(&requests), vec!["a".to_string()]);
 
-    let after_a = m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::ToolFinished {
-            id: "a".to_string(),
-            output: tool_output("a", false),
-        },
-    );
+    let after_a = complete(&mut m, tool_finished("a", tool_output("a", false)));
     assert_eq!(run_tools(&after_a), vec!["b".to_string()]);
     assert_eq!(calls_llm(&after_a), 0);
+}
+
+#[test]
+fn duplicate_and_stale_parallel_completions_settle_each_call_once() {
+    let mut m = machine_read_tools(&["read", "grep"]);
+    let _ = m.on_start(EngineTime::ZERO);
+    let dispatched = complete(
+        &mut m,
+        llm_responded(assistant_tool_calls(&[("a", "read"), ("b", "grep")])),
+    );
+    assert_eq!(run_tools(&dispatched), vec!["a", "b"]);
+
+    let (a_operation, batch_generation) = m.active_tool_generations("a").expect("active call a");
+    let (b_operation, b_batch_generation) = m.active_tool_generations("b").expect("active call b");
+    assert_eq!(batch_generation, b_batch_generation);
+
+    let finish_a = AgentCompletion::ToolFinished {
+        operation_generation: a_operation,
+        batch_generation,
+        id: "a".to_string(),
+        output: tool_output("a", false),
+    };
+    assert!(
+        m.on_completion(EngineTime::ZERO, finish_a).is_empty(),
+        "one parallel call cannot advance the batch"
+    );
+    assert!(
+        m.on_completion(
+            EngineTime::ZERO,
+            AgentCompletion::ToolFinished {
+                operation_generation: a_operation,
+                batch_generation,
+                id: "a".to_string(),
+                output: tool_output("duplicate", false),
+            },
+        )
+        .is_empty(),
+        "a duplicate completion must be ignored"
+    );
+    assert!(
+        m.on_completion(
+            EngineTime::ZERO,
+            AgentCompletion::ToolFinished {
+                operation_generation: b_operation,
+                batch_generation: batch_generation.saturating_add(1),
+                id: "b".to_string(),
+                output: tool_output("stale", false),
+            },
+        )
+        .is_empty(),
+        "a stale batch generation must be ignored"
+    );
+
+    let settled = m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::ToolFinished {
+            operation_generation: b_operation,
+            batch_generation,
+            id: "b".to_string(),
+            output: tool_output("b", false),
+        },
+    );
+    assert_eq!(calls_llm(&settled), 1, "the batch settles exactly once");
+
+    let late = m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::ToolFinished {
+            operation_generation: b_operation,
+            batch_generation,
+            id: "b".to_string(),
+            output: tool_output("late", false),
+        },
+    );
+    assert!(
+        late.is_empty(),
+        "a prior-batch completion cannot re-dispatch"
+    );
 }
 
 #[test]
@@ -187,16 +222,10 @@ fn results_across_serial_batches_preserve_original_order() {
     let requests = run(
         &mut m,
         vec![
-            AgentCompletion::LlmResponded(assistant_tool_calls(&[("r", "read"), ("w", "write")])),
-            AgentCompletion::ToolFinished {
-                id: "r".to_string(),
-                output: tool_output("r", false),
-            },
-            AgentCompletion::ToolFinished {
-                id: "w".to_string(),
-                output: tool_output("w", false),
-            },
-            AgentCompletion::LlmResponded(assistant_text("done")),
+            llm_responded(assistant_tool_calls(&[("r", "read"), ("w", "write")])),
+            tool_finished("r", tool_output("r", false)),
+            tool_finished("w", tool_output("w", false)),
+            llm_responded(assistant_text("done")),
         ],
     );
     let messages = requests

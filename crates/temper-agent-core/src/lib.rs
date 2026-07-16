@@ -22,7 +22,8 @@ pub mod subagent_tool;
 
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,
-    ModelCallStatus, StreamDelta, ToolCallStatus, ToolResultMetadata,
+    BatchGeneration, ModelCallStatus, OperationGeneration, StreamDelta, ToolCallStatus,
+    ToolResultMetadata,
 };
 pub use run::{
     AgentOperationLimits, SubAgent, SubAgentControl, SubAgentError, run_sub_agent,

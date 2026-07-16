@@ -44,9 +44,10 @@ impl EventSink for PanicSafeEventSink {
 ///
 /// The handle wraps a clone of the run's completion-queue sender, so it can be
 /// moved to another task/thread (it is `Send + Clone`) and used while the run is
-/// in flight. Steering is applied at the next turn boundary; abort drains any
-/// in-flight tool batch and then stops the run with [`AgentStop::Aborted`].
-/// Calls after the run has finished are harmless no-ops (the queue is closed).
+/// in flight. Steering is applied at the next turn boundary; abort cancels all
+/// active model/tool operations immediately and resolves after their shell task
+/// wrappers have quiesced. Calls after the run has finished are harmless no-ops
+/// (the queue is closed).
 #[derive(Clone)]
 pub struct SubAgentControl {
     cq: CqSender<AgentCompletion>,
@@ -66,8 +67,8 @@ impl SubAgentControl {
         })]);
     }
 
-    /// Abort the run. The current tool batch (if any) drains first, then the run
-    /// stops with [`crate::AgentStop::Aborted`].
+    /// Abort the run. Active model/tool futures are cancelled immediately; the
+    /// outcome resolves only after the run task group reports quiescence.
     pub fn abort(&self) {
         let _ = self.cq.send(AgentCompletion::Abort);
     }
@@ -318,6 +319,7 @@ pub fn run_sub_agent_controllable_with_observability(
         sub_agent.system_prompt,
         Arc::new(tool_defs),
         Arc::new(sub_agent.stream_options),
+        sub_agent.operation_limits,
         observability,
         outcome_tx,
     );
@@ -329,11 +331,17 @@ pub fn run_sub_agent_controllable_with_observability(
         machine = machine.with_arg_preview(arg_preview);
     }
 
+    let task_group = shell.task_group();
     let run = async move {
-        // Drive to completion. The machine stops itself on `Finished`, which
-        // also resolves the outcome oneshot.
+        // Cancelling/dropping the caller cannot detach model/tool work. The
+        // guard propagates cancellation on drop, while every normal terminal
+        // path joins the per-run group before returning.
+        let mut drop_guard = task_group.drop_guard();
         let _ = drive(machine, &shell, cq_rx).await;
-        outcome_rx.recv().await.ok_or(SubAgentError::NoOutcome)
+        task_group.wait_for_quiescence().await;
+        let result = outcome_rx.recv().await.ok_or(SubAgentError::NoOutcome);
+        drop_guard.disarm();
+        result
     };
     Ok((control, run))
 }

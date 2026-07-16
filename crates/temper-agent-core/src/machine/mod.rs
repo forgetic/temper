@@ -30,8 +30,8 @@ mod protocol;
 
 pub use core::{AgentMachine, ArgPreviewFn};
 pub use protocol::{
-    AgentCompletion, AgentEvent, AgentRequest, AgentStop, ModelCallStatus, StreamDelta,
-    ToolCallStatus, ToolResultMetadata,
+    AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, ModelCallStatus,
+    OperationGeneration, StreamDelta, ToolCallStatus, ToolResultMetadata,
 };
 
 #[cfg(test)]

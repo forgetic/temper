@@ -6,7 +6,7 @@
 //! types it exchanges live in [`super::protocol`]; the effect-batching policy
 //! it applies lives in [`super::batching`].
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use tongs::model::{
@@ -22,7 +22,9 @@ use tongs::tools::{ToolEffects, ToolOutput};
 pub type ArgPreviewFn = Arc<dyn Fn(&str, &serde_json::Value) -> Option<String> + Send + Sync>;
 
 use super::batching::{PendingTool, plan_batches};
-use super::protocol::{AgentCompletion, AgentEvent, AgentRequest, AgentStop};
+use super::protocol::{
+    AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
+};
 
 /// Where the loop is in the call/tool cycle.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,8 +33,18 @@ enum Phase {
     AwaitingLlm,
     /// Waiting for the in-flight tool batch to finish.
     AwaitingTools,
+    /// Cancellation has been requested; only a matching shell-quiescence
+    /// completion can finish the run.
+    Cancelling,
     /// Terminal.
     Done,
+}
+
+#[derive(Debug)]
+struct ActiveToolBatch {
+    generation: BatchGeneration,
+    operations: BTreeMap<String, OperationGeneration>,
+    settled: BTreeSet<String>,
 }
 
 /// The pure agent loop.
@@ -57,7 +69,16 @@ pub struct AgentMachine {
     last_assistant: Option<AssistantMessage>,
     /// Steering messages to inject at the next turn boundary.
     queued_steering: Vec<Message>,
-    aborted: bool,
+    /// Next never-reused shell operation identity.
+    next_operation_generation: OperationGeneration,
+    /// Next never-reused parallel tool-batch identity. Model calls use zero.
+    next_batch_generation: BatchGeneration,
+    /// Model operation currently allowed to settle.
+    active_llm: Option<OperationGeneration>,
+    /// Tool batch currently allowed to settle, including duplicate detection.
+    active_tool_batch: Option<ActiveToolBatch>,
+    /// Fresh operation/batch pair attached to the outstanding cancellation.
+    cancellation_generation: Option<(OperationGeneration, BatchGeneration)>,
     /// Optional shell-supplied preview function used to fill
     /// `ToolStart.arg_preview` from each call's name + arguments. `None` leaves
     /// the field unset (the pure default).
@@ -94,7 +115,11 @@ impl AgentMachine {
             turn_results: Vec::new(),
             last_assistant: None,
             queued_steering: Vec::new(),
-            aborted: false,
+            next_operation_generation: 1,
+            next_batch_generation: 1,
+            active_llm: None,
+            active_tool_batch: None,
+            cancellation_generation: None,
             arg_preview: None,
         }
     }
@@ -113,6 +138,10 @@ impl AgentMachine {
 
     fn finish(&mut self, stop: AgentStop) -> Vec<AgentRequest> {
         self.phase = Phase::Done;
+        self.active_llm = None;
+        self.active_tool_batch = None;
+        self.pending_batches.clear();
+        self.cancellation_generation = None;
         let final_message = self
             .last_assistant
             .clone()
@@ -127,6 +156,57 @@ impl AgentMachine {
         ]
     }
 
+    fn next_operation_generation(&mut self) -> OperationGeneration {
+        let generation = self.next_operation_generation;
+        self.next_operation_generation = self
+            .next_operation_generation
+            .checked_add(1)
+            .expect("agent operation generation exhausted");
+        generation
+    }
+
+    fn next_batch_generation(&mut self) -> BatchGeneration {
+        let generation = self.next_batch_generation;
+        self.next_batch_generation = self
+            .next_batch_generation
+            .checked_add(1)
+            .expect("agent batch generation exhausted");
+        generation
+    }
+
+    /// The operation/batch identity currently allowed to complete. This is
+    /// primarily useful to deterministic protocol tests that synthesize shell
+    /// completions without running an executor.
+    pub fn active_generations(&self) -> Option<(OperationGeneration, BatchGeneration)> {
+        match self.phase {
+            Phase::AwaitingLlm => self.active_llm.map(|operation| (operation, 0)),
+            Phase::AwaitingTools => self.active_tool_batch.as_ref().and_then(|batch| {
+                batch
+                    .operations
+                    .values()
+                    .next()
+                    .copied()
+                    .map(|operation| (operation, batch.generation))
+            }),
+            Phase::Cancelling => self.cancellation_generation,
+            Phase::Done => None,
+        }
+    }
+
+    /// The operation/batch identity currently allowed to complete for `id`.
+    /// Returns `None` unless that exact tool call is in the active batch.
+    pub fn active_tool_generations(
+        &self,
+        id: &str,
+    ) -> Option<(OperationGeneration, BatchGeneration)> {
+        let batch = self.active_tool_batch.as_ref()?;
+        batch
+            .operations
+            .get(id)
+            .copied()
+            .map(|operation| (operation, batch.generation))
+    }
+
     /// Begin the next model turn: inject any queued steering, then call the LLM.
     fn begin_turn(&mut self) -> Vec<AgentRequest> {
         let mut requests = Vec::new();
@@ -138,10 +218,15 @@ impl AgentMachine {
             self.messages.extend(steering);
         }
         self.phase = Phase::AwaitingLlm;
+        let operation_generation = self.next_operation_generation();
+        self.active_llm = Some(operation_generation);
+        self.active_tool_batch = None;
         requests.push(AgentRequest::Emit(AgentEvent::TurnStart {
             turn: self.turn,
         }));
         requests.push(AgentRequest::CallLlm {
+            operation_generation,
+            batch_generation: 0,
             messages: self.messages.clone(),
         });
         self.turn += 1;
@@ -196,26 +281,64 @@ impl AgentMachine {
         let Some(batch) = self.pending_batches.front() else {
             return Vec::new();
         };
+        let calls = batch
+            .iter()
+            .map(|pending| pending.call.clone())
+            .collect::<Vec<_>>();
+        let batch_generation = self.next_batch_generation();
+        let mut operations = BTreeMap::new();
         let mut requests = Vec::new();
-        for pending in batch {
+        for call in calls {
             // The pure core does not know the per-tool rendering rules; the
             // shell supplies an optional preview fn (agent-log-cleanup plan,
             // pieces B/D). Absent it, the field stays `None`.
             let arg_preview = self
                 .arg_preview
                 .as_ref()
-                .and_then(|render| render(&pending.call.name, &pending.call.arguments));
+                .and_then(|render| render(&call.name, &call.arguments));
+            let operation_generation = self.next_operation_generation();
+            operations.insert(call.id.clone(), operation_generation);
             requests.push(AgentRequest::Emit(AgentEvent::ToolStart {
-                id: pending.call.id.clone(),
-                name: pending.call.name.clone(),
+                id: call.id.clone(),
+                name: call.name.clone(),
                 arg_preview,
             }));
-            requests.push(AgentRequest::RunTool(pending.call.clone()));
+            requests.push(AgentRequest::RunTool {
+                operation_generation,
+                batch_generation,
+                call,
+            });
         }
+        self.active_llm = None;
+        self.active_tool_batch = Some(ActiveToolBatch {
+            generation: batch_generation,
+            operations,
+            settled: BTreeSet::new(),
+        });
         requests
     }
 
-    fn on_tool_finished(&mut self, id: String, output: ToolOutput) -> Vec<AgentRequest> {
+    fn on_tool_finished(
+        &mut self,
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        id: String,
+        output: ToolOutput,
+    ) -> Vec<AgentRequest> {
+        // A completion is accepted exactly once and only for the active batch.
+        // This fences duplicated calls and late tasks from cancelled or prior
+        // model turns before they can mutate the conversation.
+        let Some(active) = self.active_tool_batch.as_mut() else {
+            return Vec::new();
+        };
+        if !matches!(self.phase, Phase::AwaitingTools)
+            || active.generation != batch_generation
+            || active.operations.get(&id) != Some(&operation_generation)
+            || !active.settled.insert(id.clone())
+        {
+            return Vec::new();
+        }
+
         // The shell emits the timed ToolEnd event immediately before enqueueing
         // this completion. The pure machine only sequences the result into the
         // conversation, avoiding a second parallel instrumentation path.
@@ -229,14 +352,11 @@ impl AgentMachine {
             }
         }
 
-        // Is the front batch fully resolved?
-        let batch_done = self
-            .pending_batches
-            .front()
-            .is_some_and(|batch| batch.iter().all(|p| p.result.is_some()));
+        let batch_done = active.settled.len() == active.operations.len();
         if !batch_done {
             return requests;
         }
+        self.active_tool_batch = None;
 
         // Retire the batch: its results join the turn's results in original
         // tool-call order (batches were planned in order, so appending preserves
@@ -245,30 +365,43 @@ impl AgentMachine {
             self.turn_results.extend(batch);
         }
 
-        // If an abort arrived mid-turn, drain the in-flight batch (done above)
-        // but do NOT start any further batches — stop after appending results.
-        if !self.aborted && !self.pending_batches.is_empty() {
-            // More serialized batches remain — dispatch the next one. The
-            // in-flight batch always drains fully before the run reacts to
-            // steering/abort, keeping tool-result state untorn.
+        if !self.pending_batches.is_empty() {
             requests.extend(self.dispatch_current_batch());
             return requests;
         }
 
         // All batches done: append every tool-result message in order, then
-        // begin the next model turn (or stop if aborted mid-turn).
+        // begin the next model turn.
         for pending in std::mem::take(&mut self.turn_results) {
             if let Some(result) = pending.result {
                 self.messages
                     .push(Message::ToolResult(std::sync::Arc::new(result)));
             }
         }
-        if self.aborted {
-            requests.extend(self.finish(AgentStop::Aborted));
-        } else {
-            requests.extend(self.begin_turn());
-        }
+        requests.extend(self.begin_turn());
         requests
+    }
+
+    fn begin_cancellation(&mut self) -> Vec<AgentRequest> {
+        if matches!(self.phase, Phase::Done | Phase::Cancelling) {
+            return Vec::new();
+        }
+        let batch_generation = self
+            .active_tool_batch
+            .as_ref()
+            .map_or(0, |batch| batch.generation);
+        let operation_generation = self.next_operation_generation();
+        self.phase = Phase::Cancelling;
+        self.active_llm = None;
+        self.active_tool_batch = None;
+        self.pending_batches.clear();
+        self.turn_results.clear();
+        self.queued_steering.clear();
+        self.cancellation_generation = Some((operation_generation, batch_generation));
+        vec![AgentRequest::CancelActive {
+            operation_generation,
+            batch_generation,
+        }]
     }
 }
 
@@ -286,29 +419,64 @@ impl temper_agent_io::Machine for AgentMachine {
         completion: AgentCompletion,
     ) -> Vec<AgentRequest> {
         match completion {
-            AgentCompletion::LlmResponded(assistant) => self.on_llm_responded(assistant),
-            AgentCompletion::LlmFailed(message) => {
+            AgentCompletion::LlmResponded {
+                operation_generation,
+                batch_generation,
+                message,
+            } => {
+                if !matches!(self.phase, Phase::AwaitingLlm)
+                    || batch_generation != 0
+                    || self.active_llm != Some(operation_generation)
+                {
+                    return Vec::new();
+                }
+                self.active_llm = None;
+                self.on_llm_responded(message)
+            }
+            AgentCompletion::LlmFailed {
+                operation_generation,
+                batch_generation,
+                message,
+            } => {
+                if !matches!(self.phase, Phase::AwaitingLlm)
+                    || batch_generation != 0
+                    || self.active_llm != Some(operation_generation)
+                {
+                    return Vec::new();
+                }
+                self.active_llm = None;
                 self.last_assistant = Some(error_assistant(&message));
                 self.finish(AgentStop::ModelError)
             }
-            AgentCompletion::ToolFinished { id, output } => self.on_tool_finished(id, output),
+            AgentCompletion::ToolFinished {
+                operation_generation,
+                batch_generation,
+                id,
+                output,
+            } => self.on_tool_finished(operation_generation, batch_generation, id, output),
+            AgentCompletion::TasksQuiesced {
+                operation_generation,
+                batch_generation,
+            } => {
+                if !matches!(self.phase, Phase::Cancelling)
+                    || self.cancellation_generation
+                        != Some((operation_generation, batch_generation))
+                {
+                    return Vec::new();
+                }
+                self.finish(AgentStop::Aborted)
+            }
             AgentCompletion::Steer(messages) => {
+                if matches!(self.phase, Phase::Done | Phase::Cancelling) {
+                    return Vec::new();
+                }
                 // Queue for the next turn boundary. If we are idle between turns
                 // (shouldn't normally happen — the shell only delivers steering
                 // while a run is active), it will be picked up on begin_turn.
                 self.queued_steering.extend(messages);
                 Vec::new()
             }
-            AgentCompletion::Abort => {
-                self.aborted = true;
-                // If we're mid-LLM or between turns, stop now; if mid-tools, let
-                // the in-flight batch drain (on_tool_finished checks `aborted`).
-                if matches!(self.phase, Phase::AwaitingTools) {
-                    Vec::new()
-                } else {
-                    self.finish(AgentStop::Aborted)
-                }
-            }
+            AgentCompletion::Abort => self.begin_cancellation(),
         }
     }
 
