@@ -33,11 +33,11 @@ impl Fixture {
         }
     }
 
-    pub fn executor(
+    pub fn executor<R: AgentRunner + 'static>(
         &self,
-        runner: FakeAgentRunner,
+        runner: R,
         include_identity: bool,
-    ) -> CodingExecutor<FakeAgentRunner> {
+    ) -> CodingExecutor<R> {
         let mut role_identities = BTreeMap::new();
         if include_identity {
             for (role, user, email) in [

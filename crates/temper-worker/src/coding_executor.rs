@@ -223,6 +223,7 @@ async fn execute<R: AgentRunner>(
         mode,
         coordination_key: &coordination_key,
         job_id: &job_id,
+        cancellation: &execution.cancellation,
     })
     .await
     {
@@ -256,6 +257,7 @@ async fn execute<R: AgentRunner>(
         &role,
         &coordination_key,
         mode,
+        &execution.cancellation,
     )
     .await
     {
@@ -332,6 +334,7 @@ async fn execute<R: AgentRunner>(
                 latest_self_pushed_sha,
                 accepted_submit: accepted_submit.as_ref(),
                 fence: &execution.fence,
+                cancellation: &execution.cancellation,
             })
             .await
         }
@@ -350,7 +353,9 @@ async fn execute<R: AgentRunner>(
     if !execution.fence.is_open() {
         return cancelled_attempt();
     }
-    if let Some(failure) = persist_after_success(agent_session.as_ref(), &outcome).await {
+    if let Some(failure) =
+        persist_after_success(agent_session.as_ref(), &outcome, &execution.cancellation).await
+    {
         return failure;
     }
     if !execution.fence.is_open() {
@@ -381,6 +386,7 @@ struct PrepareRequest<'a> {
     mode: JobMode,
     coordination_key: &'a str,
     job_id: &'a str,
+    cancellation: &'a crate::executor::JobCancellation,
 }
 
 async fn prepare_repos(request: PrepareRequest<'_>) -> Result<Vec<PreparedRepo>, JobOutcome> {
@@ -419,7 +425,8 @@ async fn prepare_repo(
         job_id: request.job_id.to_string(),
         correlation_key: request.coordination_key.to_string(),
         repository: repo_spec.repo.clone(),
-    });
+    })
+    .with_attempt_cancellation(request.cancellation.clone());
 
     prepare_workspace(&workspace, request, repo_spec, &default_branch).await?;
     let start_head_sha = workspace

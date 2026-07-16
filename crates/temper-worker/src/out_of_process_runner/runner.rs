@@ -57,6 +57,7 @@ impl OutOfProcessRunner {
                 trace.as_ref(),
                 request.progress,
                 request.fence,
+                request.cancellation,
             )
             .await;
         if let Some(trace) = trace {

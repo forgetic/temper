@@ -1,6 +1,9 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
+use crate::executor::JobCancellation;
+use crate::managed_effect::JoinedBlocking;
+
 mod git;
 mod recovery;
 mod target_branch;
@@ -27,6 +30,10 @@ pub struct Workspace {
     remote_url: String,
     identity: RoleGitIdentity,
     recovery_context: RecoveryContext,
+    /// Attempt-local cancellation authority. Every blocking workspace effect
+    /// races this signal and owns a join-on-drop adapter, so cancelling the
+    /// executor cannot detach checkout mutation past job quiescence.
+    cancellation: JobCancellation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +81,8 @@ pub enum WorkspaceError {
     },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("workspace operation cancelled by the worker watchdog")]
+    Cancelled,
     #[error("invalid utf-8 in git output: {0}")]
     Utf8(String),
     #[error("invalid repo `{0}`: expected owner/name")]
@@ -177,10 +186,15 @@ pub async fn cleanup_scoped_workspace(
     correlation_key: String,
     active: bool,
 ) -> Result<ScopedWorkspaceCleanupOutcome, ScopedWorkspaceCleanupError> {
-    skein::runtime::spawn_blocking(move || {
+    let error_path = workspace_root.clone();
+    JoinedBlocking::spawn("temper-workspace-cleanup", move || {
         cleanup_scoped_workspace_sync(&workspace_root, &role, &correlation_key, active)
     })
     .await
+    .map_err(|source| ScopedWorkspaceCleanupError::Io {
+        path: error_path,
+        source,
+    })?
 }
 
 fn remove_scoped_workspace_dir(
@@ -234,6 +248,7 @@ impl Workspace {
                 correlation_key: role.to_string(),
                 repository: repo.to_string(),
             },
+            cancellation: JobCancellation::default(),
         })
     }
 
@@ -252,7 +267,28 @@ impl Workspace {
             remote_url: remote_url.into(),
             identity,
             recovery_context: RecoveryContext::default(),
+            cancellation: JobCancellation::default(),
         }
+    }
+
+    /// Binds all workspace effects to one worker attempt. Compatibility callers
+    /// keep the default never-cancelled authority.
+    pub fn with_attempt_cancellation(mut self, cancellation: JobCancellation) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    pub(crate) async fn run_blocking<T: Send + 'static>(
+        &self,
+        name: &'static str,
+        operation: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, WorkspaceError> {
+        let owner = JoinedBlocking::spawn(name, operation);
+        self.cancellation
+            .run(owner)
+            .await
+            .ok_or(WorkspaceError::Cancelled)?
+            .map_err(WorkspaceError::Io)
     }
 
     pub fn path(&self) -> &Path {
@@ -311,7 +347,10 @@ impl Workspace {
                 // agent, so even a fast filesystem syscall must not run inline
                 // (a slow/networked FS would stall every other task).
                 let parent = parent.to_path_buf();
-                skein::runtime::spawn_blocking(move || std::fs::create_dir_all(&parent)).await?;
+                self.run_blocking("temper-workspace-mkdir", move || {
+                    std::fs::create_dir_all(&parent)
+                })
+                .await??;
             }
 
             self.run_git(

@@ -32,6 +32,7 @@ use temper_protocol_worker::{
 };
 
 use crate::executor::{AttemptFence, JobCancellation};
+use crate::pre_push::fingerprint::fingerprint_writable_repos_controlled;
 use crate::pre_push::{WorkspaceFingerprint, fingerprint_writable_repos_blocking};
 pub use temper_protocol_agent::WorkspaceResult;
 use temper_worker_io::EngineTime;
@@ -308,6 +309,34 @@ impl AcceptedSubmitProofStore {
         });
         response
     }
+
+    /// Async attempt-owned variant. Cancelling while fingerprinting drops and
+    /// joins the active git process before the submit side channel quiesces.
+    pub async fn record_response_controlled(
+        &self,
+        response: SubmitForPrResponse,
+        context: &WorkspaceContext,
+        cwd: &Path,
+        cancellation: &JobCancellation,
+    ) -> SubmitForPrResponse {
+        if !response.accepted {
+            return response;
+        }
+        let fingerprint =
+            match fingerprint_writable_repos_controlled(context, cwd, cancellation).await {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    return SubmitForPrResponse::rejected(format!(
+                        "submit_for_pr accepted but workspace proof could not be recorded: {error}"
+                    ));
+                }
+            };
+        *self.inner.lock().expect("accepted submit proof lock") = Some(AcceptedSubmitProof {
+            response: response.clone(),
+            fingerprint,
+        });
+        response
+    }
 }
 
 pub async fn handle_submit_for_pr_with_proof<F, Fut>(
@@ -322,7 +351,9 @@ where
     Fut: Future<Output = SubmitForPrResponse>,
 {
     let response = handler(request, context.clone(), cwd.clone()).await;
-    store.record_response(response, &context, &cwd)
+    store
+        .record_response_controlled(response, &context, &cwd, &JobCancellation::default())
+        .await
 }
 
 /// Why an agent turn could not produce a [`WorkspaceResult`].

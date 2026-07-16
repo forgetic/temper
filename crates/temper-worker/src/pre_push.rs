@@ -7,7 +7,9 @@ use temper_protocol_agent::{
     PROTOCOL_VERSION, SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse, WorkspaceContext,
 };
 
-mod fingerprint;
+use crate::managed_effect::JoinedBlocking;
+
+pub(crate) mod fingerprint;
 mod process;
 
 pub use fingerprint::{
@@ -27,7 +29,15 @@ pub async fn run_pre_push_checks(
 ) -> Result<PrePushReport, PrePushError> {
     let repo_root = repo_root.as_ref().to_path_buf();
     let config_path = repo_root.join(".temper").join("pre-push.toml");
-    let Some(plan) = load_plan(&config_path)? else {
+    let owner_path = config_path.clone();
+    let load_path = config_path.clone();
+    let Some(plan) = JoinedBlocking::spawn("temper-pre-push-config", move || load_plan(&load_path))
+        .await
+        .map_err(|source| PrePushError::BlockingOwner {
+            path: owner_path,
+            source,
+        })??
+    else {
         return Ok(PrePushReport {
             config_path,
             status: PrePushStatus::NotConfigured,
@@ -219,6 +229,12 @@ pub enum PrePushStatus {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrePushError {
+    #[error("join blocking pre-push owner for `{path}`: {source}")]
+    BlockingOwner {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("read pre-push config `{path}`: {source}")]
     ReadConfig {
         path: PathBuf,
