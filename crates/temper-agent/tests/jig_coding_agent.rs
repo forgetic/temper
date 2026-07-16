@@ -113,6 +113,7 @@ fn coding_agent_prompt_snapshot_equals_anthropic_provider_startup_context() {
             ..Default::default()
         },
         address: Some(activity.address.clone()),
+        ..Default::default()
     };
     let cwd = checkout.path().to_path_buf();
     let config_path = config_dir.path().to_path_buf();

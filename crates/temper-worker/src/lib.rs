@@ -34,7 +34,8 @@ pub mod workspace;
 
 pub use agent_runner::{
     AcceptedSubmitProof, AcceptedSubmitProofStore, AgentForgeContextFuture, AgentForgeContextHost,
-    AgentRunError, AgentRunOutput, AgentRunner, WorkspaceResult, handle_submit_for_pr_with_proof,
+    AgentRunError, AgentRunOutput, AgentRunRequest, AgentRunner, JobProgress, JobProgressReporter,
+    WorkspaceResult, handle_submit_for_pr_with_proof,
 };
 pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
@@ -63,6 +64,10 @@ pub use run::{
     WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
 };
 pub use temper_protocol_agent::{
+    AGENT_LIFECYCLE_ADDRESS_FLAG, AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleAgentStatusV1,
+    AgentLifecycleCancellationAckV1, AgentLifecycleCancellationAcknowledgementV1,
+    AgentLifecycleCommandV1, AgentLifecycleEventV1, AgentLifecycleFrameV1, AgentLifecycleHelloV1,
+    AgentLifecycleModelStatusV1, AgentLifecycleScopeV1, AgentLifecycleToolStatusV1,
     AgentRuntimeLimitsV1, AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode,
     CodebaseMemoryToolConfig, RUNTIME_LIMITS_FLAG,
 };

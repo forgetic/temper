@@ -1,6 +1,69 @@
 use super::*;
 
 #[test]
+fn lifecycle_contract_is_closed_bounded_and_content_free() {
+    let frame = AgentLifecycleFrameV1 {
+        version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+        seq: 1,
+        scope: AgentLifecycleScopeV1 {
+            id: "main".to_string(),
+            parent_id: None,
+        },
+        event: AgentLifecycleEventV1::ToolStarted {
+            call_id: "call-1".to_string(),
+            name: "read".to_string(),
+        },
+    };
+    frame.validate().expect("valid lifecycle frame");
+    let value = serde_json::to_value(&frame).expect("serialize frame");
+    assert_eq!(value["event"]["type"], "tool_started");
+    let wire = serde_json::to_string(&value).unwrap();
+    for forbidden in [
+        "prompt",
+        "arguments",
+        "output",
+        "credentials",
+        "worker_id",
+        "job_id",
+    ] {
+        assert!(!wire.contains(forbidden), "lifecycle leaked {forbidden}");
+    }
+
+    let mut unknown = value;
+    unknown["job_id"] = serde_json::json!("forged");
+    assert!(serde_json::from_value::<AgentLifecycleFrameV1>(unknown).is_err());
+
+    let oversized = AgentLifecycleFrameV1 {
+        event: AgentLifecycleEventV1::ModelProgress {
+            call_id: "x".repeat(MAX_AGENT_LIFECYCLE_ID_BYTES + 1),
+        },
+        ..frame
+    };
+    assert!(oversized.validate().is_err());
+    assert_eq!(AGENT_LIFECYCLE_ADDRESS_FLAG, "--agent-lifecycle-address");
+}
+
+#[test]
+fn lifecycle_commands_and_acknowledgements_validate() {
+    let cancel = AgentLifecycleCommandV1::Cancel {
+        reason: "worker no-progress deadline".to_string(),
+    };
+    cancel.validate().expect("bounded cancellation command");
+    assert!(
+        AgentLifecycleCommandV1::Cancel {
+            reason: String::new()
+        }
+        .validate()
+        .is_err()
+    );
+    AgentLifecycleCancellationAcknowledgementV1 {
+        version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+    }
+    .validate()
+    .expect("valid cancellation acknowledgement");
+}
+
+#[test]
 fn runtime_limits_round_trip_and_reject_zero() {
     let limits = AgentRuntimeLimitsV1 {
         tool_timeout_secs: 45,

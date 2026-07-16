@@ -127,7 +127,10 @@ provider knobs become flags — `--provider <kind>`, and `--model`,
 `--investigate-model`, `--provider-url` when set — alongside `--max-iterations`,
 `--subagents on|off`, and a per-job `--context`, `--result`, and `--workspace`.
 For known first-party commands it also writes the complete resolved operation
-limits to a private per-run JSON file and passes `--runtime-limits <FILE>`.
+limits to a private per-run JSON file, passes `--runtime-limits <FILE>`, and
+passes an attempt-owned `--agent-lifecycle-address <HOST:PORT>`. The lifecycle
+channel carries only bounded model/tool/steering/end boundaries and remains on
+when optional activity trace capture or storage is unavailable.
 Each `[agent.profiles.<name>.deadlines]` field inherits independently from
 `[agent.deadlines]`. Explicit third-party profile commands receive neither this
 Temper-specific flag nor first-party lifecycle flags; worker fallback supervision

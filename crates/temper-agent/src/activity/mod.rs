@@ -1,11 +1,12 @@
 //! Canonical agent activity normalization and non-failing projections.
 //!
 //! `temper-agent-core::AgentEvent` remains the internal machine protocol. This
-//! module is the only production seam that converts those events into the
-//! shared typed activity vocabulary; usage accounting, operational tracing, and
-//! the optional child-to-worker activity channel all consume that normalized
-//! stream.
+//! module owns two independent consumers: the canonical optional-activity
+//! normalizer and the always-on, content-free lifecycle sink. Usage accounting,
+//! operational tracing, and the optional child-to-worker activity channel
+//! consume the normalized activity stream; worker liveness never does.
 
+mod lifecycle;
 mod normalizer;
 mod transport;
 
@@ -24,11 +25,36 @@ use crate::usage::{TracingProjection, UsageTotals};
 use normalizer::NormalizingEventSink;
 use transport::ActivityClient;
 
-/// Optional activity settings for one coding-agent invocation.
-#[derive(Clone, Debug, Default)]
+pub use lifecycle::AgentLifecycleReporter;
+use lifecycle::CompositeEventSink;
+
+/// Activity and independent correctness-lifecycle settings for one coding-agent
+/// invocation.
+#[derive(Clone, Default)]
 pub struct AgentActivityConfig {
     pub policy: AgentActivityCapturePolicyV1,
     pub address: Option<String>,
+    /// Always-on first-party lifecycle endpoint. This is consumed regardless
+    /// of `policy.capture` and never shares activity storage or queues.
+    pub lifecycle_address: Option<String>,
+    /// In-process equivalent of `lifecycle_address` used by the standalone
+    /// worker and deterministic fakes.
+    pub lifecycle_reporter: Option<AgentLifecycleReporter>,
+}
+
+impl std::fmt::Debug for AgentActivityConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentActivityConfig")
+            .field("policy", &self.policy)
+            .field("address", &self.address)
+            .field("lifecycle_address", &self.lifecycle_address)
+            .field(
+                "lifecycle_reporter",
+                &self.lifecycle_reporter.as_ref().map(|_| "<reporter>"),
+            )
+            .finish()
+    }
 }
 
 /// One source-clock observation used to stamp a normalized child frame.
@@ -91,6 +117,7 @@ pub struct ScopeFactory {
     policy: AgentActivityCapturePolicyV1,
     clock: Arc<dyn ActivityClock>,
     projections: Arc<ProjectionSet>,
+    lifecycle_projection: Option<Arc<dyn lifecycle::LifecycleProjection>>,
 }
 
 /// A core run observer plus the unique scope identity it carries. Callers keep
@@ -112,10 +139,15 @@ impl ScopeFactory {
                 projections.push(Arc::new(ActivityClient::new(address)));
             }
         }
+        let lifecycle_projection = lifecycle::projection(
+            config.lifecycle_address.as_deref(),
+            config.lifecycle_reporter,
+        );
         Self {
             policy: config.policy,
             clock: Arc::new(SystemActivityClock::new()),
             projections: Arc::new(ProjectionSet { projections }),
+            lifecycle_projection,
         }
     }
 
@@ -129,6 +161,7 @@ impl ScopeFactory {
             policy,
             clock,
             projections: Arc::new(ProjectionSet { projections }),
+            lifecycle_projection: None,
         }
     }
 
@@ -171,13 +204,27 @@ impl ScopeFactory {
             parent_id,
         };
         let scope_id = scope.id.clone();
-        let sink = Arc::new(NormalizingEventSink::new(
-            scope,
+        let activity = Arc::new(NormalizingEventSink::new(
+            scope.clone(),
             display_name,
             self.policy.clone(),
             Arc::clone(&self.clock),
             Arc::clone(&self.projections),
         ));
+        let lifecycle = self.lifecycle_projection.as_ref().map(|projection| {
+            Arc::new(lifecycle::LifecycleEventSink::new(
+                temper_protocol_agent::AgentLifecycleScopeV1 {
+                    id: scope.id,
+                    parent_id: scope.parent_id,
+                },
+                Arc::clone(&self.clock),
+                Arc::clone(projection),
+            ))
+        });
+        let sink = Arc::new(CompositeEventSink {
+            activity,
+            lifecycle,
+        });
         ScopedRunObservability {
             scope_id,
             observability: RunObservability::new(sink, model),

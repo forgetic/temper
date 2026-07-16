@@ -326,8 +326,9 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
         ..tongs::provider::StreamOptions::default()
     };
 
-    // One normalizer feeds every projection: totals/tracing and, when present,
-    // the bounded child-to-worker activity channel.
+    // One scope factory feeds the optional activity projections and installs a
+    // separate correctness-lifecycle sink. Lifecycle never passes through the
+    // capture policy, trace queue, or storage projection.
     let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
     let scope_factory =
         crate::activity::ScopeFactory::new(activity_config, std::sync::Arc::clone(&totals));

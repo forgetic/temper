@@ -43,6 +43,16 @@ mod forge;
 pub use forge::{
     FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextRequest, ForgeContextResponse, ForgeContextToolOutcome,
 };
+mod lifecycle;
+pub use lifecycle::{
+    AGENT_LIFECYCLE_ADDRESS_FLAG, AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleAgentStatusV1,
+    AgentLifecycleCancellationAckV1, AgentLifecycleCancellationAcknowledgementV1,
+    AgentLifecycleCommandV1, AgentLifecycleEventV1, AgentLifecycleFrameV1, AgentLifecycleHelloV1,
+    AgentLifecycleModelStatusV1, AgentLifecycleScopeV1, AgentLifecycleToolStatusV1,
+    AgentLifecycleValidationError, MAX_AGENT_LIFECYCLE_CANCEL_REASON_BYTES,
+    MAX_AGENT_LIFECYCLE_FRAME_BYTES, MAX_AGENT_LIFECYCLE_ID_BYTES,
+    MAX_AGENT_LIFECYCLE_TOOL_NAME_BYTES,
+};
 mod submit;
 pub use submit::{
     SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse,

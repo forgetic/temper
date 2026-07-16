@@ -60,6 +60,8 @@ fn drive_coding_loop(
     let activity_config = AgentActivityConfig {
         policy: config.trace_policy.clone(),
         address: config.activity_address.clone(),
+        lifecycle_address: config.lifecycle_address.clone(),
+        lifecycle_reporter: None,
     };
     temper_agent_io::block_on_with(move |_cx, handle| async move {
         let (result, _totals) = run_coding_agent_native_with_totals_tool_config_and_hosts(

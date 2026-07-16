@@ -28,19 +28,21 @@ use temper_protocol_activity::{
     ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, TRACE_POLICY_FLAG,
 };
 use temper_protocol_agent::{
-    AgentRuntimeLimitsV1, AgentToolConfig, FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse,
-    RUNTIME_LIMITS_FLAG, SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest, SubmitForPrResponse,
-    TOOL_CONFIG_FLAG, WorkspaceContext,
+    AGENT_LIFECYCLE_ADDRESS_FLAG, AgentRuntimeLimitsV1, AgentToolConfig,
+    FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, RUNTIME_LIMITS_FLAG,
+    SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest, SubmitForPrResponse, TOOL_CONFIG_FLAG,
+    WorkspaceContext,
 };
 
 use crate::WorkerAgentTraceConfig;
 use crate::agent_runner::{
-    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
-    WorkspaceResult,
+    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, WorkspaceResult,
 };
 use crate::pre_push::submit_for_pr_pre_push_response_blocking;
 use crate::trace::{TraceCollector, TraceRun};
 
+mod lifecycle;
+mod runner;
 mod runtime_limits;
 mod side_channel;
 mod stderr;
@@ -209,36 +211,6 @@ impl OutOfProcessRunner {
     }
 }
 
-impl AgentRunner for OutOfProcessRunner {
-    async fn run(
-        &self,
-        job_id: &str,
-        context: &WorkspaceContext,
-        cwd: &Path,
-    ) -> Result<AgentRunOutput, AgentRunError> {
-        let trace = match self.trace_collector.begin_run(job_id, context) {
-            Ok(trace) => trace,
-            Err(error) => {
-                tracing::warn!(
-                    target: "temper::worker",
-                    service = "worker",
-                    event = "agent.activity.start_failed",
-                    job_id,
-                    correlation_key = context.correlation_key.as_str(),
-                    %error,
-                    "worker could not start durable agent tracing; continuing without it"
-                );
-                None
-            }
-        };
-        let outcome = self.run_agent(job_id, context, cwd, trace.as_ref()).await;
-        if let Some(trace) = trace {
-            terminal::finish_and_flush(&trace, &self.trace_collector, &outcome, job_id).await;
-        }
-        outcome
-    }
-}
-
 impl OutOfProcessRunner {
     async fn run_agent(
         &self,
@@ -246,6 +218,7 @@ impl OutOfProcessRunner {
         context: &WorkspaceContext,
         cwd: &Path,
         trace: Option<&TraceRun>,
+        progress: crate::JobProgressReporter,
     ) -> Result<AgentRunOutput, AgentRunError> {
         let Some((program, args)) = self.command.split_first() else {
             return Err(AgentRunError::permanent("agent command is empty"));
@@ -341,6 +314,23 @@ impl OutOfProcessRunner {
             None
         };
 
+        // Operation limits are supplied only to known first-party commands, so
+        // they are also the compatibility gate for the dedicated lifecycle
+        // flag. Unlike activity, this endpoint is always bound for first-party
+        // runs and does not depend on trace policy or durable storage.
+        let lifecycle_endpoint = if self.runtime_limits.is_some() {
+            Some(
+                lifecycle::LifecycleEndpoint::bind(progress).map_err(|error| {
+                    AgentRunError::transient(format!("bind agent lifecycle endpoint: {error}"))
+                })?,
+            )
+        } else {
+            None
+        };
+        let lifecycle_address = lifecycle_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.address().to_string());
+
         let activity_endpoint = if self.trace_policy.is_some() {
             trace.and_then(|trace| match trace.bind_endpoint() {
                 Ok(endpoint) => Some(endpoint),
@@ -376,6 +366,7 @@ impl OutOfProcessRunner {
         let tool_config_path_owned = tool_config_path.clone();
         let runtime_limits_path_owned = runtime_limits_path.clone();
         let trace_policy_path_owned = trace_policy_path.clone();
+        let lifecycle_address_owned = lifecycle_address.clone();
         let activity_address_owned = activity_address.clone();
         let accepted_submit_for_child = accepted_submit.clone();
         let (forge_requests, mut forge_request_rx) = temper_worker_io::channel();
@@ -402,6 +393,7 @@ impl OutOfProcessRunner {
                     tool_config_path: tool_config_path_owned.as_deref(),
                     runtime_limits_path: runtime_limits_path_owned.as_deref(),
                     trace_policy_path: trace_policy_path_owned.as_deref(),
+                    lifecycle_address: lifecycle_address_owned.as_deref(),
                     activity_address: activity_address_owned.as_deref(),
                     submit_listener,
                     forge_listener,
@@ -454,6 +446,9 @@ impl OutOfProcessRunner {
         if let Some(endpoint) = activity_endpoint {
             endpoint.stop();
         }
+        if let Some(endpoint) = lifecycle_endpoint {
+            endpoint.stop();
+        }
 
         let ChildOutcome {
             status_code,
@@ -504,6 +499,7 @@ struct ChildRunRequest<'a> {
     tool_config_path: Option<&'a Path>,
     runtime_limits_path: Option<&'a Path>,
     trace_policy_path: Option<&'a Path>,
+    lifecycle_address: Option<&'a str>,
     activity_address: Option<&'a str>,
     submit_listener: Option<(TcpListener, String)>,
     forge_listener: Option<(TcpListener, String)>,
@@ -530,6 +526,7 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
         tool_config_path,
         runtime_limits_path,
         trace_policy_path,
+        lifecycle_address,
         activity_address,
         submit_listener,
         forge_listener,
@@ -558,6 +555,9 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
     }
     if let Some(path) = trace_policy_path {
         command.arg(TRACE_POLICY_FLAG).arg(path);
+    }
+    if let Some(address) = lifecycle_address {
+        command.arg(AGENT_LIFECYCLE_ADDRESS_FLAG).arg(address);
     }
     if let Some(address) = activity_address {
         command.arg(ACTIVITY_ADDRESS_FLAG).arg(address);
@@ -623,6 +623,10 @@ fn run_child(request: ChildRunRequest<'_>) -> Result<ChildOutcome, AgentRunError
 #[cfg(test)]
 #[path = "out_of_process_runner_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "out_of_process_runner_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 #[path = "out_of_process_runner_trace_tests.rs"]

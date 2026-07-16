@@ -325,6 +325,33 @@ impl AgentRunner for FakeAgentRunner {
             })),
         }
     }
+
+    async fn run_request(
+        &self,
+        request: AgentRunRequest<'_>,
+    ) -> Result<AgentRunOutput, AgentRunError> {
+        let scope = AgentLifecycleScopeV1 {
+            id: "fake-main".to_string(),
+            parent_id: None,
+        };
+        let _ = request.progress.report(
+            scope.clone(),
+            AgentLifecycleEventV1::ModelStarted {
+                call_id: "fake-call".to_string(),
+                attempt: 0,
+            },
+        );
+        let outcome = self.run(request.job_id, request.context, request.cwd).await;
+        let status = if outcome.is_ok() {
+            AgentLifecycleAgentStatusV1::Succeeded
+        } else {
+            AgentLifecycleAgentStatusV1::Failed
+        };
+        let _ = request
+            .progress
+            .report(scope, AgentLifecycleEventV1::AgentFinished { status });
+        outcome
+    }
 }
 
 async fn accepted_output(

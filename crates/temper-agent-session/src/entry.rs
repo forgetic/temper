@@ -95,6 +95,12 @@ fn build_config(
             "worker activity endpoint supplied for this agent run"
         );
     }
+    if options.lifecycle_address.is_some() {
+        tracing::debug!(
+            target: "temper::agent",
+            "worker lifecycle endpoint supplied for this agent run"
+        );
+    }
 
     let config_dir = resolve_config_dir_from(
         options.capture_dir.as_deref(),
@@ -112,7 +118,8 @@ fn build_config(
     .with_tool_config(read_tool_config(options.tool_config.as_deref())?)
     .with_runtime_limits(read_runtime_limits(options.runtime_limits.as_deref())?)
     .with_trace_policy(read_trace_policy(options.trace_policy.as_deref())?)
-    .with_activity_address(options.activity_address.clone());
+    .with_activity_address(options.activity_address.clone())
+    .with_lifecycle_address(options.lifecycle_address.clone());
     let config = match options.submit_for_pr_address {
         Some(address) => config.with_submit_for_pr(crate::submit_client::host_for_address(address)),
         None => config,
