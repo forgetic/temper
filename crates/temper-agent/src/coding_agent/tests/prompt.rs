@@ -10,8 +10,8 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("ROLE: engineer"));
     assert!(engineer.contains("product diff"));
     assert!(engineer.contains("Do NOT run git commit"));
-    assert!(engineer.contains("submit_for_pr"));
-    assert!(engineer.contains("host responds with failure"));
+    assert!(!engineer.contains("submit_for_pr"));
+    assert!(!engineer.contains("investigate"));
     assert!(engineer.contains("needs_architect"));
     assert!(engineer.contains("needs_human"));
     assert!(engineer.contains("PR repair runs"));
@@ -20,6 +20,8 @@ fn system_prompt_is_role_specific() {
     assert!(!engineer.contains("checkpoint(label)"));
     assert!(!engineer.contains("CHECKPOINTS:"));
     assert!(!engineer.contains("CODEBASE MEMORY"));
+    assert!(!engineer.contains("`write`"));
+    assert!(!engineer.contains("`edit`"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(architect.contains("ROLE: architect"));
@@ -376,14 +378,14 @@ fn artifact_bundle_renders_only_explicit_members_in_each_section() {
     assert!(!optional.contains("Code child"));
     assert!(!optional.contains("Implementation PR"));
 
-    let diagnostics = artifact_section(
-        &rendered,
-        "Diagnostics and truncation:",
-        "Forge context tools:",
-    );
+    let diagnostics = rendered
+        .split_once("Diagnostics and truncation:")
+        .expect("diagnostics heading")
+        .1
+        .trim();
     assert!(diagnostics.contains("content_truncated (issue acme/service#7): body bounded"));
     assert!(diagnostics.contains("content_truncated=true"));
-    assert!(rendered.contains("Repeated calls may follow indirect relations"));
+    assert!(!rendered.contains("Forge context follow-up:"));
     assert!(!rendered.contains("Work item context (JSON):"));
 }
 

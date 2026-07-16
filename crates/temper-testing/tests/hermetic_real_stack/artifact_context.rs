@@ -51,7 +51,9 @@ fn hermetic_real_stack_delivers_bundle_and_services_repeated_forge_reads() {
                 assert!(optional.contains("relation=related source=issue acme/service#1"));
                 assert!(!optional.contains("Cross-repository architecture parent"));
                 assert!(!optional.contains("Plan lineage delivery"));
-                assert!(prompt.contains("Forge context tools:"));
+                assert!(prompt.contains("Forge context follow-up:"));
+                assert!(prompt.contains("`forge_get_item`"));
+                assert!(prompt.contains("`forge_list_related`"));
                 observed_bundle_for_script.fetch_add(1, Ordering::SeqCst);
                 tool_call(
                     "get_primary",

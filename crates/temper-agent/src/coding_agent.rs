@@ -37,7 +37,10 @@
 //! entries. When no outcomes are supplied, the prompt uses the legacy per-role
 //! menus (`needs_architect` / `needs_human`; `ready_code` / `needs_design` /
 //! `needs_breakdown`; or `approve` / `changes` / `escalate`) for compatibility.
-//! The engineer's no-verdict success path remains available in both cases, and
+//! Optional named guidance is added only after the provider tool registry is
+//! finalized, so submit, Forge, codebase-memory, and sub-agent prose cannot
+//! advertise an unavailable tool. The engineer's no-verdict success path
+//! remains available in both outcome modes, and
 //! any emitted verdict outside a non-empty declared vocabulary is rejected.
 //!
 //! This file is a thin facade: the role→capability mapping, errors, prompt
@@ -78,6 +81,8 @@ pub use tools::tool_registry;
 // Internal items the unit tests reach through `super::*`.
 #[cfg(test)]
 pub(crate) use codebase_memory::codebase_memory_prompt_section;
+#[cfg(test)]
+pub(crate) use prompt::{system_prompt_with_registry, user_context_with_registry};
 #[cfg(test)]
 pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabulary};
 #[cfg(test)]
