@@ -94,8 +94,58 @@ pub struct ArtifactSnapshot {
     pub labels: Vec<String>,
     pub state: String,
     /// Workflow artifact kind when classification succeeded.
+    ///
+    /// Retained for compatibility with context bundles produced before the
+    /// compact [`Self::workflow`] projection was introduced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_kind: Option<String>,
+    /// Compact, protocol-owned projection of useful workflow context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<ArtifactWorkflowContext>,
+}
+
+/// Compact workflow context safe to carry across protocol boundaries.
+///
+/// This deliberately models only authored-context relations and persisted
+/// child identities. It has no extension payload capable of carrying workflow
+/// runtime bookkeeping or recursively embedded artifact bodies.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactWorkflowContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<WorkflowArtifactReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<WorkflowArtifactReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<WorkflowChildIdentity>,
+}
+
+/// Fully qualified, normalized workflow relation target.
+///
+/// Unlike the workflow metadata shorthand, `repository_id` is always present,
+/// so same- and cross-repository references have one transport shape.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowArtifactReference {
+    pub repository_id: String,
+    pub number: u64,
+}
+
+/// Identity of a workflow child that already has a persisted artifact number.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowChildIdentity {
+    pub repository_id: String,
+    pub number: u64,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 /// Body-omitted record in one of the bundle's explicit summary scopes.
@@ -440,187 +490,4 @@ fn all_zero(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fixture(name: &str) -> String {
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("fixtures")
-                .join(name),
-        )
-        .expect("fixture is readable")
-    }
-
-    #[test]
-    fn golden_bundles_round_trip() {
-        for name in ["complete.json", "diagnostics-truncation.json"] {
-            let json = fixture(name);
-            let bundle: ArtifactContextBundle =
-                serde_json::from_str(&json).expect("fixture parses");
-            assert_eq!(bundle.version, ARTIFACT_CONTEXT_VERSION);
-            let round_trip = serde_json::to_value(&bundle).expect("bundle serializes");
-            let golden: serde_json::Value = serde_json::from_str(&json).expect("valid json");
-            assert_eq!(round_trip, golden, "fixture {name} is canonical");
-        }
-    }
-
-    #[test]
-    fn complete_fixture_has_explicit_primary_and_scopes() {
-        let bundle: ArtifactContextBundle =
-            serde_json::from_str(&fixture("complete.json")).expect("fixture parses");
-        assert_eq!(bundle.primary.artifact.number, 295);
-        assert_eq!(bundle.primary.workflow_kind.as_deref(), Some("code"));
-        assert_eq!(
-            bundle
-                .lineage
-                .iter()
-                .map(|snapshot| snapshot.workflow_kind.as_deref())
-                .collect::<Vec<_>>(),
-            [Some("feature"), Some("plan")]
-        );
-        assert_eq!(bundle.validation_scope[0].labels, ["implementation"]);
-        assert_eq!(bundle.validation_scope[0].source, bundle.primary.artifact);
-        assert_eq!(
-            bundle.optional_references[0].relation_type,
-            ArtifactRelationType::Related
-        );
-    }
-
-    #[test]
-    fn diagnostic_codes_are_stable_snake_case() {
-        let codes = [
-            ArtifactContextDiagnosticCode::MissingArtifact,
-            ArtifactContextDiagnosticCode::ClosedAncestor,
-            ArtifactContextDiagnosticCode::MalformedMetadata,
-            ArtifactContextDiagnosticCode::RepositoryNotAllowed,
-            ArtifactContextDiagnosticCode::CycleDetected,
-            ArtifactContextDiagnosticCode::DepthExceeded,
-            ArtifactContextDiagnosticCode::CountExceeded,
-            ArtifactContextDiagnosticCode::ContentTruncated,
-            ArtifactContextDiagnosticCode::ForgeReadFailed,
-        ];
-        let names: Vec<String> = codes
-            .into_iter()
-            .map(|code| {
-                serde_json::to_value(code)
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_string()
-            })
-            .collect();
-        assert_eq!(
-            names,
-            [
-                "missing_artifact",
-                "closed_ancestor",
-                "malformed_metadata",
-                "repository_not_allowed",
-                "cycle_detected",
-                "depth_exceeded",
-                "count_exceeded",
-                "content_truncated",
-                "forge_read_failed",
-            ]
-        );
-    }
-
-    #[test]
-    fn forge_operations_use_closed_snake_case_shapes() {
-        let operation = ForgeContextOperation::ForgeListRelated(ForgeListRelatedOperation {
-            repo: "ai/temper".into(),
-            number: 7,
-            artifact_type: Some(ArtifactType::Issue),
-            relations: vec![ForgeRelationType::Child, ForgeRelationType::ProducedPr],
-            depth: Some(2),
-            limit: Some(50),
-        });
-        let json = serde_json::to_value(&operation).unwrap();
-        assert_eq!(json["operation"], "forge_list_related");
-        assert_eq!(json["repo"], "ai/temper");
-        assert_eq!(json["type"], "issue");
-        assert_eq!(json["relations"][1], "produced_pr");
-        assert_eq!(
-            serde_json::from_value::<ForgeContextOperation>(json).unwrap(),
-            operation
-        );
-    }
-
-    #[test]
-    fn w3c_trace_context_validation_is_strict_and_bounded() {
-        let context = W3cTraceContext {
-            traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
-            tracestate: Some("vendor=value,other=opaque".into()),
-        };
-        context.validate().unwrap();
-        assert_eq!(
-            serde_json::from_value::<W3cTraceContext>(serde_json::to_value(&context).unwrap())
-                .unwrap(),
-            context
-        );
-
-        for invalid in [
-            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
-            "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
-            "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-        ] {
-            let invalid = W3cTraceContext {
-                traceparent: invalid.into(),
-                tracestate: None,
-            };
-            assert!(invalid.validate().is_err());
-        }
-    }
-
-    #[test]
-    fn w3c_tracestate_rejects_control_characters_and_unbounded_values() {
-        for tracestate in [
-            "vendor=ok\nsecret=value".to_string(),
-            "x".repeat(513),
-            "Vendor=value".to_string(),
-            "1vendor=value".to_string(),
-            "vendor=has=equals".to_string(),
-            "vendor=first,vendor=duplicate".to_string(),
-            "vendor;bad=value".to_string(),
-        ] {
-            let invalid = W3cTraceContext {
-                traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
-                tracestate: Some(tracestate),
-            };
-            assert!(invalid.validate().is_err());
-        }
-
-        W3cTraceContext {
-            traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
-            tracestate: Some("1tenant@vendor=value,other=opaque".into()),
-        }
-        .validate()
-        .unwrap();
-    }
-
-    #[test]
-    fn stable_context_error_vocabulary_is_snake_case() {
-        let errors = [
-            ForgeContextErrorCode::InvalidRequest,
-            ForgeContextErrorCode::NotAuthorized,
-            ForgeContextErrorCode::NotFound,
-            ForgeContextErrorCode::ForgeUnavailable,
-            ForgeContextErrorCode::LimitExceeded,
-        ];
-        let values: Vec<_> = errors
-            .into_iter()
-            .map(|error| serde_json::to_value(error).unwrap())
-            .collect();
-        assert_eq!(
-            values,
-            [
-                "invalid_request",
-                "not_authorized",
-                "not_found",
-                "forge_unavailable",
-                "limit_exceeded",
-            ]
-        );
-    }
-}
+mod tests;

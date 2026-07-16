@@ -454,8 +454,50 @@
     "body": { "type": "string" },
     "labels": { "type": "array", "items": { "type": "string" } },
     "state": { "type": "string" },
-    "workflow_kind": { "type": "string", "minLength": 1 }
+    "workflow_kind": { "type": "string", "minLength": 1 },
+    "workflow": { "$ref": "#/$defs/artifactWorkflowContext" }
    }
+  },
+  "artifactWorkflowContext": {
+   "type": "object",
+   "properties": {
+    "kind": { "type": "string", "minLength": 1 },
+    "parents": {
+     "type": "array",
+     "items": { "$ref": "#/$defs/workflowArtifactReference" }
+    },
+    "dependencies": {
+     "type": "array",
+     "items": { "$ref": "#/$defs/workflowArtifactReference" }
+    },
+    "target_branch": { "type": "string", "minLength": 1 },
+    "correlation_key": { "type": "string", "minLength": 1 },
+    "children": {
+     "type": "array",
+     "items": { "$ref": "#/$defs/workflowChildIdentity" }
+    }
+   },
+   "additionalProperties": false
+  },
+  "workflowArtifactReference": {
+   "type": "object",
+   "required": ["repository_id", "number"],
+   "properties": {
+    "repository_id": { "type": "string", "minLength": 1 },
+    "number": { "type": "integer", "minimum": 1 }
+   },
+   "additionalProperties": false
+  },
+  "workflowChildIdentity": {
+   "type": "object",
+   "required": ["repository_id", "number", "title"],
+   "properties": {
+    "repository_id": { "type": "string", "minLength": 1 },
+    "number": { "type": "integer", "minimum": 1 },
+    "title": { "type": "string" },
+    "state": { "type": "string" }
+   },
+   "additionalProperties": false
   },
   "artifactSummary": {
    "type": "object",

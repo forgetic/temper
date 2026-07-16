@@ -12,7 +12,31 @@
     "body": "Implement the revised contract.",
     "labels": ["code", "ready"],
     "state": "open",
-    "workflow_kind": "code"
+    "workflow_kind": "code",
+    "workflow": {
+      "kind": "code",
+      "parents": [
+        {"repository_id": "repo-1", "number": 277}
+      ],
+      "dependencies": [
+        {"repository_id": "repo-2", "number": 88}
+      ],
+      "target_branch": "main",
+      "correlation_key": "context-for-code-295",
+      "children": [
+        {
+          "repository_id": "repo-1",
+          "number": 296,
+          "title": "Render compact workflow context",
+          "state": "open"
+        },
+        {
+          "repository_id": "repo-2",
+          "number": 12,
+          "title": "Consume compact workflow context"
+        }
+      ]
+    }
   },
   "lineage": [
     {

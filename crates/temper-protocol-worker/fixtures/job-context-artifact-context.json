@@ -24,7 +24,20 @@
       "body": "Preserve this singular artifact shape.",
       "labels": ["code"],
       "state": "open",
-      "workflow_kind": "code"
+      "workflow_kind": "code",
+      "workflow": {
+        "kind": "code",
+        "parents": [{"repository_id": "repo-1", "number": 277}],
+        "dependencies": [{"repository_id": "repo-2", "number": 88}],
+        "target_branch": "main",
+        "correlation_key": "context-for-code-279",
+        "children": [{
+          "repository_id": "repo-1",
+          "number": 280,
+          "title": "Render artifact context",
+          "state": "open"
+        }]
+      }
     },
     "truncation": {
       "depth_exceeded": false,
