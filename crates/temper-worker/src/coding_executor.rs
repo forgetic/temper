@@ -7,7 +7,9 @@ use temper_protocol_worker::{
     Assign, FailureClass, JobChild, JobContext, WorkspaceManifest, WorkspaceRepo,
 };
 
-use crate::agent_runner::{AgentRunError, AgentRunOutput, AgentRunner};
+use crate::agent_runner::{
+    AgentRunError, AgentRunOutput, AgentRunRequest, AgentRunner, JobProgressReporter,
+};
 use crate::executor::{JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{
@@ -23,6 +25,8 @@ use context::build_workspace_context;
 use outcome::{WritableOutcomeRequest, writable_outcome};
 use session::{attach_agent_session, persist_after_success};
 
+type ProgressReporterFactory = Arc<dyn Fn(&str, &str) -> JobProgressReporter + Send + Sync>;
+
 /// Configuration for the real coding-job executor.
 ///
 /// The agent turn itself is produced by an [`AgentRunner`] passed alongside this
@@ -31,26 +35,22 @@ use session::{attach_agent_session, persist_after_success};
 /// surface the executor owns.
 #[derive(Clone, Debug)]
 pub struct CodingExecutorConfig {
-    /// Top-level root under which the executor creates per-role, per-job
-    /// scoped workspaces: `<root>/<role>/<safe-coordination-key>/<repo-dir>`.
+    /// Root for `<role>/<safe-coordination-key>/<repo-dir>` workspaces.
     pub workspace_root: PathBuf,
-    /// Forge git base URL, e.g. `http://localhost:3000` (joined with the
-    /// repo slug via `forgejo_remote_url`; `file://` URLs work for tests).
+    /// Forge git base URL; `file://` URLs work for tests.
     pub git_base_url: String,
-    /// Role id -> git identity (user, email, push token).
     pub role_identities: BTreeMap<String, RoleGitIdentity>,
 }
 
-/// Runs coding/triage/review jobs by preparing a scoped workspace, driving one
-/// agent turn through its [`AgentRunner`], and mapping the result to a
-/// [`JobOutcome`] (commit/push on the writable head path, verdict routing
-/// otherwise).
+/// Runs coding jobs by preparing a workspace, driving an [`AgentRunner`], and
+/// mapping its product to a [`JobOutcome`].
 #[derive(Clone)]
 pub struct CodingExecutor<R: AgentRunner> {
     config: CodingExecutorConfig,
     runner: Arc<R>,
     /// Optional host-provided guard for PR-head freshness checks before pushes.
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
+    progress_reporter_factory: ProgressReporterFactory,
 }
 
 impl<R: AgentRunner> CodingExecutor<R> {
@@ -59,13 +59,25 @@ impl<R: AgentRunner> CodingExecutor<R> {
             config,
             runner,
             pr_freshness_guard: None,
+            progress_reporter_factory: Arc::new(|_job_id, attempt_id| {
+                JobProgressReporter::noop(attempt_id.to_string())
+            }),
         }
     }
 
-    /// Installs a host/daemon freshness guard used by `pull_request_writable`
-    /// jobs before final PR-head pushes.
+    /// Installs the PR-head freshness guard used before final pushes.
     pub fn with_pr_freshness_guard(mut self, guard: Arc<dyn PrFreshnessGuard>) -> Self {
         self.pr_freshness_guard = Some(guard);
+        self
+    }
+
+    /// Installs worker-owned attempt binding for lifecycle delivery. Future
+    /// watchdog state may reject stale IDs in the returned reporter.
+    pub fn with_progress_reporter_factory<F>(mut self, factory: F) -> Self
+    where
+        F: Fn(&str, &str) -> JobProgressReporter + Send + Sync + 'static,
+    {
+        self.progress_reporter_factory = Arc::new(factory);
         self
     }
 }
@@ -75,7 +87,17 @@ impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
         let config = self.config.clone();
         let runner = Arc::clone(&self.runner);
         let pr_freshness_guard = self.pr_freshness_guard.clone();
-        async move { execute(config, runner, pr_freshness_guard, assign).await }
+        let progress_reporter_factory = Arc::clone(&self.progress_reporter_factory);
+        async move {
+            execute(
+                config,
+                runner,
+                pr_freshness_guard,
+                progress_reporter_factory,
+                assign,
+            )
+            .await
+        }
     }
 }
 
@@ -83,6 +105,7 @@ async fn execute<R: AgentRunner>(
     config: CodingExecutorConfig,
     runner: Arc<R>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
+    progress_reporter_factory: ProgressReporterFactory,
     assign: Assign,
 ) -> JobOutcome {
     let artifact_item = assign.artifact.item.clone();
@@ -234,11 +257,25 @@ async fn execute<R: AgentRunner>(
     // Run one agent turn with the cwd set to the workspace root (not a single
     // repo), so the agent can read and build every sibling. The runner owns the
     // agent mechanism; the executor owns the workspace lifecycle around it.
+    let attempt_id = uuid::Uuid::new_v4().to_string();
+    let progress = progress_reporter_factory(&job_id, &attempt_id);
+    if progress.attempt_id() != attempt_id {
+        return failure(
+            FailureClass::Protocol,
+            "progress reporter is bound to a different agent attempt".to_string(),
+        );
+    }
     let AgentRunOutput {
         result,
         accepted_submit,
     } = match runner
-        .run(&job_id, &workspace_context, &workspace_root)
+        .run_request(AgentRunRequest::new(
+            &job_id,
+            attempt_id,
+            &workspace_context,
+            &workspace_root,
+            progress,
+        ))
         .await
     {
         Ok(output) => output,

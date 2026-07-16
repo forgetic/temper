@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1, TRACE_POLICY_FLAG};
 use temper_protocol_agent::{
-    AgentRuntimeLimitsV1, AgentToolConfig, PROVIDER_CREDENTIALS_ENV, RUNTIME_LIMITS_FLAG,
-    TOOL_CONFIG_FLAG, WorkspaceContext,
+    AGENT_LIFECYCLE_ADDRESS_FLAG, AgentRuntimeLimitsV1, AgentToolConfig, PROVIDER_CREDENTIALS_ENV,
+    RUNTIME_LIMITS_FLAG, TOOL_CONFIG_FLAG, WorkspaceContext,
 };
 
 use super::{OutOfProcessRunner, stderr_tail};
@@ -94,6 +94,10 @@ fn runtime_limits_flag_and_file_are_first_party_opt_in() {
 
     let args = std::fs::read_to_string(args_path).expect("args captured");
     assert!(args.lines().any(|arg| arg == RUNTIME_LIMITS_FLAG), "{args}");
+    assert!(
+        args.lines().any(|arg| arg == AGENT_LIFECYCLE_ADDRESS_FLAG),
+        "{args}"
+    );
     let copied = AgentRuntimeLimitsV1::from_json(
         &std::fs::read_to_string(limits_path).expect("runtime limits copied"),
     )
@@ -103,6 +107,7 @@ fn runtime_limits_flag_and_file_are_first_party_opt_in() {
     let (args, _) = run_fake_agent_with_tool_config("architect", None)
         .expect("third-party-compatible run succeeds");
     assert!(!args.iter().any(|arg| arg == RUNTIME_LIMITS_FLAG));
+    assert!(!args.iter().any(|arg| arg == AGENT_LIFECYCLE_ADDRESS_FLAG));
 }
 
 #[test]

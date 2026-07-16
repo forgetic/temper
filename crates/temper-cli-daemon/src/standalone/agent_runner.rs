@@ -25,8 +25,8 @@ use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_ag
 use temper_protocol_activity::FailureCodeV1;
 use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext};
 use temper_worker::{
-    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
-    TraceCollector, WorkerAgentTraceConfig,
+    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput,
+    AgentRunRequest, AgentRunner, TraceCollector, WorkerAgentTraceConfig,
 };
 
 const TERMINAL_ACTIVITY_FLUSH_TIMEOUT: Duration = Duration::from_millis(250);
@@ -136,6 +136,32 @@ impl AgentRunner for InProcessAgentRunner {
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> impl std::future::Future<Output = Result<AgentRunOutput, AgentRunError>> + Send {
+        self.run_attempt(AgentRunRequest::unsupervised(job_id, context, cwd))
+    }
+
+    fn run_request(
+        &self,
+        request: AgentRunRequest<'_>,
+    ) -> impl std::future::Future<Output = Result<AgentRunOutput, AgentRunError>> + Send {
+        self.run_attempt(request)
+    }
+}
+
+impl InProcessAgentRunner {
+    fn run_attempt(
+        &self,
+        request: AgentRunRequest<'_>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<AgentRunOutput, AgentRunError>>
+                + Send
+                + 'static,
+        >,
+    > {
+        let job_id = request.job_id;
+        let context = request.context;
+        let cwd = request.cwd;
+        let progress = request.progress;
         // §7 agent boundary events. The `item` ref is the work-item subject tag
         // (`[repo#n]` / `[repo PR#n]`); `kind` is the role's activity verb
         // (architect→triage, engineer→coding). We emit `agent.started` here,
@@ -214,10 +240,14 @@ impl AgentRunner for InProcessAgentRunner {
             std::sync::Arc::new(move |operation| host(job_id.clone(), operation))
                 as ForgeContextHost
         });
+        let lifecycle_reporter: temper_agent::AgentLifecycleReporter =
+            std::sync::Arc::new(move |scope, event| {
+                let _ = progress.report(scope, event);
+            });
         let context = context.clone();
         let cwd = cwd.to_path_buf();
 
-        async move {
+        Box::pin(async move {
             let outcome = run_coding_agent_native_with_totals_tool_config_and_hosts(
                 handle,
                 &provider,
@@ -232,6 +262,8 @@ impl AgentRunner for InProcessAgentRunner {
                 AgentActivityConfig {
                     policy: trace_policy,
                     address: activity_address,
+                    lifecycle_address: None,
+                    lifecycle_reporter: Some(lifecycle_reporter),
                 },
                 runtime_limits,
             )
@@ -309,7 +341,7 @@ impl AgentRunner for InProcessAgentRunner {
                 result,
                 accepted_submit: accepted_submit.latest(),
             })
-        }
+        })
     }
 }
 

@@ -49,6 +49,9 @@ pub struct AgentConfig {
     /// Optional worker-owned local endpoint for newline-delimited activity
     /// frames. Absence preserves legacy/third-party behavior.
     pub activity_address: Option<String>,
+    /// Dedicated correctness-critical lifecycle endpoint. Unlike activity this
+    /// remains enabled when trace capture is off or unavailable.
+    pub lifecycle_address: Option<String>,
     /// Optional host submit callback. In out-of-process mode this is a thin
     /// client for the worker-owned local side channel; when absent the
     /// `submit_for_pr` tool is not exposed by this agent process.
@@ -74,6 +77,7 @@ impl AgentConfig {
             runtime_limits: AgentRuntimeLimitsV1::default(),
             trace_policy: AgentActivityCapturePolicyV1::default(),
             activity_address: None,
+            lifecycle_address: None,
             submit_for_pr: None,
             forge_context: None,
         }
@@ -100,6 +104,12 @@ impl AgentConfig {
     /// Installs the optional worker-owned activity endpoint.
     pub fn with_activity_address(mut self, activity_address: Option<String>) -> Self {
         self.activity_address = activity_address;
+        self
+    }
+
+    /// Installs the worker-owned always-on lifecycle endpoint.
+    pub fn with_lifecycle_address(mut self, lifecycle_address: Option<String>) -> Self {
+        self.lifecycle_address = lifecycle_address;
         self
     }
 
@@ -139,6 +149,7 @@ mod tests {
         assert_eq!(config.runtime_limits, AgentRuntimeLimitsV1::default());
         assert_eq!(config.trace_policy, AgentActivityCapturePolicyV1::default());
         assert!(config.activity_address.is_none());
+        assert!(config.lifecycle_address.is_none());
         assert_eq!(config.provider.base_url(), "https://llm.example");
     }
 }

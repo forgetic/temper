@@ -1,6 +1,7 @@
 use temper_protocol_activity::{
     ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, AgentActivityEventV1,
 };
+use temper_protocol_agent::AGENT_LIFECYCLE_ADDRESS_FLAG;
 
 use super::{
     OutOfProcessRunner, tests::fake_agent_script, tests::test_context, tests::test_context_for_role,
@@ -51,6 +52,7 @@ fn worker_metadata_spool_brackets_children_without_activity_support() {
     ));
     let args = std::fs::read_to_string(temp.path().join("args.txt")).unwrap();
     assert!(!args.lines().any(|arg| arg == ACTIVITY_ADDRESS_FLAG));
+    assert!(!args.lines().any(|arg| arg == AGENT_LIFECYCLE_ADDRESS_FLAG));
 }
 
 #[test]

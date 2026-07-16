@@ -1,6 +1,44 @@
 use super::support::*;
 
 #[test]
+fn coding_executor_binds_fake_progress_to_one_attempt() {
+    use std::sync::Mutex;
+
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let observed_for_factory = Arc::clone(&observed);
+        let executor = fixture
+            .executor(AgentBehavior::Success.runner(), true)
+            .with_progress_reporter_factory(move |_job_id, attempt_id| {
+                let observed = Arc::clone(&observed_for_factory);
+                JobProgressReporter::new(attempt_id.to_string(), move |progress| {
+                    observed.lock().unwrap().push(progress);
+                })
+            });
+
+        expect_success(
+            executor
+                .execute(assign("agent/pr-for-code-7", "attempt-progress-7"))
+                .await,
+        );
+
+        let observed = observed.lock().unwrap();
+        assert_eq!(observed.len(), 2);
+        assert!(!observed[0].attempt_id.is_empty());
+        assert_eq!(observed[0].attempt_id, observed[1].attempt_id);
+        assert!(matches!(
+            observed[0].frame.event,
+            AgentLifecycleEventV1::ModelStarted { .. }
+        ));
+        assert!(matches!(
+            observed[1].frame.event,
+            AgentLifecycleEventV1::AgentFinished { .. }
+        ));
+    });
+}
+
+#[test]
 fn artifact_context_bundle_is_copied_without_reconstruction() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
