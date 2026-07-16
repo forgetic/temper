@@ -83,6 +83,22 @@ The `%i` instance name becomes `--pool %i`. Use `--capacity` in a local override
 for a host-specific concurrency limit; otherwise the resolved pool policy is
 used.
 
+### Agent process containment and abrupt worker death
+
+Each Unix agent run is placed in its own process group. On Linux, the child also
+installs a parent-death signal before `exec`; cancellation terminates and then
+hard-kills that group before the worker releases the run. Windows workers use a
+kill-on-close Job Object, so closing the worker's handle terminates the complete
+job tree. Other platforms retain the direct-child kill/reap fallback but cannot
+guarantee cleanup of independently re-parented grandchildren.
+
+For production Linux deployments, keep the worker and all of its children in a
+systemd cgroup (the checked-in template's default service layout does this) and
+do not use `KillMode=process`. The recommended `KillMode=control-group` (the
+systemd default) is the final backstop for `SIGKILL`, kernel failure, or power
+loss before Temper's joined supervisor can finish. Process-group cleanup is the
+normal in-process guarantee; cgroup cleanup covers abrupt service death.
+
 ## 5. Register the webhook contract
 
 Register one Forgejo webhook per managed repository with this target:

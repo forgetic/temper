@@ -1,14 +1,15 @@
 //! Attempt-bound receiver for the correctness-critical agent lifecycle stream.
 
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use temper_protocol_agent::{
-    AgentLifecycleFrameV1, AgentLifecycleHelloV1, MAX_AGENT_LIFECYCLE_FRAME_BYTES,
+    AgentLifecycleCancellationAckV1, AgentLifecycleCommandV1, AgentLifecycleFrameV1,
+    AgentLifecycleHelloV1, MAX_AGENT_LIFECYCLE_FRAME_BYTES,
 };
 
 use crate::agent_runner::JobProgressReporter;
@@ -16,12 +17,23 @@ use crate::agent_runner::JobProgressReporter;
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+struct LifecycleServerState {
+    reporter: JobProgressReporter,
+    stopping: Arc<AtomicBool>,
+    connected: Arc<AtomicBool>,
+    stream_finished: Arc<AtomicBool>,
+    active_stream: Arc<Mutex<Option<TcpStream>>>,
+    cancellation_acknowledged: Arc<AtomicBool>,
+}
+
 /// A loopback endpoint created for exactly one worker attempt.
 pub(super) struct LifecycleEndpoint {
     address: String,
     stopping: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
     stream_finished: Arc<AtomicBool>,
+    active_stream: Arc<Mutex<Option<TcpStream>>>,
+    cancellation_acknowledged: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -33,34 +45,67 @@ impl LifecycleEndpoint {
         let stopping = Arc::new(AtomicBool::new(false));
         let connected = Arc::new(AtomicBool::new(false));
         let stream_finished = Arc::new(AtomicBool::new(false));
-        let thread_stopping = Arc::clone(&stopping);
-        let thread_connected = Arc::clone(&connected);
-        let thread_stream_finished = Arc::clone(&stream_finished);
+        let active_stream = Arc::new(Mutex::new(None));
+        let cancellation_acknowledged = Arc::new(AtomicBool::new(false));
         let thread_address = address.clone();
         let attempt_id = reporter.attempt_id().to_string();
+        let server_state = LifecycleServerState {
+            reporter,
+            stopping: Arc::clone(&stopping),
+            connected: Arc::clone(&connected),
+            stream_finished: Arc::clone(&stream_finished),
+            active_stream: Arc::clone(&active_stream),
+            cancellation_acknowledged: Arc::clone(&cancellation_acknowledged),
+        };
         let thread = thread::Builder::new()
             .name(format!("lifecycle-{attempt_id}"))
-            .spawn(move || {
-                serve(
-                    listener,
-                    reporter,
-                    thread_stopping,
-                    thread_connected,
-                    thread_stream_finished,
-                    &thread_address,
-                )
-            })?;
+            .spawn(move || serve(listener, server_state, &thread_address))?;
         Ok(Self {
             address,
             stopping,
             connected,
             stream_finished,
+            active_stream,
+            cancellation_acknowledged,
             thread: Some(thread),
         })
     }
 
     pub(super) fn address(&self) -> &str {
         &self.address
+    }
+
+    /// Sends cooperative cancellation on the already-authenticated first-party
+    /// connection. Endpoint ownership binds the command to this attempt.
+    pub(super) fn request_cancel(&self, reason: &str) -> bool {
+        let command = AgentLifecycleCommandV1::Cancel {
+            reason: reason.to_string(),
+        };
+        if command.validate().is_err() {
+            return false;
+        }
+        let mut bytes = match serde_json::to_vec(&command) {
+            Ok(bytes) => bytes,
+            Err(_) => return false,
+        };
+        bytes.push(b'\n');
+        let mut stream = self
+            .active_stream
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(stream) = stream.as_mut() else {
+            return false;
+        };
+        stream.write_all(&bytes).is_ok()
+    }
+
+    pub(super) fn connected(&self) -> bool {
+        self.connected.load(Ordering::Acquire)
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn cancellation_acknowledged(&self) -> bool {
+        self.cancellation_acknowledged.load(Ordering::Acquire)
     }
 
     pub(super) fn stop(mut self) {
@@ -100,32 +145,41 @@ impl Drop for LifecycleEndpoint {
     }
 }
 
-fn serve(
-    listener: TcpListener,
-    reporter: JobProgressReporter,
-    stopping: Arc<AtomicBool>,
-    connected: Arc<AtomicBool>,
-    stream_finished: Arc<AtomicBool>,
-    address: &str,
-) {
+fn serve(listener: TcpListener, state: LifecycleServerState, address: &str) {
     let mut expected_seq = 1_u64;
-    while !stopping.load(Ordering::Acquire) {
+    while !state.stopping.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((stream, peer)) => {
-                if stopping.load(Ordering::Acquire) {
+                if state.stopping.load(Ordering::Acquire) {
                     break;
                 }
-                connected.store(true, Ordering::Release);
-                stream_finished.store(false, Ordering::Release);
-                let outcome =
-                    receive_lifecycle_stream(stream, &reporter, &stopping, &mut expected_seq);
-                stream_finished.store(true, Ordering::Release);
+                state.connected.store(true, Ordering::Release);
+                state.stream_finished.store(false, Ordering::Release);
+                if let Ok(command_stream) = stream.try_clone() {
+                    *state
+                        .active_stream
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(command_stream);
+                }
+                let outcome = receive_lifecycle_stream(
+                    stream,
+                    &state.reporter,
+                    &state.stopping,
+                    &mut expected_seq,
+                    &state.cancellation_acknowledged,
+                );
+                state
+                    .active_stream
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                state.stream_finished.store(true, Ordering::Release);
                 if let Err(error) = outcome {
                     tracing::warn!(
                         target: "temper::worker",
                         service = "worker",
                         event = "agent.lifecycle.frame_rejected",
-                        attempt_id = reporter.attempt_id(),
+                        attempt_id = state.reporter.attempt_id(),
                         peer = %peer,
                         %error,
                         "worker closed an invalid agent lifecycle stream"
@@ -140,7 +194,7 @@ fn serve(
                     target: "temper::worker",
                     service = "worker",
                     event = "agent.lifecycle.accept_failed",
-                    attempt_id = reporter.attempt_id(),
+                    attempt_id = state.reporter.attempt_id(),
                     endpoint = address,
                     %error,
                     "worker lifecycle endpoint stopped after an accept failure"
@@ -156,6 +210,7 @@ fn receive_lifecycle_stream(
     reporter: &JobProgressReporter,
     stopping: &AtomicBool,
     expected_seq: &mut u64,
+    cancellation_acknowledged: &AtomicBool,
 ) -> Result<(), String> {
     stream
         .set_read_timeout(Some(READ_POLL_INTERVAL))
@@ -169,6 +224,15 @@ fn receive_lifecycle_stream(
         .map_err(|error| error.to_string())?;
 
     while let Some(bytes) = read_record(&mut reader, stopping)? {
+        if let Ok(acknowledgement) =
+            serde_json::from_slice::<AgentLifecycleCancellationAckV1>(&bytes)
+        {
+            acknowledgement
+                .validate()
+                .map_err(|error| error.to_string())?;
+            cancellation_acknowledged.store(true, Ordering::Release);
+            continue;
+        }
         let frame = serde_json::from_slice::<AgentLifecycleFrameV1>(&bytes)
             .map_err(|_| "lifecycle frame is malformed".to_string())?;
         frame.validate().map_err(|error| error.to_string())?;

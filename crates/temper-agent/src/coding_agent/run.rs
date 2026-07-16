@@ -330,6 +330,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     // separate correctness-lifecycle sink. Lifecycle never passes through the
     // capture policy, trace queue, or storage projection.
     let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
+    let cancellation = activity_config.cancellation.clone();
     let scope_factory =
         crate::activity::ScopeFactory::new(activity_config, std::sync::Arc::clone(&totals));
     let main_observability = scope_factory.main(crate::usage::MAIN_SCOPE, model_identity.clone());
@@ -389,13 +390,14 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     let arg_preview = crate::usage::tool_arg_preview_hook(cwd.to_path_buf());
     let model_id = provider_config.model_id().to_string();
     let outcome = async {
-        let (_control, run) = temper_agent_core::run_sub_agent_controllable_with_observability(
+        let (control, run) = temper_agent_core::run_sub_agent_controllable_with_observability(
             handle.clone(),
             sub_agent,
             main_observability.observability,
             None,
             Some(arg_preview),
         )?;
+        cancellation.install(move || control.abort());
         run.await
     }
     .await

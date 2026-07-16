@@ -71,9 +71,11 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
                 AgentSurface::ExternalCommand(command) => (command, None),
             };
             let trace_config = config.agent_traces.clone();
+            let liveness_limits = config.liveness_limits;
             let runner = Arc::new(
                 OutOfProcessRunner::new(command)
                     .with_runtime_limits(runtime_limits)
+                    .with_liveness_limits(liveness_limits)
                     .with_trace_collector(trace_config),
             );
             temper_worker_io::block_on_with(move |_cx, handle| async move {

@@ -25,8 +25,8 @@ use crate::usage::{TracingProjection, UsageTotals};
 use normalizer::NormalizingEventSink;
 use transport::ActivityClient;
 
-pub use lifecycle::AgentLifecycleReporter;
 use lifecycle::CompositeEventSink;
+pub use lifecycle::{AgentCancellationLatch, AgentLifecycleReporter};
 
 /// Activity and independent correctness-lifecycle settings for one coding-agent
 /// invocation.
@@ -40,6 +40,8 @@ pub struct AgentActivityConfig {
     /// In-process equivalent of `lifecycle_address` used by the standalone
     /// worker and deterministic fakes.
     pub lifecycle_reporter: Option<AgentLifecycleReporter>,
+    /// Cooperative cancellation bridge installed into the core run control.
+    pub cancellation: AgentCancellationLatch,
 }
 
 impl std::fmt::Debug for AgentActivityConfig {
@@ -53,6 +55,7 @@ impl std::fmt::Debug for AgentActivityConfig {
                 "lifecycle_reporter",
                 &self.lifecycle_reporter.as_ref().map(|_| "<reporter>"),
             )
+            .field("cancellation", &"<latch>")
             .finish()
     }
 }
@@ -142,6 +145,7 @@ impl ScopeFactory {
         let lifecycle_projection = lifecycle::projection(
             config.lifecycle_address.as_deref(),
             config.lifecycle_reporter,
+            config.cancellation,
         );
         Self {
             policy: config.policy,

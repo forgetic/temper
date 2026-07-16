@@ -18,6 +18,10 @@ use temper_protocol_agent::{
 
 use super::{ActivityClock, NormalizingEventSink};
 
+mod cancellation;
+pub use cancellation::AgentCancellationLatch;
+use cancellation::spawn_command_reader;
+
 const LIFECYCLE_QUEUE_CAPACITY: usize = 256;
 const LIFECYCLE_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const LIFECYCLE_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
@@ -63,12 +67,12 @@ struct LifecycleClient {
 }
 
 impl LifecycleClient {
-    fn new(address: &str) -> Self {
+    fn new(address: &str, cancellation: AgentCancellationLatch) -> Self {
         let (sender, receiver) = mpsc::sync_channel(LIFECYCLE_QUEUE_CAPACITY);
         let address = address.to_string();
         let _ = std::thread::Builder::new()
             .name("temper-agent-lifecycle".to_string())
-            .spawn(move || lifecycle_writer(&address, receiver));
+            .spawn(move || lifecycle_writer(&address, receiver, cancellation));
         Self {
             sender,
             state: Mutex::new(ClientState { next_seq: 1 }),
@@ -126,7 +130,11 @@ impl LifecycleProjection for LifecycleClient {
     }
 }
 
-fn lifecycle_writer(address: &str, receiver: mpsc::Receiver<WriterMessage>) {
+fn lifecycle_writer(
+    address: &str,
+    receiver: mpsc::Receiver<WriterMessage>,
+    cancellation: AgentCancellationLatch,
+) {
     let mut addresses = match address.to_socket_addrs() {
         Ok(addresses) => addresses,
         Err(_) => return,
@@ -134,27 +142,46 @@ fn lifecycle_writer(address: &str, receiver: mpsc::Receiver<WriterMessage>) {
     let Some(address) = addresses.next() else {
         return;
     };
-    let mut stream = match TcpStream::connect_timeout(&address, LIFECYCLE_CONNECT_TIMEOUT) {
+    let stream = match TcpStream::connect_timeout(&address, LIFECYCLE_CONNECT_TIMEOUT) {
         Ok(stream) => stream,
         Err(_) => return,
     };
     let _ = stream.set_write_timeout(Some(LIFECYCLE_WRITE_TIMEOUT));
+    let command_stream = match stream.try_clone() {
+        Ok(stream) => stream,
+        Err(_) => return,
+    };
+    let writer = Arc::new(Mutex::new(stream));
     let Ok(mut hello) = serde_json::to_vec(&AgentLifecycleHelloV1::default()) else {
         return;
     };
     hello.push(b'\n');
-    if stream.write_all(&hello).is_err() {
+    if writer
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .write_all(&hello)
+        .is_err()
+    {
         return;
     }
+    let command_writer = Arc::clone(&writer);
+    spawn_command_reader(command_stream, command_writer, cancellation);
     while let Ok(message) = receiver.recv() {
-        if stream.write_all(&message.bytes).is_err() {
+        let write_result = writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .write_all(&message.bytes);
+        if write_result.is_err() {
             break;
         }
         if let Some(delivered) = message.delivered {
             let _ = delivered.send(());
         }
         if message.terminal {
-            let _ = stream.shutdown(std::net::Shutdown::Write);
+            let _ = writer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .shutdown(std::net::Shutdown::Write);
             break;
         }
     }
@@ -163,6 +190,7 @@ fn lifecycle_writer(address: &str, receiver: mpsc::Receiver<WriterMessage>) {
 pub(super) fn projection(
     address: Option<&str>,
     reporter: Option<AgentLifecycleReporter>,
+    cancellation: AgentCancellationLatch,
 ) -> Option<Arc<dyn LifecycleProjection>> {
     // A direct reporter is authoritative for in-process execution. The socket
     // carrier is used only by split-process execution, preventing duplicates if
@@ -170,7 +198,9 @@ pub(super) fn projection(
     if let Some(reporter) = reporter {
         return Some(Arc::new(CallbackProjection { callback: reporter }));
     }
-    address.map(|address| Arc::new(LifecycleClient::new(address)) as Arc<dyn LifecycleProjection>)
+    address.map(|address| {
+        Arc::new(LifecycleClient::new(address, cancellation)) as Arc<dyn LifecycleProjection>
+    })
 }
 
 struct LifecycleState {
