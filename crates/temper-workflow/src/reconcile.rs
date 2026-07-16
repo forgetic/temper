@@ -23,11 +23,13 @@
 //!
 //! # Recovery policy hooks
 //!
-//! [`RecoveryPolicy`] has one defaulted hook per finding class, so a workflow
-//! can override how it handles expired leases, partial transitions, impossible
-//! states, classification drift, stale commands, or resolved dependencies by
-//! implementing only the hooks it cares about. [`DefaultRecoveryPolicy`] uses
-//! the safe defaults: requeue expired leases, escalate ambiguous drift, repair
+//! Durable assignment recovery is fixed to full convergence so it cannot be
+//! downgraded to lease-only clearing. [`RecoveryPolicy`] has defaulted hooks for
+//! the remaining configurable finding classes, so a workflow can override how
+//! it handles expired legacy leases, partial transitions, impossible states,
+//! classification drift, stale commands, or resolved dependencies by
+//! implementing only the hooks it cares about. [`DefaultRecoveryPolicy`] uses the safe defaults: fully converge expired
+//! assignments, requeue expired legacy leases, escalate ambiguous drift, repair
 //! partial transitions, mark already-realized commands reconciled, and
 //! mechanically unblock dependency-gated work once its prerequisites land.
 

@@ -11,9 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use temper_forge::{ChangeKind, Forge, ForgeError, HintArtifactKind, ItemNumber, RepositoryId};
 use temper_workflow::{
-    Applier, ApplyOutcome, ArtifactSnapshot, CompiledWorkflow, DefaultRecoveryPolicy, Executor,
-    LeaseManager, LeasePolicy, ReconciliationMode, RecoveryPolicy, ValidatedWorkflow,
-    parse_metadata_block,
+    Applier, ApplyOutcome, ArtifactSnapshot, AssignmentConverger, CompiledWorkflow,
+    DefaultRecoveryPolicy, Executor, LeaseManager, LeasePolicy, ReconciliationMode, RecoveryPolicy,
+    ValidatedWorkflow, parse_metadata_block,
 };
 
 /// Controller-plane worker that runs mechanical recovery and automation.
@@ -38,6 +38,7 @@ pub struct MechanicalWorker<
     repo: &'a RepositoryId,
     executor: Executor<'a, F>,
     lease_manager: LeaseManager<'a, F>,
+    assignment_converger: AssignmentConverger<'a, F>,
     journal: &'a J,
     policy: P,
     /// Workspace executors the actor roles of workspace-backed automations can
@@ -95,6 +96,7 @@ where
             repo,
             executor: Executor::new(workflow, forge),
             lease_manager: LeaseManager::new(forge, lease_policy),
+            assignment_converger: AssignmentConverger::new(workflow, forge, lease_policy),
             journal,
             policy,
             external_tool_executors: ExternalToolExecutors::new(),
@@ -241,7 +243,12 @@ where
         } else {
             log_mechanical_reconciliation(&self.name, self.repo, &report);
             Applier::new(&self.executor, &self.lease_manager, self.journal)
-                .apply_report(self.repo, &report, now)
+                .apply_report_with_assignment_converger(
+                    self.repo,
+                    &report,
+                    now,
+                    &self.assignment_converger,
+                )
                 .await?
         };
         Ok(Progress {
@@ -270,7 +277,12 @@ where
         } else {
             log_mechanical_reconciliation(&self.name, self.repo, &report);
             Applier::new(&self.executor, &self.lease_manager, self.journal)
-                .apply_report(self.repo, &report, now)
+                .apply_report_with_assignment_converger(
+                    self.repo,
+                    &report,
+                    now,
+                    &self.assignment_converger,
+                )
                 .await?
         };
         if !outcome.advisory.is_empty() {
@@ -386,6 +398,7 @@ fn log_mechanical_reconciliation_summary(
 fn finding_name(finding: &temper_workflow::ReconcileFinding) -> &'static str {
     use temper_workflow::ReconcileFinding;
     match finding {
+        ReconcileFinding::ExpiredAssignment { .. } => "expired_assignment",
         ReconcileFinding::ExpiredLease { .. } => "expired_lease",
         ReconcileFinding::ImpossibleState { .. } => "impossible_state",
         ReconcileFinding::ClassificationDrift { .. } => "classification_drift",
@@ -399,6 +412,7 @@ fn finding_name(finding: &temper_workflow::ReconcileFinding) -> &'static str {
 fn action_name(action: &temper_workflow::RecoveryAction) -> &'static str {
     use temper_workflow::RecoveryAction;
     match action {
+        RecoveryAction::ConvergeAssignment { .. } => "converge_assignment",
         RecoveryAction::RequeueLease { .. } => "requeue_lease",
         RecoveryAction::Escalate { .. } => "escalate",
         RecoveryAction::Repair { .. } => "repair",

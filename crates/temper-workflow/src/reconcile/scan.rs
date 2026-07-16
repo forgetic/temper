@@ -6,7 +6,7 @@
 //! backend loaders that gather snapshots before calling [`Reconciler::scan`]
 //! live in the sibling [`load`](super::load) module.
 
-use super::finding::{ReconcileFinding, ReconcileReport, RecoveryPolicy};
+use super::finding::{ReconcileFinding, ReconcileReport, RecoveryAction, RecoveryPolicy};
 use super::{ArtifactSnapshot, Reconciler};
 use crate::classify::{
     ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
@@ -65,18 +65,37 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         report
     }
 
-    /// Detects an expired lease on a single snapshot.
+    /// Detects an expired durable assignment or legacy lease on one snapshot.
     fn scan_lease(
         &self,
         snapshot: &ArtifactSnapshot,
         now: chrono::DateTime<chrono::Utc>,
         report: &mut ReconcileReport,
     ) {
-        let Some(lease) = parse_metadata_block(&snapshot.body)
-            .ok()
-            .flatten()
-            .and_then(|metadata| metadata.lease)
-        else {
+        let Some(metadata) = parse_metadata_block(&snapshot.body).ok().flatten() else {
+            return;
+        };
+        if let Some(assignment) = metadata.assignment {
+            let expires_at = assignment
+                .expires_at
+                .or_else(|| metadata.lease.as_ref().map(|lease| lease.expires_at));
+            if expires_at.is_none_or(|expires_at| now < expires_at) {
+                return;
+            }
+            let action = RecoveryAction::ConvergeAssignment {
+                target: snapshot.source,
+                assignment: Box::new(assignment.clone()),
+            };
+            report.push(
+                ReconcileFinding::ExpiredAssignment {
+                    target: snapshot.source,
+                    assignment: Box::new(assignment),
+                },
+                action,
+            );
+            return;
+        }
+        let Some(lease) = metadata.lease else {
             return;
         };
         if lease.is_expired(now) {
