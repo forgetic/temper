@@ -14,6 +14,7 @@ mod extras;
 mod forge;
 mod lineage;
 mod markdown;
+mod projection;
 mod retrieval;
 
 #[cfg(test)]
@@ -31,6 +32,7 @@ use temper_workflow::{ArtifactSource, ClassifiedArtifact, ValidatedWorkflow};
 
 pub use catalog::ConfiguredRepositoryCatalog;
 pub use forge::ArtifactContextForge;
+pub(crate) use projection::{SnapshotInput, project_snapshot};
 pub use retrieval::{
     ArtifactContextService, DEFAULT_RELATED_DEPTH, DEFAULT_RELATED_RESULTS, MAX_COMMENT_BYTES,
     MAX_FORGE_RESPONSE_BYTES, MAX_ITEM_BODY_BYTES, MAX_ITEM_COMMENTS, MAX_RELATED_DEPTH,
@@ -316,6 +318,7 @@ async fn resolve_initial_artifact_context_selected_with_primary<F: Forge + ?Size
     }
     bundle.validation_scope = validation.summaries;
     bundle.optional_references = references.summaries;
+    projection::attach_available_child_states(&mut bundle);
     if total_summaries > policy.summaries {
         bundle.diagnostics.push(lineage::diagnostic(
             ArtifactContextDiagnosticCode::CountExceeded,

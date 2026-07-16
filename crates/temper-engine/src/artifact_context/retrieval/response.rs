@@ -12,6 +12,7 @@ use super::{MAX_COMMENT_BYTES, MAX_INNER_RESPONSE_BYTES};
 use crate::artifact_context::catalog::ConfiguredRepositoryCatalog;
 use crate::artifact_context::forge::ArtifactContextForge;
 use crate::artifact_context::lineage::{ForgeItem, fetch, key};
+use crate::artifact_context::projection::{drop_optional_child, drop_optional_child_state};
 
 pub(super) async fn load_item<F: ArtifactContextForge + ?Sized>(
     forge: &F,
@@ -111,6 +112,11 @@ pub(super) fn enforce_item_response_bound(
         result.comments.pop();
         result.truncation.count_exceeded = true;
     }
+    while serialized_len(result) > MAX_INNER_RESPONSE_BYTES
+        && (drop_optional_child_state(&mut result.item) || drop_optional_child(&mut result.item))
+    {
+        result.truncation.count_exceeded = true;
+    }
     if serialized_len(result) > MAX_INNER_RESPONSE_BYTES && !result.item.body.is_empty() {
         let excess = serialized_len(result).saturating_sub(MAX_INNER_RESPONSE_BYTES);
         let target = result.item.body.len().saturating_sub(excess.max(1));
@@ -144,4 +150,56 @@ fn serialized_len<T: serde::Serialize>(value: &T) -> usize {
     serde_json::to_vec(value)
         .expect("Forge context DTO always serializes")
         .len()
+}
+
+#[cfg(test)]
+mod tests {
+    use temper_protocol_context::{
+        ArtifactReference, ArtifactRepository, ArtifactSnapshot, ArtifactWorkflowContext,
+        WorkflowChildIdentity,
+    };
+
+    use super::*;
+
+    #[test]
+    fn item_response_drops_optional_children_before_authored_body() {
+        let authored = "mandatory authored body".repeat(1_024);
+        let mut result = ForgeGetItemResult {
+            item: ArtifactSnapshot {
+                artifact: ArtifactReference {
+                    repository: ArtifactRepository {
+                        id: "forge:ai/temper".into(),
+                        path: "ai/temper".into(),
+                    },
+                    artifact_type: ArtifactType::Issue,
+                    number: 1,
+                },
+                title: "primary".into(),
+                body: authored.clone(),
+                labels: Vec::new(),
+                state: "open".into(),
+                workflow_kind: Some("plan".into()),
+                workflow: Some(ArtifactWorkflowContext {
+                    kind: Some("plan".into()),
+                    children: vec![WorkflowChildIdentity {
+                        repository_id: "forge:ai/temper".into(),
+                        number: 2,
+                        title: "x".repeat(MAX_INNER_RESPONSE_BYTES),
+                        state: Some("open".into()),
+                    }],
+                    ..Default::default()
+                }),
+            },
+            comments: Vec::new(),
+            truncation: ArtifactContextTruncation::default(),
+        };
+
+        enforce_item_response_bound(&mut result).unwrap();
+
+        assert_eq!(result.item.body, authored);
+        assert!(result.item.workflow.as_ref().unwrap().children.is_empty());
+        assert!(result.truncation.count_exceeded);
+        assert!(!result.truncation.content_truncated);
+        assert!(serialized_len(&result) <= MAX_INNER_RESPONSE_BYTES);
+    }
 }

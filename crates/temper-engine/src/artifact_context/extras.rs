@@ -126,10 +126,11 @@ async fn validation_candidates<F: ArtifactContextForge + ?Sized>(
         match fetch(forge, &repository_id, artifact_type, relation.target.number).await {
             Ok(Some(item)) => {
                 let classified_dependency = classify(workflow, &item);
-                let mut snapshot = item.snapshot(repository, None);
-                if let Ok(dependency) = &classified_dependency {
-                    snapshot.workflow_kind = Some(dependency.kind.to_string());
-                }
+                let workflow_kind = classified_dependency
+                    .as_ref()
+                    .ok()
+                    .map(|dependency| dependency.kind.to_string());
+                let snapshot = item.snapshot(repository, workflow_kind);
                 let dependency_ref = snapshot.artifact.clone();
                 output.push(Candidate {
                     summary: summary(

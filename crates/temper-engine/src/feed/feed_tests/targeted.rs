@@ -41,6 +41,67 @@ async fn targeted_ready_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemN
 }
 
 #[test]
+fn targeted_preloaded_snapshot_uses_authored_projection() {
+    temper_engine_io::block_on(async move {
+        let forge = MemoryForge::new();
+        let repo = targeted_repo(&forge).await;
+        let authored = "## Objective\ntargeted authored sentinel\n";
+        let issue = forge
+            .create_issue(
+                &repo,
+                temper_forge::CreateIssue {
+                    title: "targeted".into(),
+                    body: format!(
+                        "{authored}{}",
+                        render_metadata_block(&WorkflowMetadata {
+                            kind: Some(ArtifactKindId::new("code")),
+                            target_branch: Some("feature/targeted".into()),
+                            correlation_key: Some("targeted-correlation".into()),
+                            repaired_head: Some("bookkeeping-must-not-escape".into()),
+                            ..Default::default()
+                        })
+                    ),
+                    labels: vec!["code".into(), "ready".into()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let (workflow, compiled) = targeted_basic_workflow();
+        let scan = temper_runner::targeted_role_work_items(
+            &forge,
+            &repo,
+            &workflow,
+            &compiled,
+            temper_runner::ArtifactAddress::issue(issue.number),
+            &[RoleId::new("engineer")],
+            chrono::DateTime::from_timestamp(1, 0).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let snapshot =
+            super::super::targeted::context_snapshot("ai/temper", &scan.snapshot, &scan.classified);
+
+        assert_eq!(snapshot.body, authored);
+        assert_eq!(snapshot.workflow_kind.as_deref(), Some("code"));
+        let projected = snapshot.workflow.expect("workflow projection");
+        assert_eq!(projected.kind.as_deref(), Some("code"));
+        assert_eq!(projected.target_branch.as_deref(), Some("feature/targeted"));
+        assert_eq!(
+            projected.correlation_key.as_deref(),
+            Some("targeted-correlation")
+        );
+        assert!(
+            !serde_json::to_string(&projected)
+                .unwrap()
+                .contains("bookkeeping-must-not-escape")
+        );
+    });
+}
+
+#[test]
 fn targeted_feed_returns_artifact_scoped_ids_without_pruning_other_pending_work() {
     temper_engine_io::block_on_with(move |_cx, handle| async move {
         let daemon = Daemon::new(Arc::new(handle));
