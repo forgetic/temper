@@ -18,6 +18,7 @@ use temper_worker_io::{CqSender, OneshotReceiver, Spawner, channel, drive, onesh
 use crate::client::WorkerError;
 use crate::config::{WorkerConfig, WorkerParams};
 use crate::executor::JobExecutor;
+use crate::lifecycle_hook::{NoopWorkerLifecycleHook, WorkerLifecycleHook};
 use crate::result_outbox::ResultOutbox;
 use crate::trace::spawn_activity_forwarder;
 use crate::transport::{HttpTransport, Transport};
@@ -113,6 +114,30 @@ where
     T: Transport,
     S: Spawner,
 {
+    start_worker_with_transport_and_hook(
+        spawner,
+        config,
+        executor,
+        transport,
+        Arc::new(NoopWorkerLifecycleHook),
+    )
+}
+
+/// Starts the production worker with an optional lifecycle hook used by
+/// deterministic restart acceptance fixtures. Product entry points call
+/// [`start_worker_with_transport`] and therefore install the zero-cost no-op.
+pub fn start_worker_with_transport_and_hook<E, T, S>(
+    spawner: S,
+    config: WorkerConfig,
+    executor: Arc<E>,
+    transport: Arc<T>,
+    lifecycle_hook: Arc<dyn WorkerLifecycleHook>,
+) -> WorkerComponentHandle
+where
+    E: JobExecutor + Send + Sync + 'static,
+    T: Transport,
+    S: Spawner,
+{
     let params = WorkerParams::from_config(&config);
     let outbox = Arc::new(ResultOutbox::new(params.result_root.clone()));
     let recovered = match outbox.load() {
@@ -146,6 +171,7 @@ where
         executor,
         outbox,
         cancellation.clone(),
+        lifecycle_hook,
     );
     let machine = WorkerMachine::with_recovered_outbox(params, recovered);
     let (joined_tx, joined) = oneshot();

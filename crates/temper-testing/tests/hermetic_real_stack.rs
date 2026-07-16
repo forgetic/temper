@@ -186,6 +186,8 @@ mod basic_delivery;
 mod multi_repo;
 #[path = "hermetic_real_stack/restart_acceptance.rs"]
 mod restart_acceptance;
+#[path = "hermetic_real_stack/restart_cancellation.rs"]
+mod restart_cancellation;
 #[path = "hermetic_real_stack/restart_recovery.rs"]
 mod restart_recovery;
 
