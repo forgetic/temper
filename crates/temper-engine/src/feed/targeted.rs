@@ -105,6 +105,7 @@ pub(super) fn context_snapshot(
         labels,
         state,
         workflow_kind: Some(classified.kind.to_string()),
+        workflow: None,
     }
 }
 

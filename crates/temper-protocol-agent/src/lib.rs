@@ -33,9 +33,10 @@ pub use temper_protocol_context::{
     ARTIFACT_CONTEXT_VERSION, ArtifactContextBundle, ArtifactContextDiagnostic,
     ArtifactContextDiagnosticCode, ArtifactContextTruncation, ArtifactIndexEntry,
     ArtifactReference, ArtifactRelation, ArtifactRelationType, ArtifactRepository,
-    ArtifactSnapshot, ArtifactSummary, ArtifactType, ForgeContextErrorCode, ForgeContextOperation,
-    ForgeContextResult, ForgeGetItemOperation, ForgeGetItemResult, ForgeItemComment,
-    ForgeListRelatedOperation, ForgeListRelatedResult, ForgeRelatedEdge, ForgeRelationType,
+    ArtifactSnapshot, ArtifactSummary, ArtifactType, ArtifactWorkflowContext,
+    ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult, ForgeGetItemOperation,
+    ForgeGetItemResult, ForgeItemComment, ForgeListRelatedOperation, ForgeListRelatedResult,
+    ForgeRelatedEdge, ForgeRelationType, WorkflowArtifactReference, WorkflowChildIdentity,
 };
 use temper_verdict::{VerdictChildView, VerdictContracts, VerdictResultView};
 

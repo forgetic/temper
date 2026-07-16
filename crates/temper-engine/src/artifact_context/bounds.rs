@@ -140,6 +140,7 @@ mod tests {
             labels: Vec::new(),
             state: "open".into(),
             workflow_kind: Some("code".into()),
+            workflow: None,
         });
         bundle.lineage.push(ArtifactSnapshot {
             artifact: ArtifactReference {
@@ -152,6 +153,7 @@ mod tests {
             labels: Vec::new(),
             state: "open".into(),
             workflow_kind: Some("feature".into()),
+            workflow: None,
         });
 
         enforce_bounds(
@@ -183,6 +185,7 @@ mod tests {
             labels: Vec::new(),
             state: "open".into(),
             workflow_kind: Some("code".into()),
+            workflow: None,
         });
 
         enforce_bounds(
@@ -214,6 +217,7 @@ mod tests {
             labels: Vec::new(),
             state: "open".into(),
             workflow_kind: None,
+            workflow: None,
         });
         assert!(serialized_len(&bundle) < ArtifactContextPolicy::default().bundle_bytes);
     }

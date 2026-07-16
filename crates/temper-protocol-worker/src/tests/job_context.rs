@@ -208,10 +208,44 @@ fn artifact_context_embedding_fixture_preserves_singular_artifact() {
     assert_eq!(bundle.version, 1);
     assert_eq!(bundle.primary.artifact.number, 279);
     assert_eq!(bundle.primary.workflow_kind.as_deref(), Some("code"));
+    let workflow: &crate::ArtifactWorkflowContext = bundle
+        .primary
+        .workflow
+        .as_ref()
+        .expect("workflow projection");
+    assert_eq!(workflow.kind.as_deref(), Some("code"));
+    assert_eq!(workflow.parents[0].number, 277);
+    assert_eq!(workflow.dependencies[0].repository_id, "repo-2");
+    assert_eq!(workflow.children[0].title, "Render artifact context");
+    assert_eq!(
+        serde_json::to_value(bundle).unwrap(),
+        raw["artifact_context"],
+        "the artifact context fixture must remain canonical"
+    );
     assert_eq!(
         serde_json::to_value(context.artifact.as_ref().unwrap()).unwrap(),
         raw["artifact"],
         "the legacy singular artifact shape must not change"
+    );
+}
+
+#[test]
+fn legacy_worker_bundle_without_workflow_projection_stays_canonical() {
+    let mut raw: serde_json::Value = serde_json::from_str(include_str!(
+        "../../fixtures/job-context-artifact-context.json"
+    ))
+    .unwrap();
+    raw["artifact_context"]["primary"]
+        .as_object_mut()
+        .unwrap()
+        .remove("workflow");
+
+    let context: JobContext = serde_json::from_value(raw.clone()).unwrap();
+    let bundle = context.artifact_context.as_ref().unwrap();
+    assert!(bundle.primary.workflow.is_none());
+    assert_eq!(
+        serde_json::to_value(bundle).unwrap(),
+        raw["artifact_context"]
     );
 }
 

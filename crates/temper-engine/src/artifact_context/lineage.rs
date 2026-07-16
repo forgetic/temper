@@ -390,6 +390,7 @@ impl ForgeItem {
                 labels: sorted_labels(&issue.labels),
                 state: format!("{:?}", issue.state).to_lowercase(),
                 workflow_kind,
+                workflow: None,
             },
             Self::PullRequest(pull_request) => ArtifactSnapshot {
                 artifact: reference(
@@ -402,6 +403,7 @@ impl ForgeItem {
                 labels: sorted_labels(&pull_request.labels),
                 state: format!("{:?}", pull_request.state).to_lowercase(),
                 workflow_kind,
+                workflow: None,
             },
         }
     }
