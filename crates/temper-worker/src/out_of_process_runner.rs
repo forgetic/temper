@@ -15,9 +15,10 @@
 //! `ExternalCommandRunner` (same file protocol).
 //!
 //! The child is owned by a dedicated joined supervisor thread. The async run
-//! polls its completion queue alongside side-channel work; dropping that future
-//! fences the attempt, escalates process-group termination, reaps the child, and
-//! joins the supervisor instead of leaving a blocking waiter detached.
+//! polls process completion, side channels, and the worker cancellation
+//! handshake together; graceful, forced, and hard-kill requests are forwarded
+//! distinctly and the joined supervisor outcome is returned to WorkerMachine.
+//! Dropping remains only an abrupt component-loss hard-kill safety net.
 
 use std::future::Future;
 use std::net::TcpListener;
@@ -46,6 +47,7 @@ use crate::pre_push::submit_for_pr_pre_push_response;
 use crate::trace::{TraceCollector, TraceRun};
 use crate::{WorkerAgentTraceConfig, WorkerLivenessLimits};
 
+mod command;
 mod lifecycle;
 mod runner;
 mod runtime_limits;
@@ -53,6 +55,7 @@ mod side_channel;
 mod stderr;
 mod supervisor;
 mod terminal;
+pub use crate::executor::{CancellationOutcome, DescendantCleanupStatus};
 use side_channel::{
     ForgeSideChannelRequest, LocalServer, SubmitSideChannelRequest, start_forge_server,
     start_submit_server, submit_for_pr_available,
@@ -60,7 +63,7 @@ use side_channel::{
 use stderr::DiagnosticIdentity;
 #[cfg(test)]
 use stderr::stderr_tail;
-pub use supervisor::{CancellationOutcome, DescendantCleanupStatus, JobQuiesced};
+pub use supervisor::JobQuiesced;
 use supervisor::{ManagedAgentProcess, SupervisorResult};
 
 /// Host-side submit gate used by the out-of-process carrier.
@@ -92,7 +95,8 @@ pub struct OutOfProcessRunner {
     tool_config: Option<AgentToolConfig>,
     /// Complete operation limits supplied only to known first-party agents.
     runtime_limits: Option<AgentRuntimeLimitsV1>,
-    /// Worker-owned graceful and forced process cancellation bounds.
+    /// Worker-owned cancellation limits. WorkerMachine uses the same resolved
+    /// values to schedule the explicit soft- and hard-escalation requests.
     liveness_limits: WorkerLivenessLimits,
     /// Shared, non-secret capture policy written to a per-run JSON file for the
     /// first-party agent process. `None` preserves third-party agent compatibility.

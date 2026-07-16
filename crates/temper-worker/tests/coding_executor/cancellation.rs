@@ -207,8 +207,8 @@ fn cancelled_paused_commit_joins_before_next_capacity_one_job() {
             attempt_id: assignment.attempt_id.clone().expect("attempt id"),
             generation,
             cleanup: temper_worker::JobCleanup {
-                cancellation: "requested".to_string(),
-                descendants: "joined".to_string(),
+                cancellation: temper_worker::CancellationOutcome::Graceful,
+                descendants: temper_worker::DescendantCleanupStatus::Clean,
             },
         },
     );

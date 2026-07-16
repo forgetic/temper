@@ -4,35 +4,19 @@ use std::process::{Child, Command};
 use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Context, Poll};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use temper_process_containment::{ContainmentKind, ProcessContainment, configure_command};
 use temper_worker_io::CqReceiver;
 
 use super::ChildOutcome;
 use crate::agent_runner::AgentRunError;
+use crate::executor::{CancellationOutcome, DescendantCleanupStatus};
 use crate::out_of_process_runner::stderr::{
     DiagnosticIdentity, emit_reader_unavailable, stream as stream_stderr,
 };
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
-/// How a cancellation reached process quiescence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CancellationOutcome {
-    Graceful,
-    ForcedTermination,
-    HardKill,
-}
-
-/// Final state of the run's descendant containment.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DescendantCleanupStatus {
-    Clean,
-    Terminated,
-    HardKilled,
-    Failed(String),
-}
 
 /// One joined, reaped process-tree result.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,11 +32,9 @@ pub(super) struct SupervisorResult {
 }
 
 enum SupervisorCommand {
-    Cancel {
-        first_party_connected: bool,
-        graceful_grace: Duration,
-        forced_grace: Duration,
-    },
+    Cancel,
+    ForceTerminate,
+    HardKill,
 }
 
 /// Explicit owner of the child, wait loop, containment and stderr reader.
@@ -170,33 +152,19 @@ impl ManagedAgentProcess {
         }
     }
 
-    pub fn cancel_and_join(
-        &mut self,
-        first_party_connected: bool,
-        graceful_grace: Duration,
-        forced_grace: Duration,
-    ) -> SupervisorResult {
-        if !self.completed {
-            let _ = self.command.send(SupervisorCommand::Cancel {
-                first_party_connected,
-                graceful_grace,
-                forced_grace,
-            });
-        }
-        self.join_completed();
-        self.completed = true;
-        self.take_result().unwrap_or_else(|| SupervisorResult {
-            outcome: Err(AgentRunError::transient(
-                "agent supervisor joined without an outcome",
-            )),
-            quiesced: JobQuiesced {
-                cancellation: Some(CancellationOutcome::HardKill),
-                descendants: DescendantCleanupStatus::Failed(
-                    "supervisor outcome missing".to_string(),
-                ),
-                containment: fallback_kind(),
-            },
-        })
+    /// Enqueues cooperative cancellation without waiting for process exit.
+    pub fn request_cancel(&self) -> bool {
+        self.command.send(SupervisorCommand::Cancel).is_ok()
+    }
+
+    /// Enqueues ordinary process-group termination without waiting for exit.
+    pub fn force_terminate(&self) -> bool {
+        self.command.send(SupervisorCommand::ForceTerminate).is_ok()
+    }
+
+    /// Enqueues unconditional process-group kill without waiting for exit.
+    pub fn hard_kill(&self) -> bool {
+        self.command.send(SupervisorCommand::HardKill).is_ok()
     }
 
     fn take_result(&self) -> Option<SupervisorResult> {
@@ -210,7 +178,11 @@ impl ManagedAgentProcess {
 impl Drop for ManagedAgentProcess {
     fn drop(&mut self) {
         if self.thread.is_some() {
-            let _ = self.cancel_and_join(false, Duration::ZERO, Duration::ZERO);
+            // Abrupt component/future loss is the safety fallback, not the
+            // watchdog path. The normal path sends each escalation explicitly
+            // and asynchronously, then polls the supervisor outcome.
+            let _ = self.hard_kill();
+            self.join_completed();
         }
     }
 }
@@ -224,9 +196,6 @@ fn supervise(
     let containment_kind = containment.kind();
     let mut cancellation = None;
     let mut descendants = DescendantCleanupStatus::Clean;
-    let mut graceful_deadline = None;
-    let mut forced_deadline = None;
-    let mut forced_grace_after_graceful = Duration::ZERO;
 
     let status = loop {
         match child.try_wait() {
@@ -243,54 +212,39 @@ fn supervise(
             }
         }
 
-        if cancellation.is_none() {
-            match commands.recv_timeout(PROCESS_POLL_INTERVAL) {
-                Ok(SupervisorCommand::Cancel {
-                    first_party_connected,
-                    graceful_grace,
-                    forced_grace,
-                }) => {
-                    if first_party_connected && !graceful_grace.is_zero() {
-                        cancellation = Some(CancellationOutcome::Graceful);
-                        graceful_deadline = Some(Instant::now() + graceful_grace);
-                        forced_grace_after_graceful = forced_grace;
-                    } else {
-                        cancellation = Some(CancellationOutcome::ForcedTermination);
-                        descendants = terminate(&containment, &mut child);
-                        forced_deadline = Some(Instant::now() + forced_grace);
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    cancellation = Some(CancellationOutcome::HardKill);
-                    descendants = hard_kill(&containment, &mut child);
+        match commands.recv_timeout(PROCESS_POLL_INTERVAL) {
+            Ok(SupervisorCommand::Cancel) => {
+                if cancellation.is_none() {
+                    cancellation = Some(CancellationOutcome::Graceful);
                 }
             }
-        } else {
-            thread::sleep(PROCESS_POLL_INTERVAL);
-        }
-
-        let now = Instant::now();
-        if graceful_deadline.is_some_and(|deadline| now >= deadline) {
-            cancellation = Some(CancellationOutcome::ForcedTermination);
-            descendants = terminate(&containment, &mut child);
-            graceful_deadline = None;
-            // Continue with the independently configured forced-termination
-            // grace before hard-killing the group.
-            forced_deadline = Some(now + forced_grace_after_graceful);
-        }
-        if forced_deadline.is_some_and(|deadline| now >= deadline) {
-            cancellation = Some(CancellationOutcome::HardKill);
-            descendants = hard_kill(&containment, &mut child);
-            forced_deadline = None;
+            Ok(SupervisorCommand::ForceTerminate) => {
+                if !matches!(cancellation, Some(CancellationOutcome::HardKill)) {
+                    cancellation = Some(CancellationOutcome::ForcedTermination);
+                    descendants = terminate(&containment, &mut child);
+                }
+            }
+            Ok(SupervisorCommand::HardKill) => {
+                cancellation = Some(CancellationOutcome::HardKill);
+                descendants = hard_kill(&containment, &mut child);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                cancellation = Some(CancellationOutcome::HardKill);
+                descendants = hard_kill(&containment, &mut child);
+            }
         }
     };
 
     // Even a cooperative direct-child exit may have left tool grandchildren in
-    // the process group/job. Closing with a hard group kill makes the quiesced
-    // boundary descendant-complete before any worker capacity can be released.
+    // the process group/job. Emptying the group makes the quiesced boundary
+    // descendant-complete before worker capacity can be released. Preserve an
+    // earlier cleanup failure rather than hiding it behind a successful final
+    // kill.
     let final_cleanup = hard_kill(&containment, &mut child);
-    if !matches!(final_cleanup, DescendantCleanupStatus::Clean) {
+    if !matches!(descendants, DescendantCleanupStatus::Failed(_))
+        && !matches!(final_cleanup, DescendantCleanupStatus::Clean)
+    {
         descendants = final_cleanup;
     }
     let stderr_tail = stderr_thread.join().unwrap_or_default();

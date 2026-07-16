@@ -26,6 +26,55 @@ struct LifecycleServerState {
     cancellation_acknowledged: Arc<AtomicBool>,
 }
 
+#[derive(Clone)]
+pub(super) struct LifecycleCancelHandle {
+    stopping: Arc<AtomicBool>,
+    stream_finished: Arc<AtomicBool>,
+    active_stream: Arc<Mutex<Option<TcpStream>>>,
+}
+
+impl LifecycleCancelHandle {
+    /// Sends cooperative cancellation on the first-party connection. A child
+    /// may have completed its TCP connect and hello write just before the
+    /// accept thread publishes `active_stream`, so wait for that bounded race
+    /// on a joined blocking owner rather than blocking the runtime task.
+    pub(super) fn request_cancel(&self, reason: &str, connection_grace: Duration) -> bool {
+        let command = AgentLifecycleCommandV1::Cancel {
+            reason: reason.to_string(),
+        };
+        if command.validate().is_err() {
+            return false;
+        }
+        let mut bytes = match serde_json::to_vec(&command) {
+            Ok(bytes) => bytes,
+            Err(_) => return false,
+        };
+        bytes.push(b'\n');
+        let deadline = Instant::now() + connection_grace;
+        loop {
+            let sent = {
+                let mut stream = self
+                    .active_stream
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                stream
+                    .as_mut()
+                    .is_some_and(|stream| stream.write_all(&bytes).is_ok())
+            };
+            if sent {
+                return true;
+            }
+            if Instant::now() >= deadline
+                || self.stream_finished.load(Ordering::Acquire)
+                || self.stopping.load(Ordering::Acquire)
+            {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
 /// A loopback endpoint created for exactly one worker attempt.
 pub(super) struct LifecycleEndpoint {
     address: String,
@@ -75,43 +124,11 @@ impl LifecycleEndpoint {
         &self.address
     }
 
-    /// Sends cooperative cancellation on the first-party connection. A child
-    /// may have completed its TCP connect and hello write just before the
-    /// accept thread publishes `active_stream`, so wait for that bounded race
-    /// rather than escalating a connected child without a Cancel command.
-    pub(super) fn request_cancel(&self, reason: &str, connection_grace: Duration) -> bool {
-        let command = AgentLifecycleCommandV1::Cancel {
-            reason: reason.to_string(),
-        };
-        if command.validate().is_err() {
-            return false;
-        }
-        let mut bytes = match serde_json::to_vec(&command) {
-            Ok(bytes) => bytes,
-            Err(_) => return false,
-        };
-        bytes.push(b'\n');
-        let deadline = Instant::now() + connection_grace;
-        loop {
-            let sent = {
-                let mut stream = self
-                    .active_stream
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                stream
-                    .as_mut()
-                    .is_some_and(|stream| stream.write_all(&bytes).is_ok())
-            };
-            if sent {
-                return true;
-            }
-            if Instant::now() >= deadline
-                || self.stream_finished.load(Ordering::Acquire)
-                || self.stopping.load(Ordering::Acquire)
-            {
-                return false;
-            }
-            thread::sleep(Duration::from_millis(1));
+    pub(super) fn cancellation_handle(&self) -> LifecycleCancelHandle {
+        LifecycleCancelHandle {
+            stopping: Arc::clone(&self.stopping),
+            stream_finished: Arc::clone(&self.stream_finished),
+            active_stream: Arc::clone(&self.active_stream),
         }
     }
 

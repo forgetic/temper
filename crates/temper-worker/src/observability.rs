@@ -247,7 +247,7 @@ mod tests {
                 job_id: "job-1".into(),
                 attempt_id: "attempt-1".into(),
                 outcome: "hard_kill".into(),
-                descendant_cleanup: "joined".into(),
+                descendant_cleanup: "hard_killed".into(),
                 forced: true,
             },
             WorkerEvent::ResultRecorded {

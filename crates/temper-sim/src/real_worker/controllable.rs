@@ -238,7 +238,13 @@ impl JobExecutor for ControllableExecutor {
                     job_id: job_id.clone(),
                     completed: false,
                 };
-                gate.wait().await;
+                let completed = context.cancellation.run(gate.wait()).await;
+                if completed.is_none() {
+                    return JobOutcome::Failure {
+                        class: temper_protocol_worker::FailureClass::Canceled,
+                        message: "controlled Forge future cancelled".to_string(),
+                    };
+                }
                 executor.record(|state| {
                     state.result_file_acceptances.push(job_id.clone());
                     state.validations.push(job_id.clone());

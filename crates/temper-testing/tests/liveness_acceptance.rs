@@ -22,6 +22,8 @@ struct Criterion {
 const SIM_REAL_WORKER: &str = include_str!("../../temper-sim/tests/sim_real_worker.rs");
 const WORKER_WATCHDOG: &str =
     include_str!("../../temper-worker/src/worker_machine_watchdog_tests.rs");
+const WORKER_CANCELLATION_PROJECTION: &str =
+    include_str!("../../temper-worker/src/worker_machine_cancellation_projection_tests.rs");
 const OUT_OF_PROCESS: &str =
     include_str!("../../temper-worker/src/out_of_process_runner_supervisor_tests.rs");
 const RESULT_OUTBOX: &str = include_str!("../../temper-worker/src/result_outbox.rs");
@@ -80,7 +82,7 @@ const MATRIX: &[Criterion] = &[
             Evidence {
                 crate_path: "temper-worker::out_of_process_runner",
                 source: OUT_OF_PROCESS,
-                test: "result_written_during_cancellation_is_fenced_and_the_future_joins_on_drop",
+                test: "forced_termination_fences_late_result_and_reports_cleanup",
             },
         ],
     },
@@ -166,7 +168,17 @@ const MATRIX: &[Criterion] = &[
             Evidence {
                 crate_path: "temper-worker::out_of_process_runner",
                 source: OUT_OF_PROCESS,
-                test: "forced_termination_writes_synthetic_cancelled_terminal_activity",
+                test: "forced_termination_fences_late_result_and_reports_cleanup",
+            },
+            Evidence {
+                crate_path: "temper-worker::out_of_process_runner",
+                source: OUT_OF_PROCESS,
+                test: "hard_kill_writes_synthetic_cancelled_terminal_activity_and_reports_cleanup",
+            },
+            Evidence {
+                crate_path: "temper-worker::worker_machine",
+                source: WORKER_CANCELLATION_PROJECTION,
+                test: "real_cancellation_and_cleanup_outcomes_project_without_synthesis",
             },
             Evidence {
                 crate_path: "temper-worker::out_of_process_runner",

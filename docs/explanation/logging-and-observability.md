@@ -199,7 +199,7 @@ an attempt exists. Numeric elapsed/limit fields remain milliseconds.
 | `worker.job.progress` | debug | `phase`, current `operation_kind`/`operation_name`/`operation_id`, `operation_elapsed_ms`, `run_elapsed_ms`, `last_progress_elapsed_ms`, `no_progress_elapsed_ms`, `active_parallel_operation_count` |
 | `worker.job.timeout` | warn | progress fields plus `timeout_reason`, `timeout_limit_ms` |
 | `worker.job.cancellation_requested` | warn | timeout reason/limit |
-| `worker.job.cancellation_completed` | warn | `cancellation_outcome`, `forced`, `descendant_cleanup` |
+| `worker.job.cancellation_completed` | warn | `cancellation_outcome` (`graceful`, `forced_termination`, or `hard_kill`), `forced`, and `descendant_cleanup` (`clean`, `terminated`, `hard_killed`, or `failed`) from the joined process supervisor |
 | `worker.result.recorded` | debug on success, error on failure | `outbox_state`, `delivery_state` |
 | `worker.result.delivery` | debug on acknowledgement, warn on retry/stale/rejection | outbox/delivery state and `claim_convergence` |
 | `worker.capacity.released` | debug | `permit_released`, `free_capacity` |

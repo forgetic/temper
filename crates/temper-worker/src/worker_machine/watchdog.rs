@@ -14,7 +14,7 @@ use temper_worker_io::EngineTime;
 
 use crate::agent_runner::JobProgress;
 
-use super::{WorkerMachine, WorkerRequest};
+use super::{JobCleanup, WorkerMachine, WorkerRequest};
 
 /// Smallest re-arm used at an exact deadline. Timeout is strictly `now >
 /// deadline`, so a completion stamped at the deadline always has a chance to
@@ -248,12 +248,6 @@ pub enum WatchdogTimerKind {
     MaxRun,
     CancellationGrace,
     ForcedTerminationGrace,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct JobCleanup {
-    pub cancellation: String,
-    pub descendants: String,
 }
 
 impl WorkerMachine {
@@ -542,6 +536,9 @@ impl WorkerMachine {
                 "elapsed_ms": now.as_nanos().saturating_sub(operation.started_at.as_nanos()) / 1_000_000,
             })
         });
+        let cancellation = cleanup.cancellation.as_str();
+        let descendant_cleanup = cleanup.descendants.as_str();
+        let descendant_cleanup_error = cleanup.descendants.failure();
         let details = serde_json::json!({
             "timeout": {
                 "reason": timeout.reason.as_str(),
@@ -550,8 +547,9 @@ impl WorkerMachine {
                 "last_agent_progress_ms": state.last_agent_progress.as_millis(),
                 "operation": operation,
                 "cleanup": {
-                    "cancellation": cleanup.cancellation,
-                    "descendants": cleanup.descendants,
+                    "cancellation": cancellation,
+                    "descendants": descendant_cleanup,
+                    "descendant_error": descendant_cleanup_error,
                     "escalated": state.escalation_requested,
                     "quiesced": true,
                 }
@@ -580,8 +578,8 @@ impl WorkerMachine {
                     timeout.reason.as_str(),
                     timeout.limit.as_millis(),
                     operation_name,
-                    cleanup.cancellation,
-                    cleanup.descendants,
+                    cancellation,
+                    descendant_cleanup,
                 ),
             }),
             summary: None,

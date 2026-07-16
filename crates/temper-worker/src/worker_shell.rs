@@ -25,16 +25,17 @@ use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
 use temper_worker_io::{CqSender, Spawner, arm_timer};
 
 use crate::executor::{
-    AttemptFence, JobAttempt, JobCancellation, JobExecutionContext, JobExecutor,
-    job_result_for_attempt,
+    AttemptFence, CancellationOutcome, DescendantCleanupStatus, JobAttempt, JobCancellation,
+    JobCleanup, JobExecutionContext, JobExecutor, job_result_for_attempt,
 };
 use crate::result_outbox::ResultOutbox;
 use crate::transport::{HttpTransport, Transport};
-use crate::worker_machine::{JobCleanup, WorkerCompletion, WorkerMachine, WorkerRequest};
+use crate::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 
 /// Shared cancellation authority for a worker component and all job futures it
-/// spawned. Dropping a cancelled job future prevents its later git/Forge
-/// publication from outliving the component machine.
+/// spawned. Component shutdown drops attempt futures only as an abrupt-owner
+/// fallback; normal per-job cancellation uses the explicit `JobCancellation`
+/// handshake.
 #[derive(Clone, Default)]
 pub(crate) struct WorkerCancellation {
     cancelled: Arc<AtomicBool>,
@@ -302,7 +303,12 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     progress,
                 };
                 self.spawner.spawn_task(async move {
-                    let run = job_cancellation.run(executor.execute(assign, execution));
+                    // Production executors observe `JobCancellation` in every
+                    // owned effect. In particular, the out-of-process runner
+                    // keeps this future alive while the supervisor performs
+                    // the explicit asynchronous escalation handshake.
+                    let run =
+                        job_cancellation.run_to_quiescence(executor.execute(assign, execution));
                     let component_result = component_cancellation.run(run).await;
                     let mut current_controls = controls.lock().expect("job controls lock");
                     if current_controls.get(&job_id).is_some_and(|control| {
@@ -330,14 +336,19 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                             }
                         }
                         Some(Some(_)) | Some(None) => {
+                            // A managed process records its real supervisor
+                            // outcome after all endpoints and descendants join.
+                            // Cancellation before process spawn has no
+                            // descendants and therefore quiesces cooperatively.
+                            let cleanup = job_cancellation.cleanup().unwrap_or(JobCleanup {
+                                cancellation: CancellationOutcome::Graceful,
+                                descendants: DescendantCleanupStatus::Clean,
+                            });
                             let _ = cq.send(WorkerCompletion::JobQuiesced {
                                 job_id,
                                 attempt_id,
                                 generation,
-                                cleanup: JobCleanup {
-                                    cancellation: "requested".to_string(),
-                                    descendants: "joined".to_string(),
-                                },
+                                cleanup,
                             });
                         }
                     }
@@ -348,12 +359,6 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 attempt_id,
                 generation,
                 reason: _,
-            }
-            | WorkerRequest::EscalateJob {
-                job_id,
-                attempt_id,
-                generation,
-                hard: _,
             } => {
                 let control = self
                     .job_controls
@@ -367,6 +372,43 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 if let Some(control) = control {
                     control.fence.close();
                     control.cancellation.cancel();
+                } else {
+                    // The executor may have naturally quiesced between the
+                    // machine transition and this shell request. Complete that
+                    // race cooperatively so a timeout cannot be left waiting
+                    // forever for a control that already disappeared.
+                    let _ = self.cq.send(WorkerCompletion::JobQuiesced {
+                        job_id,
+                        attempt_id,
+                        generation,
+                        cleanup: JobCleanup {
+                            cancellation: CancellationOutcome::Graceful,
+                            descendants: DescendantCleanupStatus::Clean,
+                        },
+                    });
+                }
+            }
+            WorkerRequest::EscalateJob {
+                job_id,
+                attempt_id,
+                generation,
+                hard,
+            } => {
+                let control = self
+                    .job_controls
+                    .lock()
+                    .expect("job controls lock")
+                    .get(&job_id)
+                    .filter(|control| {
+                        control.generation == generation && control.attempt_id == attempt_id
+                    })
+                    .cloned();
+                if let Some(control) = control {
+                    if hard {
+                        control.cancellation.hard_kill();
+                    } else {
+                        control.cancellation.force_terminate();
+                    }
                 }
             }
             WorkerRequest::ArmWatchdogTimer {

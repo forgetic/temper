@@ -15,7 +15,9 @@ use super::{
     WorkerRequest,
 };
 use crate::agent_runner::JobProgress;
-use crate::executor::{JobOutcome, job_result_for_attempt};
+use crate::executor::{
+    CancellationOutcome, DescendantCleanupStatus, JobOutcome, job_result_for_attempt,
+};
 use crate::result_outbox::ResultOutboxEntry;
 
 fn dispatch_at(machine: &mut WorkerMachine, job_id: &str, now: EngineTime) -> Vec<WorkerRequest> {
@@ -242,8 +244,8 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
             attempt_id: "attempt-job-timeout".to_string(),
             generation,
             cleanup: JobCleanup {
-                cancellation: "graceful".to_string(),
-                descendants: "joined".to_string(),
+                cancellation: CancellationOutcome::Graceful,
+                descendants: DescendantCleanupStatus::Clean,
             },
         },
     );
@@ -252,10 +254,10 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
         request,
         WorkerRequest::Observe(crate::observability::WorkerEvent::CancellationCompleted {
             outcome,
-            forced: true,
+            forced: false,
             descendant_cleanup,
             ..
-        }) if outcome == "forced" && descendant_cleanup == "joined"
+        }) if outcome == "graceful" && descendant_cleanup == "clean"
     )));
     let result = record
         .iter()
@@ -456,8 +458,8 @@ fn max_run_is_independent_of_progress_and_releasing_one_of_many_preserves_member
             attempt_id: "attempt-job-a".to_string(),
             generation: generation_a,
             cleanup: JobCleanup {
-                cancellation: "forced".to_string(),
-                descendants: "joined".to_string(),
+                cancellation: CancellationOutcome::ForcedTermination,
+                descendants: DescendantCleanupStatus::Terminated,
             },
         },
     );
