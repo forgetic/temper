@@ -13,6 +13,7 @@
 //! single-process mode. The protocol crossing the seam is identical; only the
 //! carrier differs.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,10 +24,13 @@ use skein::runtime::RuntimeHandle;
 use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
 use temper_worker_io::{CqSender, Spawner, arm_timer};
 
-use crate::executor::{JobExecutor, job_result_for_attempt};
+use crate::executor::{
+    AttemptFence, JobAttempt, JobCancellation, JobExecutionContext, JobExecutor,
+    job_result_for_attempt,
+};
 use crate::result_outbox::ResultOutbox;
 use crate::transport::{HttpTransport, Transport};
-use crate::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
+use crate::worker_machine::{JobCleanup, WorkerCompletion, WorkerMachine, WorkerRequest};
 
 /// Shared cancellation authority for a worker component and all job futures it
 /// spawned. Dropping a cancelled job future prevents its later git/Forge
@@ -65,6 +69,14 @@ impl WorkerCancellation {
     }
 }
 
+#[derive(Clone)]
+struct JobControl {
+    attempt_id: String,
+    generation: u64,
+    fence: AttemptFence,
+    cancellation: JobCancellation,
+}
+
 /// Performs the worker's I/O on a skein spawn capability (production runtime or lab).
 pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner = RuntimeHandle> {
     spawner: S,
@@ -75,6 +87,7 @@ pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner 
     executor: Arc<E>,
     outbox: Arc<ResultOutbox>,
     cancellation: WorkerCancellation,
+    job_controls: Arc<Mutex<BTreeMap<String, JobControl>>>,
 }
 
 impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, RuntimeHandle> {
@@ -152,6 +165,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
             executor,
             outbox,
             cancellation,
+            job_controls: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -186,12 +200,22 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
             WorkerRequest::SendPoll(message) => {
                 self.post(message, WorkerCompletion::PollReply);
             }
-            WorkerRequest::RecordResult { job_id, result } => {
+            WorkerRequest::RecordResult {
+                job_id,
+                attempt_id,
+                generation,
+                result,
+            } => {
                 let outbox = Arc::clone(&self.outbox);
                 let cq = self.cq.clone();
                 self.spawner.spawn_task(async move {
                     let outcome = outbox.record(result).map_err(|error| error.to_string());
-                    let _ = cq.send(WorkerCompletion::ResultRecorded { job_id, outcome });
+                    let _ = cq.send(WorkerCompletion::ResultRecorded {
+                        job_id,
+                        attempt_id,
+                        generation,
+                        outcome,
+                    });
                 });
             }
             WorkerRequest::SendResult { entry_id, message } => {
@@ -228,24 +252,153 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     WorkerCompletion::HeartbeatDelivered(heartbeat_outcome(reply))
                 });
             }
-            WorkerRequest::RunJob(assign) => {
+            WorkerRequest::RunJob { assign, generation } => {
                 let executor = Arc::clone(&self.executor);
                 let cq = self.cq.clone();
                 let worker_id = self.worker_id.clone();
-                let cancellation = self.cancellation.clone();
+                let component_cancellation = self.cancellation.clone();
+                let controls = Arc::clone(&self.job_controls);
                 let job_id = assign.job_id.clone();
-                let attempt_id = assign.attempt_id.clone();
+                let attempt_id = assign
+                    .attempt_id
+                    .clone()
+                    .expect("machine dispatches only fenced assignments");
+                let fence = AttemptFence::open();
+                let job_cancellation = JobCancellation::default();
+                let progress_cq = cq.clone();
+                let progress_job_id = job_id.clone();
+                let progress_attempt_id = attempt_id.clone();
+                let progress_fence = fence.clone();
+                let progress = crate::JobProgressReporter::with_attempt_guard(
+                    attempt_id.clone(),
+                    move |reported_attempt| {
+                        progress_fence.is_open() && reported_attempt == progress_attempt_id
+                    },
+                    move |progress| {
+                        let _ = progress_cq.send(WorkerCompletion::JobProgress {
+                            job_id: progress_job_id.clone(),
+                            attempt_id: progress.attempt_id.clone(),
+                            generation,
+                            progress,
+                        });
+                    },
+                );
+                controls.lock().expect("job controls lock").insert(
+                    job_id.clone(),
+                    JobControl {
+                        attempt_id: attempt_id.clone(),
+                        generation,
+                        fence: fence.clone(),
+                        cancellation: job_cancellation.clone(),
+                    },
+                );
+                let execution = JobExecutionContext {
+                    attempt: JobAttempt {
+                        id: attempt_id.clone(),
+                        generation,
+                    },
+                    fence: fence.clone(),
+                    cancellation: job_cancellation.clone(),
+                    progress,
+                };
                 self.spawner.spawn_task(async move {
-                    let Some(outcome) = cancellation.run(executor.execute(assign)).await else {
-                        return;
-                    };
-                    let result = job_result_for_attempt(&worker_id, &job_id, attempt_id, outcome);
-                    let _ = cq.send(WorkerCompletion::JobFinished { job_id, result });
+                    let run = job_cancellation.run(executor.execute(assign, execution));
+                    let component_result = component_cancellation.run(run).await;
+                    let mut current_controls = controls.lock().expect("job controls lock");
+                    if current_controls.get(&job_id).is_some_and(|control| {
+                        control.generation == generation && control.attempt_id == attempt_id
+                    }) {
+                        current_controls.remove(&job_id);
+                    }
+                    drop(current_controls);
+                    match component_result {
+                        None => {}
+                        Some(Some(outcome)) if fence.is_open() => {
+                            let result = job_result_for_attempt(
+                                &worker_id,
+                                &job_id,
+                                Some(attempt_id.clone()),
+                                outcome,
+                            );
+                            if fence.is_open() {
+                                let _ = cq.send(WorkerCompletion::JobFinished {
+                                    job_id,
+                                    attempt_id,
+                                    generation,
+                                    result,
+                                });
+                            }
+                        }
+                        Some(Some(_)) | Some(None) => {
+                            let _ = cq.send(WorkerCompletion::JobQuiesced {
+                                job_id,
+                                attempt_id,
+                                generation,
+                                cleanup: JobCleanup {
+                                    cancellation: "requested".to_string(),
+                                    descendants: "joined".to_string(),
+                                },
+                            });
+                        }
+                    }
                 });
             }
-            WorkerRequest::ArmResultRecordTimer { job_id, delay } => {
+            WorkerRequest::CancelJob {
+                job_id,
+                attempt_id,
+                generation,
+                reason: _,
+            }
+            | WorkerRequest::EscalateJob {
+                job_id,
+                attempt_id,
+                generation,
+                hard: _,
+            } => {
+                let control = self
+                    .job_controls
+                    .lock()
+                    .expect("job controls lock")
+                    .get(&job_id)
+                    .filter(|control| {
+                        control.generation == generation && control.attempt_id == attempt_id
+                    })
+                    .cloned();
+                if let Some(control) = control {
+                    control.fence.close();
+                    control.cancellation.cancel();
+                }
+            }
+            WorkerRequest::ArmWatchdogTimer {
+                job_id,
+                attempt_id,
+                generation,
+                timer_generation,
+                kind,
+                delay,
+            } => {
                 arm_timer(&self.spawner, &self.cq, delay, move || {
-                    WorkerCompletion::ResultRecordTimer { job_id }
+                    WorkerCompletion::WatchdogTimer {
+                        job_id,
+                        attempt_id,
+                        generation,
+                        timer_generation,
+                        kind,
+                    }
+                });
+            }
+            WorkerRequest::ArmResultRecordTimer {
+                job_id,
+                attempt_id,
+                generation,
+                delay,
+            } => {
+                arm_timer(&self.spawner, &self.cq, delay, move || {
+                    WorkerCompletion::ResultRecordTimer {
+                        job_id,
+                        attempt_id,
+                        generation,
+                    }
                 });
             }
             WorkerRequest::ArmResultReplayTimer { entry_id, delay } => {

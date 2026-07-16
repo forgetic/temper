@@ -1,8 +1,16 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
+
 use serde_json::Value;
 use temper_protocol_worker::{
     Assign, Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION,
 };
+
+use crate::agent_runner::JobProgressReporter;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum JobOutcome {
@@ -36,8 +44,120 @@ pub enum JobOutcome {
     },
 }
 
+/// Stable identity for one daemon assignment plus the worker-local incarnation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobAttempt {
+    pub id: String,
+    pub generation: u64,
+}
+
+/// Shared publication fence. Closing it is irreversible and immediately makes
+/// every late result, validation, git, and side-channel path non-authoritative.
+#[derive(Clone, Debug)]
+pub struct AttemptFence {
+    open: Arc<AtomicBool>,
+}
+
+impl AttemptFence {
+    pub fn open() -> Self {
+        Self {
+            open: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn close(&self) {
+        self.open.store(false, Ordering::Release);
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open.load(Ordering::Acquire)
+    }
+}
+
+/// Attempt-local cancellation signal used by the worker shell to destroy the
+/// executor future. Dropping that future is the quiescence boundary: managed
+/// runners synchronously terminate and join their process tree on drop.
+#[derive(Clone, Debug, Default)]
+pub struct JobCancellation {
+    cancelled: Arc<AtomicBool>,
+    waiters: Arc<Mutex<Vec<Waker>>>,
+}
+
+impl JobCancellation {
+    pub fn cancel(&self) {
+        if self.cancelled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        for waiter in std::mem::take(
+            &mut *self
+                .waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        ) {
+            waiter.wake();
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn run<F: Future>(&self, future: F) -> Option<F::Output> {
+        let mut future = std::pin::pin!(future);
+        std::future::poll_fn(|cx| {
+            if self.is_cancelled() {
+                return Poll::Ready(None);
+            }
+            if let Poll::Ready(output) = Pin::new(&mut future).poll(cx) {
+                return Poll::Ready(Some(output));
+            }
+            let mut waiters = self
+                .waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if self.is_cancelled() {
+                return Poll::Ready(None);
+            }
+            waiters.push(cx.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+}
+
+/// Worker-owned controls supplied to every layer of one job execution.
+#[derive(Clone, Debug)]
+pub struct JobExecutionContext {
+    pub attempt: JobAttempt,
+    pub fence: AttemptFence,
+    pub cancellation: JobCancellation,
+    pub progress: JobProgressReporter,
+}
+
+impl JobExecutionContext {
+    pub fn unsupervised(assign: &Assign) -> Self {
+        let attempt_id = assign
+            .attempt_id
+            .clone()
+            .unwrap_or_else(|| assign.job_id.clone());
+        Self {
+            attempt: JobAttempt {
+                id: attempt_id.clone(),
+                generation: 0,
+            },
+            fence: AttemptFence::open(),
+            cancellation: JobCancellation::default(),
+            progress: JobProgressReporter::noop(attempt_id),
+        }
+    }
+}
+
 pub trait JobExecutor {
-    fn execute(&self, assign: Assign) -> impl std::future::Future<Output = JobOutcome> + Send;
+    fn execute(
+        &self,
+        assign: Assign,
+        context: JobExecutionContext,
+    ) -> impl std::future::Future<Output = JobOutcome> + Send;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,8 +191,21 @@ impl StubExecutor {
     }
 }
 
+impl StubExecutor {
+    /// Compatibility entry point for direct executor tests and embedders that
+    /// do not run the worker watchdog.
+    pub fn execute(&self, assign: Assign) -> impl Future<Output = JobOutcome> + Send {
+        let context = JobExecutionContext::unsupervised(&assign);
+        <Self as JobExecutor>::execute(self, assign, context)
+    }
+}
+
 impl JobExecutor for StubExecutor {
-    fn execute(&self, assign: Assign) -> impl std::future::Future<Output = JobOutcome> + Send {
+    fn execute(
+        &self,
+        assign: Assign,
+        _context: JobExecutionContext,
+    ) -> impl std::future::Future<Output = JobOutcome> + Send {
         let mode = self.mode.clone();
         async move {
             match mode {

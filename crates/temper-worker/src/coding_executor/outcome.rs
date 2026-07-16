@@ -4,11 +4,11 @@ use temper_protocol_worker::{
 };
 
 use crate::agent_runner::AcceptedSubmitProof;
-use crate::executor::JobOutcome;
+use crate::executor::{AttemptFence, JobOutcome};
 use crate::pr_freshness::{PrFreshnessFailure, PrFreshnessGuard};
 use crate::pre_push::fingerprint_writable_repos;
 
-use super::{PreparedRepo, failure, workspace_failure};
+use super::{PreparedRepo, cancelled_attempt, failure, workspace_failure};
 
 struct WorkspaceDiffProduced<'a> {
     repo: &'a str,
@@ -48,6 +48,7 @@ pub(super) struct WritableOutcomeRequest<'a> {
     pub(super) freshness_guard: Option<&'a dyn PrFreshnessGuard>,
     pub(super) latest_self_pushed_sha: Option<&'a str>,
     pub(super) accepted_submit: Option<&'a AcceptedSubmitProof>,
+    pub(super) fence: &'a AttemptFence,
 }
 
 pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> JobOutcome {
@@ -65,7 +66,11 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         freshness_guard,
         latest_self_pushed_sha,
         accepted_submit,
+        fence,
     } = request;
+    if !fence.is_open() {
+        return cancelled_attempt();
+    }
     if let Some(verdict) = result.verdict.clone() {
         return writable_verdict_outcome(
             prepared,
@@ -73,6 +78,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
             verdict,
             allowed_verdicts,
             coordination_key,
+            fence,
         )
         .await;
     }
@@ -82,14 +88,22 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         pull_request_freshness,
         freshness_guard,
         latest_self_pushed_sha,
+        fence,
     )
     .await
     {
-        return discard_unpublished_work(prepared, outcome).await;
+        if !fence.is_open() {
+            return cancelled_attempt();
+        }
+        return discard_unpublished_work(prepared, outcome, fence).await;
     }
-    if let Err(outcome) =
-        ensure_accepted_submit_before_pr_push(accepted_submit, workspace_context, workspace_root)
-            .await
+    if let Err(outcome) = ensure_accepted_submit_before_pr_push(
+        accepted_submit,
+        workspace_context,
+        workspace_root,
+        fence,
+    )
+    .await
     {
         return outcome;
     }
@@ -100,12 +114,16 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         action,
         artifact_item,
         pull_request_fix,
+        fence,
     )
     .await
     {
         Ok(outcomes) => outcomes,
         Err(outcome) => return outcome,
     };
+    if !fence.is_open() {
+        return cancelled_attempt();
+    }
     if outcomes.is_empty() {
         // A PR-fix job that changes nothing leaves CI red — surface it as a
         // failure so it does not read as "addressed". An ordinary writable job
@@ -118,6 +136,9 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         return failure(FailureClass::Permanent, message);
     }
 
+    if !fence.is_open() {
+        return cancelled_attempt();
+    }
     JobOutcome::Success {
         repos: outcomes,
         title: result.title,
@@ -129,14 +150,24 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
     }
 }
 
-async fn discard_unpublished_work(prepared: &[PreparedRepo], outcome: JobOutcome) -> JobOutcome {
+async fn discard_unpublished_work(
+    prepared: &[PreparedRepo],
+    outcome: JobOutcome,
+    fence: &AttemptFence,
+) -> JobOutcome {
     for prepared in prepared {
+        if !fence.is_open() {
+            return cancelled_attempt();
+        }
         if let Err(error) = prepared
             .workspace
             .discard_changes_to_ref(&prepared.start_head_sha)
             .await
         {
             return workspace_failure("discard unpublished workspace changes", error);
+        }
+        if !fence.is_open() {
+            return cancelled_attempt();
         }
     }
     outcome
@@ -148,7 +179,11 @@ async fn writable_verdict_outcome(
     verdict: String,
     allowed_verdicts: &[String],
     coordination_key: &str,
+    fence: &AttemptFence,
 ) -> JobOutcome {
+    if !fence.is_open() {
+        return cancelled_attempt();
+    }
     if !allowed_verdicts.contains(&verdict) {
         return failure(
             FailureClass::Permanent,
@@ -157,9 +192,18 @@ async fn writable_verdict_outcome(
     }
 
     for prepared in prepared {
+        if !fence.is_open() {
+            return cancelled_attempt();
+        }
         if let Err(error) = prepared.workspace.discard_changes().await {
             return workspace_failure("discard verdict workspace changes", error);
         }
+        if !fence.is_open() {
+            return cancelled_attempt();
+        }
+    }
+    if !fence.is_open() {
+        return cancelled_attempt();
     }
     let children = result
         .children
@@ -220,7 +264,11 @@ async fn ensure_fresh_before_pr_push(
     pull_request_freshness: Option<&WorkerPullRequestFreshness>,
     freshness_guard: Option<&dyn PrFreshnessGuard>,
     latest_self_pushed_sha: Option<&str>,
+    fence: &AttemptFence,
 ) -> Result<(), JobOutcome> {
+    if !fence.is_open() {
+        return Err(cancelled_attempt());
+    }
     if !pull_request_fix {
         return Ok(());
     }
@@ -234,7 +282,8 @@ async fn ensure_fresh_before_pr_push(
         .check(&agent_freshness(freshness, latest_self_pushed_sha))
         .await
     {
-        Ok(()) => Ok(()),
+        Ok(()) if fence.is_open() => Ok(()),
+        Ok(()) => Err(cancelled_attempt()),
         Err(PrFreshnessFailure::Stale(reason)) => Err(failure(
             FailureClass::Canceled,
             format!("stale pull request job canceled before push: {reason}"),
@@ -250,7 +299,11 @@ async fn ensure_accepted_submit_before_pr_push(
     accepted_submit: Option<&AcceptedSubmitProof>,
     context: &WorkspaceContext,
     workspace_root: &std::path::Path,
+    fence: &AttemptFence,
 ) -> Result<(), JobOutcome> {
+    if !fence.is_open() {
+        return Err(cancelled_attempt());
+    }
     let Some(proof) = accepted_submit else {
         return Err(failure(
             FailureClass::Permanent,
@@ -272,6 +325,9 @@ async fn ensure_accepted_submit_before_pr_push(
                 format!("inspect workspace fingerprint before final push: {error}"),
             )
         })?;
+    if !fence.is_open() {
+        return Err(cancelled_attempt());
+    }
     if current == proof.fingerprint {
         return Ok(());
     }
@@ -288,9 +344,13 @@ async fn push_writable_repos(
     action: &str,
     artifact_item: &serde_json::Value,
     pull_request_fix: bool,
+    fence: &AttemptFence,
 ) -> Result<Vec<RepoOutcome>, JobOutcome> {
     let mut outcomes = Vec::new();
     for (index, prepared) in prepared.iter().enumerate() {
+        if !fence.is_open() {
+            return Err(cancelled_attempt());
+        }
         if let Some(outcome) = push_writable_repo(
             prepared,
             index,
@@ -298,6 +358,7 @@ async fn push_writable_repos(
             action,
             artifact_item,
             pull_request_fix,
+            fence,
         )
         .await?
         {
@@ -314,7 +375,11 @@ async fn push_writable_repo(
     action: &str,
     artifact_item: &serde_json::Value,
     pull_request_fix: bool,
+    fence: &AttemptFence,
 ) -> Result<Option<RepoOutcome>, JobOutcome> {
+    if !fence.is_open() {
+        return Err(cancelled_attempt());
+    }
     if !prepared.writable {
         return Ok(None);
     }
@@ -323,10 +388,16 @@ async fn push_writable_repo(
         .clone()
         .expect("writable repo carries a branch hint (checked at prepare)");
     let has_tree_changes = repo_has_tree_changes(prepared).await?;
+    if !fence.is_open() {
+        return Err(cancelled_attempt());
+    }
     if !repo_produced_diff(prepared, has_tree_changes, pull_request_fix).await? {
         return Ok(None);
     }
     emit_produced_diff(prepared, has_tree_changes, pull_request_fix).await?;
+    if !fence.is_open() {
+        return Err(cancelled_attempt());
+    }
     if has_tree_changes {
         let message = if pull_request_fix {
             pr_fix_commit_message(coordination_key, action)
@@ -338,12 +409,21 @@ async fn push_writable_repo(
             .commit_all(&message)
             .await
             .map_err(|error| workspace_failure("commit workspace changes", error))?;
+        if !fence.is_open() {
+            return Err(cancelled_attempt());
+        }
+    }
+    if !fence.is_open() {
+        return Err(cancelled_attempt());
     }
     let head_sha = prepared
         .workspace
         .push_branch(&branch)
         .await
         .map_err(|error| workspace_failure("push workspace branch", error))?;
+    if !fence.is_open() {
+        return Err(cancelled_attempt());
+    }
     Ok(Some(RepoOutcome {
         repo: prepared.repo.clone(),
         branch: Branch {

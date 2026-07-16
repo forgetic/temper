@@ -80,7 +80,11 @@ struct BlockingExecutor {
 }
 
 impl JobExecutor for BlockingExecutor {
-    fn execute(&self, assign: Assign) -> impl Future<Output = temper_worker::JobOutcome> + Send {
+    fn execute(
+        &self,
+        assign: Assign,
+        _context: temper_worker::JobExecutionContext,
+    ) -> impl Future<Output = temper_worker::JobOutcome> + Send {
         let probe = Arc::clone(&self.probe);
         async move {
             probe.job_started(assign.job_id.clone());

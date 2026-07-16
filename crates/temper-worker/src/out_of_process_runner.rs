@@ -25,7 +25,6 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
 
 use temper_protocol_activity::{
@@ -42,6 +41,7 @@ use crate::agent_runner::{
     AcceptedSubmitProofStore, AgentForgeContextFuture, AgentForgeContextHost, AgentRunError,
     AgentRunOutput, WorkspaceResult,
 };
+use crate::executor::AttemptFence;
 use crate::pre_push::submit_for_pr_pre_push_response;
 use crate::trace::{TraceCollector, TraceRun};
 use crate::{WorkerAgentTraceConfig, WorkerLivenessLimits};
@@ -72,28 +72,6 @@ fn default_submit_for_pr_handler() -> SubmitForPrHandler {
     Arc::new(|request, context, cwd| {
         Box::pin(async move { submit_for_pr_pre_push_response(&request, &context, cwd).await })
     })
-}
-
-/// Attempt-local acceptance gate shared by result and side-channel paths.
-#[derive(Clone)]
-struct AttemptFence {
-    open: Arc<AtomicBool>,
-}
-
-impl AttemptFence {
-    fn open() -> Self {
-        Self {
-            open: Arc::new(AtomicBool::new(true)),
-        }
-    }
-
-    fn close(&self) {
-        self.open.store(false, Ordering::Release);
-    }
-
-    fn is_open(&self) -> bool {
-        self.open.load(Ordering::Acquire)
-    }
 }
 
 /// Spawns an agent program speaking the `smith-agent-protocol`.

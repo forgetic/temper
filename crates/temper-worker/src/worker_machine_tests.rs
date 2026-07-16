@@ -19,7 +19,7 @@ use crate::config::{CapabilitySpec, WorkerParams};
 use crate::executor::{JobOutcome, job_result_for_attempt};
 use crate::result_outbox::ResultOutboxEntry;
 
-fn params() -> WorkerParams {
+pub(super) fn params() -> WorkerParams {
     WorkerParams {
         worker_id: "worker-1".to_string(),
         worker_pool: None,
@@ -36,7 +36,7 @@ fn params() -> WorkerParams {
     }
 }
 
-fn assign(job_id: &str) -> Assign {
+pub(super) fn assign(job_id: &str) -> Assign {
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
@@ -127,7 +127,7 @@ fn assign_reply_dispatches_job_and_decrements_capacity() {
     assert!(
         requests
             .iter()
-            .any(|r| matches!(r, WorkerRequest::RunJob(a) if a.job_id == "job-1")),
+            .any(|r| matches!(r, WorkerRequest::RunJob { assign: a, .. } if a.job_id == "job-1")),
         "expected the job to be dispatched, got {requests:?}"
     );
     assert_eq!(machine.free_capacity(), 0);
@@ -158,7 +158,7 @@ fn current_worker_refuses_unfenced_legacy_assignment() {
     assert!(
         !requests
             .iter()
-            .any(|request| matches!(request, WorkerRequest::RunJob(_)))
+            .any(|request| matches!(request, WorkerRequest::RunJob { .. }))
     );
     assert!(requests.iter().any(|request| matches!(
         request,
@@ -192,7 +192,7 @@ fn assignment_is_refused_when_already_at_capacity() {
     assert!(
         !requests
             .iter()
-            .any(|r| matches!(r, WorkerRequest::RunJob(a) if a.job_id == "job-2")),
+            .any(|r| matches!(r, WorkerRequest::RunJob { assign: a, .. } if a.job_id == "job-2")),
         "must not dispatch a second job at capacity: {requests:?}"
     );
     assert_eq!(machine.free_capacity(), 0);
@@ -231,7 +231,7 @@ fn duplicate_assignment_of_in_flight_job_is_refused() {
     assert!(
         !requests
             .iter()
-            .any(|r| matches!(r, WorkerRequest::RunJob(_))),
+            .any(|r| matches!(r, WorkerRequest::RunJob { .. })),
         "must not re-dispatch an in-flight job: {requests:?}"
     );
     assert_eq!(machine.in_flight().len(), 1);
@@ -290,6 +290,8 @@ fn job_finished_reports_result_frees_capacity_and_repolls() {
         &mut machine,
         vec![WorkerCompletion::JobFinished {
             job_id: "job-1".to_string(),
+            attempt_id: "attempt-job-1".to_string(),
+            generation: 1,
             result: result.clone(),
         }],
     );
@@ -305,6 +307,8 @@ fn job_finished_reports_result_frees_capacity_and_repolls() {
         &mut machine,
         vec![WorkerCompletion::ResultRecorded {
             job_id: "job-1".to_string(),
+            attempt_id: "attempt-job-1".to_string(),
+            generation: 1,
             outcome: Ok(entry),
         }],
     );

@@ -48,7 +48,10 @@ pub use config::{
 pub use context_client::{
     ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,
 };
-pub use executor::{JobExecutor, JobOutcome, StubExecutor, job_result, job_result_for_attempt};
+pub use executor::{
+    AttemptFence, JobAttempt, JobCancellation, JobExecutionContext, JobExecutor, JobOutcome,
+    StubExecutor, job_result, job_result_for_attempt,
+};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
 pub use out_of_process_runner::{
     CancellationOutcome, DescendantCleanupStatus, JobQuiesced, OutOfProcessRunner,
@@ -84,7 +87,11 @@ pub use trace::{
     WORKER_SPOOL_RUN_CAPACITY,
 };
 pub use transport::{HttpTransport, Transport};
-pub use worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
+pub use worker_machine::{
+    ActiveOperation, CancellationStatus, JobCleanup, JobPhase, JobWatchState, OperationId,
+    OperationKind, ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState,
+    WatchdogTimerKind, WorkerCompletion, WorkerMachine, WorkerRequest,
+};
 pub use workspace::{
     PreparationOutcome, QuarantineManifest, RecoveryContext, RoleGitIdentity,
     ScopedWorkspaceCleanupError, ScopedWorkspaceCleanupOutcome, ScopedWorkspacePathError,

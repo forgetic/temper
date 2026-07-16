@@ -74,6 +74,15 @@ pub(super) async fn attach_agent_session(
     };
 
     context.agent_session = Some(state.clone());
+    // Persist the identity before the agent is started. A watchdog timeout must
+    // preserve this coordination-scoped session even though the ordinary
+    // success cleanup path is never reached.
+    store.save(&state).await.map_err(|error| {
+        failure(
+            FailureClass::Transient,
+            format!("save attached agent session state: {error}"),
+        )
+    })?;
     Ok(Some(AgentSessionBinding { store, state }))
 }
 

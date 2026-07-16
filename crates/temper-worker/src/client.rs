@@ -84,13 +84,46 @@ pub fn heartbeat_message_params_attempts(
     in_flight: &BTreeMap<String, String>,
     free_capacity: u32,
 ) -> WorkerProtocolMessage {
-    heartbeat_message_params_with_attempts(
+    heartbeat_message_params_states(
         params,
-        in_flight
-            .iter()
-            .map(|(job_id, attempt_id)| (job_id, Some(attempt_id.as_str()))),
+        in_flight.iter().map(|(job_id, attempt_id)| {
+            (
+                job_id.as_str(),
+                attempt_id.as_str(),
+                HeartbeatState::Running,
+            )
+        }),
         free_capacity,
     )
+}
+
+/// Builds an exact heartbeat projection for running and finishing attempts.
+pub fn heartbeat_message_params_states<'a>(
+    params: &crate::config::WorkerParams,
+    jobs: impl Iterator<Item = (&'a str, &'a str, HeartbeatState)>,
+    free_capacity: u32,
+) -> WorkerProtocolMessage {
+    WorkerProtocolMessage::Heartbeat(Heartbeat {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: params.worker_id.clone(),
+        jobs: jobs
+            .map(|(job_id, attempt_id, state)| JobHeartbeat {
+                job_id: job_id.to_string(),
+                attempt_id: Some(attempt_id.to_string()),
+                state,
+                message: match state {
+                    HeartbeatState::Running => "running",
+                    HeartbeatState::Waiting => "waiting",
+                    HeartbeatState::Finishing => "finishing",
+                }
+                .to_string(),
+            })
+            .collect(),
+        free_capacity: Some(free_capacity),
+        worker_pool: params.worker_pool.clone(),
+        max_concurrent_jobs: Some(params.max_concurrent_jobs),
+        capabilities: protocol_capabilities(params),
+    })
 }
 
 fn heartbeat_message_params_with_attempts<'a>(
