@@ -5,13 +5,14 @@ use std::path::Path;
 
 use crate::provider::ProviderConfig;
 use tongs::tools::{
-    ToolRegistry, create_bash_tool, create_edit_tool, create_find_tool, create_grep_tool,
-    create_ls_tool, create_read_tool, create_write_tool,
+    ToolRegistry, create_edit_tool, create_find_tool, create_grep_tool, create_ls_tool,
+    create_read_tool, create_write_tool,
 };
 
 use super::Capability;
 use super::forge::{ForgeContextHost, ForgeGetItemTool, ForgeListRelatedTool};
 use super::submit::{SubmitForPrCallback, SubmitForPrTool, submit_for_pr_available};
+use temper_agent_core::{ManagedBashTool, joined_filesystem_tool};
 use temper_protocol_agent::WorkspaceContext;
 
 /// Builds the tool registry for a capability, scoped to `cwd`.
@@ -48,15 +49,15 @@ pub(crate) fn tool_registry_for_context(
 /// can append extra tools (e.g. a sub-agent tool) before building the registry.
 fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::tools::Tool>> {
     let mut tools = vec![
-        create_read_tool(cwd),
-        create_ls_tool(cwd),
-        create_grep_tool(cwd),
-        create_find_tool(cwd),
-        create_bash_tool(cwd),
+        joined_filesystem_tool(create_read_tool(cwd)),
+        joined_filesystem_tool(create_ls_tool(cwd)),
+        joined_filesystem_tool(create_grep_tool(cwd)),
+        joined_filesystem_tool(create_find_tool(cwd)),
+        Box::new(ManagedBashTool::new(cwd)),
     ];
     if capability.is_writable() {
-        tools.push(create_edit_tool(cwd));
-        tools.push(create_write_tool(cwd));
+        tools.push(joined_filesystem_tool(create_edit_tool(cwd)));
+        tools.push(joined_filesystem_tool(create_write_tool(cwd)));
     }
     tools
 }
@@ -179,6 +180,7 @@ pub(crate) fn subagent_specs() -> &'static [SubAgentSpec] {
 /// working tree (the read-only ones cannot at all; the bash-capable `delegate`
 /// is prompt-constrained to read-only inspection, matching Claude's parallel
 /// `general-purpose` reviewers).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn add_subagents(
     handle: skein::runtime::RuntimeHandle,
     mut base: ToolRegistry,
@@ -187,6 +189,7 @@ pub(crate) fn add_subagents(
     cwd: &Path,
     scope_factory: &crate::activity::ScopeFactory,
     parent_scope_id: &str,
+    operation_limits: temper_agent_core::AgentOperationLimits,
 ) -> ToolRegistry {
     for spec in subagent_specs() {
         base = add_one_subagent(
@@ -197,12 +200,14 @@ pub(crate) fn add_subagents(
             stream_options,
             cwd,
             (scope_factory, parent_scope_id),
+            operation_limits,
         );
     }
     base
 }
 
 /// Wires a single sub-agent role into the registry.
+#[allow(clippy::too_many_arguments)]
 fn add_one_subagent(
     handle: skein::runtime::RuntimeHandle,
     mut base: ToolRegistry,
@@ -211,6 +216,7 @@ fn add_one_subagent(
     stream_options: &tongs::provider::StreamOptions,
     cwd: &Path,
     scope: (&crate::activity::ScopeFactory, &str),
+    operation_limits: temper_agent_core::AgentOperationLimits,
 ) -> ToolRegistry {
     // The role's model tier. The cheap tier (e.g. Haiku) is for the read-only
     // searcher whose product is a focused report and which dominates token spend
@@ -244,19 +250,20 @@ fn add_one_subagent(
             .build_provider()
             .expect("sub-agent provider builds (parent already built one)");
         let mut tools = vec![
-            create_read_tool(&cwd),
-            create_ls_tool(&cwd),
-            create_grep_tool(&cwd),
-            create_find_tool(&cwd),
+            joined_filesystem_tool(create_read_tool(&cwd)),
+            joined_filesystem_tool(create_ls_tool(&cwd)),
+            joined_filesystem_tool(create_grep_tool(&cwd)),
+            joined_filesystem_tool(create_find_tool(&cwd)),
         ];
         if with_bash {
-            tools.push(create_bash_tool(&cwd));
+            tools.push(Box::new(ManagedBashTool::new(&cwd)));
         }
         temper_agent_core::SubAgent {
             system_prompt: Some(prompt.to_string()),
             user_message: task,
             tools: ToolRegistry::from_tools(tools),
             max_iterations,
+            operation_limits,
             provider,
             stream_options: stream_options.clone(),
         }

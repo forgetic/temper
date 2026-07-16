@@ -164,6 +164,7 @@
     "protocol_version",
     "type",
     "job_id",
+    "attempt_id",
     "role",
     "repo",
     "artifact",
@@ -180,6 +181,10 @@
      "$ref": "#/$defs/traceContext"
     },
     "job_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "attempt_id": {
      "type": "string",
      "minLength": 1
     },
@@ -331,11 +336,16 @@
    "type": "object",
    "required": [
     "job_id",
+    "attempt_id",
     "state",
     "message"
    ],
    "properties": {
     "job_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "attempt_id": {
      "type": "string",
      "minLength": 1
     },
@@ -348,8 +358,65 @@
     },
     "message": {
      "type": "string"
+    },
+    "liveness": {
+     "$ref": "#/$defs/jobLiveness"
     }
    }
+  },
+  "jobLiveness": {
+   "type": "object",
+   "required": [
+    "phase",
+    "run_elapsed_ms",
+    "no_progress_elapsed_ms",
+    "active_operation_count",
+    "cancellation",
+    "result_durability",
+    "result_delivery",
+    "pending_result"
+   ],
+   "properties": {
+    "phase": {
+     "enum": ["running", "cancel_requested", "quiesced", "result_recorded"]
+    },
+    "run_elapsed_ms": { "type": "integer", "minimum": 0 },
+    "no_progress_elapsed_ms": { "type": "integer", "minimum": 0 },
+    "active_operation_count": { "type": "integer", "minimum": 0 },
+    "active_operations": {
+     "type": "array",
+     "maxItems": 8,
+     "items": { "$ref": "#/$defs/jobOperationSummary" }
+    },
+    "timeout": { "$ref": "#/$defs/jobTimeoutSummary" },
+    "cancellation": {
+     "enum": ["not_requested", "requested", "escalated", "quiesced"]
+    },
+    "result_durability": { "enum": ["none", "pending", "durable"] },
+    "result_delivery": { "enum": ["not_ready", "pending"] },
+    "pending_result": { "type": "boolean" }
+   }
+  },
+  "jobOperationSummary": {
+   "type": "object",
+   "required": ["scope", "kind", "name", "operation_id", "elapsed_ms"],
+   "properties": {
+    "scope": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["model", "tool"] },
+    "name": { "type": "string", "minLength": 1 },
+    "operation_id": { "type": "string", "minLength": 1 },
+    "elapsed_ms": { "type": "integer", "minimum": 0 }
+   },
+   "additionalProperties": false
+  },
+  "jobTimeoutSummary": {
+   "type": "object",
+   "required": ["reason", "limit_ms"],
+   "properties": {
+    "reason": { "enum": ["no_progress", "max_run"] },
+    "limit_ms": { "type": "integer", "minimum": 1 }
+   },
+   "additionalProperties": false
   },
   "verdictContract": {
    "type": "object",
@@ -759,6 +826,7 @@
     "type",
     "worker_id",
     "job_id",
+    "attempt_id",
     "status"
    ],
    "properties": {
@@ -773,6 +841,10 @@
      "minLength": 1
     },
     "job_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "attempt_id": {
      "type": "string",
      "minLength": 1
     },
@@ -865,6 +937,7 @@
     "type",
     "worker_id",
     "job_id",
+    "attempt_id",
     "disposition"
    ],
    "properties": {
@@ -879,6 +952,10 @@
      "minLength": 1
     },
     "job_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "attempt_id": {
      "type": "string",
      "minLength": 1
     },

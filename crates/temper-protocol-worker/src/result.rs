@@ -70,6 +70,11 @@ pub struct JobResult {
     pub protocol_version: u32,
     pub worker_id: String,
     pub job_id: String,
+    /// Opaque assignment fence copied byte-for-byte from [`crate::Assign`].
+    /// Optional only for compatibility deserialization; daemons reject an
+    /// unfenced result for a fenced assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     pub status: ResultStatus,
     /// Per-repo head products -- one per writable repo that produced a diff. The
     /// daemon opens one pull request per entry. Empty for a verdict result.

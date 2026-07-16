@@ -3,6 +3,7 @@
   "type": "result",
   "worker_id": "worker-1",
   "job_id": "job-123",
+  "attempt_id": "attempt-01JEXAMPLE",
   "status": "success",
   "repos": [
     {

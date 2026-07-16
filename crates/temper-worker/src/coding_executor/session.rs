@@ -4,7 +4,7 @@ use temper_protocol_agent::{AgentSessionState, WorkspaceContext};
 use temper_protocol_worker::FailureClass;
 
 use crate::agent_session::AgentSessionStore;
-use crate::executor::JobOutcome;
+use crate::executor::{JobCancellation, JobOutcome};
 
 use super::{JobMode, failure};
 
@@ -20,6 +20,7 @@ pub(super) async fn attach_agent_session(
     role: &str,
     coordination_key: &str,
     mode: JobMode,
+    cancellation: &JobCancellation,
 ) -> Result<Option<AgentSessionBinding>, JobOutcome> {
     if !session_enabled(role, mode) {
         return Ok(None);
@@ -32,7 +33,7 @@ pub(super) async fn attach_agent_session(
                 format!("invalid agent session store path: {error}"),
             )
         })?;
-    let state = match store.load().await {
+    let state = match store.load_controlled(cancellation).await {
         Ok(Some(state)) => {
             tracing::debug!(
                 target: "temper_worker",
@@ -74,18 +75,35 @@ pub(super) async fn attach_agent_session(
     };
 
     context.agent_session = Some(state.clone());
+    // Persist the identity before the agent is started. A watchdog timeout must
+    // preserve this coordination-scoped session even though the ordinary
+    // success cleanup path is never reached.
+    store
+        .save_controlled(&state, cancellation)
+        .await
+        .map_err(|error| {
+            failure(
+                FailureClass::Transient,
+                format!("save attached agent session state: {error}"),
+            )
+        })?;
     Ok(Some(AgentSessionBinding { store, state }))
 }
 
 pub(super) async fn persist_after_success(
     binding: Option<&AgentSessionBinding>,
     outcome: &JobOutcome,
+    cancellation: &JobCancellation,
 ) -> Option<JobOutcome> {
     if !matches!(outcome, JobOutcome::Success { .. }) {
         return None;
     }
     let binding = binding?;
-    match binding.store.save(&binding.state).await {
+    match binding
+        .store
+        .save_controlled(&binding.state, cancellation)
+        .await
+    {
         Ok(()) => {
             tracing::debug!(
                 target: "temper_worker",

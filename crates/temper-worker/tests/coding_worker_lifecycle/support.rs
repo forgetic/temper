@@ -249,6 +249,11 @@ pub fn worker_config() -> WorkerConfig {
         max_concurrent_jobs: 1,
         poll_wait: Duration::from_millis(20),
         heartbeat_interval: Duration::from_millis(50),
+        liveness_limits: Default::default(),
+        result_root: std::env::temp_dir().join(format!(
+            "temper-worker-test-results-{}",
+            uuid::Uuid::new_v4()
+        )),
         agent_traces: Default::default(),
         executor: ExecutorSelection::Stub,
     }

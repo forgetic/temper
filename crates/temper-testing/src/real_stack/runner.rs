@@ -49,13 +49,18 @@ impl AgentRunner for NativeJigAgentRunner {
         let accepted_submit_for_host = accepted_submit.clone();
         let submit_for_pr: temper_agent::SubmitForPrHost =
             std::sync::Arc::new(move |request, context, cwd| {
-                temper_worker::handle_submit_for_pr_with_proof(
-                    &accepted_submit_for_host,
-                    |request, context, cwd| submit_for_pr(request, context, cwd),
-                    request,
-                    context,
-                    cwd,
-                )
+                let accepted_submit = accepted_submit_for_host.clone();
+                let submit_for_pr = submit_for_pr.clone();
+                Box::pin(async move {
+                    temper_worker::handle_submit_for_pr_with_proof(
+                        &accepted_submit,
+                        move |request, context, cwd| submit_for_pr(request, context, cwd),
+                        request,
+                        context,
+                        cwd,
+                    )
+                    .await
+                })
             });
         let forge_host = self.forge_context.clone();
         let job_id = job_id.to_string();
@@ -73,6 +78,7 @@ impl AgentRunner for NativeJigAgentRunner {
             Some(submit_for_pr),
             Some(forge_context),
             temper_agent::AgentActivityConfig::default(),
+            temper_protocol_agent::AgentRuntimeLimitsV1::default(),
         )
         .await
         .map_err(agent_error)?;

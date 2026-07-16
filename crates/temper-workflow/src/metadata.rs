@@ -236,6 +236,9 @@ pub fn global_child_correlation_key(
 pub struct DurableAssignment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
+    /// Opaque fence for one dispatch attempt. Optional for legacy metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<RoleId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

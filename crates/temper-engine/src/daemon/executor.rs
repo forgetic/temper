@@ -65,6 +65,7 @@ fn context_result_metrics(
 fn apply_outcome_name(outcome: &ApplyOutcome) -> &'static str {
     match outcome {
         ApplyOutcome::Applied => "applied",
+        ApplyOutcome::RetryReleased => "retry_released",
         ApplyOutcome::Stale => "stale",
         ApplyOutcome::Retryable { .. } => "retryable",
         ApplyOutcome::Rejected { .. } => "rejected",
@@ -143,38 +144,11 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     DaemonCompletion::StartupRecoveryGraceElapsed { reply }
                 });
             }
-            DaemonRequest::RunApply { job, result } => {
-                let applier = Arc::clone(&self.applier);
-                let cq = self.cq.clone();
-                let job_id = job.job_id.clone();
-                let span = tracing::debug_span!(
-                    target: "temper::engine",
-                    "apply",
-                    apply.id = %job_id
-                );
-                self.spawner.spawn_with_cx(move |_cx| {
-                    async move {
-                        let started = Instant::now();
-                        let outcome = applier.apply(job, result).await;
-                        tracing::debug!(
-                            target: "temper::engine",
-                            service = "engine",
-                            apply.id = %job_id,
-                            apply.outcome = apply_outcome_name(&outcome),
-                            duration_ms = u64::try_from(started.elapsed().as_millis())
-                                .unwrap_or(u64::MAX),
-                            "engine: result apply finished"
-                        );
-                        let _ = cq.send(DaemonCompletion::ApplyFinished { job_id, outcome });
-                    }
-                    .instrument(span)
-                });
-            }
             DaemonRequest::RunApplyAndRespond {
                 job,
                 result,
+                recovered_context,
                 responder,
-                response,
             } => {
                 let applier = Arc::clone(&self.applier);
                 let cq = self.cq.clone();
@@ -187,7 +161,13 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 self.spawner.spawn_with_cx(move |_cx| {
                     async move {
                         let started = Instant::now();
-                        let outcome = applier.apply(job, result).await;
+                        let applied_result = result.clone();
+                        let outcome = match recovered_context {
+                            Some(context) => {
+                                applier.apply_recovered(job, applied_result, context).await
+                            }
+                            None => applier.apply(job, applied_result).await,
+                        };
                         tracing::debug!(
                             target: "temper::engine",
                             service = "engine",
@@ -197,8 +177,11 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                                 .unwrap_or(u64::MAX),
                             "engine: result apply finished"
                         );
-                        let _ = cq.send(DaemonCompletion::ApplyFinished { job_id, outcome });
-                        responder.respond(response);
+                        let _ = cq.send(DaemonCompletion::ApplyAndRespondFinished {
+                            result,
+                            responder,
+                            outcome,
+                        });
                     }
                     .instrument(span)
                 });

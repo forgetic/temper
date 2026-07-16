@@ -42,8 +42,11 @@ impl<F: temper_forge::Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F
                         VerdictCheck::Valid => {}
                         VerdictCheck::Stale => return ApplyOutcome::Stale,
                         VerdictCheck::Retryable(reason) => {
-                            self.release_source_action_claim_for_retry(&job).await;
-                            return ApplyOutcome::Retryable { reason };
+                            return if self.release_source_action_claim_for_retry(&job).await {
+                                ApplyOutcome::RetryReleased
+                            } else {
+                                ApplyOutcome::Retryable { reason }
+                            };
                         }
                         VerdictCheck::Rejected(reason) => {
                             return self.reject_success(job, result, reason).await;
@@ -55,8 +58,11 @@ impl<F: temper_forge::Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F
                         self.reject_success(job, result, reason).await
                     }
                     ApplyOutcome::Retryable { reason } => {
-                        self.release_source_action_claim_for_retry(&job).await;
-                        ApplyOutcome::Retryable { reason }
+                        if self.release_source_action_claim_for_retry(&job).await {
+                            ApplyOutcome::RetryReleased
+                        } else {
+                            ApplyOutcome::Retryable { reason }
+                        }
                     }
                     outcome => outcome,
                 }

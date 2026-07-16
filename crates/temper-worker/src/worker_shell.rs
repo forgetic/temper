@@ -13,6 +13,7 @@
 //! single-process mode. The protocol crossing the seam is identical; only the
 //! carrier differs.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,13 +24,21 @@ use skein::runtime::RuntimeHandle;
 use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
 use temper_worker_io::{CqSender, Spawner, arm_timer};
 
-use crate::executor::{JobExecutor, job_result};
+use crate::executor::{
+    AttemptFence, CancellationOutcome, DescendantCleanupStatus, JobAttempt, JobCancellation,
+    JobCleanup, JobExecutionContext, JobExecutor, job_result_for_attempt,
+};
+use crate::lifecycle_hook::{
+    NoopWorkerLifecycleHook, WorkerLifecycleCheckpoint, WorkerLifecycleHook,
+};
+use crate::result_outbox::ResultOutbox;
 use crate::transport::{HttpTransport, Transport};
 use crate::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 
 /// Shared cancellation authority for a worker component and all job futures it
-/// spawned. Dropping a cancelled job future prevents its later git/Forge
-/// publication from outliving the component machine.
+/// spawned. Component shutdown drops attempt futures only as an abrupt-owner
+/// fallback; normal per-job cancellation uses the explicit `JobCancellation`
+/// handshake.
 #[derive(Clone, Default)]
 pub(crate) struct WorkerCancellation {
     cancelled: Arc<AtomicBool>,
@@ -64,6 +73,14 @@ impl WorkerCancellation {
     }
 }
 
+#[derive(Clone)]
+struct JobControl {
+    attempt_id: String,
+    generation: u64,
+    fence: AttemptFence,
+    cancellation: JobCancellation,
+}
+
 /// Performs the worker's I/O on a skein spawn capability (production runtime or lab).
 pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner = RuntimeHandle> {
     spawner: S,
@@ -72,7 +89,10 @@ pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner 
     worker_auth: Option<WorkerAuth>,
     worker_id: String,
     executor: Arc<E>,
+    outbox: Arc<ResultOutbox>,
     cancellation: WorkerCancellation,
+    lifecycle_hook: Arc<dyn WorkerLifecycleHook>,
+    job_controls: Arc<Mutex<BTreeMap<String, JobControl>>>,
 }
 
 impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, RuntimeHandle> {
@@ -86,6 +106,9 @@ impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, Runti
         worker_id: String,
         executor: Arc<E>,
     ) -> Self {
+        let outbox = Arc::new(ResultOutbox::new(
+            std::env::temp_dir().join(format!("temper-worker-results-{worker_id}")),
+        ));
         Self::with_transport_controlled(
             handle,
             cq,
@@ -93,7 +116,9 @@ impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, Runti
             None,
             worker_id,
             executor,
+            outbox,
             WorkerCancellation::default(),
+            Arc::new(NoopWorkerLifecycleHook),
         )
     }
 }
@@ -109,6 +134,9 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
         worker_id: String,
         executor: Arc<E>,
     ) -> Self {
+        let outbox = Arc::new(ResultOutbox::new(
+            std::env::temp_dir().join(format!("temper-worker-results-{worker_id}")),
+        ));
         Self::with_transport_controlled(
             spawner,
             cq,
@@ -116,10 +144,15 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
             worker_auth,
             worker_id,
             executor,
+            outbox,
             WorkerCancellation::default(),
+            Arc::new(NoopWorkerLifecycleHook),
         )
     }
 
+    // This internal construction boundary keeps transport, durability, and
+    // shared shutdown capabilities explicit; public factories remain compact.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_transport_controlled(
         spawner: S,
         cq: CqSender<WorkerCompletion>,
@@ -127,7 +160,9 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
         worker_auth: Option<WorkerAuth>,
         worker_id: String,
         executor: Arc<E>,
+        outbox: Arc<ResultOutbox>,
         cancellation: WorkerCancellation,
+        lifecycle_hook: Arc<dyn WorkerLifecycleHook>,
     ) -> Self {
         Self {
             spawner,
@@ -136,7 +171,10 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
             worker_auth,
             worker_id,
             executor,
+            outbox,
             cancellation,
+            lifecycle_hook,
+            job_controls: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -151,8 +189,14 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
         let transport = Arc::clone(&self.transport);
         let cq = self.cq.clone();
         let auth = self.worker_auth.clone();
+        let component_cancellation = self.cancellation.clone();
         self.spawner.spawn_task_with_cx(move |cx| async move {
-            let decoded = transport.send(cx, message, auth).await;
+            let Some(decoded) = component_cancellation
+                .run(transport.send(cx, message, auth))
+                .await
+            else {
+                return;
+            };
             let _ = cq.send(to_completion(decoded));
         });
     }
@@ -171,10 +215,103 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
             WorkerRequest::SendPoll(message) => {
                 self.post(message, WorkerCompletion::PollReply);
             }
-            WorkerRequest::SendResult { job_id, message } => {
-                self.post(message, move |reply| WorkerCompletion::ResultDelivered {
-                    job_id,
-                    outcome: reply.map(|_| ()),
+            WorkerRequest::RecordResult {
+                job_id,
+                attempt_id,
+                generation,
+                result,
+            } => {
+                let outbox = Arc::clone(&self.outbox);
+                let cq = self.cq.clone();
+                let lifecycle_hook = Arc::clone(&self.lifecycle_hook);
+                let component_cancellation = self.cancellation.clone();
+                self.spawner.spawn_task(async move {
+                    if lifecycle_hook.enabled()
+                        && component_cancellation
+                            .run(lifecycle_hook.reached(WorkerLifecycleCheckpoint::Quiesced))
+                            .await
+                            .is_none()
+                    {
+                        return;
+                    }
+                    let outcome = outbox.record(result).map_err(|error| error.to_string());
+                    let _ = cq.send(WorkerCompletion::ResultRecorded {
+                        job_id,
+                        attempt_id,
+                        generation,
+                        outcome,
+                    });
+                });
+            }
+            WorkerRequest::SendResult { entry_id, message } => {
+                let transport = Arc::clone(&self.transport);
+                let cq = self.cq.clone();
+                let auth = self.worker_auth.clone();
+                let lifecycle_hook = Arc::clone(&self.lifecycle_hook);
+                let component_cancellation = self.cancellation.clone();
+                self.spawner.spawn_task_with_cx(move |cx| async move {
+                    if lifecycle_hook.enabled()
+                        && component_cancellation
+                            .run(lifecycle_hook.reached(WorkerLifecycleCheckpoint::ResultRecorded))
+                            .await
+                            .is_none()
+                    {
+                        return;
+                    }
+                    let Some(outcome) = component_cancellation
+                        .run(transport.send(cx, message, auth))
+                        .await
+                    else {
+                        return;
+                    };
+                    if lifecycle_hook.enabled()
+                        && component_cancellation
+                            .run(
+                                lifecycle_hook
+                                    .reached(WorkerLifecycleCheckpoint::ResultDeliveryResolved),
+                            )
+                            .await
+                            .is_none()
+                    {
+                        return;
+                    }
+                    let _ = cq.send(WorkerCompletion::ResultDelivered { entry_id, outcome });
+                });
+            }
+            WorkerRequest::AcknowledgeResult { entry, release } => {
+                let outbox = Arc::clone(&self.outbox);
+                let cq = self.cq.clone();
+                let entry_id = entry.entry_id.clone();
+                let lifecycle_hook = Arc::clone(&self.lifecycle_hook);
+                let component_cancellation = self.cancellation.clone();
+                self.spawner.spawn_task(async move {
+                    if lifecycle_hook.enabled()
+                        && component_cancellation
+                            .run(
+                                lifecycle_hook
+                                    .reached(WorkerLifecycleCheckpoint::ResultAcknowledged),
+                            )
+                            .await
+                            .is_none()
+                    {
+                        return;
+                    }
+                    let outcome = outbox
+                        .acknowledge(&entry, &release)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string());
+                    let _ = cq.send(WorkerCompletion::ResultFinalized { entry_id, outcome });
+                });
+            }
+            WorkerRequest::RejectResult { entry, reason } => {
+                let outbox = Arc::clone(&self.outbox);
+                let cq = self.cq.clone();
+                let entry_id = entry.entry_id.clone();
+                self.spawner.spawn_task(async move {
+                    let outcome = outbox
+                        .reject(&entry, &reason)
+                        .map_err(|error| error.to_string());
+                    let _ = cq.send(WorkerCompletion::ResultFinalized { entry_id, outcome });
                 });
             }
             WorkerRequest::SendHeartbeat(message) => {
@@ -182,18 +319,196 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     WorkerCompletion::HeartbeatDelivered(heartbeat_outcome(reply))
                 });
             }
-            WorkerRequest::RunJob(assign) => {
+            WorkerRequest::RunJob { assign, generation } => {
                 let executor = Arc::clone(&self.executor);
                 let cq = self.cq.clone();
                 let worker_id = self.worker_id.clone();
-                let cancellation = self.cancellation.clone();
+                let component_cancellation = self.cancellation.clone();
+                let controls = Arc::clone(&self.job_controls);
                 let job_id = assign.job_id.clone();
+                let attempt_id = assign
+                    .attempt_id
+                    .clone()
+                    .expect("machine dispatches only fenced assignments");
+                let fence = AttemptFence::open();
+                let job_cancellation = JobCancellation::default();
+                let progress_cq = cq.clone();
+                let progress_job_id = job_id.clone();
+                let progress_attempt_id = attempt_id.clone();
+                let progress_fence = fence.clone();
+                let progress = crate::JobProgressReporter::with_attempt_guard(
+                    attempt_id.clone(),
+                    move |reported_attempt| {
+                        progress_fence.is_open() && reported_attempt == progress_attempt_id
+                    },
+                    move |progress| {
+                        let _ = progress_cq.send(WorkerCompletion::JobProgress {
+                            job_id: progress_job_id.clone(),
+                            attempt_id: progress.attempt_id.clone(),
+                            generation,
+                            progress,
+                        });
+                    },
+                );
+                controls.lock().expect("job controls lock").insert(
+                    job_id.clone(),
+                    JobControl {
+                        attempt_id: attempt_id.clone(),
+                        generation,
+                        fence: fence.clone(),
+                        cancellation: job_cancellation.clone(),
+                    },
+                );
+                let execution = JobExecutionContext {
+                    attempt: JobAttempt {
+                        id: attempt_id.clone(),
+                        generation,
+                    },
+                    fence: fence.clone(),
+                    cancellation: job_cancellation.clone(),
+                    progress,
+                };
                 self.spawner.spawn_task(async move {
-                    let Some(outcome) = cancellation.run(executor.execute(assign)).await else {
-                        return;
-                    };
-                    let result = job_result(&worker_id, &job_id, outcome);
-                    let _ = cq.send(WorkerCompletion::JobFinished { job_id, result });
+                    // Production executors observe `JobCancellation` in every
+                    // owned effect. In particular, the out-of-process runner
+                    // keeps this future alive while the supervisor performs
+                    // the explicit asynchronous escalation handshake.
+                    let run =
+                        job_cancellation.run_to_quiescence(executor.execute(assign, execution));
+                    let component_result = component_cancellation.run(run).await;
+                    let mut current_controls = controls.lock().expect("job controls lock");
+                    if current_controls.get(&job_id).is_some_and(|control| {
+                        control.generation == generation && control.attempt_id == attempt_id
+                    }) {
+                        current_controls.remove(&job_id);
+                    }
+                    drop(current_controls);
+                    match component_result {
+                        None => {}
+                        Some(Some(outcome)) if fence.is_open() => {
+                            let result = job_result_for_attempt(
+                                &worker_id,
+                                &job_id,
+                                Some(attempt_id.clone()),
+                                outcome,
+                            );
+                            if fence.is_open() {
+                                let _ = cq.send(WorkerCompletion::JobFinished {
+                                    job_id,
+                                    attempt_id,
+                                    generation,
+                                    result,
+                                });
+                            }
+                        }
+                        Some(Some(_)) | Some(None) => {
+                            // A managed process records its real supervisor
+                            // outcome after all endpoints and descendants join.
+                            // Cancellation before process spawn has no
+                            // descendants and therefore quiesces cooperatively.
+                            let cleanup = job_cancellation.cleanup().unwrap_or(JobCleanup {
+                                cancellation: CancellationOutcome::Graceful,
+                                descendants: DescendantCleanupStatus::Clean,
+                            });
+                            let _ = cq.send(WorkerCompletion::JobQuiesced {
+                                job_id,
+                                attempt_id,
+                                generation,
+                                cleanup,
+                            });
+                        }
+                    }
+                });
+            }
+            WorkerRequest::CancelJob {
+                job_id,
+                attempt_id,
+                generation,
+                reason: _,
+            } => {
+                if self.lifecycle_hook.enabled() {
+                    let lifecycle_hook = Arc::clone(&self.lifecycle_hook);
+                    let component_cancellation = self.cancellation.clone();
+                    let controls = Arc::clone(&self.job_controls);
+                    let cq = self.cq.clone();
+                    self.spawner.spawn_task(async move {
+                        if component_cancellation
+                            .run(lifecycle_hook.reached(WorkerLifecycleCheckpoint::CancelRequested))
+                            .await
+                            .is_none()
+                        {
+                            return;
+                        }
+                        cancel_job_control(controls, cq, job_id, attempt_id, generation);
+                    });
+                } else {
+                    cancel_job_control(
+                        Arc::clone(&self.job_controls),
+                        self.cq.clone(),
+                        job_id,
+                        attempt_id,
+                        generation,
+                    );
+                }
+            }
+            WorkerRequest::EscalateJob {
+                job_id,
+                attempt_id,
+                generation,
+                hard,
+            } => {
+                let control = self
+                    .job_controls
+                    .lock()
+                    .expect("job controls lock")
+                    .get(&job_id)
+                    .filter(|control| {
+                        control.generation == generation && control.attempt_id == attempt_id
+                    })
+                    .cloned();
+                if let Some(control) = control {
+                    if hard {
+                        control.cancellation.hard_kill();
+                    } else {
+                        control.cancellation.force_terminate();
+                    }
+                }
+            }
+            WorkerRequest::ArmWatchdogTimer {
+                job_id,
+                attempt_id,
+                generation,
+                timer_generation,
+                kind,
+                delay,
+            } => {
+                arm_timer(&self.spawner, &self.cq, delay, move || {
+                    WorkerCompletion::WatchdogTimer {
+                        job_id,
+                        attempt_id,
+                        generation,
+                        timer_generation,
+                        kind,
+                    }
+                });
+            }
+            WorkerRequest::ArmResultRecordTimer {
+                job_id,
+                attempt_id,
+                generation,
+                delay,
+            } => {
+                arm_timer(&self.spawner, &self.cq, delay, move || {
+                    WorkerCompletion::ResultRecordTimer {
+                        job_id,
+                        attempt_id,
+                        generation,
+                    }
+                });
+            }
+            WorkerRequest::ArmResultReplayTimer { entry_id, delay } => {
+                arm_timer(&self.spawner, &self.cq, delay, move || {
+                    WorkerCompletion::ResultReplayTimer { entry_id }
                 });
             }
             WorkerRequest::ArmPollTimer(delay) => {
@@ -206,6 +521,27 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     WorkerCompletion::HeartbeatTimer
                 });
             }
+            WorkerRequest::Observe(event) => {
+                if matches!(
+                    &event,
+                    crate::observability::WorkerEvent::CapacityReleased { .. }
+                ) && self.lifecycle_hook.enabled()
+                {
+                    let lifecycle_hook = Arc::clone(&self.lifecycle_hook);
+                    let component_cancellation = self.cancellation.clone();
+                    self.spawner.spawn_task(async move {
+                        let _ = component_cancellation
+                            .run(
+                                lifecycle_hook.reached(WorkerLifecycleCheckpoint::CapacityReleased),
+                            )
+                            .await;
+                    });
+                }
+                event.emit();
+            }
+            WorkerRequest::Warn(line) => {
+                tracing::warn!(target: "temper_worker", "{line}");
+            }
             WorkerRequest::Log(line) => {
                 // Worker-side protocol traces (`worker: registered`, `worker:
                 // assigned`, `worker: result sent`, refusals/failures). These are
@@ -214,6 +550,38 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 tracing::debug!(target: "temper_worker", "{line}");
             }
         }
+    }
+}
+
+fn cancel_job_control(
+    controls: Arc<Mutex<BTreeMap<String, JobControl>>>,
+    cq: CqSender<WorkerCompletion>,
+    job_id: String,
+    attempt_id: String,
+    generation: u64,
+) {
+    let control = controls
+        .lock()
+        .expect("job controls lock")
+        .get(&job_id)
+        .filter(|control| control.generation == generation && control.attempt_id == attempt_id)
+        .cloned();
+    if let Some(control) = control {
+        control.fence.close();
+        control.cancellation.cancel();
+    } else {
+        // The executor may have naturally quiesced between the machine
+        // transition and this shell request. Complete that race cooperatively
+        // so a timeout cannot wait forever for a disappeared control.
+        let _ = cq.send(WorkerCompletion::JobQuiesced {
+            job_id,
+            attempt_id,
+            generation,
+            cleanup: JobCleanup {
+                cancellation: CancellationOutcome::Graceful,
+                descendants: DescendantCleanupStatus::Clean,
+            },
+        });
     }
 }
 

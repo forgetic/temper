@@ -345,6 +345,9 @@ async fn run_async(
             resolved.agent.enable_subagents,
         )
         .with_tool_config(temper_worker_service::agent_tool_config(resolved))
+        .with_runtime_limits(temper_worker_service::selected_agent_runtime_limits(
+            resolved,
+        )?)
         .with_trace_policy(worker_config.agent_traces.policy.clone())
         .with_trace_collector(worker_config.agent_traces.clone())
         .with_forge_context_host(forge_context),
@@ -463,6 +466,7 @@ pub(super) fn standalone_worker_config(
     role_identities: BTreeMap<String, RoleGitIdentity>,
     agent_traces: WorkerAgentTraceConfig,
 ) -> Result<WorkerConfig, String> {
+    temper_worker::prepare_result_root(&worker.result_root)?;
     Ok(WorkerConfig {
         // Unused on the in-process transport, but the struct carries it.
         daemon_url: String::new(),
@@ -474,6 +478,13 @@ pub(super) fn standalone_worker_config(
         max_concurrent_jobs: worker.max_concurrent_jobs,
         poll_wait: Duration::from_secs(20),
         heartbeat_interval: Duration::from_secs(10),
+        liveness_limits: temper_worker::WorkerLivenessLimits {
+            max_no_progress: worker.liveness_limits.max_no_progress,
+            max_run: worker.liveness_limits.max_run,
+            graceful_cancellation_grace: worker.liveness_limits.graceful_cancellation_grace,
+            forced_termination_grace: worker.liveness_limits.forced_termination_grace,
+        },
+        result_root: worker.result_root.clone(),
         agent_traces,
         executor: ExecutorSelection::Stub, // not consulted: the executor is built directly
     })

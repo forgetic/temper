@@ -1,7 +1,8 @@
 use crate::codebase_memory::{
-    CodebaseMemoryToolMetadata, CodebaseMemoryToolset, build_codebase_memory_toolset,
+    CodebaseMemoryToolMetadata, CodebaseMemoryToolset, build_codebase_memory_toolset_with_timeout,
 };
 use std::path::Path;
+use std::time::Duration;
 
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
 use tongs::tools::ToolRegistry;
@@ -50,15 +51,32 @@ impl PreparedCodebaseMemoryGuidance {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn prepare_codebase_memory_tools(
     tool_config: Option<&AgentToolConfig>,
     role: &str,
     context: &WorkspaceContext,
     cwd: &Path,
 ) -> Result<PreparedCodebaseMemoryTools, CodingAgentError> {
-    let toolset = build_codebase_memory_toolset(tool_config, role, context, cwd)
-        .await
-        .map_err(|error| CodingAgentError::CodebaseMemory(error.to_string()))?;
+    prepare_codebase_memory_tools_with_timeout(tool_config, role, context, cwd, Duration::MAX).await
+}
+
+pub(super) async fn prepare_codebase_memory_tools_with_timeout(
+    tool_config: Option<&AgentToolConfig>,
+    role: &str,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    generic_tool_timeout: Duration,
+) -> Result<PreparedCodebaseMemoryTools, CodingAgentError> {
+    let toolset = build_codebase_memory_toolset_with_timeout(
+        tool_config,
+        role,
+        context,
+        cwd,
+        generic_tool_timeout,
+    )
+    .await
+    .map_err(|error| CodingAgentError::CodebaseMemory(error.to_string()))?;
     let prompt_section = codebase_memory_prompt_section_with_status(
         toolset.registered_tool_metadata(),
         toolset.prompt_status(),

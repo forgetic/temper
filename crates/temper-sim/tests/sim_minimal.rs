@@ -56,11 +56,16 @@ fn poll(worker_id: &str, max_wait_ms: u64) -> WorkerProtocolMessage {
     })
 }
 
-fn success_result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
+fn success_result(
+    worker_id: &str,
+    job_id: &str,
+    attempt_id: Option<String>,
+) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Result(JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id,
         status: ResultStatus::Success,
         repos: vec![RepoOutcome {
             repo: "acme/service".to_string(),
@@ -134,12 +139,18 @@ fn run_world(seed: u64) -> (Vec<String>, u64, u64) {
 
         let reply = client.send(&poll("sim-worker", 50)).await;
         events.push(format!("poll => {}", describe(&reply)));
-        let job_id = match reply {
-            Some(WorkerProtocolMessage::Assign(assign)) => assign.job_id,
+        let assignment = match reply {
+            Some(WorkerProtocolMessage::Assign(assign)) => assign,
             other => panic!("expected assignment, got {other:?}"),
         };
 
-        let reply = client.send(&success_result("sim-worker", &job_id)).await;
+        let reply = client
+            .send(&success_result(
+                "sim-worker",
+                &assignment.job_id,
+                assignment.attempt_id,
+            ))
+            .await;
         events.push(format!("result => {}", describe(&reply)));
 
         let (job, result) = apply_rx.recv().await.expect("applier invoked");

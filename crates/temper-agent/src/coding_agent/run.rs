@@ -6,9 +6,11 @@ use std::path::Path;
 use crate::prompt_overlays::PromptOverlays;
 use crate::provider::ProviderConfig;
 use crate::usage::RunTotals;
-use temper_protocol_agent::{AgentToolConfig, WorkspaceContext, WorkspaceResult};
+use temper_protocol_agent::{
+    AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext, WorkspaceResult,
+};
 
-use super::codebase_memory::prepare_codebase_memory_tools;
+use super::codebase_memory::prepare_codebase_memory_tools_with_timeout;
 use super::prompt::{system_prompt_with_registry, user_context_with_registry};
 use super::result::{
     collect_text, parse_result, validate_contract, validate_verdict_contract,
@@ -277,6 +279,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
         submit_for_pr,
         None,
         crate::activity::AgentActivityConfig::default(),
+        AgentRuntimeLimitsV1::default(),
     )
     .await
 }
@@ -296,10 +299,24 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     submit_for_pr: Option<SubmitForPrHost>,
     forge_context: Option<ForgeContextHost>,
     activity_config: crate::activity::AgentActivityConfig,
+    runtime_limits: AgentRuntimeLimitsV1,
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
+    let operation_limits = temper_agent_core::AgentOperationLimits {
+        tool_timeout: std::time::Duration::from_secs(runtime_limits.tool_timeout_secs),
+        model_connect_timeout: std::time::Duration::from_secs(
+            runtime_limits.model_connect_timeout_secs,
+        ),
+        model_idle_timeout: std::time::Duration::from_secs(runtime_limits.model_idle_timeout_secs),
+    };
     let capability = Capability::for_role(&context.work_item.role);
-    let codebase_memory =
-        prepare_codebase_memory_tools(tool_config, &context.work_item.role, context, cwd).await?;
+    let codebase_memory = prepare_codebase_memory_tools_with_timeout(
+        tool_config,
+        &context.work_item.role,
+        context,
+        cwd,
+        operation_limits.tool_timeout,
+    )
+    .await?;
     let model_identity = temper_agent_core::ModelIdentity::new(
         provider_config.provider_id(),
         provider_config.model_id(),
@@ -315,9 +332,11 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
         ..tongs::provider::StreamOptions::default()
     };
 
-    // One normalizer feeds every projection: totals/tracing and, when present,
-    // the bounded child-to-worker activity channel.
+    // One scope factory feeds the optional activity projections and installs a
+    // separate correctness-lifecycle sink. Lifecycle never passes through the
+    // capture policy, trace queue, or storage projection.
     let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
+    let cancellation = activity_config.cancellation.clone();
     let scope_factory =
         crate::activity::ScopeFactory::new(activity_config, std::sync::Arc::clone(&totals));
     let main_observability = scope_factory.main(crate::usage::MAIN_SCOPE, model_identity.clone());
@@ -338,6 +357,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
             cwd,
             &scope_factory,
             &main_scope_id,
+            operation_limits,
         );
     }
 
@@ -366,6 +386,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
         user_message: turns.user,
         tools,
         max_iterations,
+        operation_limits,
         provider,
         stream_options,
     };
@@ -375,13 +396,14 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     let arg_preview = crate::usage::tool_arg_preview_hook(cwd.to_path_buf());
     let model_id = provider_config.model_id().to_string();
     let outcome = async {
-        let (_control, run) = temper_agent_core::run_sub_agent_controllable_with_observability(
+        let (control, run) = temper_agent_core::run_sub_agent_controllable_with_observability(
             handle.clone(),
             sub_agent,
             main_observability.observability,
             None,
             Some(arg_preview),
         )?;
+        cancellation.install(move || control.abort());
         run.await
     }
     .await

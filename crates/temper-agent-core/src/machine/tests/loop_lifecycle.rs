@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use super::common::{
     assistant_error, assistant_text, assistant_tool_call_with_args, assistant_tool_calls,
-    calls_llm, final_stop, machine, run, run_tools, tool_output, tool_start_previews, user,
+    calls_llm, complete, final_stop, llm_failed, llm_responded, machine, run, run_tools,
+    tool_finished, tool_output, tool_start_previews, user,
 };
 use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop};
 
@@ -29,10 +30,7 @@ fn on_start_calls_the_model_once() {
 #[test]
 fn text_only_response_completes_without_tools() {
     let mut m = machine();
-    let requests = run(
-        &mut m,
-        vec![AgentCompletion::LlmResponded(assistant_text("all done"))],
-    );
+    let requests = run(&mut m, vec![llm_responded(assistant_text("all done"))]);
     assert_eq!(final_stop(&requests), Some(AgentStop::Completed));
     assert!(run_tools(&requests).is_empty());
     assert!(m.is_stopped());
@@ -44,12 +42,9 @@ fn single_tool_round_then_completes() {
     let requests = run(
         &mut m,
         vec![
-            AgentCompletion::LlmResponded(assistant_tool_calls(&[("call-1", "read")])),
-            AgentCompletion::ToolFinished {
-                id: "call-1".to_string(),
-                output: tool_output("file contents", false),
-            },
-            AgentCompletion::LlmResponded(assistant_text("done after reading")),
+            llm_responded(assistant_tool_calls(&[("call-1", "read")])),
+            tool_finished("call-1", tool_output("file contents", false)),
+            llm_responded(assistant_text("done after reading")),
         ],
     );
     // One tool dispatched, the model called twice (initial + after tool), and a
@@ -65,10 +60,7 @@ fn single_tool_round_then_completes() {
 #[test]
 fn model_error_stops_immediately() {
     let mut m = machine();
-    let requests = run(
-        &mut m,
-        vec![AgentCompletion::LlmResponded(assistant_error())],
-    );
+    let requests = run(&mut m, vec![llm_responded(assistant_error())]);
     assert_eq!(final_stop(&requests), Some(AgentStop::ModelError));
     assert!(m.is_stopped());
 }
@@ -76,10 +68,7 @@ fn model_error_stops_immediately() {
 #[test]
 fn transport_failure_stops_with_model_error() {
     let mut m = machine();
-    let requests = run(
-        &mut m,
-        vec![AgentCompletion::LlmFailed("connection reset".to_string())],
-    );
+    let requests = run(&mut m, vec![llm_failed("connection reset")]);
     assert_eq!(final_stop(&requests), Some(AgentStop::ModelError));
 }
 
@@ -91,20 +80,17 @@ fn iteration_budget_is_enforced() {
     let mut round = 0;
     while !m.is_stopped() && round < 10 {
         // model asks for a tool
-        requests.extend(m.on_completion(
-            EngineTime::ZERO,
-            AgentCompletion::LlmResponded(assistant_tool_calls(&[("c", "read")])),
+        requests.extend(complete(
+            &mut m,
+            llm_responded(assistant_tool_calls(&[("c", "read")])),
         ));
         if m.is_stopped() {
             break;
         }
         // tool finishes
-        requests.extend(m.on_completion(
-            EngineTime::ZERO,
-            AgentCompletion::ToolFinished {
-                id: "c".to_string(),
-                output: tool_output("again", false),
-            },
+        requests.extend(complete(
+            &mut m,
+            tool_finished("c", tool_output("again", false)),
         ));
         round += 1;
     }
@@ -119,30 +105,58 @@ fn abort_between_turns_stops() {
     let mut m = machine();
     m.on_start(EngineTime::ZERO);
     // Model responded with text-less tool? No — abort while awaiting LLM.
-    let requests = m.on_completion(EngineTime::ZERO, AgentCompletion::Abort);
+    let cancel = m.on_completion(EngineTime::ZERO, AgentCompletion::Abort);
+    let (operation_generation, batch_generation) = cancel
+        .iter()
+        .find_map(|request| match request {
+            AgentRequest::CancelActive {
+                operation_generation,
+                batch_generation,
+            } => Some((*operation_generation, *batch_generation)),
+            _ => None,
+        })
+        .expect("cancellation request");
+    assert_eq!(final_stop(&cancel), None);
+    let requests = m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::TasksQuiesced {
+            operation_generation,
+            batch_generation,
+        },
+    );
     assert_eq!(final_stop(&requests), Some(AgentStop::Aborted));
     assert!(m.is_stopped());
 }
 
 #[test]
-fn abort_during_tools_drains_the_batch_then_stops() {
+fn abort_during_tools_cancels_immediately_and_waits_for_quiescence() {
     let mut m = machine();
     m.on_start(EngineTime::ZERO);
-    m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::LlmResponded(assistant_tool_calls(&[("t", "bash")])),
+    complete(
+        &mut m,
+        llm_responded(assistant_tool_calls(&[("t", "bash")])),
     );
-    // Abort arrives mid-batch: the machine must not stop until the in-flight
-    // tool drains (no torn tool-result state).
+    // Abort immediately asks the shell to cancel the hung task and clears all
+    // pending batches. It does not wait for a ToolFinished completion.
     let mid = m.on_completion(EngineTime::ZERO, AgentCompletion::Abort);
-    assert_eq!(final_stop(&mid), None, "must not stop mid-tool-batch");
+    let (operation_generation, batch_generation) = mid
+        .iter()
+        .find_map(|request| match request {
+            AgentRequest::CancelActive {
+                operation_generation,
+                batch_generation,
+            } => Some((*operation_generation, *batch_generation)),
+            _ => None,
+        })
+        .expect("cancellation request");
+    assert_eq!(final_stop(&mid), None);
     assert!(!m.is_stopped());
 
     let after = m.on_completion(
         EngineTime::ZERO,
-        AgentCompletion::ToolFinished {
-            id: "t".to_string(),
-            output: tool_output("done", false),
+        AgentCompletion::TasksQuiesced {
+            operation_generation,
+            batch_generation,
         },
     );
     assert_eq!(final_stop(&after), Some(AgentStop::Aborted));
@@ -150,13 +164,74 @@ fn abort_during_tools_drains_the_batch_then_stops() {
 }
 
 #[test]
+fn abort_fences_late_operations_and_stale_quiescence() {
+    let mut m = machine();
+    let _ = m.on_start(EngineTime::ZERO);
+    let (model_operation, model_batch) = m.active_generations().expect("active model");
+
+    let cancel = m.on_completion(EngineTime::ZERO, AgentCompletion::Abort);
+    let (cancel_operation, cancel_batch) = cancel
+        .iter()
+        .find_map(|request| match request {
+            AgentRequest::CancelActive {
+                operation_generation,
+                batch_generation,
+            } => Some((*operation_generation, *batch_generation)),
+            _ => None,
+        })
+        .expect("cancel request");
+
+    let late_model = m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::LlmResponded {
+            operation_generation: model_operation,
+            batch_generation: model_batch,
+            message: assistant_tool_calls(&[("late", "read")]),
+        },
+    );
+    assert!(late_model.is_empty());
+    assert!(run_tools(&late_model).is_empty());
+    assert_eq!(calls_llm(&late_model), 0);
+
+    let stale_quiescence = m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::TasksQuiesced {
+            operation_generation: cancel_operation.saturating_add(1),
+            batch_generation: cancel_batch,
+        },
+    );
+    assert!(stale_quiescence.is_empty());
+    assert!(!m.is_stopped());
+
+    let finished = m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::TasksQuiesced {
+            operation_generation: cancel_operation,
+            batch_generation: cancel_batch,
+        },
+    );
+    assert_eq!(final_stop(&finished), Some(AgentStop::Aborted));
+
+    let late_tool = m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::ToolFinished {
+            operation_generation: model_operation,
+            batch_generation: 99,
+            id: "late".to_string(),
+            output: tool_output("late", false),
+        },
+    );
+    assert!(late_tool.is_empty());
+}
+
+#[test]
 fn steering_is_injected_at_the_next_turn_boundary() {
     let mut m = machine();
     m.on_start(EngineTime::ZERO);
     // A tool round is in flight.
-    m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::LlmResponded(assistant_tool_calls(&[("s", "read")])),
+    complete(
+        &mut m,
+        llm_responded(assistant_tool_calls(&[("s", "read")])),
     );
     // Steering arrives mid-round — queued, not applied yet.
     let steered = m.on_completion(
@@ -170,13 +245,7 @@ fn steering_is_injected_at_the_next_turn_boundary() {
         "steering must wait for the turn boundary"
     );
     // Tool finishes ⇒ turn boundary ⇒ steering injected + model re-called.
-    let after = m.on_completion(
-        EngineTime::ZERO,
-        AgentCompletion::ToolFinished {
-            id: "s".to_string(),
-            output: tool_output("read", false),
-        },
-    );
+    let after = complete(&mut m, tool_finished("s", tool_output("read", false)));
     assert!(
         after
             .iter()
@@ -200,13 +269,11 @@ fn arg_preview_hook_fills_tool_start_field_from_call_args() {
     ));
     let requests = run(
         &mut m,
-        vec![AgentCompletion::LlmResponded(
-            assistant_tool_call_with_args(
-                "call-1",
-                "read",
-                serde_json::json!({"path": "src/main.rs"}),
-            ),
-        )],
+        vec![llm_responded(assistant_tool_call_with_args(
+            "call-1",
+            "read",
+            serde_json::json!({"path": "src/main.rs"}),
+        ))],
     );
     assert_eq!(
         tool_start_previews(&requests),
@@ -220,13 +287,11 @@ fn tool_start_arg_preview_is_none_without_a_hook() {
     let mut m = machine();
     let requests = run(
         &mut m,
-        vec![AgentCompletion::LlmResponded(
-            assistant_tool_call_with_args(
-                "call-1",
-                "read",
-                serde_json::json!({"path": "src/main.rs"}),
-            ),
-        )],
+        vec![llm_responded(assistant_tool_call_with_args(
+            "call-1",
+            "read",
+            serde_json::json!({"path": "src/main.rs"}),
+        ))],
     );
     assert_eq!(
         tool_start_previews(&requests),

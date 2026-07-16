@@ -10,14 +10,15 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_protocol_worker::{
-    Artifact, Assign, ForgeContextErrorCode, Heartbeat, JobResult, Poll, PullRequestFreshness,
-    Register, WORKER_AUTHORIZATION_HEADER, WorkerAuth, WorkerProtocolMessage,
+    Artifact, Assign, ErrorCode, ForgeContextErrorCode, Heartbeat, JobResult, Poll, ProtocolError,
+    PullRequestFreshness, Register, WORKER_AUTHORIZATION_HEADER, WORKER_PROTOCOL_VERSION,
+    WorkerAuth, WorkerProtocolMessage,
 };
 
 use super::context_transport::malformed_context_response;
 use super::machine::{DaemonMachine, DaemonRequest, DeferredEnqueue, PollWaiter};
 use super::protocol::{
-    ResultDisposition, is_poll_timeout, protocol_response, register_log_line, result_disposition,
+    is_poll_timeout, protocol_response, register_log_line, result_disposition,
     result_disposition_log_value, result_received_log_line,
 };
 use super::state_dto::{DaemonStateSnapshot, JobDto};
@@ -72,7 +73,10 @@ impl DaemonMachine {
     /// the job is pending, unknown, or already completed.
     fn handle_state_job(&self, job_id: &str, responder: HttpResponder) -> Vec<DaemonRequest> {
         let response = match self.core.in_flight_job(job_id) {
-            Some(job) => HttpResponseData::json(200, &JobDto::from(&job).to_json()),
+            Some(job) => HttpResponseData::json(
+                200,
+                &JobDto::from_in_flight(&job, self.core.worker_job_report(job_id)).to_json(),
+            ),
             None => HttpResponseData::status_only(404),
         };
         vec![DaemonRequest::Respond {
@@ -310,69 +314,91 @@ impl DaemonMachine {
         auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
-        let mut requests = Vec::new();
-        // Capture full job context before the core completes and forgets the
-        // job.
-        let in_flight = self.core.in_flight_job(&result.job_id);
-        let response = match self
-            .core
-            .handle_authenticated(WorkerProtocolMessage::Result(result.clone()), auth.as_ref())
-        {
-            Ok(response) => response,
+        match self.core.authenticate_result(&result, auth.as_ref()) {
             Err(_) => {
                 return vec![DaemonRequest::Respond {
                     responder,
                     response: HttpResponseData::status_only(401),
                 }];
             }
-        };
-
-        // Route only when the core accepted/completed the in-flight job.
-        // Unknown, never-assigned, version-mismatched, and double-sent results
-        // must not apply, retry, or drop beyond the core response.
-        if let (Some(job), Some(WorkerProtocolMessage::Release(_))) = (in_flight, response.as_ref())
-        {
-            self.assignment_contexts.remove(&job.job_id);
-            let disposition = result_disposition(&result);
-            requests.push(DaemonRequest::Log(result_received_log_line(
-                &result,
-                result_disposition_log_value(disposition),
-            )));
-
-            match disposition {
-                ResultDisposition::Apply => {
-                    if self.applying.is_empty() {
-                        let decisions = self.wake_coordinator.begin_apply();
-                        requests.extend(self.wake_decision_requests(decisions));
-                    }
-                    self.applying.insert(job.job_id.clone());
-                    requests.push(DaemonRequest::RunApply { job, result });
-                }
-                // Apply retry bookkeeping (for example, releasing a claimed
-                // source issue back to its ready queue) before the next webhook
-                // wake or poll-backstop tick re-feeds the work through the
-                // guarded scan path. The result is still logged as `rescan`: it
-                // is not a terminal workflow outcome.
-                ResultDisposition::DropForRescan => {
-                    if self.applying.is_empty() {
-                        let decisions = self.wake_coordinator.begin_apply();
-                        requests.extend(self.wake_decision_requests(decisions));
-                    }
-                    self.applying.insert(job.job_id.clone());
-                    requests.push(DaemonRequest::RunApplyAndRespond {
-                        job,
-                        result,
-                        responder,
-                        response: protocol_response(response),
-                    });
-                    return requests;
-                }
+            Ok(Some(response)) => {
+                return vec![DaemonRequest::Respond {
+                    responder,
+                    response: protocol_response(Some(response)),
+                }];
             }
+            Ok(None) => {}
         }
 
-        requests.push(DaemonRequest::Respond {
+        let key = (result.job_id.clone(), result.attempt_id.clone());
+
+        // A lost acknowledgement may replay after the exact apply completed.
+        // Retain the applied payload so only a byte-for-byte equivalent result
+        // receives the prior release and no Forge work runs twice.
+        if let Some((applied, response)) = self.completed_results.get(&key) {
+            let response = if applied == &result {
+                protocol_response(Some(response.clone()))
+            } else {
+                protocol_response(Some(WorkerProtocolMessage::Error(ProtocolError {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    code: ErrorCode::MalformedMessage,
+                    message: "different result reused a completed assignment attempt".to_string(),
+                    retry_after_ms: None,
+                    job_id: Some(result.job_id.clone()),
+                })))
+            };
+            return vec![DaemonRequest::Respond {
+                responder,
+                response,
+            }];
+        }
+        if let Some(pending) = self.pending_results.get(&key) {
+            let response = if pending == &result {
+                HttpResponseData::status_only(503)
+            } else {
+                HttpResponseData::status_only(422)
+            };
+            return vec![DaemonRequest::Respond {
+                responder,
+                response,
+            }];
+        }
+
+        let job = match self.core.result_job(&result) {
+            Err(response) => {
+                return vec![DaemonRequest::Respond {
+                    responder,
+                    response: protocol_response(Some(response)),
+                }];
+            }
+            Ok(job) => job,
+        };
+
+        // A recovered claim keeps its prior daemon boot identity until exact
+        // release. Retry every delivery through `apply_recovered`, not merely
+        // the first one: a transient failure may happen before the lease
+        // decorator has reattached the claim to its process-local state.
+        let recovered_context = self
+            .assignment_contexts
+            .get(&job.job_id)
+            .filter(|context| context.daemon_boot_id != self.daemon_boot_id)
+            .cloned();
+        let disposition = result_disposition(&result);
+        let mut requests = vec![DaemonRequest::Log(result_received_log_line(
+            &result,
+            result_disposition_log_value(disposition),
+        ))];
+        if self.applying.is_empty() {
+            let decisions = self.wake_coordinator.begin_apply();
+            requests.extend(self.wake_decision_requests(decisions));
+        }
+        self.applying.insert(job.job_id.clone());
+        self.pending_results.insert(key, result.clone());
+        requests.push(DaemonRequest::RunApplyAndRespond {
+            job,
+            result,
+            recovered_context,
             responder,
-            response: protocol_response(response),
         });
         requests
     }
@@ -569,6 +595,7 @@ fn worker_auth_from_headers(headers: &[(String, String)]) -> Result<Option<Worke
 fn in_flight_job_from_assign(assign: &Assign) -> InFlightJob {
     InFlightJob {
         job_id: assign.job_id.clone(),
+        attempt_id: assign.attempt_id.clone(),
         role: assign.role.clone(),
         repo: assign.repo.clone(),
         artifact: assign.artifact.clone(),

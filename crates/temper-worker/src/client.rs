@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_worker::{
     Capability, Capacity, Heartbeat, HeartbeatState, JobHeartbeat, Poll, Register,
@@ -71,15 +71,94 @@ pub fn heartbeat_message_params(
     in_flight: &BTreeSet<String>,
     free_capacity: u32,
 ) -> WorkerProtocolMessage {
+    heartbeat_message_params_with_attempts(
+        params,
+        in_flight.iter().map(|job_id| (job_id, None)),
+        free_capacity,
+    )
+}
+
+/// Builds fenced heartbeats for current worker assignments.
+pub fn heartbeat_message_params_attempts(
+    params: &crate::config::WorkerParams,
+    in_flight: &BTreeMap<String, String>,
+    free_capacity: u32,
+) -> WorkerProtocolMessage {
+    heartbeat_message_params_states(
+        params,
+        in_flight.iter().map(|(job_id, attempt_id)| {
+            (
+                job_id.as_str(),
+                attempt_id.as_str(),
+                HeartbeatState::Running,
+            )
+        }),
+        free_capacity,
+    )
+}
+
+/// Builds an exact heartbeat from worker-owned structured reports.
+pub fn heartbeat_message_params_reports(
+    params: &crate::config::WorkerParams,
+    jobs: Vec<JobHeartbeat>,
+    free_capacity: u32,
+) -> WorkerProtocolMessage {
+    WorkerProtocolMessage::Heartbeat(Heartbeat {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: params.worker_id.clone(),
+        jobs,
+        free_capacity: Some(free_capacity),
+        worker_pool: params.worker_pool.clone(),
+        max_concurrent_jobs: Some(params.max_concurrent_jobs),
+        capabilities: protocol_capabilities(params),
+    })
+}
+
+/// Builds an exact heartbeat projection for running and finishing attempts.
+pub fn heartbeat_message_params_states<'a>(
+    params: &crate::config::WorkerParams,
+    jobs: impl Iterator<Item = (&'a str, &'a str, HeartbeatState)>,
+    free_capacity: u32,
+) -> WorkerProtocolMessage {
+    WorkerProtocolMessage::Heartbeat(Heartbeat {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: params.worker_id.clone(),
+        jobs: jobs
+            .map(|(job_id, attempt_id, state)| JobHeartbeat {
+                job_id: job_id.to_string(),
+                attempt_id: Some(attempt_id.to_string()),
+                state,
+                message: match state {
+                    HeartbeatState::Running => "running",
+                    HeartbeatState::Waiting => "waiting",
+                    HeartbeatState::Finishing => "finishing",
+                }
+                .to_string(),
+                liveness: None,
+            })
+            .collect(),
+        free_capacity: Some(free_capacity),
+        worker_pool: params.worker_pool.clone(),
+        max_concurrent_jobs: Some(params.max_concurrent_jobs),
+        capabilities: protocol_capabilities(params),
+    })
+}
+
+fn heartbeat_message_params_with_attempts<'a>(
+    params: &crate::config::WorkerParams,
+    in_flight: impl Iterator<Item = (&'a String, Option<&'a str>)>,
+    free_capacity: u32,
+) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Heartbeat(Heartbeat {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: params.worker_id.clone(),
         jobs: in_flight
-            .iter()
-            .map(|job_id| JobHeartbeat {
+            .map(|(job_id, attempt_id)| JobHeartbeat {
                 job_id: job_id.clone(),
+                attempt_id: attempt_id.map(str::to_string),
                 state: HeartbeatState::Running,
                 message: "running".to_string(),
+                liveness: None,
             })
             .collect(),
         free_capacity: Some(free_capacity),
@@ -139,6 +218,8 @@ mod tests {
             max_concurrent_jobs: 2,
             poll_wait: Duration::from_millis(1_500),
             heartbeat_interval: Duration::from_millis(500),
+            liveness_limits: Default::default(),
+            result_root: ".temper/worker-results".into(),
             agent_traces: Default::default(),
             executor: crate::config::ExecutorSelection::Stub,
         }

@@ -44,6 +44,16 @@ mod forge;
 pub use forge::{
     FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextRequest, ForgeContextResponse, ForgeContextToolOutcome,
 };
+mod lifecycle;
+pub use lifecycle::{
+    AGENT_LIFECYCLE_ADDRESS_FLAG, AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleAgentStatusV1,
+    AgentLifecycleCancellationAckV1, AgentLifecycleCancellationAcknowledgementV1,
+    AgentLifecycleCommandV1, AgentLifecycleEventV1, AgentLifecycleFrameV1, AgentLifecycleHelloV1,
+    AgentLifecycleModelStatusV1, AgentLifecycleScopeV1, AgentLifecycleToolStatusV1,
+    AgentLifecycleValidationError, MAX_AGENT_LIFECYCLE_CANCEL_REASON_BYTES,
+    MAX_AGENT_LIFECYCLE_FRAME_BYTES, MAX_AGENT_LIFECYCLE_ID_BYTES,
+    MAX_AGENT_LIFECYCLE_TOOL_NAME_BYTES,
+};
 mod submit;
 pub use submit::{
     SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse,
@@ -62,6 +72,60 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// context/result paths, the workspace, the provider/model/url, the
 /// workspace path) is a CLI flag — only the credential crosses as env.
 pub const PROVIDER_CREDENTIALS_ENV: &str = "TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON";
+
+/// Process-boundary flag naming the resolved first-party operation-limit file.
+pub const RUNTIME_LIMITS_FLAG: &str = "--runtime-limits";
+
+/// Complete, non-secret first-party agent operation limits.
+///
+/// This DTO deliberately stores seconds rather than runtime clock types so the
+/// worker/agent protocol crate remains serde-only. Runtime tiers convert these
+/// values to monotonic durations at their boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRuntimeLimitsV1 {
+    pub tool_timeout_secs: u64,
+    pub model_connect_timeout_secs: u64,
+    pub model_idle_timeout_secs: u64,
+}
+
+impl Default for AgentRuntimeLimitsV1 {
+    fn default() -> Self {
+        Self {
+            tool_timeout_secs: 600,
+            model_connect_timeout_secs: 120,
+            model_idle_timeout_secs: 120,
+        }
+    }
+}
+
+impl AgentRuntimeLimitsV1 {
+    pub fn validate(self) -> Result<Self, String> {
+        for (field, value) in [
+            ("tool_timeout_secs", self.tool_timeout_secs),
+            (
+                "model_connect_timeout_secs",
+                self.model_connect_timeout_secs,
+            ),
+            ("model_idle_timeout_secs", self.model_idle_timeout_secs),
+        ] {
+            if value == 0 {
+                return Err(format!("{field} must be greater than zero"));
+            }
+        }
+        Ok(self)
+    }
+
+    pub fn from_json(raw: &str) -> Result<Self, String> {
+        serde_json::from_str::<Self>(raw.trim())
+            .map_err(|error| error.to_string())?
+            .validate()
+    }
+
+    pub fn to_json(self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&self)
+    }
+}
 
 /// Process-boundary flag naming a non-secret JSON tool configuration file.
 ///

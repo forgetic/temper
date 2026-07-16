@@ -1,12 +1,13 @@
 //! The agent shell's I/O orchestration: the public shell types and the
 //! [`Executor`] that performs the loop's two I/O seams.
 //!
-//! [`AgentShell`] spawns model streaming and tool execution on the skein
-//! runtime and feeds every result back into the completion queue, never calling
-//! into the machine. Observability events are forwarded to an [`EventSink`]; the
-//! terminal `Finished` request resolves the run's outcome through a oneshot.
+//! [`AgentShell`] owns every model/tool task in a per-run group. Operations are
+//! deadline-bound and cancellation drops their futures immediately; the pure
+//! machine is told that the group is quiescent only after every wrapper task has
+//! returned.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use temper_agent_io::{CqSender, Executor};
 use tongs::model::{AssistantMessage, Message, ToolCall};
@@ -14,10 +15,14 @@ use tongs::provider::{Provider, StreamOptions, ToolDef};
 use tongs::tools::ToolRegistry;
 
 use crate::machine::{
-    AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ToolCallStatus,
-    ToolResultMetadata,
+    AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
+    OperationGeneration, ToolCallStatus, ToolResultMetadata,
 };
-use crate::shell::streaming::{ModelCallObservability, stream_to_completion};
+use crate::run::AgentOperationLimits;
+use crate::shell::streaming::{
+    ModelCallObservability, ModelOperationContext, ModelTaskOutcome, stream_to_completion,
+};
+use crate::shell::task_group::{CancellationToken, RunTaskGroup, cancel_or};
 
 /// The settled result of a sub-agent run.
 #[derive(Clone, Debug)]
@@ -121,11 +126,10 @@ pub struct AgentShell {
     events: Arc<dyn EventSink>,
     model: ModelIdentity,
     clock: Arc<dyn EventClock>,
-    /// Awaited before each model call (turn boundary); see [`TurnHook`].
+    operation_limits: AgentOperationLimits,
+    task_group: RunTaskGroup,
     turn_hook: Option<Arc<dyn TurnHook>>,
-    /// Zero-based count of model calls dispatched, for the hook's `turn`.
     turns_started: std::sync::atomic::AtomicUsize,
-    /// Resolved once, when the machine emits `Finished`.
     outcome: std::sync::Mutex<Option<temper_agent_io::OneshotSender<AgentOutcome>>>,
 }
 
@@ -139,9 +143,11 @@ impl AgentShell {
         system_prompt: Option<String>,
         tool_defs: Arc<Vec<ToolDef>>,
         stream_options: Arc<StreamOptions>,
+        operation_limits: AgentOperationLimits,
         observability: RunObservability,
         outcome: temper_agent_io::OneshotSender<AgentOutcome>,
     ) -> Self {
+        let task_group = RunTaskGroup::new(cq.clone());
         Self {
             handle,
             cq,
@@ -153,6 +159,8 @@ impl AgentShell {
             events: observability.events,
             model: observability.model,
             clock: observability.clock,
+            operation_limits,
+            task_group,
             turn_hook: None,
             turns_started: std::sync::atomic::AtomicUsize::new(0),
             outcome: std::sync::Mutex::new(Some(outcome)),
@@ -165,9 +173,19 @@ impl AgentShell {
         self
     }
 
+    pub(crate) fn task_group(&self) -> RunTaskGroup {
+        self.task_group.clone()
+    }
+
     /// Spawn the model call for one turn: await the turn hook, stream the
-    /// response, emit per-turn usage, and enqueue the completion.
-    fn execute_call_llm(&self, messages: Vec<Message>) {
+    /// response, emit per-turn usage, and enqueue the generation-tagged
+    /// completion.
+    fn execute_call_llm(
+        &self,
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        messages: Vec<Message>,
+    ) {
         let provider = Arc::clone(&self.provider);
         let system_prompt = self.system_prompt.clone();
         let tool_defs = Arc::clone(&self.tool_defs);
@@ -177,19 +195,32 @@ impl AgentShell {
         let clock = Arc::clone(&self.clock);
         let cq = self.cq.clone();
         let turn_hook = self.turn_hook.clone();
+        let limits = self.operation_limits;
+        let (cancellation, task_guard) = self.task_group.register();
         let turn = self
             .turns_started
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.handle.spawn(async move {
+            let _task_guard = task_guard;
             if let Some(hook) = turn_hook {
-                hook.before_model_call(turn).await;
+                if cancel_or(&cancellation, hook.before_model_call(turn))
+                    .await
+                    .is_none()
+                {
+                    return;
+                }
             }
-            let completion = stream_to_completion(
+            let outcome = stream_to_completion(
                 provider.as_ref(),
                 system_prompt.as_deref(),
                 &messages,
                 &tool_defs,
                 &stream_options,
+                ModelOperationContext {
+                    connect_timeout: limits.model_connect_timeout,
+                    idle_timeout: limits.model_idle_timeout,
+                    cancellation: &cancellation,
+                },
                 ModelCallObservability {
                     turn,
                     model: &model,
@@ -198,28 +229,60 @@ impl AgentShell {
                 },
             )
             .await;
-            // Preserve the long-standing per-turn usage event. The canonical
-            // normalizer turns this into the single usage projection source.
-            if let AgentCompletion::LlmResponded(message) = &completion {
-                events.emit(AgentEvent::TurnUsage {
-                    turn,
-                    usage: message.usage,
-                });
-            }
+            let completion = match outcome {
+                ModelTaskOutcome::Responded(message) => {
+                    events.emit(AgentEvent::TurnUsage {
+                        turn,
+                        usage: message.usage,
+                    });
+                    AgentCompletion::LlmResponded {
+                        operation_generation,
+                        batch_generation,
+                        message,
+                    }
+                }
+                ModelTaskOutcome::Failed(message) => AgentCompletion::LlmFailed {
+                    operation_generation,
+                    batch_generation,
+                    message,
+                },
+                ModelTaskOutcome::Cancelled => return,
+            };
             let _ = cq.send(completion);
         });
     }
 
-    /// Spawn one tool execution, measuring it on the same monotonic clock used
-    /// for model attempts. Event failures cannot affect the completion result.
-    fn execute_run_tool(&self, call: tongs::model::ToolCall) {
+    /// Spawn one deadline-bound tool execution, measuring it on the same
+    /// monotonic clock used for model attempts.
+    fn execute_run_tool(
+        &self,
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        call: ToolCall,
+    ) {
         let tools = Arc::clone(&self.tools);
         let events = Arc::clone(&self.events);
         let clock = Arc::clone(&self.clock);
         let cq = self.cq.clone();
+        let timeout = self.operation_limits.tool_timeout;
+        let (cancellation, task_guard) = self.task_group.register();
         self.handle.spawn(async move {
-            let output = execute_tool(tools.as_ref(), &call, clock.as_ref(), events.as_ref()).await;
+            let _task_guard = task_guard;
+            let Some(output) = execute_tool(
+                tools.as_ref(),
+                &call,
+                timeout,
+                &cancellation,
+                clock.as_ref(),
+                events.as_ref(),
+            )
+            .await
+            else {
+                return;
+            };
             let _ = cq.send(AgentCompletion::ToolFinished {
+                operation_generation,
+                batch_generation,
                 id: call.id,
                 output,
             });
@@ -246,8 +309,22 @@ impl AgentShell {
 impl Executor<AgentMachine> for AgentShell {
     fn execute(&self, request: AgentRequest) {
         match request {
-            AgentRequest::CallLlm { messages } => self.execute_call_llm(messages),
-            AgentRequest::RunTool(call) => self.execute_run_tool(call),
+            AgentRequest::CallLlm {
+                operation_generation,
+                batch_generation,
+                messages,
+            } => self.execute_call_llm(operation_generation, batch_generation, messages),
+            AgentRequest::RunTool {
+                operation_generation,
+                batch_generation,
+                call,
+            } => self.execute_run_tool(operation_generation, batch_generation, call),
+            AgentRequest::CancelActive {
+                operation_generation,
+                batch_generation,
+            } => self
+                .task_group
+                .cancel_all(operation_generation, batch_generation),
             AgentRequest::Emit(event) => self.events.emit(event),
             AgentRequest::Finished {
                 stop,
@@ -258,25 +335,68 @@ impl Executor<AgentMachine> for AgentShell {
     }
 }
 
+enum ToolExecution {
+    Finished(tongs::tools::ToolOutput),
+    TimedOut(tongs::tools::ToolOutput),
+}
+
 async fn execute_tool(
     tools: &ToolRegistry,
     call: &ToolCall,
+    timeout: Duration,
+    cancellation: &CancellationToken,
     clock: &dyn EventClock,
     events: &dyn EventSink,
-) -> tongs::tools::ToolOutput {
+) -> Option<tongs::tools::ToolOutput> {
     let started_ms = clock.now_millis();
-    let output = match tools.get(&call.name) {
-        Some(tool) => match tool.execute(&call.id, call.arguments.clone(), None).await {
-            Ok(output) => output,
-            Err(error) => tool_error_output(&format!("tool `{}` failed: {error}", call.name)),
-        },
-        None => tool_error_output(&format!("unknown tool `{}`", call.name)),
+    let operation = async {
+        match tools.get(&call.name) {
+            Some(tool) => match temper_agent_io::timeout(
+                timeout,
+                tool.execute(&call.id, call.arguments.clone(), None),
+            )
+            .await
+            {
+                Ok(Ok(output)) => ToolExecution::Finished(output),
+                Ok(Err(error)) => ToolExecution::Finished(tool_error_output(&format!(
+                    "tool `{}` failed: {error}",
+                    call.name
+                ))),
+                Err(_) => ToolExecution::TimedOut(tool_error_output(&format!(
+                    "tool `{}` timed out after configured limit {}",
+                    call.name,
+                    format_duration(timeout)
+                ))),
+            },
+            None => {
+                ToolExecution::Finished(tool_error_output(&format!("unknown tool `{}`", call.name)))
+            }
+        }
     };
+
+    let settled = cancel_or(cancellation, operation).await;
     let duration_ms = clock.now_millis().saturating_sub(started_ms);
-    let status = if output.is_error {
-        ToolCallStatus::Failed
-    } else {
-        ToolCallStatus::Succeeded
+    let (output, status) = match settled {
+        Some(ToolExecution::Finished(output)) => {
+            let status = if output.is_error {
+                ToolCallStatus::Failed
+            } else {
+                ToolCallStatus::Succeeded
+            };
+            (output, status)
+        }
+        Some(ToolExecution::TimedOut(output)) => (output, ToolCallStatus::Cancelled),
+        None => {
+            let output = tool_error_output(&format!("tool `{}` cancelled", call.name));
+            events.emit(AgentEvent::ToolEnd {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                status: ToolCallStatus::Cancelled,
+                duration_ms,
+                result: bounded_tool_result(&output),
+            });
+            return None;
+        }
     };
     events.emit(AgentEvent::ToolEnd {
         id: call.id.clone(),
@@ -285,7 +405,17 @@ async fn execute_tool(
         duration_ms,
         result: bounded_tool_result(&output),
     });
-    output
+    Some(output)
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.subsec_nanos() == 0 {
+        format!("{}s", duration.as_secs())
+    } else if duration.subsec_nanos() % 1_000_000 == 0 {
+        format!("{}ms", duration.as_millis())
+    } else {
+        format!("{}ns", duration.as_nanos())
+    }
 }
 
 const TOOL_RESULT_PREVIEW_BYTES: usize = 4 * 1024;
@@ -344,136 +474,5 @@ fn tool_error_output(message: &str) -> tongs::tools::ToolOutput {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use async_trait::async_trait;
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
-    use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
-
-    struct FakeClock(Mutex<VecDeque<u64>>);
-
-    impl EventClock for FakeClock {
-        fn now_millis(&self) -> u64 {
-            self.0
-                .lock()
-                .expect("clock")
-                .pop_front()
-                .expect("clock value")
-        }
-    }
-
-    #[derive(Default)]
-    struct Recorder(Mutex<Vec<AgentEvent>>);
-
-    impl EventSink for Recorder {
-        fn emit(&self, event: AgentEvent) {
-            self.0.lock().expect("events").push(event);
-        }
-    }
-
-    struct FakeTool;
-
-    #[async_trait]
-    impl Tool for FakeTool {
-        fn name(&self) -> &str {
-            "fake"
-        }
-
-        fn label(&self) -> &str {
-            "fake"
-        }
-
-        fn description(&self) -> &str {
-            "deterministic fake tool"
-        }
-
-        fn parameters(&self) -> serde_json::Value {
-            serde_json::json!({"type": "object"})
-        }
-
-        fn effects(&self) -> ToolEffects {
-            ToolEffects::read()
-        }
-
-        async fn execute(
-            &self,
-            _tool_call_id: &str,
-            _input: serde_json::Value,
-            _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
-        ) -> tongs::Result<ToolOutput> {
-            Ok(ToolOutput {
-                content: vec![tongs::model::ContentBlock::Text(
-                    tongs::model::TextContent {
-                        text: "bounded result".to_string(),
-                        text_signature: None,
-                    },
-                )],
-                details: None,
-                is_error: false,
-            })
-        }
-    }
-
-    #[test]
-    fn tool_duration_uses_the_injected_monotonic_clock() {
-        let tools = ToolRegistry::from_tools(vec![Box::new(FakeTool)]);
-        let clock = FakeClock(Mutex::new(VecDeque::from([100, 137])));
-        let recorder = Arc::new(Recorder::default());
-        let observed = Arc::clone(&recorder);
-        let call = ToolCall {
-            id: "call-1".to_string(),
-            name: "fake".to_string(),
-            arguments: serde_json::json!({}),
-        };
-
-        let output = temper_agent_io::block_on(async move {
-            execute_tool(&tools, &call, &clock, observed.as_ref()).await
-        });
-        assert!(!output.is_error);
-        let events = recorder.0.lock().expect("events");
-        assert!(matches!(
-            &events[0],
-            AgentEvent::ToolEnd {
-                id,
-                name,
-                status: ToolCallStatus::Succeeded,
-                duration_ms: 37,
-                result: ToolResultMetadata {
-                    preview: Some(preview),
-                    bytes: 14,
-                    truncated: false,
-                },
-            } if id == "call-1" && name == "fake" && preview == "bounded result"
-        ));
-    }
-
-    #[test]
-    fn bounded_tool_metadata_is_utf8_safe_and_omits_structured_details() {
-        let output = tongs::tools::ToolOutput {
-            content: vec![tongs::model::ContentBlock::Text(
-                tongs::model::TextContent {
-                    text: "🙂".repeat(2_000),
-                    text_signature: None,
-                },
-            )],
-            details: Some(serde_json::json!({"secret": "must-not-enter-preview"})),
-            is_error: false,
-        };
-        let metadata = bounded_tool_result(&output);
-        assert!(metadata.truncated);
-        assert!(
-            metadata
-                .preview
-                .as_ref()
-                .is_some_and(|value| value.len() <= TOOL_RESULT_PREVIEW_BYTES)
-        );
-        assert!(
-            !metadata
-                .preview
-                .as_deref()
-                .unwrap_or_default()
-                .contains("must-not-enter-preview")
-        );
-    }
-}
+#[path = "executor_tests.rs"]
+mod tests;

@@ -83,6 +83,7 @@
 //! observes [`LeaseError::Contended`].
 
 pub mod artifact;
+pub mod assignment_convergence;
 pub mod classify;
 pub mod compile;
 pub mod context;
@@ -106,6 +107,11 @@ mod validate_build;
 pub mod validated;
 
 pub use artifact::{ArtifactRef, ArtifactTarget};
+pub use assignment_convergence::{
+    ASSIGNMENT_RECOVERY_AUDIT_MARKER, AssignmentConvergenceError, AssignmentConvergenceOutcome,
+    AssignmentConverger, AssignmentValidation,
+    recover_advanced_pull_request_assignment_from_durable,
+};
 pub use classify::{
     ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact,
     ClassifiedRelation, Classifier,

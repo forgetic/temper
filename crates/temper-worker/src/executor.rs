@@ -1,8 +1,16 @@
+use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::task::{Poll, Waker};
+
 use serde_json::Value;
 use temper_protocol_worker::{
     Assign, Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION,
 };
+
+use crate::agent_runner::JobProgressReporter;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum JobOutcome {
@@ -36,8 +44,75 @@ pub enum JobOutcome {
     },
 }
 
+/// Stable identity for one daemon assignment plus the worker-local incarnation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobAttempt {
+    pub id: String,
+    pub generation: u64,
+}
+
+/// Shared publication fence. Closing it is irreversible and immediately makes
+/// every late result, validation, git, and side-channel path non-authoritative.
+#[derive(Clone, Debug)]
+pub struct AttemptFence {
+    open: Arc<AtomicBool>,
+}
+
+impl AttemptFence {
+    pub fn open() -> Self {
+        Self {
+            open: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn close(&self) {
+        self.open.store(false, Ordering::Release);
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open.load(Ordering::Acquire)
+    }
+}
+
+mod cancellation;
+pub use cancellation::{
+    CancellationOutcome, DescendantCleanupStatus, JobCancellation, JobCancellationRequest,
+    JobCleanup,
+};
+
+/// Worker-owned controls supplied to every layer of one job execution.
+#[derive(Clone, Debug)]
+pub struct JobExecutionContext {
+    pub attempt: JobAttempt,
+    pub fence: AttemptFence,
+    pub cancellation: JobCancellation,
+    pub progress: JobProgressReporter,
+}
+
+impl JobExecutionContext {
+    pub fn unsupervised(assign: &Assign) -> Self {
+        let attempt_id = assign
+            .attempt_id
+            .clone()
+            .unwrap_or_else(|| assign.job_id.clone());
+        Self {
+            attempt: JobAttempt {
+                id: attempt_id.clone(),
+                generation: 0,
+            },
+            fence: AttemptFence::open(),
+            cancellation: JobCancellation::default(),
+            progress: JobProgressReporter::noop(attempt_id),
+        }
+    }
+}
+
 pub trait JobExecutor {
-    fn execute(&self, assign: Assign) -> impl std::future::Future<Output = JobOutcome> + Send;
+    fn execute(
+        &self,
+        assign: Assign,
+        context: JobExecutionContext,
+    ) -> impl std::future::Future<Output = JobOutcome> + Send;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,8 +146,21 @@ impl StubExecutor {
     }
 }
 
+impl StubExecutor {
+    /// Compatibility entry point for direct executor tests and embedders that
+    /// do not run the worker watchdog.
+    pub fn execute(&self, assign: Assign) -> impl Future<Output = JobOutcome> + Send {
+        let context = JobExecutionContext::unsupervised(&assign);
+        <Self as JobExecutor>::execute(self, assign, context)
+    }
+}
+
 impl JobExecutor for StubExecutor {
-    fn execute(&self, assign: Assign) -> impl std::future::Future<Output = JobOutcome> + Send {
+    fn execute(
+        &self,
+        assign: Assign,
+        _context: JobExecutionContext,
+    ) -> impl std::future::Future<Output = JobOutcome> + Send {
         let mode = self.mode.clone();
         async move {
             match mode {
@@ -96,10 +184,21 @@ impl JobExecutor for StubExecutor {
 }
 
 pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResult {
+    job_result_for_attempt(worker_id, job_id, None, outcome)
+}
+
+/// Builds a terminal result fenced to the exact daemon assignment attempt.
+pub fn job_result_for_attempt(
+    worker_id: &str,
+    job_id: &str,
+    attempt_id: Option<String>,
+    outcome: JobOutcome,
+) -> JobResult {
     let base = JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id,
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
@@ -161,6 +260,7 @@ mod tests {
             protocol_version: WORKER_PROTOCOL_VERSION,
             trace_context: None,
             job_id: job_id.to_string(),
+            attempt_id: Some(format!("attempt-{job_id}")),
             role: "coder".to_string(),
             repo: "ai/temper".to_string(),
             artifact: Artifact {
@@ -169,6 +269,44 @@ mod tests {
             },
             job_payload: json!({}),
         }
+    }
+
+    #[test]
+    fn cancellation_handshake_preserves_every_escalation_and_one_cleanup() {
+        let cancellation = JobCancellation::default();
+        cancellation.hard_kill();
+        let waker = Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        assert_eq!(
+            cancellation.poll_request(None, &mut cx),
+            Poll::Ready(JobCancellationRequest::Graceful)
+        );
+        assert_eq!(
+            cancellation.poll_request(Some(JobCancellationRequest::Graceful), &mut cx),
+            Poll::Ready(JobCancellationRequest::ForcedTermination)
+        );
+        assert_eq!(
+            cancellation.poll_request(Some(JobCancellationRequest::ForcedTermination), &mut cx),
+            Poll::Ready(JobCancellationRequest::HardKill)
+        );
+        let cleanup = JobCleanup {
+            cancellation: CancellationOutcome::HardKill,
+            descendants: DescendantCleanupStatus::HardKilled,
+        };
+        assert!(cancellation.record_cleanup(cleanup.clone()));
+        assert!(!cancellation.record_cleanup(JobCleanup {
+            cancellation: CancellationOutcome::Graceful,
+            descendants: DescendantCleanupStatus::Clean,
+        }));
+        assert_eq!(cancellation.cleanup(), Some(cleanup));
+
+        let owned = JobCancellation::default();
+        let owner = owned.register_async_owner();
+        let mut run = Box::pin(owned.run_to_quiescence(std::future::pending::<()>()));
+        owned.cancel();
+        assert!(run.as_mut().poll(&mut cx).is_pending());
+        drop(owner);
+        assert_eq!(run.as_mut().poll(&mut cx), Poll::Ready(None));
     }
 
     #[test]

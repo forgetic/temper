@@ -8,6 +8,7 @@ fn coordinated_job_result_round_trips_with_multiple_repos() {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: "worker-1".to_string(),
         job_id: "job-123".to_string(),
+        attempt_id: Some("attempt-123".to_string()),
         status: ResultStatus::Success,
         repos: vec![
             RepoOutcome {
@@ -56,6 +57,7 @@ fn verdict_job_result_round_trips_without_repos() {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: "worker-1".to_string(),
         job_id: "job-123".to_string(),
+        attempt_id: Some("attempt-123".to_string()),
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: Some("ready_code".to_string()),
@@ -81,6 +83,7 @@ fn verdict_job_result_round_trips_with_children() {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: "worker-1".to_string(),
         job_id: "job-123".to_string(),
+        attempt_id: Some("attempt-123".to_string()),
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: Some("needs_breakdown".to_string()),

@@ -7,6 +7,8 @@
 //! independent of *how* the agent turn is produced. The real out-of-process
 //! boundary is covered separately by `coding_worker_e2e.rs`.
 
+#[path = "coding_executor/cancellation.rs"]
+mod cancellation;
 #[path = "coding_executor/context.rs"]
 mod context;
 #[path = "coding_executor/failures.rs"]

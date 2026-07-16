@@ -22,13 +22,14 @@ pub mod provider;
 mod tool_preview;
 pub mod usage;
 
-pub use activity::AgentActivityConfig;
+pub use activity::{AgentActivityConfig, AgentLifecycleReporter};
 pub use coding_agent::{
     AgentSessionState, Capability, CodingAgentError, DEFAULT_MAX_ITERATIONS, ForgeContextFuture,
-    ForgeContextHost, SubmitForPrCallback, SubmitForPrHost, WorkspaceContext, WorkspaceGuidance,
-    WorkspaceRepository, WorkspaceResult, WorkspaceResultChild, WorkspaceWorkItem,
-    bind_submit_for_pr_host, default_submit_for_pr_host, run_coding_agent_native,
-    run_coding_agent_native_with_options, run_coding_agent_native_with_options_and_submit_for_pr,
+    ForgeContextHost, SubmitForPrCallback, SubmitForPrFuture, SubmitForPrHost, WorkspaceContext,
+    WorkspaceGuidance, WorkspaceRepository, WorkspaceResult, WorkspaceResultChild,
+    WorkspaceWorkItem, bind_submit_for_pr_host, default_submit_for_pr_host,
+    run_coding_agent_native, run_coding_agent_native_with_options,
+    run_coding_agent_native_with_options_and_submit_for_pr,
     run_coding_agent_native_with_options_tool_config_and_submit_for_pr,
     run_coding_agent_native_with_submit_for_pr, run_coding_agent_native_with_tool_config,
     run_coding_agent_native_with_totals, run_coding_agent_native_with_totals_and_submit_for_pr,

@@ -23,7 +23,7 @@
 //!    transition it has either emitted forward progress (a poll, a job, a
 //!    result, a heartbeat) or armed a timer that will wake it again.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use serde_json::json;
 use temper_protocol_worker::{
@@ -31,8 +31,13 @@ use temper_protocol_worker::{
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_worker::config::{CapabilitySpec, WorkerParams};
-use temper_worker::executor::{JobOutcome, job_result};
-use temper_worker::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
+use temper_worker::executor::{
+    CancellationOutcome, DescendantCleanupStatus, JobOutcome, job_result_for_attempt,
+};
+use temper_worker::result_outbox::ResultOutboxEntry;
+use temper_worker::worker_machine::{
+    JobCleanup, JobPhase, WatchdogTimerKind, WorkerCompletion, WorkerMachine, WorkerRequest,
+};
 use temper_worker_io::{EngineTime, Machine};
 
 /// A tiny deterministic PRNG (SplitMix64) so the fuzzer needs no external crate
@@ -58,6 +63,11 @@ impl Rng {
 }
 
 fn params(max_concurrent: u32) -> WorkerParams {
+    let liveness_limits = temper_worker::WorkerLivenessLimits {
+        max_no_progress: std::time::Duration::from_nanos(8),
+        max_run: Some(std::time::Duration::from_nanos(21)),
+        ..Default::default()
+    };
     WorkerParams {
         worker_id: "fuzz-worker".to_string(),
         worker_pool: None,
@@ -69,6 +79,8 @@ fn params(max_concurrent: u32) -> WorkerParams {
         poll_wait: std::time::Duration::from_millis(100),
         heartbeat_interval: std::time::Duration::from_millis(50),
         poll_backoff: std::time::Duration::from_millis(500),
+        liveness_limits,
+        result_root: ".temper/worker-results".into(),
     }
 }
 
@@ -77,6 +89,7 @@ fn assign(job_id: &str) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: job_id.to_string(),
+        attempt_id: Some(format!("attempt-{job_id}")),
         role: "engineer".to_string(),
         repo: "ai/smith".to_string(),
         artifact: Artifact {
@@ -97,12 +110,15 @@ fn poll_timeout_reply() -> WorkerProtocolMessage {
     })
 }
 
-fn finished(job_id: &str) -> WorkerCompletion {
+fn finished(job_id: &str, generation: u64) -> WorkerCompletion {
     WorkerCompletion::JobFinished {
         job_id: job_id.to_string(),
-        result: job_result(
+        attempt_id: format!("attempt-{job_id}"),
+        generation,
+        result: job_result_for_attempt(
             "fuzz-worker",
             job_id,
+            Some(format!("attempt-{job_id}")),
             JobOutcome::Failure {
                 class: FailureClass::Transient,
                 message: "sim".to_string(),
@@ -118,7 +134,8 @@ struct Sim {
     machine: WorkerMachine,
     max_concurrent: u32,
     /// Jobs the machine has dispatched (RunJob emitted) but not yet finished.
-    dispatched: BTreeSet<String>,
+    dispatched: BTreeMap<String, u64>,
+    pending_records: BTreeMap<String, (String, u64, temper_protocol_worker::JobResult)>,
     next_job: u64,
     registered: bool,
 }
@@ -131,7 +148,8 @@ impl Sim {
         Self {
             machine,
             max_concurrent,
-            dispatched: BTreeSet::new(),
+            dispatched: BTreeMap::new(),
+            pending_records: BTreeMap::new(),
             next_job: 0,
             registered: false,
         }
@@ -141,9 +159,30 @@ impl Sim {
     fn next_completion(&mut self, rng: &mut Rng) -> WorkerCompletion {
         // Choose among completions that make sense right now.
         let mut choices: Vec<u8> = vec![0, 1, 4, 5]; // register-ack, poll(assign/none/timeout), poll-timer, heartbeat-timer
-        if !self.dispatched.is_empty() {
-            choices.push(2); // a dispatched job finishes
-            choices.push(3); // a result delivery acks
+        if self.dispatched.keys().any(|job_id| {
+            self.machine
+                .job_state(job_id)
+                .is_some_and(|state| state.phase == JobPhase::Running)
+        }) {
+            choices.push(2); // a running job finishes
+            choices.push(3); // a heartbeat delivery acks
+        }
+        if !self.pending_records.is_empty() {
+            choices.push(6); // durable outbox write completes
+        }
+        if self.dispatched.keys().any(|job_id| {
+            self.machine
+                .job_state(job_id)
+                .is_some_and(|state| state.phase == JobPhase::Running)
+        }) {
+            choices.push(7); // a watchdog timer fires (possibly stale/boundary)
+        }
+        if self.dispatched.keys().any(|job_id| {
+            self.machine
+                .job_state(job_id)
+                .is_some_and(|state| state.phase == JobPhase::CancelRequested)
+        }) {
+            choices.push(8); // cancellation reaches quiescence
         }
         let pick = choices[rng.below(choices.len() as u64) as usize];
         match pick {
@@ -164,19 +203,95 @@ impl Sim {
             }
             2 => {
                 // Finish a random dispatched job.
-                let job = self
+                let (job, generation) = self
                     .dispatched
                     .iter()
-                    .nth(rng.below(self.dispatched.len() as u64) as usize)
-                    .cloned()
-                    .expect("dispatched non-empty");
-                finished(&job)
+                    .filter(|(job_id, _)| {
+                        self.machine
+                            .job_state(job_id)
+                            .is_some_and(|state| state.phase == JobPhase::Running)
+                    })
+                    .nth(
+                        rng.below(
+                            self.dispatched
+                                .keys()
+                                .filter(|job_id| {
+                                    self.machine
+                                        .job_state(job_id)
+                                        .is_some_and(|state| state.phase == JobPhase::Running)
+                                })
+                                .count() as u64,
+                        ) as usize,
+                    )
+                    .map(|(job, generation)| (job.clone(), *generation))
+                    .expect("running dispatched job exists");
+                finished(&job, generation)
             }
-            3 => WorkerCompletion::ResultDelivered {
-                job_id: "job-x".to_string(),
-                outcome: Ok(()),
-            },
+            3 => WorkerCompletion::HeartbeatDelivered(Ok(())),
             4 => WorkerCompletion::PollTimer,
+            6 => {
+                let job_id = self.pending_records.keys().next().cloned().unwrap();
+                let (attempt_id, generation, result) =
+                    self.pending_records.remove(&job_id).unwrap();
+                WorkerCompletion::ResultRecorded {
+                    job_id,
+                    attempt_id,
+                    generation,
+                    outcome: ResultOutboxEntry::from_result(result)
+                        .map_err(|error| error.to_string()),
+                }
+            }
+            7 => {
+                let (job_id, state) = self
+                    .dispatched
+                    .keys()
+                    .filter_map(|job_id| {
+                        self.machine
+                            .job_state(job_id)
+                            .filter(|state| state.phase == JobPhase::Running)
+                            .map(|state| (job_id.clone(), state))
+                    })
+                    .next()
+                    .expect("running job exists");
+                let kind = if rng.below(2) == 0 {
+                    WatchdogTimerKind::NoProgress
+                } else {
+                    WatchdogTimerKind::MaxRun
+                };
+                WorkerCompletion::WatchdogTimer {
+                    job_id,
+                    attempt_id: state.attempt_id.clone(),
+                    generation: state.generation,
+                    timer_generation: if kind == WatchdogTimerKind::NoProgress {
+                        state.timer_generation
+                    } else {
+                        0
+                    },
+                    kind,
+                }
+            }
+            8 => {
+                let (job_id, state) = self
+                    .dispatched
+                    .keys()
+                    .filter_map(|job_id| {
+                        self.machine
+                            .job_state(job_id)
+                            .filter(|state| state.phase == JobPhase::CancelRequested)
+                            .map(|state| (job_id.clone(), state))
+                    })
+                    .next()
+                    .expect("cancelling job exists");
+                WorkerCompletion::JobQuiesced {
+                    job_id,
+                    attempt_id: state.attempt_id.clone(),
+                    generation: state.generation,
+                    cleanup: JobCleanup {
+                        cancellation: CancellationOutcome::Graceful,
+                        descendants: DescendantCleanupStatus::Clean,
+                    },
+                }
+            }
             _ => WorkerCompletion::HeartbeatTimer,
         }
     }
@@ -198,15 +313,20 @@ impl Sim {
                 | WorkerCompletion::PollTimer
                 | WorkerCompletion::HeartbeatTimer
                 | WorkerCompletion::JobFinished { .. }
+                | WorkerCompletion::JobQuiesced { .. }
+                | WorkerCompletion::WatchdogTimer { .. }
+                | WorkerCompletion::ResultRecordTimer { .. }
         );
         let free_before = self.machine.free_capacity();
-        let requests = self.machine.on_completion(EngineTime::ZERO, completion);
+        let requests = self
+            .machine
+            .on_completion(EngineTime::from_nanos(tick as u64), completion);
 
         let mut emitted_run = false;
         let mut emitted_progress = false;
         for request in &requests {
             match request {
-                WorkerRequest::RunJob(assign) => {
+                WorkerRequest::RunJob { assign, generation } => {
                     // Invariant 3: never dispatch without a free slot.
                     assert!(
                         free_before > 0,
@@ -218,18 +338,41 @@ impl Sim {
                         "seed {seed} tick {tick}: dispatched job {} not in in_flight",
                         assign.job_id
                     );
-                    self.dispatched.insert(assign.job_id.clone());
+                    self.dispatched.insert(assign.job_id.clone(), *generation);
                     emitted_run = true;
+                    emitted_progress = true;
+                }
+                WorkerRequest::RecordResult {
+                    job_id,
+                    attempt_id,
+                    generation,
+                    result,
+                } => {
+                    self.dispatched.remove(job_id);
+                    self.pending_records.insert(
+                        job_id.clone(),
+                        (attempt_id.clone(), *generation, result.clone()),
+                    );
                     emitted_progress = true;
                 }
                 WorkerRequest::SendPoll(_)
                 | WorkerRequest::SendResult { .. }
                 | WorkerRequest::SendHeartbeat(_)
                 | WorkerRequest::SendRegister(_) => emitted_progress = true,
-                WorkerRequest::ArmPollTimer(_) | WorkerRequest::ArmHeartbeatTimer(_) => {
+                WorkerRequest::ArmPollTimer(_)
+                | WorkerRequest::ArmHeartbeatTimer(_)
+                | WorkerRequest::ArmResultRecordTimer { .. }
+                | WorkerRequest::ArmResultReplayTimer { .. }
+                | WorkerRequest::ArmWatchdogTimer { .. } => {
                     emitted_progress = true;
                 }
-                WorkerRequest::Log(_) => {}
+                WorkerRequest::AcknowledgeResult { .. } | WorkerRequest::RejectResult { .. } => {
+                    emitted_progress = true;
+                }
+                WorkerRequest::CancelJob { .. } | WorkerRequest::EscalateJob { .. } => {
+                    emitted_progress = true;
+                }
+                WorkerRequest::Observe(_) | WorkerRequest::Warn(_) | WorkerRequest::Log(_) => {}
             }
         }
 
@@ -241,7 +384,7 @@ impl Sim {
         // a finished job leaves in_flight, so drop any dispatched id no longer
         // in flight.
         self.dispatched
-            .retain(|job| self.machine.in_flight().contains(job));
+            .retain(|job, _| self.machine.in_flight().contains(job));
 
         // Invariant 1: capacity conservation.
         let free = self.machine.free_capacity();
@@ -301,13 +444,13 @@ fn capacity_never_oversubscribes_under_assignment_storm() {
         for tick in 1..128 {
             // Bias heavily toward assignments; occasionally finish a job.
             let completion = if !sim.dispatched.is_empty() && rng.below(4) == 0 {
-                let job = sim
+                let (job, generation) = sim
                     .dispatched
                     .iter()
                     .next()
-                    .cloned()
+                    .map(|(job, generation)| (job.clone(), *generation))
                     .expect("dispatched non-empty");
-                finished(&job)
+                finished(&job, generation)
             } else {
                 let job_id = format!("job-{}", sim.next_job);
                 sim.next_job += 1;

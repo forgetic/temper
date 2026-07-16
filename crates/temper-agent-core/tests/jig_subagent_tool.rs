@@ -89,6 +89,7 @@ fn parent_agent_delegates_to_a_sub_agent() {
             user_message: task,
             tools: ToolRegistry::from_tools(vec![create_read_tool(&checkout_path)]),
             max_iterations: 4,
+            operation_limits: temper_agent_core::AgentOperationLimits::default(),
             provider,
             stream_options: StreamOptions {
                 api_key: Some("sk-jig-test".to_string()),
@@ -128,6 +129,7 @@ fn parent_agent_delegates_to_a_sub_agent() {
                 user_message: "What is the answer? Use the investigate sub-agent.".into(),
                 tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
                 max_iterations: 4,
+                operation_limits: temper_agent_core::AgentOperationLimits::default(),
                 provider: parent_provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),
@@ -267,6 +269,7 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
             user_message: task,
             tools: ToolRegistry::from_tools(vec![create_read_tool(&checkout_path)]),
             max_iterations: 4,
+            operation_limits: temper_agent_core::AgentOperationLimits::default(),
             provider,
             stream_options: StreamOptions {
                 api_key: Some("sk-jig-test".to_string()),
@@ -300,6 +303,7 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
                 user_message: "Investigate A and B.".into(),
                 tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
                 max_iterations: 4,
+                operation_limits: temper_agent_core::AgentOperationLimits::default(),
                 provider: parent_provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),

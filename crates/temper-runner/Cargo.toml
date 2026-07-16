@@ -21,6 +21,7 @@ temper-workflow = { path = "../temper-workflow" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-testing = { path = "../temper-testing" }
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

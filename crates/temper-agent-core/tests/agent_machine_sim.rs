@@ -109,7 +109,7 @@ fn collect_run_tool_ids(requests: &[AgentRequest]) -> Vec<String> {
     requests
         .iter()
         .filter_map(|r| match r {
-            AgentRequest::RunTool(call) => Some(call.id.clone()),
+            AgentRequest::RunTool { call, .. } => Some(call.id.clone()),
             _ => None,
         })
         .collect()
@@ -119,6 +119,34 @@ fn has_call_llm(requests: &[AgentRequest]) -> bool {
     requests
         .iter()
         .any(|r| matches!(r, AgentRequest::CallLlm { .. }))
+}
+
+fn deliver_llm(m: &mut AgentMachine, message: AssistantMessage) -> Vec<AgentRequest> {
+    let (operation_generation, batch_generation) =
+        m.active_generations().expect("active model operation");
+    m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::LlmResponded {
+            operation_generation,
+            batch_generation,
+            message,
+        },
+    )
+}
+
+fn deliver_tool(m: &mut AgentMachine, id: String) -> Vec<AgentRequest> {
+    let (operation_generation, batch_generation) = m
+        .active_tool_generations(&id)
+        .expect("active tool operation");
+    m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::ToolFinished {
+            operation_generation,
+            batch_generation,
+            id,
+            output: output(),
+        },
+    )
 }
 
 #[test]
@@ -145,10 +173,7 @@ fn batching_invariants_hold_across_random_turns() {
                 })
                 .collect();
 
-            let requests = m.on_completion(
-                EngineTime::ZERO,
-                AgentCompletion::LlmResponded(assistant_tool_calls(&calls)),
-            );
+            let requests = deliver_llm(&mut m, assistant_tool_calls(&calls));
 
             // Drain all tools for this turn, batch by batch, finishing each
             // batch's tools in a random order. Track invariants throughout.
@@ -162,13 +187,7 @@ fn batching_invariants_hold_across_random_turns() {
                 // Pick a random outstanding tool in the current batch to finish.
                 let idx = rng.below(outstanding.len() as u64) as usize;
                 let id = outstanding.remove(idx);
-                let step = m.on_completion(
-                    EngineTime::ZERO,
-                    AgentCompletion::ToolFinished {
-                        id,
-                        output: output(),
-                    },
-                );
+                let step = deliver_tool(&mut m, id);
                 delivered += 1;
 
                 let newly = collect_run_tool_ids(&step);
@@ -212,10 +231,7 @@ fn batching_invariants_hold_across_random_turns() {
         }
 
         // End the run with a text response.
-        let end = m.on_completion(
-            EngineTime::ZERO,
-            AgentCompletion::LlmResponded(assistant_text("done")),
-        );
+        let end = deliver_llm(&mut m, assistant_text("done"));
         // The final conversation's tool-result messages are in original order
         // per turn (checked structurally below via the Finished payload).
         let messages = end
@@ -317,10 +333,7 @@ fn every_arrival_order_of_a_parallel_batch_is_safe() {
     for perm in permutations(&ids) {
         let mut m = AgentMachine::with_effects(vec![user("go")], 10, effects.clone());
         let _ = m.on_start(EngineTime::ZERO);
-        let dispatched = m.on_completion(
-            EngineTime::ZERO,
-            AgentCompletion::LlmResponded(assistant_tool_calls(&calls)),
-        );
+        let dispatched = deliver_llm(&mut m, assistant_tool_calls(&calls));
         // All four dispatched in one batch.
         let mut running = collect_run_tool_ids(&dispatched);
         running.sort();
@@ -329,13 +342,7 @@ fn every_arrival_order_of_a_parallel_batch_is_safe() {
         // Deliver results in this permutation; the model must NOT be re-called
         // until the last one.
         for (i, id) in perm.iter().enumerate() {
-            let step = m.on_completion(
-                EngineTime::ZERO,
-                AgentCompletion::ToolFinished {
-                    id: (*id).to_string(),
-                    output: output(),
-                },
-            );
+            let step = deliver_tool(&mut m, (*id).to_string());
             let last = i == perm.len() - 1;
             assert_eq!(
                 has_call_llm(&step),
@@ -344,10 +351,7 @@ fn every_arrival_order_of_a_parallel_batch_is_safe() {
             );
             if last {
                 // End the run and verify result order is original (a,b,c,d).
-                let end = m.on_completion(
-                    EngineTime::ZERO,
-                    AgentCompletion::LlmResponded(assistant_text("done")),
-                );
+                let end = deliver_llm(&mut m, assistant_text("done"));
                 let messages = end
                     .iter()
                     .find_map(|r| match r {

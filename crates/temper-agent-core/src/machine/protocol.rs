@@ -147,14 +147,44 @@ pub enum AgentStop {
     BudgetExhausted,
 }
 
+/// Monotonic identity assigned to one model or tool operation.
+///
+/// Generations are scoped to one [`AgentMachine`](super::AgentMachine) run and
+/// are never reused. They fence completions that arrive after cancellation or
+/// after a later operation has already started.
+pub type OperationGeneration = u64;
+
+/// Monotonic identity shared by every tool call dispatched in one parallel
+/// batch. Model calls use batch generation zero.
+pub type BatchGeneration = u64;
+
 /// A finished I/O event delivered to the machine.
 pub enum AgentCompletion {
     /// The model stream completed, yielding the full assistant message.
-    LlmResponded(AssistantMessage),
+    LlmResponded {
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        message: AssistantMessage,
+    },
     /// The model call failed at the transport/provider layer.
-    LlmFailed(String),
+    LlmFailed {
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        message: String,
+    },
     /// A tool the machine requested finished.
-    ToolFinished { id: String, output: ToolOutput },
+    ToolFinished {
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        id: String,
+        output: ToolOutput,
+    },
+    /// The shell has cancelled and joined every model/tool task owned by this
+    /// run. The generations identify the matching cancellation request.
+    TasksQuiesced {
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+    },
     /// Steering messages arrived from the controller; inject at the next turn
     /// boundary.
     Steer(Vec<Message>),
@@ -168,9 +198,23 @@ pub enum AgentRequest {
     /// builds the provider `Context` from these messages + the agent's system
     /// prompt and tool defs (held by the shell), and replies with
     /// [`AgentCompletion::LlmResponded`] / [`AgentCompletion::LlmFailed`].
-    CallLlm { messages: Vec<Message> },
+    CallLlm {
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        messages: Vec<Message>,
+    },
     /// Run one tool call; reply with [`AgentCompletion::ToolFinished`].
-    RunTool(ToolCall),
+    RunTool {
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        call: ToolCall,
+    },
+    /// Cancel every model/tool task owned by the shell. The machine finishes
+    /// only after the matching [`AgentCompletion::TasksQuiesced`] arrives.
+    CancelActive {
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+    },
     /// Emit an observability event.
     Emit(AgentEvent),
     /// The run is finished; `final_message` is the last assistant message (or a

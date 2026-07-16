@@ -172,13 +172,14 @@ fn context_reads_are_assignment_scoped_bounded_and_available_over_both_carriers(
                 json!({}),
             )
             .await;
-        assert!(matches!(
-            daemon
-                .deliver_protocol_message_with_auth(poll("worker-a"), good_auth.clone())
-                .await
-                .expect("poll"),
-            Some(WorkerProtocolMessage::Assign(_))
-        ));
+        let assignment = match daemon
+            .deliver_protocol_message_with_auth(poll("worker-a"), good_auth.clone())
+            .await
+            .expect("poll")
+        {
+            Some(WorkerProtocolMessage::Assign(assign)) => assign,
+            other => panic!("expected assignment, got {other:?}"),
+        };
         daemon
             .enqueue_job(
                 "job-pending",
@@ -369,6 +370,7 @@ fn context_reads_are_assignment_scoped_bounded_and_available_over_both_carriers(
                     protocol_version: WORKER_PROTOCOL_VERSION,
                     worker_id: "worker-a".to_string(),
                     job_id: "job-1".to_string(),
+                    attempt_id: assignment.attempt_id.clone(),
                     status: ResultStatus::Success,
                     repos: Vec::new(),
                     verdict: None,

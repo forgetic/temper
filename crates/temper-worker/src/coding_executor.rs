@@ -2,13 +2,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use temper_protocol_agent::WorkspaceResult;
-use temper_protocol_worker::{
-    Assign, FailureClass, JobChild, JobContext, WorkspaceManifest, WorkspaceRepo,
-};
+use temper_protocol_worker::{Assign, FailureClass, JobContext, WorkspaceManifest, WorkspaceRepo};
 
-use crate::agent_runner::{AgentRunError, AgentRunOutput, AgentRunner};
-use crate::executor::{JobExecutor, JobOutcome};
+use crate::agent_runner::{
+    AgentRunError, AgentRunOutput, AgentRunRequest, AgentRunner, JobProgressReporter,
+};
+use crate::executor::{JobExecutionContext, JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{
     PreparationOutcome, RecoveryContext, RoleGitIdentity, Workspace, WorkspaceError,
@@ -18,10 +17,14 @@ use crate::workspace::{
 mod context;
 mod outcome;
 mod session;
+mod verdict;
 
 use context::build_workspace_context;
 use outcome::{WritableOutcomeRequest, writable_outcome};
 use session::{attach_agent_session, persist_after_success};
+use verdict::verdict_only_outcome;
+
+type ProgressReporterFactory = Arc<dyn Fn(&str, &str) -> JobProgressReporter + Send + Sync>;
 
 /// Configuration for the real coding-job executor.
 ///
@@ -31,51 +34,76 @@ use session::{attach_agent_session, persist_after_success};
 /// surface the executor owns.
 #[derive(Clone, Debug)]
 pub struct CodingExecutorConfig {
-    /// Top-level root under which the executor creates per-role, per-job
-    /// scoped workspaces: `<root>/<role>/<safe-coordination-key>/<repo-dir>`.
+    /// Root for `<role>/<safe-coordination-key>/<repo-dir>` workspaces.
     pub workspace_root: PathBuf,
-    /// Forge git base URL, e.g. `http://localhost:3000` (joined with the
-    /// repo slug via `forgejo_remote_url`; `file://` URLs work for tests).
+    /// Forge git base URL; `file://` URLs work for tests.
     pub git_base_url: String,
-    /// Role id -> git identity (user, email, push token).
     pub role_identities: BTreeMap<String, RoleGitIdentity>,
 }
 
-/// Runs coding/triage/review jobs by preparing a scoped workspace, driving one
-/// agent turn through its [`AgentRunner`], and mapping the result to a
-/// [`JobOutcome`] (commit/push on the writable head path, verdict routing
-/// otherwise).
+/// Runs coding jobs by preparing a workspace, driving an [`AgentRunner`], and
+/// mapping its product to a [`JobOutcome`].
 #[derive(Clone)]
 pub struct CodingExecutor<R: AgentRunner> {
     config: CodingExecutorConfig,
     runner: Arc<R>,
     /// Optional host-provided guard for PR-head freshness checks before pushes.
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
+    progress_reporter_factory: ProgressReporterFactory,
 }
 
-impl<R: AgentRunner> CodingExecutor<R> {
+impl<R: AgentRunner + 'static> CodingExecutor<R> {
     pub fn new(config: CodingExecutorConfig, runner: Arc<R>) -> Self {
         Self {
             config,
             runner,
             pr_freshness_guard: None,
+            progress_reporter_factory: Arc::new(|_job_id, attempt_id| {
+                JobProgressReporter::noop(attempt_id.to_string())
+            }),
         }
     }
 
-    /// Installs a host/daemon freshness guard used by `pull_request_writable`
-    /// jobs before final PR-head pushes.
+    /// Installs the PR-head freshness guard used before final pushes.
     pub fn with_pr_freshness_guard(mut self, guard: Arc<dyn PrFreshnessGuard>) -> Self {
         self.pr_freshness_guard = Some(guard);
         self
     }
+
+    /// Installs worker-owned attempt binding for lifecycle delivery. Future
+    /// watchdog state may reject stale IDs in the returned reporter.
+    pub fn with_progress_reporter_factory<F>(mut self, factory: F) -> Self
+    where
+        F: Fn(&str, &str) -> JobProgressReporter + Send + Sync + 'static,
+    {
+        self.progress_reporter_factory = Arc::new(factory);
+        self
+    }
+
+    /// Compatibility entry point for direct executor use. Production worker
+    /// execution supplies the same controls from `WorkerShell` through the
+    /// `JobExecutor` implementation below.
+    pub fn execute(&self, assign: Assign) -> impl std::future::Future<Output = JobOutcome> + Send {
+        let attempt_id = assign
+            .attempt_id
+            .clone()
+            .unwrap_or_else(|| assign.job_id.clone());
+        let mut execution = JobExecutionContext::unsupervised(&assign);
+        execution.progress = (self.progress_reporter_factory)(&assign.job_id, &attempt_id);
+        <Self as JobExecutor>::execute(self, assign, execution)
+    }
 }
 
 impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
-    fn execute(&self, assign: Assign) -> impl std::future::Future<Output = JobOutcome> + Send {
+    fn execute(
+        &self,
+        assign: Assign,
+        execution: JobExecutionContext,
+    ) -> impl std::future::Future<Output = JobOutcome> + Send {
         let config = self.config.clone();
         let runner = Arc::clone(&self.runner);
         let pr_freshness_guard = self.pr_freshness_guard.clone();
-        async move { execute(config, runner, pr_freshness_guard, assign).await }
+        async move { execute(config, runner, pr_freshness_guard, assign, execution).await }
     }
 }
 
@@ -84,6 +112,7 @@ async fn execute<R: AgentRunner>(
     runner: Arc<R>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
     assign: Assign,
+    execution: JobExecutionContext,
 ) -> JobOutcome {
     let artifact_item = assign.artifact.item.clone();
     let job_id = assign.job_id.clone();
@@ -194,6 +223,7 @@ async fn execute<R: AgentRunner>(
         mode,
         coordination_key: &coordination_key,
         job_id: &job_id,
+        cancellation: &execution.cancellation,
     })
     .await
     {
@@ -218,27 +248,50 @@ async fn execute<R: AgentRunner>(
         pull_request_freshness.as_ref(),
         trace_context,
     );
+    if !execution.fence.is_open() {
+        return cancelled_attempt();
+    }
     let agent_session = match attach_agent_session(
         &mut workspace_context,
         &config.workspace_root,
         &role,
         &coordination_key,
         mode,
+        &execution.cancellation,
     )
     .await
     {
         Ok(agent_session) => agent_session,
         Err(outcome) => return outcome,
     };
+    if !execution.fence.is_open() {
+        return cancelled_attempt();
+    }
 
     // Run one agent turn with the cwd set to the workspace root (not a single
     // repo), so the agent can read and build every sibling. The runner owns the
     // agent mechanism; the executor owns the workspace lifecycle around it.
+    let attempt_id = execution.attempt.id.clone();
+    let progress = execution.progress.clone();
+    if progress.attempt_id() != attempt_id {
+        return failure(
+            FailureClass::Protocol,
+            "progress reporter is bound to a different agent attempt".to_string(),
+        );
+    }
     let AgentRunOutput {
         result,
         accepted_submit,
     } = match runner
-        .run(&job_id, &workspace_context, &workspace_root)
+        .run_request(AgentRunRequest::new_controlled(
+            &job_id,
+            attempt_id,
+            &workspace_context,
+            &workspace_root,
+            execution.fence.clone(),
+            execution.cancellation.clone(),
+            progress,
+        ))
         .await
     {
         Ok(output) => output,
@@ -247,6 +300,9 @@ async fn execute<R: AgentRunner>(
         }
     };
 
+    if !execution.fence.is_open() {
+        return cancelled_attempt();
+    }
     if let Err(error) =
         temper_verdict::validate_verdict_result(&result, &verdict_contracts, &source_metadata)
     {
@@ -258,6 +314,9 @@ async fn execute<R: AgentRunner>(
 
     let latest_self_pushed_sha = None;
 
+    if !execution.fence.is_open() {
+        return cancelled_attempt();
+    }
     let outcome = match mode {
         JobMode::Writable | JobMode::PullRequestWritable => {
             writable_outcome(WritableOutcomeRequest {
@@ -274,6 +333,8 @@ async fn execute<R: AgentRunner>(
                 freshness_guard: pr_freshness_guard.as_deref(),
                 latest_self_pushed_sha,
                 accepted_submit: accepted_submit.as_ref(),
+                fence: &execution.fence,
+                cancellation: &execution.cancellation,
             })
             .await
         }
@@ -283,13 +344,22 @@ async fn execute<R: AgentRunner>(
                 result,
                 &allowed_verdicts,
                 &coordination_key,
+                &execution.fence,
             )
             .await
         }
     };
 
-    if let Some(failure) = persist_after_success(agent_session.as_ref(), &outcome).await {
+    if !execution.fence.is_open() {
+        return cancelled_attempt();
+    }
+    if let Some(failure) =
+        persist_after_success(agent_session.as_ref(), &outcome, &execution.cancellation).await
+    {
         return failure;
+    }
+    if !execution.fence.is_open() {
+        return cancelled_attempt();
     }
     outcome
 }
@@ -316,6 +386,7 @@ struct PrepareRequest<'a> {
     mode: JobMode,
     coordination_key: &'a str,
     job_id: &'a str,
+    cancellation: &'a crate::executor::JobCancellation,
 }
 
 async fn prepare_repos(request: PrepareRequest<'_>) -> Result<Vec<PreparedRepo>, JobOutcome> {
@@ -354,7 +425,8 @@ async fn prepare_repo(
         job_id: request.job_id.to_string(),
         correlation_key: request.coordination_key.to_string(),
         repository: repo_spec.repo.clone(),
-    });
+    })
+    .with_attempt_cancellation(request.cancellation.clone());
 
     prepare_workspace(&workspace, request, repo_spec, &default_branch).await?;
     let start_head_sha = workspace
@@ -484,62 +556,6 @@ async fn prepare_writable(
         .map_err(|error| workspace_failure("configure workspace git identity", error))
 }
 
-async fn verdict_only_outcome(
-    workspace: &Workspace,
-    result: WorkspaceResult,
-    allowed_verdicts: &[String],
-    correlation_key: &str,
-) -> JobOutcome {
-    let WorkspaceResult {
-        verdict,
-        summary,
-        title,
-        body,
-        review_body,
-        children,
-        // `labels` is a head-path PR-label override; read-only verdict routing
-        // does not consume it.
-        labels: _labels,
-    } = result;
-    let Some(verdict) = verdict else {
-        return failure(FailureClass::Permanent, "read-only job returned no verdict");
-    };
-    if !allowed_verdicts.contains(&verdict) {
-        return failure(
-            FailureClass::Permanent,
-            format!(
-                "read-only job returned undeclared verdict `{verdict}`; allowed verdicts: {}",
-                allowed_verdicts_display(allowed_verdicts)
-            ),
-        );
-    }
-
-    if let Err(error) = workspace.discard_changes().await {
-        return workspace_failure("discard verdict workspace changes", error);
-    }
-
-    let children = children
-        .into_iter()
-        .map(|child| JobChild {
-            slug: child.slug,
-            title: child.title,
-            body: child.body,
-            kind: child.kind,
-            labels: child.labels,
-            depends_on: child.depends_on,
-            target_repo: child.target_repo,
-        })
-        .collect();
-
-    JobOutcome::Verdict {
-        verdict,
-        title,
-        body: body.or(review_body),
-        summary: summary.or_else(|| Some(format!("implemented {correlation_key}"))),
-        children,
-    }
-}
-
 fn require_enriched_field<T>(field: Option<T>, name: &str) -> Result<T, JobOutcome> {
     field.ok_or_else(|| {
         failure(
@@ -559,6 +575,13 @@ fn workspace_failure(action: &str, error: WorkspaceError) -> JobOutcome {
         FailureClass::Transient
     };
     failure(class, format!("{action}: {error}"))
+}
+
+fn cancelled_attempt() -> JobOutcome {
+    failure(
+        FailureClass::Transient,
+        "job attempt was cancelled by the worker watchdog",
+    )
 }
 
 fn failure(class: FailureClass, message: impl Into<String>) -> JobOutcome {

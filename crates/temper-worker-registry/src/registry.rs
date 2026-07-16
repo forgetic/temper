@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_protocol_worker::{Capability, Register};
+use temper_protocol_worker::{Capability, JobHeartbeat, Register};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryError {
@@ -133,6 +133,8 @@ pub struct WorkerSnapshot {
     pub max_concurrent_jobs: u32,
     pub free_capacity: u32,
     pub healthy: bool,
+    /// Latest accepted observability report for each active/recent assignment.
+    pub job_reports: Vec<JobHeartbeat>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +143,7 @@ struct WorkerEntry {
     capabilities: Vec<Capability>,
     max_concurrent_jobs: u32,
     in_flight: BTreeSet<String>,
+    job_reports: BTreeMap<String, JobHeartbeat>,
     healthy: bool,
 }
 
@@ -168,6 +171,7 @@ impl WorkerRegistry {
                 capabilities: msg.capabilities.clone(),
                 max_concurrent_jobs: msg.capacity.max_concurrent_jobs,
                 in_flight: BTreeSet::new(),
+                job_reports: BTreeMap::new(),
                 healthy: true,
             });
     }
@@ -279,7 +283,31 @@ impl WorkerRegistry {
             .ok_or_else(|| RegistryError::UnknownWorker(worker_id.to_string()))?;
 
         entry.in_flight.remove(job_id);
+        entry.job_reports.remove(job_id);
         Ok(())
+    }
+
+    /// Stores only the latest accepted report for an assignment currently held
+    /// by this worker. Reports are observability data and never affect health,
+    /// leases, capacity, or dispatch eligibility.
+    pub fn report_job(
+        &mut self,
+        worker_id: &str,
+        report: JobHeartbeat,
+    ) -> Result<(), RegistryError> {
+        let entry = self
+            .workers
+            .get_mut(worker_id)
+            .ok_or_else(|| RegistryError::UnknownWorker(worker_id.to_string()))?;
+        if !entry.in_flight.contains(&report.job_id) {
+            return Err(RegistryError::DuplicateJob(report.job_id));
+        }
+        entry.job_reports.insert(report.job_id.clone(), report);
+        Ok(())
+    }
+
+    pub fn job_report(&self, worker_id: &str, job_id: &str) -> Option<&JobHeartbeat> {
+        self.workers.get(worker_id)?.job_reports.get(job_id)
     }
 
     pub fn heartbeat(&mut self, worker_id: &str) -> Result<(), RegistryError> {
@@ -298,6 +326,7 @@ impl WorkerRegistry {
         };
 
         entry.healthy = false;
+        entry.job_reports.clear();
         std::mem::take(&mut entry.in_flight).into_iter().collect()
     }
 
@@ -325,6 +354,7 @@ impl WorkerRegistry {
                 max_concurrent_jobs: entry.max_concurrent_jobs,
                 free_capacity: entry.free_capacity(),
                 healthy: entry.healthy,
+                job_reports: entry.job_reports.values().cloned().collect(),
             })
             .collect()
     }

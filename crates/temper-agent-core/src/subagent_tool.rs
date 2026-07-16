@@ -19,7 +19,12 @@
 //! This is the composition the design aimed for: concurrency lives *inside* one
 //! agent (fan-out of sub-agents / parallel tools), not across worker jobs.
 
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
+use std::thread::{self, JoinHandle};
 
 use async_trait::async_trait;
 use skein::runtime::RuntimeHandle;
@@ -28,10 +33,9 @@ use tongs::model::ContentBlock;
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
 use crate::run::{
-    SubAgent, run_sub_agent, run_sub_agent_controllable_with_observability,
-    run_sub_agent_with_events,
+    SubAgent, SubAgentControl, SubAgentError, run_sub_agent_controllable_with_observability,
 };
-use crate::shell::{EventSink, RunObservability};
+use crate::shell::{AgentOutcome, EventSink, ModelIdentity, NullEventSink, RunObservability};
 
 /// Builds the nested [`SubAgent`] to run for one invocation, given the task
 /// string the parent model supplied. Called fresh per tool call so each
@@ -56,9 +60,10 @@ pub struct SubAgentTool {
     /// Preferred scope-aware observer factory. Called once per invocation so
     /// parallel sub-agents never share scope identity or in-flight state.
     observer_factory: Option<SubAgentObserverFactory>,
-    /// Runtime spawn capability, forwarded to each nested run. Passed
-    /// explicitly (no ambient handle lookup).
-    handle: RuntimeHandle,
+    /// Kept in the public constructor for compatibility. Nested runs now own a
+    /// dedicated joined runtime so dropping the parent tool can synchronously
+    /// drive cancellation to quiescence.
+    _handle: RuntimeHandle,
 }
 
 impl SubAgentTool {
@@ -66,8 +71,9 @@ impl SubAgentTool {
     /// sees (make the description say *when* to delegate to this sub-agent).
     /// `effects` governs batching — [`ToolEffects::read`] for a read-only
     /// sub-agent that is safe to run in parallel with siblings. `factory`
-    /// assembles the nested [`SubAgent`] from the task string. `handle` is the
-    /// runtime spawn capability each nested run needs.
+    /// assembles the nested [`SubAgent`] from the task string. `handle` remains
+    /// part of the compatibility surface; each invocation is driven on its own
+    /// joined runtime so parent cancellation can synchronously join it.
     pub fn new(
         handle: RuntimeHandle,
         name: impl Into<String>,
@@ -83,7 +89,7 @@ impl SubAgentTool {
             factory,
             events: None,
             observer_factory: None,
-            handle,
+            _handle: handle,
         }
     }
 
@@ -148,26 +154,21 @@ impl Tool for SubAgentTool {
             .to_string();
 
         let sub_agent = (self.factory)(task);
-        let outcome = if let Some(factory) = &self.observer_factory {
-            let (_control, run) = run_sub_agent_controllable_with_observability(
-                self.handle.clone(),
-                sub_agent,
-                factory(),
-                None,
-                None,
-            )
-            .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
-            run.await
+        let observability = if let Some(factory) = &self.observer_factory {
+            factory()
         } else {
-            match &self.events {
-                Some(events) => {
-                    run_sub_agent_with_events(self.handle.clone(), sub_agent, Arc::clone(events))
-                        .await
-                }
-                None => run_sub_agent(self.handle.clone(), sub_agent).await,
-            }
-        }
-        .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
+            let events: Arc<dyn EventSink> = self
+                .events
+                .as_ref()
+                .map(Arc::clone)
+                .unwrap_or_else(|| Arc::new(NullEventSink));
+            let model = ModelIdentity::new(sub_agent.provider.api(), "unknown");
+            RunObservability::new(events, model)
+        };
+        let outcome = ManagedSubAgentRun::spawn(sub_agent, observability)
+            .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?
+            .await
+            .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
 
         // The sub-agent's product is the text of its final message. A
         // sub-agent that ended in an error stop reports a tool error so the
@@ -182,6 +183,131 @@ impl Tool for SubAgentTool {
             details: Some(serde_json::json!({ "sub_agent_stop": format!("{:?}", outcome.stop) })),
             is_error,
         })
+    }
+}
+
+struct ManagedSubAgentState {
+    control: Option<SubAgentControl>,
+    result: Option<std::result::Result<AgentOutcome, SubAgentError>>,
+    waker: Option<Waker>,
+}
+
+/// Nested run on a dedicated joined runtime. Drop reaches every published
+/// `SubAgentControl`, aborts the nested machine, lets that runtime drive all
+/// model/tool wrappers to quiescence, and joins the owner thread before the
+/// parent tool task can settle.
+struct ManagedSubAgentRun {
+    state: Arc<Mutex<ManagedSubAgentState>>,
+    cancelled: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl ManagedSubAgentRun {
+    fn spawn(sub_agent: SubAgent, observability: RunObservability) -> std::io::Result<Self> {
+        let state = Arc::new(Mutex::new(ManagedSubAgentState {
+            control: None,
+            result: None,
+            waker: None,
+        }));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let thread_state = Arc::clone(&state);
+        let control_state = Arc::clone(&state);
+        let thread_cancelled = Arc::clone(&cancelled);
+        let thread = thread::Builder::new()
+            .name("temper-nested-agent".to_string())
+            .spawn(move || {
+                let result = temper_agent_io::block_on_with(move |_cx, handle| async move {
+                    let (control, run) = run_sub_agent_controllable_with_observability(
+                        handle,
+                        sub_agent,
+                        observability,
+                        None,
+                        None,
+                    )?;
+                    {
+                        let mut state = control_state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        state.control = Some(control.clone());
+                    }
+                    if thread_cancelled.load(Ordering::Acquire) {
+                        control.abort();
+                    }
+                    let result = run.await;
+                    control_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .control
+                        .take();
+                    result
+                });
+                let waker = {
+                    let mut state = thread_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    state.result = Some(result);
+                    state.waker.take()
+                };
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            })?;
+        Ok(Self {
+            state,
+            cancelled,
+            thread: Some(thread),
+        })
+    }
+
+    fn join(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Future for ManagedSubAgentRun {
+    type Output = std::result::Result<AgentOutcome, SubAgentError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.result.is_none()
+                && !state
+                    .waker
+                    .as_ref()
+                    .is_some_and(|waker| waker.will_wake(cx.waker()))
+            {
+                state.waker = Some(cx.waker().clone());
+            }
+            state.result.take()
+        };
+        match result {
+            Some(result) => {
+                self.join();
+                Poll::Ready(result)
+            }
+            None => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for ManagedSubAgentRun {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        if let Some(control) = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .control
+            .clone()
+        {
+            control.abort();
+        }
+        self.join();
     }
 }
 
@@ -209,4 +335,78 @@ fn collect_text(content: &[ContentBlock]) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use tongs::provider::{Context as ProviderContext, EventStream, Provider, StreamOptions};
+    use tongs::tools::ToolRegistry;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    struct HungProvider {
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for HungProvider {
+        fn api(&self) -> &str {
+            "hung-nested"
+        }
+
+        async fn stream(
+            &self,
+            _context: &ProviderContext<'_>,
+            _options: &StreamOptions,
+        ) -> tongs::Result<EventStream> {
+            let _drop = DropFlag(Arc::clone(&self.dropped));
+            self.started.store(true, Ordering::Release);
+            futures::future::pending().await
+        }
+    }
+
+    #[test]
+    fn dropping_nested_run_aborts_every_control_and_joins_its_task_group() {
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let sub_agent = SubAgent {
+            system_prompt: None,
+            user_message: "wait".to_string(),
+            tools: ToolRegistry::new(),
+            max_iterations: 1,
+            operation_limits: crate::run::AgentOperationLimits::default(),
+            provider: Arc::new(HungProvider {
+                started: Arc::clone(&started),
+                dropped: Arc::clone(&dropped),
+            }),
+            stream_options: StreamOptions::default(),
+        };
+        let run = ManagedSubAgentRun::spawn(
+            sub_agent,
+            RunObservability::new(Arc::new(NullEventSink), ModelIdentity::new("test", "hung")),
+        )
+        .expect("start nested run owner");
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !started.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            started.load(Ordering::Acquire),
+            "nested model did not start"
+        );
+
+        let cancellation_started = Instant::now();
+        drop(run);
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(cancellation_started.elapsed() < Duration::from_millis(500));
+    }
 }

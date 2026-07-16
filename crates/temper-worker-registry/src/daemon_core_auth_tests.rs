@@ -4,7 +4,7 @@ use serde_json::json;
 use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
 
 use crate::daemon_core::{DaemonCore, WorkerAuthError};
-use crate::test_support::{artifact, heartbeat, poll, register, result};
+use crate::test_support::{artifact, heartbeat, poll, register, result_with_attempt};
 use crate::{WorkerPoolAuthConfig, WorkerPoolPolicy};
 
 fn pool_auth_config() -> WorkerPoolAuthConfig {
@@ -103,16 +103,22 @@ fn worker_pool_auth_rechecks_registered_pool_for_poll_result_and_heartbeat() {
         "worker pool `builders` worker_token authentication failed",
     );
 
-    match core
+    let assignment = match core
         .handle_authenticated(poll("worker-a"), Some(&auth("builders-secret")))
         .expect("poll authenticates")
     {
-        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-1"),
+        Some(WorkerProtocolMessage::Assign(assign)) => {
+            assert_eq!(assign.job_id, "job-1");
+            assign
+        }
         other => panic!("expected assignment, got {other:?}"),
-    }
+    };
 
     assert_auth_error(
-        core.handle_authenticated(result("worker-a", "job-1"), Some(&auth("reviewers-secret"))),
+        core.handle_authenticated(
+            result_with_attempt("worker-a", "job-1", assignment.attempt_id.clone()),
+            Some(&auth("reviewers-secret")),
+        ),
         "worker pool `builders` worker_token authentication failed",
     );
     assert!(
@@ -134,7 +140,10 @@ fn worker_pool_auth_rechecks_registered_pool_for_poll_result_and_heartbeat() {
     );
 
     match core
-        .handle_authenticated(result("worker-a", "job-1"), Some(&auth("builders-secret")))
+        .handle_authenticated(
+            result_with_attempt("worker-a", "job-1", assignment.attempt_id),
+            Some(&auth("builders-secret")),
+        )
         .expect("result authenticates")
     {
         Some(WorkerProtocolMessage::Release(release)) => assert_eq!(release.job_id, "job-1"),

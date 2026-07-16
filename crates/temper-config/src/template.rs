@@ -68,11 +68,24 @@ lease_ttl_secs = 300
 # daemon_url = \"http://engine-host:4000\"
 # Defaults to the cross-product of engine.repos x engine.roles.
 # capabilities = [\"acme/widgets:engineer\"]
+# Agent progress must arrive within this interval. Heartbeats do not count as
+# progress and must remain strictly more frequent than this deadline. Inspect
+# effective values with `temper config show`; inspect live reports at /v1/state.
+max_no_progress_secs = 900
+# max_run_secs = 7200       # optional independent whole-run ceiling
+# Cooperative cancellation is followed by bounded forced process termination.
+graceful_cancellation_grace_secs = 10
+forced_termination_grace_secs = 5
 
 [agent]
 provider = \"anthropic\"
 max_iterations = 250
 enable_subagents = false
+
+[agent.deadlines]
+tool_timeout_secs = 600
+model_connect_timeout_secs = 120
+model_idle_timeout_secs = 120
 
 # Agent-local codebase-memory MCP tool settings. Auto mode is best-effort: if
 # `codebase-memory-mcp` is not installed, agent runs continue without these

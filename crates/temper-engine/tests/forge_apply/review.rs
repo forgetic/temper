@@ -73,13 +73,11 @@ fn review_verdict_changes_attaches_changes_requested_review_with_body() {
             "review body should carry authored text, got `{body}`"
         );
 
-        match post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await {
-            WorkerProtocolMessage::Error(error) => assert_eq!(
-                error.code,
-                temper_protocol_worker::ErrorCode::MalformedMessage
-            ),
-            other => panic!("expected replay rejection, got {other:?}"),
-        }
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+            "worker-a",
+            &assignment.job_id,
+        );
 
         let replay_job = review_in_flight_job("acme/service", pull_request);
         let replay_result =
@@ -130,11 +128,8 @@ fn undeclared_review_verdict_quarantines_pull_request() {
             assign_review_job(&handle, forge.clone(), &repo, pull_request).await;
 
         let result = verdict_result("worker-a", &assignment.job_id, "merge_now", None);
-        assert_release(
-            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
-            "worker-a",
-            &assignment.job_id,
-        );
+        let response = post(&client, &url, &WorkerProtocolMessage::Result(result)).await;
+        assert_eq!(response.status, 422);
 
         let (labels, reviews) =
             wait_for_review_apply(&cx, &forge, &repo, pull_request, |labels, reviews| {

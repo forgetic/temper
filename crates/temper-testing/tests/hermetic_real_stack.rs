@@ -75,35 +75,39 @@ fn hermetic_real_stack_submit_for_pr_failure_stays_in_session_until_retry_passes
         let attempts_for_host = Arc::clone(&submit_attempts);
         let host: temper_agent::SubmitForPrHost =
             Arc::new(move |request: SubmitForPrRequest, _context, cwd| {
-                calls_for_host
-                    .lock()
-                    .expect("submit calls lock")
-                    .push(request.clone());
-                let attempt = attempts_for_host.fetch_add(1, Ordering::SeqCst);
-                SubmitForPrResponse {
-                    accepted: attempt > 0,
-                    message: if attempt == 0 {
-                        "fake fail"
-                    } else {
-                        "fake pass"
-                    }
-                    .to_string(),
-                    gates: vec![SubmitForPrGate {
-                        command_id: format!("hermetic-submit-{attempt}"),
-                        argv: vec!["fake-gate".to_string()],
-                        cwd: cwd.display().to_string(),
-                        exit_status: if attempt == 0 { "failed" } else { "passed" }.to_string(),
-                        exit_code: Some(if attempt == 0 { 1 } else { 0 }),
-                        stdout_tail: format!("attempt {attempt}"),
-                        stderr_tail: if attempt == 0 {
-                            "needs fix".to_string()
+                let calls = Arc::clone(&calls_for_host);
+                let attempts = Arc::clone(&attempts_for_host);
+                Box::pin(async move {
+                    calls
+                        .lock()
+                        .expect("submit calls lock")
+                        .push(request.clone());
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    SubmitForPrResponse {
+                        accepted: attempt > 0,
+                        message: if attempt == 0 {
+                            "fake fail"
                         } else {
-                            String::new()
-                        },
-                        timed_out: false,
-                        elapsed_ms: 5,
-                    }],
-                }
+                            "fake pass"
+                        }
+                        .to_string(),
+                        gates: vec![SubmitForPrGate {
+                            command_id: format!("hermetic-submit-{attempt}"),
+                            argv: vec!["fake-gate".to_string()],
+                            cwd: cwd.display().to_string(),
+                            exit_status: if attempt == 0 { "failed" } else { "passed" }.to_string(),
+                            exit_code: Some(if attempt == 0 { 1 } else { 0 }),
+                            stdout_tail: format!("attempt {attempt}"),
+                            stderr_tail: if attempt == 0 {
+                                "needs fix".to_string()
+                            } else {
+                                String::new()
+                            },
+                            timed_out: false,
+                            elapsed_ms: 5,
+                        }],
+                    }
+                })
             });
 
         let mut stack = HermeticRealStackBuilder::new()
@@ -182,6 +186,8 @@ mod basic_delivery;
 mod multi_repo;
 #[path = "hermetic_real_stack/restart_acceptance.rs"]
 mod restart_acceptance;
+#[path = "hermetic_real_stack/restart_cancellation.rs"]
+mod restart_cancellation;
 #[path = "hermetic_real_stack/restart_recovery.rs"]
 mod restart_recovery;
 

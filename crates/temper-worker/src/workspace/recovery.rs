@@ -87,7 +87,11 @@ impl Workspace {
             return Ok(None);
         }
         let manifest_path = quarantine_path.join("temper-recovery.json");
-        let bytes = skein::runtime::spawn_blocking(move || std::fs::read(&manifest_path)).await?;
+        let bytes = self
+            .run_blocking("temper-workspace-quarantine-read", move || {
+                std::fs::read(&manifest_path)
+            })
+            .await??;
         let manifest = serde_json::from_slice(&bytes).map_err(|error| {
             WorkspaceError::Recovery(format!(
                 "quarantine {} exists but its manifest cannot be read: {error}",
@@ -414,7 +418,11 @@ impl Workspace {
         let branch = (!branch.trim().is_empty()).then(|| branch.trim().to_string());
         let status_paths = self.status_paths().await?;
         let git_dir = self.resolve_git_dir().await?;
-        let operation = skein::runtime::spawn_blocking(move || detect_operation(&git_dir)).await;
+        let operation = self
+            .run_blocking("temper-workspace-operation-inspect", move || {
+                detect_operation(&git_dir)
+            })
+            .await?;
         Ok(RepositoryState {
             branch,
             head,
@@ -593,14 +601,17 @@ impl Workspace {
             .map_err(|error| WorkspaceError::Recovery(error.to_string()))?;
         let checkout = self.path.clone();
         let destination = quarantine_path.clone();
-        skein::runtime::spawn_blocking(move || -> Result<(), std::io::Error> {
-            let temporary = checkout.join("temper-recovery.json.tmp");
-            std::fs::write(&temporary, bytes)?;
-            std::fs::rename(&temporary, checkout.join("temper-recovery.json"))?;
-            std::fs::rename(&checkout, &destination)?;
-            Ok(())
-        })
-        .await
+        self.run_blocking(
+            "temper-workspace-quarantine",
+            move || -> Result<(), std::io::Error> {
+                let temporary = checkout.join("temper-recovery.json.tmp");
+                std::fs::write(&temporary, bytes)?;
+                std::fs::rename(&temporary, checkout.join("temper-recovery.json"))?;
+                std::fs::rename(&checkout, &destination)?;
+                Ok(())
+            },
+        )
+        .await?
         .map_err(|error| {
             WorkspaceError::Recovery(format!(
                 "failed to quarantine checkout at {}: {error}",
@@ -672,25 +683,18 @@ impl Workspace {
         // non-zero "missing" status is awkward through the strict git wrapper.
         // `rev-parse --verify --quiet` is therefore run in one blocking command
         // with the same non-secret identity configuration.
-        let path = self.path.clone();
-        let reference = reference.to_string();
-        let command_reference = reference.clone();
-        let identity = self.identity.clone();
-        let output = skein::runtime::spawn_blocking(move || {
-            std::process::Command::new("git")
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .args([
-                    "-c",
-                    &format!("user.name={}", identity.user),
-                    "-c",
-                    &format!("user.email={}", identity.email),
-                    "-C",
-                ])
-                .arg(path)
-                .args(["rev-parse", "--verify", "--quiet", &reference])
-                .output()
-        })
-        .await?;
+        let command_reference = reference.to_string();
+        let output = self
+            .run_workspace_git_unchecked(
+                false,
+                vec![
+                    OsString::from("rev-parse"),
+                    OsString::from("--verify"),
+                    OsString::from("--quiet"),
+                    OsString::from(reference),
+                ],
+            )
+            .await?;
         if output.status.success() {
             return Ok(Some(output_string(output.stdout)?.trim().to_string()));
         }

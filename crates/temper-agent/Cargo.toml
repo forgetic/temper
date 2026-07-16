@@ -23,6 +23,7 @@ temper-protocol-interaction = { path = "../temper-protocol-interaction" }
 uuid.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 temper-agent-io = { path = "../temper-agent-io" }
 tracing-subscriber = { workspace = true }
 jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }

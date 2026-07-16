@@ -54,11 +54,15 @@ fn drive_coding_loop(
     let config_dir = config.config_dir.clone();
     let enable_subagents = config.enable_subagents;
     let tool_config = config.tool_config.clone();
+    let runtime_limits = config.runtime_limits;
     let submit_for_pr = config.submit_for_pr.clone();
     let forge_context = config.forge_context.clone();
     let activity_config = AgentActivityConfig {
         policy: config.trace_policy.clone(),
         address: config.activity_address.clone(),
+        lifecycle_address: config.lifecycle_address.clone(),
+        lifecycle_reporter: None,
+        cancellation: Default::default(),
     };
     temper_agent_io::block_on_with(move |_cx, handle| async move {
         let (result, _totals) = run_coding_agent_native_with_totals_tool_config_and_hosts(
@@ -73,6 +77,7 @@ fn drive_coding_loop(
             submit_for_pr,
             forge_context,
             activity_config,
+            runtime_limits,
         )
         .await?;
         Ok(result)

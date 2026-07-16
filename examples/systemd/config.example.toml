@@ -37,6 +37,13 @@ daemon_url = "http://127.0.0.1:4000"
 git_base_url = "https://forge.example.com"
 # Retained as the profile-less/no-pool migration fallback.
 max_concurrent_jobs = 1
+# Worker-owned liveness supervision. Keep heartbeat_interval_ms below the
+# no-progress interval; cancellation graces must sum to less than it.
+max_no_progress_secs = 900
+# max_run_secs = 7200
+# heartbeat_interval_ms = 10000
+graceful_cancellation_grace_secs = 10
+forced_termination_grace_secs = 5
 
 [[worker.pools]]
 name = "architects"
@@ -67,6 +74,11 @@ worker_token = "worker-reviewers-token"
 provider = "anthropic"
 max_iterations = 120
 enable_subagents = false
+
+[agent.deadlines]
+tool_timeout_secs = 600
+model_connect_timeout_secs = 120
+model_idle_timeout_secs = 120
 
 [agent.providers.anthropic]
 models = { main = "claude-opus-4-8", investigate = "claude-haiku-4-5" }

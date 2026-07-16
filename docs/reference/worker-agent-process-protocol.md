@@ -15,11 +15,76 @@ inputs as flags:
 - `--workspace <DIR>`: workspace root and process cwd;
 - optional `--submit-for-pr-address <HOST:PORT>` and
   `--forge-context-address <HOST:PORT>` loopback side channels;
-- optional `--tool-config <FILE>` for non-secret agent-local tools.
+- optional `--tool-config <FILE>` for non-secret agent-local tools;
+- `--runtime-limits <FILE>` for known first-party commands only. The file is an
+  `AgentRuntimeLimitsV1` JSON object with positive `tool_timeout_secs`,
+  `model_connect_timeout_secs`, and `model_idle_timeout_secs` values;
+- `--agent-lifecycle-address <HOST:PORT>` for known first-party commands only.
+  This is a dedicated correctness channel, not an activity-trace endpoint.
+
+The worker classifies each invocation as first-party or third-party. Known
+`temper-agent` and `temper agent` commands receive complete resolved limits and
+first-party lifecycle flags. Explicit third-party profile commands receive no
+Temper-specific limits flag and remain under bounded worker fallback
+supervision. Profile deadline overrides inherit field-by-field from
+`[agent.deadlines]` before the file is written.
 
 The side-channel listeners exist only for that run, accept bounded JSON, and
 are stopped when the child exits. Standalone calls the same host callbacks
 in-process rather than opening sockets.
+
+The worker writes per-run protocol files in a private temporary directory. Its
+durable result root is created with owner-only permissions below
+`[paths].state_dir` when available, or below the worker workspace root otherwise.
+
+## Always-on lifecycle channel
+
+A first-party child opens the attempt-owned loopback endpoint and sends a
+newline-delimited `AgentLifecycleHelloV1` followed by monotonic
+`AgentLifecycleFrameV1` values. The first sequence is `1`. A frame contains only
+`version`, `seq`, opaque scope identity, and one closed event:
+
+- `model_started`, `model_progress`, `model_finished`, `model_retrying`;
+- `tool_started`, `tool_finished`;
+- `steering_applied`, `agent_finished`.
+
+For example:
+
+```json
+{"version":1,"seq":7,"scope":{"id":"scope-a","parent_id":"scope-root"},"event":{"type":"tool_started","call_id":"call-4","name":"grep"}}
+```
+
+Frames cannot carry prompt text, model output/thinking, tool arguments/results,
+credentials, worker ID, or job ID. IDs and tool names are non-empty and bounded;
+frames have a 64 KiB hard limit and reject unknown fields. The worker binds the
+endpoint to `AgentRunRequest.attempt_id`, stamps receipt with its runtime clock,
+ignores duplicate sequence numbers and stale attempts, and closes a connection
+on malformed, oversized, or gapped input. Fakes and the standalone runner use
+the same typed `JobProgressReporter` without opening a socket.
+
+Cancellation does not depend on a child-authored terminal frame. After the
+joined supervisor has completed graceful exit or forced process-group
+termination and descendant cleanup, the worker appends one synthetic canonical
+`run.finished` activity with `status=cancelled` and
+`stop_reason=cancelled`. The host-only record is durable even when the child
+never connected, stopped responding, or was killed; terminal insertion is
+idempotent if a terminal host record already exists.
+
+The producer maps model attempt boundaries, tool boundaries, steering, and
+agent termination directly from `AgentEvent`. Non-empty text deltas and
+completed streamed tool calls produce content-free `model_progress`, coalesced
+to at most one frame per model call per five monotonic seconds. Empty text and
+thinking-only deltas do not count. Main and nested agents use distinct opaque
+scopes with explicit parent IDs.
+
+Lifecycle production is installed beside activity normalization. It remains on
+when trace capture is `off`, and it shares no trace queue, quota, spool, or
+storage path; trace startup/storage failure therefore cannot disable progress.
+`AgentLifecycleCommandV1::Cancel { reason }` and
+`AgentLifecycleCancellationAcknowledgementV1` define the bounded reverse
+cancellation handshake used by the process supervisor. Explicit third-party
+commands receive no lifecycle flag and may emit nothing; worker fallback
+supervision remains authoritative for them.
 
 ## `WorkspaceContext` and artifact compatibility
 

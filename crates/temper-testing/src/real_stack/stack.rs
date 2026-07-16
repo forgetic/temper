@@ -15,7 +15,6 @@ use temper_forge_model::{Forge, ItemNumber, PullRequest, PullRequestQuery, Repos
 use temper_protocol_worker::{JobResult, ResultStatus, WorkerAuth, WorkerProtocolMessage};
 use temper_worker::{
     CodingExecutor, CodingExecutorConfig, Transport, WorkerComponentHandle, WorkerConfig,
-    start_worker_with_transport,
 };
 use temper_workflow::InMemoryJournal;
 use temper_workflow::{
@@ -28,6 +27,9 @@ use super::clock::MutableWallClock;
 use super::git::{git_output_raw, git_output_trim, path_str};
 use super::pause::{PauseHooks, PausePoint};
 use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
+
+pub(crate) type PublishedResultKey = (String, Option<String>);
+pub(crate) type PublishedResults = Arc<Mutex<BTreeMap<PublishedResultKey, JobResult>>>;
 
 /// Built hermetic stack. Durable state and replaceable process handles are
 /// intentionally different values so tests cannot accidentally rebuild the
@@ -46,6 +48,8 @@ pub struct HermeticDurableWorld {
     pub(crate) compiled: CompiledWorkflow,
     pub(crate) result_tx: temper_engine_io::CqSender<JobResult>,
     pub(crate) result_rx: temper_engine_io::CqReceiver<JobResult>,
+    /// Exact results already observed at the worker publication boundary.
+    pub(crate) published_results: PublishedResults,
     pub(crate) origins: BTreeMap<String, PathBuf>,
     pub(crate) repo_ids: BTreeMap<String, RepositoryId>,
     pub(crate) workspace_root: PathBuf,
@@ -171,28 +175,6 @@ impl HermeticRealStack {
     /// Real daemon handle used by the current fixture component.
     pub fn daemon(&self) -> &Daemon {
         self.components.daemon.as_ref()
-    }
-
-    /// Starts the real worker loop once and retains explicit crash/join control.
-    pub fn start_worker(&mut self, handle: &RuntimeHandle) {
-        if self.components.worker.is_some() {
-            return;
-        }
-        let transport = self.transport();
-        self.components.worker = Some(start_worker_with_transport(
-            handle.clone(),
-            self.worker_config.clone(),
-            self.components.executor.clone(),
-            transport,
-        ));
-    }
-
-    /// Abruptly stops and joins the worker machine. Durable workspaces and its
-    /// stable worker identity remain in the world for [`start_worker`](Self::start_worker).
-    pub async fn crash_worker(&mut self) {
-        if let Some(worker) = self.components.worker.take() {
-            worker.crash().await;
-        }
     }
 
     /// Abruptly stops the daemon and installs a fresh daemon over the same
@@ -343,6 +325,7 @@ impl HermeticRealStack {
                 .stage_recovered_job(
                     temper_engine::RecoveredJob {
                         job_id: job.job_id,
+                        attempt_id: assignment.attempt_id.clone(),
                         worker_id,
                         role: job.role,
                         repo: job.repo,
@@ -517,10 +500,11 @@ impl HermeticRealStack {
             .ok_or_else(|| format!("unknown seeded repository `{repo}`"))
     }
 
-    fn transport(&self) -> Arc<ResultTappingTransport> {
+    pub(super) fn transport(&self) -> Arc<ResultTappingTransport> {
         Arc::new(ResultTappingTransport {
             router: self.router.clone(),
             result_tx: self.result_tx.clone(),
+            published_results: Arc::clone(&self.published_results),
             hooks: self.hooks.clone(),
         })
     }
@@ -562,6 +546,7 @@ impl DaemonRouter {
 pub struct ResultTappingTransport {
     router: Arc<DaemonRouter>,
     result_tx: temper_engine_io::CqSender<JobResult>,
+    published_results: PublishedResults,
     hooks: PauseHooks,
 }
 
@@ -573,6 +558,7 @@ impl Transport for ResultTappingTransport {
         auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
         let result_tx = self.result_tx.clone();
+        let published_results = Arc::clone(&self.published_results);
         let hooks = self.hooks.clone();
         async move {
             let reports_jobs = matches!(
@@ -589,10 +575,31 @@ impl Transport for ResultTappingTransport {
                 WorkerProtocolMessage::Result(result) => Some(result.clone()),
                 _ => None,
             };
-            if recorded.is_some() {
-                // A successful coding executor has already committed and pushed
-                // before publishing Result.
+            let first_publication = recorded.as_ref().is_some_and(|result| {
+                let key = (result.job_id.clone(), result.attempt_id.clone());
+                let mut published = published_results.lock().expect("published result lock");
+                match published.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(result.clone());
+                        true
+                    }
+                    std::collections::btree_map::Entry::Occupied(slot) => {
+                        assert_eq!(
+                            slot.get(),
+                            result,
+                            "one assignment attempt published conflicting terminal payloads"
+                        );
+                        false
+                    }
+                }
+            });
+            if first_publication {
+                // A first publication follows the coding executor's commit and
+                // push. Durable replay of the same exact result must not
+                // masquerade as another workspace push in crash tests.
                 hooks.reach(PausePoint::WorkerPushCompleted).await;
+            }
+            if recorded.is_some() {
                 hooks.reach(PausePoint::ResultApplicationStarted).await;
             }
             let daemon = self.router.current();

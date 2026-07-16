@@ -61,6 +61,41 @@ Every tick re-reads fresh Forge state before planning or mutating. Engine or
 standalone webhooks only accelerate latency; polling and audits remain the
 correctness backstops.
 
+## Agent liveness supervision
+
+The deterministic cross-component and restart evidence is indexed in the
+[agent-run liveness acceptance matrix](agent-run-liveness-acceptance.md).
+
+`temper serve worker` owns one watchdog state per occupied permit. The effective
+settings are visible in the generated configuration template and in
+`temper config show`:
+
+- `worker.max_no_progress_secs` (default 900) is reset only by accepted model,
+  tool, steering, and terminal lifecycle boundaries; heartbeats do not count;
+- optional `worker.max_run_secs` independently bounds the whole attempt;
+- `worker.graceful_cancellation_grace_secs` and
+  `worker.forced_termination_grace_secs` bound cooperative cancellation,
+  process-group escalation, descendant cleanup, and join;
+- first-party operation limits live in `agent.deadlines` (with profile
+  overrides) and must remain below the no-progress bound.
+
+Use `temper config show` to verify resolved values without revealing provider or
+worker credentials. During a run, inspect `GET /v1/state` (all workers) or
+`GET /v1/state/job/<job-id>` (one assignment). The optional `worker_report`
+shows attempt/phase, monotonic run and no-progress elapsed values, at most eight
+content-free active model/tool summaries, timeout/cancellation status, and
+pending-result state. It is a latest-report diagnostic, not lease or watchdog
+authority.
+
+On timeout the worker fences the attempt, cancels and joins all owned resources,
+durably records one transient result, releases its local permit, and polls
+immediately. Result delivery/replay and durable-claim convergence continue after
+permit release. A Forge outage therefore appears as
+`worker.result.delivery` retry warnings and eventually
+`assignment.convergence`, rather than monopolizing capacity. Both graceful and
+forced termination append a synthetic canonical terminal activity with
+`status=cancelled` even if the child cannot send one.
+
 ## Diagnostics
 
 Completed tick logs include:

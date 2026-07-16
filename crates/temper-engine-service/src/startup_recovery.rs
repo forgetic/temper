@@ -7,13 +7,12 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use temper_engine::Daemon;
 use temper_forge::{
-    CreateComment, Forge, ForgeError, ForgeResult, IssueQuery, IssueState, PullRequest,
-    PullRequestQuery, PullRequestState, RepositoryId, UpdateIssue, UpdatePullRequest,
+    Forge, ForgeError, ForgeResult, IssueQuery, IssueState, PullRequest, PullRequestQuery,
+    PullRequestState, RepositoryId,
 };
 use temper_workflow::{
-    ArtifactKindId, ArtifactSource, Classifier, CompiledWorkflow, DurableAssignment, Effect,
-    LeaseManager, LeasePolicy, METADATA_BEGIN, RelationKind, ValidatedWorkflow,
-    parse_metadata_block,
+    ArtifactSource, AssignmentConverger, AssignmentValidation, CompiledWorkflow, DurableAssignment,
+    LeasePolicy, METADATA_BEGIN, ValidatedWorkflow, parse_metadata_block,
 };
 
 #[derive(Clone)]
@@ -21,11 +20,6 @@ pub struct RecoveredClaim {
     repo: RepositoryId,
     target: ArtifactSource,
     assignment: DurableAssignment,
-    kind: ArtifactKindId,
-    queue_labels: Vec<String>,
-    claim_labels: Vec<String>,
-    assignment_valid: bool,
-    queue_known: bool,
 }
 
 pub async fn stage_startup_assignments(
@@ -39,6 +33,7 @@ pub async fn stage_startup_assignments(
 ) -> Result<BTreeMap<String, RecoveredClaim>, String> {
     const MAX_RECOVERY_CANDIDATES: usize = 1_000;
     let artifact_context = daemon.artifact_context_service();
+    let converger = AssignmentConverger::new(workflow, forge, policy);
     let mut candidates = Vec::new();
     for repo in repos {
         let issues = forge
@@ -101,162 +96,50 @@ pub async fn stage_startup_assignments(
             Ok(Some(metadata)) => metadata,
             Ok(None) => continue,
             Err(error) => {
-                quarantine_target(
-                    forge,
-                    &repo,
-                    target,
-                    &format!("malformed workflow metadata: {error}"),
-                )
-                .await?;
+                converger
+                    .quarantine_target(
+                        &repo,
+                        target,
+                        &format!("malformed workflow metadata: {error}"),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
                 continue;
             }
         };
         let Some(assignment) = metadata.assignment else {
             continue;
         };
-        let Some(kind) = metadata.kind else {
-            quarantine_invalid_assignment(
-                forge,
-                policy,
-                &repo,
-                target,
-                &assignment,
-                "durable assignment is missing workflow kind",
-            )
-            .await?;
-            continue;
+        let expires_at = match converger
+            .validate_current(&repo, target, &assignment)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            AssignmentValidation::Valid { expires_at, .. } => expires_at,
+            AssignmentValidation::Stale | AssignmentValidation::Quarantined => continue,
         };
-        let queue = assignment.queue.as_deref().and_then(|queue| {
-            compiled
-                .queues()
-                .iter()
-                .find(|candidate| candidate.id.as_str() == queue)
-        });
-        let queue_known = queue.is_some();
-        let queue_labels = queue
-            .map(|queue| {
-                let mut labels = queue
-                    .labels
-                    .iter()
-                    .map(|label| label.as_str().to_string())
-                    .collect::<Vec<_>>();
-                if let Some(branch) = queue.any_of.iter().find(|branch| {
-                    branch.labels.iter().all(|label| {
-                        assignment
-                            .pre_claim_labels
-                            .iter()
-                            .any(|present| present == label.as_str())
-                    })
-                }) {
-                    for label in &branch.labels {
-                        if !labels.iter().any(|present| present == label.as_str()) {
-                            labels.push(label.as_str().to_string());
-                        }
-                    }
-                }
-                labels
-            })
-            .unwrap_or_default();
-        let assigned_transition = assignment.action.as_deref().and_then(|action| {
-            workflow
-                .transitions()
-                .iter()
-                .find(|transition| transition.id.as_str() == action)
-        });
-        let assignment_valid = assigned_transition.is_some_and(|transition| {
-            transition.artifact == kind
-                && assignment
-                    .role
-                    .as_ref()
-                    .is_some_and(|role| transition.roles.contains(role))
-        });
-        let claim_labels = assigned_transition
-            .map(|transition| {
-                transition
-                    .effects
-                    .iter()
-                    .filter_map(|effect| match effect {
-                        Effect::AddLabel(label) => Some(label.as_str().to_string()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let Some(job_id) = assignment
+        let job_id = assignment
             .job_id
             .clone()
-            .filter(|value| !value.trim().is_empty())
-        else {
-            quarantine_invalid_assignment(
-                forge,
-                policy,
-                &repo,
-                target,
-                &assignment,
-                "durable assignment is missing job id",
-            )
-            .await?;
-            continue;
-        };
-        let Some(worker_id) = assignment
+            .expect("validated assignment has a job id");
+        let worker_id = assignment
             .worker_id
             .clone()
-            .filter(|value| !value.trim().is_empty())
-        else {
-            quarantine_invalid_assignment(
-                forge,
-                policy,
-                &repo,
-                target,
-                &assignment,
-                "durable assignment is missing worker id",
-            )
-            .await?;
-            continue;
-        };
-        let Some(prior_boot) = assignment
+            .expect("validated assignment has a worker id");
+        let prior_boot = assignment
             .daemon_boot_id
             .clone()
-            .filter(|value| !value.trim().is_empty())
-        else {
-            quarantine_invalid_assignment(
-                forge,
-                policy,
-                &repo,
-                target,
-                &assignment,
-                "durable assignment is missing daemon boot id",
-            )
-            .await?;
-            continue;
-        };
-        let Some(expires_at) = assignment
-            .expires_at
-            .or_else(|| metadata.lease.as_ref().map(|lease| lease.expires_at))
-        else {
-            quarantine_invalid_assignment(
-                forge,
-                policy,
-                &repo,
-                target,
-                &assignment,
-                "durable assignment is missing expiry",
-            )
-            .await?;
-            continue;
-        };
+            .expect("validated assignment has a daemon boot id");
         let claim = RecoveredClaim {
             repo: repo.clone(),
             target,
             assignment: assignment.clone(),
-            kind,
-            queue_labels,
-            claim_labels,
-            assignment_valid,
-            queue_known,
         };
         if expires_at <= now {
-            converge_startup_claim(forge, policy, workflow, &claim).await?;
+            converger
+                .converge(&repo, target, &assignment)
+                .await
+                .map_err(|error| format!("could not converge expired assignment: {error}"))?;
             continue;
         }
         let reconstructed = if let Some(service) = artifact_context.as_deref() {
@@ -285,16 +168,20 @@ pub async fn stage_startup_assignments(
             Ok(job) => job,
             Err(reason) => {
                 tracing::warn!(job_id = %job_id, %reason, "quarantining impossible durable assignment");
-                quarantine_invalid_assignment(forge, policy, &repo, target, &assignment, &reason)
-                    .await?;
+                converger
+                    .quarantine_current(&repo, target, &assignment, &reason)
+                    .await
+                    .map_err(|error| error.to_string())?;
                 continue;
             }
         };
+        let attempt_id = claim.assignment.attempt_id.clone();
         prepared.push((
             job_id,
             claim,
             temper_engine::RecoveredJob {
                 job_id: job.job_id,
+                attempt_id,
                 worker_id,
                 role: job.role,
                 repo: job.repo,
@@ -312,15 +199,15 @@ pub async fn stage_startup_assignments(
     let mut staged = BTreeMap::new();
     for (job_id, claim, job, prior_boot) in prepared {
         if job_id_counts.get(&job_id).copied().unwrap_or_default() > 1 {
-            quarantine_invalid_assignment(
-                forge,
-                policy,
-                &claim.repo,
-                claim.target,
-                &claim.assignment,
-                "multiple durable assignments claim the same job id",
-            )
-            .await?;
+            converger
+                .quarantine_current(
+                    &claim.repo,
+                    claim.target,
+                    &claim.assignment,
+                    "multiple durable assignments claim the same job id",
+                )
+                .await
+                .map_err(|error| error.to_string())?;
             continue;
         }
         daemon
@@ -350,197 +237,6 @@ fn startup_pull_inventory(
     }
 }
 
-const STARTUP_RECOVERY_AUDIT_MARKER: &str =
-    "<!-- temper:comment-key=startup_assignment_recovery -->";
-
-async fn quarantine_invalid_assignment(
-    forge: &dyn Forge,
-    policy: LeasePolicy,
-    repo: &RepositoryId,
-    target: ArtifactSource,
-    assignment: &DurableAssignment,
-    reason: &str,
-) -> Result<(), String> {
-    LeaseManager::new(forge, policy)
-        .quarantine_assignment(repo, target, assignment)
-        .await
-        .map_err(|error| format!("could not quarantine impossible claim on {repo}: {error}"))?;
-    quarantine_target(forge, repo, target, reason).await
-}
-
-async fn quarantine_target(
-    forge: &dyn Forge,
-    repo: &RepositoryId,
-    target: ArtifactSource,
-    reason: &str,
-) -> Result<(), String> {
-    let audit_body = format!(
-        "Startup recovery could not safely converge a durable assignment. The artifact was parked for human inspection.\n\nReason: {reason}\n\n{STARTUP_RECOVERY_AUDIT_MARKER}"
-    );
-    match target {
-        ArtifactSource::Issue { number } => {
-            let issue = forge
-                .get_issue_by_number(repo, number)
-                .await
-                .map_err(|error| format!("could not load quarantined issue on {repo}: {error}"))?
-                .ok_or_else(|| format!("quarantined issue {number} disappeared from {repo}"))?;
-            if !issue.labels.iter().any(|label| label == "needs-human") {
-                forge
-                    .update_issue(
-                        &issue.id,
-                        UpdateIssue {
-                            add_labels: vec!["needs-human".to_string()],
-                            ..UpdateIssue::default()
-                        },
-                    )
-                    .await
-                    .map_err(|error| format!("could not label quarantined issue: {error}"))?;
-            }
-            let comments = forge
-                .list_issue_comments(&issue.id)
-                .await
-                .map_err(|error| format!("could not inspect recovery audit comments: {error}"))?;
-            if !comments
-                .iter()
-                .any(|comment| comment.body.contains(STARTUP_RECOVERY_AUDIT_MARKER))
-            {
-                forge
-                    .add_issue_comment(&issue.id, CreateComment { body: audit_body })
-                    .await
-                    .map_err(|error| format!("could not record recovery audit: {error}"))?;
-            }
-        }
-        ArtifactSource::PullRequest { number } => {
-            let pull_request = forge
-                .get_pull_request_by_number(repo, number)
-                .await
-                .map_err(|error| format!("could not load quarantined PR on {repo}: {error}"))?
-                .ok_or_else(|| format!("quarantined PR {number} disappeared from {repo}"))?;
-            if !pull_request
-                .labels
-                .iter()
-                .any(|label| label == "needs-human")
-            {
-                forge
-                    .update_pull_request(
-                        &pull_request.id,
-                        UpdatePullRequest {
-                            add_labels: vec!["needs-human".to_string()],
-                            ..UpdatePullRequest::default()
-                        },
-                    )
-                    .await
-                    .map_err(|error| format!("could not label quarantined PR: {error}"))?;
-            }
-            let comments = forge
-                .list_pull_request_comments(&pull_request.id)
-                .await
-                .map_err(|error| format!("could not inspect recovery audit comments: {error}"))?;
-            if !comments
-                .iter()
-                .any(|comment| comment.body.contains(STARTUP_RECOVERY_AUDIT_MARKER))
-            {
-                forge
-                    .add_pull_request_comment(&pull_request.id, CreateComment { body: audit_body })
-                    .await
-                    .map_err(|error| format!("could not record recovery audit: {error}"))?;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn converge_startup_claim(
-    forge: &dyn Forge,
-    policy: LeasePolicy,
-    workflow: &ValidatedWorkflow,
-    claim: &RecoveredClaim,
-) -> Result<(), String> {
-    if !claim.assignment_valid {
-        return quarantine_invalid_assignment(
-            forge,
-            policy,
-            &claim.repo,
-            claim.target,
-            &claim.assignment,
-            "durable assignment action is missing, unknown, or unauthorized",
-        )
-        .await;
-    }
-    if !claim.queue_known {
-        return quarantine_invalid_assignment(
-            forge,
-            policy,
-            &claim.repo,
-            claim.target,
-            &claim.assignment,
-            "durable assignment names an unknown queue",
-        )
-        .await;
-    }
-
-    if matches!(claim.target, ArtifactSource::PullRequest { .. }) {
-        let recovered = temper_engine::recover_advanced_pull_request_assignment_from_durable(
-            forge,
-            &claim.repo,
-            claim.target,
-            &claim.assignment,
-            claim.kind.clone(),
-            workflow,
-        )
-        .await
-        .map_err(|error| format!("could not recover advanced PR head: {error}"))?;
-        if recovered {
-            return Ok(());
-        }
-        return LeaseManager::new(forge, policy)
-            .rollback_assignment(&claim.repo, claim.target, &claim.assignment)
-            .await
-            .map_err(|error| format!("could not converge abandoned PR assignment: {error}"));
-    }
-
-    let ArtifactSource::Issue { number } = claim.target else {
-        unreachable!("pull requests returned above")
-    };
-    let issue = forge
-        .get_issue_by_number(&claim.repo, number)
-        .await
-        .map_err(|error| format!("could not refresh assigned issue: {error}"))?
-        .ok_or_else(|| format!("assigned issue {number} disappeared from {}", claim.repo))?;
-    let artifact = match Classifier::new(workflow).classify_issue(&issue) {
-        Ok(artifact) => artifact,
-        Err(error) => {
-            return quarantine_invalid_assignment(
-                forge,
-                policy,
-                &claim.repo,
-                claim.target,
-                &claim.assignment,
-                &format!("assigned issue is ambiguous: {error}"),
-            )
-            .await;
-        }
-    };
-    let dependency_status =
-        temper_workflow::dependency_state::status_for_artifact(forge, &claim.repo, &artifact).await;
-    let dependencies_unresolved = artifact
-        .relations
-        .iter()
-        .filter(|relation| relation.kind == RelationKind::Dependency)
-        .any(|relation| !dependency_status.is_landed(&relation.target));
-    LeaseManager::new(forge, policy)
-        .converge_issue_assignment(
-            &claim.repo,
-            claim.target,
-            &claim.assignment,
-            &claim.queue_labels,
-            &claim.claim_labels,
-            dependencies_unresolved,
-        )
-        .await
-        .map_err(|error| format!("could not converge abandoned issue assignment: {error}"))
-}
-
 pub async fn converge_startup_orphans(
     forge: &dyn Forge,
     policy: LeasePolicy,
@@ -548,6 +244,7 @@ pub async fn converge_startup_orphans(
     recovered: &BTreeMap<String, RecoveredClaim>,
     orphaned: &[temper_engine::RecoveredJob],
 ) -> Result<(), String> {
+    let converger = AssignmentConverger::new(workflow, forge, policy);
     for orphan in orphaned {
         let claim = recovered.get(&orphan.job_id).ok_or_else(|| {
             format!(
@@ -555,7 +252,8 @@ pub async fn converge_startup_orphans(
                 orphan.job_id
             )
         })?;
-        converge_startup_claim(forge, policy, workflow, claim)
+        converger
+            .converge(&claim.repo, claim.target, &claim.assignment)
             .await
             .map_err(|error| {
                 format!(

@@ -21,10 +21,13 @@ pub mod coding_executor;
 pub mod config;
 pub mod context_client;
 pub mod executor;
+mod lifecycle_hook;
+mod managed_effect;
 pub mod observability;
 pub mod out_of_process_runner;
 pub mod pr_freshness;
 pub mod pre_push;
+pub mod result_outbox;
 pub mod run;
 pub mod trace;
 pub mod transport;
@@ -34,21 +37,27 @@ pub mod workspace;
 
 pub use agent_runner::{
     AcceptedSubmitProof, AcceptedSubmitProofStore, AgentForgeContextFuture, AgentForgeContextHost,
-    AgentRunError, AgentRunOutput, AgentRunner, WorkspaceResult, handle_submit_for_pr_with_proof,
+    AgentRunError, AgentRunOutput, AgentRunRequest, AgentRunner, JobProgress, JobProgressReporter,
+    WorkspaceResult, handle_submit_for_pr_with_proof,
 };
 pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
 pub use config::{
     AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
-    ExecutorSelection, ParseOutcome, USAGE, WorkerAgentTraceConfig, WorkerConfig, WorkerParams,
-    parse, role_identities_from_env,
+    ExecutorSelection, ParseOutcome, USAGE, WorkerAgentTraceConfig, WorkerConfig,
+    WorkerLivenessLimits, WorkerParams, parse, prepare_result_root, role_identities_from_env,
 };
 pub use context_client::{
     ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,
 };
-pub use executor::{JobExecutor, JobOutcome, StubExecutor, job_result};
+pub use executor::{
+    AttemptFence, CancellationOutcome, DescendantCleanupStatus, JobAttempt, JobCancellation,
+    JobCancellationRequest, JobCleanup, JobExecutionContext, JobExecutor, JobOutcome, StubExecutor,
+    job_result, job_result_for_attempt,
+};
+pub use lifecycle_hook::{WorkerLifecycleCheckpoint, WorkerLifecycleHook};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
-pub use out_of_process_runner::OutOfProcessRunner;
+pub use out_of_process_runner::{JobQuiesced, OutOfProcessRunner};
 pub use pr_freshness::{
     HttpPrFreshnessGuard, PrFreshnessFailure, PrFreshnessGuard,
     map_response as map_pr_freshness_response,
@@ -57,13 +66,22 @@ pub use pre_push::{
     PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, WorkspaceFingerprint,
     WorkspaceFingerprintError, final_pre_push_response, fingerprint_writable_repos,
     fingerprint_writable_repos_blocking, run_pre_push_checks, submit_for_pr_pre_push_response,
-    submit_for_pr_pre_push_response_blocking,
+};
+pub use result_outbox::{
+    RESULT_OUTBOX_VERSION, ResultAcknowledgement, ResultAssignmentIdentity, ResultDeliveryState,
+    ResultOutbox, ResultOutboxEntry, ResultOutboxError,
 };
 pub use run::{
     WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
+    start_worker_with_transport_and_hook,
 };
 pub use temper_protocol_agent::{
-    AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
+    AGENT_LIFECYCLE_ADDRESS_FLAG, AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleAgentStatusV1,
+    AgentLifecycleCancellationAckV1, AgentLifecycleCancellationAcknowledgementV1,
+    AgentLifecycleCommandV1, AgentLifecycleEventV1, AgentLifecycleFrameV1, AgentLifecycleHelloV1,
+    AgentLifecycleModelStatusV1, AgentLifecycleScopeV1, AgentLifecycleToolStatusV1,
+    AgentRuntimeLimitsV1, AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode,
+    CodebaseMemoryToolConfig, RUNTIME_LIMITS_FLAG,
 };
 pub use temper_protocol_worker::WorkerAuth;
 pub use trace::{
@@ -72,7 +90,11 @@ pub use trace::{
     WORKER_SPOOL_RUN_CAPACITY,
 };
 pub use transport::{HttpTransport, Transport};
-pub use worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
+pub use worker_machine::{
+    ActiveOperation, CancellationStatus, JobPhase, JobWatchState, OperationId, OperationKind,
+    ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState, WatchdogTimerKind,
+    WorkerCompletion, WorkerMachine, WorkerRequest,
+};
 pub use workspace::{
     PreparationOutcome, QuarantineManifest, RecoveryContext, RoleGitIdentity,
     ScopedWorkspaceCleanupError, ScopedWorkspaceCleanupOutcome, ScopedWorkspacePathError,

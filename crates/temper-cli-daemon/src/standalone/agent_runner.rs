@@ -23,10 +23,10 @@ use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
 use temper_protocol_activity::FailureCodeV1;
-use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
+use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext};
 use temper_worker::{
-    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
-    TraceCollector, WorkerAgentTraceConfig,
+    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput,
+    AgentRunRequest, AgentRunner, TraceCollector, WorkerAgentTraceConfig,
 };
 
 const TERMINAL_ACTIVITY_FLUSH_TIMEOUT: Duration = Duration::from_millis(250);
@@ -39,6 +39,7 @@ pub struct InProcessAgentRunner {
     config_dir: Option<PathBuf>,
     enable_subagents: bool,
     tool_config: Option<AgentToolConfig>,
+    runtime_limits: AgentRuntimeLimitsV1,
     trace_policy: AgentActivityCapturePolicyV1,
     trace_collector: TraceCollector,
     submit_for_pr: SubmitForPrHost,
@@ -60,10 +61,13 @@ impl InProcessAgentRunner {
             config_dir,
             enable_subagents,
             tool_config: None,
+            runtime_limits: AgentRuntimeLimitsV1::default(),
             trace_policy: AgentActivityCapturePolicyV1::default(),
             trace_collector: TraceCollector::default(),
             submit_for_pr: std::sync::Arc::new(|request, context, cwd| {
-                temper_worker::submit_for_pr_pre_push_response_blocking(request, context, cwd)
+                Box::pin(async move {
+                    temper_worker::submit_for_pr_pre_push_response(&request, &context, cwd).await
+                })
             }),
             forge_context: None,
         }
@@ -75,6 +79,14 @@ impl InProcessAgentRunner {
     #[must_use]
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
+        self
+    }
+
+    /// Stores complete first-party operation limits for the native loop and
+    /// every nested subagent.
+    #[must_use]
+    pub fn with_runtime_limits(mut self, runtime_limits: AgentRuntimeLimitsV1) -> Self {
+        self.runtime_limits = runtime_limits;
         self
     }
 
@@ -126,6 +138,32 @@ impl AgentRunner for InProcessAgentRunner {
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> impl std::future::Future<Output = Result<AgentRunOutput, AgentRunError>> + Send {
+        self.run_attempt(AgentRunRequest::unsupervised(job_id, context, cwd))
+    }
+
+    fn run_request(
+        &self,
+        request: AgentRunRequest<'_>,
+    ) -> impl std::future::Future<Output = Result<AgentRunOutput, AgentRunError>> + Send {
+        self.run_attempt(request)
+    }
+}
+
+impl InProcessAgentRunner {
+    fn run_attempt(
+        &self,
+        request: AgentRunRequest<'_>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<AgentRunOutput, AgentRunError>>
+                + Send
+                + 'static,
+        >,
+    > {
+        let job_id = request.job_id;
+        let context = request.context;
+        let cwd = request.cwd;
+        let progress = request.progress;
         // §7 agent boundary events. The `item` ref is the work-item subject tag
         // (`[repo#n]` / `[repo PR#n]`); `kind` is the role's activity verb
         // (architect→triage, engineer→coding). We emit `agent.started` here,
@@ -183,19 +221,25 @@ impl AgentRunner for InProcessAgentRunner {
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
         let tool_config = self.tool_config.clone();
+        let runtime_limits = self.runtime_limits;
         let trace_policy = self.trace_policy.clone();
         let trace_collector = self.trace_collector.clone();
         let submit_for_pr = self.submit_for_pr.clone();
         let accepted_submit = AcceptedSubmitProofStore::new();
         let accepted_submit_for_host = accepted_submit.clone();
         let submit_for_pr: SubmitForPrHost = std::sync::Arc::new(move |request, context, cwd| {
-            temper_worker::handle_submit_for_pr_with_proof(
-                &accepted_submit_for_host,
-                |request, context, cwd| submit_for_pr(request, context, cwd),
-                request,
-                context,
-                cwd,
-            )
+            let accepted_submit = accepted_submit_for_host.clone();
+            let submit_for_pr = submit_for_pr.clone();
+            Box::pin(async move {
+                temper_worker::handle_submit_for_pr_with_proof(
+                    &accepted_submit,
+                    move |request, context, cwd| submit_for_pr(request, context, cwd),
+                    request,
+                    context,
+                    cwd,
+                )
+                .await
+            })
         });
         let submit_for_pr = Some(submit_for_pr);
         let forge_context: Option<ForgeContextHost> = self.forge_context.clone().map(|host| {
@@ -203,10 +247,14 @@ impl AgentRunner for InProcessAgentRunner {
             std::sync::Arc::new(move |operation| host(job_id.clone(), operation))
                 as ForgeContextHost
         });
+        let lifecycle_reporter: temper_agent::AgentLifecycleReporter =
+            std::sync::Arc::new(move |scope, event| {
+                let _ = progress.report(scope, event);
+            });
         let context = context.clone();
         let cwd = cwd.to_path_buf();
 
-        async move {
+        Box::pin(async move {
             let outcome = run_coding_agent_native_with_totals_tool_config_and_hosts(
                 handle,
                 &provider,
@@ -221,7 +269,11 @@ impl AgentRunner for InProcessAgentRunner {
                 AgentActivityConfig {
                     policy: trace_policy,
                     address: activity_address,
+                    lifecycle_address: None,
+                    lifecycle_reporter: Some(lifecycle_reporter),
+                    cancellation: Default::default(),
                 },
+                runtime_limits,
             )
             .await
             .map_err(classify_coding_agent_error);
@@ -297,7 +349,7 @@ impl AgentRunner for InProcessAgentRunner {
                 result,
                 accepted_submit: accepted_submit.latest(),
             })
-        }
+        })
     }
 }
 

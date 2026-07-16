@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1, TRACE_POLICY_FLAG};
 use temper_protocol_agent::{
-    AgentToolConfig, PROVIDER_CREDENTIALS_ENV, TOOL_CONFIG_FLAG, WorkspaceContext,
+    AGENT_LIFECYCLE_ADDRESS_FLAG, AgentRuntimeLimitsV1, AgentToolConfig, PROVIDER_CREDENTIALS_ENV,
+    RUNTIME_LIMITS_FLAG, TOOL_CONFIG_FLAG, WorkspaceContext,
 };
 
 use super::{OutOfProcessRunner, stderr_tail};
@@ -55,6 +56,58 @@ fn tool_config_flag_is_omitted_for_non_matching_role() {
 
     assert!(!args.iter().any(|arg| arg == TOOL_CONFIG_FLAG));
     assert_eq!(copied_config, None);
+}
+
+#[test]
+#[cfg(unix)]
+fn runtime_limits_flag_and_file_are_first_party_opt_in() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = fake_agent_script(temp.path());
+    let args_path = temp.path().join("args.txt");
+    let tool_path = temp.path().join("tool-config-copy.json");
+    let limits_path = temp.path().join("runtime-limits-copy.json");
+    let limits = AgentRuntimeLimitsV1 {
+        tool_timeout_secs: 41,
+        model_connect_timeout_secs: 17,
+        model_idle_timeout_secs: 13,
+    };
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_env(vec![
+            (
+                "TEMPER_ARGS_OUT".to_string(),
+                args_path.display().to_string(),
+            ),
+            (
+                "TEMPER_TOOL_OUT".to_string(),
+                tool_path.display().to_string(),
+            ),
+            (
+                "TEMPER_RUNTIME_LIMITS_OUT".to_string(),
+                limits_path.display().to_string(),
+            ),
+        ])
+        .with_runtime_limits(Some(limits));
+    let context = test_context();
+    let cwd = temp.path().to_path_buf();
+    temper_worker_io::block_on(async move { runner.run("job-test", &context, &cwd).await })
+        .expect("agent run succeeds");
+
+    let args = std::fs::read_to_string(args_path).expect("args captured");
+    assert!(args.lines().any(|arg| arg == RUNTIME_LIMITS_FLAG), "{args}");
+    assert!(
+        args.lines().any(|arg| arg == AGENT_LIFECYCLE_ADDRESS_FLAG),
+        "{args}"
+    );
+    let copied = AgentRuntimeLimitsV1::from_json(
+        &std::fs::read_to_string(limits_path).expect("runtime limits copied"),
+    )
+    .expect("runtime limits parse");
+    assert_eq!(copied, limits);
+
+    let (args, _) = run_fake_agent_with_tool_config("architect", None)
+        .expect("third-party-compatible run succeeds");
+    assert!(!args.iter().any(|arg| arg == RUNTIME_LIMITS_FLAG));
+    assert!(!args.iter().any(|arg| arg == AGENT_LIFECYCLE_ADDRESS_FLAG));
 }
 
 #[test]
@@ -383,6 +436,7 @@ set -eu
 args_out="${TEMPER_ARGS_OUT:?}"
 tool_out="${TEMPER_TOOL_OUT:?}"
 trace_policy_out="${TEMPER_TRACE_POLICY_OUT:-}"
+runtime_limits_out="${TEMPER_RUNTIME_LIMITS_OUT:-}"
 credential_out="${TEMPER_CREDENTIAL_OUT:-}"
 context_out="${TEMPER_CONTEXT_OUT:-}"
 : > "$args_out"
@@ -392,6 +446,7 @@ fi
 result=""
 tool=""
 trace_policy=""
+runtime_limits=""
 context=""
 while [ "$#" -gt 0 ]; do
   arg="$1"
@@ -410,6 +465,11 @@ while [ "$#" -gt 0 ]; do
       ;;
     --trace-policy)
       trace_policy="$1"
+      printf '%s\n' "$1" >> "$args_out"
+      shift
+      ;;
+    --runtime-limits)
+      runtime_limits="$1"
       printf '%s\n' "$1" >> "$args_out"
       shift
       ;;
@@ -435,6 +495,9 @@ if [ -n "$tool" ]; then
 fi
 if [ -n "$trace_policy" ] && [ -n "$trace_policy_out" ]; then
   cp "$trace_policy" "$trace_policy_out"
+fi
+if [ -n "$runtime_limits" ] && [ -n "$runtime_limits_out" ]; then
+  cp "$runtime_limits" "$runtime_limits_out"
 fi
 if [ -n "$context_out" ]; then
   cp "$context" "$context_out"

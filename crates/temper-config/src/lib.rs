@@ -24,6 +24,7 @@ mod agent_resolve;
 mod agent_trace_resolve;
 mod build;
 mod cli;
+mod deadline_resolve;
 mod env;
 mod error;
 mod inputs;
@@ -72,17 +73,18 @@ pub use paths::{
 };
 pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
-    AgentProfileSettings, AgentSettings, AgentToolSettings, AgentTraceSettings, Capability,
-    CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolSettings, DeploymentSettings,
-    DeploymentTopology, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
-    ObservabilitySettings, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
-    RepoPath, Resolved, SecretReference, WebUiCreds, WorkerPoolSettings, WorkerSettings,
+    AgentOperationLimits, AgentProfileSettings, AgentSettings, AgentToolSettings,
+    AgentTraceSettings, Capability, CodebaseMemoryIndex, CodebaseMemoryMode,
+    CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
+    ForgeSettings, GitIdentity, ObservabilitySettings, PathSettings, ProviderCredential,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, SecretReference, WebUiCreds,
+    WorkerLivenessLimits, WorkerPoolSettings, WorkerSettings,
 };
 pub use schema::{
-    AgentConfig, AgentCredentials, AgentProfileConfig, AgentProviderConfig, AgentToolsConfig,
-    AgentTraceConfig, CodebaseMemoryToolConfig, Config, Credentials, DeploymentConfig,
-    EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap, NamedSecret,
-    NamedSecretEntry, ObservabilityConfig, PathsConfig,
+    AgentConfig, AgentCredentials, AgentDeadlineConfig, AgentProfileConfig, AgentProviderConfig,
+    AgentToolsConfig, AgentTraceConfig, CodebaseMemoryToolConfig, Config, Credentials,
+    DeploymentConfig, EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
+    NamedSecret, NamedSecretEntry, ObservabilityConfig, PathsConfig,
     ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
     WorkerPoolConfig, WorkflowConfig,
 };

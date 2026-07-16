@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use temper_protocol_agent::AgentSessionState;
 
+use crate::executor::JobCancellation;
+use crate::managed_effect::JoinedBlocking;
 use crate::workspace::{ScopedWorkspacePathError, scoped_workspace_root};
 
 const STORE_VERSION: u32 = 1;
@@ -40,6 +42,8 @@ pub enum AgentSessionStoreError {
         #[source]
         source: std::io::Error,
     },
+    #[error("agent session operation cancelled by the worker watchdog")]
+    Cancelled,
     #[error("invalid agent session JSON `{path}`: {source}")]
     Json {
         path: PathBuf,
@@ -153,20 +157,52 @@ impl AgentSessionStore {
     }
 
     pub async fn load(&self) -> Result<Option<AgentSessionState>, AgentSessionStoreError> {
+        self.load_controlled(&JobCancellation::default()).await
+    }
+
+    pub(crate) async fn load_controlled(
+        &self,
+        cancellation: &JobCancellation,
+    ) -> Result<Option<AgentSessionState>, AgentSessionStoreError> {
         let store = self.clone();
-        skein::runtime::spawn_blocking(move || store.load_sync()).await
+        let path = self.path();
+        let owner = JoinedBlocking::spawn("temper-agent-session-load", move || store.load_sync());
+        cancellation
+            .run(owner)
+            .await
+            .ok_or(AgentSessionStoreError::Cancelled)?
+            .map_err(|source| AgentSessionStoreError::Io { path, source })?
     }
 
     pub async fn save(&self, state: &AgentSessionState) -> Result<(), AgentSessionStoreError> {
+        self.save_controlled(state, &JobCancellation::default())
+            .await
+    }
+
+    pub(crate) async fn save_controlled(
+        &self,
+        state: &AgentSessionState,
+        cancellation: &JobCancellation,
+    ) -> Result<(), AgentSessionStoreError> {
         let store = self.clone();
         let state = state.clone();
-        skein::runtime::spawn_blocking(move || store.save_sync(&state)).await
+        let path = self.path();
+        let owner =
+            JoinedBlocking::spawn("temper-agent-session-save", move || store.save_sync(&state));
+        cancellation
+            .run(owner)
+            .await
+            .ok_or(AgentSessionStoreError::Cancelled)?
+            .map_err(|source| AgentSessionStoreError::Io { path, source })?
     }
 
     #[allow(dead_code)]
     pub async fn delete(&self) -> Result<bool, AgentSessionStoreError> {
         let store = self.clone();
-        skein::runtime::spawn_blocking(move || store.delete_sync()).await
+        let path = self.path();
+        JoinedBlocking::spawn("temper-agent-session-delete", move || store.delete_sync())
+            .await
+            .map_err(|source| AgentSessionStoreError::Io { path, source })?
     }
 
     fn validate_loaded(

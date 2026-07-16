@@ -86,7 +86,7 @@ fn submit_for_pr_failure_returns_to_same_native_run_for_fix_and_retry() {
             .expect("submit calls lock")
             .push(request.clone());
         let attempt = submit_attempts_for_host.fetch_add(1, Ordering::SeqCst);
-        SubmitForPrResponse {
+        let response = SubmitForPrResponse {
             accepted: attempt > 0,
             message: if attempt == 0 {
                 "fake host gate failed"
@@ -109,7 +109,8 @@ fn submit_for_pr_failure_returns_to_same_native_run_for_fix_and_retry() {
                 timed_out: false,
                 elapsed_ms: 25 + attempt as u64,
             }],
-        }
+        };
+        Box::pin(std::future::ready(response))
     });
 
     let context = workspace_context();

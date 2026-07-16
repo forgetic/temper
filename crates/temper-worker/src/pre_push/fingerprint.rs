@@ -2,6 +2,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
 
+use crate::executor::JobCancellation;
+use crate::managed_effect::ManagedCommand;
+
 use serde::{Deserialize, Serialize};
 use temper_protocol_agent::WorkspaceContext;
 
@@ -51,6 +54,8 @@ pub enum WorkspaceFingerprintError {
         status: String,
         stderr: String,
     },
+    #[error("workspace fingerprint cancelled by the worker watchdog")]
+    Cancelled,
     #[error("git reported a non-utf8 untracked path in `{repo}`")]
     NonUtf8Path { repo: PathBuf },
 }
@@ -59,7 +64,19 @@ pub async fn fingerprint_writable_repos(
     context: &WorkspaceContext,
     workspace_root: impl AsRef<Path>,
 ) -> Result<WorkspaceFingerprint, WorkspaceFingerprintError> {
-    let workspace_root = workspace_root.as_ref();
+    fingerprint_writable_repos_controlled(
+        context,
+        workspace_root.as_ref(),
+        &JobCancellation::default(),
+    )
+    .await
+}
+
+pub(crate) async fn fingerprint_writable_repos_controlled(
+    context: &WorkspaceContext,
+    workspace_root: &Path,
+    cancellation: &JobCancellation,
+) -> Result<WorkspaceFingerprint, WorkspaceFingerprintError> {
     let mut repos = Vec::new();
     for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
         repos.push(
@@ -67,6 +84,7 @@ pub async fn fingerprint_writable_repos(
                 repo.id.clone(),
                 repo.dir.clone(),
                 workspace_root.join(&repo.dir),
+                cancellation,
             )
             .await?,
         );
@@ -89,21 +107,28 @@ async fn fingerprint_repo(
     repo: String,
     dir: String,
     repo_root: PathBuf,
+    cancellation: &JobCancellation,
 ) -> Result<RepoFingerprint, WorkspaceFingerprintError> {
-    let head = git_stdout(&repo_root, &["rev-parse", "HEAD"]).await?;
+    let head = git_stdout(&repo_root, &["rev-parse", "HEAD"], cancellation).await?;
     let status_porcelain_z = git_stdout(
         &repo_root,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cancellation,
     )
     .await?;
     let staged_diff_binary = git_stdout(
         &repo_root,
         &["diff", "--cached", "--binary", "--no-ext-diff", "--"],
+        cancellation,
     )
     .await?;
-    let unstaged_diff_binary =
-        git_stdout(&repo_root, &["diff", "--binary", "--no-ext-diff", "--"]).await?;
-    let untracked_files = untracked_files(&repo_root).await?;
+    let unstaged_diff_binary = git_stdout(
+        &repo_root,
+        &["diff", "--binary", "--no-ext-diff", "--"],
+        cancellation,
+    )
+    .await?;
+    let untracked_files = untracked_files(&repo_root, cancellation).await?;
 
     Ok(RepoFingerprint {
         repo,
@@ -118,10 +143,12 @@ async fn fingerprint_repo(
 
 async fn untracked_files(
     repo_root: &Path,
+    cancellation: &JobCancellation,
 ) -> Result<Vec<UntrackedFileFingerprint>, WorkspaceFingerprintError> {
     let output = git_stdout(
         repo_root,
         &["ls-files", "--others", "--exclude-standard", "-z"],
+        cancellation,
     )
     .await?;
     let mut paths = split_nul(&output)
@@ -136,8 +163,12 @@ async fn untracked_files(
 
     let mut fingerprints = Vec::new();
     for path in paths {
-        let object_id =
-            git_stdout(repo_root, &["hash-object", "--no-filters", "--", &path]).await?;
+        let object_id = git_stdout(
+            repo_root,
+            &["hash-object", "--no-filters", "--", &path],
+            cancellation,
+        )
+        .await?;
         fingerprints.push(UntrackedFileFingerprint {
             path,
             git_object_id: trim_ascii_newline(object_id),
@@ -160,36 +191,40 @@ fn trim_ascii_newline(mut bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-async fn git_stdout(repo: &Path, args: &[&str]) -> Result<Vec<u8>, WorkspaceFingerprintError> {
-    let output = run_git(repo, args).await?;
+async fn git_stdout(
+    repo: &Path,
+    args: &[&str],
+    cancellation: &JobCancellation,
+) -> Result<Vec<u8>, WorkspaceFingerprintError> {
+    let output = run_git(repo, args, cancellation).await?;
     Ok(output.stdout)
 }
 
-async fn run_git(repo: &Path, args: &[&str]) -> Result<Output, WorkspaceFingerprintError> {
+async fn run_git(
+    repo: &Path,
+    args: &[&str],
+    cancellation: &JobCancellation,
+) -> Result<Output, WorkspaceFingerprintError> {
     let repo = repo.to_path_buf();
     let args = args
         .iter()
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
     let command = format!("git -C {} {}", repo.display(), args.join(" "));
-    let output = skein::runtime::spawn_blocking({
-        let repo = repo.clone();
-        let args = args.clone();
-        move || {
-            Command::new("git")
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .arg("-C")
-                .arg(&repo)
-                .args(&args)
-                .output()
-        }
-    })
-    .await
-    .map_err(|source| WorkspaceFingerprintError::Io {
-        repo: repo.clone(),
-        command: command.clone(),
-        source,
-    })?;
+    let mut git = Command::new("git");
+    git.env("GIT_TERMINAL_PROMPT", "0")
+        .arg("-C")
+        .arg(&repo)
+        .args(&args);
+    let output = cancellation
+        .run(ManagedCommand::spawn(git))
+        .await
+        .ok_or(WorkspaceFingerprintError::Cancelled)?
+        .map_err(|source| WorkspaceFingerprintError::Io {
+            repo: repo.clone(),
+            command: command.clone(),
+            source,
+        })?;
     if output.status.success() {
         Ok(output)
     } else {

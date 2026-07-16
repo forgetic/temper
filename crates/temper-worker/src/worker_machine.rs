@@ -1,116 +1,215 @@
 //! The worker's pure sans-IO core.
 //!
-//! [`WorkerMachine`] is the deterministic logic of the long-poll worker:
-//! register, poll the daemon for work while capacity is free, dispatch assigned
-//! jobs, report results, and heartbeat in-flight jobs. It performs no I/O — it
-//! consumes [`WorkerCompletion`]s (a poll reply arrived, a job finished, a timer
-//! fired) and emits [`WorkerRequest`]s (send this message, run this job, arm
-//! this timer). The imperative shell ([`crate::worker_shell`]) performs the
-//! actual HTTP/agent/timer work and feeds results back.
-//!
-//! Because it is pure, the whole worker control flow — the poll/dispatch/result
-//! interleavings the tokio `select!` loop used to hide — is unit-testable with
-//! [`temper_worker_io::drive_sync`]: feed a completion sequence and assert on the
-//! emitted requests, with no runtime and no races. The production shell is also
-//! driven under `temper-sim`'s skein-lab runtime for high-fidelity worker/daemon
-//! scenarios over in-process transport.
+//! `WorkerMachine` is the sole authority for job liveness, terminal ordering,
+//! heartbeat membership, and permit release. All time is supplied by the
+//! runtime as `EngineTime`; timers are generation-tagged requests rather than a
+//! watchdog thread.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::time::Duration;
 
 use temper_protocol_worker::{Assign, ErrorCode, JobResult, WorkerProtocolMessage};
 use temper_worker_io::{EngineTime, Machine};
 
+use crate::agent_runner::JobProgress;
+use crate::result_outbox::ResultOutboxEntry;
+
 pub use crate::config::WorkerParams;
+
+mod delivery;
+mod watchdog;
+pub use crate::executor::JobCleanup;
+pub use watchdog::{
+    ActiveOperation, CancellationStatus, JobPhase, JobWatchState, OperationId, OperationKind,
+    ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState, WatchdogTimerKind,
+};
+
+/// Read-only compatibility view over occupied job IDs.
+pub struct InFlightJobs<'a>(&'a BTreeMap<String, JobWatchState>);
+
+impl InFlightJobs<'_> {
+    pub fn contains(&self, job_id: &str) -> bool {
+        self.0.contains_key(job_id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 /// A finished I/O event delivered to the machine.
 #[derive(Debug)]
 pub enum WorkerCompletion {
-    /// The register POST completed (`Ok` = accepted, `Err` = transport error).
     Registered(Result<(), String>),
-    /// A poll POST completed, yielding the daemon's reply (or a transport
-    /// error). `Ok(None)` is an empty/204 reply.
     PollReply(Result<Option<WorkerProtocolMessage>, String>),
-    /// A dispatched job finished; its result is ready to report.
-    JobFinished { job_id: String, result: JobResult },
-    /// A result POST completed (`Err` = transport error; the machine logs and
-    /// moves on — the daemon re-leases on its own timeout).
-    ResultDelivered {
+    JobProgress {
         job_id: String,
+        attempt_id: String,
+        generation: u64,
+        progress: JobProgress,
+    },
+    WatchdogTimer {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        timer_generation: u64,
+        kind: WatchdogTimerKind,
+    },
+    JobFinished {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        result: JobResult,
+    },
+    JobQuiesced {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        cleanup: JobCleanup,
+    },
+    ResultRecorded {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        outcome: Result<ResultOutboxEntry, String>,
+    },
+    ResultRecordTimer {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+    },
+    ResultDelivered {
+        entry_id: String,
+        outcome: Result<Option<WorkerProtocolMessage>, String>,
+    },
+    ResultFinalized {
+        entry_id: String,
         outcome: Result<(), String>,
     },
-    /// A heartbeat POST completed.
+    ResultReplayTimer {
+        entry_id: String,
+    },
     HeartbeatDelivered(Result<(), String>),
-    /// The poll-backoff timer fired: time to poll again.
     PollTimer,
-    /// The heartbeat cadence timer fired: time to heartbeat (if work in flight).
     HeartbeatTimer,
-    /// Stop the component loop without reporting or releasing in-flight work.
-    /// Test restart harnesses use this to model a process crash deterministically.
     Shutdown,
 }
 
 /// An I/O request the shell must perform.
 #[derive(Debug)]
 pub enum WorkerRequest {
-    /// POST a register message; completes as [`WorkerCompletion::Registered`].
     SendRegister(WorkerProtocolMessage),
-    /// POST a poll message; completes as [`WorkerCompletion::PollReply`].
     SendPoll(WorkerProtocolMessage),
-    /// POST a result; completes as [`WorkerCompletion::ResultDelivered`].
-    SendResult {
+    RunJob {
+        assign: Assign,
+        generation: u64,
+    },
+    CancelJob {
         job_id: String,
+        attempt_id: String,
+        generation: u64,
+        reason: String,
+    },
+    EscalateJob {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        hard: bool,
+    },
+    ArmWatchdogTimer {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        timer_generation: u64,
+        kind: WatchdogTimerKind,
+        delay: Duration,
+    },
+    RecordResult {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        result: JobResult,
+    },
+    SendResult {
+        entry_id: String,
         message: WorkerProtocolMessage,
     },
-    /// POST a heartbeat; completes as [`WorkerCompletion::HeartbeatDelivered`].
+    AcknowledgeResult {
+        entry: ResultOutboxEntry,
+        release: temper_protocol_worker::Release,
+    },
+    RejectResult {
+        entry: ResultOutboxEntry,
+        reason: String,
+    },
     SendHeartbeat(WorkerProtocolMessage),
-    /// Run an assigned job; completes as [`WorkerCompletion::JobFinished`].
-    RunJob(Assign),
-    /// Arm the poll-backoff timer; completes as [`WorkerCompletion::PollTimer`].
-    ArmPollTimer(std::time::Duration),
-    /// Arm the heartbeat cadence timer; completes as
-    /// [`WorkerCompletion::HeartbeatTimer`].
-    ArmHeartbeatTimer(std::time::Duration),
-    /// A human-facing log line (observability; the shell prints it). Keeps the
-    /// machine pure while still emitting the same operational log contract the
-    /// old loop did.
+    ArmResultRecordTimer {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        delay: Duration,
+    },
+    ArmResultReplayTimer {
+        entry_id: String,
+        delay: Duration,
+    },
+    ArmPollTimer(Duration),
+    ArmHeartbeatTimer(Duration),
+    Observe(crate::observability::WorkerEvent),
+    Warn(String),
     Log(String),
 }
 
-/// The pure worker core.
 pub struct WorkerMachine {
     params: WorkerParams,
     free_capacity: u32,
-    in_flight: BTreeSet<String>,
-    /// Set once the worker has registered; gates the first poll.
+    jobs: BTreeMap<String, JobWatchState>,
+    next_generation: u64,
+    outbox: BTreeMap<String, ResultOutboxEntry>,
+    replay_attempts: BTreeMap<String, u32>,
     registered: bool,
     stopped: bool,
 }
 
 impl WorkerMachine {
     pub fn new(params: WorkerParams) -> Self {
+        Self::with_recovered_outbox(params, Vec::new())
+    }
+
+    pub fn with_recovered_outbox(params: WorkerParams, recovered: Vec<ResultOutboxEntry>) -> Self {
         let free_capacity = params.max_concurrent_jobs;
+        let outbox = recovered
+            .into_iter()
+            .map(|entry| (entry.entry_id.clone(), entry))
+            .collect();
         Self {
             params,
             free_capacity,
-            in_flight: BTreeSet::new(),
+            jobs: BTreeMap::new(),
+            next_generation: 1,
+            outbox,
+            replay_attempts: BTreeMap::new(),
             registered: false,
             stopped: false,
         }
     }
 
-    /// Free capacity right now (test/observability accessor).
     pub fn free_capacity(&self) -> u32 {
         self.free_capacity
     }
 
-    /// In-flight job ids right now (test/observability accessor).
-    pub fn in_flight(&self) -> &BTreeSet<String> {
-        &self.in_flight
+    pub fn in_flight(&self) -> InFlightJobs<'_> {
+        InFlightJobs(&self.jobs)
     }
 
-    /// Poll the daemon if there is free capacity, else arm the backoff timer so
-    /// we re-poll once a job frees a slot or the timer elapses. Centralizes the
-    /// "should I poll now?" decision the old `select!` guard encoded.
+    pub fn job_state(&self, job_id: &str) -> Option<&JobWatchState> {
+        self.jobs.get(job_id)
+    }
+
     fn poll_or_backoff(&self) -> Vec<WorkerRequest> {
         if self.free_capacity > 0 {
             vec![WorkerRequest::SendPoll(crate::client::poll_message_params(
@@ -122,27 +221,27 @@ impl WorkerMachine {
         }
     }
 
-    /// Handle one poll reply: dispatch an assignment, ignore a poll-timeout, or
-    /// surface an unexpected message — then decide the next poll.
     fn on_poll_reply(
         &mut self,
+        now: EngineTime,
         reply: Result<Option<WorkerProtocolMessage>, String>,
     ) -> Vec<WorkerRequest> {
         let mut requests = Vec::new();
         match reply {
             Ok(Some(WorkerProtocolMessage::Assign(assign))) => {
-                // Defensive: the machine only polls with free capacity, so the
-                // daemon should never assign when we are full or re-assign a job
-                // already in flight. If it does (a buggy/racing daemon), refuse
-                // rather than over-subscribe or double-run — capacity
-                // conservation is an invariant, not a hope. Back off and re-sync
-                // on the next poll.
-                if self.free_capacity == 0 || self.in_flight.contains(&assign.job_id) {
+                let attempt_id = assign.attempt_id.clone().unwrap_or_default();
+                if attempt_id.is_empty() {
+                    requests.push(WorkerRequest::Log(format!(
+                        "worker: refusing unfenced assignment job_id={}",
+                        assign.job_id
+                    )));
+                    requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
+                } else if self.free_capacity == 0 || self.jobs.contains_key(&assign.job_id) {
                     requests.push(WorkerRequest::Log(format!(
                         "worker: refusing assignment job_id={} (free_capacity={}, already_in_flight={})",
                         assign.job_id,
                         self.free_capacity,
-                        self.in_flight.contains(&assign.job_id)
+                        self.jobs.contains_key(&assign.job_id)
                     )));
                     requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
                 } else {
@@ -150,17 +249,48 @@ impl WorkerMachine {
                         &assign,
                     )));
                     self.free_capacity = self.free_capacity.saturating_sub(1);
-                    self.in_flight.insert(assign.job_id.clone());
-                    requests.push(WorkerRequest::RunJob(assign));
-                    // Immediately try to poll again — more work may be waiting
-                    // and we may still have capacity.
+                    let generation = self.next_generation;
+                    self.next_generation = self.next_generation.saturating_add(1);
+                    self.jobs.insert(
+                        assign.job_id.clone(),
+                        JobWatchState {
+                            attempt_id: attempt_id.clone(),
+                            generation,
+                            phase: JobPhase::Running,
+                            run_started_at: now,
+                            last_agent_progress: now,
+                            timer_generation: 1,
+                            active_operations: BTreeMap::new(),
+                            timeout: None,
+                            cancellation: CancellationStatus::NotRequested,
+                            escalation_requested: false,
+                            result_durability: ResultDurabilityStatus::None,
+                            result_delivery: ResultDeliveryStatus::NotReady,
+                            last_progress_sequence: 0,
+                            pending_result: None,
+                        },
+                    );
+                    requests.push(WorkerRequest::RunJob {
+                        assign: assign.clone(),
+                        generation,
+                    });
+                    requests.push(self.no_progress_timer(&assign.job_id, now));
+                    if let Some(delay) = self.params.liveness_limits.max_run {
+                        requests.push(WorkerRequest::ArmWatchdogTimer {
+                            job_id: assign.job_id.clone(),
+                            attempt_id,
+                            generation,
+                            timer_generation: 0,
+                            kind: WatchdogTimerKind::MaxRun,
+                            delay,
+                        });
+                    }
                     requests.extend(self.poll_or_backoff());
                 }
             }
             Ok(Some(WorkerProtocolMessage::Error(error)))
                 if error.code == ErrorCode::PollTimeout =>
             {
-                // Long-poll elapsed with no work; back off before re-polling.
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
             Ok(Some(other)) => {
@@ -197,7 +327,7 @@ impl Machine for WorkerMachine {
 
     fn on_completion(
         &mut self,
-        _now: EngineTime,
+        now: EngineTime,
         completion: WorkerCompletion,
     ) -> Vec<WorkerRequest> {
         match completion {
@@ -211,19 +341,16 @@ impl Machine for WorkerMachine {
                         &self.params.capabilities,
                     ),
                 )];
+                requests.extend(self.outbox.values().map(Self::send_entry));
                 requests.extend(self.poll_or_backoff());
                 requests
             }
-            WorkerCompletion::Registered(Err(error)) => {
-                // Registration is required before work; back off and retry.
-                vec![
-                    WorkerRequest::Log(format!("worker: register failed: {error}")),
-                    WorkerRequest::ArmPollTimer(self.params.poll_backoff),
-                ]
-            }
-            WorkerCompletion::PollReply(reply) => self.on_poll_reply(reply),
+            WorkerCompletion::Registered(Err(error)) => vec![
+                WorkerRequest::Log(format!("worker: register failed: {error}")),
+                WorkerRequest::ArmPollTimer(self.params.poll_backoff),
+            ],
+            WorkerCompletion::PollReply(reply) => self.on_poll_reply(now, reply),
             WorkerCompletion::PollTimer => {
-                // Re-poll if registered; otherwise retry registration.
                 if self.registered {
                     self.poll_or_backoff()
                 } else {
@@ -232,52 +359,215 @@ impl Machine for WorkerMachine {
                     )]
                 }
             }
-            WorkerCompletion::JobFinished { job_id, result } => {
-                self.in_flight.remove(&job_id);
-                self.free_capacity = self
-                    .free_capacity
-                    .saturating_add(1)
-                    .min(self.params.max_concurrent_jobs);
-                let mut requests = vec![
-                    WorkerRequest::Log(crate::observability::result_sent_line(&result)),
-                    WorkerRequest::SendResult {
-                        job_id,
-                        message: WorkerProtocolMessage::Result(result),
-                    },
-                ];
-                // A slot just freed; poll again right away.
-                requests.extend(self.poll_or_backoff());
+            WorkerCompletion::JobProgress {
+                job_id,
+                attempt_id,
+                generation,
+                progress,
+            } => self.on_progress(now, job_id, attempt_id, generation, progress),
+            WorkerCompletion::WatchdogTimer {
+                job_id,
+                attempt_id,
+                generation,
+                timer_generation,
+                kind,
+            } => {
+                self.on_watchdog_timer(now, job_id, attempt_id, generation, timer_generation, kind)
+            }
+            WorkerCompletion::JobFinished {
+                job_id,
+                attempt_id,
+                generation,
+                result,
+            } => {
+                let Some(state) = self.jobs.get_mut(&job_id) else {
+                    return Vec::new();
+                };
+                if state.phase != JobPhase::Running
+                    || !state.accepts(&attempt_id, generation)
+                    || result.attempt_id.as_deref() != Some(attempt_id.as_str())
+                {
+                    return Vec::new();
+                }
+                state.phase = JobPhase::Quiesced;
+                state.cancellation = CancellationStatus::Quiesced;
+                let mut requests = self.record_terminal(&job_id, &attempt_id, generation, result);
+                requests.push(self.heartbeat_request(now));
                 requests
             }
-            WorkerCompletion::ResultDelivered { job_id, outcome } => match outcome {
-                Ok(()) => Vec::new(),
-                Err(error) => vec![WorkerRequest::Log(format!(
-                    "worker: result delivery failed for job {job_id}: {error}"
-                ))],
+            WorkerCompletion::JobQuiesced {
+                job_id,
+                attempt_id,
+                generation,
+                cleanup,
+            } => {
+                let Some(state) = self.jobs.get_mut(&job_id) else {
+                    return Vec::new();
+                };
+                if state.phase != JobPhase::CancelRequested
+                    || !state.accepts(&attempt_id, generation)
+                {
+                    return Vec::new();
+                }
+                state.phase = JobPhase::Quiesced;
+                state.cancellation = CancellationStatus::Quiesced;
+                let state = state.clone();
+                let outcome = cleanup.cancellation.as_str().to_string();
+                let descendant_cleanup = cleanup.descendants.as_str().to_string();
+                let forced = cleanup.cancellation.forced();
+                let result = self.timeout_result(&job_id, &state, now, &cleanup);
+                let mut requests = vec![WorkerRequest::Observe(
+                    crate::observability::WorkerEvent::CancellationCompleted {
+                        worker_id: self.params.worker_id.clone(),
+                        job_id: job_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        outcome,
+                        descendant_cleanup,
+                        forced,
+                    },
+                )];
+                requests.extend(self.record_terminal(&job_id, &attempt_id, generation, result));
+                requests.push(self.heartbeat_request(now));
+                requests
+            }
+            WorkerCompletion::ResultRecorded {
+                job_id,
+                attempt_id,
+                generation,
+                outcome,
+            } => {
+                let Some(state) = self.jobs.get(&job_id) else {
+                    return Vec::new();
+                };
+                if !state.accepts(&attempt_id, generation)
+                    || state.phase != JobPhase::Quiesced
+                    || state.result_durability != ResultDurabilityStatus::Pending
+                {
+                    return Vec::new();
+                }
+                match outcome {
+                    Ok(entry) => {
+                        if let Some(state) = self.jobs.get_mut(&job_id) {
+                            state.phase = JobPhase::ResultRecorded;
+                            state.result_durability = ResultDurabilityStatus::Durable;
+                            state.result_delivery = ResultDeliveryStatus::Pending;
+                        }
+                        self.jobs.remove(&job_id);
+                        self.free_capacity = self
+                            .free_capacity
+                            .saturating_add(1)
+                            .min(self.params.max_concurrent_jobs);
+                        self.outbox.insert(entry.entry_id.clone(), entry.clone());
+                        let mut requests = vec![
+                            WorkerRequest::Observe(
+                                crate::observability::WorkerEvent::ResultRecorded {
+                                    worker_id: self.params.worker_id.clone(),
+                                    job_id: job_id.clone(),
+                                    attempt_id: attempt_id.clone(),
+                                    outbox_state: "durable",
+                                    delivery_state: "pending",
+                                    success: true,
+                                },
+                            ),
+                            WorkerRequest::Observe(
+                                crate::observability::WorkerEvent::CapacityReleased {
+                                    worker_id: self.params.worker_id.clone(),
+                                    job_id: job_id.clone(),
+                                    attempt_id: attempt_id.clone(),
+                                    permit_released: true,
+                                    free_capacity: self.free_capacity,
+                                },
+                            ),
+                            WorkerRequest::Observe(
+                                crate::observability::WorkerEvent::ResultDelivery {
+                                    worker_id: self.params.worker_id.clone(),
+                                    job_id: job_id.clone(),
+                                    attempt_id: attempt_id.clone(),
+                                    outbox_state: "durable",
+                                    delivery_state: "pending",
+                                    claim_convergence: "pending",
+                                    warning: false,
+                                },
+                            ),
+                            WorkerRequest::Log(crate::observability::result_sent_line(
+                                &entry.result,
+                            )),
+                            Self::send_entry(&entry),
+                        ];
+                        requests.extend(self.poll_or_backoff());
+                        requests
+                    }
+                    Err(error) => vec![
+                        WorkerRequest::Observe(crate::observability::WorkerEvent::ResultRecorded {
+                            worker_id: self.params.worker_id.clone(),
+                            job_id: job_id.clone(),
+                            attempt_id: attempt_id.clone(),
+                            outbox_state: "record_failed",
+                            delivery_state: "not_ready",
+                            success: false,
+                        }),
+                        WorkerRequest::Log(format!(
+                            "worker: durable result recording failed for job {job_id}: {error}"
+                        )),
+                        WorkerRequest::ArmResultRecordTimer {
+                            job_id,
+                            attempt_id,
+                            generation,
+                            delay: self.params.poll_backoff,
+                        },
+                    ],
+                }
+            }
+            WorkerCompletion::ResultRecordTimer {
+                job_id,
+                attempt_id,
+                generation,
+            } => self
+                .jobs
+                .get(&job_id)
+                .filter(|state| {
+                    state.accepts(&attempt_id, generation)
+                        && state.phase == JobPhase::Quiesced
+                        && state.result_durability == ResultDurabilityStatus::Pending
+                })
+                .and_then(|state| state.pending_result.clone())
+                .map(|result| {
+                    vec![WorkerRequest::RecordResult {
+                        job_id,
+                        attempt_id,
+                        generation,
+                        result,
+                    }]
+                })
+                .unwrap_or_default(),
+            WorkerCompletion::ResultDelivered { entry_id, outcome } => {
+                self.result_delivery(entry_id, outcome)
+            }
+            WorkerCompletion::ResultReplayTimer { entry_id } => self
+                .outbox
+                .get(&entry_id)
+                .map(Self::send_entry)
+                .into_iter()
+                .collect(),
+            WorkerCompletion::ResultFinalized { entry_id, outcome } => match outcome {
+                Ok(()) => {
+                    self.outbox.remove(&entry_id);
+                    self.replay_attempts.remove(&entry_id);
+                    Vec::new()
+                }
+                Err(error) => self.retry_entry(&entry_id, error),
             },
             WorkerCompletion::HeartbeatTimer => {
                 let mut requests = Vec::new();
-                if !self.in_flight.is_empty() {
-                    requests.push(WorkerRequest::SendHeartbeat(
-                        crate::client::heartbeat_message_params(
-                            &self.params,
-                            &self.in_flight,
-                            self.free_capacity,
-                        ),
-                    ));
+                if !self.jobs.is_empty() {
+                    requests.push(self.heartbeat_request(now));
                 }
-                // Re-arm the cadence regardless, so heartbeats resume when work
-                // arrives.
                 requests.push(WorkerRequest::ArmHeartbeatTimer(
                     self.params.heartbeat_interval,
                 ));
                 requests
             }
             WorkerCompletion::HeartbeatDelivered(Err(error)) => {
-                // A daemon replacement forgets process-local registrations but
-                // the worker still owns its in-flight job set. Re-register and
-                // keep that set intact so the next exact heartbeat can reattach
-                // any durable assignment staged by startup recovery.
                 self.registered = false;
                 vec![
                     WorkerRequest::Log(format!("worker: heartbeat failed: {error}")),
@@ -302,3 +592,11 @@ impl Machine for WorkerMachine {
 #[cfg(test)]
 #[path = "worker_machine_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "worker_machine_watchdog_tests.rs"]
+mod watchdog_tests;
+
+#[cfg(test)]
+#[path = "worker_machine_cancellation_projection_tests.rs"]
+mod cancellation_projection_tests;

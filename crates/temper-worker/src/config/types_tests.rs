@@ -31,6 +31,8 @@ fn in_memory_worker_config() -> WorkerConfig {
         max_concurrent_jobs: 1,
         poll_wait: Duration::from_millis(10),
         heartbeat_interval: Duration::from_millis(10),
+        liveness_limits: Default::default(),
+        result_root: ".temper/worker-results".into(),
         agent_traces: Default::default(),
         executor: ExecutorSelection::Stub,
     }
@@ -79,6 +81,8 @@ fn worker_params_project_from_in_memory_config() {
     let params = WorkerParams::from_config(&config);
     assert_eq!(params.worker_id, "worker-unit");
     assert_eq!(params.max_concurrent_jobs, 1);
+    assert_eq!(params.liveness_limits, config.liveness_limits);
+    assert_eq!(params.result_root, config.result_root);
 }
 
 /// The coding executor's config is built from the worker config's role

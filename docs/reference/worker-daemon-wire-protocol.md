@@ -101,6 +101,7 @@ when known, is carried in the payload.
 | `trace_context.traceparent` | string | yes when `trace_context` is present | Canonical lowercase W3C `traceparent`. |
 | `trace_context.tracestate` | string | no | Bounded W3C `tracestate` (at most 512 bytes). |
 | `job_id` | string | yes | Daemon-generated unique job id. |
+| `attempt_id` | string | yes | Opaque daemon-generated identity for this dispatch attempt. Workers must copy it unchanged into results and heartbeats. Compatibility readers may deserialize legacy assignments without it, but current workers refuse them. |
 | `role` | string | yes | Workflow role id for the assignment. |
 | `repo` | string | yes | Repository slug. |
 | `artifact` | object | yes | Target work item identity. |
@@ -280,13 +281,36 @@ stalls and reclaim leases.
 | `worker_id` | string | yes | Worker id. |
 | `jobs` | array | yes | Per-job heartbeat objects. |
 | `jobs[].job_id` | string | yes | Assigned job id. |
+| `jobs[].attempt_id` | string | yes | Exact attempt fence from the assignment. Omission is tolerated only for legacy recovered metadata. |
 | `jobs[].state` | string | yes | Job state: `running`, `waiting`, or `finishing`. |
-| `jobs[].message` | string | yes | Short human-readable progress text. |
+| `jobs[].message` | string | yes | Short human-readable phase text; consumers should prefer `liveness` when present. |
+| `jobs[].liveness` | object | no | Additive worker-owned structured report. Omitted by legacy/third-party workers. |
+| `jobs[].liveness.phase` | string | yes when `liveness` is present | `running`, `cancel_requested`, `quiesced`, or `result_recorded`. |
+| `jobs[].liveness.run_elapsed_ms` | integer | yes when `liveness` is present | Monotonic elapsed time since this attempt acquired its local permit. |
+| `jobs[].liveness.no_progress_elapsed_ms` | integer | yes when `liveness` is present | Monotonic elapsed time since the last accepted agent lifecycle boundary. Lease heartbeats do not reset it. |
+| `jobs[].liveness.active_operation_count` | integer | yes when `liveness` is present | Full number of parallel model/tool operations. |
+| `jobs[].liveness.active_operations` | array | no | At most eight content-free summaries (`scope`, `kind`, `name`, `operation_id`, `elapsed_ms`). The count may exceed the array length. |
+| `jobs[].liveness.timeout` | object | no | Winning timeout `reason` (`no_progress` or `max_run`) and configured `limit_ms`. |
+| `jobs[].liveness.cancellation` | string | yes when `liveness` is present | `not_requested`, `requested`, `escalated`, or `quiesced`. |
+| `jobs[].liveness.result_durability` | string | yes when `liveness` is present | `none`, `pending`, or `durable`. |
+| `jobs[].liveness.result_delivery` | string | yes when `liveness` is present | `not_ready` or `pending`; delivery continues independently after permit release. |
+| `jobs[].liveness.pending_result` | boolean | yes when `liveness` is present | Whether a terminal result is waiting for durable recording or delivery. |
 | `free_capacity` | integer | no | Current free capacity; must be at least `0` when present. |
 
 Heartbeat interval and missed-heartbeat threshold are deployment-configured
 daemon policy, not fixed wire constants. If a worker misses the threshold, the
 daemon may mark the worker unhealthy, reclaim leases, and reassign eligible work.
+The structured report is observability only: the worker watchdog remains the
+no-progress authority and durable Forge assignment metadata remains claim
+authority. The daemon registry retains only the latest accepted report for each
+exact `(worker_id, job_id, attempt_id)` and never renews a lease from its elapsed
+values.
+
+The operator `GET /v1/state` and `GET /v1/state/job/{job_id}` projections expose
+the report additively. Registered workers have a `jobs` array of latest reports;
+in-flight jobs include `attempt_id` and optional `worker_report`. An absent
+report means unknown/legacy, not healthy or idle. Tool arguments, result bodies,
+prompts, credentials, and model content cannot appear in these DTOs.
 
 ### `result` — worker → daemon
 
@@ -298,6 +322,7 @@ Worker returns the structured result for one assigned job.
 | `type` | string | yes | Constant `result`. |
 | `worker_id` | string | yes | Worker id. |
 | `job_id` | string | yes | Assigned job id. |
+| `attempt_id` | string | yes | Exact attempt fence from the assignment. An unfenced result cannot complete a current fenced assignment. |
 | `status` | string | yes | `success` or `failure`. |
 | `branch` | object | required for successful code-producing jobs | Pushed branch data. |
 | `branch.name` | string | yes when `branch` is present | Pushed branch name. |
@@ -318,6 +343,14 @@ Worker returns the structured result for one assigned job.
 | `failure.message` | string | yes when `failure` is present | Human-readable failure summary. |
 | `summary` | string | no | Short result summary suitable for logs or operator display. |
 | `details` | object | no | Arbitrary structured role-specific result details. |
+
+The worker first records the exact result in its private durable result outbox.
+Transport failures retain that entry and replay it with bounded exponential
+backoff independently of job permits. The daemon applies a matching result
+idempotently and does not acknowledge it until result bookkeeping and exact
+durable-claim release complete. A duplicate exact delivery returns the prior
+acknowledgement without reapplying. Permanent authentication/protocol rejection
+moves the worker entry to operator-visible rejected storage.
 
 The daemon performs any idempotent PR create/update through the Forge API as the
 role identity. It also routes declared verdicts through the compiled workflow and
@@ -358,7 +391,8 @@ closing the assignment from the worker's perspective.
 | `type` | string | yes | Constant `release`. |
 | `worker_id` | string | yes | Worker id. |
 | `job_id` | string | yes | Assigned job id. |
-| `disposition` | string | yes | `accepted`, `superseded`, or `reclaimed`. |
+| `attempt_id` | string | yes | Attempt fence being acknowledged. The worker compacts an outbox entry only when this identity matches exactly. |
+| `disposition` | string | yes | `accepted`, `superseded`, or `reclaimed`. `accepted` means the exact result applied and the claim converged; stale `superseded`/`reclaimed` acknowledgements compact without mutation and remain operator-visible warnings. |
 | `message` | string | no | Human-readable explanation. |
 
 ### `lease-ack` — worker → daemon

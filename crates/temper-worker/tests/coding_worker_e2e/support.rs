@@ -37,6 +37,11 @@ pub fn worker_config() -> WorkerConfig {
         max_concurrent_jobs: 1,
         poll_wait: std::time::Duration::from_millis(50),
         heartbeat_interval: std::time::Duration::from_millis(50),
+        liveness_limits: Default::default(),
+        result_root: std::env::temp_dir().join(format!(
+            "temper-worker-test-results-{}",
+            uuid::Uuid::new_v4()
+        )),
         agent_traces: Default::default(),
         // `run_worker` takes the executor we construct directly, so the config's
         // `executor` field is unused here (it only matters to the binary's arg
@@ -118,6 +123,7 @@ pub fn coding_assign(_fixture: &GitFixture) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: "acme/service/issue-7/engineer/pr-for-code-7".to_string(),
+        attempt_id: Some("attempt-pr-for-code-7".to_string()),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {
@@ -172,6 +178,7 @@ pub fn coordinated_assign(_fixture: &GitFixture) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: "acme/service/issue-7/engineer/coord-for-code-7".to_string(),
+        attempt_id: Some("attempt-coord-for-code-7".to_string()),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {

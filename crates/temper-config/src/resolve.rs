@@ -21,13 +21,17 @@ use secrecy::SecretString;
 
 use crate::agent_resolve::{parse_provider_kind, resolve_provider_credential};
 use crate::agent_trace_resolve::resolve_observability;
+use crate::deadline_resolve::{
+    positive_duration_millis, resolve_agent_operation_limits, resolve_worker_liveness_limits,
+    validate_liveness_ordering,
+};
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
-    AgentProfileSettings, AgentSettings, AgentToolSettings, Capability, CodebaseMemoryIndex,
-    CodebaseMemoryMode, CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology,
-    EngineSettings, ForgeKind, ForgeSettings, GitIdentity, PathSettings, ProviderKind,
-    ProviderSettings, RepoPath, Resolved, WebUiCreds, WorkerSettings,
+    AgentSettings, AgentToolSettings, Capability, CodebaseMemoryIndex, CodebaseMemoryMode,
+    CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
+    ForgeSettings, GitIdentity, PathSettings, ProviderKind, ProviderSettings, RepoPath, Resolved,
+    WebUiCreds, WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
 use crate::secret_refs::{EngineSecretReferences, resolve_engine_secret_references};
@@ -98,7 +102,7 @@ pub fn resolve_with_options(
         &engine,
         state_dir.as_ref(),
         options,
-        &agent.profiles,
+        &agent,
     )?;
     let observability = resolve_observability(
         config,
@@ -379,7 +383,7 @@ fn resolve_worker(
     engine: &EngineSettings,
     state_dir: Option<&PathBuf>,
     options: &ResolveOptions,
-    agent_profiles: &BTreeMap<String, AgentProfileSettings>,
+    agent: &AgentSettings,
 ) -> Result<WorkerSettings, ConfigError> {
     let worker_id = resolve_identity(
         config.worker.worker_id.as_deref(),
@@ -417,12 +421,15 @@ fn resolve_worker(
     }
     let poll_wait =
         Duration::from_millis(config.worker.poll_wait_ms.unwrap_or(DEFAULT_POLL_WAIT_MS));
-    let heartbeat_interval = Duration::from_millis(
+    let heartbeat_interval = positive_duration_millis(
         config
             .worker
             .heartbeat_interval_ms
             .unwrap_or(DEFAULT_HEARTBEAT_MS),
-    );
+        "worker.heartbeat_interval_ms",
+    )?;
+    let liveness_limits = resolve_worker_liveness_limits(config)?;
+    validate_liveness_ordering(heartbeat_interval, liveness_limits, agent)?;
 
     let capabilities = match &config.worker.capabilities {
         Some(raw) => raw
@@ -434,19 +441,24 @@ fn resolve_worker(
     let capabilities = dedup_by(capabilities, |a, b| a.repo == b.repo && a.role == b.role);
     let resolved_pools = resolve_worker_pools(
         config,
-        agent_profiles,
+        &agent.profiles,
         credentials,
         options.validate_secret_references,
     )?;
+    let result_root = state_dir
+        .map(|dir| dir.join("worker-results"))
+        .unwrap_or_else(|| workspace_root.join(".temper").join("worker-results"));
 
     Ok(WorkerSettings {
         worker_id,
         daemon_url,
         workspace_root,
+        result_root,
         git_base_url,
         max_concurrent_jobs,
         poll_wait,
         heartbeat_interval,
+        liveness_limits,
         capabilities,
         pools: resolved_pools.pools,
         worker_pool_tokens: resolved_pools.token_values,
@@ -524,6 +536,8 @@ fn resolve_agent(
 
     let credential = resolve_provider_credential(credentials, &provider_name, env);
     let tools = resolve_agent_tools(config)?;
+    let operation_limits =
+        resolve_agent_operation_limits(&config.agent.deadlines, None, "agent.deadlines")?;
 
     let provider = ProviderSettings {
         kind,
@@ -532,7 +546,12 @@ fn resolve_agent(
         base_url,
         credential,
     };
-    let profiles = resolve_agent_profiles(config, credentials, options.validate_secret_references)?;
+    let profiles = resolve_agent_profiles(
+        config,
+        credentials,
+        options.validate_secret_references,
+        operation_limits,
+    )?;
 
     Ok(AgentSettings {
         provider,
@@ -543,6 +562,7 @@ fn resolve_agent(
         enable_subagents: config.agent.enable_subagents.unwrap_or(false),
         config_dir: trimmed(config.agent.config_dir.as_deref())
             .map(|value| resolve_config_path(&value, env, options)),
+        operation_limits,
         tools,
         profiles,
     })

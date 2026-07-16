@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 pub(crate) use std::{
-    sync::{Arc, Mutex as StdMutex},
+    collections::BTreeMap,
+    sync::{Arc, Mutex as StdMutex, OnceLock},
     time::Duration,
 };
 
@@ -12,6 +13,27 @@ pub(crate) use temper_protocol_worker::{
     WorkerProtocolMessage,
 };
 pub(crate) use temper_worker_registry::InFlightJob;
+
+fn assignment_attempts() -> &'static StdMutex<BTreeMap<String, Option<String>>> {
+    static ATTEMPTS: OnceLock<StdMutex<BTreeMap<String, Option<String>>>> = OnceLock::new();
+    ATTEMPTS.get_or_init(|| StdMutex::new(BTreeMap::new()))
+}
+
+fn remember_assignment(assign: &temper_protocol_worker::Assign) {
+    assignment_attempts()
+        .lock()
+        .expect("assignment attempt lock")
+        .insert(assign.job_id.clone(), assign.attempt_id.clone());
+}
+
+fn attempt_for(job_id: &str) -> Option<String> {
+    assignment_attempts()
+        .lock()
+        .expect("assignment attempt lock")
+        .get(job_id)
+        .cloned()
+        .flatten()
+}
 
 pub(crate) struct RecordingApplier {
     tx: temper_engine_io::CqSender<(InFlightJob, JobResult)>,
@@ -162,6 +184,7 @@ pub(crate) fn job_result(worker_id: &str, job_id: &str, repos: Vec<RepoOutcome>)
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: attempt_for(job_id),
         status: ResultStatus::Success,
         repos,
         verdict: None,
@@ -205,6 +228,7 @@ pub(crate) fn failure_result(
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: attempt_for(job_id),
         status: ResultStatus::Failure,
         repos: Vec::new(),
         verdict: None,
@@ -267,6 +291,21 @@ pub(crate) async fn post_json(
     serde_json::from_slice(&response.body).expect("protocol response json")
 }
 
+pub(crate) fn post_json_background(
+    spawner: &dyn temper_engine_io::Spawner,
+    url: &str,
+    msg: WorkerProtocolMessage,
+) -> temper_engine_io::OneshotReceiver<WorkerProtocolMessage> {
+    let (reply_tx, reply_rx) = temper_engine_io::oneshot();
+    let url = url.to_string();
+    spawner.spawn_with_cx(move |_cx| async move {
+        let client = temper_engine_io::http::JsonClient::new();
+        let reply = post_json(&client, &url, &msg).await;
+        reply_tx.send(reply);
+    });
+    reply_rx
+}
+
 pub(crate) fn assert_release(msg: WorkerProtocolMessage, worker_id: &str, job_id: &str) {
     match msg {
         WorkerProtocolMessage::Release(release) => {
@@ -280,14 +319,20 @@ pub(crate) fn assert_release(msg: WorkerProtocolMessage, worker_id: &str, job_id
 
 pub(crate) fn assert_assigned(msg: WorkerProtocolMessage, job_id: &str) {
     match msg {
-        WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, job_id),
+        WorkerProtocolMessage::Assign(assign) => {
+            assert_eq!(assign.job_id, job_id);
+            remember_assignment(&assign);
+        }
         other => panic!("expected assign, got {other:?}"),
     }
 }
 
 pub(crate) fn assignment_job_id(msg: WorkerProtocolMessage) -> String {
     match msg {
-        WorkerProtocolMessage::Assign(assign) => assign.job_id,
+        WorkerProtocolMessage::Assign(assign) => {
+            remember_assignment(&assign);
+            assign.job_id
+        }
         other => panic!("expected assign, got {other:?}"),
     }
 }
@@ -322,7 +367,10 @@ pub(crate) async fn eventually_enqueue_and_assign(
     for _ in 0..20 {
         enqueue_standard_job(daemon, job_id).await;
         match post_json(client, url, &poll_with_wait(worker_id, 25)).await {
-            WorkerProtocolMessage::Assign(assign) if assign.job_id == job_id => return,
+            WorkerProtocolMessage::Assign(assign) if assign.job_id == job_id => {
+                remember_assignment(&assign);
+                return;
+            }
             WorkerProtocolMessage::Error(error) if error.code == ErrorCode::PollTimeout => {
                 temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
             }

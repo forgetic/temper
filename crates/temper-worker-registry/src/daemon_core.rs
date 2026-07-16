@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_worker::{
-    Artifact, Assign, ErrorCode, Heartbeat, JobResult, LeaseAck, Poll, ProtocolError, Register,
-    Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
+    Artifact, Assign, ErrorCode, JobHeartbeat, LeaseAck, Poll, ProtocolError, Register,
+    WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 
 use crate::{
@@ -20,6 +20,8 @@ use crate::{
 };
 
 mod activity;
+mod heartbeat;
+mod result;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueuedJob {
@@ -33,6 +35,7 @@ pub struct QueuedJob {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InFlightJob {
     pub job_id: String,
+    pub attempt_id: Option<String>,
     pub role: String,
     pub repo: String,
     pub artifact: Artifact,
@@ -67,6 +70,7 @@ pub struct RoleSaturation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecoveredJob {
     pub job_id: String,
+    pub attempt_id: Option<String>,
     pub worker_id: String,
     pub role: String,
     pub repo: String,
@@ -87,6 +91,7 @@ pub struct HeartbeatRecovery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StagedRecovery {
     worker_id: String,
+    attempt_id: Option<String>,
     item: WorkItem,
 }
 
@@ -95,6 +100,9 @@ pub struct DaemonCore {
     coordinator: DispatchCoordinator,
     job_context: BTreeMap<String, (Artifact, serde_json::Value)>,
     staged_recovery: BTreeMap<String, StagedRecovery>,
+    assignment_attempts: BTreeMap<String, String>,
+    next_attempt: u64,
+    attempt_prefix: String,
     worker_auth: WorkerPoolAuthConfig,
     authenticated_workers: BTreeMap<String, String>,
     pool_policies: WorkerPoolPolicies,
@@ -159,6 +167,11 @@ impl DaemonCore {
         &self.worker_auth
     }
 
+    pub fn set_attempt_prefix(&mut self, prefix: impl Into<String>) {
+        self.attempt_prefix = prefix.into();
+        self.next_attempt = 0;
+    }
+
     /// Stages one assignment reconstructed from durable Forge metadata.
     ///
     /// A staged job is intentionally not dispatchable. It becomes in-flight
@@ -179,6 +192,7 @@ impl DaemonCore {
         };
         let staged = StagedRecovery {
             worker_id: recovered.worker_id,
+            attempt_id: recovered.attempt_id,
             item,
         };
         if let Some(current) = self.staged_recovery.get(&recovered.job_id) {
@@ -215,6 +229,7 @@ impl DaemonCore {
                 let (artifact, job_payload) = self.job_context.remove(&job_id)?;
                 Some(RecoveredJob {
                     job_id,
+                    attempt_id: staged.attempt_id,
                     worker_id: staged.worker_id,
                     role: staged.item.role,
                     repo: staged.item.repo,
@@ -401,10 +416,12 @@ impl DaemonCore {
 
     /// Restore a failed or canceled claim to the front of the pending queue.
     pub fn rollback_assignment(&mut self, job_id: &str) -> bool {
+        self.assignment_attempts.remove(job_id);
         self.coordinator.rollback_reservation(job_id)
     }
 
     pub fn rollback_committed_assignment(&mut self, job_id: &str) -> bool {
+        self.assignment_attempts.remove(job_id);
         self.coordinator.rollback_committed(job_id)
     }
 
@@ -414,6 +431,7 @@ impl DaemonCore {
             return false;
         }
         self.job_context.remove(job_id);
+        self.assignment_attempts.remove(job_id);
         true
     }
 
@@ -425,11 +443,17 @@ impl DaemonCore {
     /// Full context of a currently in-flight (assigned, not yet completed) job,
     /// recoverable until `handle(Result)` completes it. `None` if the job is
     /// pending (not yet dispatched), unknown, or already completed.
+    pub fn worker_job_report(&self, job_id: &str) -> Option<&JobHeartbeat> {
+        let worker_id = self.coordinator.assigned_worker(job_id)?;
+        self.coordinator.registry().job_report(worker_id, job_id)
+    }
+
     pub fn in_flight_job(&self, job_id: &str) -> Option<InFlightJob> {
         let item = self.coordinator.assigned_work_item(job_id)?;
         let (artifact, job_payload) = self.job_context.get(job_id)?.clone();
         Some(InFlightJob {
             job_id: job_id.to_string(),
+            attempt_id: self.assignment_attempts.get(job_id).cloned(),
             role: item.role.clone(),
             repo: item.repo.clone(),
             artifact,
@@ -626,7 +650,21 @@ impl DaemonCore {
                 Some(assignment.job_id),
             );
         };
-        assignment_message(assignment, artifact, job_payload)
+        let attempt_id = self.new_attempt_id();
+        self.assignment_attempts
+            .insert(assignment.job_id.clone(), attempt_id.clone());
+        assignment_message(assignment, Some(attempt_id), artifact, job_payload)
+    }
+
+    fn new_attempt_id(&mut self) -> String {
+        if self.attempt_prefix.is_empty() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT_PREFIX: AtomicU64 = AtomicU64::new(1);
+            let sequence = NEXT_PREFIX.fetch_add(1, Ordering::Relaxed);
+            self.attempt_prefix = format!("daemon-core-{sequence:x}");
+        }
+        self.next_attempt = self.next_attempt.wrapping_add(1);
+        format!("{}-{:x}", self.attempt_prefix, self.next_attempt)
     }
 
     fn handle_poll(&mut self, poll: Poll) -> WorkerProtocolMessage {
@@ -644,92 +682,6 @@ impl DaemonCore {
         response
     }
 
-    /// Authenticates and applies a heartbeat while exposing exact durable-job
-    /// matches to the daemon lease handler.
-    pub fn handle_authenticated_heartbeat(
-        &mut self,
-        heartbeat: Heartbeat,
-        auth: Option<&WorkerAuth>,
-    ) -> Result<(Option<WorkerProtocolMessage>, HeartbeatRecovery), WorkerAuthError> {
-        self.authenticate_registered_worker(
-            &heartbeat.worker_id,
-            heartbeat.worker_pool.as_deref(),
-            auth,
-        )?;
-        Ok(self.handle_heartbeat(heartbeat))
-    }
-
-    fn handle_heartbeat(
-        &mut self,
-        heartbeat: Heartbeat,
-    ) -> (Option<WorkerProtocolMessage>, HeartbeatRecovery) {
-        if self
-            .coordinator
-            .registry_mut()
-            .heartbeat(&heartbeat.worker_id)
-            .is_err()
-        {
-            return (
-                Some(error_response(
-                    ErrorCode::UnknownWorker,
-                    "unknown worker",
-                    None,
-                )),
-                HeartbeatRecovery::default(),
-            );
-        }
-
-        let mut recovery = HeartbeatRecovery::default();
-        for reported in heartbeat.jobs {
-            if self.coordinator.assigned_worker(&reported.job_id)
-                == Some(heartbeat.worker_id.as_str())
-            {
-                recovery.matched_job_ids.push(reported.job_id);
-                continue;
-            }
-
-            let Some(staged) = self.staged_recovery.get(&reported.job_id).cloned() else {
-                recovery.rejected_job_ids.push(reported.job_id);
-                continue;
-            };
-            if staged.worker_id != heartbeat.worker_id {
-                recovery.rejected_job_ids.push(reported.job_id);
-                continue;
-            }
-            match self
-                .coordinator
-                .restore_assignment(&staged.worker_id, staged.item)
-            {
-                Ok(_) => {
-                    self.staged_recovery.remove(&reported.job_id);
-                    recovery.matched_job_ids.push(reported.job_id);
-                }
-                Err(_) => recovery.rejected_job_ids.push(reported.job_id),
-            }
-        }
-        (None, recovery)
-    }
-
-    fn handle_result(&mut self, result: JobResult) -> WorkerProtocolMessage {
-        if self.coordinator.assigned_worker(&result.job_id) != Some(result.worker_id.as_str()) {
-            return error_response(
-                ErrorCode::MalformedMessage,
-                "result does not match the assigned job and worker",
-                Some(result.job_id),
-            );
-        }
-        let _ = self.coordinator.complete(&result.job_id);
-        self.job_context.remove(&result.job_id);
-
-        WorkerProtocolMessage::Release(Release {
-            protocol_version: WORKER_PROTOCOL_VERSION,
-            worker_id: result.worker_id,
-            job_id: result.job_id,
-            disposition: ReleaseDisposition::Accepted,
-            message: None,
-        })
-    }
-
     fn handle_lease_ack(&mut self, _lease_ack: LeaseAck) -> Option<WorkerProtocolMessage> {
         None
     }
@@ -737,6 +689,7 @@ impl DaemonCore {
 
 fn assignment_message(
     assignment: Assignment,
+    attempt_id: Option<String>,
     artifact: Artifact,
     job_payload: serde_json::Value,
 ) -> WorkerProtocolMessage {
@@ -748,6 +701,7 @@ fn assignment_message(
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context,
         job_id: assignment.job_id,
+        attempt_id,
         role: assignment.role,
         repo: assignment.repo,
         artifact,
@@ -844,3 +798,6 @@ mod daemon_core_auth_tests;
 #[cfg(test)]
 #[path = "daemon_core_tests.rs"]
 mod daemon_core_tests;
+
+#[cfg(test)]
+mod result_tests;

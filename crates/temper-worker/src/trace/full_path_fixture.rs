@@ -118,6 +118,7 @@ pub(super) fn produce_first_party_run(collector: &TraceCollector) -> (String, Ag
         AgentActivityConfig {
             policy: full_path_policy(),
             address: Some(endpoint.address().to_string()),
+            ..Default::default()
         },
         Arc::new(UsageTotals::default()),
     );

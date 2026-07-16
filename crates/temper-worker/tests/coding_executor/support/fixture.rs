@@ -33,11 +33,11 @@ impl Fixture {
         }
     }
 
-    pub fn executor(
+    pub fn executor<R: AgentRunner + 'static>(
         &self,
-        runner: FakeAgentRunner,
+        runner: R,
         include_identity: bool,
-    ) -> CodingExecutor<FakeAgentRunner> {
+    ) -> CodingExecutor<R> {
         let mut role_identities = BTreeMap::new();
         if include_identity {
             for (role, user, email) in [
@@ -157,6 +157,7 @@ pub fn assign(branch_hint: &str, correlation_key: &str) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: format!("acme/service/issue-7/engineer/{correlation_key}"),
+        attempt_id: Some(format!("attempt-{correlation_key}")),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {
@@ -177,6 +178,7 @@ pub fn pr_assign(
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: format!("acme/service/pull-7/reviewer/{correlation_key}"),
+        attempt_id: Some(format!("attempt-{correlation_key}")),
         role: "reviewer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {
@@ -363,6 +365,7 @@ pub fn pr_fix_assign(branch_hint: &str, correlation_key: &str) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: "acme/service/pull_request-7/engineer/pr_ci_failed".to_string(),
+        attempt_id: Some(format!("attempt-{correlation_key}")),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {
@@ -379,6 +382,7 @@ pub fn pr_merge_conflict_assign(branch_hint: &str, correlation_key: &str) -> Ass
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: "acme/service/pull_request-7/engineer/pr_merge_conflict".to_string(),
+        attempt_id: Some(format!("attempt-{correlation_key}")),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {
@@ -395,6 +399,7 @@ pub fn assign_with_context(correlation_key: &str, context: TestJobContext) -> As
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: format!("acme/service/issue-7/{role}/{correlation_key}"),
+        attempt_id: Some(format!("attempt-{correlation_key}")),
         role,
         repo: "acme/service".to_string(),
         artifact: Artifact {
