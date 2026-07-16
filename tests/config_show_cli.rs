@@ -29,6 +29,11 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
          webhook_secret = \"webhook-secret\"\n\
          repos = [\"ai/temper\"]\n\
          roles = [\"engineer\"]\n\
+         [worker]\n\
+         max_no_progress_secs = 777\n\
+         max_run_secs = 3600\n\
+         graceful_cancellation_grace_secs = 12\n\
+         forced_termination_grace_secs = 6\n\
          [[worker.pools]]\n\
          name = \"engineers\"\n\
          roles = [\"engineer\"]\n\
@@ -38,6 +43,10 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
          worker_token = \"worker-engineers-token\"\n\
          [agent]\n\
          provider = \"anthropic\"\n\
+         [agent.deadlines]\n\
+         tool_timeout_secs = 500\n\
+         model_connect_timeout_secs = 100\n\
+         model_idle_timeout_secs = 90\n\
          [agent.profiles.coding]\n\
          command = [\"temper\", \"agent\"]\n\
          provider = \"anthropic\"\n\
@@ -46,7 +55,9 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
          provider_url = \"http://fake-llm\"\n\
          max_iterations = 250\n\
          subagents = true\n\
-         credential = \"agent-provider\"\n",
+         credential = \"agent-provider\"\n\
+         [agent.profiles.coding.deadlines]\n\
+         model_idle_timeout_secs = 45\n",
     )
     .expect("write config");
     std::fs::write(
@@ -104,6 +115,20 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
     assert!(stdout.contains("model=claude-opus-4-8"), "{stdout}");
     assert!(
         stdout.contains("credential=agent-provider (available)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("max_no_progress_secs = 777"), "{stdout}");
+    assert!(stdout.contains("max_run_secs = 3600"), "{stdout}");
+    assert!(
+        stdout.contains("cancellation_graces_secs = 12 graceful + 6 forced"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("deadlines_secs = tool 500, model_connect 100, model_idle 90"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("deadlines_secs=tool 500/connect 100/idle 45"),
         "{stdout}"
     );
     assert!(!stdout.contains("super-secret-forge-token"), "{stdout}");

@@ -37,6 +37,8 @@ pub fn worker_config() -> WorkerConfig {
         max_concurrent_jobs: 1,
         poll_wait: std::time::Duration::from_millis(50),
         heartbeat_interval: std::time::Duration::from_millis(50),
+        liveness_limits: Default::default(),
+        result_root: ".temper/worker-results".into(),
         agent_traces: Default::default(),
         // `run_worker` takes the executor we construct directly, so the config's
         // `executor` field is unused here (it only matters to the binary's arg

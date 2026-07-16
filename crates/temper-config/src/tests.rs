@@ -502,6 +502,14 @@ fn config_template_enables_codebase_memory_auto_defaults() {
     assert_eq!(tool.roles, vec!["*".to_string()]);
     assert_eq!(tool.index, CodebaseMemoryIndex::Background);
     assert_eq!(
+        resolved.agent.operation_limits.tool_timeout,
+        std::time::Duration::from_secs(600)
+    );
+    assert_eq!(
+        resolved.worker.liveness_limits.max_no_progress,
+        std::time::Duration::from_secs(900)
+    );
+    assert_eq!(
         resolved.observability.agent_traces.policy.capture,
         crate::CaptureModeV1::Metadata
     );
@@ -686,6 +694,7 @@ workspace = "~/.local/state/temper/workspace"
 }
 
 mod agent_traces;
+mod deadlines;
 mod secret_references;
 mod target_sections;
 

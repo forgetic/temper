@@ -69,6 +69,8 @@ fn params(max_concurrent: u32) -> WorkerParams {
         poll_wait: std::time::Duration::from_millis(100),
         heartbeat_interval: std::time::Duration::from_millis(50),
         poll_backoff: std::time::Duration::from_millis(500),
+        liveness_limits: Default::default(),
+        result_root: ".temper/worker-results".into(),
     }
 }
 

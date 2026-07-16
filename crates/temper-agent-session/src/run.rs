@@ -54,6 +54,7 @@ fn drive_coding_loop(
     let config_dir = config.config_dir.clone();
     let enable_subagents = config.enable_subagents;
     let tool_config = config.tool_config.clone();
+    let runtime_limits = config.runtime_limits;
     let submit_for_pr = config.submit_for_pr.clone();
     let forge_context = config.forge_context.clone();
     let activity_config = AgentActivityConfig {
@@ -73,6 +74,7 @@ fn drive_coding_loop(
             submit_for_pr,
             forge_context,
             activity_config,
+            runtime_limits,
         )
         .await?;
         Ok(result)

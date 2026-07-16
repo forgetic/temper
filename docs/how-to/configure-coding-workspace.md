@@ -82,11 +82,22 @@ roles = ["architect", "engineer", "code-reviewer"]
 # Explicit owner/name:role capabilities this worker serves.
 # Default: the cross-product of [engine] repos × roles.
 # capabilities = ["acme/widgets:engineer"]
+# Worker-owned liveness supervision. Lease heartbeats are not agent progress.
+max_no_progress_secs = 900
+# max_run_secs = 7200       # optional independent whole-run ceiling
+graceful_cancellation_grace_secs = 10
+forced_termination_grace_secs = 5
 
 [agent]
 provider = "anthropic"          # selects the [agent.providers.<name>] block below
 max_iterations = 250
 enable_subagents = false        # the investigate read-only sub-agent tool
+
+[agent.deadlines]
+# Complete defaults are 600/120/120 seconds when this table is absent.
+tool_timeout_secs = 600
+model_connect_timeout_secs = 120
+model_idle_timeout_secs = 120
 
 [agent.providers.anthropic]
 # url = "https://api.anthropic.com"   # optional base-URL override → --provider-url
@@ -115,7 +126,13 @@ From this resolved config the worker renders the agent command. The non-secret
 provider knobs become flags — `--provider <kind>`, and `--model`,
 `--investigate-model`, `--provider-url` when set — alongside `--max-iterations`,
 `--subagents on|off`, and a per-job `--context`, `--result`, and `--workspace`.
-The credential becomes the single `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON` env
+For known first-party commands it also writes the complete resolved operation
+limits to a private per-run JSON file and passes `--runtime-limits <FILE>`.
+Each `[agent.profiles.<name>.deadlines]` field inherits independently from
+`[agent.deadlines]`. Explicit third-party profile commands receive neither this
+Temper-specific flag nor first-party lifecycle flags; worker fallback supervision
+still applies to them. The credential becomes the single
+`TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON` env
 the child reads. (For the full flag inventory and defaults, see
 [`docs/reference/environment-variables.md`](../reference/environment-variables.md).)
 

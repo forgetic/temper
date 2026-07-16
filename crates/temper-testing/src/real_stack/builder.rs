@@ -339,6 +339,8 @@ impl HermeticRealStackBuilder {
                 .unwrap_or(1),
             poll_wait: Duration::from_millis(25),
             heartbeat_interval: Duration::from_millis(50),
+            liveness_limits: Default::default(),
+            result_root: workspace_root.join(".temper/worker-results"),
             agent_traces: Default::default(),
             executor: ExecutorSelection::Stub,
         };

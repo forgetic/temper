@@ -15,11 +15,25 @@ inputs as flags:
 - `--workspace <DIR>`: workspace root and process cwd;
 - optional `--submit-for-pr-address <HOST:PORT>` and
   `--forge-context-address <HOST:PORT>` loopback side channels;
-- optional `--tool-config <FILE>` for non-secret agent-local tools.
+- optional `--tool-config <FILE>` for non-secret agent-local tools;
+- `--runtime-limits <FILE>` for known first-party commands only. The file is an
+  `AgentRuntimeLimitsV1` JSON object with positive `tool_timeout_secs`,
+  `model_connect_timeout_secs`, and `model_idle_timeout_secs` values.
+
+The worker classifies each invocation as first-party or third-party. Known
+`temper-agent` and `temper agent` commands receive complete resolved limits and
+first-party lifecycle flags. Explicit third-party profile commands receive no
+Temper-specific limits flag and remain under bounded worker fallback
+supervision. Profile deadline overrides inherit field-by-field from
+`[agent.deadlines]` before the file is written.
 
 The side-channel listeners exist only for that run, accept bounded JSON, and
 are stopped when the child exits. Standalone calls the same host callbacks
 in-process rather than opening sockets.
+
+The worker writes per-run protocol files in a private temporary directory. Its
+durable result root is created with owner-only permissions below
+`[paths].state_dir` when available, or below the worker workspace root otherwise.
 
 ## `WorkspaceContext` and artifact compatibility
 

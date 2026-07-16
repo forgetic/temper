@@ -2324,6 +2324,7 @@ dependencies = [
  "temper-log",
  "temper-worker",
  "temper-worker-io",
+ "tempfile",
  "tracing",
 ]
 

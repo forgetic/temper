@@ -187,3 +187,12 @@ fn write_bounded(stream: &mut TcpStream, response: &impl serde::Serialize) {
         }
     }
 }
+
+pub(super) fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
+    context.work_item.role == "engineer"
+        && context.repos.iter().any(|repo| repo.is_writable())
+        && !matches!(
+            context.checkout.as_deref(),
+            Some("read_only" | "pull_request_read_only")
+        )
+}

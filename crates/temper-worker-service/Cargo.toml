@@ -18,6 +18,9 @@ temper-config = { path = "../temper-config" }
 temper-worker = { path = "../temper-worker" }
 temper-worker-io = { path = "../temper-worker-io" }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [[bin]]
 name = "temper-worker"
 path = "src/bin/temper-worker.rs"

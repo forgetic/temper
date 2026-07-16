@@ -44,6 +44,8 @@ fn worker_config_with_capacity(max_concurrent_jobs: u32) -> WorkerConfig {
         max_concurrent_jobs,
         poll_wait: Duration::from_millis(25),
         heartbeat_interval: Duration::from_millis(25),
+        liveness_limits: Default::default(),
+        result_root: ".temper/worker-results".into(),
         agent_traces: Default::default(),
         executor: ExecutorSelection::Stub,
     }

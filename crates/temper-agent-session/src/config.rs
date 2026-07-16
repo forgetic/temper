@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use temper_agent::{ForgeContextHost, ProviderConfig, SubmitForPrHost};
 use temper_protocol_activity::AgentActivityCapturePolicyV1;
-use temper_protocol_agent::AgentToolConfig;
+use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig};
 
 /// Everything the coding-agent session is configured by, in one struct.
 ///
@@ -41,6 +41,8 @@ pub struct AgentConfig {
     /// `--tool-config`. The native coding loop builds the codebase-memory MCP
     /// bridge from this config when it applies to the current role.
     pub tool_config: Option<AgentToolConfig>,
+    /// Complete operation limits supplied by the first-party worker contract.
+    pub runtime_limits: AgentRuntimeLimitsV1,
     /// Worker-resolved shared trace capture policy. The activity producer
     /// consumes this in the agent tier; it contains no storage path or token.
     pub trace_policy: AgentActivityCapturePolicyV1,
@@ -69,6 +71,7 @@ impl AgentConfig {
             enable_subagents,
             config_dir,
             tool_config: None,
+            runtime_limits: AgentRuntimeLimitsV1::default(),
             trace_policy: AgentActivityCapturePolicyV1::default(),
             activity_address: None,
             submit_for_pr: None,
@@ -79,6 +82,12 @@ impl AgentConfig {
     /// Stores the parsed non-secret agent tool config for this session.
     pub fn with_tool_config(mut self, tool_config: Option<AgentToolConfig>) -> Self {
         self.tool_config = tool_config;
+        self
+    }
+
+    /// Stores complete first-party operation limits for this session.
+    pub fn with_runtime_limits(mut self, runtime_limits: AgentRuntimeLimitsV1) -> Self {
+        self.runtime_limits = runtime_limits;
         self
     }
 
@@ -127,6 +136,7 @@ mod tests {
         assert!(config.enable_subagents);
         assert_eq!(config.config_dir, Some(PathBuf::from("/cfg")));
         assert!(config.tool_config.is_none());
+        assert_eq!(config.runtime_limits, AgentRuntimeLimitsV1::default());
         assert_eq!(config.trace_policy, AgentActivityCapturePolicyV1::default());
         assert!(config.activity_address.is_none());
         assert_eq!(config.provider.base_url(), "https://llm.example");

@@ -6,7 +6,9 @@ use std::path::Path;
 use crate::prompt_overlays::PromptOverlays;
 use crate::provider::ProviderConfig;
 use crate::usage::RunTotals;
-use temper_protocol_agent::{AgentToolConfig, WorkspaceContext, WorkspaceResult};
+use temper_protocol_agent::{
+    AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext, WorkspaceResult,
+};
 
 use super::codebase_memory::prepare_codebase_memory_tools;
 use super::prompt::{system_prompt_with_registry, user_context_with_registry};
@@ -277,6 +279,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_submit_for_pr(
         submit_for_pr,
         None,
         crate::activity::AgentActivityConfig::default(),
+        AgentRuntimeLimitsV1::default(),
     )
     .await
 }
@@ -296,7 +299,15 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     submit_for_pr: Option<SubmitForPrHost>,
     forge_context: Option<ForgeContextHost>,
     activity_config: crate::activity::AgentActivityConfig,
+    runtime_limits: AgentRuntimeLimitsV1,
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
+    let operation_limits = temper_agent_core::AgentOperationLimits {
+        tool_timeout: std::time::Duration::from_secs(runtime_limits.tool_timeout_secs),
+        model_connect_timeout: std::time::Duration::from_secs(
+            runtime_limits.model_connect_timeout_secs,
+        ),
+        model_idle_timeout: std::time::Duration::from_secs(runtime_limits.model_idle_timeout_secs),
+    };
     let capability = Capability::for_role(&context.work_item.role);
     let codebase_memory =
         prepare_codebase_memory_tools(tool_config, &context.work_item.role, context, cwd).await?;
@@ -338,6 +349,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
             cwd,
             &scope_factory,
             &main_scope_id,
+            operation_limits,
         );
     }
 
@@ -366,6 +378,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
         user_message: turns.user,
         tools,
         max_iterations,
+        operation_limits,
         provider,
         stream_options,
     };

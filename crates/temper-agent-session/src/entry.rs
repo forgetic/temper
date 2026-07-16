@@ -27,7 +27,8 @@ use temper_agent::{
 };
 use temper_protocol_activity::AgentActivityCapturePolicyV1;
 use temper_protocol_agent::{
-    AgentToolConfig, PROVIDER_CREDENTIALS_ENV, ProviderCredentialJson, WorkspaceContext,
+    AgentRuntimeLimitsV1, AgentToolConfig, PROVIDER_CREDENTIALS_ENV, ProviderCredentialJson,
+    WorkspaceContext,
 };
 
 use crate::config::AgentConfig;
@@ -109,6 +110,7 @@ fn build_config(
         config_dir,
     )
     .with_tool_config(read_tool_config(options.tool_config.as_deref())?)
+    .with_runtime_limits(read_runtime_limits(options.runtime_limits.as_deref())?)
     .with_trace_policy(read_trace_policy(options.trace_policy.as_deref())?)
     .with_activity_address(options.activity_address.clone());
     let config = match options.submit_for_pr_address {
@@ -132,6 +134,18 @@ fn read_tool_config(path: Option<&std::path::Path>) -> Result<Option<AgentToolCo
     AgentToolConfig::from_json(&raw)
         .map(Some)
         .map_err(|error| format!("parse tool config file {}: {error}", path.display()))
+}
+
+/// Reads and validates complete first-party operation limits. Direct/manual
+/// agent runs retain the protocol defaults when no worker file is supplied.
+fn read_runtime_limits(path: Option<&std::path::Path>) -> Result<AgentRuntimeLimitsV1, String> {
+    let Some(path) = path else {
+        return Ok(AgentRuntimeLimitsV1::default());
+    };
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| format!("read runtime limits file {}: {error}", path.display()))?;
+    AgentRuntimeLimitsV1::from_json(&raw)
+        .map_err(|error| format!("parse runtime limits file {}: {error}", path.display()))
 }
 
 /// Reads and validates the non-secret shared capture-policy DTO. An absent file
@@ -347,6 +361,31 @@ mod tests {
         std::fs::write(&invalid, "not json").expect("write invalid json");
         let parse_error = read_tool_config(Some(&invalid)).expect_err("invalid json fails");
         assert!(parse_error.contains("parse tool config file"));
+    }
+
+    #[test]
+    fn runtime_limits_default_and_worker_file_are_parsed() {
+        assert_eq!(
+            read_runtime_limits(None).expect("default limits"),
+            AgentRuntimeLimitsV1::default()
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("runtime-limits.json");
+        let limits = AgentRuntimeLimitsV1 {
+            tool_timeout_secs: 31,
+            model_connect_timeout_secs: 11,
+            model_idle_timeout_secs: 7,
+        };
+        std::fs::write(&path, limits.to_json().unwrap()).expect("write limits");
+        assert_eq!(read_runtime_limits(Some(&path)).unwrap(), limits);
+
+        std::fs::write(
+            &path,
+            r#"{"tool_timeout_secs":0,"model_connect_timeout_secs":1,"model_idle_timeout_secs":1}"#,
+        )
+        .expect("write invalid limits");
+        let error = read_runtime_limits(Some(&path)).expect_err("zero is rejected");
+        assert!(error.contains("tool_timeout_secs"), "{error}");
     }
 
     #[test]

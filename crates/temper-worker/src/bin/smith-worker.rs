@@ -32,6 +32,7 @@ fn main() {
 /// Credentials are the agent process's concern — it preflights its own provider
 /// login at job start.
 fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
+    temper_worker::prepare_result_root(&config.result_root)?;
     match config.executor.clone() {
         ExecutorSelection::Stub => {
             let executor = Arc::new(StubExecutor::success());
@@ -62,13 +63,19 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
             // the temper-agent surface assembles `temper-agent` + auth/iteration flags;
             // an external command is passed through verbatim.
             let agent_surface = surface.agent;
-            let command = match agent_surface {
-                AgentSurface::AnvilNative(agent) => agent.into_command(),
-                AgentSurface::ExternalCommand(command) => command,
+            let (command, runtime_limits) = match agent_surface {
+                AgentSurface::AnvilNative(agent) => (
+                    agent.into_command(),
+                    Some(temper_worker::AgentRuntimeLimitsV1::default()),
+                ),
+                AgentSurface::ExternalCommand(command) => (command, None),
             };
             let trace_config = config.agent_traces.clone();
-            let runner =
-                Arc::new(OutOfProcessRunner::new(command).with_trace_collector(trace_config));
+            let runner = Arc::new(
+                OutOfProcessRunner::new(command)
+                    .with_runtime_limits(runtime_limits)
+                    .with_trace_collector(trace_config),
+            );
             temper_worker_io::block_on_with(move |_cx, handle| async move {
                 let executor = Arc::new(
                     CodingExecutor::new(executor_config, runner).with_pr_freshness_guard(Arc::new(

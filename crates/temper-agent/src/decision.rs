@@ -103,6 +103,7 @@ pub async fn run_decision<D: DeserializeOwned>(
             user_message: effective_user,
             tools: tongs::tools::ToolRegistry::from_tools(Vec::new()),
             max_iterations: MAX_TOOL_ITERATIONS,
+            operation_limits: temper_agent_core::AgentOperationLimits::default(),
             provider,
             stream_options,
         },

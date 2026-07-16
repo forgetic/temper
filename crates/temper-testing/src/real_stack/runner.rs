@@ -73,6 +73,7 @@ impl AgentRunner for NativeJigAgentRunner {
             Some(submit_for_pr),
             Some(forge_context),
             temper_agent::AgentActivityConfig::default(),
+            temper_protocol_agent::AgentRuntimeLimitsV1::default(),
         )
         .await
         .map_err(agent_error)?;

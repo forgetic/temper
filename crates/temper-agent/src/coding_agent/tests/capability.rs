@@ -85,6 +85,7 @@ fn subagent_tools_register_parallel_safe_and_on_the_right_model() {
                 std::path::Path::new("."),
                 &scope_factory,
                 "main-scope",
+                temper_agent_core::AgentOperationLimits::default(),
             )
         })
     };

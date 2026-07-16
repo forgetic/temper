@@ -8,8 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
+use crate::deadline_resolve::resolve_agent_operation_limits;
 use crate::error::ConfigError;
-use crate::resolved::{AgentProfileSettings, ProviderKind, RepoPath, WorkerPoolSettings};
+use crate::resolved::{
+    AgentOperationLimits, AgentProfileSettings, ProviderKind, RepoPath, WorkerPoolSettings,
+};
 use crate::schema::{Config, Credentials};
 use crate::secret_refs::{require_secret_payload, resolve_secret_reference};
 
@@ -89,6 +92,7 @@ pub(crate) fn resolve_agent_profiles(
     config: &Config,
     credentials: &Credentials,
     validate_secret_references: bool,
+    inherited_limits: AgentOperationLimits,
 ) -> Result<BTreeMap<String, AgentProfileSettings>, ConfigError> {
     let mut profiles = BTreeMap::new();
     let mut seen_names = BTreeSet::new();
@@ -142,6 +146,12 @@ pub(crate) fn resolve_agent_profiles(
             })
             .transpose()?;
 
+        let operation_limits = resolve_agent_operation_limits(
+            &profile.deadlines,
+            Some(inherited_limits),
+            &format!("{field}.deadlines"),
+        )?;
+
         profiles.insert(
             name,
             AgentProfileSettings {
@@ -152,6 +162,7 @@ pub(crate) fn resolve_agent_profiles(
                 provider_url: trimmed(profile.provider_url.as_deref()),
                 max_iterations: profile.max_iterations,
                 subagents: profile.subagents,
+                operation_limits,
                 credential: credential.map(|resolved| resolved.reference),
                 credential_json,
             },

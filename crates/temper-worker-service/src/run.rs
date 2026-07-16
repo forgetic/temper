@@ -41,6 +41,13 @@ async fn run_async(
     let workspace_root = resolved.worker.workspace_root.clone();
 
     let invocation = adapt::agent_invocation(resolved, agent_program)?;
+    debug_assert_eq!(
+        invocation.runtime_limits.is_some(),
+        matches!(
+            invocation.supervision,
+            adapt::AgentSupervisionKind::FirstParty
+        )
+    );
     let forge_context = temper_worker::forge_context_host(
         Arc::new(temper_worker::HttpTransport::new(&worker_config.daemon_url)),
         cx,
@@ -51,6 +58,7 @@ async fn run_async(
         OutOfProcessRunner::new(invocation.command)
             .with_env(invocation.env)
             .with_tool_config(invocation.tool_config)
+            .with_runtime_limits(invocation.runtime_limits)
             .with_trace_policy(invocation.trace_policy)
             .with_trace_collector(worker_config.agent_traces.clone())
             .with_forge_context_host(forge_context),

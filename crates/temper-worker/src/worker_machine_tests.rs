@@ -30,6 +30,8 @@ fn params() -> WorkerParams {
         poll_wait: Duration::from_millis(100),
         heartbeat_interval: Duration::from_millis(50),
         poll_backoff: Duration::from_millis(500),
+        liveness_limits: Default::default(),
+        result_root: ".temper/worker-results".into(),
     }
 }
 
