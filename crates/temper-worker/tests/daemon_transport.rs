@@ -45,7 +45,10 @@ fn worker_config_with_capacity(max_concurrent_jobs: u32) -> WorkerConfig {
         poll_wait: Duration::from_millis(25),
         heartbeat_interval: Duration::from_millis(25),
         liveness_limits: Default::default(),
-        result_root: ".temper/worker-results".into(),
+        result_root: std::env::temp_dir().join(format!(
+            "temper-worker-test-results-{}",
+            uuid::Uuid::new_v4()
+        )),
         agent_traces: Default::default(),
         executor: ExecutorSelection::Stub,
     }
@@ -60,6 +63,7 @@ fn assign_for_job(config: &WorkerConfig, job_id: &str) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: job_id.to_string(),
+        attempt_id: Some(format!("attempt-{job_id}")),
         role: config.capabilities[0].role.clone(),
         repo: config.capabilities[0].repo.clone(),
         artifact: Artifact {

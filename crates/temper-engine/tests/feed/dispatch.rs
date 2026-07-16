@@ -194,7 +194,8 @@ fn scanned_role_work_dispatches_to_worker_and_applies_once() {
         );
         assert_eq!(artifact.state, "Open");
 
-        let posted_result = job_result("worker-a", &assignment.job_id);
+        let mut posted_result = job_result("worker-a", &assignment.job_id);
+        posted_result.attempt_id = assignment.attempt_id.clone();
         match post_json(
             &client,
             &url,

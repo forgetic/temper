@@ -1,7 +1,7 @@
 //! Per-attempt orchestration around the joined process supervisor.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::trace::ActivityEndpoint;
 
@@ -16,6 +16,8 @@ struct SubmitHostTask {
     future: SubmitForPrFuture,
     response: std::sync::mpsc::SyncSender<SubmitForPrResponse>,
 }
+
+const LIFECYCLE_CONNECT_GRACE: Duration = Duration::from_millis(100);
 
 /// Every blocking or threaded resource owned by one attempt. Drop is the
 /// cancellation boundary used when the worker watchdog or component owner
@@ -77,17 +79,18 @@ impl Drop for RunResources {
         // become authoritative after cancellation starts.
         self.fence.close();
         self.accepted_submit.clear();
-        let first_party_connected = self
-            .lifecycle
-            .as_ref()
-            .is_some_and(lifecycle::LifecycleEndpoint::connected);
-        if first_party_connected {
-            let _ = self
-                .lifecycle
-                .as_ref()
-                .expect("connected lifecycle endpoint exists")
-                .request_cancel("worker cancelled agent attempt");
-        }
+        let cancellation_started = Instant::now();
+        let connection_grace = self
+            .limits
+            .graceful_cancellation_grace
+            .min(LIFECYCLE_CONNECT_GRACE);
+        let first_party_connected = self.lifecycle.as_ref().is_some_and(|endpoint| {
+            endpoint.request_cancel("worker cancelled agent attempt", connection_grace)
+        });
+        let graceful_grace = self
+            .limits
+            .graceful_cancellation_grace
+            .saturating_sub(cancellation_started.elapsed());
 
         let result = self
             .process
@@ -95,7 +98,7 @@ impl Drop for RunResources {
             .expect("process exists")
             .cancel_and_join(
                 first_party_connected,
-                self.limits.graceful_cancellation_grace,
+                graceful_grace,
                 self.limits.forced_termination_grace,
             );
         self.process.take();

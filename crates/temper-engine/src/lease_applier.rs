@@ -148,28 +148,34 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     }
 
     async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
-        let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
-            return;
-        };
-        let expected = durable_assignment(&job, &context);
-        let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
-        match manager
-            .heartbeat_assignment(&repo_id, target, &expected, (self.clock)())
-            .await
-        {
-            Ok(_) => {
-                self.claims
-                    .lock()
-                    .expect("assignment claim lock")
-                    .insert(job.job_id, context);
-            }
-            Err(error) => tracing::warn!(
+        if let Err(error) = self.reattach_recovered_claim(&job, &context).await {
+            tracing::warn!(
                 target: "temper_daemon",
                 job_id = %job.job_id,
                 %error,
                 "recovered assignment heartbeat did not match durable claim"
-            ),
+            );
         }
+    }
+
+    async fn apply_recovered(
+        &self,
+        job: InFlightJob,
+        result: JobResult,
+        context: ClaimContext,
+    ) -> ApplyOutcome {
+        if let Err(error) = self.reattach_recovered_claim(&job, &context).await {
+            tracing::error!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                %error,
+                "lease applier could not reattach recovered result claim"
+            );
+            return ApplyOutcome::Retryable {
+                reason: format!("could not reattach recovered result claim: {error}"),
+            };
+        }
+        self.apply(job, result).await
     }
 
     async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
@@ -182,7 +188,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         else {
             return ApplyOutcome::Stale;
         };
-        if claim_context.worker_id != result.worker_id {
+        if claim_context.worker_id != result.worker_id || job.attempt_id != result.attempt_id {
             return ApplyOutcome::Stale;
         }
         let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
@@ -234,6 +240,9 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
             }
 
             let outcome = self.inner.apply(job.clone(), result).await;
+            if matches!(outcome, ApplyOutcome::Retryable { .. }) {
+                return outcome;
+            }
 
             if let Err(error) = manager
                 .release_assignment(&repo_id, target, &expected)
@@ -245,6 +254,9 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                     %error,
                     "lease applier could not release durable assignment"
                 );
+                return ApplyOutcome::Retryable {
+                    reason: format!("could not release durable assignment: {error}"),
+                };
             } else {
                 emit_lease_released(LeaseReleased {
                     item: &item,
@@ -263,6 +275,27 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
 }
 
 impl<F: Forge + ?Sized> LeaseApplier<F> {
+    async fn reattach_recovered_claim(
+        &self,
+        job: &InFlightJob,
+        context: &ClaimContext,
+    ) -> Result<(), String> {
+        let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), job).await else {
+            return Err("assignment target could not be resolved".to_string());
+        };
+        let expected = durable_assignment(job, context);
+        let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
+        manager
+            .heartbeat_assignment(&repo_id, target, &expected, (self.clock)())
+            .await
+            .map_err(|error| error.to_string())?;
+        self.claims
+            .lock()
+            .expect("assignment claim lock")
+            .insert(job.job_id.clone(), context.clone());
+        Ok(())
+    }
+
     async fn validate_claim_freshness(&self, job: &InFlightJob) -> Option<ClaimOutcome> {
         let check = serde_json::from_value::<JobContext>(job.job_payload.clone())
             .ok()?
@@ -283,6 +316,7 @@ fn durable_assignment(job: &InFlightJob, context: &ClaimContext) -> DurableAssig
     let parsed = serde_json::from_value::<JobContext>(job.job_payload.clone()).ok();
     DurableAssignment {
         job_id: Some(job.job_id.clone()),
+        attempt_id: job.attempt_id.clone(),
         role: Some(RoleId::new(job.role.clone())),
         queue: parsed.as_ref().map(|context| context.queue.clone()),
         action: parsed.as_ref().and_then(|context| context.action.clone()),

@@ -112,11 +112,12 @@ fn heartbeat(worker_id: &str) -> WorkerProtocolMessage {
     })
 }
 
-fn result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
+fn result(worker_id: &str, job_id: &str, attempt_id: Option<&str>) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Result(JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: attempt_id.map(str::to_string),
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
@@ -286,32 +287,54 @@ fn worker_protocol_http_auth_rejects_missing_wrong_and_cross_pool_tokens() {
                 .status,
             401
         );
-        match serde_json::from_slice::<WorkerProtocolMessage>(
+        let assignment = match serde_json::from_slice::<WorkerProtocolMessage>(
             &post_bearer(&url, &poll("worker-a"), Some("builders-secret"))
                 .await
                 .body,
         )
         .expect("assignment response parses")
         {
-            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+            WorkerProtocolMessage::Assign(assign) => {
+                assert_eq!(assign.job_id, "job-1");
+                assign
+            }
             other => panic!("expected assignment, got {other:?}"),
-        }
+        };
         assert_eq!(
-            post_bearer(&url, &result("worker-a", "job-1"), Some("reviewers-secret"),)
-                .await
-                .status,
+            post_bearer(
+                &url,
+                &result("worker-a", "job-1", assignment.attempt_id.as_deref()),
+                Some("reviewers-secret"),
+            )
+            .await
+            .status,
             401
         );
         match serde_json::from_slice::<WorkerProtocolMessage>(
-            &post_bearer(&url, &result("worker-a", "job-1"), Some("builders-secret"))
-                .await
-                .body,
+            &post_bearer(
+                &url,
+                &result("worker-a", "job-1", assignment.attempt_id.as_deref()),
+                Some("builders-secret"),
+            )
+            .await
+            .body,
         )
         .expect("release response parses")
         {
             WorkerProtocolMessage::Release(release) => assert_eq!(release.job_id, "job-1"),
             other => panic!("expected release, got {other:?}"),
         }
+        assert_eq!(
+            post_bearer(
+                &url,
+                &result("worker-a", "job-1", assignment.attempt_id.as_deref()),
+                Some("reviewers-secret"),
+            )
+            .await
+            .status,
+            401,
+            "a cached lost-acknowledgement release must still authenticate its sender"
+        );
     })
 }
 
@@ -467,11 +490,20 @@ fn result_release_frees_capacity() {
         daemon
             .enqueue_job("job-2", "engineer", "ai/temper", artifact(), json!({"n":2}))
             .await;
-        match post_json(&client, &url, &poll("worker-a")).await {
-            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+        let assignment = match post_json(&client, &url, &poll("worker-a")).await {
+            WorkerProtocolMessage::Assign(assign) => {
+                assert_eq!(assign.job_id, "job-1");
+                assign
+            }
             other => panic!("expected assign, got {other:?}"),
-        }
-        match post_json(&client, &url, &result("worker-a", "job-1")).await {
+        };
+        match post_json(
+            &client,
+            &url,
+            &result("worker-a", "job-1", assignment.attempt_id.as_deref()),
+        )
+        .await
+        {
             WorkerProtocolMessage::Release(release) => {
                 assert_eq!(release.disposition, ReleaseDisposition::Accepted)
             }
@@ -519,6 +551,51 @@ fn protocol_version_mismatch() {
             post_json(&client, &url, &msg).await,
             ErrorCode::ProtocolVersionMismatch,
         );
+    })
+}
+
+#[test]
+fn result_protocol_version_mismatch_does_not_consume_assignment() {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
+        let (daemon, url) = spawn(&handle).await;
+        let client = JsonClient::new();
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "ai/temper", 1)
+            )
+            .await
+            .status,
+            204
+        );
+        daemon
+            .enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({}))
+            .await;
+        let assignment = match post_json(&client, &url, &poll("worker-a")).await {
+            WorkerProtocolMessage::Assign(assign) => assign,
+            other => panic!("expected assignment, got {other:?}"),
+        };
+        let mut mismatched = result("worker-a", "job-1", assignment.attempt_id.as_deref());
+        if let WorkerProtocolMessage::Result(result) = &mut mismatched {
+            result.protocol_version = WORKER_PROTOCOL_VERSION + 1;
+        }
+        assert_error(
+            post_json(&client, &url, &mismatched).await,
+            ErrorCode::ProtocolVersionMismatch,
+        );
+        match post_json(
+            &client,
+            &url,
+            &result("worker-a", "job-1", assignment.attempt_id.as_deref()),
+        )
+        .await
+        {
+            WorkerProtocolMessage::Release(release) => {
+                assert_eq!(release.disposition, ReleaseDisposition::Accepted)
+            }
+            other => panic!("expected release, got {other:?}"),
+        }
     })
 }
 

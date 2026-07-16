@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_worker::{
     Capability, Capacity, Heartbeat, HeartbeatState, JobHeartbeat, Poll, Register,
@@ -71,13 +71,40 @@ pub fn heartbeat_message_params(
     in_flight: &BTreeSet<String>,
     free_capacity: u32,
 ) -> WorkerProtocolMessage {
+    heartbeat_message_params_with_attempts(
+        params,
+        in_flight.iter().map(|job_id| (job_id, None)),
+        free_capacity,
+    )
+}
+
+/// Builds fenced heartbeats for current worker assignments.
+pub fn heartbeat_message_params_attempts(
+    params: &crate::config::WorkerParams,
+    in_flight: &BTreeMap<String, String>,
+    free_capacity: u32,
+) -> WorkerProtocolMessage {
+    heartbeat_message_params_with_attempts(
+        params,
+        in_flight
+            .iter()
+            .map(|(job_id, attempt_id)| (job_id, Some(attempt_id.as_str()))),
+        free_capacity,
+    )
+}
+
+fn heartbeat_message_params_with_attempts<'a>(
+    params: &crate::config::WorkerParams,
+    in_flight: impl Iterator<Item = (&'a String, Option<&'a str>)>,
+    free_capacity: u32,
+) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Heartbeat(Heartbeat {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: params.worker_id.clone(),
         jobs: in_flight
-            .iter()
-            .map(|job_id| JobHeartbeat {
+            .map(|(job_id, attempt_id)| JobHeartbeat {
                 job_id: job_id.clone(),
+                attempt_id: attempt_id.map(str::to_string),
                 state: HeartbeatState::Running,
                 message: "running".to_string(),
             })

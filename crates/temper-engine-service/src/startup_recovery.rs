@@ -175,11 +175,13 @@ pub async fn stage_startup_assignments(
                 continue;
             }
         };
+        let attempt_id = claim.assignment.attempt_id.clone();
         prepared.push((
             job_id,
             claim,
             temper_engine::RecoveredJob {
                 job_id: job.job_id,
+                attempt_id,
                 worker_id,
                 role: job.role,
                 repo: job.repo,

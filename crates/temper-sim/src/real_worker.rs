@@ -41,12 +41,27 @@ pub struct RealWorkerProfile {
     pub max_concurrent_jobs: u32,
     pub poll_wait: Duration,
     pub heartbeat_interval: Duration,
+    /// Hermetic durable result root for this simulated worker process.
+    pub result_root: std::path::PathBuf,
 }
 
 impl RealWorkerProfile {
     pub fn new(worker_id: impl Into<String>, role: &str, repo: &str) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_RESULT_ROOT: AtomicU64 = AtomicU64::new(1);
+
+        let worker_id = worker_id.into();
+        let root_sequence = NEXT_RESULT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let result_root = std::env::temp_dir().join(format!(
+            "temper-sim-worker-results-{}-{root_sequence}",
+            std::process::id()
+        ));
+        // A prior abruptly terminated test process may have left this
+        // process-scoped path behind after PID reuse.
+        let _ = std::fs::remove_dir_all(&result_root);
         Self {
-            worker_id: worker_id.into(),
+            result_root,
+            worker_id,
             role: role.to_string(),
             repo: repo.to_string(),
             max_concurrent_jobs: 1,
@@ -71,7 +86,7 @@ impl RealWorkerProfile {
             poll_wait: self.poll_wait,
             heartbeat_interval: self.heartbeat_interval,
             liveness_limits: Default::default(),
-            result_root: std::path::PathBuf::from(".temper/worker-results"),
+            result_root: self.result_root.clone(),
             agent_traces: Default::default(),
             executor: ExecutorSelection::Stub,
         }
@@ -261,6 +276,7 @@ pub fn run_success_stub_worker_once(seed: u64) -> RealWorkerOutcome {
     .with_apply_grace(Duration::from_millis(200));
 
     let profile = RealWorkerProfile::new("real-worker-0", "engineer", "acme/service");
+    let result_root = profile.result_root.clone();
     let probe = spawn_success_stub_worker(&sim, &daemon, profile, Some(model.clone()));
 
     let enqueue_model = model.clone();
@@ -295,8 +311,11 @@ pub fn run_success_stub_worker_once(seed: u64) -> RealWorkerOutcome {
         crate::scenarios::MAX_STEPS,
     );
 
-    RealWorkerOutcome {
+    let outcome = RealWorkerOutcome {
         model: model.snapshot(),
         trace: probe.snapshot(),
-    }
+    };
+    drop(sim);
+    let _ = std::fs::remove_dir_all(result_root);
+    outcome
 }

@@ -184,6 +184,7 @@ pub(crate) fn job_result(worker_id: &str, job_id: &str) -> JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: None,
         status: ResultStatus::Success,
         repos: vec![RepoOutcome {
             repo: "acme/service".to_string(),

@@ -15,6 +15,7 @@ fn assignment_trace_context_round_trips_and_stays_optional() {
         protocol_version: crate::WORKER_PROTOCOL_VERSION,
         trace_context: Some(trace_context.clone()),
         job_id: "job-1".into(),
+        attempt_id: Some("attempt-1".into()),
         role: "engineer".into(),
         repo: "ai/temper".into(),
         artifact: crate::Artifact {

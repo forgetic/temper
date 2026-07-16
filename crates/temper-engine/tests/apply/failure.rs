@@ -87,15 +87,10 @@ fn permanent_failure_apply_window_unblocks_after_apply_completes() {
         );
 
         let failure = permanent_failure_result("worker-a", "job-permanent-failure-1");
-        assert_release(
-            post_json(
-                &client,
-                &url,
-                &WorkerProtocolMessage::Result(failure.clone()),
-            )
-            .await,
-            "worker-a",
-            "job-permanent-failure-1",
+        let acknowledgement = post_json_background(
+            &handle,
+            &url,
+            WorkerProtocolMessage::Result(failure.clone()),
         );
         let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
         assert_eq!(job.job_id, "job-permanent-failure-1");
@@ -113,6 +108,14 @@ fn permanent_failure_apply_window_unblocks_after_apply_completes() {
         assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
 
         release_tx.send(());
+        assert_release(
+            acknowledgement
+                .recv()
+                .await
+                .expect("result acknowledgement"),
+            "worker-a",
+            "job-permanent-failure-1",
+        );
         eventually_enqueue_and_assign(
             &cx,
             &daemon,

@@ -96,11 +96,16 @@ fn poll_message(profile: &WorkerProfile) -> WorkerProtocolMessage {
     })
 }
 
-fn result_message(profile: &WorkerProfile, job_id: &str) -> WorkerProtocolMessage {
+fn result_message(
+    profile: &WorkerProfile,
+    assign: &temper_protocol_worker::Assign,
+) -> WorkerProtocolMessage {
+    let job_id = &assign.job_id;
     WorkerProtocolMessage::Result(JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: profile.worker_id.clone(),
         job_id: job_id.to_string(),
+        attempt_id: assign.attempt_id.clone(),
         status: ResultStatus::Success,
         repos: vec![RepoOutcome {
             repo: profile.repo.clone(),
@@ -164,14 +169,14 @@ pub async fn run_worker(
                     .await;
                 }
 
-                let result = result_message(&profile, &assign.job_id);
+                let result = result_message(&profile, &assign);
                 let submissions = if profile.duplicate_results { 2 } else { 1 };
                 for _ in 0..submissions {
-                    if let Ok(reply) = client.try_send(&result).await {
-                        if let Some(WorkerProtocolMessage::Release(release)) = reply {
-                            if release.job_id == assign.job_id {
-                                model.record_release(&assign.job_id);
-                            }
+                    if let Ok(Some(WorkerProtocolMessage::Release(release))) =
+                        client.try_send(&result).await
+                    {
+                        if release.job_id == assign.job_id {
+                            model.record_release(&assign.job_id);
                         }
                     }
                 }

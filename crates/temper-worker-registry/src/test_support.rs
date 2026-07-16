@@ -104,11 +104,16 @@ pub(crate) fn artifact() -> Artifact {
     }
 }
 
-pub(crate) fn result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
+pub(crate) fn result_with_attempt(
+    worker_id: &str,
+    job_id: &str,
+    attempt_id: Option<String>,
+) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Result(JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id,
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,

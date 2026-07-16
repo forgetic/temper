@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use temper_protocol_agent::{
     AgentLifecycleCancellationAckV1, AgentLifecycleCommandV1, AgentLifecycleFrameV1,
@@ -75,9 +75,11 @@ impl LifecycleEndpoint {
         &self.address
     }
 
-    /// Sends cooperative cancellation on the already-authenticated first-party
-    /// connection. Endpoint ownership binds the command to this attempt.
-    pub(super) fn request_cancel(&self, reason: &str) -> bool {
+    /// Sends cooperative cancellation on the first-party connection. A child
+    /// may have completed its TCP connect and hello write just before the
+    /// accept thread publishes `active_stream`, so wait for that bounded race
+    /// rather than escalating a connected child without a Cancel command.
+    pub(super) fn request_cancel(&self, reason: &str, connection_grace: Duration) -> bool {
         let command = AgentLifecycleCommandV1::Cancel {
             reason: reason.to_string(),
         };
@@ -89,18 +91,28 @@ impl LifecycleEndpoint {
             Err(_) => return false,
         };
         bytes.push(b'\n');
-        let mut stream = self
-            .active_stream
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(stream) = stream.as_mut() else {
-            return false;
-        };
-        stream.write_all(&bytes).is_ok()
-    }
-
-    pub(super) fn connected(&self) -> bool {
-        self.connected.load(Ordering::Acquire)
+        let deadline = Instant::now() + connection_grace;
+        loop {
+            let sent = {
+                let mut stream = self
+                    .active_stream
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                stream
+                    .as_mut()
+                    .is_some_and(|stream| stream.write_all(&bytes).is_ok())
+            };
+            if sent {
+                return true;
+            }
+            if Instant::now() >= deadline
+                || self.stream_finished.load(Ordering::Acquire)
+                || self.stopping.load(Ordering::Acquire)
+            {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     #[allow(dead_code)]

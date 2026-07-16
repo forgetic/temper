@@ -336,6 +336,7 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
 
         let replay_job = InFlightJob {
             job_id: assignment.job_id.clone(),
+            attempt_id: assignment.attempt_id.clone(),
             role: assignment.role.clone(),
             repo: assignment.repo.clone(),
             artifact: assignment.artifact.clone(),
@@ -493,6 +494,7 @@ fn coordinated_result_opens_one_pull_request_per_writable_repo() {
             protocol_version: WORKER_PROTOCOL_VERSION,
             worker_id: "worker-a".to_string(),
             job_id: job.job_id.clone(),
+            attempt_id: job.attempt_id.clone(),
             status: ResultStatus::Success,
             repos: vec![
                 RepoOutcome {

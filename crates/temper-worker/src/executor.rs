@@ -96,10 +96,21 @@ impl JobExecutor for StubExecutor {
 }
 
 pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResult {
+    job_result_for_attempt(worker_id, job_id, None, outcome)
+}
+
+/// Builds a terminal result fenced to the exact daemon assignment attempt.
+pub fn job_result_for_attempt(
+    worker_id: &str,
+    job_id: &str,
+    attempt_id: Option<String>,
+    outcome: JobOutcome,
+) -> JobResult {
     let base = JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id,
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
@@ -161,6 +172,7 @@ mod tests {
             protocol_version: WORKER_PROTOCOL_VERSION,
             trace_context: None,
             job_id: job_id.to_string(),
+            attempt_id: Some(format!("attempt-{job_id}")),
             role: "coder".to_string(),
             repo: "ai/temper".to_string(),
             artifact: Artifact {

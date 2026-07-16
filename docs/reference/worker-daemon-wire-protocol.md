@@ -101,6 +101,7 @@ when known, is carried in the payload.
 | `trace_context.traceparent` | string | yes when `trace_context` is present | Canonical lowercase W3C `traceparent`. |
 | `trace_context.tracestate` | string | no | Bounded W3C `tracestate` (at most 512 bytes). |
 | `job_id` | string | yes | Daemon-generated unique job id. |
+| `attempt_id` | string | yes | Opaque daemon-generated identity for this dispatch attempt. Workers must copy it unchanged into results and heartbeats. Compatibility readers may deserialize legacy assignments without it, but current workers refuse them. |
 | `role` | string | yes | Workflow role id for the assignment. |
 | `repo` | string | yes | Repository slug. |
 | `artifact` | object | yes | Target work item identity. |
@@ -274,6 +275,7 @@ stalls and reclaim leases.
 | `worker_id` | string | yes | Worker id. |
 | `jobs` | array | yes | Per-job heartbeat objects. |
 | `jobs[].job_id` | string | yes | Assigned job id. |
+| `jobs[].attempt_id` | string | yes | Exact attempt fence from the assignment. Omission is tolerated only for legacy recovered metadata. |
 | `jobs[].state` | string | yes | Job state: `running`, `waiting`, or `finishing`. |
 | `jobs[].message` | string | yes | Short human-readable progress text. |
 | `free_capacity` | integer | no | Current free capacity; must be at least `0` when present. |
@@ -292,6 +294,7 @@ Worker returns the structured result for one assigned job.
 | `type` | string | yes | Constant `result`. |
 | `worker_id` | string | yes | Worker id. |
 | `job_id` | string | yes | Assigned job id. |
+| `attempt_id` | string | yes | Exact attempt fence from the assignment. An unfenced result cannot complete a current fenced assignment. |
 | `status` | string | yes | `success` or `failure`. |
 | `branch` | object | required for successful code-producing jobs | Pushed branch data. |
 | `branch.name` | string | yes when `branch` is present | Pushed branch name. |
@@ -312,6 +315,14 @@ Worker returns the structured result for one assigned job.
 | `failure.message` | string | yes when `failure` is present | Human-readable failure summary. |
 | `summary` | string | no | Short result summary suitable for logs or operator display. |
 | `details` | object | no | Arbitrary structured role-specific result details. |
+
+The worker first records the exact result in its private durable result outbox.
+Transport failures retain that entry and replay it with bounded exponential
+backoff independently of job permits. The daemon applies a matching result
+idempotently and does not acknowledge it until result bookkeeping and exact
+durable-claim release complete. A duplicate exact delivery returns the prior
+acknowledgement without reapplying. Permanent authentication/protocol rejection
+moves the worker entry to operator-visible rejected storage.
 
 The daemon performs any idempotent PR create/update through the Forge API as the
 role identity. It also routes declared verdicts through the compiled workflow and
@@ -352,7 +363,8 @@ closing the assignment from the worker's perspective.
 | `type` | string | yes | Constant `release`. |
 | `worker_id` | string | yes | Worker id. |
 | `job_id` | string | yes | Assigned job id. |
-| `disposition` | string | yes | `accepted`, `superseded`, or `reclaimed`. |
+| `attempt_id` | string | yes | Attempt fence being acknowledged. The worker compacts an outbox entry only when this identity matches exactly. |
+| `disposition` | string | yes | `accepted`, `superseded`, or `reclaimed`. `accepted` means the exact result applied and the claim converged; stale `superseded`/`reclaimed` acknowledgements compact without mutation and remain operator-visible warnings. |
 | `message` | string | no | Human-readable explanation. |
 
 ### `lease-ack` — worker → daemon

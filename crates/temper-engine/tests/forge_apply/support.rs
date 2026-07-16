@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-pub(crate) use std::{sync::Arc, time::Duration};
+pub(crate) use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 pub(crate) use serde_json::json;
 pub(crate) use std::time::Instant;
@@ -24,6 +24,27 @@ pub(crate) use temper_workflow::{
     LeasePolicy, RawArtifactKind, RawLabel, RawWorkflowSpec, RoleId, ValidatedWorkflow,
     WorkflowMetadata, global_child_correlation_key, parse_metadata_block, render_metadata_block,
 };
+
+thread_local! {
+    static ASSIGNMENT_ATTEMPTS: std::cell::RefCell<BTreeMap<String, String>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+fn remember_assignment(assign: &Assign) {
+    if let Some(attempt_id) = &assign.attempt_id {
+        ASSIGNMENT_ATTEMPTS.with(|attempts| {
+            attempts
+                .borrow_mut()
+                .insert(assign.job_id.clone(), attempt_id.clone());
+        });
+    }
+}
+
+fn attempt_for(job_id: &str) -> Option<String> {
+    ASSIGNMENT_ATTEMPTS
+        .with(|attempts| attempts.borrow().get(job_id).cloned())
+        .or_else(|| Some("attempt-test".to_string()))
+}
 
 const REFERENCE_FIXTURE: &str =
     include_str!("../../../temper-workflow/fixtures/reference-delivery.json");
@@ -233,6 +254,7 @@ pub(crate) fn success_result(
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: attempt_for(job_id),
         status: ResultStatus::Success,
         repos: vec![RepoOutcome {
             repo: repo.to_string(),
@@ -261,6 +283,7 @@ pub(crate) fn failure_result(
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: attempt_for(job_id),
         status: ResultStatus::Failure,
         repos: Vec::new(),
         verdict: None,
@@ -290,6 +313,7 @@ pub(crate) fn success_without_branch(worker_id: &str, job_id: &str) -> JobResult
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: attempt_for(job_id),
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
@@ -312,6 +336,7 @@ pub(crate) fn verdict_result(
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: attempt_for(job_id),
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: Some(verdict.to_string()),
@@ -514,6 +539,7 @@ pub(crate) fn job_for_context(
             context.role,
             context.queue
         ),
+        attempt_id: Some("attempt-test".to_string()),
         role: context.role.clone(),
         repo: repo_path.to_string(),
         artifact: Artifact {
@@ -575,6 +601,7 @@ pub(crate) async fn poll_assignment_for_role(
             assert_eq!(assign.role, expected_role);
             assert_eq!(assign.artifact.kind, expected_artifact_kind);
             assert_eq!(assign.artifact.item, json!(number.get()));
+            remember_assignment(&assign);
             assign
         }
         other => panic!("expected assign, got {other:?}"),
@@ -620,6 +647,10 @@ pub(crate) fn assert_durable_assignment(issue: &Issue, assignment: &Assign) {
         .assignment
         .expect("poll does not return before the durable assignment exists");
     assert_eq!(durable.job_id.as_deref(), Some(assignment.job_id.as_str()));
+    assert_eq!(
+        durable.attempt_id.as_deref(),
+        assignment.attempt_id.as_deref()
+    );
     assert_eq!(durable.worker_id.as_deref(), Some("worker-a"));
     assert!(durable.daemon_boot_id.is_some());
     assert!(metadata.lease.is_some());

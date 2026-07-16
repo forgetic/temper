@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -29,6 +29,9 @@ use super::git::{git_output_raw, git_output_trim, path_str};
 use super::pause::{PauseHooks, PausePoint};
 use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
 
+pub(crate) type PublishedResultKey = (String, Option<String>);
+pub(crate) type PublishedResults = Arc<Mutex<BTreeSet<PublishedResultKey>>>;
+
 /// Built hermetic stack. Durable state and replaceable process handles are
 /// intentionally different values so tests cannot accidentally rebuild the
 /// world when restarting a component.
@@ -46,6 +49,8 @@ pub struct HermeticDurableWorld {
     pub(crate) compiled: CompiledWorkflow,
     pub(crate) result_tx: temper_engine_io::CqSender<JobResult>,
     pub(crate) result_rx: temper_engine_io::CqReceiver<JobResult>,
+    /// Exact results already observed at the worker publication boundary.
+    pub(crate) published_results: PublishedResults,
     pub(crate) origins: BTreeMap<String, PathBuf>,
     pub(crate) repo_ids: BTreeMap<String, RepositoryId>,
     pub(crate) workspace_root: PathBuf,
@@ -343,6 +348,7 @@ impl HermeticRealStack {
                 .stage_recovered_job(
                     temper_engine::RecoveredJob {
                         job_id: job.job_id,
+                        attempt_id: assignment.attempt_id.clone(),
                         worker_id,
                         role: job.role,
                         repo: job.repo,
@@ -521,6 +527,7 @@ impl HermeticRealStack {
         Arc::new(ResultTappingTransport {
             router: self.router.clone(),
             result_tx: self.result_tx.clone(),
+            published_results: Arc::clone(&self.published_results),
             hooks: self.hooks.clone(),
         })
     }
@@ -562,6 +569,7 @@ impl DaemonRouter {
 pub struct ResultTappingTransport {
     router: Arc<DaemonRouter>,
     result_tx: temper_engine_io::CqSender<JobResult>,
+    published_results: PublishedResults,
     hooks: PauseHooks,
 }
 
@@ -573,6 +581,7 @@ impl Transport for ResultTappingTransport {
         auth: Option<WorkerAuth>,
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
         let result_tx = self.result_tx.clone();
+        let published_results = Arc::clone(&self.published_results);
         let hooks = self.hooks.clone();
         async move {
             let reports_jobs = matches!(
@@ -589,10 +598,19 @@ impl Transport for ResultTappingTransport {
                 WorkerProtocolMessage::Result(result) => Some(result.clone()),
                 _ => None,
             };
-            if recorded.is_some() {
-                // A successful coding executor has already committed and pushed
-                // before publishing Result.
+            let first_publication = recorded.as_ref().is_some_and(|result| {
+                published_results
+                    .lock()
+                    .expect("published result lock")
+                    .insert((result.job_id.clone(), result.attempt_id.clone()))
+            });
+            if first_publication {
+                // A first publication follows the coding executor's commit and
+                // push. Durable replay of the same exact result must not
+                // masquerade as another workspace push in crash tests.
                 hooks.reach(PausePoint::WorkerPushCompleted).await;
+            }
+            if recorded.is_some() {
                 hooks.reach(PausePoint::ResultApplicationStarted).await;
             }
             let daemon = self.router.current();

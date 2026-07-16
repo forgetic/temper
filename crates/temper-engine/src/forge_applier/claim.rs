@@ -92,7 +92,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     /// already advanced to another state.
     pub(super) async fn release_source_action_claim_for_retry(&self, job: &InFlightJob) -> bool {
         if job.artifact.kind != "issue" {
-            return false;
+            return true;
         }
 
         let context = match serde_json::from_value::<JobContext>(job.job_payload.clone()) {
@@ -111,7 +111,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             }
         };
         let Some(action) = context.action.as_deref() else {
-            return false;
+            return true;
         };
         let Some(transition) = self
             .workflow
@@ -135,13 +135,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .iter()
             .any(|effect| matches!(effect, Effect::CreatePullRequest { .. }));
         if !include_label_effects {
-            return false;
+            return true;
         }
 
         let current_role_user = self.current_role_user(job).await;
         let mutation = self.retry_release_mutation(job, &effects, current_role_user);
         if mutation.is_empty() {
-            return false;
+            return true;
         }
 
         let artifact_kind = ArtifactKindId::new(context.artifact_kind);
@@ -332,7 +332,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 artifact_kind,
                 self.workflow.as_ref(),
             ) {
-                return false;
+                return true;
             }
 
             match self

@@ -16,7 +16,8 @@ use temper_worker_io::{EngineTime, Machine, drive_sync};
 
 use super::{WorkerCompletion, WorkerMachine, WorkerRequest};
 use crate::config::{CapabilitySpec, WorkerParams};
-use crate::executor::{JobOutcome, job_result};
+use crate::executor::{JobOutcome, job_result_for_attempt};
+use crate::result_outbox::ResultOutboxEntry;
 
 fn params() -> WorkerParams {
     WorkerParams {
@@ -40,6 +41,7 @@ fn assign(job_id: &str) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: job_id.to_string(),
+        attempt_id: Some(format!("attempt-{job_id}")),
         role: "engineer".to_string(),
         repo: "ai/smith".to_string(),
         artifact: Artifact {
@@ -136,6 +138,32 @@ fn assign_reply_dispatches_job_and_decrements_capacity() {
         matches!(tail, WorkerRequest::ArmPollTimer(_)),
         "expected a backoff timer once at capacity, got {tail:?}"
     );
+}
+
+#[test]
+fn current_worker_refuses_unfenced_legacy_assignment() {
+    let mut machine = WorkerMachine::new(params());
+    machine.on_start(EngineTime::ZERO);
+    run(&mut machine, vec![WorkerCompletion::Registered(Ok(()))]);
+    let mut legacy = assign("legacy-job");
+    legacy.attempt_id = None;
+    let requests = run(
+        &mut machine,
+        vec![WorkerCompletion::PollReply(Ok(Some(
+            WorkerProtocolMessage::Assign(legacy),
+        )))],
+    );
+    assert_eq!(machine.free_capacity(), 1);
+    assert!(machine.in_flight().is_empty());
+    assert!(
+        !requests
+            .iter()
+            .any(|request| matches!(request, WorkerRequest::RunJob(_)))
+    );
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        WorkerRequest::Log(line) if line.contains("refusing unfenced assignment")
+    )));
 }
 
 #[test]
@@ -249,19 +277,35 @@ fn job_finished_reports_result_frees_capacity_and_repolls() {
             WorkerCompletion::PollReply(Ok(Some(WorkerProtocolMessage::Assign(assign("job-1"))))),
         ],
     );
-    let result = job_result(
+    let result = job_result_for_attempt(
         "worker-1",
         "job-1",
+        Some("attempt-job-1".to_string()),
         JobOutcome::Failure {
             class: temper_protocol_worker::FailureClass::Permanent,
             message: "nope".to_string(),
         },
     );
-    let requests = run(
+    let record_requests = run(
         &mut machine,
         vec![WorkerCompletion::JobFinished {
             job_id: "job-1".to_string(),
-            result,
+            result: result.clone(),
+        }],
+    );
+    assert_eq!(machine.free_capacity(), 0);
+    assert!(machine.in_flight().contains("job-1"));
+    assert!(record_requests.iter().any(|request| matches!(
+        request,
+        WorkerRequest::RecordResult { job_id, .. } if job_id == "job-1"
+    )));
+
+    let entry = ResultOutboxEntry::from_result(result).unwrap();
+    let requests = run(
+        &mut machine,
+        vec![WorkerCompletion::ResultRecorded {
+            job_id: "job-1".to_string(),
+            outcome: Ok(entry),
         }],
     );
     assert_eq!(machine.free_capacity(), 1);
@@ -281,6 +325,67 @@ fn job_finished_reports_result_frees_capacity_and_repolls() {
             .any(|r| matches!(r, WorkerRequest::SendPoll(_))),
         "expected a re-poll after a slot freed, got {requests:?}"
     );
+}
+
+#[test]
+fn recovered_outbox_replays_with_backoff_and_compacts_only_matching_release() {
+    let result = job_result_for_attempt(
+        "worker-1",
+        "job-replay",
+        Some("attempt-replay".to_string()),
+        JobOutcome::Failure {
+            class: temper_protocol_worker::FailureClass::Transient,
+            message: "retry me".to_string(),
+        },
+    );
+    let entry = ResultOutboxEntry::from_result(result).unwrap();
+    let entry_id = entry.entry_id.clone();
+    let mut machine = WorkerMachine::with_recovered_outbox(params(), vec![entry.clone()]);
+    let startup = machine.on_start(EngineTime::ZERO);
+    assert!(
+        !startup
+            .iter()
+            .any(|request| matches!(request, WorkerRequest::SendResult { .. }))
+    );
+    let registered = machine.on_completion(EngineTime::ZERO, WorkerCompletion::Registered(Ok(())));
+    assert!(registered.iter().any(|request| matches!(
+        request,
+        WorkerRequest::SendResult { entry_id: id, .. } if id == &entry_id
+    )));
+
+    let failed = machine.on_completion(
+        EngineTime::ZERO,
+        WorkerCompletion::ResultDelivered {
+            entry_id: entry_id.clone(),
+            outcome: Err("transport unavailable".to_string()),
+        },
+    );
+    assert!(failed.iter().any(|request| matches!(
+        request,
+        WorkerRequest::ArmResultReplayTimer { entry_id: id, delay }
+            if id == &entry_id && *delay == Duration::from_secs(1)
+    )));
+
+    let matching = temper_protocol_worker::Release {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: "worker-1".to_string(),
+        job_id: "job-replay".to_string(),
+        attempt_id: Some("attempt-replay".to_string()),
+        disposition: temper_protocol_worker::ReleaseDisposition::Reclaimed,
+        message: None,
+    };
+    let acknowledged = machine.on_completion(
+        EngineTime::ZERO,
+        WorkerCompletion::ResultDelivered {
+            entry_id,
+            outcome: Ok(Some(WorkerProtocolMessage::Release(matching))),
+        },
+    );
+    assert!(acknowledged.iter().any(|request| matches!(
+        request,
+        WorkerRequest::AcknowledgeResult { entry: acked, .. }
+            if acked.entry_id == entry.entry_id
+    )));
 }
 
 #[test]

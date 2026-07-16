@@ -5,6 +5,7 @@
   "jobs": [
     {
       "job_id": "job-123",
+      "attempt_id": "attempt-01JEXAMPLE",
       "state": "running",
       "message": "coding"
     }

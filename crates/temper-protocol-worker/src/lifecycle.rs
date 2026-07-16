@@ -15,6 +15,9 @@ pub enum HeartbeatState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobHeartbeat {
     pub job_id: String,
+    /// Assignment fence copied from [`crate::Assign`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     pub state: HeartbeatState,
     pub message: String,
 }
@@ -47,6 +50,9 @@ pub struct Release {
     pub protocol_version: u32,
     pub worker_id: String,
     pub job_id: String,
+    /// Fence acknowledged by this release. Legacy releases may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     pub disposition: ReleaseDisposition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,

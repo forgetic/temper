@@ -34,6 +34,7 @@ impl ResultApplier for RecordingApplier {
 fn in_flight_job(role: &str) -> InFlightJob {
     InFlightJob {
         job_id: format!("job-{role}"),
+        attempt_id: Some(format!("attempt-{role}")),
         role: role.to_string(),
         repo: "ai/temper".to_string(),
         artifact: Artifact {
@@ -49,6 +50,7 @@ fn success_result(job_id: &str) -> JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: "worker-a".to_string(),
         job_id: job_id.to_string(),
+        attempt_id: Some(job_id.replacen("job-", "attempt-", 1)),
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,

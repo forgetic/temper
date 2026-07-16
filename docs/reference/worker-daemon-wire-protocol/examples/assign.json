@@ -6,6 +6,7 @@
     "tracestate": "vendor=opaque"
   },
   "job_id": "job-123",
+  "attempt_id": "attempt-01JEXAMPLE",
   "role": "engineer",
   "repo": "ai/temper",
   "artifact": {

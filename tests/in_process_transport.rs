@@ -76,12 +76,12 @@ fn in_process_transport_registers_polls_and_assigns() {
             .send(cx.clone(), poll("w1"), None)
             .await
             .expect("poll succeeds in-process");
-        let job_id = match reply {
+        let (job_id, attempt_id) = match reply {
             Some(WorkerProtocolMessage::Assign(assign)) => {
                 assert_eq!(assign.job_id, "job-1");
                 assert_eq!(assign.role, "engineer");
                 assert_eq!(assign.repo, "acme/service");
-                assign.job_id
+                (assign.job_id, assign.attempt_id)
             }
             other => panic!("expected an Assign reply, got {other:?}"),
         };
@@ -95,6 +95,7 @@ fn in_process_transport_registers_polls_and_assigns() {
                     protocol_version: WORKER_PROTOCOL_VERSION,
                     worker_id: "w1".to_string(),
                     job_id: job_id.clone(),
+                    attempt_id,
                     status: ResultStatus::Success,
                     repos: vec![RepoOutcome {
                         repo: "acme/service".to_string(),
