@@ -9,6 +9,18 @@ use test_support::*;
 use tongs::tools::ToolEffects;
 
 #[test]
+fn model_visible_mcp_calls_are_clamped_to_the_generic_tool_deadline() {
+    assert_eq!(
+        effective_mcp_call_timeout(Duration::from_secs(900), Duration::from_secs(30)),
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        effective_mcp_call_timeout(Duration::from_secs(5), Duration::from_secs(30)),
+        Duration::from_secs(5)
+    );
+}
+
+#[test]
 fn codebase_memory_bridge_wraps_allowed_tool_and_filters_destructive_tools() {
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");

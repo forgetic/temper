@@ -21,7 +21,8 @@
 
 use std::future::Future;
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,7 +42,7 @@ use crate::agent_runner::{
     AcceptedSubmitProofStore, AgentForgeContextFuture, AgentForgeContextHost, AgentRunError,
     AgentRunOutput, WorkspaceResult,
 };
-use crate::pre_push::submit_for_pr_pre_push_response_blocking;
+use crate::pre_push::submit_for_pr_pre_push_response;
 use crate::trace::{TraceCollector, TraceRun};
 use crate::{WorkerAgentTraceConfig, WorkerLivenessLimits};
 
@@ -53,8 +54,8 @@ mod stderr;
 mod supervisor;
 mod terminal;
 use side_channel::{
-    ForgeSideChannelRequest, LocalServer, start_forge_server, start_submit_server,
-    submit_for_pr_available,
+    ForgeSideChannelRequest, LocalServer, SubmitSideChannelRequest, start_forge_server,
+    start_submit_server, submit_for_pr_available,
 };
 use stderr::DiagnosticIdentity;
 #[cfg(test)]
@@ -63,12 +64,13 @@ pub use supervisor::{CancellationOutcome, DescendantCleanupStatus, JobQuiesced};
 use supervisor::{ManagedAgentProcess, SupervisorResult};
 
 /// Host-side submit gate used by the out-of-process carrier.
+type SubmitForPrFuture = Pin<Box<dyn Future<Output = SubmitForPrResponse> + Send + 'static>>;
 type SubmitForPrHandler =
-    Arc<dyn Fn(SubmitForPrRequest, &WorkspaceContext, &Path) -> SubmitForPrResponse + Send + Sync>;
+    Arc<dyn Fn(SubmitForPrRequest, WorkspaceContext, PathBuf) -> SubmitForPrFuture + Send + Sync>;
 
 fn default_submit_for_pr_handler() -> SubmitForPrHandler {
     Arc::new(|request, context, cwd| {
-        submit_for_pr_pre_push_response_blocking(request, context, cwd)
+        Box::pin(async move { submit_for_pr_pre_push_response(&request, &context, cwd).await })
     })
 }
 
@@ -226,7 +228,22 @@ impl OutOfProcessRunner {
             + Sync
             + 'static,
     {
-        self.submit_for_pr = Arc::new(handler);
+        self.submit_for_pr = Arc::new(move |request, context, cwd| {
+            let response = handler(request, &context, &cwd);
+            Box::pin(std::future::ready(response))
+        });
+        self
+    }
+
+    /// Overrides the submit gate with an asynchronous, cancellation-aware host.
+    #[must_use]
+    pub fn with_async_submit_for_pr_handler<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(SubmitForPrRequest, WorkspaceContext, PathBuf) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = SubmitForPrResponse> + Send + 'static,
+    {
+        self.submit_for_pr =
+            Arc::new(move |request, context, cwd| Box::pin(handler(request, context, cwd)));
         self
     }
 

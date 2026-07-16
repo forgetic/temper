@@ -1,71 +1,233 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Local client for the worker-owned `submit_for_pr` side channel.
+//! Cancellation-aware client for the worker-owned `submit_for_pr` channel.
 //!
-//! The out-of-process agent receives the address as a non-secret CLI flag. Each
-//! tool call opens one loopback TCP connection, writes a JSON
-//! [`SubmitForPrRequest`], half-closes the write side, then reads the JSON
-//! [`SubmitForPrResponse`]. Transport failures are returned to the model as a
-//! host rejection so the live run remains intact.
+//! Each call owns a joined socket task. Dropping the tool future shuts down the
+//! active stream and joins the blocking reader, so a hung gate cannot survive
+//! the agent task-group's quiescence boundary.
 
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
-use std::time::Duration;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use temper_agent::SubmitForPrHost;
 use temper_protocol_agent::{SubmitForPrRequest, SubmitForPrResponse};
 
 const SUBMIT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const CONNECT_CANCELLATION_SLICE: Duration = Duration::from_millis(100);
 const SUBMIT_REQUEST_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) fn host_for_address(address: String) -> SubmitForPrHost {
-    Arc::new(move |request, _context, _cwd| submit_once(&address, request))
+    Arc::new(move |request, _context, _cwd| {
+        let address = address.clone();
+        Box::pin(async move { SubmitIoTask::spawn(address, request).await })
+    })
 }
 
-fn submit_once(address: &str, request: SubmitForPrRequest) -> SubmitForPrResponse {
-    match submit_once_result(address, &request) {
-        Ok(response) => response,
-        Err(error) => {
-            SubmitForPrResponse::rejected(format!("submit_for_pr host channel failed: {error}"))
-        }
-    }
-}
-
+#[cfg(test)]
 fn submit_once_result(
     address: &str,
     request: &SubmitForPrRequest,
 ) -> std::io::Result<SubmitForPrResponse> {
-    let mut stream = connect_submit_channel(address)?;
+    submit_once_cancellable(address, request, &AtomicBool::new(false), &Mutex::new(None))
+}
+
+fn submit_once_cancellable(
+    address: &str,
+    request: &SubmitForPrRequest,
+    cancelled: &AtomicBool,
+    active_stream: &Mutex<Option<TcpStream>>,
+) -> std::io::Result<SubmitForPrResponse> {
+    let mut stream = connect_submit_channel_cancellable(address, cancelled)?;
     stream.set_write_timeout(Some(SUBMIT_REQUEST_WRITE_TIMEOUT))?;
-    // The host owns pre-push execution and command timeouts; a client-side
-    // response read timeout would turn a legitimate long-running gate into a
-    // transport error before the worker can return structured gate data.
     stream.set_read_timeout(None)?;
+    *active_stream
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(stream.try_clone()?);
+    if cancelled.load(Ordering::Acquire) {
+        let _ = stream.shutdown(Shutdown::Both);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "submit_for_pr request cancelled",
+        ));
+    }
+
     let bytes = serde_json::to_vec(request).map_err(std::io::Error::other)?;
     stream.write_all(&bytes)?;
     stream.shutdown(Shutdown::Write)?;
-
     let mut response = Vec::new();
-    stream.read_to_end(&mut response)?;
+    let read = stream.read_to_end(&mut response);
+    active_stream
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    read?;
     serde_json::from_slice(&response).map_err(std::io::Error::other)
 }
 
-fn connect_submit_channel(address: &str) -> std::io::Result<TcpStream> {
+fn connect_submit_channel_cancellable(
+    address: &str,
+    cancelled: &AtomicBool,
+) -> std::io::Result<TcpStream> {
+    let deadline = Instant::now() + SUBMIT_CONNECT_TIMEOUT;
     let mut last_error = None;
     for socket_address in address.to_socket_addrs()? {
-        match TcpStream::connect_timeout(&socket_address, SUBMIT_CONNECT_TIMEOUT) {
-            Ok(stream) => return Ok(stream),
-            Err(error) => last_error = Some(error),
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "submit_for_pr connection cancelled",
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match TcpStream::connect_timeout(
+                &socket_address,
+                remaining.min(CONNECT_CANCELLATION_SLICE),
+            ) {
+                Ok(stream) => return Ok(stream),
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    last_error = Some(error);
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    break;
+                }
+            }
         }
     }
-
     Err(last_error.unwrap_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("submit_for_pr host address `{address}` resolved to no socket addresses"),
         )
     }))
+}
+
+struct SubmitTaskState {
+    result: Option<SubmitForPrResponse>,
+    waker: Option<Waker>,
+}
+
+struct SubmitIoTask {
+    state: Arc<Mutex<SubmitTaskState>>,
+    cancelled: Arc<AtomicBool>,
+    active_stream: Arc<Mutex<Option<TcpStream>>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl SubmitIoTask {
+    fn spawn(address: String, request: SubmitForPrRequest) -> Self {
+        let state = Arc::new(Mutex::new(SubmitTaskState {
+            result: None,
+            waker: None,
+        }));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let active_stream = Arc::new(Mutex::new(None));
+        let thread_state = Arc::clone(&state);
+        let thread_cancelled = Arc::clone(&cancelled);
+        let thread_stream = Arc::clone(&active_stream);
+        let thread = match thread::Builder::new()
+            .name("submit-for-pr-client".to_string())
+            .spawn(move || {
+                let response = match submit_once_cancellable(
+                    &address,
+                    &request,
+                    &thread_cancelled,
+                    &thread_stream,
+                ) {
+                    Ok(response) => response,
+                    Err(error) => SubmitForPrResponse::rejected(format!(
+                        "submit_for_pr host channel failed: {error}"
+                    )),
+                };
+                let waker = {
+                    let mut state = thread_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    state.result = Some(response);
+                    state.waker.take()
+                };
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }) {
+            Ok(thread) => Some(thread),
+            Err(error) => {
+                state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .result = Some(SubmitForPrResponse::rejected(format!(
+                    "submit_for_pr host channel failed to start: {error}"
+                )));
+                None
+            }
+        };
+        Self {
+            state,
+            cancelled,
+            active_stream,
+            thread,
+        }
+    }
+
+    fn join(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Future for SubmitIoTask {
+    type Output = SubmitForPrResponse;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let response = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.result.is_none()
+                && !state
+                    .waker
+                    .as_ref()
+                    .is_some_and(|waker| waker.will_wake(cx.waker()))
+            {
+                state.waker = Some(cx.waker().clone());
+            }
+            state.result.take()
+        };
+        match response {
+            Some(response) => {
+                self.join();
+                Poll::Ready(response)
+            }
+            None => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for SubmitIoTask {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        if let Some(stream) = self
+            .active_stream
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        self.join();
+    }
 }
 
 #[cfg(test)]
@@ -136,11 +298,37 @@ mod tests {
         let started = Instant::now();
         let response =
             submit_once_result(&address, &request).expect("delayed host response should be read");
-        assert!(
-            started.elapsed() >= response_delay,
-            "client returned before the delayed worker response was written"
-        );
+        assert!(started.elapsed() >= response_delay);
         let expected = server.join().expect("submit response thread");
         assert_eq!(response, expected);
+    }
+
+    #[test]
+    fn dropping_client_future_closes_a_hung_stream_and_joins() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener");
+        let address = listener.local_addr().unwrap().to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).expect("read request");
+            thread::sleep(Duration::from_millis(300));
+            let _ = stream.write_all(b"{}");
+        });
+        let request = SubmitForPrRequest {
+            protocol_version: PROTOCOL_VERSION,
+            correlation_key: "cancel".to_string(),
+            role: "engineer".to_string(),
+            action: "open_pr".to_string(),
+            summary: None,
+        };
+        let outcome = temper_agent_io::block_on(async move {
+            temper_agent_io::timeout(
+                Duration::from_millis(100),
+                SubmitIoTask::spawn(address, request),
+            )
+            .await
+        });
+        assert!(outcome.is_err());
+        server.join().expect("server observed closed stream");
     }
 }

@@ -1,6 +1,7 @@
 //! Per-attempt orchestration around the joined process supervisor.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::trace::ActivityEndpoint;
 
@@ -9,6 +10,11 @@ use super::*;
 struct ForgeHostTask {
     future: AgentForgeContextFuture,
     response: std::sync::mpsc::SyncSender<ForgeContextResponse>,
+}
+
+struct SubmitHostTask {
+    future: SubmitForPrFuture,
+    response: std::sync::mpsc::SyncSender<SubmitForPrResponse>,
 }
 
 /// Every blocking or threaded resource owned by one attempt. Drop is the
@@ -196,6 +202,7 @@ impl OutOfProcessRunner {
 
         let fence = AttemptFence::open();
         let accepted_submit = AcceptedSubmitProofStore::new();
+        let (submit_requests, mut submit_request_rx) = temper_worker_io::channel();
         let (forge_requests, mut forge_request_rx) = temper_worker_io::channel();
         let command = self.child_command(
             program,
@@ -217,15 +224,7 @@ impl OutOfProcessRunner {
         );
 
         let submit_server = submit_listener.map(|(listener, address)| {
-            start_submit_server(
-                listener,
-                address,
-                Arc::clone(&self.submit_for_pr),
-                accepted_submit.clone(),
-                context.clone(),
-                cwd.to_path_buf(),
-                fence.clone(),
-            )
+            start_submit_server(listener, address, submit_requests, fence.clone())
         });
         let forge_server = forge_listener.map(|(listener, address)| {
             start_forge_server(listener, address, forge_requests, fence.clone())
@@ -246,9 +245,16 @@ impl OutOfProcessRunner {
         };
 
         let forge_context = self.forge_context.clone();
+        let operation_timeout =
+            Duration::from_secs(self.runtime_limits.unwrap_or_default().tool_timeout_secs);
+        let submit_for_pr = Arc::clone(&self.submit_for_pr);
+        let submit_context = context.clone();
+        let submit_cwd = cwd.to_path_buf();
         let bound_job_id = job_id.to_string();
         let mut pending_forge: Option<ForgeHostTask> = None;
+        let mut pending_submit: Option<SubmitHostTask> = None;
         let mut forge_closed = false;
+        let mut submit_closed = false;
         let supervisor_result = loop {
             enum Next {
                 Child(SupervisorResult),
@@ -259,6 +265,8 @@ impl OutOfProcessRunner {
                         temper_protocol_agent::ForgeContextErrorCode,
                     >,
                 ),
+                SubmitRequest(Option<SubmitSideChannelRequest>),
+                SubmitCompleted(SubmitForPrResponse),
             }
 
             let next = std::future::poll_fn(|task_cx| {
@@ -275,6 +283,16 @@ impl OutOfProcessRunner {
                         return Poll::Ready(Next::ForgeRequest(request));
                     }
                 }
+                if let Some(task) = pending_submit.as_mut() {
+                    if let Poll::Ready(response) = task.future.as_mut().poll(task_cx) {
+                        return Poll::Ready(Next::SubmitCompleted(response));
+                    }
+                } else if !submit_closed {
+                    let mut receive = Box::pin(submit_request_rx.recv());
+                    if let Poll::Ready(request) = receive.as_mut().poll(task_cx) {
+                        return Poll::Ready(Next::SubmitRequest(request));
+                    }
+                }
                 Poll::Pending
             })
             .await;
@@ -284,12 +302,20 @@ impl OutOfProcessRunner {
                     if let Some(task) = pending_forge.take() {
                         let _ = task.response.send(forge_unavailable());
                     }
+                    if let Some(task) = pending_submit.take() {
+                        let _ = task.response.send(SubmitForPrResponse::rejected(
+                            "agent attempt ended before submit_for_pr completed",
+                        ));
+                    }
                     break outcome;
                 }
                 Next::ForgeRequest(Some(request)) => match &forge_context {
                     Some(host) if fence.is_open() => {
                         pending_forge = Some(ForgeHostTask {
-                            future: host(bound_job_id.clone(), request.operation),
+                            future: bounded_forge_future(
+                                host(bound_job_id.clone(), request.operation),
+                                operation_timeout,
+                            ),
                             response: request.response,
                         });
                     }
@@ -314,6 +340,37 @@ impl OutOfProcessRunner {
                             Ok(result) => ForgeContextResponse::success(result),
                             Err(code) => ForgeContextResponse::error(code),
                         }
+                    };
+                    let _ = task.response.send(response);
+                }
+                Next::SubmitRequest(Some(request)) if fence.is_open() => {
+                    pending_submit = Some(SubmitHostTask {
+                        future: bounded_submit_future(
+                            submit_for_pr(
+                                request.request,
+                                submit_context.clone(),
+                                submit_cwd.clone(),
+                            ),
+                            operation_timeout,
+                        ),
+                        response: request.response,
+                    });
+                }
+                Next::SubmitRequest(Some(request)) => {
+                    let _ = request.response.send(SubmitForPrResponse::rejected(
+                        "agent attempt is no longer available",
+                    ));
+                }
+                Next::SubmitRequest(None) => submit_closed = true,
+                Next::SubmitCompleted(response) => {
+                    let task = pending_submit
+                        .take()
+                        .expect("completed submit task remains attempt-bound");
+                    let response = if fence.is_open() {
+                        accepted_submit.record_response(response, context, cwd)
+                    } else {
+                        accepted_submit.clear();
+                        SubmitForPrResponse::rejected("agent attempt is no longer available")
                     };
                     let _ = task.response.send(response);
                 }
@@ -471,6 +528,30 @@ impl OutOfProcessRunner {
         }
         command
     }
+}
+
+fn bounded_forge_future(
+    future: AgentForgeContextFuture,
+    timeout: Duration,
+) -> AgentForgeContextFuture {
+    Box::pin(async move {
+        match skein::time::timeout(temper_worker_io::engine_now(), timeout, future).await {
+            Ok(result) => result,
+            Err(_) => Err(temper_protocol_agent::ForgeContextErrorCode::ForgeUnavailable),
+        }
+    })
+}
+
+fn bounded_submit_future(future: SubmitForPrFuture, timeout: Duration) -> SubmitForPrFuture {
+    Box::pin(async move {
+        match skein::time::timeout(temper_worker_io::engine_now(), timeout, future).await {
+            Ok(response) => response,
+            Err(_) => SubmitForPrResponse::rejected(format!(
+                "submit_for_pr exceeded the generic tool deadline of {:.3}s",
+                timeout.as_secs_f64()
+            )),
+        }
+    })
 }
 
 fn optional_listener(

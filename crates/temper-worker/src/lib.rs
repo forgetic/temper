@@ -60,7 +60,6 @@ pub use pre_push::{
     PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, WorkspaceFingerprint,
     WorkspaceFingerprintError, final_pre_push_response, fingerprint_writable_repos,
     fingerprint_writable_repos_blocking, run_pre_push_checks, submit_for_pr_pre_push_response,
-    submit_for_pr_pre_push_response_blocking,
 };
 pub use run::{
     WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,

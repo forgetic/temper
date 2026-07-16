@@ -73,8 +73,8 @@ pub use run::{
     run_coding_agent_native_with_totals_tool_config_and_submit_for_pr,
 };
 pub use submit::{
-    SubmitForPrCallback, SubmitForPrHost, bind_submit_for_pr_host, default_submit_for_pr_host,
-    submit_for_pr_available,
+    SubmitForPrCallback, SubmitForPrFuture, SubmitForPrHost, bind_submit_for_pr_host,
+    default_submit_for_pr_host, submit_for_pr_available,
 };
 pub use tools::tool_registry;
 

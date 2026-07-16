@@ -10,7 +10,7 @@ use temper_protocol_agent::{
     AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext, WorkspaceResult,
 };
 
-use super::codebase_memory::prepare_codebase_memory_tools;
+use super::codebase_memory::prepare_codebase_memory_tools_with_timeout;
 use super::prompt::{system_prompt_with_registry, user_context_with_registry};
 use super::result::{
     collect_text, parse_result, validate_contract, validate_verdict_contract,
@@ -309,8 +309,14 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
         model_idle_timeout: std::time::Duration::from_secs(runtime_limits.model_idle_timeout_secs),
     };
     let capability = Capability::for_role(&context.work_item.role);
-    let codebase_memory =
-        prepare_codebase_memory_tools(tool_config, &context.work_item.role, context, cwd).await?;
+    let codebase_memory = prepare_codebase_memory_tools_with_timeout(
+        tool_config,
+        &context.work_item.role,
+        context,
+        cwd,
+        operation_limits.tool_timeout,
+    )
+    .await?;
     let model_identity = temper_agent_core::ModelIdentity::new(
         provider_config.provider_id(),
         provider_config.model_id(),

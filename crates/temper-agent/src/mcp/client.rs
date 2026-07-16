@@ -1,11 +1,15 @@
 //! Stdio MCP client and child-process lifecycle management.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::connection::Connection;
+use super::connection::{Connection, ProcessControl};
 use super::protocol::{
     McpToolCallResult, McpToolDescriptor, parse_call_tool_result, parse_tool_list,
 };
@@ -66,6 +70,9 @@ pub enum McpError {
         method: String,
         timeout: Duration,
     },
+    Cancelled {
+        method: String,
+    },
     ProcessExited {
         method: String,
         status: Option<String>,
@@ -93,6 +100,7 @@ impl std::fmt::Display for McpError {
                 "MCP request `{method}` timed out after {:.3}s",
                 timeout.as_secs_f64()
             ),
+            Self::Cancelled { method } => write!(formatter, "MCP request `{method}` was cancelled"),
             Self::ProcessExited { method, status } => match status {
                 Some(status) => write!(
                     formatter,
@@ -107,6 +115,29 @@ impl std::fmt::Display for McpError {
 
 impl std::error::Error for McpError {}
 
+/// Cloneable cancellation authority independent of the serialized MCP request
+/// mutex. Cancellation closes stdin, kills/reaps the server containment group,
+/// disconnects a waiting response receiver, and joins the reader thread.
+#[derive(Clone)]
+pub struct McpCancellationHandle {
+    control: Arc<ProcessControl>,
+}
+
+impl McpCancellationHandle {
+    pub fn cancel_and_join(&self) {
+        self.control.cancel_and_join();
+    }
+}
+
+impl std::fmt::Debug for McpCancellationHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpCancellationHandle")
+            .field("child_id", &self.control.child_id())
+            .finish()
+    }
+}
+
 /// Cloneable handle to one stdio MCP child process.
 #[derive(Clone)]
 pub struct StdioMcpClient {
@@ -118,13 +149,7 @@ impl StdioMcpClient {
     /// Spawns the configured command, sends MCP `initialize`, and sends the
     /// standard `notifications/initialized` notification.
     pub async fn connect(config: StdioMcpServerConfig) -> Result<Self, McpError> {
-        let connection = Connection::spawn(&config)?;
-        let client = Self {
-            inner: Arc::new(ClientInner {
-                connection: Mutex::new(connection),
-            }),
-            call_timeout: config.call_timeout,
-        };
+        let client = Self::spawn(&config)?;
         client.initialize(config.startup_timeout).await?;
         client
             .notify_initialized(config.startup_timeout)
@@ -140,18 +165,8 @@ impl StdioMcpClient {
     }
 
     /// Spawns the configured command and initializes it from synchronous code.
-    ///
-    /// This is used only for host-controlled background bootstrap work where we
-    /// deliberately do not want to hold up the agent's main skein task. Normal
-    /// MCP use should prefer [`Self::connect`].
     pub fn connect_blocking(config: StdioMcpServerConfig) -> Result<Self, McpError> {
-        let connection = Connection::spawn(&config)?;
-        let client = Self {
-            inner: Arc::new(ClientInner {
-                connection: Mutex::new(connection),
-            }),
-            call_timeout: config.call_timeout,
-        };
+        let client = Self::spawn(&config)?;
         client.initialize_blocking(config.startup_timeout)?;
         client
             .notify_initialized_blocking(config.startup_timeout)
@@ -165,6 +180,18 @@ impl StdioMcpClient {
         Ok(client)
     }
 
+    fn spawn(config: &StdioMcpServerConfig) -> Result<Self, McpError> {
+        let connection = Connection::spawn(config)?;
+        let control = connection.control();
+        Ok(Self {
+            inner: Arc::new(ClientInner {
+                connection: Mutex::new(connection),
+                control,
+            }),
+            call_timeout: config.call_timeout,
+        })
+    }
+
     /// Calls one MCP tool by its server-side name from synchronous code.
     pub fn call_tool_blocking(
         &self,
@@ -172,11 +199,7 @@ impl StdioMcpClient {
         arguments: Value,
         timeout: Duration,
     ) -> Result<McpToolCallResult, McpError> {
-        let arguments = if arguments.is_null() {
-            json!({})
-        } else {
-            arguments
-        };
+        let arguments = normalize_arguments(arguments);
         let result = self.request_blocking(
             "tools/call",
             json!({
@@ -188,16 +211,18 @@ impl StdioMcpClient {
         Ok(parse_call_tool_result(result))
     }
 
-    /// Returns the configured default call timeout for this client.
     pub fn call_timeout(&self) -> Duration {
         self.call_timeout
     }
 
-    /// Returns the child process id. Intended for focused lifecycle tests and
-    /// diagnostics; callers should not attempt to manage the process directly.
     pub fn child_id(&self) -> u32 {
-        self.with_connection(|connection| Ok(connection.child_id()))
-            .expect("MCP connection lock is not poisoned")
+        self.inner.control.child_id()
+    }
+
+    pub fn cancellation_handle(&self) -> McpCancellationHandle {
+        McpCancellationHandle {
+            control: Arc::clone(&self.inner.control),
+        }
     }
 
     /// Lists MCP tools. Pagination cursors are followed if the server returns
@@ -221,24 +246,18 @@ impl StdioMcpClient {
         Ok(all_tools)
     }
 
-    /// Calls one MCP tool by its server-side name.
     pub async fn call_tool(
         &self,
         name: &str,
         arguments: Value,
         timeout: Duration,
     ) -> Result<McpToolCallResult, McpError> {
-        let arguments = if arguments.is_null() {
-            json!({})
-        } else {
-            arguments
-        };
         let result = self
             .request(
                 "tools/call",
                 json!({
                     "name": name,
-                    "arguments": arguments,
+                    "arguments": normalize_arguments(arguments),
                 }),
                 timeout,
             )
@@ -247,24 +266,8 @@ impl StdioMcpClient {
     }
 
     fn initialize_blocking(&self, timeout: Duration) -> Result<(), McpError> {
-        let result = self.request_blocking(
-            "initialize",
-            json!({
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "temper-agent",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-            }),
-            timeout,
-        )?;
-        if !result.is_object() {
-            return Err(McpError::Protocol(
-                "initialize result must be a JSON object".to_string(),
-            ));
-        }
-        Ok(())
+        let result = self.request_blocking("initialize", initialize_params(), timeout)?;
+        validate_initialize(result)
     }
 
     fn notify_initialized_blocking(&self, timeout: Duration) -> Result<(), McpError> {
@@ -284,34 +287,19 @@ impl StdioMcpClient {
 
     async fn initialize(&self, timeout: Duration) -> Result<(), McpError> {
         let result = self
-            .request(
-                "initialize",
-                json!({
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "temper-agent",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                }),
-                timeout,
-            )
+            .request("initialize", initialize_params(), timeout)
             .await?;
-        if !result.is_object() {
-            return Err(McpError::Protocol(
-                "initialize result must be a JSON object".to_string(),
-            ));
-        }
-        Ok(())
+        validate_initialize(result)
     }
 
     async fn notify_initialized(&self, timeout: Duration) -> Result<(), McpError> {
         let client = self.clone();
-        skein::runtime::spawn_blocking(move || {
+        let control = self.cancellation_handle();
+        BlockingCall::spawn(control, "mcp-notify", move || {
             client.with_connection(|connection| {
                 connection.notify("notifications/initialized", json!({}), timeout)
             })
-        })
+        })?
         .await
     }
 
@@ -322,9 +310,10 @@ impl StdioMcpClient {
         timeout: Duration,
     ) -> Result<Value, McpError> {
         let client = self.clone();
-        skein::runtime::spawn_blocking(move || {
+        let control = self.cancellation_handle();
+        BlockingCall::spawn(control, "mcp-request", move || {
             client.with_connection(|connection| connection.request(method, params, timeout))
-        })
+        })?
         .await
     }
 
@@ -341,6 +330,142 @@ impl StdioMcpClient {
     }
 }
 
+fn normalize_arguments(arguments: Value) -> Value {
+    if arguments.is_null() {
+        json!({})
+    } else {
+        arguments
+    }
+}
+
+fn initialize_params() -> Value {
+    json!({
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {
+            "name": "temper-agent",
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+    })
+}
+
+fn validate_initialize(result: Value) -> Result<(), McpError> {
+    if result.is_object() {
+        Ok(())
+    } else {
+        Err(McpError::Protocol(
+            "initialize result must be a JSON object".to_string(),
+        ))
+    }
+}
+
 struct ClientInner {
     connection: Mutex<Connection>,
+    control: Arc<ProcessControl>,
+}
+
+impl Drop for ClientInner {
+    fn drop(&mut self) {
+        self.control.cancel_and_join();
+    }
+}
+
+struct BlockingCallState<T> {
+    result: Option<Result<T, McpError>>,
+    waker: Option<Waker>,
+}
+
+/// One joined blocking MCP operation. Unlike `spawn_blocking`, dropping this
+/// future cannot detach a mutex waiter or socket/pipe read from the agent run.
+struct BlockingCall<T> {
+    state: Arc<Mutex<BlockingCallState<T>>>,
+    cancellation: McpCancellationHandle,
+    thread: Option<JoinHandle<()>>,
+    completed: bool,
+}
+
+impl<T: Send + 'static> BlockingCall<T> {
+    fn spawn(
+        cancellation: McpCancellationHandle,
+        name: &'static str,
+        operation: impl FnOnce() -> Result<T, McpError> + Send + 'static,
+    ) -> Result<Self, McpError> {
+        let state = Arc::new(Mutex::new(BlockingCallState {
+            result: None,
+            waker: None,
+        }));
+        let thread_state = Arc::clone(&state);
+        let thread = thread::Builder::new()
+            .name(name.to_string())
+            .spawn(move || {
+                let result = operation();
+                let waker = {
+                    let mut state = thread_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    state.result = Some(result);
+                    state.waker.take()
+                };
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            })
+            .map_err(|error| McpError::Io {
+                operation: "start request thread",
+                message: error.to_string(),
+            })?;
+        Ok(Self {
+            state,
+            cancellation,
+            thread: Some(thread),
+            completed: false,
+        })
+    }
+
+    fn join(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl<T: Send + 'static> Future for BlockingCall<T> {
+    type Output = Result<T, McpError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.result.is_none()
+                && !state
+                    .waker
+                    .as_ref()
+                    .is_some_and(|waker| waker.will_wake(cx.waker()))
+            {
+                state.waker = Some(cx.waker().clone());
+            }
+            state.result.take()
+        };
+        match result {
+            Some(result) => {
+                self.completed = true;
+                self.join();
+                Poll::Ready(result)
+            }
+            None => Poll::Pending,
+        }
+    }
+}
+
+impl<T> Drop for BlockingCall<T> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.cancellation.cancel_and_join();
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }

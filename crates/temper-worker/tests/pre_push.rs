@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use temper_worker::{PrePushStatus, run_pre_push_checks};
 use tempfile::tempdir;
@@ -181,6 +182,67 @@ fn config_is_read_from_the_current_checkout_branch() {
         assert_eq!(feature_report.status, PrePushStatus::Passed);
         assert_eq!(feature_report.commands[0].stdout_tail, "feature-config");
     });
+}
+
+#[test]
+#[cfg(unix)]
+fn cancelling_a_hung_gate_kills_grandchildren_and_joins_the_command_owner() {
+    let temp = tempdir().expect("create temp dir");
+    let pid_file = temp.path().join("gate-grandchild.pid");
+    write_config(
+        temp.path(),
+        format!(
+            r#"
+version = 1
+
+[pre_push]
+required = true
+cwd = "repo"
+
+[[pre_push.commands]]
+id = "hung"
+argv = ["sh", "-c", "sleep 60 & echo $! > '{}'; wait"]
+timeout_secs = 60
+"#,
+            pid_file.display()
+        ),
+    );
+    let root = temp.path().to_path_buf();
+    let outcome = temper_worker_io::block_on(async move {
+        skein::time::timeout(
+            temper_worker_io::engine_now(),
+            Duration::from_millis(200),
+            Box::pin(run_pre_push_checks(root)),
+        )
+        .await
+    });
+    assert!(outcome.is_err(), "attempt cancellation must win");
+    let pid: u32 = fs::read_to_string(&pid_file)
+        .expect("gate grandchild pid")
+        .trim()
+        .parse()
+        .expect("numeric pid");
+    assert!(
+        !process_alive(pid),
+        "gate grandchild {pid} survived cancellation"
+    );
+}
+
+fn process_alive(pid: u32) -> bool {
+    let exists = Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !exists {
+        return false;
+    }
+    fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| stat.rsplit_once(") ").map(|(_, rest)| rest.to_string()))
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|state| state != 'Z')
 }
 
 fn config_printing(text: &str) -> String {

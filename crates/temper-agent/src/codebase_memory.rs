@@ -208,6 +208,19 @@ pub async fn build_codebase_memory_toolset(
     context: &WorkspaceContext,
     cwd: &Path,
 ) -> std::result::Result<CodebaseMemoryToolset, CodebaseMemoryToolsetError> {
+    build_codebase_memory_toolset_with_timeout(config, role, context, cwd, Duration::MAX).await
+}
+
+/// Builds the toolset while clamping model-visible MCP calls to the generic
+/// agent tool deadline. Startup and index operations retain their narrower,
+/// purpose-specific limits.
+pub async fn build_codebase_memory_toolset_with_timeout(
+    config: Option<&AgentToolConfig>,
+    role: &str,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    generic_tool_timeout: Duration,
+) -> std::result::Result<CodebaseMemoryToolset, CodebaseMemoryToolsetError> {
     let Some(codebase_memory) = config.and_then(|config| config.codebase_memory.as_ref()) else {
         return Ok(CodebaseMemoryToolset::disabled(
             CodebaseMemoryToolsetStatus::NotConfigured,
@@ -235,7 +248,7 @@ pub async fn build_codebase_memory_toolset(
         }
     };
 
-    match start_toolset(codebase_memory, role, scope).await {
+    match start_toolset(codebase_memory, role, scope, generic_tool_timeout).await {
         Ok(toolset) => Ok(toolset),
         Err(error) if codebase_memory.mode == CodebaseMemoryMode::Auto => Ok(
             CodebaseMemoryToolset::disabled(CodebaseMemoryToolsetStatus::AutoUnavailable {
@@ -250,12 +263,14 @@ async fn start_toolset(
     config: &CodebaseMemoryToolConfig,
     role: &str,
     mut scope: WorkspaceScope,
+    generic_tool_timeout: Duration,
 ) -> std::result::Result<CodebaseMemoryToolset, McpError> {
     let startup_timeout = Duration::from_secs(config.startup_timeout_secs);
-    let call_timeout = Duration::from_secs(config.index_timeout_secs);
+    let index_timeout = Duration::from_secs(config.index_timeout_secs);
+    let call_timeout = effective_mcp_call_timeout(index_timeout, generic_tool_timeout);
     let mcp_config = StdioMcpServerConfig::new(config.command.clone(), config.args.clone())
         .with_startup_timeout(startup_timeout)
-        .with_call_timeout(call_timeout);
+        .with_call_timeout(index_timeout);
     emit_agent_tool_configured(AgentToolConfigured {
         role,
         tool_name: "codebase_memory",
@@ -343,6 +358,10 @@ async fn start_toolset(
         registered_tool_metadata,
         prompt_status,
     ))
+}
+
+fn effective_mcp_call_timeout(index_timeout: Duration, generic_tool_timeout: Duration) -> Duration {
+    index_timeout.min(generic_tool_timeout)
 }
 
 fn allowed_tool(name: &str) -> Option<&'static AllowedCodebaseMemoryTool> {

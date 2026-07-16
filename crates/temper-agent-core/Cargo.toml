@@ -18,12 +18,14 @@ tongs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 temper-agent-io = { path = "../temper-agent-io" }
+temper-process-containment = { path = "../temper-process-containment" }
 
 [dev-dependencies]
 temper-agent-io = { path = "../temper-agent-io" }
 temper-agent = { path = "../temper-agent" }
 jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -16,6 +16,8 @@
 //! abort), and testability from the start.
 
 pub mod machine;
+mod managed_bash;
+mod managed_fs;
 pub mod run;
 pub mod shell;
 pub mod subagent_tool;
@@ -25,6 +27,8 @@ pub use machine::{
     BatchGeneration, ModelCallStatus, OperationGeneration, StreamDelta, ToolCallStatus,
     ToolResultMetadata,
 };
+pub use managed_bash::ManagedBashTool;
+pub use managed_fs::joined_filesystem_tool;
 pub use run::{
     AgentOperationLimits, SubAgent, SubAgentControl, SubAgentError, run_sub_agent,
     run_sub_agent_controllable, run_sub_agent_controllable_with_hook,
@@ -40,3 +44,4 @@ pub use shell::{
     StreamRetryConfig, StreamRetryConfigOverrideGuard, install_stream_retry_config_override,
 };
 pub use subagent_tool::{SubAgentFactory, SubAgentObserverFactory, SubAgentTool};
+pub use temper_process_containment::{ProcessContainment, configure_descendant_command};

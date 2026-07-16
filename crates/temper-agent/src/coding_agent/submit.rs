@@ -6,7 +6,9 @@
 //! an ordinary tool result. It does not run git, run checks, push, or decide that
 //! a workspace is ready.
 
-use std::path::Path;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -20,24 +22,27 @@ use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 /// Agent-side callback invoked by the tool. Native in-process hosts bind this
 /// from a host callback; the out-of-process agent binds it to the worker-owned
 /// local side channel.
-pub type SubmitForPrCallback = Arc<dyn Fn(SubmitForPrRequest) -> SubmitForPrResponse + Send + Sync>;
+pub type SubmitForPrFuture = Pin<Box<dyn Future<Output = SubmitForPrResponse> + Send + 'static>>;
+pub type SubmitForPrCallback = Arc<dyn Fn(SubmitForPrRequest) -> SubmitForPrFuture + Send + Sync>;
 
 /// Host-side submit gate callback. It receives the tool request plus the run's
 /// immutable context and prepared workspace root, so future implementations can
 /// run pre-push checks from the host/worker layer without moving that decision
 /// into the model/tool code.
 pub type SubmitForPrHost =
-    Arc<dyn Fn(SubmitForPrRequest, &WorkspaceContext, &Path) -> SubmitForPrResponse + Send + Sync>;
+    Arc<dyn Fn(SubmitForPrRequest, WorkspaceContext, PathBuf) -> SubmitForPrFuture + Send + Sync>;
 
 /// Host gate used when a caller has not installed real checks yet. It preserves
 /// the host-controlled shape while leaving actual pre-push enforcement to the
 /// follow-up work item.
 pub fn default_submit_for_pr_host() -> SubmitForPrHost {
     Arc::new(|request, _context, _cwd| {
-        SubmitForPrResponse::accepted(format!(
-            "host accepted submit_for_pr for {}; no submit gates are configured yet",
-            request.correlation_key
-        ))
+        Box::pin(async move {
+            SubmitForPrResponse::accepted(format!(
+                "host accepted submit_for_pr for {}; no submit gates are configured yet",
+                request.correlation_key
+            ))
+        })
     })
 }
 
@@ -50,7 +55,7 @@ pub fn bind_submit_for_pr_host(
 ) -> SubmitForPrCallback {
     let context = context.clone();
     let cwd = cwd.to_path_buf();
-    Arc::new(move |request| host(request, &context, &cwd))
+    Arc::new(move |request| host(request, context.clone(), cwd.clone()))
 }
 
 /// Whether this workspace turn is allowed to expose `submit_for_pr`.
@@ -132,7 +137,7 @@ impl Tool for SubmitForPrTool {
             action: self.action.clone(),
             summary,
         };
-        let response = (self.callback)(request);
+        let response = (self.callback)(request).await;
         let details = serde_json::to_value(&response).ok();
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {
@@ -288,7 +293,13 @@ mod tests {
             }],
         };
         let response_for_tool = response.clone();
-        let tool = SubmitForPrTool::new(&context, Arc::new(move |_| response_for_tool.clone()));
+        let tool = SubmitForPrTool::new(
+            &context,
+            Arc::new(move |_| {
+                let response = response_for_tool.clone();
+                Box::pin(async move { response })
+            }),
+        );
         let output = temper_agent_io::block_on(async move {
             tool.execute(
                 "call_submit",
