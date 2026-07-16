@@ -363,6 +363,7 @@ impl HermeticRealStackBuilder {
                 compiled,
                 result_tx,
                 result_rx,
+                published_results: Default::default(),
                 origins,
                 repo_ids,
                 workspace_root,

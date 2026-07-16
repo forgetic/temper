@@ -15,10 +15,14 @@
 //! driven under `temper-sim`'s skein-lab runtime for high-fidelity worker/daemon
 //! scenarios over in-process transport.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use temper_protocol_worker::{Assign, ErrorCode, JobResult, WorkerProtocolMessage};
+use temper_protocol_worker::{
+    Assign, ErrorCode, JobResult, ReleaseDisposition, WorkerProtocolMessage,
+};
 use temper_worker_io::{EngineTime, Machine};
+
+use crate::result_outbox::ResultOutboxEntry;
 
 pub use crate::config::WorkerParams;
 
@@ -30,14 +34,28 @@ pub enum WorkerCompletion {
     /// A poll POST completed, yielding the daemon's reply (or a transport
     /// error). `Ok(None)` is an empty/204 reply.
     PollReply(Result<Option<WorkerProtocolMessage>, String>),
-    /// A dispatched job finished; its result is ready to report.
+    /// A dispatched job finished; its exact result must be durably recorded
+    /// before local capacity is released or delivery begins.
     JobFinished { job_id: String, result: JobResult },
-    /// A result POST completed (`Err` = transport error; the machine logs and
-    /// moves on — the daemon re-leases on its own timeout).
-    ResultDelivered {
+    /// One outbox record operation completed.
+    ResultRecorded {
         job_id: String,
+        outcome: Result<ResultOutboxEntry, String>,
+    },
+    /// Retry an outbox record that previously failed.
+    ResultRecordTimer { job_id: String },
+    /// A result POST completed with the daemon's exact protocol reply.
+    ResultDelivered {
+        entry_id: String,
+        outcome: Result<Option<WorkerProtocolMessage>, String>,
+    },
+    /// Durable acknowledgement compaction or permanent rejection completed.
+    ResultFinalized {
+        entry_id: String,
         outcome: Result<(), String>,
     },
+    /// A per-entry replay timer fired.
+    ResultReplayTimer { entry_id: String },
     /// A heartbeat POST completed.
     HeartbeatDelivered(Result<(), String>),
     /// The poll-backoff timer fired: time to poll again.
@@ -56,23 +74,45 @@ pub enum WorkerRequest {
     SendRegister(WorkerProtocolMessage),
     /// POST a poll message; completes as [`WorkerCompletion::PollReply`].
     SendPoll(WorkerProtocolMessage),
-    /// POST a result; completes as [`WorkerCompletion::ResultDelivered`].
+    /// Persist an exact result in the crash-safe outbox.
+    RecordResult { job_id: String, result: JobResult },
+    /// POST a recorded result; completes as [`WorkerCompletion::ResultDelivered`].
     SendResult {
-        job_id: String,
+        entry_id: String,
         message: WorkerProtocolMessage,
+    },
+    /// Delete an entry after a matching release acknowledgement.
+    AcknowledgeResult {
+        entry: ResultOutboxEntry,
+        release: temper_protocol_worker::Release,
+    },
+    /// Move a permanently rejected entry to operator-visible rejected storage.
+    RejectResult {
+        entry: ResultOutboxEntry,
+        reason: String,
     },
     /// POST a heartbeat; completes as [`WorkerCompletion::HeartbeatDelivered`].
     SendHeartbeat(WorkerProtocolMessage),
     /// Run an assigned job; completes as [`WorkerCompletion::JobFinished`].
     RunJob(Assign),
+    /// Retry an outbox record without coupling it to polling or permits.
+    ArmResultRecordTimer {
+        job_id: String,
+        delay: std::time::Duration,
+    },
+    /// Retry one durable result independently of job permit availability.
+    ArmResultReplayTimer {
+        entry_id: String,
+        delay: std::time::Duration,
+    },
     /// Arm the poll-backoff timer; completes as [`WorkerCompletion::PollTimer`].
     ArmPollTimer(std::time::Duration),
     /// Arm the heartbeat cadence timer; completes as
     /// [`WorkerCompletion::HeartbeatTimer`].
     ArmHeartbeatTimer(std::time::Duration),
-    /// A human-facing log line (observability; the shell prints it). Keeps the
-    /// machine pure while still emitting the same operational log contract the
-    /// old loop did.
+    /// Operator-visible warning for stale/rejected durable result delivery.
+    Warn(String),
+    /// A human-facing debug log line (observability; the shell prints it).
     Log(String),
 }
 
@@ -81,18 +121,34 @@ pub struct WorkerMachine {
     params: WorkerParams,
     free_capacity: u32,
     in_flight: BTreeSet<String>,
-    /// Set once the worker has registered; gates the first poll.
+    in_flight_attempts: BTreeMap<String, String>,
+    pending_records: BTreeMap<String, JobResult>,
+    outbox: BTreeMap<String, ResultOutboxEntry>,
+    replay_attempts: BTreeMap<String, u32>,
     registered: bool,
     stopped: bool,
 }
 
 impl WorkerMachine {
     pub fn new(params: WorkerParams) -> Self {
+        Self::with_recovered_outbox(params, Vec::new())
+    }
+
+    /// Constructs a worker with entries recovered by the startup outbox scan.
+    pub fn with_recovered_outbox(params: WorkerParams, recovered: Vec<ResultOutboxEntry>) -> Self {
         let free_capacity = params.max_concurrent_jobs;
+        let outbox = recovered
+            .into_iter()
+            .map(|entry| (entry.entry_id.clone(), entry))
+            .collect();
         Self {
             params,
             free_capacity,
             in_flight: BTreeSet::new(),
+            in_flight_attempts: BTreeMap::new(),
+            pending_records: BTreeMap::new(),
+            outbox,
+            replay_attempts: BTreeMap::new(),
             registered: false,
             stopped: false,
         }
@@ -137,7 +193,13 @@ impl WorkerMachine {
                 // rather than over-subscribe or double-run — capacity
                 // conservation is an invariant, not a hope. Back off and re-sync
                 // on the next poll.
-                if self.free_capacity == 0 || self.in_flight.contains(&assign.job_id) {
+                if assign.attempt_id.as_deref().is_none_or(str::is_empty) {
+                    requests.push(WorkerRequest::Log(format!(
+                        "worker: refusing unfenced assignment job_id={}",
+                        assign.job_id
+                    )));
+                    requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
+                } else if self.free_capacity == 0 || self.in_flight.contains(&assign.job_id) {
                     requests.push(WorkerRequest::Log(format!(
                         "worker: refusing assignment job_id={} (free_capacity={}, already_in_flight={})",
                         assign.job_id,
@@ -151,6 +213,10 @@ impl WorkerMachine {
                     )));
                     self.free_capacity = self.free_capacity.saturating_sub(1);
                     self.in_flight.insert(assign.job_id.clone());
+                    self.in_flight_attempts.insert(
+                        assign.job_id.clone(),
+                        assign.attempt_id.clone().expect("attempt checked above"),
+                    );
                     requests.push(WorkerRequest::RunJob(assign));
                     // Immediately try to poll again — more work may be waiting
                     // and we may still have capacity.
@@ -182,6 +248,121 @@ impl WorkerMachine {
         }
         requests
     }
+
+    fn send_entry(entry: &ResultOutboxEntry) -> WorkerRequest {
+        WorkerRequest::SendResult {
+            entry_id: entry.entry_id.clone(),
+            message: WorkerProtocolMessage::Result(entry.result.clone()),
+        }
+    }
+
+    fn retry_entry(&mut self, entry_id: &str, reason: String) -> Vec<WorkerRequest> {
+        if !self.outbox.contains_key(entry_id) {
+            return Vec::new();
+        }
+        let attempt = self
+            .replay_attempts
+            .entry(entry_id.to_string())
+            .or_insert(0);
+        *attempt = attempt.saturating_add(1);
+        let exponent = attempt.saturating_sub(1).min(8);
+        let delay = std::time::Duration::from_secs(2_u64.saturating_pow(exponent).min(300));
+        vec![
+            WorkerRequest::Log(format!(
+                "worker: retaining durable result entry_id={entry_id} retry={} backoff_ms={} reason={reason}",
+                *attempt,
+                delay.as_millis()
+            )),
+            WorkerRequest::ArmResultReplayTimer {
+                entry_id: entry_id.to_string(),
+                delay,
+            },
+        ]
+    }
+
+    fn result_delivery(
+        &mut self,
+        entry_id: String,
+        outcome: Result<Option<WorkerProtocolMessage>, String>,
+    ) -> Vec<WorkerRequest> {
+        let Some(entry) = self.outbox.get(&entry_id).cloned() else {
+            return Vec::new();
+        };
+        match outcome {
+            Ok(Some(WorkerProtocolMessage::Release(release)))
+                if entry.matches_release(&release) =>
+            {
+                if matches!(
+                    release.disposition,
+                    ReleaseDisposition::Superseded | ReleaseDisposition::Reclaimed
+                ) {
+                    return vec![
+                        WorkerRequest::Warn(format!(
+                            "worker: durable result became stale entry_id={} job_id={} attempt_id={} disposition={:?}",
+                            entry.entry_id,
+                            entry.assignment.job_id,
+                            entry.assignment.attempt_id,
+                            release.disposition
+                        )),
+                        WorkerRequest::AcknowledgeResult { entry, release },
+                    ];
+                }
+                vec![WorkerRequest::AcknowledgeResult { entry, release }]
+            }
+            Ok(Some(WorkerProtocolMessage::Error(error)))
+                if matches!(
+                    error.code,
+                    ErrorCode::Unauthorized
+                        | ErrorCode::MalformedMessage
+                        | ErrorCode::ProtocolVersionMismatch
+                        | ErrorCode::RegistrationRejected
+                ) =>
+            {
+                vec![
+                    WorkerRequest::Warn(format!(
+                        "worker: permanently rejecting durable result entry_id={} job_id={} attempt_id={} code={:?}",
+                        entry.entry_id,
+                        entry.assignment.job_id,
+                        entry.assignment.attempt_id,
+                        error.code
+                    )),
+                    WorkerRequest::RejectResult {
+                        entry,
+                        reason: format!("daemon permanently rejected result: {:?}", error.code),
+                    },
+                ]
+            }
+            Ok(Some(other)) => self.retry_entry(
+                &entry_id,
+                format!("unexpected daemon acknowledgement: {other:?}"),
+            ),
+            Ok(None) => self.retry_entry(
+                &entry_id,
+                "daemon returned no release acknowledgement".to_string(),
+            ),
+            Err(error) if permanent_transport_rejection(&error) => {
+                vec![
+                    WorkerRequest::Warn(format!(
+                        "worker: permanently rejecting durable result entry_id={} job_id={} attempt_id={} reason={error}",
+                        entry.entry_id, entry.assignment.job_id, entry.assignment.attempt_id,
+                    )),
+                    WorkerRequest::RejectResult {
+                        entry,
+                        reason: error,
+                    },
+                ]
+            }
+            Err(error) => self.retry_entry(&entry_id, error),
+        }
+    }
+}
+
+fn permanent_transport_rejection(error: &str) -> bool {
+    [
+        "HTTP 400", "HTTP 401", "HTTP 403", "HTTP 404", "HTTP 409", "HTTP 422",
+    ]
+    .iter()
+    .any(|status| error.contains(status))
 }
 
 impl Machine for WorkerMachine {
@@ -211,6 +392,7 @@ impl Machine for WorkerMachine {
                         &self.params.capabilities,
                     ),
                 )];
+                requests.extend(self.outbox.values().map(Self::send_entry));
                 requests.extend(self.poll_or_backoff());
                 requests
             }
@@ -233,35 +415,69 @@ impl Machine for WorkerMachine {
                 }
             }
             WorkerCompletion::JobFinished { job_id, result } => {
-                self.in_flight.remove(&job_id);
-                self.free_capacity = self
-                    .free_capacity
-                    .saturating_add(1)
-                    .min(self.params.max_concurrent_jobs);
-                let mut requests = vec![
-                    WorkerRequest::Log(crate::observability::result_sent_line(&result)),
-                    WorkerRequest::SendResult {
-                        job_id,
-                        message: WorkerProtocolMessage::Result(result),
-                    },
-                ];
-                // A slot just freed; poll again right away.
-                requests.extend(self.poll_or_backoff());
-                requests
+                if !self.in_flight.contains(&job_id) || self.pending_records.contains_key(&job_id) {
+                    return Vec::new();
+                }
+                self.pending_records.insert(job_id.clone(), result.clone());
+                vec![WorkerRequest::RecordResult { job_id, result }]
             }
-            WorkerCompletion::ResultDelivered { job_id, outcome } => match outcome {
-                Ok(()) => Vec::new(),
-                Err(error) => vec![WorkerRequest::Log(format!(
-                    "worker: result delivery failed for job {job_id}: {error}"
-                ))],
+            WorkerCompletion::ResultRecorded { job_id, outcome } => match outcome {
+                Ok(entry) => {
+                    self.pending_records.remove(&job_id);
+                    self.in_flight.remove(&job_id);
+                    self.in_flight_attempts.remove(&job_id);
+                    self.free_capacity = self
+                        .free_capacity
+                        .saturating_add(1)
+                        .min(self.params.max_concurrent_jobs);
+                    self.outbox.insert(entry.entry_id.clone(), entry.clone());
+                    let mut requests = vec![
+                        WorkerRequest::Log(crate::observability::result_sent_line(&entry.result)),
+                        Self::send_entry(&entry),
+                    ];
+                    requests.extend(self.poll_or_backoff());
+                    requests
+                }
+                Err(error) => vec![
+                    WorkerRequest::Log(format!(
+                        "worker: durable result recording failed for job {job_id}: {error}"
+                    )),
+                    WorkerRequest::ArmResultRecordTimer {
+                        job_id,
+                        delay: self.params.poll_backoff,
+                    },
+                ],
+            },
+            WorkerCompletion::ResultRecordTimer { job_id } => self
+                .pending_records
+                .get(&job_id)
+                .cloned()
+                .map(|result| vec![WorkerRequest::RecordResult { job_id, result }])
+                .unwrap_or_default(),
+            WorkerCompletion::ResultDelivered { entry_id, outcome } => {
+                self.result_delivery(entry_id, outcome)
+            }
+            WorkerCompletion::ResultReplayTimer { entry_id } => self
+                .outbox
+                .get(&entry_id)
+                .map(Self::send_entry)
+                .into_iter()
+                .collect(),
+            WorkerCompletion::ResultFinalized { entry_id, outcome } => match outcome {
+                Ok(()) => {
+                    self.outbox.remove(&entry_id);
+                    self.replay_attempts.remove(&entry_id);
+                    Vec::new()
+                }
+                Err(error) => self.retry_entry(&entry_id, error),
             },
             WorkerCompletion::HeartbeatTimer => {
                 let mut requests = Vec::new();
                 if !self.in_flight.is_empty() {
                     requests.push(WorkerRequest::SendHeartbeat(
-                        crate::client::heartbeat_message_params(
+                        crate::client::heartbeat_message_params_attempts(
                             &self.params,
-                            &self.in_flight,
+                            &self.in_flight_attempts,
                             self.free_capacity,
                         ),
                     ));

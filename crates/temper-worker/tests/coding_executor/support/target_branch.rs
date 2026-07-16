@@ -140,6 +140,7 @@ fn assign_with_repos(correlation_key: &str, repos: Vec<Value>) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: format!("acme/service/issue-7/engineer/{correlation_key}"),
+        attempt_id: Some(format!("attempt-{correlation_key}")),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {

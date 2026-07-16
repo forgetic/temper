@@ -179,6 +179,7 @@ fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &st
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id: None,
         status: ResultStatus::Success,
         repos: vec![RepoOutcome {
             repo: "acme/service".to_string(),
@@ -450,7 +451,9 @@ fn posted_webhook_drives_success_apply_to_pull_request() {
 
         let summary = "implemented daemon webhook route";
         let branch_name = format!("agent/pr-for-code-{}", issue.get());
-        let posted_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
+        let mut posted_result =
+            success_result("worker-a", &assignment.job_id, &branch_name, summary);
+        posted_result.attempt_id = assignment.attempt_id.clone();
         assert_release(
             post_json(
                 &client,

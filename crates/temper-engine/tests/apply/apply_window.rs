@@ -23,16 +23,8 @@ fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
         );
 
         let result = success_result("worker-a", "job-apply-window-1");
-        assert_release(
-            post_json(
-                &client,
-                &url,
-                &WorkerProtocolMessage::Result(result.clone()),
-            )
-            .await,
-            "worker-a",
-            "job-apply-window-1",
-        );
+        let acknowledgement =
+            post_json_background(&handle, &url, WorkerProtocolMessage::Result(result.clone()));
         let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
         assert_eq!(job.job_id, "job-apply-window-1");
         assert_eq!(recorded_result.job_id, result.job_id);
@@ -41,6 +33,14 @@ fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
         assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
 
         release_tx.send(());
+        assert_release(
+            acknowledgement
+                .recv()
+                .await
+                .expect("result acknowledgement"),
+            "worker-a",
+            "job-apply-window-1",
+        );
         eventually_enqueue_and_assign(
             &cx,
             &daemon,
@@ -74,20 +74,20 @@ fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
         );
 
         let result = success_result("worker-a", "job-apply-grace-1");
-        assert_release(
-            post_json(
-                &client,
-                &url,
-                &WorkerProtocolMessage::Result(result.clone()),
-            )
-            .await,
-            "worker-a",
-            "job-apply-grace-1",
-        );
+        let acknowledgement =
+            post_json_background(&handle, &url, WorkerProtocolMessage::Result(result.clone()));
         let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
         assert_eq!(job.job_id, "job-apply-grace-1");
         assert_eq!(recorded_result.job_id, result.job_id);
         release_tx.send(());
+        assert_release(
+            acknowledgement
+                .recv()
+                .await
+                .expect("result acknowledgement"),
+            "worker-a",
+            "job-apply-grace-1",
+        );
         temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(25)).await;
 
         enqueue_standard_job(&daemon, "job-apply-grace-1").await;
@@ -124,16 +124,8 @@ fn apply_block_is_global_but_post_apply_grace_is_per_job_id() {
         );
 
         let result = success_result("worker-a", "job-blocked");
-        assert_release(
-            post_json(
-                &client,
-                &url,
-                &WorkerProtocolMessage::Result(result.clone()),
-            )
-            .await,
-            "worker-a",
-            "job-blocked",
-        );
+        let acknowledgement =
+            post_json_background(&handle, &url, WorkerProtocolMessage::Result(result.clone()));
         let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
         assert_eq!(job.job_id, "job-blocked");
         assert_eq!(recorded_result.job_id, result.job_id);
@@ -146,6 +138,14 @@ fn apply_block_is_global_but_post_apply_grace_is_per_job_id() {
         assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-b", 25)).await);
 
         release_tx.send(());
+        assert_release(
+            acknowledgement
+                .recv()
+                .await
+                .expect("result acknowledgement"),
+            "worker-a",
+            "job-blocked",
+        );
         temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(25)).await;
         assert!(rx.try_recv().is_none());
 

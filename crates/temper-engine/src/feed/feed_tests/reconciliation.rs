@@ -125,11 +125,19 @@ fn poll_worker(worker_id: &str) -> WorkerProtocolMessage {
     })
 }
 
+thread_local! {
+    static ASSIGNMENT_ATTEMPTS: std::cell::RefCell<std::collections::BTreeMap<String, Option<String>>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
 fn success_result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
+    let attempt_id =
+        ASSIGNMENT_ATTEMPTS.with(|attempts| attempts.borrow().get(job_id).cloned().flatten());
     WorkerProtocolMessage::Result(JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
+        attempt_id,
         status: ResultStatus::Success,
         repos: Vec::new(),
         verdict: None,
@@ -142,11 +150,21 @@ fn success_result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
     })
 }
 
-fn assigned_job_id(reply: Option<WorkerProtocolMessage>) -> String {
+fn assigned_job(reply: Option<WorkerProtocolMessage>) -> temper_protocol_worker::Assign {
     match reply {
-        Some(WorkerProtocolMessage::Assign(assign)) => assign.job_id,
+        Some(WorkerProtocolMessage::Assign(assign)) => assign,
         other => panic!("expected assignment, got {other:?}"),
     }
+}
+
+fn assigned_job_id(reply: Option<WorkerProtocolMessage>) -> String {
+    let assign = assigned_job(reply);
+    ASSIGNMENT_ATTEMPTS.with(|attempts| {
+        attempts
+            .borrow_mut()
+            .insert(assign.job_id.clone(), assign.attempt_id.clone());
+    });
+    assign.job_id
 }
 
 fn assert_poll_timeout(reply: Option<WorkerProtocolMessage>) {

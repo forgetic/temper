@@ -11,7 +11,8 @@ use temper_protocol_worker::{
 use crate::WorkerPoolPolicy;
 use crate::daemon_core::{DaemonCore, InFlightJob, RecoveredJob};
 use crate::test_support::{
-    artifact, assert_error, coordinated_payload, heartbeat, poll, register, register_multi, result,
+    artifact, assert_error, coordinated_payload, heartbeat, poll, register, register_multi,
+    result_with_attempt,
 };
 
 fn builders_policy() -> Vec<WorkerPoolPolicy> {
@@ -256,6 +257,7 @@ fn assigned_job_is_recoverable_as_in_flight() {
         core.in_flight_job("job-1"),
         Some(InFlightJob {
             job_id: "job-1".to_string(),
+            attempt_id: core.in_flight_job("job-1").unwrap().attempt_id,
             role: "engineer".to_string(),
             repo: "ai/temper".to_string(),
             artifact,
@@ -489,11 +491,18 @@ fn completed_job_is_no_longer_in_flight() {
         .register(&register("worker-a", "engineer", "ai/temper", 1));
     core.enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({"k":1}));
 
-    match core.handle(poll("worker-a")) {
-        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-1"),
+    let assignment = match core.handle(poll("worker-a")) {
+        Some(WorkerProtocolMessage::Assign(assign)) => {
+            assert_eq!(assign.job_id, "job-1");
+            assign
+        }
         other => panic!("expected assign, got {other:?}"),
-    }
-    let _ = core.handle(result("worker-a", "job-1"));
+    };
+    let _ = core.handle(result_with_attempt(
+        "worker-a",
+        "job-1",
+        assignment.attempt_id,
+    ));
 
     assert_eq!(core.in_flight_job("job-1"), None);
 }
@@ -589,6 +598,7 @@ fn matching_heartbeat_reattaches_staged_assignment_and_rejects_other_ids() {
     let mut core = DaemonCore::new();
     core.stage_recovered_job(RecoveredJob {
         job_id: "job-old".to_string(),
+        attempt_id: None,
         worker_id: "worker-a".to_string(),
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),
@@ -608,6 +618,7 @@ fn matching_heartbeat_reattaches_staged_assignment_and_rejects_other_ids() {
             .iter()
             .map(|job_id| JobHeartbeat {
                 job_id: (*job_id).to_string(),
+                attempt_id: None,
                 state: HeartbeatState::Running,
                 message: String::new(),
             })
@@ -651,6 +662,7 @@ fn unreattached_recovery_is_returned_once_for_orphan_convergence() {
     let mut core = DaemonCore::new();
     let recovered = RecoveredJob {
         job_id: "job-old".to_string(),
+        attempt_id: None,
         worker_id: "worker-a".to_string(),
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),
@@ -679,34 +691,6 @@ fn heartbeat_known_worker_returns_none_and_unknown_returns_error() {
 }
 
 #[test]
-fn result_returns_release_accepted_and_frees_capacity() {
-    let mut core = DaemonCore::new();
-    core.coordinator_mut()
-        .register(&register("worker-a", "engineer", "ai/temper", 1));
-    core.enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({"n":1}));
-    core.enqueue_job("job-2", "engineer", "ai/temper", artifact(), json!({"n":2}));
-
-    match core.handle(poll("worker-a")) {
-        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-1"),
-        other => panic!("expected first assign, got {other:?}"),
-    }
-
-    match core.handle(result("worker-a", "job-1")) {
-        Some(WorkerProtocolMessage::Release(release)) => {
-            assert_eq!(release.worker_id, "worker-a");
-            assert_eq!(release.job_id, "job-1");
-            assert_eq!(release.disposition, ReleaseDisposition::Accepted);
-        }
-        other => panic!("expected release, got {other:?}"),
-    }
-
-    match core.handle(poll("worker-a")) {
-        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-2"),
-        other => panic!("expected second assign, got {other:?}"),
-    }
-}
-
-#[test]
 fn version_mismatch_returns_protocol_version_mismatch_error() {
     let mut core = DaemonCore::new();
     let mut register = register("worker-a", "engineer", "ai/temper", 1);
@@ -726,6 +710,7 @@ fn inbound_assign_or_release_is_malformed_message() {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: "job-1".to_string(),
+        attempt_id: Some("attempt-1".to_string()),
         role: "engineer".to_string(),
         repo: "ai/temper".to_string(),
         artifact: artifact(),
@@ -735,6 +720,7 @@ fn inbound_assign_or_release_is_malformed_message() {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: "worker-a".to_string(),
         job_id: "job-1".to_string(),
+        attempt_id: Some("attempt-1".to_string()),
         disposition: ReleaseDisposition::Accepted,
         message: None,
     });

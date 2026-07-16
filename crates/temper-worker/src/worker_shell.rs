@@ -23,7 +23,8 @@ use skein::runtime::RuntimeHandle;
 use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
 use temper_worker_io::{CqSender, Spawner, arm_timer};
 
-use crate::executor::{JobExecutor, job_result};
+use crate::executor::{JobExecutor, job_result_for_attempt};
+use crate::result_outbox::ResultOutbox;
 use crate::transport::{HttpTransport, Transport};
 use crate::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 
@@ -72,6 +73,7 @@ pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner 
     worker_auth: Option<WorkerAuth>,
     worker_id: String,
     executor: Arc<E>,
+    outbox: Arc<ResultOutbox>,
     cancellation: WorkerCancellation,
 }
 
@@ -86,6 +88,9 @@ impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, Runti
         worker_id: String,
         executor: Arc<E>,
     ) -> Self {
+        let outbox = Arc::new(ResultOutbox::new(
+            std::env::temp_dir().join(format!("temper-worker-results-{worker_id}")),
+        ));
         Self::with_transport_controlled(
             handle,
             cq,
@@ -93,6 +98,7 @@ impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, Runti
             None,
             worker_id,
             executor,
+            outbox,
             WorkerCancellation::default(),
         )
     }
@@ -109,6 +115,9 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
         worker_id: String,
         executor: Arc<E>,
     ) -> Self {
+        let outbox = Arc::new(ResultOutbox::new(
+            std::env::temp_dir().join(format!("temper-worker-results-{worker_id}")),
+        ));
         Self::with_transport_controlled(
             spawner,
             cq,
@@ -116,10 +125,14 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
             worker_auth,
             worker_id,
             executor,
+            outbox,
             WorkerCancellation::default(),
         )
     }
 
+    // This internal construction boundary keeps transport, durability, and
+    // shared shutdown capabilities explicit; public factories remain compact.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_transport_controlled(
         spawner: S,
         cq: CqSender<WorkerCompletion>,
@@ -127,6 +140,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
         worker_auth: Option<WorkerAuth>,
         worker_id: String,
         executor: Arc<E>,
+        outbox: Arc<ResultOutbox>,
         cancellation: WorkerCancellation,
     ) -> Self {
         Self {
@@ -136,6 +150,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
             worker_auth,
             worker_id,
             executor,
+            outbox,
             cancellation,
         }
     }
@@ -171,10 +186,41 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
             WorkerRequest::SendPoll(message) => {
                 self.post(message, WorkerCompletion::PollReply);
             }
-            WorkerRequest::SendResult { job_id, message } => {
-                self.post(message, move |reply| WorkerCompletion::ResultDelivered {
-                    job_id,
-                    outcome: reply.map(|_| ()),
+            WorkerRequest::RecordResult { job_id, result } => {
+                let outbox = Arc::clone(&self.outbox);
+                let cq = self.cq.clone();
+                self.spawner.spawn_task(async move {
+                    let outcome = outbox.record(result).map_err(|error| error.to_string());
+                    let _ = cq.send(WorkerCompletion::ResultRecorded { job_id, outcome });
+                });
+            }
+            WorkerRequest::SendResult { entry_id, message } => {
+                self.post(message, move |outcome| WorkerCompletion::ResultDelivered {
+                    entry_id,
+                    outcome,
+                });
+            }
+            WorkerRequest::AcknowledgeResult { entry, release } => {
+                let outbox = Arc::clone(&self.outbox);
+                let cq = self.cq.clone();
+                let entry_id = entry.entry_id.clone();
+                self.spawner.spawn_task(async move {
+                    let outcome = outbox
+                        .acknowledge(&entry, &release)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string());
+                    let _ = cq.send(WorkerCompletion::ResultFinalized { entry_id, outcome });
+                });
+            }
+            WorkerRequest::RejectResult { entry, reason } => {
+                let outbox = Arc::clone(&self.outbox);
+                let cq = self.cq.clone();
+                let entry_id = entry.entry_id.clone();
+                self.spawner.spawn_task(async move {
+                    let outcome = outbox
+                        .reject(&entry, &reason)
+                        .map_err(|error| error.to_string());
+                    let _ = cq.send(WorkerCompletion::ResultFinalized { entry_id, outcome });
                 });
             }
             WorkerRequest::SendHeartbeat(message) => {
@@ -188,12 +234,23 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 let worker_id = self.worker_id.clone();
                 let cancellation = self.cancellation.clone();
                 let job_id = assign.job_id.clone();
+                let attempt_id = assign.attempt_id.clone();
                 self.spawner.spawn_task(async move {
                     let Some(outcome) = cancellation.run(executor.execute(assign)).await else {
                         return;
                     };
-                    let result = job_result(&worker_id, &job_id, outcome);
+                    let result = job_result_for_attempt(&worker_id, &job_id, attempt_id, outcome);
                     let _ = cq.send(WorkerCompletion::JobFinished { job_id, result });
+                });
+            }
+            WorkerRequest::ArmResultRecordTimer { job_id, delay } => {
+                arm_timer(&self.spawner, &self.cq, delay, move || {
+                    WorkerCompletion::ResultRecordTimer { job_id }
+                });
+            }
+            WorkerRequest::ArmResultReplayTimer { entry_id, delay } => {
+                arm_timer(&self.spawner, &self.cq, delay, move || {
+                    WorkerCompletion::ResultReplayTimer { entry_id }
                 });
             }
             WorkerRequest::ArmPollTimer(delay) => {
@@ -205,6 +262,9 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 arm_timer(&self.spawner, &self.cq, delay, || {
                     WorkerCompletion::HeartbeatTimer
                 });
+            }
+            WorkerRequest::Warn(line) => {
+                tracing::warn!(target: "temper_worker", "{line}");
             }
             WorkerRequest::Log(line) => {
                 // Worker-side protocol traces (`worker: registered`, `worker:

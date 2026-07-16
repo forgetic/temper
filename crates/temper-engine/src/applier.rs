@@ -37,9 +37,16 @@ pub enum ClaimOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApplyOutcome {
     Applied,
+    /// Retry bookkeeping and exact claim release completed successfully.
+    RetryReleased,
     Stale,
-    Retryable { reason: String },
-    Rejected { class: FailureClass, reason: String },
+    Retryable {
+        reason: String,
+    },
+    Rejected {
+        class: FailureClass,
+        reason: String,
+    },
 }
 
 /// Pluggable seam invoked when the daemon assigns work and accepts worker
@@ -74,6 +81,20 @@ pub trait ResultApplier: Send + Sync {
     /// proves ownership by reporting the exact job id in a heartbeat.
     async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
         let _ = (job, context);
+    }
+
+    /// Applies a matching result for an assignment reconstructed during daemon
+    /// startup. Lease-backed implementations override this to reattach the
+    /// exact durable claim before performing any result mutation. The default
+    /// keeps non-durable appliers source compatible.
+    async fn apply_recovered(
+        &self,
+        job: InFlightJob,
+        result: JobResult,
+        context: ClaimContext,
+    ) -> ApplyOutcome {
+        self.heartbeat(job.clone(), context).await;
+        self.apply(job, result).await
     }
 
     async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome;
@@ -147,6 +168,18 @@ impl ResultApplier for RoleRoutingApplier {
         match self.routes.get(&job.role) {
             Some(applier) => applier.heartbeat(job, context).await,
             None => self.default.heartbeat(job, context).await,
+        }
+    }
+
+    async fn apply_recovered(
+        &self,
+        job: InFlightJob,
+        result: JobResult,
+        context: ClaimContext,
+    ) -> ApplyOutcome {
+        match self.routes.get(&job.role) {
+            Some(applier) => applier.apply_recovered(job, result, context).await,
+            None => self.default.apply_recovered(job, result, context).await,
         }
     }
 

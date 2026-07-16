@@ -83,6 +83,7 @@ mod tests {
             protocol_version: WORKER_PROTOCOL_VERSION,
             trace_context: None,
             job_id: "job-123".to_string(),
+            attempt_id: Some("attempt-123".to_string()),
             role: "engineer".to_string(),
             repo: "acme/service".to_string(),
             artifact: Artifact {

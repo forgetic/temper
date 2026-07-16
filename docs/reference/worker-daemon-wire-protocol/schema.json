@@ -164,6 +164,7 @@
     "protocol_version",
     "type",
     "job_id",
+    "attempt_id",
     "role",
     "repo",
     "artifact",
@@ -180,6 +181,10 @@
      "$ref": "#/$defs/traceContext"
     },
     "job_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "attempt_id": {
      "type": "string",
      "minLength": 1
     },
@@ -331,11 +336,16 @@
    "type": "object",
    "required": [
     "job_id",
+    "attempt_id",
     "state",
     "message"
    ],
    "properties": {
     "job_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "attempt_id": {
      "type": "string",
      "minLength": 1
     },
@@ -717,6 +727,7 @@
     "type",
     "worker_id",
     "job_id",
+    "attempt_id",
     "status"
    ],
    "properties": {
@@ -731,6 +742,10 @@
      "minLength": 1
     },
     "job_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "attempt_id": {
      "type": "string",
      "minLength": 1
     },
@@ -823,6 +838,7 @@
     "type",
     "worker_id",
     "job_id",
+    "attempt_id",
     "disposition"
    ],
    "properties": {
@@ -837,6 +853,10 @@
      "minLength": 1
     },
     "job_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "attempt_id": {
      "type": "string",
      "minLength": 1
     },

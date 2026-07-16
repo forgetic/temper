@@ -25,12 +25,18 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .unwrap_or_else(|| "worker failure omitted failure details".to_string());
         match class {
             FailureClass::Transient => {
-                self.release_source_action_claim_for_retry(&job).await;
-                return ApplyOutcome::Retryable { reason };
+                return if self.release_source_action_claim_for_retry(&job).await {
+                    ApplyOutcome::RetryReleased
+                } else {
+                    ApplyOutcome::Retryable { reason }
+                };
             }
             FailureClass::Canceled => {
-                self.release_source_action_claim_for_retry(&job).await;
-                return ApplyOutcome::Stale;
+                return if self.release_source_action_claim_for_retry(&job).await {
+                    ApplyOutcome::RetryReleased
+                } else {
+                    ApplyOutcome::Retryable { reason }
+                };
             }
             FailureClass::Permanent | FailureClass::Protocol => {}
         }

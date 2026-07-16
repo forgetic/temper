@@ -57,8 +57,15 @@ pub(super) enum DaemonCompletion {
         context: crate::applier::ClaimContext,
     },
     /// A result applier finished off-loop.
+    #[cfg(test)]
     ApplyFinished {
         job_id: String,
+        outcome: ApplyOutcome,
+    },
+    /// Result application that still owns the worker request responder.
+    ApplyAndRespondFinished {
+        result: JobResult,
+        responder: HttpResponder,
         outcome: ApplyOutcome,
     },
     /// Close the dispatch barrier before startup inventory begins.
@@ -182,17 +189,15 @@ pub(super) enum DaemonRequest {
         delay: Duration,
         reply: temper_engine_io::OneshotSender<()>,
     },
-    RunApply {
-        job: InFlightJob,
-        result: JobResult,
-    },
     /// Apply retry bookkeeping before acknowledging a retryable/canceled result
     /// to the worker so the source claim is released before the next rescan.
     RunApplyAndRespond {
         job: InFlightJob,
         result: JobResult,
+        /// Present only when `job` was restored from durable startup state and
+        /// the applier must reattach that exact claim before mutation.
+        recovered_context: Option<crate::applier::ClaimContext>,
         responder: HttpResponder,
-        response: HttpResponseData,
     },
     /// Apply an assignment-time source claim before returning the assignment to
     /// the worker that will start the job.
@@ -303,6 +308,9 @@ pub(super) struct DaemonMachine {
     pub(super) webhook: Option<WebhookConfig>,
     pub(super) waiters: BTreeMap<u64, PollWaiter>,
     pub(super) applying: BTreeSet<String>,
+    pub(super) pending_results: BTreeMap<(String, Option<String>), JobResult>,
+    pub(super) completed_results:
+        BTreeMap<(String, Option<String>), (JobResult, WorkerProtocolMessage)>,
     pub(super) recently_applied: BTreeMap<String, EngineTime>,
     pub(super) retry_attempts: BTreeMap<String, u32>,
     pub(super) retry_backoff_until: BTreeMap<String, EngineTime>,
@@ -365,19 +373,23 @@ impl DaemonMachine {
         )
     }
 
-    fn with_core(core: DaemonCore, apply_grace: Duration, max_poll_wait_ms: u64) -> Self {
+    fn with_core(mut core: DaemonCore, apply_grace: Duration, max_poll_wait_ms: u64) -> Self {
+        let daemon_boot_id = new_daemon_boot_id();
+        core.set_attempt_prefix(daemon_boot_id.clone());
         Self {
             core,
             max_poll_wait_ms,
             webhook: None,
             waiters: BTreeMap::new(),
             applying: BTreeSet::new(),
+            pending_results: BTreeMap::new(),
+            completed_results: BTreeMap::new(),
             recently_applied: BTreeMap::new(),
             retry_attempts: BTreeMap::new(),
             retry_backoff_until: BTreeMap::new(),
             apply_grace,
             now: EngineTime::ZERO,
-            daemon_boot_id: new_daemon_boot_id(),
+            daemon_boot_id,
             startup_recovery: false,
             deferred_enqueues: Vec::new(),
             assignment_contexts: BTreeMap::new(),
@@ -456,6 +468,7 @@ impl DaemonMachine {
 fn in_flight_job_from_assignment(assign: &Assign) -> InFlightJob {
     InFlightJob {
         job_id: assign.job_id.clone(),
+        attempt_id: assign.attempt_id.clone(),
         role: assign.role.clone(),
         repo: assign.repo.clone(),
         artifact: assign.artifact.clone(),
@@ -493,7 +506,7 @@ fn new_daemon_boot_id() -> String {
     format!("daemon-boot-{epoch_nanos:x}-{sequence:x}")
 }
 
-fn retry_delay(attempt: u32) -> Duration {
+pub(super) fn retry_delay(attempt: u32) -> Duration {
     const MAX_BACKOFF_SECS: u64 = 300;
     let exponent = attempt.saturating_sub(1).min(8);
     Duration::from_secs((2_u64.saturating_pow(exponent)).min(MAX_BACKOFF_SECS))
@@ -595,35 +608,15 @@ impl Machine for DaemonMachine {
                 self.core.rollback_committed_assignment(&job.job_id);
                 vec![DaemonRequest::RunClaimRollback { job, context }]
             }
+            #[cfg(test)]
             DaemonCompletion::ApplyFinished { job_id, outcome } => {
-                self.applying.remove(&job_id);
-                let mut requests = match outcome {
-                    ApplyOutcome::Retryable { reason } => {
-                        let attempt = self.retry_attempts.entry(job_id.clone()).or_insert(0);
-                        *attempt = attempt.saturating_add(1);
-                        let delay = retry_delay(*attempt);
-                        self.retry_backoff_until
-                            .insert(job_id.clone(), self.now + delay);
-                        vec![DaemonRequest::Log(format!(
-                            "engine: result apply retry scheduled job_id={job_id} attempt={} backoff_ms={} reason={reason}",
-                            *attempt,
-                            delay.as_millis()
-                        ))]
-                    }
-                    ApplyOutcome::Applied | ApplyOutcome::Stale | ApplyOutcome::Rejected { .. } => {
-                        self.retry_attempts.remove(&job_id);
-                        self.retry_backoff_until.remove(&job_id);
-                        self.recently_applied
-                            .insert(job_id, self.now + self.apply_grace);
-                        Vec::new()
-                    }
-                };
-                if self.applying.is_empty() {
-                    let decisions = self.wake_coordinator.promote_apply_deferred();
-                    requests.extend(self.wake_decision_requests(decisions));
-                }
-                requests
+                self.handle_apply_finished(job_id, outcome)
             }
+            DaemonCompletion::ApplyAndRespondFinished {
+                result,
+                responder,
+                outcome,
+            } => self.handle_apply_and_respond_finished(result, responder, outcome),
             DaemonCompletion::BeginStartupRecovery => {
                 self.startup_recovery = true;
                 Vec::new()

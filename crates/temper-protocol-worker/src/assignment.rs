@@ -51,6 +51,11 @@ pub struct Assign {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<W3cTraceContext>,
     pub job_id: String,
+    /// Opaque daemon-generated fence for this particular dispatch of `job_id`.
+    /// Optional only so legacy protocol fixtures remain readable; a current
+    /// worker refuses assignments that omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     pub role: String,
     /// Primary repository path (`owner/name`) -- the home of the coordinating
     /// artifact. The full repo set to assemble travels in the job payload's

@@ -25,6 +25,7 @@ pub mod observability;
 pub mod out_of_process_runner;
 pub mod pr_freshness;
 pub mod pre_push;
+pub mod result_outbox;
 pub mod run;
 pub mod trace;
 pub mod transport;
@@ -47,7 +48,7 @@ pub use config::{
 pub use context_client::{
     ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,
 };
-pub use executor::{JobExecutor, JobOutcome, StubExecutor, job_result};
+pub use executor::{JobExecutor, JobOutcome, StubExecutor, job_result, job_result_for_attempt};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
 pub use out_of_process_runner::{
     CancellationOutcome, DescendantCleanupStatus, JobQuiesced, OutOfProcessRunner,
@@ -60,6 +61,10 @@ pub use pre_push::{
     PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, WorkspaceFingerprint,
     WorkspaceFingerprintError, final_pre_push_response, fingerprint_writable_repos,
     fingerprint_writable_repos_blocking, run_pre_push_checks, submit_for_pr_pre_push_response,
+};
+pub use result_outbox::{
+    RESULT_OUTBOX_VERSION, ResultAcknowledgement, ResultAssignmentIdentity, ResultDeliveryState,
+    ResultOutbox, ResultOutboxEntry, ResultOutboxError,
 };
 pub use run::{
     WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,

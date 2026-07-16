@@ -5,6 +5,7 @@ use temper_testing::real_stack::{
     FakeModelResponse, HermeticIssueSpec, HermeticRealStackBuilder, HermeticRepoSpec, PauseHooks,
     PausePoint,
 };
+use temper_worker::ResultOutbox;
 use temper_workflow::parse_metadata_block;
 
 #[test]
@@ -177,16 +178,26 @@ fn daemon_loss_after_child_create_replays_wiring_and_activation_once() {
         );
 
         // Stop both replaceable components while the old result application is
-        // still parked immediately after its committed child create. The new
-        // daemon reuses the same Forge intent and the new worker replays the
-        // same verdict; the parked incarnation is released only after replay.
+        // still parked immediately after its committed child create. The result
+        // request cannot be acknowledged while application is incomplete, so
+        // the worker's exact payload must already be restart-readable instead
+        // of appearing on the transport tap.
         stack.daemon().crash().await;
-        let interrupted = stack
-            .await_worker_result(&cx, std::time::Duration::from_secs(2))
-            .await
-            .expect("interrupted incarnation reports its unpublished result");
-        assert_eq!(interrupted.status, ResultStatus::Success);
         stack.crash_worker().await;
+        let pending = ResultOutbox::new(
+            stack
+                .workspace_root()
+                .join(".temper")
+                .join("worker-results"),
+        )
+        .load()
+        .expect("interrupted result outbox loads");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].result.status, ResultStatus::Success);
+
+        // The new daemon reuses the same Forge intent and the new worker
+        // replays the same verdict; the parked incarnation is released only
+        // after replay.
         stack.replace_daemon(&handle).await;
         assert_eq!(stack.open_recovery_barrier().await.len(), 1);
         assert_eq!(

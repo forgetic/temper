@@ -93,6 +93,7 @@ fn policy() -> LeasePolicy {
 fn in_flight_job(number: ItemNumber) -> InFlightJob {
     InFlightJob {
         job_id: "ai/test-job".to_string(),
+        attempt_id: Some("attempt-test".to_string()),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {
@@ -139,6 +140,7 @@ fn repair_job(repo: &RepositoryId, pull_request: &temper_forge::PullRequest) -> 
             "acme/service/pull_request-{}/engineer/pr_merge_conflict",
             pull_request.number
         ),
+        attempt_id: Some("attempt-repair".to_string()),
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         artifact: Artifact {
@@ -172,6 +174,11 @@ fn job_result(job_id: &str) -> JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: "worker-a".to_string(),
         job_id: job_id.to_string(),
+        attempt_id: Some(if job_id == "ai/test-job" {
+            "attempt-test".to_string()
+        } else {
+            "attempt-repair".to_string()
+        }),
         status: ResultStatus::Success,
         repos: vec![RepoOutcome {
             repo: "acme/service".to_string(),
@@ -324,6 +331,76 @@ fn lease_won_inner_applied_then_lease_released() {
                 .lease
                 .is_none()
         );
+    })
+}
+
+#[test]
+fn matching_recovered_result_reattaches_and_releases_durable_assignment() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge).await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let job = in_flight_job(issue);
+        let result = job_result(&job.job_id);
+        let context = temper_engine::ClaimContext {
+            worker_id: result.worker_id.clone(),
+            daemon_boot_id: "daemon-boot-original".to_string(),
+        };
+
+        let (initial_tx, _initial_rx) = temper_engine_io::channel();
+        let initial = LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            Arc::new(RecordingApplier {
+                tx: initial_tx,
+                forge: None,
+                repo: None,
+                issue: None,
+                lease_tx: None,
+                freshness_response: None,
+            }),
+            temper_engine::system_clock(),
+        );
+        assert_eq!(
+            initial.claim(job.clone(), context.clone()).await,
+            temper_engine::ClaimOutcome::Claimed
+        );
+        drop(initial);
+
+        let (tx, mut rx) = temper_engine_io::channel();
+        let recovered = LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            Arc::new(RecordingApplier {
+                tx,
+                forge: None,
+                repo: None,
+                issue: None,
+                lease_tx: None,
+                freshness_response: None,
+            }),
+            temper_engine::system_clock(),
+        );
+        assert_eq!(
+            recovered
+                .apply_recovered(job.clone(), result.clone(), context)
+                .await,
+            temper_engine::ApplyOutcome::Applied
+        );
+        assert_eq!(rx.recv().await, Some((job, result)));
+
+        let issue = forge
+            .get_issue_by_number(&repo, issue)
+            .await
+            .expect("issue reload succeeds")
+            .expect("issue exists after recovered apply");
+        let metadata = parse_metadata_block(&issue.body)
+            .expect("issue metadata parses")
+            .unwrap_or_default();
+        assert!(metadata.assignment.is_none());
+        assert!(metadata.lease.is_none());
     })
 }
 

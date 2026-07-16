@@ -23,7 +23,7 @@
 //!    transition it has either emitted forward progress (a poll, a job, a
 //!    result, a heartbeat) or armed a timer that will wake it again.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 use temper_protocol_worker::{
@@ -31,7 +31,8 @@ use temper_protocol_worker::{
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_worker::config::{CapabilitySpec, WorkerParams};
-use temper_worker::executor::{JobOutcome, job_result};
+use temper_worker::executor::{JobOutcome, job_result_for_attempt};
+use temper_worker::result_outbox::ResultOutboxEntry;
 use temper_worker::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 use temper_worker_io::{EngineTime, Machine};
 
@@ -79,6 +80,7 @@ fn assign(job_id: &str) -> Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
         trace_context: None,
         job_id: job_id.to_string(),
+        attempt_id: Some(format!("attempt-{job_id}")),
         role: "engineer".to_string(),
         repo: "ai/smith".to_string(),
         artifact: Artifact {
@@ -102,9 +104,10 @@ fn poll_timeout_reply() -> WorkerProtocolMessage {
 fn finished(job_id: &str) -> WorkerCompletion {
     WorkerCompletion::JobFinished {
         job_id: job_id.to_string(),
-        result: job_result(
+        result: job_result_for_attempt(
             "fuzz-worker",
             job_id,
+            Some(format!("attempt-{job_id}")),
             JobOutcome::Failure {
                 class: FailureClass::Transient,
                 message: "sim".to_string(),
@@ -121,6 +124,7 @@ struct Sim {
     max_concurrent: u32,
     /// Jobs the machine has dispatched (RunJob emitted) but not yet finished.
     dispatched: BTreeSet<String>,
+    pending_records: BTreeMap<String, temper_protocol_worker::JobResult>,
     next_job: u64,
     registered: bool,
 }
@@ -134,6 +138,7 @@ impl Sim {
             machine,
             max_concurrent,
             dispatched: BTreeSet::new(),
+            pending_records: BTreeMap::new(),
             next_job: 0,
             registered: false,
         }
@@ -146,6 +151,9 @@ impl Sim {
         if !self.dispatched.is_empty() {
             choices.push(2); // a dispatched job finishes
             choices.push(3); // a result delivery acks
+        }
+        if !self.pending_records.is_empty() {
+            choices.push(6); // durable outbox write completes
         }
         let pick = choices[rng.below(choices.len() as u64) as usize];
         match pick {
@@ -174,11 +182,17 @@ impl Sim {
                     .expect("dispatched non-empty");
                 finished(&job)
             }
-            3 => WorkerCompletion::ResultDelivered {
-                job_id: "job-x".to_string(),
-                outcome: Ok(()),
-            },
+            3 => WorkerCompletion::HeartbeatDelivered(Ok(())),
             4 => WorkerCompletion::PollTimer,
+            6 => {
+                let job_id = self.pending_records.keys().next().cloned().unwrap();
+                let result = self.pending_records.remove(&job_id).unwrap();
+                WorkerCompletion::ResultRecorded {
+                    job_id,
+                    outcome: ResultOutboxEntry::from_result(result)
+                        .map_err(|error| error.to_string()),
+                }
+            }
             _ => WorkerCompletion::HeartbeatTimer,
         }
     }
@@ -224,14 +238,25 @@ impl Sim {
                     emitted_run = true;
                     emitted_progress = true;
                 }
+                WorkerRequest::RecordResult { job_id, result } => {
+                    self.dispatched.remove(job_id);
+                    self.pending_records.insert(job_id.clone(), result.clone());
+                    emitted_progress = true;
+                }
                 WorkerRequest::SendPoll(_)
                 | WorkerRequest::SendResult { .. }
                 | WorkerRequest::SendHeartbeat(_)
                 | WorkerRequest::SendRegister(_) => emitted_progress = true,
-                WorkerRequest::ArmPollTimer(_) | WorkerRequest::ArmHeartbeatTimer(_) => {
+                WorkerRequest::ArmPollTimer(_)
+                | WorkerRequest::ArmHeartbeatTimer(_)
+                | WorkerRequest::ArmResultRecordTimer { .. }
+                | WorkerRequest::ArmResultReplayTimer { .. } => {
                     emitted_progress = true;
                 }
-                WorkerRequest::Log(_) => {}
+                WorkerRequest::AcknowledgeResult { .. } | WorkerRequest::RejectResult { .. } => {
+                    emitted_progress = true;
+                }
+                WorkerRequest::Warn(_) | WorkerRequest::Log(_) => {}
             }
         }
 

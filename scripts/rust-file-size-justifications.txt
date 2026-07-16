@@ -14,6 +14,14 @@ crates/temper-worker-registry/src/daemon_core.rs
 # mismatched, repeated, and orphaned heartbeat behavior.
 crates/temper-worker-registry/src/daemon_core_tests.rs
 
+# Worker transport integration coverage shares one daemon harness for polling,
+# attempt-fenced result acknowledgement, authentication, and capacity behavior.
+crates/temper-engine/tests/transport.rs
+
+# Forge result fixtures centralize durable assignment identities and seeded
+# workflow state so attempt-aware apply tests exercise one consistent boundary.
+crates/temper-engine/tests/forge_apply/support.rs
+
 # Durable assignment claim, refresh, rollback, and quarantine all share one
 # conditional Forge write boundary so recovery CAS semantics remain auditable.
 crates/temper-workflow/src/lease/manager.rs

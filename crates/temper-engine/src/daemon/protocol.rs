@@ -153,6 +153,7 @@ mod tests {
             protocol_version: WORKER_PROTOCOL_VERSION,
             worker_id: "worker-a".to_string(),
             job_id: "job-1".to_string(),
+            attempt_id: Some("attempt-1".to_string()),
             status,
             repos: Vec::new(),
             verdict: None,
@@ -195,6 +196,7 @@ mod tests {
             protocol_version: WORKER_PROTOCOL_VERSION,
             trace_context: None,
             job_id: "ai/temper/issue-147/engineer/code_ready".to_string(),
+            attempt_id: Some("attempt-1".to_string()),
             role: "engineer".to_string(),
             repo: "ai/temper".to_string(),
             artifact: Artifact {
