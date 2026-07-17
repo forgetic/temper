@@ -1711,6 +1711,7 @@ dependencies = [
  "temper-agent-core",
  "temper-agent-io",
  "temper-log",
+ "temper-process-containment",
  "temper-protocol-activity",
  "temper-protocol-agent",
  "tempfile",

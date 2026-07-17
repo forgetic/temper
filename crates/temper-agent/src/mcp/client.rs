@@ -79,6 +79,12 @@ pub enum McpError {
         method: String,
         status: Option<String>,
     },
+    ProtocolOverflow {
+        direction: &'static str,
+        resource: &'static str,
+        limit: usize,
+        observed: usize,
+    },
     Protocol(String),
 }
 
@@ -110,6 +116,15 @@ impl std::fmt::Display for McpError {
                 ),
                 None => write!(formatter, "MCP process exited while waiting for `{method}`"),
             },
+            Self::ProtocolOverflow {
+                direction,
+                resource,
+                limit,
+                observed,
+            } => write!(
+                formatter,
+                "MCP protocol overflow: {direction} {resource} exceeded limit {limit} (observed at least {observed})"
+            ),
             Self::Protocol(message) => write!(formatter, "MCP protocol error: {message}"),
         }
     }
