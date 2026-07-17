@@ -101,16 +101,8 @@ impl Write for BoundedRecordWriter {
 }
 
 #[cfg(test)]
-static ACTIVE_OUTPUT_READERS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-#[cfg(test)]
 static JOINED_OUTPUT_READERS: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> =
     std::sync::OnceLock::new();
-
-#[cfg(test)]
-pub(super) fn active_output_readers() -> usize {
-    ACTIVE_OUTPUT_READERS.load(Ordering::Acquire)
-}
 
 #[cfg(test)]
 pub(super) fn output_reader_joined(config: &StdioMcpServerConfig) -> bool {
@@ -127,7 +119,6 @@ struct ActiveReaderGuard(String);
 #[cfg(test)]
 impl ActiveReaderGuard {
     fn enter(key: String) -> Self {
-        ACTIVE_OUTPUT_READERS.fetch_add(1, Ordering::AcqRel);
         Self(key)
     }
 }
@@ -135,7 +126,6 @@ impl ActiveReaderGuard {
 #[cfg(test)]
 impl Drop for ActiveReaderGuard {
     fn drop(&mut self) {
-        ACTIVE_OUTPUT_READERS.fetch_sub(1, Ordering::AcqRel);
         JOINED_OUTPUT_READERS
             .get_or_init(Default::default)
             .lock()

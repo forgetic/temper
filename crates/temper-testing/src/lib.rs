@@ -19,6 +19,8 @@ pub mod ci;
 pub mod counting_forge;
 pub mod counting_http;
 pub mod daemon_worker;
+#[cfg(target_os = "linux")]
+pub mod descendant_fixture;
 pub mod forgejo_runtime;
 pub mod forgejo_server;
 pub mod live_basic_delivery;
