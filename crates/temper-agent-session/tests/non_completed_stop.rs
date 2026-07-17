@@ -1,4 +1,4 @@
-use std::io::Write as _;
+use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::TcpListener;
 use std::process::Command;
 use std::thread;
@@ -7,7 +7,8 @@ use std::time::Duration;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_protocol_agent::{
-    AgentLifecycleCommandV1, PROVIDER_CREDENTIALS_ENV, WorkspaceContext, WorkspaceGuidance,
+    AgentLifecycleCancellationAckV1, AgentLifecycleCommandV1, AgentLifecycleFrameV1,
+    AgentLifecycleHelloV1, PROVIDER_CREDENTIALS_ENV, WorkspaceContext, WorkspaceGuidance,
     WorkspaceRepository, WorkspaceWorkItem,
 };
 
@@ -112,6 +113,21 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
         for _ in 0..500 {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Consume the client's hello before sending the command. Closing a
+                    // socket with that frame unread can reset the connection and discard
+                    // the cancellation under load.
+                    let mut reader = BufReader::new(
+                        stream
+                            .try_clone()
+                            .expect("clone lifecycle stream for reading"),
+                    );
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("read lifecycle hello");
+                    serde_json::from_str::<AgentLifecycleHelloV1>(line.trim())
+                        .expect("decode lifecycle hello")
+                        .validate()
+                        .expect("validate lifecycle hello");
+
                     serde_json::to_writer(
                         &mut stream,
                         &AgentLifecycleCommandV1::Cancel {
@@ -122,6 +138,32 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
                     stream
                         .write_all(b"\n")
                         .expect("terminate lifecycle cancellation");
+
+                    let mut acknowledged = false;
+                    loop {
+                        line.clear();
+                        if reader
+                            .read_line(&mut line)
+                            .expect("read lifecycle response")
+                            == 0
+                        {
+                            break;
+                        }
+                        if let Ok(acknowledgement) =
+                            serde_json::from_str::<AgentLifecycleCancellationAckV1>(line.trim())
+                        {
+                            acknowledgement
+                                .validate()
+                                .expect("validate lifecycle cancellation acknowledgement");
+                            acknowledged = true;
+                        } else {
+                            serde_json::from_str::<AgentLifecycleFrameV1>(line.trim())
+                                .expect("decode lifecycle frame")
+                                .validate()
+                                .expect("validate lifecycle frame");
+                        }
+                    }
+                    assert!(acknowledged, "agent did not acknowledge cancellation");
                     return;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -159,7 +201,7 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
             "--provider-url",
             fake_url.as_str(),
             "--max-iterations",
-            "10000",
+            "100",
             "--subagents",
             "off",
             "--agent-lifecycle-address",
