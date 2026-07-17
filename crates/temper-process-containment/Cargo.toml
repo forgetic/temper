@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Small OS process-containment boundary used by the Temper worker"
+description = "Prepared descendant-complete process-containment contract for Temper"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
