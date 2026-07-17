@@ -14,6 +14,7 @@
 //! surface is safe; platform-specific unsafe operations stay inside the
 //! prepared backends and the temporary `legacy` adapter.
 
+mod capture;
 #[cfg(target_os = "linux")]
 mod cgroup_v2;
 mod command;
@@ -26,6 +27,7 @@ mod runtime;
 #[cfg(windows)]
 mod windows;
 
+pub use capture::*;
 #[cfg(target_os = "linux")]
 pub use cgroup_v2::*;
 pub use command::*;

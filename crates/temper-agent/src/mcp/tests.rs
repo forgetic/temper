@@ -41,6 +41,10 @@ for line in sys.stdin:
     if not line.strip():
         continue
     request = json.loads(line)
+    if mode == "oversized_record":
+        sys.stdout.write("x" * (1024 * 1024 + 1) + "\n")
+        sys.stdout.flush()
+        time.sleep(60)
     if "id" not in request:
         continue
     method = request.get("method")
@@ -247,6 +251,67 @@ fn server_exit_with_new_session_waits_for_recursive_cleanup_and_reader_join() {
         assert!(
             !process_alive(descendant),
             "new-session descendant survived server failure"
+        );
+        assert_eq!(super::connection::active_output_readers(), 0);
+    });
+}
+
+#[test]
+fn oversized_inbound_record_is_typed_and_joins_server() {
+    let _serial = PROCESS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = fake_server_script();
+    let config = fake_command(&dir, Some("oversized_record"));
+    let error = temper_agent_io::block_on(async move {
+        match connect(config).await {
+            Ok(_) => panic!("oversized MCP record must fail"),
+            Err(error) => error,
+        }
+    });
+    assert!(matches!(
+        error,
+        McpError::ProtocolOverflow {
+            direction: "inbound",
+            resource: "record bytes",
+            limit: super::connection::MAX_MCP_RECORD_BYTES,
+            ..
+        }
+    ));
+    assert_eq!(super::connection::active_output_readers(), 0);
+}
+
+#[test]
+fn oversized_outbound_record_is_typed_and_contains_server() {
+    let _serial = PROCESS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = fake_server_script();
+    temper_agent_io::block_on(async move {
+        let client = connect(fake_command(&dir, None))
+            .await
+            .expect("connect fake MCP server");
+        let pid = client.child_id();
+        let error = client
+            .call_tool(
+                "too-large",
+                json!({"payload": "x".repeat(super::connection::MAX_MCP_RECORD_BYTES)}),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("oversized outbound record must fail");
+        assert!(matches!(
+            error,
+            McpError::ProtocolOverflow {
+                direction: "outbound",
+                resource: "record bytes",
+                limit: super::connection::MAX_MCP_RECORD_BYTES,
+                ..
+            }
+        ));
+        assert!(
+            !process_alive(pid),
+            "overflow result preceded cleanup proof"
         );
         assert_eq!(super::connection::active_output_readers(), 0);
     });
