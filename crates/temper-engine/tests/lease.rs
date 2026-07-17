@@ -197,6 +197,9 @@ fn job_result(job_id: &str) -> JobResult {
     }
 }
 
+#[path = "lease/lookup_failures.rs"]
+mod lookup_failures;
+
 #[test]
 fn claim_revalidates_pr_freshness_before_persisting_assignment() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
