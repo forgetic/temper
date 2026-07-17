@@ -18,8 +18,13 @@
 mod cgroup_v2;
 mod command;
 mod legacy;
+#[cfg(target_os = "linux")]
+mod linux;
 mod model;
+mod platform;
 mod runtime;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(target_os = "linux")]
 pub use cgroup_v2::*;
@@ -27,8 +32,13 @@ pub use command::*;
 pub use legacy::{
     ContainmentKind, ProcessContainment, configure_command, configure_descendant_command,
 };
+#[cfg(target_os = "linux")]
+pub use linux::*;
 pub use model::*;
+pub use platform::*;
 pub use runtime::*;
+#[cfg(windows)]
+pub use windows::*;
 
 #[cfg(test)]
 mod tests;

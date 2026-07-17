@@ -287,6 +287,6 @@ fn fallback_kind() -> ContainmentKind {
     }
     #[cfg(not(any(unix, windows)))]
     {
-        ContainmentKind::DirectChildFallback
+        ContainmentKind::UnsupportedPlatform
     }
 }

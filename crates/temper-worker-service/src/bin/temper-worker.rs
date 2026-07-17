@@ -18,6 +18,13 @@ Long-polls the engine for coding jobs and runs each by spawning the out-of-proce
 `temper serve worker`.";
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "linux")]
+    if let Some(status) =
+        temper_worker::dispatch_linux_supervisor_helper(std::env::args_os().skip(1))
+    {
+        return status;
+    }
+
     // Install the global tracing subscriber before arg parsing or the runtime
     // starts, so startup output flows through the env-aware subscriber.
     temper_log::init_logging();

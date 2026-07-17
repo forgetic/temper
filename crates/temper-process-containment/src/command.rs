@@ -115,8 +115,35 @@ impl ContainmentCommand {
     /// Converts this request to `std::process::Command` inside a backend's
     /// race-free spawn implementation.
     pub fn into_std_command(self) -> Command {
-        let mut command = Command::new(self.program);
-        command.args(self.arguments);
+        let program = self.program.clone();
+        let arguments = self.arguments.clone();
+        let mut command = Command::new(program);
+        command.args(arguments);
+        self.apply_spawn_properties(&mut command);
+        command
+    }
+
+    /// Wraps the payload in the Linux supervisor helper while preserving the
+    /// payload's argv, environment, cwd, and stdio exactly. The helper inherits
+    /// those launch properties, spawns the payload with inherited stdio, and
+    /// closes its own copies after the spawn handshake.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn into_linux_supervisor_command(
+        self,
+        helper: &OsStr,
+        mut helper_arguments: Vec<OsString>,
+    ) -> Command {
+        helper_arguments.push(OsString::from("--"));
+        helper_arguments.push(self.program.clone());
+        helper_arguments.extend(self.arguments.iter().cloned());
+
+        let mut command = Command::new(helper);
+        command.args(helper_arguments);
+        self.apply_spawn_properties(&mut command);
+        command
+    }
+
+    fn apply_spawn_properties(self, command: &mut Command) {
         if self.clear_environment {
             command.env_clear();
         }
@@ -137,6 +164,5 @@ impl ContainmentCommand {
             .stdin(self.stdin)
             .stdout(self.stdout)
             .stderr(self.stderr);
-        command
     }
 }

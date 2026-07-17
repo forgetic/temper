@@ -44,4 +44,7 @@ pub use shell::{
     StreamRetryConfig, StreamRetryConfigOverrideGuard, install_stream_retry_config_override,
 };
 pub use subagent_tool::{SubAgentFactory, SubAgentObserverFactory, SubAgentTool};
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use temper_process_containment::dispatch_linux_supervisor_helper;
 pub use temper_process_containment::{ProcessContainment, configure_descendant_command};

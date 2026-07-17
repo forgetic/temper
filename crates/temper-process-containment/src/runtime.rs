@@ -6,6 +6,9 @@ use std::time::Duration;
 use crate::command::ContainmentCommand;
 use crate::model::*;
 
+mod evidence;
+use evidence::collect_backend_signal_evidence;
+
 /// Kernel/backend operations used by the implementation-neutral cleanup state
 /// machine. Test fakes can implement this trait without mutating process-global
 /// environment or backend selectors.
@@ -23,6 +26,13 @@ pub trait ContainmentKernel: Send {
     /// have been considered by the backend. PID/start-time mismatch must be
     /// represented as [`SignalAttemptOutcome::PidReused`].
     fn signal_members(&mut self, signal: ContainmentSignal) -> io::Result<SignalBatch>;
+
+    /// Return a signal batch performed internally by a supervising backend
+    /// before the shared owner-side state machine observed completion. Each
+    /// batch may be taken at most once. Most kernels never signal internally.
+    fn take_backend_signal_batch(&mut self, _signal: ContainmentSignal) -> Option<SignalBatch> {
+        None
+    }
 
     /// Non-blockingly reap the eligible direct child or report that it remains
     /// live. Inspection/reap uncertainty is an error and therefore fail-closed.
@@ -419,6 +429,7 @@ fn run_cleanup(
                 continue;
             }
         };
+        collect_backend_signal_evidence(owned.kernel.as_mut(), &mut evidence);
         evidence.remember_survivors(discovery.members(), discovery.omitted());
 
         observe(

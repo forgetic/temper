@@ -52,6 +52,9 @@ mod submit_client;
 use std::process::ExitCode;
 
 pub use config::AgentConfig;
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use temper_agent_core::dispatch_linux_supervisor_helper;
 
 /// The agent binary's entry point: the **single place** this crate (and the
 /// `temper-agent` core it drives) reads `std::env`. It reads the one secret env
