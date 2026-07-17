@@ -368,11 +368,13 @@ async fn drain_after_signal(
         }
     })
     .await;
+    daemon_guard.begin_shutdown().await;
+    server.begin_drain(std::time::Duration::from_secs(5));
     if let Some(trace_retention) = trace_retention {
         trace_retention.stop().await;
     }
     daemon_guard.release_assignments_for_shutdown().await;
-    server.begin_drain(std::time::Duration::from_secs(5));
+    server.finish_drain().await;
     Ok(())
 }
 

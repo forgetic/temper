@@ -97,7 +97,14 @@ impl NativeJigAgentRunner {
         let job_id = job_id.to_string();
         let forge_context: ForgeContextHost =
             Arc::new(move |operation| forge_host(job_id.clone(), operation));
-        let (result, _totals) = run_coding_agent_native_with_totals_tool_config_and_hosts(
+        let agent_cancellation = temper_agent::AgentCancellationLatch::default();
+        let worker_cancellation = attempt_control
+            .as_ref()
+            .map(|(_, cancellation)| cancellation.clone());
+        let _cancellation_owner = worker_cancellation
+            .as_ref()
+            .map(JobCancellation::register_async_owner);
+        let run = run_coding_agent_native_with_totals_tool_config_and_hosts(
             self.handle.clone(),
             &self.provider,
             context,
@@ -108,11 +115,28 @@ impl NativeJigAgentRunner {
             None,
             Some(submit_for_pr),
             Some(forge_context),
-            temper_agent::AgentActivityConfig::default(),
+            temper_agent::AgentActivityConfig {
+                cancellation: agent_cancellation.clone(),
+                ..Default::default()
+            },
             temper_protocol_agent::AgentRuntimeLimitsV1::default(),
-        )
-        .await
-        .map_err(|error| {
+        );
+        let outcome = if let Some(worker_cancellation) = worker_cancellation {
+            let mut run = std::pin::pin!(run);
+            let mut cancelled = std::pin::pin!(worker_cancellation.cancelled());
+            let mut forwarded = false;
+            std::future::poll_fn(|cx| {
+                if !forwarded && cancelled.as_mut().poll(cx).is_ready() {
+                    forwarded = true;
+                    agent_cancellation.request_cancel();
+                }
+                run.as_mut().poll(cx)
+            })
+            .await
+        } else {
+            run.await
+        };
+        let (result, _totals) = outcome.map_err(|error| {
             let worker_cancellation_requested =
                 attempt_control
                     .as_ref()

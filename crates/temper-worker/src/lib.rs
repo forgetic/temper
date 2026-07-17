@@ -30,6 +30,7 @@ pub mod pre_push;
 mod process_containment;
 pub mod result_outbox;
 pub mod run;
+pub mod task_registry;
 pub mod trace;
 pub mod transport;
 pub mod worker_machine;
@@ -52,9 +53,9 @@ pub use context_client::{
     ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,
 };
 pub use executor::{
-    AttemptFence, CancellationOutcome, JobAttempt, JobCancellation, JobCancellationRequest,
-    JobCleanup, JobExecutionContext, JobExecutor, JobOutcome, ResourceJoinReport,
-    ResourceJoinStatus, StubExecutor, job_result, job_result_for_attempt,
+    AttemptFence, CancellationOutcome, JobAttempt, JobCancellation, JobCancellationOwner,
+    JobCancellationRequest, JobCleanup, JobExecutionContext, JobExecutor, JobOutcome,
+    ResourceJoinReport, ResourceJoinStatus, StubExecutor, job_result, job_result_for_attempt,
 };
 pub use lifecycle_hook::{WorkerLifecycleCheckpoint, WorkerLifecycleHook};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
@@ -75,6 +76,10 @@ pub use result_outbox::{
 pub use run::{
     WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
     start_worker_with_transport_and_hook,
+};
+pub use task_registry::{
+    ActiveJobJoinState, ActiveJobTask, WorkerShutdown, WorkerTaskJoinNotification,
+    WorkerTaskRegistry,
 };
 #[cfg(target_os = "linux")]
 #[doc(hidden)]

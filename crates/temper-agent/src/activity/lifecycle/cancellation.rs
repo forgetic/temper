@@ -48,7 +48,9 @@ impl AgentCancellationLatch {
             .requested
     }
 
-    fn request(&self) {
+    /// Requests in-process cancellation through the same race-safe latch used
+    /// by the lifecycle command reader.
+    pub fn request_cancel(&self) {
         let callback = {
             let mut state = self
                 .state
@@ -95,7 +97,7 @@ fn lifecycle_command_reader(
         return;
     }
     match command {
-        AgentLifecycleCommandV1::Cancel { .. } => cancellation.request(),
+        AgentLifecycleCommandV1::Cancel { .. } => cancellation.request_cancel(),
     }
     let acknowledgement = AgentLifecycleCancellationAckV1 {
         version: AGENT_LIFECYCLE_PROTOCOL_VERSION,

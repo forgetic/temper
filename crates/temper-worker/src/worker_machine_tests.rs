@@ -497,6 +497,34 @@ fn poll_transport_error_backs_off_and_logs() {
 }
 
 #[test]
+fn begin_shutdown_keeps_drive_alive_but_rejects_late_assignment_dispatch() {
+    let mut machine = WorkerMachine::new(params());
+    machine.on_start(EngineTime::ZERO);
+    run(&mut machine, vec![WorkerCompletion::Registered(Ok(()))]);
+
+    assert!(
+        machine
+            .on_completion(EngineTime::ZERO, WorkerCompletion::BeginShutdown)
+            .is_empty()
+    );
+    assert!(!machine.is_stopped());
+    assert!(
+        machine
+            .on_completion(EngineTime::ZERO, WorkerCompletion::PollTimer)
+            .is_empty()
+    );
+    let late = machine.on_completion(
+        EngineTime::ZERO,
+        WorkerCompletion::PollReply(Ok(Some(WorkerProtocolMessage::Assign(assign("job-late"))))),
+    );
+    assert!(
+        late.iter()
+            .all(|request| !matches!(request, WorkerRequest::RunJob { .. }))
+    );
+    assert!(machine.in_flight().is_empty());
+}
+
+#[test]
 fn shutdown_stops_the_worker_without_emitting_cleanup_requests() {
     let mut machine = WorkerMachine::new(params());
     let requests = machine.on_completion(EngineTime::ZERO, WorkerCompletion::Shutdown);

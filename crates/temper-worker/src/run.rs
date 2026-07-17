@@ -10,7 +10,10 @@
 //! any [`temper_worker_io::Spawner`], including the lab spawner used by
 //! `temper-sim`.
 
+use std::future::Future;
 use std::sync::Arc;
+use std::task::Poll;
+use std::time::Duration;
 
 use skein::runtime::RuntimeHandle;
 use temper_worker_io::{CqSender, OneshotReceiver, Spawner, channel, drive, oneshot};
@@ -20,6 +23,9 @@ use crate::config::{WorkerConfig, WorkerParams};
 use crate::executor::JobExecutor;
 use crate::lifecycle_hook::{NoopWorkerLifecycleHook, WorkerLifecycleHook};
 use crate::result_outbox::ResultOutbox;
+use crate::task_registry::{
+    WorkerComponentTasks, WorkerShutdown, WorkerTaskJoinNotification, WorkerTaskRegistry,
+};
 use crate::trace::spawn_activity_forwarder;
 use crate::transport::{HttpTransport, Transport};
 use crate::worker_machine::{WorkerCompletion, WorkerMachine};
@@ -74,30 +80,99 @@ where
 /// workflow cleanup so restart tests can retain durable assignment state.
 pub struct WorkerComponentHandle {
     completions: CqSender<WorkerCompletion>,
-    joined: OneshotReceiver<()>,
+    joined: Option<OneshotReceiver<()>>,
     forwarder_joined: Option<OneshotReceiver<()>>,
     cancellation: WorkerCancellation,
+    task_registry: WorkerTaskRegistry,
+    component_tasks: WorkerComponentTasks,
+    graceful_cancellation_grace: Duration,
+    forced_termination_grace: Duration,
 }
 
 impl WorkerComponentHandle {
-    /// Stops and joins the worker machine, modeling abrupt process loss.
-    pub async fn crash(self) {
+    /// Gracefully stops intake, fences active attempts, applies configured
+    /// escalation deadlines, and joins every worker-owned task.
+    pub async fn shutdown(mut self) {
+        let notification = self.task_registry.begin_shutdown(WorkerShutdown::Graceful);
+        let _ = self.completions.send(WorkerCompletion::BeginShutdown);
+        if !wait_until_or_timeout(notification, self.graceful_cancellation_grace).await {
+            self.task_registry
+                .request_all(crate::JobCancellationRequest::ForcedTermination);
+            if !wait_until_or_timeout(
+                self.task_registry.join_notification(),
+                self.forced_termination_grace,
+            )
+            .await
+            {
+                self.task_registry
+                    .request_all(crate::JobCancellationRequest::HardKill);
+                self.task_registry.join_notification().wait().await;
+            }
+        }
+        self.stop_background_and_machine().await;
+    }
+
+    /// Stops the component without publishing or releasing active claims. It
+    /// immediately hard-escalates every attempt, but still waits indefinitely
+    /// for recursive emptiness and resource joins before returning.
+    pub async fn crash(mut self) {
+        let notification = self.task_registry.begin_shutdown(WorkerShutdown::Crash);
+        let _ = self.completions.send(WorkerCompletion::BeginShutdown);
+        notification.wait().await;
+        self.stop_background_and_machine().await;
+    }
+
+    /// Returns a snapshot of the registry used to prove local attempt absence.
+    pub fn task_registry(&self) -> WorkerTaskRegistry {
+        self.task_registry.clone()
+    }
+
+    /// Waits until the worker exits without requesting shutdown.
+    pub async fn join(mut self) {
+        if let Some(joined) = self.joined.take() {
+            let _ = joined.recv().await;
+        }
+        self.component_tasks.stop_accepting();
         self.cancellation.cancel();
-        let _ = self.completions.send(WorkerCompletion::Shutdown);
-        let _ = self.joined.recv().await;
-        if let Some(joined) = self.forwarder_joined {
+        self.component_tasks.wait_empty().await;
+        if let Some(joined) = self.forwarder_joined.take() {
             let _ = joined.recv().await;
         }
     }
 
-    /// Waits until the worker exits without requesting shutdown.
-    pub async fn join(self) {
-        let _ = self.joined.recv().await;
+    async fn stop_background_and_machine(&mut self) {
+        self.component_tasks.stop_accepting();
         self.cancellation.cancel();
-        if let Some(joined) = self.forwarder_joined {
+        self.component_tasks.wait_empty().await;
+        if let Some(joined) = self.forwarder_joined.take() {
+            let _ = joined.recv().await;
+        }
+        let _ = self.completions.send(WorkerCompletion::Shutdown);
+        if let Some(joined) = self.joined.take() {
             let _ = joined.recv().await;
         }
     }
+}
+
+async fn wait_until_or_timeout(
+    notification: WorkerTaskJoinNotification,
+    timeout: Duration,
+) -> bool {
+    if notification.is_ready() {
+        return true;
+    }
+    let mut joined = std::pin::pin!(notification.wait());
+    let mut timer = std::pin::pin!(temper_worker_io::sleep_for(timeout));
+    std::future::poll_fn(|cx| {
+        if joined.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(true);
+        }
+        if timer.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(false);
+        }
+        Poll::Pending
+    })
+    .await
 }
 
 /// Starts the production worker machine and returns explicit crash/join
@@ -139,6 +214,7 @@ where
     S: Spawner,
 {
     let params = WorkerParams::from_config(&config);
+    let liveness_limits = params.liveness_limits;
     let outbox = Arc::new(ResultOutbox::new(params.result_root.clone()));
     let recovered = match outbox.load() {
         Ok(entries) => entries,
@@ -154,6 +230,8 @@ where
     let (cq_tx, cq_rx) = channel();
 
     let cancellation = WorkerCancellation::default();
+    let task_registry = WorkerTaskRegistry::new();
+    let component_tasks = WorkerComponentTasks::default();
     let forwarder_joined = spawn_activity_forwarder(
         spawner.clone(),
         config.agent_traces.clone(),
@@ -172,6 +250,8 @@ where
         outbox,
         cancellation.clone(),
         lifecycle_hook,
+        task_registry.clone(),
+        component_tasks.clone(),
     );
     let machine = WorkerMachine::with_recovered_outbox(params, recovered);
     let (joined_tx, joined) = oneshot();
@@ -182,16 +262,16 @@ where
 
     WorkerComponentHandle {
         completions: cq_tx,
-        joined,
+        joined: Some(joined),
         forwarder_joined,
         cancellation,
+        task_registry,
+        component_tasks,
+        graceful_cancellation_grace: liveness_limits.graceful_cancellation_grace,
+        forced_termination_grace: liveness_limits.forced_termination_grace,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    // Loop behavior is unit-tested on the pure WorkerMachine in
-    // `worker_machine_tests.rs` (deterministic, runtime-free); end-to-end wiring
-    // against a real daemon is covered by `tests/daemon_transport.rs` and the
-    // `temper-sim` real-worker harness.
-}
+#[path = "run_tests.rs"]
+mod tests;

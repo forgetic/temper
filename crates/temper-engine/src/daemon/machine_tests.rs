@@ -2,9 +2,37 @@
 
 use super::*;
 use serde_json::json;
+use temper_engine_io::oneshot;
 use temper_forge::{ChangeKind, HintArtifactKind, ItemNumber, RepositoryPath};
 use temper_protocol_worker::Artifact;
 use temper_workflow::RoleId;
+
+#[test]
+fn begin_shutdown_closes_dispatch_before_assignment_release() {
+    let mut machine = DaemonMachine::default_machine(Duration::ZERO);
+    let (reply, _joined) = oneshot();
+    let requests =
+        machine.on_completion(EngineTime::ZERO, DaemonCompletion::BeginShutdown { reply });
+    assert!(requests.is_empty());
+    assert!(machine.shutting_down);
+    assert!(machine.core.in_flight_jobs().is_empty());
+
+    let enqueue = machine.on_completion(
+        EngineTime::ZERO,
+        DaemonCompletion::Enqueue {
+            job_id: "late-job".to_string(),
+            role: "engineer".to_string(),
+            repo: "ai/temper".to_string(),
+            artifact: Artifact {
+                item: json!(454),
+                kind: "issue".to_string(),
+            },
+            job_payload: json!({}),
+        },
+    );
+    assert!(enqueue.is_empty());
+    assert!(machine.core.queued_jobs().is_empty());
+}
 
 #[test]
 fn nested_applies_release_one_deferred_repository_generation_only_after_final_completion() {
