@@ -133,7 +133,18 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
             .remove(&job.job_id);
         let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
             Ok(Some(target)) => target,
-            Ok(None) => return,
+            Ok(None) => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    operation = "release",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    "lease applier assignment target no longer exists; durable assignment cleanup deferred to lease expiry and live reconciliation"
+                );
+                return;
+            }
             Err(error) => {
                 tracing::error!(
                     target: "temper_daemon",
@@ -212,7 +223,18 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     ) -> ApplyOutcome {
         let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
             Ok(Some(target)) => target,
-            Ok(None) => return ApplyOutcome::Stale,
+            Ok(None) => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    operation = "apply",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    "lease applier assignment target no longer exists"
+                );
+                return ApplyOutcome::Stale;
+            }
             Err(error) => {
                 report_target_lookup_failure(&job, "apply", &error);
                 return ApplyOutcome::Retryable {
@@ -253,7 +275,18 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         }
         let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
             Ok(Some(target)) => target,
-            Ok(None) => return ApplyOutcome::Stale,
+            Ok(None) => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    operation = "apply",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    "lease applier assignment target no longer exists"
+                );
+                return ApplyOutcome::Stale;
+            }
             Err(error) => {
                 report_target_lookup_failure(&job, "apply", &error);
                 return ApplyOutcome::Retryable {

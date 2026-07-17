@@ -1,12 +1,112 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::sync::Mutex;
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
 use temper_forge_memory::FaultOp;
 use temper_workflow::WorkflowMetadata;
+use tracing::Level;
+use tracing::field::{Field, Visit};
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::{Layer, registry};
 
 use super::*;
+
+#[derive(Clone, Debug)]
+struct CapturedEvent {
+    level: Level,
+    target: String,
+    fields: BTreeMap<String, String>,
+}
+
+impl CapturedEvent {
+    fn field(&self, name: &str) -> Option<&str> {
+        self.fields.get(name).map(|value| value.trim_matches('"'))
+    }
+}
+
+#[derive(Default)]
+struct CapturedVisitor {
+    fields: BTreeMap<String, String>,
+}
+
+impl Visit for CapturedVisitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
+    }
+}
+
+#[derive(Clone)]
+struct CaptureLayer {
+    events: Arc<Mutex<Vec<CapturedEvent>>>,
+}
+
+impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
+        let mut visitor = CapturedVisitor::default();
+        event.record(&mut visitor);
+        self.events
+            .lock()
+            .expect("capture lock")
+            .push(CapturedEvent {
+                level: *event.metadata().level(),
+                target: event.metadata().target().to_string(),
+                fields: visitor.fields,
+            });
+    }
+}
+
+fn event_store() -> &'static Arc<Mutex<Vec<CapturedEvent>>> {
+    static EVENTS: OnceLock<Arc<Mutex<Vec<CapturedEvent>>>> = OnceLock::new();
+    EVENTS.get_or_init(|| {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        tracing::subscriber::set_global_default(registry().with(CaptureLayer {
+            events: Arc::clone(&events),
+        }))
+        .expect("install lease diagnostic capture subscriber");
+        events
+    })
+}
+
+fn capture_events(run: impl FnOnce()) -> Vec<CapturedEvent> {
+    let events = event_store();
+    run();
+    let captured = events.lock().expect("capture lock").clone();
+    captured
+}
+
+fn diagnostic<'a>(
+    events: &'a [CapturedEvent],
+    level: Level,
+    operation: &str,
+    message: &str,
+    expected_field: (&str, &str),
+) -> &'a CapturedEvent {
+    events
+        .iter()
+        .find(|event| {
+            event.level == level
+                && event.target == "temper_daemon"
+                && event.field("operation") == Some(operation)
+                && event.field("message") == Some(message)
+                && event
+                    .field(expected_field.0)
+                    .is_some_and(|value| value.contains(expected_field.1))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing {level} operation={operation} diagnostic {message:?} with {} containing {:?} in {events:#?}",
+                expected_field.0, expected_field.1
+            )
+        })
+}
 
 fn claim_context() -> temper_engine::ClaimContext {
     temper_engine::ClaimContext {
@@ -328,4 +428,187 @@ fn recovered_apply_lookup_failure_retries_then_applies_once() {
         assert_eq!(rx.recv().await, Some((job, result)));
         assert!(rx.try_recv().is_none());
     })
+}
+
+#[test]
+fn apply_missing_repository_is_stale_without_invoking_inner() {
+    let events = capture_events(|| {
+        temper_engine_io::block_on_with(move |_cx, _handle| async move {
+            let forge = Arc::new(MemoryForge::new());
+            let repo = new_repo(&forge).await;
+            let issue = create_ready_issue(&forge, &repo).await;
+            let (inner, mut rx) = recording_inner();
+            let applier = LeaseApplier::new(
+                forge.clone(),
+                policy(),
+                "daemon-1",
+                inner,
+                temper_engine::system_clock(),
+            );
+            let job = in_flight_job(issue);
+            let result = job_result(&job.job_id);
+            assert_eq!(
+                applier.claim(job.clone(), claim_context()).await,
+                temper_engine::ClaimOutcome::Claimed
+            );
+            let claimed = issue_metadata(&forge, &repo, issue).await;
+
+            forge.fail_next(
+                FaultOp::GetRepositoryByPath,
+                "diagnostic apply repository lookup failure",
+            );
+            assert!(matches!(
+                applier.apply(job.clone(), result.clone()).await,
+                temper_engine::ApplyOutcome::Retryable { .. }
+            ));
+
+            let mut missing = job;
+            missing.repo = "acme/missing".to_string();
+            assert_eq!(
+                applier.apply(missing, result).await,
+                temper_engine::ApplyOutcome::Stale
+            );
+            assert!(rx.try_recv().is_none());
+            let after_apply = issue_metadata(&forge, &repo, issue).await;
+            assert_eq!(after_apply.assignment, claimed.assignment);
+            assert_eq!(after_apply.lease, claimed.lease);
+        })
+    });
+    let backend_error = diagnostic(
+        &events,
+        Level::ERROR,
+        "apply",
+        "lease applier repository lookup failed",
+        ("error", "diagnostic apply repository lookup failure"),
+    );
+    assert!(backend_error.field("error").is_some());
+    let absence = diagnostic(
+        &events,
+        Level::WARN,
+        "apply",
+        "lease applier assignment target no longer exists",
+        ("repo", "acme/missing"),
+    );
+    assert_eq!(absence.field("repo"), Some("acme/missing"));
+    assert!(absence.field("error").is_none());
+}
+
+#[test]
+fn heartbeat_missing_repository_preserves_durable_metadata() {
+    let events = capture_events(|| {
+        temper_engine_io::block_on_with(move |_cx, _handle| async move {
+            let forge = Arc::new(MemoryForge::new());
+            let repo = new_repo(&forge).await;
+            let issue = create_ready_issue(&forge, &repo).await;
+            let (inner, mut rx) = recording_inner();
+            let initial = "2026-07-15T14:50:00Z"
+                .parse::<DateTime<Utc>>()
+                .expect("valid initial time");
+            let (now, clock) = controlled_clock(initial);
+            let applier = LeaseApplier::new(forge.clone(), policy(), "daemon-1", inner, clock);
+            let job = in_flight_job(issue);
+            let context = claim_context();
+            assert_eq!(
+                applier.claim(job.clone(), context.clone()).await,
+                temper_engine::ClaimOutcome::Claimed
+            );
+            let claimed = issue_metadata(&forge, &repo, issue).await;
+
+            *now.lock().expect("clock lock") = initial + chrono::Duration::seconds(60);
+            forge.fail_next(
+                FaultOp::GetRepositoryByPath,
+                "diagnostic heartbeat repository lookup failure",
+            );
+            applier.heartbeat(job.clone(), context.clone()).await;
+
+            *now.lock().expect("clock lock") = initial + chrono::Duration::seconds(120);
+            let mut missing = job;
+            missing.repo = "acme/missing".to_string();
+            applier.heartbeat(missing, context).await;
+
+            let after_heartbeats = issue_metadata(&forge, &repo, issue).await;
+            assert_eq!(after_heartbeats.assignment, claimed.assignment);
+            assert_eq!(after_heartbeats.lease, claimed.lease);
+            assert!(rx.try_recv().is_none());
+        })
+    });
+    let backend_error = diagnostic(
+        &events,
+        Level::ERROR,
+        "heartbeat",
+        "lease applier repository lookup failed",
+        ("error", "diagnostic heartbeat repository lookup failure"),
+    );
+    assert!(backend_error.field("error").is_some());
+    let absence = diagnostic(
+        &events,
+        Level::WARN,
+        "heartbeat",
+        "recovered assignment heartbeat target no longer exists",
+        ("repo", "acme/missing"),
+    );
+    assert_eq!(absence.field("repo"), Some("acme/missing"));
+    assert!(absence.field("error").is_none());
+}
+
+#[test]
+fn release_missing_repository_drops_local_context_and_preserves_durable_metadata() {
+    let events = capture_events(|| {
+        temper_engine_io::block_on_with(move |_cx, _handle| async move {
+            let forge = Arc::new(MemoryForge::new());
+            let repo = new_repo(&forge).await;
+            let issue = create_ready_issue(&forge, &repo).await;
+            let (inner, mut rx) = recording_inner();
+            let applier = LeaseApplier::new(
+                forge.clone(),
+                policy(),
+                "daemon-1",
+                inner,
+                temper_engine::system_clock(),
+            );
+            let job = in_flight_job(issue);
+            let context = claim_context();
+            assert_eq!(
+                applier.claim(job.clone(), context.clone()).await,
+                temper_engine::ClaimOutcome::Claimed
+            );
+            let claimed = issue_metadata(&forge, &repo, issue).await;
+
+            let mut missing = job.clone();
+            missing.repo = "acme/missing".to_string();
+            applier.release_claim(missing, context.clone()).await;
+            assert_eq!(
+                applier.apply(job.clone(), job_result(&job.job_id)).await,
+                temper_engine::ApplyOutcome::Stale
+            );
+            assert!(rx.try_recv().is_none());
+
+            forge.fail_next(
+                FaultOp::GetRepositoryByPath,
+                "diagnostic release repository lookup failure",
+            );
+            applier.release_claim(job, context).await;
+
+            let after_release = issue_metadata(&forge, &repo, issue).await;
+            assert_eq!(after_release.assignment, claimed.assignment);
+            assert_eq!(after_release.lease, claimed.lease);
+        })
+    });
+    let backend_error = diagnostic(
+        &events,
+        Level::ERROR,
+        "release",
+        "lease applier repository lookup failed; durable assignment cleanup deferred to lease expiry and live reconciliation",
+        ("error", "diagnostic release repository lookup failure"),
+    );
+    assert!(backend_error.field("error").is_some());
+    let absence = diagnostic(
+        &events,
+        Level::WARN,
+        "release",
+        "lease applier assignment target no longer exists; durable assignment cleanup deferred to lease expiry and live reconciliation",
+        ("repo", "acme/missing"),
+    );
+    assert_eq!(absence.field("repo"), Some("acme/missing"));
+    assert!(absence.field("error").is_none());
 }
