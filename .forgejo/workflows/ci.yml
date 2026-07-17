@@ -58,7 +58,15 @@ jobs:
         # running either scenario execution tier.
         run: cargo dev-scenario-check
       - name: Test (quick)
-        run: cargo dev-test-quick
+        # kache restores ordinary libtest executables with their executable bit,
+        # but its cached custom-harness artifacts currently arrive as 0644.
+        # Repair those two artifacts before nextest queries their libtest-style
+        # listings; the harnesses then execute the platform contract suites.
+        run: |
+          find target/debug/deps -maxdepth 1 -type f \
+            \( -name 'linux_supervisor-*' -o -name 'windows_job-*' \) \
+            ! -name '*.d' -exec chmod +x {} +
+          cargo dev-test-quick
       - name: Test (all e2e)
         # The live e2e lane boots real Forgejo + CI runners and waits for
         # convergence. On a cold CI machine the fixture provisioning alone can

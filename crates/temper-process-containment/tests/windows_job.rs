@@ -24,10 +24,17 @@ mod windows {
     const NESTED_FIXTURE: &str = "--nested-fixture";
     const OWNER_FIXTURE: &str = "--owner-fixture";
     const LINGER_FIXTURE: &str = "--linger-fixture";
+    const CONTRACT_TEST: &str = "windows_job_contract";
     const SYNCHRONIZE_PROCESS: u32 = 0x0010_0000;
 
     pub fn main() -> ExitCode {
         let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+        if arguments.iter().any(|argument| argument == "--list") {
+            if !arguments.iter().any(|argument| argument == "--ignored") {
+                println!("{CONTRACT_TEST}: test");
+            }
+            return ExitCode::SUCCESS;
+        }
         let result = match arguments.first().and_then(|value| value.to_str()) {
             Some(MEMBERSHIP_FIXTURE) => membership_fixture(),
             Some(NESTED_FIXTURE) => one_path(&arguments[1..]).and_then(nested_fixture),

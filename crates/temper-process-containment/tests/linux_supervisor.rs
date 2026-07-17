@@ -16,6 +16,7 @@ mod linux {
     };
 
     const OWNER_FIXTURE: &str = "--owner-loss-fixture";
+    const CONTRACT_TEST: &str = "linux_supervisor_contract";
 
     pub fn main() -> ExitCode {
         if let Some(status) = dispatch_linux_supervisor_helper(std::env::args_os().skip(1)) {
@@ -31,6 +32,18 @@ mod linux {
                 return ExitCode::FAILURE;
             }
             unreachable!("owner fixture exits without running destructors");
+        }
+        // This target keeps a custom harness so the executable can dispatch
+        // helper and abrupt-owner modes before libtest parses their private
+        // arguments. Speak libtest's listing protocol so nextest still
+        // discovers and executes the contract suite.
+        if arguments.iter().any(|argument| argument == "--list") {
+            // Nextest asks for the ignored subset separately. This contract is
+            // part of the ordinary quick suite, so omit it from that query.
+            if !arguments.iter().any(|argument| argument == "--ignored") {
+                println!("{CONTRACT_TEST}: test");
+            }
+            return ExitCode::SUCCESS;
         }
         match run_contract_tests() {
             Ok(()) => ExitCode::SUCCESS,
