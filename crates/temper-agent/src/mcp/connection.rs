@@ -325,7 +325,8 @@ impl Connection {
             });
         }
 
-        let spec = containment.containment_spec(&config.command, ContainmentScope::McpServer);
+        let spec = containment
+            .containment_spec(config.containment_identity(), ContainmentScope::McpServer);
         let prepared = containment
             .factory()
             .prepare(spec)

@@ -121,6 +121,11 @@ pub enum AgentLifecycleEventV1 {
         status: AgentLifecycleToolStatusV1,
     },
     SteeringApplied,
+    /// Nested managed-bash/MCP containment evidence. Assignment identity is
+    /// supplied by the worker-owned endpoint rather than this child frame.
+    Containment {
+        observation: crate::AgentContainmentEventV1,
+    },
     AgentFinished {
         status: AgentLifecycleAgentStatusV1,
     },
@@ -139,6 +144,9 @@ impl AgentLifecycleEventV1 {
                 bounded_nonempty("call_id", call_id, MAX_AGENT_LIFECYCLE_ID_BYTES)?;
                 bounded_nonempty("tool name", name, MAX_AGENT_LIFECYCLE_TOOL_NAME_BYTES)
             }
+            Self::Containment { observation } => observation
+                .validate()
+                .map_err(AgentLifecycleValidationError::new),
             Self::SteeringApplied | Self::AgentFinished { .. } => Ok(()),
         }
     }

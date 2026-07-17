@@ -26,6 +26,7 @@ pub struct StdioMcpServerConfig {
     pub args: Vec<String>,
     pub startup_timeout: Duration,
     pub call_timeout: Duration,
+    containment_identity: String,
 }
 
 impl StdioMcpServerConfig {
@@ -35,7 +36,20 @@ impl StdioMcpServerConfig {
             args,
             startup_timeout: Duration::from_secs(5),
             call_timeout: Duration::from_secs(30),
+            containment_identity: "mcp-server".to_string(),
         }
+    }
+
+    /// Sets the content-free operator identity for this server containment.
+    /// The executable and argument vector are deliberately not used as event
+    /// identity because they may contain workspace paths or credentials.
+    pub(crate) fn with_containment_identity(mut self, identity: impl Into<String>) -> Self {
+        self.containment_identity = identity.into();
+        self
+    }
+
+    pub(super) fn containment_identity(&self) -> &str {
+        &self.containment_identity
     }
 
     pub fn with_startup_timeout(mut self, timeout: Duration) -> Self {

@@ -377,6 +377,8 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     &job_id,
                     &attempt_id,
                 );
+                let nested_containment_events = containment_events.clone();
+                let nested_containment_context = containment_context.clone();
                 job_cancellation.set_cleanup_observer(move |observation| {
                     let blocked = match observation {
                         JobContainmentObservation::Cleanup(observation) => {
@@ -420,13 +422,28 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 let progress_cq = cq.clone();
                 let progress_job_id = job_id.clone();
                 let progress_attempt_id = attempt_id.clone();
+                let progress_registry = registry.clone();
+                let progress_guard_job_id = job_id.clone();
                 let progress_fence = fence.clone();
                 let progress = crate::JobProgressReporter::with_attempt_guard(
                     attempt_id.clone(),
                     move |reported_attempt| {
-                        progress_fence.is_open() && reported_attempt == progress_attempt_id
+                        progress_registry
+                            .task(&progress_guard_job_id, reported_attempt, generation)
+                            .is_some()
                     },
                     move |progress| {
+                        if let temper_protocol_agent::AgentLifecycleEventV1::Containment {
+                            observation,
+                        } = &progress.frame.event
+                        {
+                            nested_containment_events
+                                .lifecycle(&nested_containment_context, observation);
+                            return;
+                        }
+                        if !progress_fence.is_open() || progress.attempt_id != progress_attempt_id {
+                            return;
+                        }
                         let _ = progress_cq.send(WorkerCompletion::JobProgress {
                             job_id: progress_job_id.clone(),
                             attempt_id: progress.attempt_id.clone(),

@@ -44,6 +44,60 @@ fn lifecycle_contract_is_closed_bounded_and_content_free() {
 }
 
 #[test]
+fn containment_lifecycle_contract_is_bounded_and_assignment_free() {
+    let observation = AgentContainmentEventV1::CleanupBlocked(AgentContainmentCleanupBlockedV1 {
+        owner: AgentContainmentOwnerV1 {
+            owner_kind: "tool".to_string(),
+            tool_command_id: "bash-call-1".to_string(),
+            backend: AgentContainmentBackendV1::LinuxSupervisor,
+            root: "supervisor:42".to_string(),
+        },
+        trigger: AgentContainmentTriggerV1::Cancellation,
+        phase: AgentContainmentPhaseV1::VerifyEmpty,
+        repeated_failures: 1,
+        term_attempts: Vec::new(),
+        omitted_term_attempts: 0,
+        kill_attempts: Vec::new(),
+        omitted_kill_attempts: 0,
+        survivors: vec![AgentContainmentProcessV1 {
+            pid: 42,
+            ppid: 1,
+            pgid: 42,
+            session_id: 42,
+            start_time: 100,
+            executable: "/usr/bin/temper-agent".to_string(),
+        }],
+        omitted_survivors: 0,
+    });
+    let frame = AgentLifecycleFrameV1 {
+        version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+        seq: 1,
+        scope: AgentLifecycleScopeV1 {
+            id: "containment".to_string(),
+            parent_id: None,
+        },
+        event: AgentLifecycleEventV1::Containment { observation },
+    };
+    frame.validate().expect("bounded containment evidence");
+    let wire = serde_json::to_string(&frame).unwrap();
+    assert!(wire.contains("cleanup_blocked"));
+    assert!(wire.contains("bash-call-1"));
+    for forbidden in ["worker_id", "job_id", "arguments", "credentials"] {
+        assert!(!wire.contains(forbidden));
+    }
+
+    let mut unsafe_frame = frame;
+    let AgentLifecycleEventV1::Containment {
+        observation: AgentContainmentEventV1::CleanupBlocked(event),
+    } = &mut unsafe_frame.event
+    else {
+        unreachable!()
+    };
+    event.owner.tool_command_id = "credential=secret-token-sentinel".to_string();
+    assert!(unsafe_frame.validate().is_err());
+}
+
+#[test]
 fn lifecycle_commands_and_acknowledgements_validate() {
     let cancel = AgentLifecycleCommandV1::Cancel {
         reason: "worker no-progress deadline".to_string(),

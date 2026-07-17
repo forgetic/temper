@@ -51,7 +51,6 @@ impl LifecycleProjection for CallbackProjection {
 struct WriterMessage {
     bytes: Vec<u8>,
     delivered: Option<mpsc::SyncSender<()>>,
-    terminal: bool,
 }
 
 struct ClientState {
@@ -103,8 +102,8 @@ impl LifecycleProjection for LifecycleClient {
         }
         state.next_seq = state.next_seq.saturating_add(1);
         bytes.push(b'\n');
-        let terminal = matches!(frame.event, AgentLifecycleEventV1::AgentFinished { .. });
-        let (delivered, completion) = if terminal {
+        let terminal_boundary = matches!(frame.event, AgentLifecycleEventV1::AgentFinished { .. });
+        let (delivered, completion) = if terminal_boundary {
             let (sender, receiver) = mpsc::sync_channel(0);
             (Some(sender), Some(receiver))
         } else {
@@ -114,11 +113,7 @@ impl LifecycleProjection for LifecycleClient {
         // writer disconnects the queue immediately, preserving the run result.
         if self
             .sender
-            .send(WriterMessage {
-                bytes,
-                delivered,
-                terminal,
-            })
+            .send(WriterMessage { bytes, delivered })
             .is_err()
         {
             return;
@@ -176,13 +171,6 @@ fn lifecycle_writer(
         }
         if let Some(delivered) = message.delivered {
             let _ = delivered.send(());
-        }
-        if message.terminal {
-            let _ = writer
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .shutdown(std::net::Shutdown::Write);
-            break;
         }
     }
 }

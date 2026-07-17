@@ -5,7 +5,7 @@
 //! process samples are UTF-8 bounded before they reach `tracing`.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use temper_process_containment::{
@@ -23,8 +23,15 @@ const MAX_EVENT_SURVIVORS: usize = 16;
 const MAX_EVENT_SIGNAL_OUTCOMES: usize = 32;
 const DEFAULT_BLOCKED_THROTTLE: Duration = Duration::from_secs(30);
 
+mod lifecycle;
 mod render;
+mod startup;
+use lifecycle::*;
 use render::*;
+pub(crate) use startup::emit_startup_containment_capability_once;
+pub use startup::observe_startup_containment_capability;
+#[cfg(test)]
+use startup::startup_scavenge_from_parts;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContainmentEventContext {
@@ -57,7 +64,7 @@ impl ContainmentEventIdentity {
         Self {
             context: context.clone(),
             owner_kind: owner_kind(observation.scope()),
-            tool_command_id: bounded(
+            tool_command_id: bounded_diagnostic(
                 observation.identity().owner_identifier(),
                 MAX_EVENT_IDENTIFIER_BYTES,
             ),
@@ -73,7 +80,7 @@ impl ContainmentEventIdentity {
         Self {
             context: context.clone(),
             owner_kind: owner_kind(observation.scope()),
-            tool_command_id: bounded(
+            tool_command_id: bounded_diagnostic(
                 observation.identity().owner_identifier(),
                 MAX_EVENT_IDENTIFIER_BYTES,
             ),
@@ -135,6 +142,16 @@ pub struct ContainmentFallbackActivated {
     pub survivors: String,
 }
 
+/// Stale delegated cgroups inspected before the worker accepts jobs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContainmentStartupScavenge {
+    pub worker_id: String,
+    pub removed_count: usize,
+    pub retained_count: usize,
+    pub retained_diagnostics: String,
+    pub omitted_diagnostics: usize,
+}
+
 /// One startup capability and backend-selection diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContainmentStartupCapability {
@@ -154,6 +171,7 @@ pub enum ContainmentEvent {
     CleanupCompleted(CleanupCompleted),
     ContainmentFallbackActivated(ContainmentFallbackActivated),
     StartupCapability(ContainmentStartupCapability),
+    StartupScavenge(ContainmentStartupScavenge),
 }
 
 impl ContainmentEvent {
@@ -163,6 +181,7 @@ impl ContainmentEvent {
             Self::CleanupCompleted(_) => "worker.containment.cleanup_completed",
             Self::ContainmentFallbackActivated(_) => "worker.containment.fallback_activated",
             Self::StartupCapability(_) => "worker.containment.startup_capability",
+            Self::StartupScavenge(_) => "worker.containment.startup_scavenge",
         }
     }
 
@@ -291,6 +310,7 @@ impl ContainmentEvent {
             Self::CleanupCompleted(event) => emit_cleanup_completed(event),
             Self::ContainmentFallbackActivated(event) => emit_fallback(event),
             Self::StartupCapability(event) => emit_startup(event),
+            Self::StartupScavenge(event) => emit_startup_scavenge(event),
         }
     }
 }
@@ -430,6 +450,44 @@ impl ContainmentEventThrottle {
         }
     }
 
+    pub(crate) fn lifecycle(
+        &self,
+        context: &ContainmentEventContext,
+        observation: &temper_protocol_agent::AgentContainmentEventV1,
+    ) {
+        let root = lifecycle_root(observation).to_string();
+        if let Some(reported_failures) = lifecycle_repeated_failures(observation) {
+            let now = Instant::now();
+            let mut states = self
+                .inner
+                .blocked
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let state = states.entry(root).or_default();
+            let promoted = state.failures < 3 && reported_failures >= 3;
+            let due = state
+                .last_emitted
+                .is_none_or(|last| now.duration_since(last) >= self.inner.interval);
+            state.failures = state.failures.max(reported_failures);
+            if !promoted && !due {
+                return;
+            }
+            state.last_emitted = Some(now);
+        } else if matches!(
+            observation,
+            temper_protocol_agent::AgentContainmentEventV1::CleanupCompleted(_)
+        ) {
+            self.inner
+                .blocked
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&root);
+        }
+        self.inner
+            .observer
+            .observe(&containment_event_from_lifecycle(context, observation));
+    }
+
     pub(crate) fn fallback(
         &self,
         context: &ContainmentEventContext,
@@ -439,81 +497,6 @@ impl ContainmentEventThrottle {
             .observer
             .observe(&ContainmentEvent::from_fallback(context, observation));
     }
-}
-
-/// Build and deliver one startup capability event through an injected observer.
-pub fn observe_startup_containment_capability(
-    worker_id: &str,
-    observer: &dyn ContainmentEventObserver,
-) {
-    let diagnostic = startup_diagnostic();
-    observer.observe(&ContainmentEvent::startup(worker_id, &diagnostic));
-}
-
-static STARTUP_DIAGNOSTIC: Once = Once::new();
-
-pub(crate) fn emit_startup_containment_capability_once(worker_id: &str) {
-    STARTUP_DIAGNOSTIC.call_once(|| {
-        observe_startup_containment_capability(worker_id, &TracingContainmentEventObserver);
-    });
-}
-
-#[cfg(target_os = "linux")]
-fn startup_diagnostic() -> ContainmentCapabilityDiagnostic {
-    use temper_process_containment::{CgroupV2BackendFactory, CgroupV2FactoryConfig};
-
-    let config = CgroupV2FactoryConfig::new("startup", "capability")
-        .expect("static startup cgroup identity is valid");
-    let factory = CgroupV2BackendFactory::system(config);
-    let _stale_cleanup = factory.scavenge_stale();
-    let capability = factory.capability();
-    let selected = if capability.delegation_available() {
-        ContainmentBackendKind::LinuxCgroupV2
-    } else {
-        ContainmentBackendKind::LinuxSupervisor
-    };
-    ContainmentCapabilityDiagnostic::new(
-        capability
-            .unified_mount()
-            .map(|path| path.to_string_lossy().into_owned()),
-        capability.delegation(),
-        capability.writable_subtree(),
-        capability.cgroup_kill(),
-        capability.pidfd(),
-        selected,
-        (selected == ContainmentBackendKind::LinuxSupervisor).then(|| {
-            capability
-                .diagnostic()
-                .unwrap_or("delegated cgroup-v2 capability requirements were not met")
-                .to_string()
-        }),
-    )
-}
-
-#[cfg(windows)]
-fn startup_diagnostic() -> ContainmentCapabilityDiagnostic {
-    ContainmentCapabilityDiagnostic::new(
-        None,
-        false,
-        false,
-        false,
-        false,
-        ContainmentBackendKind::WindowsJob,
-        None,
-    )
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn startup_diagnostic() -> ContainmentCapabilityDiagnostic {
-    ContainmentCapabilityDiagnostic::new(
-        None,
-        false,
-        false,
-        false,
-        false,
-        ContainmentBackendKind::NoProcess,
-        Some("no descendant-complete process containment backend is available".to_string()),
-    )
 }
 
 #[cfg(test)]

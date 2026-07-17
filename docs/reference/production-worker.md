@@ -122,7 +122,11 @@ process-group-only cleanup.
 The worker emits exactly one `worker.containment.startup_capability` diagnostic
 per process. It reports the bounded cgroup-v2 mount identity, delegation,
 nested-subtree writability, `cgroup.kill`, pidfd, selected backend, and fallback
-reason. Unavailable delegation and `worker.containment.fallback_activated` are
+reason. The same attempt-bound observer is installed in managed bash and MCP
+containment for split-agent and standalone execution, so nested blocked,
+fallback, and completed cleanup carries worker/job/attempt plus bounded
+owner/tool identity instead of appearing only in the final job cleanup.
+Unavailable delegation and `worker.containment.fallback_activated` are
 warnings. `worker.containment.cleanup_completed` is debug for an ordinary
 already-empty owner and warning when cleanup recovered leaked descendants or
 inspection failures. `worker.containment.cleanup_blocked` is warning/error,
@@ -132,10 +136,13 @@ prompts, output, or credentials.
 
 At startup, stale cgroups are considered owned only below Temper's dedicated
 subtree. Their members are killed, trees that become empty are removed
-deepest-first, and still-populated or uninspectable trees remain for retry and
-operator evidence. During `SIGINT` or `SIGTERM`, the worker stops intake, fences
-all attempts, escalates every active owner, and joins the active-job registry
-before returning. With the example systemd unit, `Delegate=yes` permits nested
+deepest-first, and still-populated or uninspectable trees remain for retry.
+`worker.containment.startup_scavenge` reports removed/retained counts, a bounded
+list of retained path diagnostics, and the omitted-diagnostic count; retained or
+omitted evidence is warning level. During `SIGINT` or `SIGTERM`, the worker
+stops intake, fences all attempts, escalates every active owner, and joins the
+active-job registry before returning. With the example systemd unit,
+`Delegate=yes` permits nested
 ownership and `KillMode=control-group` kills the complete service cgroup after
 `TimeoutStopSec` if application cleanup cannot complete. Abrupt `SIGKILL`,
 kernel failure, or power loss cannot produce a terminal cleanup event; the
