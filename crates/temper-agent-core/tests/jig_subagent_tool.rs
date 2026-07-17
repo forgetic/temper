@@ -17,7 +17,7 @@ use temper_agent::ProviderConfig;
 use temper_agent_core::{AgentEvent, AgentStop, EventSink, SubAgent, SubAgentTool, run_sub_agent};
 use tongs::provider::StreamOptions;
 use tongs::tools::create_read_tool;
-use tongs::tools::{ToolEffects, ToolRegistry};
+use tongs::tools::{Tool, ToolEffects, ToolRegistry};
 
 #[derive(Default)]
 struct EventRecorder(Mutex<Vec<AgentEvent>>);
@@ -331,6 +331,74 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
         sub_fake.requests().len() >= 4,
         "two sub-agents should each run their own loop"
     );
+}
+
+#[test]
+fn nested_budget_exhaustion_is_a_failed_tool_result() {
+    let sub_fake = FakeLlm::start(Script::Fixed(Reply {
+        turns: vec![
+            Turn::Text(r#"{"summary":"looks complete"}"#.to_string()),
+            Turn::ToolCall {
+                id: "undispatchable".to_string(),
+                name: "read".to_string(),
+                args: serde_json::json!({ "path": "NEVER_READ.md" }),
+            },
+        ],
+        usage: Default::default(),
+        stop: StopReason::ToolCalls,
+    }))
+    .expect("start sub fake");
+    let sub_base_url = sub_fake.base_url();
+    let factory: temper_agent_core::SubAgentFactory = Arc::new(move |task: String| {
+        let provider = ProviderConfig::new(
+            "jig-openai-compatible",
+            "jig-sub-budget",
+            "https://example.invalid/unused",
+            "sk-jig-test",
+        )
+        .with_base_url_override(sub_base_url.clone())
+        .build_provider()
+        .expect("build sub provider");
+        SubAgent {
+            system_prompt: Some("Return a nested result.".into()),
+            user_message: task,
+            tools: ToolRegistry::new(),
+            max_iterations: 0,
+            operation_limits: temper_agent_core::AgentOperationLimits::default(),
+            provider,
+            stream_options: StreamOptions {
+                api_key: Some("sk-jig-test".to_string()),
+                ..StreamOptions::default()
+            },
+        }
+    });
+
+    let output = temper_agent_io::block_on_with(move |_cx, handle| async move {
+        let investigate = SubAgentTool::new(
+            handle,
+            "investigate",
+            "Investigate a task.",
+            ToolEffects::read(),
+            factory,
+        );
+        investigate
+            .execute(
+                "call-investigate",
+                serde_json::json!({ "task": "finish" }),
+                None,
+            )
+            .await
+    })
+    .expect("nested tool executes");
+
+    assert!(output.is_error, "budget exhaustion must be a tool error");
+    assert_eq!(
+        output.details.as_ref().and_then(|details| details
+            .get("sub_agent_stop")
+            .and_then(serde_json::Value::as_str)),
+        Some("BudgetExhausted")
+    );
+    assert_eq!(sub_fake.requests().len(), 1);
 }
 
 struct TempCheckout {

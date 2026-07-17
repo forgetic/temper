@@ -6,13 +6,16 @@ use std::sync::{Arc, Mutex};
 use temper_agent_core::{AgentEvent, ModelCallStatus, ModelIdentity, StreamDelta, ToolCallStatus};
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityChildRecordV1,
-    AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1, CaptureModeV1,
-    CapturedContentV1, MODEL_CALL_RETRY_FAILURE_MESSAGE, StopReasonV1, TurnStartedV1,
+    AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1,
+    AgentTerminalReasonV1, CaptureModeV1, CapturedContentV1, MODEL_CALL_RETRY_FAILURE_MESSAGE,
+    ScopeStatusV1, StopReasonV1, TurnStartedV1,
 };
 use tongs::model::{ContentBlock, StopReason};
 
 use super::transport::ActivityClient;
 use super::*;
+
+mod terminal;
 
 struct FakeClock {
     values: Mutex<VecDeque<ActivityTimestamp>>,
@@ -155,6 +158,14 @@ fn normalized_order_timing_usage_and_stop_reason_are_deterministic() {
     };
     assert_eq!(usage.cache_read_tokens, 4);
     assert_eq!(usage.cache_write_tokens, 2);
+    let AgentActivityEventV1::ScopeFinished(finished) = &frames[7].event else {
+        panic!("scope finish");
+    };
+    assert_eq!(finished.status, ScopeStatusV1::Succeeded);
+    assert_eq!(
+        finished.terminal_reason,
+        Some(AgentTerminalReasonV1::Completed)
+    );
 }
 
 #[test]
@@ -549,6 +560,7 @@ fn terminal_scope_frame_gets_a_bounded_socket_flush() {
         event: AgentActivityEventV1::ScopeFinished(temper_protocol_activity::ScopeFinishedV1 {
             status: temper_protocol_activity::ScopeStatusV1::Succeeded,
             duration_ms: 9,
+            terminal_reason: Some(AgentTerminalReasonV1::Completed),
         }),
     };
 

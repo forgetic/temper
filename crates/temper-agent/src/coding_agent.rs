@@ -60,7 +60,7 @@ mod tools;
 // Re-export of the test-visible symbols and the public API so callers (and the
 // `super::*` in the test module) see one flat `coding_agent` surface.
 pub use capability::Capability;
-pub use error::CodingAgentError;
+pub use error::{AgentAbortAuthority, CodingAgentError};
 pub use forge::{ForgeContextFuture, ForgeContextHost};
 pub use prompt::{system_prompt, system_prompt_with_contracts, user_context};
 pub use run::{
@@ -86,7 +86,7 @@ pub(crate) use prompt::{system_prompt_with_registry, user_context_with_registry}
 #[cfg(test)]
 pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabulary};
 #[cfg(test)]
-pub(crate) use run::classify_run_error;
+pub(crate) use run::{classify_run_error, ensure_completed_outcome};
 #[cfg(test)]
 pub(crate) use tools::{SubAgentTier, add_subagents, subagent_specs, tool_registry_for_context};
 

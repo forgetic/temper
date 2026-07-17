@@ -126,6 +126,55 @@ fn every_event_family_has_a_canonical_golden_round_trip() {
 }
 
 #[test]
+fn retained_scope_finished_without_a_terminal_reason_round_trips() {
+    let event: AgentActivityEventV1 = round_trip(&fixture("scope-finished-legacy.json"));
+    let AgentActivityEventV1::ScopeFinished(finished) = event else {
+        panic!("legacy fixture must be scope.finished");
+    };
+    assert_eq!(finished.status, ScopeStatusV1::Succeeded);
+    assert_eq!(finished.terminal_reason, None);
+}
+
+#[test]
+fn terminal_reason_goldens_round_trip_and_validate_status_consistency() {
+    let events: Vec<AgentActivityEventV1> = round_trip(&fixture("scope-terminal-reasons.json"));
+    let expected = [
+        (ScopeStatusV1::Succeeded, AgentTerminalReasonV1::Completed),
+        (ScopeStatusV1::Failed, AgentTerminalReasonV1::ModelError),
+        (ScopeStatusV1::Cancelled, AgentTerminalReasonV1::Aborted),
+        (
+            ScopeStatusV1::Failed,
+            AgentTerminalReasonV1::BudgetExhausted,
+        ),
+    ];
+
+    for (index, (event, (expected_status, expected_reason))) in
+        events.into_iter().zip(expected).enumerate()
+    {
+        let AgentActivityEventV1::ScopeFinished(finished) = &event else {
+            panic!("terminal reason fixture must contain only scope.finished events");
+        };
+        assert_eq!(finished.status, expected_status);
+        assert_eq!(finished.terminal_reason, Some(expected_reason));
+
+        let mut canonical = usage_event(index as u64 + 1);
+        canonical.event = event.clone();
+        canonical.validate().expect("consistent reason validates");
+
+        let AgentActivityEventV1::ScopeFinished(mut mismatched) = event else {
+            unreachable!();
+        };
+        mismatched.status = if expected_status == ScopeStatusV1::Succeeded {
+            ScopeStatusV1::Failed
+        } else {
+            ScopeStatusV1::Succeeded
+        };
+        canonical.event = AgentActivityEventV1::ScopeFinished(mismatched);
+        assert_code(canonical.validate(), ActivityValidationCode::InvalidEvent);
+    }
+}
+
+#[test]
 fn retry_failures_accept_only_the_fixed_allowlisted_summary() {
     let events: Vec<AgentActivityEventV1> = round_trip(&fixture("event-families.json"));
     let mut canonical = usage_event(1);

@@ -7,7 +7,9 @@ use temper_protocol_context::W3cTraceContext;
 use crate::{ACTIVITY_PROTOCOL_VERSION, ActivityValidationError};
 
 mod prompt;
+mod terminal;
 pub use prompt::*;
+pub use terminal::*;
 
 /// Identity assigned by the worker and held constant for an entire run.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -489,6 +491,8 @@ pub struct ScopeStartedV1 {
 pub struct ScopeFinishedV1 {
     pub status: ScopeStatusV1,
     pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<AgentTerminalReasonV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

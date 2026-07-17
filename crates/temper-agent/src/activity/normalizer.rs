@@ -11,13 +11,16 @@ use temper_protocol_activity::{
     InlineContentV1, MODEL_CALL_RETRY_FAILURE_MESSAGE, ModelCallFinishedV1, ModelCallRetryingV1,
     ModelCallStartedV1, ModelCallStatusV1, OutputDeltaV1, PromptCaptureDispositionV1,
     PromptPreparedV1, PromptSnapshotV1, PromptToolDefinitionV1, ScopeFinishedV1, ScopeStartedV1,
-    ScopeStatusV1, SteeringAppliedV1, SteeringSourceV1, StopReasonV1, ToolFinishedV1,
-    ToolStartedV1, ToolStatusV1, TurnFinishedV1, TurnStartedV1, UsageV1,
+    SteeringAppliedV1, SteeringSourceV1, StopReasonV1, ToolFinishedV1, ToolStartedV1, ToolStatusV1,
+    TurnFinishedV1, TurnStartedV1, UsageV1,
 };
 use tongs::model::{ContentBlock, StopReason};
 use tongs::provider::ToolDef;
 
 use super::{ActivityClock, ProjectionSet};
+
+mod terminal;
+use terminal::scope_terminal;
 
 struct NormalizerState {
     current_turn: Option<u32>,
@@ -489,11 +492,13 @@ impl NormalizingEventSink {
     fn agent_ended(&self, state: &mut NormalizerState, reason: AgentStop) {
         self.flush_turn_finish(state);
         let now = self.clock.now();
+        let (status, terminal_reason) = scope_terminal(reason);
         self.project(
             None,
             AgentActivityEventV1::ScopeFinished(ScopeFinishedV1 {
-                status: scope_status(reason),
+                status,
                 duration_ms: now.elapsed_ms.saturating_sub(self.scope_started_ms),
+                terminal_reason: Some(terminal_reason),
             }),
         );
     }
@@ -546,14 +551,6 @@ fn map_stop_reason(reason: StopReason) -> StopReasonV1 {
         StopReason::ToolUse => StopReasonV1::ToolUse,
         StopReason::Error => StopReasonV1::Error,
         StopReason::Aborted => StopReasonV1::Cancelled,
-    }
-}
-
-fn scope_status(reason: AgentStop) -> ScopeStatusV1 {
-    match reason {
-        AgentStop::Completed => ScopeStatusV1::Succeeded,
-        AgentStop::Aborted => ScopeStatusV1::Cancelled,
-        AgentStop::ModelError | AgentStop::BudgetExhausted => ScopeStatusV1::Failed,
     }
 }
 

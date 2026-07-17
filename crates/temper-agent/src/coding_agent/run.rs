@@ -18,8 +18,8 @@ use super::result::{
 };
 use super::tools::{add_subagents, tool_registry_for_context};
 use super::{
-    Capability, CodingAgentError, ForgeContextHost, SubmitForPrCallback, SubmitForPrHost,
-    bind_submit_for_pr_host, default_submit_for_pr_host,
+    AgentAbortAuthority, Capability, CodingAgentError, ForgeContextHost, SubmitForPrCallback,
+    SubmitForPrHost, bind_submit_for_pr_host, default_submit_for_pr_host,
 };
 
 /// Runs one capability/role-aware coding-workspace turn on anvil's native
@@ -411,14 +411,12 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     totals.emit_summary();
     let run_totals = totals.snapshot();
 
-    if matches!(outcome.stop, temper_agent_core::AgentStop::ModelError) {
-        let reason = outcome
-            .final_message
-            .error_message
-            .clone()
-            .unwrap_or_else(|| "provider reported an error stop".to_string());
-        return Err(classify_run_error(&model_id, reason));
-    }
+    ensure_completed_outcome(
+        &outcome,
+        &model_id,
+        max_iterations,
+        cancellation.worker_cancellation_requested(),
+    )?;
 
     let text = collect_text(&outcome.final_message.content);
     let result = parse_result(&text).inspect_err(|_err| {
@@ -437,6 +435,39 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     )?;
     validate_contract(capability, &result, cwd, context)?;
     Ok((result, run_totals))
+}
+
+/// Reject every non-completed core outcome before final-message text can reach
+/// result parsing. Keeping this boundary separate makes the ordering explicit:
+/// co-emitted JSON on a budget-exhausting or aborted response is never a
+/// `WorkspaceResult` candidate.
+pub(crate) fn ensure_completed_outcome(
+    outcome: &temper_agent_core::AgentOutcome,
+    model_id: &str,
+    max_iterations: usize,
+    worker_cancellation_requested: bool,
+) -> Result<(), CodingAgentError> {
+    match outcome.stop {
+        temper_agent_core::AgentStop::Completed => Ok(()),
+        temper_agent_core::AgentStop::ModelError => {
+            let reason = outcome
+                .final_message
+                .error_message
+                .clone()
+                .unwrap_or_else(|| "provider reported an error stop".to_string());
+            Err(classify_run_error(model_id, reason))
+        }
+        temper_agent_core::AgentStop::BudgetExhausted => {
+            Err(CodingAgentError::BudgetExhausted { max_iterations })
+        }
+        temper_agent_core::AgentStop::Aborted => Err(CodingAgentError::Aborted {
+            authority: if worker_cancellation_requested {
+                AgentAbortAuthority::WorkerRequested
+            } else {
+                AgentAbortAuthority::Unrequested
+            },
+        }),
+    }
 }
 
 /// Classifies a run/stop error message, promoting a model-availability

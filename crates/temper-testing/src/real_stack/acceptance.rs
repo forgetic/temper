@@ -10,10 +10,11 @@ use temper_engine::{MechanicalBackstopConfig, MechanicalScope, run_mechanical_ba
 use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus, Forge, ItemNumber,
 };
+use temper_protocol_agent::AgentSessionState;
 use temper_runner::{Progress, RepositorySet, RepositoryTarget};
 use temper_worker::{WorkerLivenessLimits, start_worker_with_transport_and_hook};
 
-use super::git::{git_output_trim, path_str};
+use super::git::{git_output_raw, git_output_trim, path_str};
 use super::stack::HermeticRealStack;
 
 impl HermeticRealStack {
@@ -216,6 +217,30 @@ impl HermeticRealStack {
                     .join(", ")
             )),
         }
+    }
+
+    /// Lists local branch names in a seeded bare origin.
+    pub fn origin_branches(&self, repo: &str) -> Result<Vec<String>, String> {
+        let origin = self.origin(repo)?;
+        let output = git_output_raw(&[
+            "-C",
+            path_str(origin)?,
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads",
+        ])?;
+        Ok(output
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Agent-session state attached to each native runner invocation, in order.
+    /// This records the post-checkout control-plane context before the first
+    /// model request so retry tests can prove a redispatch loaded the same state.
+    pub fn observed_agent_sessions(&self) -> Vec<Option<AgentSessionState>> {
+        self.runner.observed_agent_sessions()
     }
 
     /// Number of persisted engineer session records in the durable workspace.

@@ -1,26 +1,298 @@
 use super::*;
-use temper_protocol_activity::{AgentActivityEventV1, CaptureModeV1, RunFailedV1};
-use temper_protocol_worker::FailureClass;
+use jig_core::{Reply, Script, StopReason, Turn};
+use jig_server::FakeLlm;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, OnceLock};
+use temper_protocol_activity::{AgentActivityEventV1, CaptureModeV1, RunFailedV1, ScopeStatusV1};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::registry;
 
 #[test]
 fn run_failure_is_transient() {
-    let err = classify_coding_agent_error(CodingAgentError::Run("network".into()));
+    let err = classify_coding_agent_error(CodingAgentError::Run("network".into()), false);
     assert_eq!(err.class, FailureClass::Transient);
 }
 
 #[test]
 fn no_product_is_permanent() {
-    let err = classify_coding_agent_error(CodingAgentError::NoProduct);
+    let err = classify_coding_agent_error(CodingAgentError::NoProduct, false);
     assert_eq!(err.class, FailureClass::Permanent);
 }
 
 #[test]
 fn parse_failure_is_transient() {
-    let err = classify_coding_agent_error(CodingAgentError::Parse {
-        snippet: "some text".into(),
-        error: "no JSON object".into(),
-    });
+    let err = classify_coding_agent_error(
+        CodingAgentError::Parse {
+            snippet: "some text".into(),
+            error: "no JSON object".into(),
+        },
+        false,
+    );
     assert_eq!(err.class, FailureClass::Transient);
+}
+
+#[test]
+fn provider_failure_is_transient() {
+    let err = classify_coding_agent_error(
+        CodingAgentError::Provider(temper_agent::ProviderError::Build("bad provider".into())),
+        false,
+    );
+    assert_eq!(err.class, FailureClass::Transient);
+}
+
+#[test]
+fn typed_stops_preserve_retry_and_cancellation_authority() {
+    let budget = classify_coding_agent_error(
+        CodingAgentError::BudgetExhausted { max_iterations: 7 },
+        false,
+    );
+    assert_eq!(budget.class, FailureClass::Transient);
+    assert!(budget.message.contains("budget_exhausted"));
+
+    let requested = classify_coding_agent_error(
+        CodingAgentError::Aborted {
+            authority: AgentAbortAuthority::WorkerRequested,
+        },
+        false,
+    );
+    assert_eq!(requested.class, FailureClass::Canceled);
+
+    let unrequested = classify_coding_agent_error(
+        CodingAgentError::Aborted {
+            authority: AgentAbortAuthority::Unrequested,
+        },
+        false,
+    );
+    assert_eq!(unrequested.class, FailureClass::Transient);
+
+    let fenced = classify_coding_agent_error(
+        CodingAgentError::Aborted {
+            authority: AgentAbortAuthority::Unrequested,
+        },
+        true,
+    );
+    assert_eq!(fenced.class, FailureClass::Canceled);
+}
+
+#[test]
+fn typed_terminal_report_distinguishes_success_failure_and_cancellation() {
+    assert_eq!(
+        agent_terminal_report(&Result::<(), CodingAgentError>::Ok(()), false),
+        (
+            AgentTerminalStatus::Succeeded,
+            Some(AgentTerminalReasonV1::Completed)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(
+            &Result::<(), CodingAgentError>::Err(CodingAgentError::AgentStopped(
+                "provider stop".into(),
+            )),
+            false,
+        ),
+        (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::ModelError)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(
+            &Result::<(), CodingAgentError>::Err(CodingAgentError::BudgetExhausted {
+                max_iterations: 7,
+            }),
+            false,
+        ),
+        (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::BudgetExhausted)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(
+            &Result::<(), CodingAgentError>::Err(CodingAgentError::Aborted {
+                authority: AgentAbortAuthority::WorkerRequested,
+            }),
+            false,
+        ),
+        (
+            AgentTerminalStatus::Cancelled,
+            Some(AgentTerminalReasonV1::Aborted)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(
+            &Result::<(), CodingAgentError>::Err(CodingAgentError::Aborted {
+                authority: AgentAbortAuthority::Unrequested,
+            }),
+            false,
+        ),
+        (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::Aborted)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(
+            &Result::<(), CodingAgentError>::Err(CodingAgentError::Aborted {
+                authority: AgentAbortAuthority::Unrequested,
+            }),
+            true,
+        ),
+        (
+            AgentTerminalStatus::Cancelled,
+            Some(AgentTerminalReasonV1::Aborted)
+        )
+    );
+}
+
+#[derive(Clone, Debug, Default)]
+struct CapturedLog {
+    fields: BTreeMap<String, String>,
+}
+
+#[derive(Default)]
+struct LogVisitor {
+    fields: BTreeMap<String, String>,
+}
+
+impl Visit for LogVisitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
+    }
+}
+
+#[derive(Clone, Default)]
+struct LogCaptureLayer {
+    events: Arc<Mutex<Vec<CapturedLog>>>,
+}
+
+impl<S: tracing::Subscriber> Layer<S> for LogCaptureLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = LogVisitor::default();
+        event.record(&mut visitor);
+        self.events
+            .lock()
+            .expect("captured logs")
+            .push(CapturedLog {
+                fields: visitor.fields,
+            });
+    }
+}
+
+fn global_log_capture() -> Arc<Mutex<Vec<CapturedLog>>> {
+    static EVENTS: OnceLock<Arc<Mutex<Vec<CapturedLog>>>> = OnceLock::new();
+    Arc::clone(EVENTS.get_or_init(|| {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        tracing::subscriber::set_global_default(registry().with(LogCaptureLayer {
+            events: Arc::clone(&events),
+        }))
+        .expect("install standalone test log capture");
+        events
+    }))
+}
+
+#[test]
+fn standalone_budget_exhaustion_ends_failed_trace_and_log_with_stable_reason() {
+    let fake = FakeLlm::start(Script::Fixed(Reply {
+        turns: vec![
+            Turn::Text(
+                r#"{"verdict":"needs_architect","summary":"must not be accepted"}"#.to_string(),
+            ),
+            Turn::ToolCall {
+                id: "undispatchable-list".to_string(),
+                name: "ls".to_string(),
+                args: serde_json::json!({ "path": "." }),
+            },
+        ],
+        usage: Default::default(),
+        stop: StopReason::ToolCalls,
+    }))
+    .expect("start fake LLM");
+    let provider = ProviderConfig::new(
+        "jig-openai-compatible",
+        "jig-standalone-budget",
+        "https://example.invalid/unused-production-url",
+        "sk-jig-test",
+    )
+    .with_base_url_override(fake.base_url());
+    let captured = global_log_capture();
+
+    let (error, recovered) = temper_engine_io::block_on_with(move |_cx, handle| async move {
+        let temp = tempfile::tempdir().expect("standalone budget tempdir");
+        std::fs::create_dir_all(temp.path().join("temper")).expect("prepared repo dir");
+        let spool_root = temp.path().join("spool");
+        let policy = AgentActivityCapturePolicyV1::default();
+        let runner = InProcessAgentRunner::new(handle, provider, 0, None, false)
+            .with_trace_policy(policy.clone())
+            .with_trace_collector(WorkerAgentTraceConfig {
+                policy,
+                spool_root: Some(spool_root.clone()),
+            });
+        let context = ctx("ai", "temper", "issue", "Issue { number: ItemNumber(440) }");
+        let error = runner
+            .run("job-standalone-budget-440", &context, temp.path())
+            .await
+            .expect_err("budget exhaustion is not a completed result");
+        let recovered = TraceCollector::new(WorkerAgentTraceConfig {
+            policy: AgentActivityCapturePolicyV1::default(),
+            spool_root: Some(spool_root),
+        })
+        .recover()
+        .expect("recover standalone budget trace");
+        (error, recovered)
+    });
+
+    assert_eq!(error.class, FailureClass::Transient);
+    assert!(error.message.contains("budget_exhausted"));
+    assert_eq!(recovered.len(), 1);
+    let events = &recovered[0].events;
+    assert!(events.iter().any(|event| matches!(
+        &event.event,
+        AgentActivityEventV1::ScopeFinished(finished)
+            if finished.status == ScopeStatusV1::Failed
+                && finished.terminal_reason == Some(AgentTerminalReasonV1::BudgetExhausted)
+    )));
+    let AgentActivityEventV1::RunFailed(RunFailedV1 { failure }) =
+        &events.last().expect("outer terminal event").event
+    else {
+        panic!("budget exhaustion must end the outer trace with run.failed");
+    };
+    assert!(failure.retryable);
+
+    let captured = captured.lock().expect("captured logs");
+    let finished = captured
+        .iter()
+        .find(|event| {
+            event.fields.get("event").map(String::as_str) == Some("agent.finished")
+                && event.fields.get("reason").map(String::as_str) == Some("budget_exhausted")
+        })
+        .expect("budget-exhausted agent.finished log");
+    assert_eq!(
+        finished.fields.get("status").map(String::as_str),
+        Some("failed")
+    );
+    assert_eq!(
+        finished.fields.get("reason").map(String::as_str),
+        Some("budget_exhausted")
+    );
+    assert!(
+        finished.fields.get("message").is_some_and(
+            |message| message.contains("failed") && message.contains("budget_exhausted")
+        )
+    );
 }
 
 #[test]

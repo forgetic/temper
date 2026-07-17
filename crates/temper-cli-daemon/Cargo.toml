@@ -34,8 +34,12 @@ temper-agent = { path = "../temper-agent" }
 temper-protocol-agent = { path = "../temper-protocol-agent" }
 
 [dev-dependencies]
+jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 temper-worker-registry = { path = "../temper-worker-registry" }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

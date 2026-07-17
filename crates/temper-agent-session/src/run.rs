@@ -120,6 +120,22 @@ mod tests {
     };
 
     #[test]
+    fn typed_stop_diagnostics_keep_stable_reason_tokens() {
+        let budget =
+            describe_agent_error(&CodingAgentError::BudgetExhausted { max_iterations: 17 });
+        assert!(budget.contains("budget_exhausted"));
+
+        for authority in [
+            temper_agent::AgentAbortAuthority::WorkerRequested,
+            temper_agent::AgentAbortAuthority::Unrequested,
+        ] {
+            let aborted = describe_agent_error(&CodingAgentError::Aborted { authority });
+            assert!(aborted.contains("aborted"));
+            assert!(aborted.contains(&authority.to_string()));
+        }
+    }
+
+    #[test]
     fn drive_passes_tool_config_to_native_loop() {
         let temp = tempfile::tempdir().expect("tempdir");
         let result_path = temp.path().join("result.json");

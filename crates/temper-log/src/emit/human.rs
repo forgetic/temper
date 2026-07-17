@@ -28,6 +28,8 @@ use crate::WorkItemRef;
 use crate::duration::format_duration_ms;
 use crate::redact::redacted_preview;
 
+use super::{AgentTerminalReasonV1, AgentTerminalStatus};
+
 /// Character bound applied to free-text previews (issue titles, summaries).
 ///
 /// Generous enough to keep a normal title intact while capping a pathological
@@ -93,14 +95,23 @@ pub(crate) fn agent_finished(
     item: &WorkItemRef,
     role: &str,
     kind: &str,
+    status: AgentTerminalStatus,
+    terminal_reason: Option<AgentTerminalReasonV1>,
     duration_ms: u64,
     summary: &str,
 ) -> String {
+    let detail = match status {
+        AgentTerminalStatus::Succeeded => summary,
+        AgentTerminalStatus::Failed | AgentTerminalStatus::Cancelled => terminal_reason
+            .map(AgentTerminalReasonV1::as_str)
+            .unwrap_or(summary),
+    };
     format!(
-        "{} {role}/{kind} done in {} | {}",
+        "{} {role}/{kind} {} in {} | {}",
         item.human_tag(),
+        status.human_verb(),
         format_duration_ms(duration_ms),
-        redacted_preview(summary, PREVIEW_LIMIT)
+        redacted_preview(detail, PREVIEW_LIMIT)
     )
 }
 
@@ -301,10 +312,36 @@ mod tests {
                 &issue42(),
                 "architect",
                 "triage",
+                AgentTerminalStatus::Succeeded,
+                Some(AgentTerminalReasonV1::Completed),
                 73_000,
                 "verdict=ready_code"
             ),
             "[acme/widgets#42] architect/triage done in 1m13s | verdict=ready_code"
+        );
+        assert_eq!(
+            agent_finished(
+                &issue42(),
+                "engineer",
+                "coding",
+                AgentTerminalStatus::Failed,
+                Some(AgentTerminalReasonV1::BudgetExhausted),
+                73_000,
+                "agent exceeded its tool budget"
+            ),
+            "[acme/widgets#42] engineer/coding failed in 1m13s | budget_exhausted"
+        );
+        assert_eq!(
+            agent_finished(
+                &issue42(),
+                "reviewer",
+                "review",
+                AgentTerminalStatus::Cancelled,
+                Some(AgentTerminalReasonV1::Aborted),
+                73_000,
+                "worker cancelled the run"
+            ),
+            "[acme/widgets#42] reviewer/review cancelled in 1m13s | aborted"
         );
     }
 

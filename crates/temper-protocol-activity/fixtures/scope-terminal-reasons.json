@@ -1,0 +1,34 @@
+[
+  {
+    "type": "scope.finished",
+    "data": {
+      "status": "succeeded",
+      "duration_ms": 10,
+      "terminal_reason": "completed"
+    }
+  },
+  {
+    "type": "scope.finished",
+    "data": {
+      "status": "failed",
+      "duration_ms": 20,
+      "terminal_reason": "model_error"
+    }
+  },
+  {
+    "type": "scope.finished",
+    "data": {
+      "status": "cancelled",
+      "duration_ms": 30,
+      "terminal_reason": "aborted"
+    }
+  },
+  {
+    "type": "scope.finished",
+    "data": {
+      "status": "failed",
+      "duration_ms": 40,
+      "terminal_reason": "budget_exhausted"
+    }
+  }
+]
