@@ -73,8 +73,8 @@ impl OutOfProcessRunner {
         activity_address: Option<&str>,
         submit_address: Option<&str>,
         forge_address: Option<&str>,
-    ) -> Command {
-        let mut command = Command::new(program);
+    ) -> temper_process_containment::ContainmentCommand {
+        let mut command = temper_process_containment::ContainmentCommand::new(program);
         command
             .args(args)
             .current_dir(cwd)

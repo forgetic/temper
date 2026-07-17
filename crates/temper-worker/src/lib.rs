@@ -27,6 +27,7 @@ pub mod observability;
 pub mod out_of_process_runner;
 pub mod pr_freshness;
 pub mod pre_push;
+mod process_containment;
 pub mod result_outbox;
 pub mod run;
 pub mod trace;
@@ -51,9 +52,9 @@ pub use context_client::{
     ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,
 };
 pub use executor::{
-    AttemptFence, CancellationOutcome, DescendantCleanupStatus, JobAttempt, JobCancellation,
-    JobCancellationRequest, JobCleanup, JobExecutionContext, JobExecutor, JobOutcome, StubExecutor,
-    job_result, job_result_for_attempt,
+    AttemptFence, CancellationOutcome, JobAttempt, JobCancellation, JobCancellationRequest,
+    JobCleanup, JobExecutionContext, JobExecutor, JobOutcome, ResourceJoinReport,
+    ResourceJoinStatus, StubExecutor, job_result, job_result_for_attempt,
 };
 pub use lifecycle_hook::{WorkerLifecycleCheckpoint, WorkerLifecycleHook};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
@@ -94,9 +95,9 @@ pub use trace::{
 };
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{
-    ActiveOperation, CancellationStatus, JobPhase, JobWatchState, OperationId, OperationKind,
-    ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState, WatchdogTimerKind,
-    WorkerCompletion, WorkerMachine, WorkerRequest,
+    ActiveOperation, AttemptCompletion, CancellationStatus, JobPhase, JobWatchState, OperationId,
+    OperationKind, ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState,
+    WatchdogTimerKind, WorkerCompletion, WorkerMachine, WorkerRequest,
 };
 pub use workspace::{
     PreparationOutcome, QuarantineManifest, RecoveryContext, RoleGitIdentity,

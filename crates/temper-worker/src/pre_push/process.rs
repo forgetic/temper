@@ -2,7 +2,7 @@ use std::future::Future;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -10,9 +10,10 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use temper_process_containment::{ProcessContainment, configure_command};
+use temper_process_containment::{CleanupTrigger, ContainedProcess, ContainmentScope};
 
 use super::PrePushCommand;
+use crate::executor::JobCancellation;
 
 const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -40,8 +41,25 @@ impl PrePushCommandResult {
     }
 }
 
-pub(super) async fn run_command(command: PrePushCommand, cwd: PathBuf) -> PrePushCommandResult {
-    ManagedPrePushCommand::spawn(command, cwd).await
+pub(super) async fn run_command(
+    command: PrePushCommand,
+    cwd: PathBuf,
+    cancellation: Option<JobCancellation>,
+) -> PrePushCommandResult {
+    ManagedPrePushCommand::spawn(command, cwd, cancellation).await
+}
+
+struct PrePushCleanupObserver(JobCancellation);
+
+impl temper_process_containment::CleanupObserver for PrePushCleanupObserver {
+    fn observe(&self, snapshot: &temper_process_containment::CleanupSnapshot) {
+        if matches!(
+            snapshot,
+            temper_process_containment::CleanupSnapshot::Blocked { .. }
+        ) {
+            self.0.observe_cleanup(snapshot.clone());
+        }
+    }
 }
 
 struct ManagedCommandState {
@@ -59,7 +77,7 @@ struct ManagedPrePushCommand {
 }
 
 impl ManagedPrePushCommand {
-    fn spawn(command: PrePushCommand, cwd: PathBuf) -> Self {
+    fn spawn(command: PrePushCommand, cwd: PathBuf, cancellation: Option<JobCancellation>) -> Self {
         let state = Arc::new(Mutex::new(ManagedCommandState {
             result: None,
             waker: None,
@@ -69,10 +87,21 @@ impl ManagedPrePushCommand {
         let thread_cancelled = Arc::clone(&cancelled);
         let fallback_command = command.clone();
         let fallback_cwd = cwd.clone();
+        let owner_command = command.clone();
+        let owner_cwd = cwd.clone();
         let thread = match thread::Builder::new()
             .name("temper-pre-push-command".to_string())
             .spawn(move || {
-                let result = run_command_sync(command, cwd, &thread_cancelled);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_command_sync(command, cwd, &thread_cancelled, cancellation)
+                }))
+                .unwrap_or_else(|_| {
+                    spawn_error_result(
+                        owner_command,
+                        owner_cwd,
+                        io::Error::other("pre-push command owner panicked"),
+                    )
+                });
                 let waker = {
                     let mut state = thread_state
                         .lock()
@@ -167,6 +196,7 @@ fn run_command_sync(
     command: PrePushCommand,
     cwd: PathBuf,
     cancelled: &AtomicBool,
+    cancellation: Option<JobCancellation>,
 ) -> PrePushCommandResult {
     let started = Instant::now();
     let mut result = PrePushCommandResult {
@@ -190,15 +220,32 @@ fn run_command_sync(
     };
 
     let mut process = Command::new(program);
-    configure_command(&mut process);
-    let mut child = match process
-        .args(args)
-        .current_dir(&result.cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    process.args(args).current_dir(&result.cwd);
+    let contained_command = crate::process_containment::containment_command(
+        &process,
+        Stdio::null(),
+        Stdio::piped(),
+        Stdio::piped(),
+    );
+    let observer = cancellation.map(|cancellation| {
+        Arc::new(PrePushCleanupObserver(cancellation))
+            as Arc<dyn temper_process_containment::CleanupObserver>
+    });
+    let prepared = match crate::process_containment::prepare_with_observer(
+        "pre-push",
+        "local",
+        ContainmentScope::PrePush,
+        &result.id,
+        observer,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            result.error = Some(format!("prepare process containment: {error}"));
+            result.elapsed_ms = elapsed_ms(started);
+            return result;
+        }
+    };
+    let child = match prepared.spawn(contained_command) {
         Ok(child) => child,
         Err(error) => {
             result.error = Some(format!("spawn: {error}"));
@@ -207,28 +254,57 @@ fn run_command_sync(
         }
     };
 
-    let containment = match ProcessContainment::attach(&child) {
-        Ok(containment) => containment,
+    let stdout = match child.take_stdout() {
+        Ok(Some(stdout)) => stdout,
+        Ok(None) => {
+            let _ = child.cleanup(CleanupTrigger::Shutdown);
+            result.error = Some("stdout was not piped".to_string());
+            result.elapsed_ms = elapsed_ms(started);
+            return result;
+        }
         Err(error) => {
-            result.error = Some(format!("attach process containment: {error}"));
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = child.cleanup(CleanupTrigger::Shutdown);
+            result.error = Some(format!("take stdout: {error}"));
+            result.elapsed_ms = elapsed_ms(started);
+            return result;
+        }
+    };
+    let stderr = match child.take_stderr() {
+        Ok(Some(stderr)) => stderr,
+        Ok(None) => {
+            let _ = child.cleanup(CleanupTrigger::Shutdown);
+            result.error = Some("stderr was not piped".to_string());
+            result.elapsed_ms = elapsed_ms(started);
+            return result;
+        }
+        Err(error) => {
+            let _ = child.cleanup(CleanupTrigger::Shutdown);
+            result.error = Some(format!("take stderr: {error}"));
+            result.elapsed_ms = elapsed_ms(started);
+            return result;
+        }
+    };
+    let stdout_reader = match spawn_reader(stdout, "stdout") {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.cleanup(CleanupTrigger::Shutdown);
+            set_error(&mut result, error.to_string());
+            result.elapsed_ms = elapsed_ms(started);
+            return result;
+        }
+    };
+    let stderr_reader = match spawn_reader(stderr, "stderr") {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.cleanup(CleanupTrigger::Shutdown);
+            let _ = stdout_reader.join();
+            set_error(&mut result, error.to_string());
             result.elapsed_ms = elapsed_ms(started);
             return result;
         }
     };
 
-    let stdout = child.stdout.take().expect("stdout was configured as piped");
-    let stderr = child.stderr.take().expect("stderr was configured as piped");
-    let stdout_reader = spawn_reader(stdout);
-    let stderr_reader = spawn_reader(stderr);
-
-    match wait_with_timeout(
-        &mut child,
-        &containment,
-        Duration::from_secs(result.timeout_secs),
-        cancelled,
-    ) {
+    match wait_with_timeout(&child, Duration::from_secs(result.timeout_secs), cancelled) {
         Ok(outcome) => {
             result.timed_out = outcome.timed_out;
             if outcome.cancelled {
@@ -241,16 +317,13 @@ fn run_command_sync(
         }
         Err(error) => {
             result.error = Some(format!("wait: {error}"));
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = child.cleanup(CleanupTrigger::Shutdown);
         }
     }
 
     // A gate may exit after backgrounding a descendant that still owns an
-    // output pipe. Empty its containment before joining the stream readers.
-    let _ = containment.hard_kill(&mut child);
-    let _ = child.wait();
+    // output pipe. Recursive emptiness is proven before stream readers join.
+    let _cleanup = child.cleanup(CleanupTrigger::NormalRootExit);
 
     match join_reader(stdout_reader, "stdout") {
         Ok(output) => result.stdout_tail = tail_utf8(&output, OUTPUT_TAIL_BYTES),
@@ -271,14 +344,13 @@ struct WaitOutcome {
 }
 
 fn wait_with_timeout(
-    child: &mut Child,
-    containment: &ProcessContainment,
+    child: &ContainedProcess,
     timeout: Duration,
     cancelled: &AtomicBool,
 ) -> io::Result<WaitOutcome> {
     let started = Instant::now();
     loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = child.try_wait_root()? {
             return Ok(WaitOutcome {
                 status: Some(status),
                 timed_out: false,
@@ -286,17 +358,17 @@ fn wait_with_timeout(
             });
         }
         if cancelled.load(Ordering::Acquire) {
-            kill_for_timeout(containment, child)?;
+            let cleanup = child.cleanup(CleanupTrigger::Cancellation);
             return Ok(WaitOutcome {
-                status: child.wait().ok(),
+                status: exit_status_from_cleanup(&cleanup),
                 timed_out: false,
                 cancelled: true,
             });
         }
         if started.elapsed() >= timeout {
-            kill_for_timeout(containment, child)?;
+            let cleanup = child.cleanup(CleanupTrigger::Timeout);
             return Ok(WaitOutcome {
-                status: child.wait().ok(),
+                status: exit_status_from_cleanup(&cleanup),
                 timed_out: true,
                 cancelled: false,
             });
@@ -305,20 +377,31 @@ fn wait_with_timeout(
     }
 }
 
-fn kill_for_timeout(containment: &ProcessContainment, child: &mut Child) -> io::Result<()> {
-    let _ = containment.hard_kill(child);
-    match child.kill() {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
-        Err(error) => Err(error),
-    }
+fn exit_status_from_cleanup(
+    _cleanup: &temper_process_containment::CleanupReport,
+) -> Option<ExitStatus> {
+    // Cleanup retains the portable exit code in its structured direct-child
+    // proof. `ExitStatus` has no portable constructor, and timeout/cancellation
+    // results do not require one to decide success.
+    None
 }
 
-fn spawn_reader<R>(mut reader: R) -> thread::JoinHandle<io::Result<Vec<u8>>>
+fn spawn_reader<R>(
+    mut reader: R,
+    stream: &'static str,
+) -> io::Result<thread::JoinHandle<io::Result<Vec<u8>>>>
 where
     R: Read + Send + 'static,
 {
-    thread::spawn(move || read_tail(&mut reader, OUTPUT_TAIL_BYTES))
+    thread::Builder::new()
+        .name(format!("temper-pre-push-{stream}"))
+        .spawn(move || read_tail(&mut reader, OUTPUT_TAIL_BYTES))
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("start pre-push {stream} reader: {error}"),
+            )
+        })
 }
 
 fn read_tail(reader: &mut impl Read, max_len: usize) -> io::Result<Vec<u8>> {
@@ -384,4 +467,80 @@ fn tail_utf8(bytes: &[u8], max_len: usize) -> String {
         start += 1;
     }
     text[start..].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::task::{Wake, Waker};
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cancellation_joins_pre_push_before_late_workspace_mutation() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let script = temporary.path().join("pre-push-cancel.sh");
+        let pid = temporary.path().join("pid");
+        let entered = temporary.path().join("entered");
+        let release = temporary.path().join("release");
+        let late = temporary.path().join("late");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nset -eu\nprintf '%s' \"$$\" > \"$1\"\ntouch \"$2\"\nwhile [ ! -e \"$3\" ]; do sleep 0.01; done\nprintf late > \"$4\"\n",
+        )
+        .expect("write fixture");
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&script, permissions).unwrap();
+
+        let command = PrePushCommand {
+            id: "cancel-fixture".to_string(),
+            argv: vec![
+                script.display().to_string(),
+                pid.display().to_string(),
+                entered.display().to_string(),
+                release.display().to_string(),
+                late.display().to_string(),
+            ],
+            timeout_secs: 30,
+        };
+        let mut owner = ManagedPrePushCommand::spawn(
+            command,
+            temporary.path().to_path_buf(),
+            Some(JobCancellation::default()),
+        );
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        assert!(Pin::new(&mut owner).poll(&mut context).is_pending());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !entered.exists() {
+            assert!(Instant::now() < deadline, "pre-push fixture did not start");
+            thread::yield_now();
+        }
+        let child_pid = std::fs::read_to_string(&pid).expect("read pid");
+
+        drop(owner);
+
+        assert!(
+            !Command::new("kill")
+                .args(["-0", child_pid.trim()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success()),
+            "pre-push owner returned before its child was reaped"
+        );
+        std::fs::write(&release, b"").expect("release hypothetical survivor");
+        assert!(
+            !late.exists(),
+            "cancelled pre-push mutated the workspace late"
+        );
+    }
 }

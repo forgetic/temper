@@ -108,7 +108,7 @@ impl Workspace {
         let mut git = Command::new("git");
         git.env("GIT_TERMINAL_PROMPT", "0").args(&full_args);
         self.cancellation
-            .run(ManagedCommand::spawn(git))
+            .run(ManagedCommand::spawn(git, self.cancellation.clone()))
             .await
             .ok_or(WorkspaceError::Cancelled)?
             .map_err(WorkspaceError::Io)

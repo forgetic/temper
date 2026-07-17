@@ -31,12 +31,11 @@ use temper_protocol_worker::{
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_worker::config::{CapabilitySpec, WorkerParams};
-use temper_worker::executor::{
-    CancellationOutcome, DescendantCleanupStatus, JobOutcome, job_result_for_attempt,
-};
+use temper_worker::executor::{CancellationOutcome, JobOutcome, job_result_for_attempt};
 use temper_worker::result_outbox::ResultOutboxEntry;
 use temper_worker::worker_machine::{
-    JobCleanup, JobPhase, WatchdogTimerKind, WorkerCompletion, WorkerMachine, WorkerRequest,
+    AttemptCompletion, JobCleanup, JobPhase, WatchdogTimerKind, WorkerCompletion, WorkerMachine,
+    WorkerRequest,
 };
 use temper_worker_io::{EngineTime, Machine};
 
@@ -111,19 +110,22 @@ fn poll_timeout_reply() -> WorkerProtocolMessage {
 }
 
 fn finished(job_id: &str, generation: u64) -> WorkerCompletion {
-    WorkerCompletion::JobFinished {
+    WorkerCompletion::AttemptQuiesced {
         job_id: job_id.to_string(),
         attempt_id: format!("attempt-{job_id}"),
         generation,
-        result: job_result_for_attempt(
-            "fuzz-worker",
-            job_id,
-            Some(format!("attempt-{job_id}")),
-            JobOutcome::Failure {
-                class: FailureClass::Transient,
-                message: "sim".to_string(),
-            },
-        ),
+        completion: AttemptCompletion {
+            result: Some(job_result_for_attempt(
+                "fuzz-worker",
+                job_id,
+                Some(format!("attempt-{job_id}")),
+                JobOutcome::Failure {
+                    class: FailureClass::Transient,
+                    message: "sim".to_string(),
+                },
+            )),
+            cleanup: JobCleanup::no_process(None),
+        },
     }
 }
 
@@ -282,13 +284,13 @@ impl Sim {
                     })
                     .next()
                     .expect("cancelling job exists");
-                WorkerCompletion::JobQuiesced {
+                WorkerCompletion::AttemptQuiesced {
                     job_id,
                     attempt_id: state.attempt_id.clone(),
                     generation: state.generation,
-                    cleanup: JobCleanup {
-                        cancellation: CancellationOutcome::Graceful,
-                        descendants: DescendantCleanupStatus::Clean,
+                    completion: AttemptCompletion {
+                        result: None,
+                        cleanup: JobCleanup::no_process(Some(CancellationOutcome::Graceful)),
                     },
                 }
             }
@@ -312,8 +314,8 @@ impl Sim {
                 | WorkerCompletion::PollReply(_)
                 | WorkerCompletion::PollTimer
                 | WorkerCompletion::HeartbeatTimer
-                | WorkerCompletion::JobFinished { .. }
-                | WorkerCompletion::JobQuiesced { .. }
+                | WorkerCompletion::AttemptQuiesced { .. }
+                | WorkerCompletion::AttemptCleanupBlocked { .. }
                 | WorkerCompletion::WatchdogTimer { .. }
                 | WorkerCompletion::ResultRecordTimer { .. }
         );

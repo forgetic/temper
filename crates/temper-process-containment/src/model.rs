@@ -38,6 +38,10 @@ pub enum ContainmentBackendPolicy {
 /// process group is descendant-complete.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContainmentBackendKind {
+    /// No payload was spawned. This is used only by higher-level owners to
+    /// carry a structured, trivially empty cleanup proof for attempts that
+    /// complete without starting a process.
+    NoProcess,
     LinuxCgroupV2,
     LinuxSupervisor,
     WindowsJob,
@@ -346,14 +350,31 @@ impl MemberDiscovery {
 /// Direct-child wait/reap detail required by every terminal report.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectChildReap {
-    Pending { pid: u32 },
-    Reaped { pid: u32, exit_code: Option<i32> },
-    AlreadyReaped { pid: u32, exit_code: Option<i32> },
+    /// The process owner proved that no payload was spawned.
+    NotSpawned,
+    Pending {
+        pid: u32,
+    },
+    Reaped {
+        pid: u32,
+        exit_code: Option<i32>,
+    },
+    AlreadyReaped {
+        pid: u32,
+        exit_code: Option<i32>,
+    },
 }
 
 impl DirectChildReap {
     pub fn is_terminal(&self) -> bool {
         !matches!(self, Self::Pending { .. })
+    }
+
+    pub fn exit_code(&self) -> Option<i32> {
+        match self {
+            Self::Reaped { exit_code, .. } | Self::AlreadyReaped { exit_code, .. } => *exit_code,
+            Self::NotSpawned | Self::Pending { .. } => None,
+        }
     }
 }
 
@@ -461,6 +482,33 @@ pub struct CleanupReport {
 }
 
 impl CleanupReport {
+    /// A structured proof for an owner that completed before spawning any
+    /// payload. Keeping this case in the shared model lets worker completion
+    /// use one fail-closed cleanup shape for process and process-free jobs.
+    pub fn no_process(trigger: CleanupTrigger) -> Self {
+        Self {
+            backend: ContainmentBackendKind::NoProcess,
+            root: ContainmentRootIdentity::new(ContainmentBackendKind::NoProcess, "not-spawned"),
+            trigger,
+            disposition: CleanupDisposition::AlreadyEmpty,
+            term_attempts: Vec::new(),
+            omitted_term_attempts: 0,
+            kill_attempts: Vec::new(),
+            omitted_kill_attempts: 0,
+            direct_child_reap: DirectChildReap::NotSpawned,
+            recursive_empty: RecursiveEmptyProof::Proven { inspections: 0 },
+            observed_survivors: Vec::new(),
+            omitted_survivors: 0,
+            blocked_diagnostics: Vec::new(),
+            omitted_blocked_diagnostics: 0,
+        }
+    }
+
+    pub fn proves_quiescence(&self) -> bool {
+        self.direct_child_reap.is_terminal()
+            && matches!(self.recursive_empty, RecursiveEmptyProof::Proven { .. })
+    }
+
     pub fn backend(&self) -> ContainmentBackendKind {
         self.backend
     }

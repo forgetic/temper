@@ -25,15 +25,15 @@ use temper_protocol_worker::{WorkerAuth, WorkerProtocolMessage};
 use temper_worker_io::{CqSender, Spawner, arm_timer};
 
 use crate::executor::{
-    AttemptFence, CancellationOutcome, DescendantCleanupStatus, JobAttempt, JobCancellation,
-    JobCleanup, JobExecutionContext, JobExecutor, job_result_for_attempt,
+    AttemptFence, CancellationOutcome, JobAttempt, JobCancellation, JobCleanup,
+    JobExecutionContext, JobExecutor, job_result_for_attempt,
 };
 use crate::lifecycle_hook::{
     NoopWorkerLifecycleHook, WorkerLifecycleCheckpoint, WorkerLifecycleHook,
 };
 use crate::result_outbox::ResultOutbox;
 use crate::transport::{HttpTransport, Transport};
-use crate::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
+use crate::worker_machine::{AttemptCompletion, WorkerCompletion, WorkerMachine, WorkerRequest};
 
 /// Shared cancellation authority for a worker component and all job futures it
 /// spawned. Component shutdown drops attempt futures only as an abrupt-owner
@@ -332,6 +332,17 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     .expect("machine dispatches only fenced assignments");
                 let fence = AttemptFence::open();
                 let job_cancellation = JobCancellation::default();
+                let cleanup_cq = cq.clone();
+                let cleanup_job_id = job_id.clone();
+                let cleanup_attempt_id = attempt_id.clone();
+                job_cancellation.set_cleanup_observer(move |snapshot| {
+                    let _ = cleanup_cq.send(WorkerCompletion::AttemptCleanupBlocked {
+                        job_id: cleanup_job_id.clone(),
+                        attempt_id: cleanup_attempt_id.clone(),
+                        generation,
+                        snapshot,
+                    });
+                });
                 let progress_cq = cq.clone();
                 let progress_job_id = job_id.clone();
                 let progress_attempt_id = attempt_id.clone();
@@ -376,6 +387,19 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     let run =
                         job_cancellation.run_to_quiescence(executor.execute(assign, execution));
                     let component_result = component_cancellation.run(run).await;
+                    if job_cancellation
+                        .cleanup()
+                        .is_some_and(|cleanup| !cleanup.proves_quiescence())
+                    {
+                        // A failed endpoint/thread join has no valid terminal
+                        // completion. Keep the task, attempt fence and control
+                        // installed until component shutdown rather than
+                        // allowing the shell to look quiescent.
+                        let _ = component_cancellation
+                            .run(std::future::pending::<()>())
+                            .await;
+                        return;
+                    }
                     let mut current_controls = controls.lock().expect("job controls lock");
                     if current_controls.get(&job_id).is_some_and(|control| {
                         control.generation == generation && control.attempt_id == attempt_id
@@ -392,29 +416,31 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                                 Some(attempt_id.clone()),
                                 outcome,
                             );
-                            if fence.is_open() {
-                                let _ = cq.send(WorkerCompletion::JobFinished {
-                                    job_id,
-                                    attempt_id,
-                                    generation,
-                                    result,
-                                });
-                            }
-                        }
-                        Some(Some(_)) | Some(None) => {
-                            // A managed process records its real supervisor
-                            // outcome after all endpoints and descendants join.
-                            // Cancellation before process spawn has no
-                            // descendants and therefore quiesces cooperatively.
-                            let cleanup = job_cancellation.cleanup().unwrap_or(JobCleanup {
-                                cancellation: CancellationOutcome::Graceful,
-                                descendants: DescendantCleanupStatus::Clean,
-                            });
-                            let _ = cq.send(WorkerCompletion::JobQuiesced {
+                            let cleanup = job_cancellation
+                                .cleanup()
+                                .unwrap_or_else(|| JobCleanup::no_process(None));
+                            let _ = cq.send(WorkerCompletion::AttemptQuiesced {
                                 job_id,
                                 attempt_id,
                                 generation,
-                                cleanup,
+                                completion: AttemptCompletion {
+                                    result: Some(result),
+                                    cleanup,
+                                },
+                            });
+                        }
+                        Some(Some(_)) | Some(None) => {
+                            let cleanup = job_cancellation.cleanup().unwrap_or_else(|| {
+                                JobCleanup::no_process(Some(CancellationOutcome::Graceful))
+                            });
+                            let _ = cq.send(WorkerCompletion::AttemptQuiesced {
+                                job_id,
+                                attempt_id,
+                                generation,
+                                completion: AttemptCompletion {
+                                    result: None,
+                                    cleanup,
+                                },
                             });
                         }
                     }
@@ -573,13 +599,13 @@ fn cancel_job_control(
         // The executor may have naturally quiesced between the machine
         // transition and this shell request. Complete that race cooperatively
         // so a timeout cannot wait forever for a disappeared control.
-        let _ = cq.send(WorkerCompletion::JobQuiesced {
+        let _ = cq.send(WorkerCompletion::AttemptQuiesced {
             job_id,
             attempt_id,
             generation,
-            cleanup: JobCleanup {
-                cancellation: CancellationOutcome::Graceful,
-                descendants: DescendantCleanupStatus::Clean,
+            completion: AttemptCompletion {
+                result: None,
+                cleanup: JobCleanup::no_process(Some(CancellationOutcome::Graceful)),
             },
         });
     }

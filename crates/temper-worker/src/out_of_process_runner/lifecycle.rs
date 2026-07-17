@@ -137,11 +137,11 @@ impl LifecycleEndpoint {
         self.cancellation_acknowledged.load(Ordering::Acquire)
     }
 
-    pub(super) fn stop(mut self) {
-        self.stop_inner();
+    pub(super) fn stop(mut self) -> bool {
+        self.stop_inner()
     }
 
-    fn stop_inner(&mut self) {
+    fn stop_inner(&mut self) -> bool {
         // The producer closes its write half after AgentFinished. Give an
         // already-connected stream a short bounded opportunity to drain before
         // signalling shutdown so the terminal boundary is not raced by child
@@ -162,15 +162,15 @@ impl LifecycleEndpoint {
         }
         self.stopping.store(true, Ordering::Release);
         let _ = TcpStream::connect(&self.address);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.thread
+            .take()
+            .is_none_or(|thread| thread.join().is_ok())
     }
 }
 
 impl Drop for LifecycleEndpoint {
     fn drop(&mut self) {
-        self.stop_inner();
+        let _ = self.stop_inner();
     }
 }
 

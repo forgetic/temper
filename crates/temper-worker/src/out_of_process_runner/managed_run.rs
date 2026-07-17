@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::executor::{JobCancellationRequest, JobCleanup};
+use crate::executor::{JobCancellationRequest, ResourceJoinReport, ResourceJoinStatus};
 use crate::managed_effect::JoinedBlocking;
 use crate::trace::ActivityEndpoint;
 
@@ -20,6 +20,19 @@ struct SubmitHostTask {
 }
 
 const LIFECYCLE_CONNECT_GRACE: Duration = Duration::from_millis(100);
+
+struct AttemptCleanupObserver(JobCancellation);
+
+impl temper_process_containment::CleanupObserver for AttemptCleanupObserver {
+    fn observe(&self, snapshot: &temper_process_containment::CleanupSnapshot) {
+        if matches!(
+            snapshot,
+            temper_process_containment::CleanupSnapshot::Blocked { .. }
+        ) {
+            self.0.observe_cleanup(snapshot.clone());
+        }
+    }
+}
 
 /// Every blocking or threaded resource owned by one attempt. The explicit
 /// cancellation path drives this owner to `finish`; Drop is only the abrupt
@@ -44,12 +57,24 @@ impl RunResources {
             .expect("run resources always own a process until quiescence")
     }
 
-    fn finish(mut self, result: SupervisorResult, cancelled: bool) -> SupervisorResult {
-        if let Some(process) = self.process.as_mut() {
-            process.join_completed();
-        }
+    fn finish(
+        mut self,
+        mut result: SupervisorResult,
+        cancelled: bool,
+        lifecycle_cancellation: ResourceJoinStatus,
+    ) -> SupervisorResult {
+        result.quiesced.cleanup.resources.process_supervisor = if self
+            .process
+            .as_mut()
+            .is_some_and(ManagedAgentProcess::join_completed)
+        {
+            ResourceJoinStatus::Joined
+        } else {
+            ResourceJoinStatus::Failed("agent supervisor thread panicked".to_string())
+        };
         self.process.take();
-        self.stop_endpoints();
+        self.stop_endpoints(&mut result.quiesced.cleanup.resources);
+        result.quiesced.cleanup.resources.lifecycle_cancellation = lifecycle_cancellation;
         if cancelled {
             self.finish_cancelled_activity();
             // Clear again after joining accepted handlers. A submit gate that
@@ -79,18 +104,18 @@ impl RunResources {
         }
     }
 
-    fn stop_endpoints(&mut self) {
+    fn stop_endpoints(&mut self, report: &mut ResourceJoinReport) {
         if let Some(server) = self.submit.take() {
-            server.stop();
+            report.submit_endpoint = join_status(server.stop(), "submit endpoint");
         }
         if let Some(server) = self.forge.take() {
-            server.stop();
+            report.forge_endpoint = join_status(server.stop(), "Forge endpoint");
         }
         if let Some(endpoint) = self.activity.take() {
-            endpoint.stop();
+            report.activity_endpoint = join_status(endpoint.stop(), "activity endpoint");
         }
         if let Some(endpoint) = self.lifecycle.take() {
-            endpoint.stop();
+            report.lifecycle_endpoint = join_status(endpoint.stop(), "lifecycle endpoint");
         }
     }
 }
@@ -107,24 +132,43 @@ impl Drop for RunResources {
         self.fence.close();
         self.accepted_submit.clear();
         self.process.take();
-        self.stop_endpoints();
+        let mut ignored = ResourceJoinReport::no_process();
+        self.stop_endpoints(&mut ignored);
         self.finish_cancelled_activity();
         self.accepted_submit.clear();
         self.finished = true;
     }
 }
 
+fn join_status(joined: bool, resource: &str) -> ResourceJoinStatus {
+    if joined {
+        ResourceJoinStatus::Joined
+    } else {
+        ResourceJoinStatus::Failed(format!("{resource} thread panicked"))
+    }
+}
+
 fn emit_quiesced(job_id: &str, outcome: &JobQuiesced, cancelled: bool) {
-    if cancelled {
+    let cleanup = &outcome.cleanup;
+    let report = &cleanup.containment;
+    let recovered = !report.observed_survivors().is_empty()
+        || report.omitted_survivors() > 0
+        || !matches!(
+            report.disposition(),
+            temper_process_containment::CleanupDisposition::AlreadyEmpty
+        );
+    if cancelled || recovered || !cleanup.proves_quiescence() {
         tracing::warn!(
             target: "temper::worker",
             service = "worker",
             event = "worker.job.quiesced",
             job_id,
-            cancellation = ?outcome.cancellation,
-            descendant_cleanup = ?outcome.descendants,
-            containment = ?outcome.containment,
-            "agent run cancelled and all owned process resources joined"
+            cancellation = ?cleanup.cancellation,
+            backend = ?report.backend(),
+            root = report.root().value(),
+            disposition = ?report.disposition(),
+            resources = ?cleanup.resources,
+            "agent run cleanup recovered descendants or followed cancellation"
         );
     } else {
         tracing::debug!(
@@ -132,10 +176,12 @@ fn emit_quiesced(job_id: &str, outcome: &JobQuiesced, cancelled: bool) {
             service = "worker",
             event = "worker.job.quiesced",
             job_id,
-            cancellation = ?outcome.cancellation,
-            descendant_cleanup = ?outcome.descendants,
-            containment = ?outcome.containment,
-            "agent run completed and all owned process resources joined"
+            cancellation = ?cleanup.cancellation,
+            backend = ?report.backend(),
+            root = report.root().value(),
+            disposition = ?report.disposition(),
+            resources = ?cleanup.resources,
+            "agent run completed with recursive emptiness and resource joins proven"
         );
     }
 }
@@ -145,6 +191,7 @@ impl OutOfProcessRunner {
     pub(super) async fn run_agent(
         &self,
         job_id: &str,
+        attempt_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
         trace: Option<&TraceRun>,
@@ -180,7 +227,7 @@ impl OutOfProcessRunner {
 
         // Runtime limits are the compatibility signal for a known first-party
         // child. Third-party commands receive neither flag.
-        let lifecycle_endpoint = if self.runtime_limits.is_some() {
+        let mut lifecycle_endpoint = if self.runtime_limits.is_some() {
             Some(
                 lifecycle::LifecycleEndpoint::bind(progress).map_err(|error| {
                     AgentRunError::transient(format!("bind agent lifecycle endpoint: {error}"))
@@ -189,7 +236,7 @@ impl OutOfProcessRunner {
         } else {
             None
         };
-        let activity_endpoint = if self.trace_policy.is_some() {
+        let mut activity_endpoint = if self.trace_policy.is_some() {
             trace.and_then(|trace| match trace.bind_endpoint() {
                 Ok(endpoint) => Some(endpoint),
                 Err(error) => {
@@ -231,14 +278,90 @@ impl OutOfProcessRunner {
             forge_listener.as_ref().map(|(_, address)| address.as_str()),
         );
 
-        let submit_server = submit_listener.map(|(listener, address)| {
-            start_submit_server(listener, address, submit_requests, fence.clone())
-        });
-        let forge_server = forge_listener.map(|(listener, address)| {
-            start_forge_server(listener, address, forge_requests, fence.clone())
-        });
+        let containment_factory =
+            (self.containment_factory)(job_id, attempt_id).map_err(|error| {
+                AgentRunError::transient(format!("create agent containment factory: {error}"))
+            })?;
+        let containment_factory = containment_factory
+            .with_observer(Arc::new(AttemptCleanupObserver(cancellation.clone())));
+        let containment_spec = temper_process_containment::ContainmentSpec::new(
+            temper_process_containment::ContainmentIdentity::new(format!(
+                "job-{job_id}-attempt-{attempt_id}"
+            ))
+            .map_err(|error| {
+                AgentRunError::transient(format!("identify agent containment: {error}"))
+            })?,
+            ContainmentScope::Job,
+        )
+        .with_timing(
+            self.liveness_limits.forced_termination_grace,
+            Duration::from_millis(100),
+        );
+        // Preparation establishes the outer ownership boundary before any
+        // untrusted agent instruction can execute. The cgroup backend passes
+        // its inherited scope descriptor to first-party children so their tool
+        // containments are nested below this final safety net.
+        let prepared = containment_factory
+            .prepare(containment_spec)
+            .map_err(|error| {
+                AgentRunError::transient(format!("prepare agent containment: {error}"))
+            })?;
+        let mut submit_server = submit_listener
+            .map(|(listener, address)| {
+                start_submit_server(listener, address, submit_requests, fence.clone())
+            })
+            .transpose()
+            .map_err(|error| {
+                AgentRunError::transient(format!("start submit side-channel owner: {error}"))
+            })?;
+        let mut forge_server = forge_listener
+            .map(|(listener, address)| {
+                start_forge_server(listener, address, forge_requests, fence.clone())
+            })
+            .transpose()
+            .map_err(|error| {
+                AgentRunError::transient(format!("start Forge side-channel owner: {error}"))
+            })?;
         let identity = DiagnosticIdentity::from_context(job_id, context);
-        let process = ManagedAgentProcess::spawn(command, identity, self.diagnostic_dispatch())?;
+        let process = match ManagedAgentProcess::spawn(
+            prepared,
+            command,
+            identity,
+            self.diagnostic_dispatch(),
+        ) {
+            Ok(process) => process,
+            Err(mut failure) => {
+                if let Some(server) = submit_server.take() {
+                    failure.cleanup.resources.submit_endpoint =
+                        join_status(server.stop(), "submit endpoint");
+                }
+                if let Some(server) = forge_server.take() {
+                    failure.cleanup.resources.forge_endpoint =
+                        join_status(server.stop(), "Forge endpoint");
+                }
+                if let Some(endpoint) = activity_endpoint.take() {
+                    failure.cleanup.resources.activity_endpoint =
+                        join_status(endpoint.stop(), "activity endpoint");
+                }
+                if let Some(endpoint) = lifecycle_endpoint.take() {
+                    failure.cleanup.resources.lifecycle_endpoint =
+                        join_status(endpoint.stop(), "lifecycle endpoint");
+                }
+                if !failure.cleanup.proves_quiescence() {
+                    cancellation.observe_cleanup(
+                        temper_process_containment::CleanupSnapshot::Blocked {
+                            trigger: failure.cleanup.containment.trigger(),
+                            phase: temper_process_containment::CleanupPhase::Reap,
+                            message: "agent setup resource join failed".to_string(),
+                            survivors: failure.cleanup.containment.observed_survivors().to_vec(),
+                            omitted_survivors: failure.cleanup.containment.omitted_survivors(),
+                        },
+                    );
+                }
+                let _ = cancellation.record_cleanup(failure.cleanup);
+                return Err(failure.error);
+            }
+        };
         let _cancellation_owner = cancellation.register_async_owner();
         let mut resources = RunResources {
             job_id: job_id.to_string(),
@@ -372,8 +495,10 @@ impl OutOfProcessRunner {
                     // fence has closed. Project that as the cooperative outcome
                     // that actually won, rather than losing the cancellation
                     // completion entirely.
-                    if outcome.quiesced.cancellation.is_none() && cancellation.is_cancelled() {
-                        outcome.quiesced.cancellation = Some(CancellationOutcome::Graceful);
+                    if outcome.quiesced.cleanup.cancellation.is_none()
+                        && cancellation.is_cancelled()
+                    {
+                        outcome.quiesced.cleanup.cancellation = Some(CancellationOutcome::Graceful);
                     }
                     break outcome;
                 }
@@ -418,6 +543,7 @@ impl OutOfProcessRunner {
                                 request.request,
                                 submit_context.clone(),
                                 submit_cwd.clone(),
+                                cancellation.clone(),
                             ),
                             operation_timeout,
                         ),
@@ -447,14 +573,31 @@ impl OutOfProcessRunner {
             }
         };
 
-        let cancelled =
-            cancellation.is_cancelled() || supervisor_result.quiesced.cancellation.is_some();
-        let supervisor_result = resources.finish(supervisor_result, cancelled);
-        if let Some(outcome) = supervisor_result.quiesced.cancellation {
-            let _ = cancellation.record_cleanup(JobCleanup {
-                cancellation: outcome,
-                descendants: supervisor_result.quiesced.descendants.clone(),
+        let cancelled = cancellation.is_cancelled()
+            || supervisor_result.quiesced.cleanup.cancellation.is_some();
+        let lifecycle_cancellation = if let Some(owner) = _lifecycle_cancel.take() {
+            drop(owner);
+            ResourceJoinStatus::Joined
+        } else {
+            ResourceJoinStatus::NotApplicable
+        };
+        let supervisor_result =
+            resources.finish(supervisor_result, cancelled, lifecycle_cancellation);
+        let cleanup = supervisor_result.quiesced.cleanup.clone();
+        if !cleanup.proves_quiescence() {
+            cancellation.observe_cleanup(temper_process_containment::CleanupSnapshot::Blocked {
+                trigger: cleanup.containment.trigger(),
+                phase: temper_process_containment::CleanupPhase::Reap,
+                message: "one or more attempt resource threads could not be joined".to_string(),
+                survivors: cleanup.containment.observed_survivors().to_vec(),
+                omitted_survivors: cleanup.containment.omitted_survivors(),
             });
+        }
+        let _ = cancellation.record_cleanup(cleanup.clone());
+        if !cleanup.proves_quiescence() {
+            return Err(AgentRunError::transient(
+                "agent cleanup did not prove recursive emptiness and endpoint joins",
+            ));
         }
         let ChildOutcome {
             status_code,

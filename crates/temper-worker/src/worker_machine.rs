@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use temper_process_containment::CleanupSnapshot;
 use temper_protocol_worker::{Assign, ErrorCode, JobResult, WorkerProtocolMessage};
 use temper_worker_io::{EngineTime, Machine};
 
@@ -41,6 +42,15 @@ impl InFlightJobs<'_> {
     }
 }
 
+/// The only terminal attempt delivery accepted by the worker machine. A
+/// result is optional because watchdog cancellation produces its timeout result
+/// only after the same cleanup proof is accepted.
+#[derive(Debug)]
+pub struct AttemptCompletion {
+    pub result: Option<JobResult>,
+    pub cleanup: JobCleanup,
+}
+
 /// A finished I/O event delivered to the machine.
 #[derive(Debug)]
 pub enum WorkerCompletion {
@@ -59,17 +69,17 @@ pub enum WorkerCompletion {
         timer_generation: u64,
         kind: WatchdogTimerKind,
     },
-    JobFinished {
+    AttemptQuiesced {
         job_id: String,
         attempt_id: String,
         generation: u64,
-        result: JobResult,
+        completion: AttemptCompletion,
     },
-    JobQuiesced {
+    AttemptCleanupBlocked {
         job_id: String,
         attempt_id: String,
         generation: u64,
-        cleanup: JobCleanup,
+        snapshot: CleanupSnapshot,
     },
     ResultRecorded {
         job_id: String,
@@ -374,58 +384,98 @@ impl Machine for WorkerMachine {
             } => {
                 self.on_watchdog_timer(now, job_id, attempt_id, generation, timer_generation, kind)
             }
-            WorkerCompletion::JobFinished {
+            WorkerCompletion::AttemptCleanupBlocked {
                 job_id,
                 attempt_id,
                 generation,
-                result,
+                snapshot,
             } => {
                 let Some(state) = self.jobs.get_mut(&job_id) else {
                     return Vec::new();
                 };
-                if state.phase != JobPhase::Running
-                    || !state.accepts(&attempt_id, generation)
-                    || result.attempt_id.as_deref() != Some(attempt_id.as_str())
+                if !state.accepts(&attempt_id, generation)
+                    || matches!(state.phase, JobPhase::Quiesced | JobPhase::ResultRecorded)
+                    || !matches!(snapshot, CleanupSnapshot::Blocked { .. })
                 {
                     return Vec::new();
                 }
-                state.phase = JobPhase::Quiesced;
-                state.cancellation = CancellationStatus::Quiesced;
-                let mut requests = self.record_terminal(&job_id, &attempt_id, generation, result);
-                requests.push(self.heartbeat_request(now));
-                requests
+                state.phase = JobPhase::CleanupPending;
+                state.cancellation = CancellationStatus::CleanupBlocked;
+                // Intentionally do not install a pending result or emit any
+                // durability/capacity request. The attempt fence and permit
+                // remain occupied until a terminal cleanup proof arrives.
+                vec![
+                    WorkerRequest::Warn(format!(
+                        "worker: attempt cleanup blocked job_id={job_id} attempt_id={attempt_id} snapshot={snapshot:?}"
+                    )),
+                    self.heartbeat_request(now),
+                ]
             }
-            WorkerCompletion::JobQuiesced {
+            WorkerCompletion::AttemptQuiesced {
                 job_id,
                 attempt_id,
                 generation,
-                cleanup,
+                completion,
             } => {
                 let Some(state) = self.jobs.get_mut(&job_id) else {
                     return Vec::new();
                 };
-                if state.phase != JobPhase::CancelRequested
-                    || !state.accepts(&attempt_id, generation)
+                if !state.accepts(&attempt_id, generation)
+                    || !matches!(
+                        state.phase,
+                        JobPhase::Running | JobPhase::CancelRequested | JobPhase::CleanupPending
+                    )
                 {
                     return Vec::new();
                 }
+                if !completion.cleanup.proves_quiescence() {
+                    state.phase = JobPhase::CleanupPending;
+                    state.cancellation = CancellationStatus::CleanupBlocked;
+                    return vec![
+                        WorkerRequest::Warn(format!(
+                            "worker: rejected unproven attempt completion job_id={job_id} attempt_id={attempt_id} cleanup={:?}",
+                            completion.cleanup
+                        )),
+                        self.heartbeat_request(now),
+                    ];
+                }
+
+                let state_before_quiescence = state.clone();
+                let result = if state.timeout.is_some() {
+                    self.timeout_result(&job_id, &state_before_quiescence, now, &completion.cleanup)
+                } else {
+                    let Some(result) = completion.result else {
+                        return vec![WorkerRequest::Warn(format!(
+                            "worker: rejected result-free non-cancelled completion job_id={job_id} attempt_id={attempt_id}"
+                        ))];
+                    };
+                    if result.attempt_id.as_deref() != Some(attempt_id.as_str())
+                        || completion.cleanup.cancellation.is_some()
+                    {
+                        return Vec::new();
+                    }
+                    result
+                };
+
+                let state = self.jobs.get_mut(&job_id).expect("checked job exists");
                 state.phase = JobPhase::Quiesced;
                 state.cancellation = CancellationStatus::Quiesced;
-                let state = state.clone();
-                let outcome = cleanup.cancellation.as_str().to_string();
-                let descendant_cleanup = cleanup.descendants.as_str().to_string();
-                let forced = cleanup.cancellation.forced();
-                let result = self.timeout_result(&job_id, &state, now, &cleanup);
-                let mut requests = vec![WorkerRequest::Observe(
-                    crate::observability::WorkerEvent::CancellationCompleted {
-                        worker_id: self.params.worker_id.clone(),
-                        job_id: job_id.clone(),
-                        attempt_id: attempt_id.clone(),
-                        outcome,
-                        descendant_cleanup,
-                        forced,
-                    },
-                )];
+                let mut requests = Vec::new();
+                if let Some(cancellation) = completion.cleanup.cancellation {
+                    requests.push(WorkerRequest::Observe(
+                        crate::observability::WorkerEvent::CancellationCompleted {
+                            worker_id: self.params.worker_id.clone(),
+                            job_id: job_id.clone(),
+                            attempt_id: attempt_id.clone(),
+                            outcome: cancellation.as_str().to_string(),
+                            descendant_cleanup: format!(
+                                "{:?}",
+                                completion.cleanup.containment.disposition()
+                            ),
+                            forced: cancellation.forced(),
+                        },
+                    ));
+                }
                 requests.extend(self.record_terminal(&job_id, &attempt_id, generation, result));
                 requests.push(self.heartbeat_request(now));
                 requests

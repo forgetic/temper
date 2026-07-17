@@ -17,9 +17,7 @@ use crate::agent_runner::{
     AgentForgeContextHost, AgentRunRequest, AgentRunner, JobProgressReporter,
 };
 use crate::config::{WorkerAgentTraceConfig, WorkerLivenessLimits};
-use crate::executor::{
-    AttemptFence, CancellationOutcome, DescendantCleanupStatus, JobCancellation,
-};
+use crate::executor::{AttemptFence, CancellationOutcome, JobCancellation};
 use crate::trace::TraceCollector;
 
 fn executable_script(directory: &Path, name: &str, body: &str) -> PathBuf {
@@ -34,13 +32,28 @@ fn executable_script(directory: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 fn managed(script: &Path) -> ManagedAgentProcess {
-    let mut command = Command::new(script);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+    let command = Command::new(script);
+    let contained = crate::process_containment::containment_command(
+        &command,
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::piped(),
+    );
+    let factory = crate::process_containment::production_factory("supervisor-test", "attempt")
+        .expect("test containment factory");
+    let prepared = factory
+        .prepare(
+            temper_process_containment::ContainmentSpec::new(
+                temper_process_containment::ContainmentIdentity::new("managed-agent-test")
+                    .expect("identity"),
+                temper_process_containment::ContainmentScope::Job,
+            )
+            .with_timing(Duration::from_millis(50), Duration::from_millis(5)),
+        )
+        .expect("prepare managed child");
     ManagedAgentProcess::spawn(
-        command,
+        prepared,
+        contained,
         DiagnosticIdentity::from_context("supervisor-test", &test_context()),
         tracing::dispatcher::get_default(|dispatch| dispatch.clone()),
     )
@@ -61,7 +74,7 @@ fn cooperative_window_observes_a_graceful_child_exit_and_joins_stderr() {
     let result = wait_for_supervisor(&mut process);
 
     assert_eq!(
-        result.quiesced.cancellation,
+        result.quiesced.cleanup.cancellation,
         Some(CancellationOutcome::Graceful)
     );
     let outcome = result.outcome.unwrap();
@@ -91,14 +104,12 @@ fn unresponsive_child_escalates_to_hard_kill_without_a_lingering_waiter() {
     let result = wait_for_supervisor(&mut process);
 
     assert_eq!(
-        result.quiesced.cancellation,
+        result.quiesced.cleanup.cancellation,
         Some(CancellationOutcome::HardKill)
     );
-    assert!(
-        matches!(
-            result.quiesced.descendants,
-            DescendantCleanupStatus::HardKilled
-        ),
+    assert_eq!(
+        result.quiesced.cleanup.containment.disposition(),
+        temper_process_containment::CleanupDisposition::Killed,
         "{:?}",
         result.quiesced
     );
@@ -375,7 +386,7 @@ PY
     assert!(cancelled.exists(), "child did not receive lifecycle Cancel");
     assert_eq!(
         cancellation.cleanup().unwrap().cancellation,
-        CancellationOutcome::Graceful
+        Some(CancellationOutcome::Graceful)
     );
     assert!(started.elapsed() < Duration::from_millis(500));
     assert_cancelled_terminal(&trace_config);
@@ -427,11 +438,11 @@ fn hard_kill_writes_synthetic_cancelled_terminal_activity_and_reports_cleanup() 
     cancellation.hard_kill();
     let _ = poll_until_ready(future.as_mut());
     let cleanup = cancellation.cleanup().expect("supervisor cleanup report");
-    assert_eq!(cleanup.cancellation, CancellationOutcome::HardKill);
-    assert!(matches!(
-        cleanup.descendants,
-        DescendantCleanupStatus::HardKilled
-    ));
+    assert_eq!(cleanup.cancellation, Some(CancellationOutcome::HardKill));
+    assert_eq!(
+        cleanup.containment.disposition(),
+        temper_process_containment::CleanupDisposition::Killed
+    );
     assert_cancelled_terminal(&trace_config);
 }
 
@@ -494,7 +505,7 @@ while :; do sleep 1; done
     let _ = poll_until_ready(future.as_mut());
     assert_eq!(
         cancellation.cleanup().unwrap().cancellation,
-        CancellationOutcome::ForcedTermination
+        Some(CancellationOutcome::ForcedTermination)
     );
     assert_eq!(
         std::fs::read_to_string(late_copy).unwrap(),

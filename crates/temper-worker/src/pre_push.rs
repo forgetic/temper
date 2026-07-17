@@ -27,7 +27,14 @@ use process::run_command;
 pub async fn run_pre_push_checks(
     repo_root: impl AsRef<Path>,
 ) -> Result<PrePushReport, PrePushError> {
-    let repo_root = repo_root.as_ref().to_path_buf();
+    run_pre_push_checks_controlled(repo_root.as_ref().to_path_buf(), None).await
+}
+
+async fn run_pre_push_checks_controlled(
+    repo_root: PathBuf,
+    cancellation: Option<crate::executor::JobCancellation>,
+) -> Result<PrePushReport, PrePushError> {
+    let repo_root = repo_root.as_path();
     let config_path = repo_root.join(".temper").join("pre-push.toml");
     let owner_path = config_path.clone();
     let load_path = config_path.clone();
@@ -55,7 +62,7 @@ pub async fn run_pre_push_checks(
     };
 
     for command in plan.commands {
-        let outcome = run_command(command, cwd.clone()).await;
+        let outcome = run_command(command, cwd.clone(), cancellation.clone()).await;
         let succeeded = outcome.succeeded();
         report.commands.push(outcome);
         if !succeeded {
@@ -102,7 +109,31 @@ pub async fn submit_for_pr_pre_push_response(
     context: &WorkspaceContext,
     workspace_root: impl AsRef<Path>,
 ) -> SubmitForPrResponse {
-    let reports = match run_workspace_pre_push_checks(context, workspace_root.as_ref()).await {
+    submit_for_pr_pre_push_response_inner(request, context, workspace_root.as_ref(), None).await
+}
+
+pub(crate) async fn submit_for_pr_pre_push_response_controlled(
+    request: &SubmitForPrRequest,
+    context: &WorkspaceContext,
+    workspace_root: impl AsRef<Path>,
+    cancellation: crate::executor::JobCancellation,
+) -> SubmitForPrResponse {
+    submit_for_pr_pre_push_response_inner(
+        request,
+        context,
+        workspace_root.as_ref(),
+        Some(cancellation),
+    )
+    .await
+}
+
+async fn submit_for_pr_pre_push_response_inner(
+    request: &SubmitForPrRequest,
+    context: &WorkspaceContext,
+    workspace_root: &Path,
+    cancellation: Option<crate::executor::JobCancellation>,
+) -> SubmitForPrResponse {
+    let reports = match run_workspace_pre_push_checks(context, workspace_root, cancellation).await {
         Ok(reports) => reports,
         Err(error) => {
             return SubmitForPrResponse::rejected(format!(
@@ -141,10 +172,13 @@ struct RepoPrePushReport {
 async fn run_workspace_pre_push_checks(
     context: &WorkspaceContext,
     workspace_root: &Path,
+    cancellation: Option<crate::executor::JobCancellation>,
 ) -> Result<Vec<RepoPrePushReport>, PrePushError> {
     let mut reports = Vec::new();
     for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
-        let report = run_pre_push_checks(workspace_root.join(&repo.dir)).await?;
+        let report =
+            run_pre_push_checks_controlled(workspace_root.join(&repo.dir), cancellation.clone())
+                .await?;
         reports.push(RepoPrePushReport { report });
     }
     Ok(reports)
