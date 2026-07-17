@@ -74,6 +74,19 @@ pub(crate) struct ManagedCommandOutput {
     pub(crate) stderr_dropped_bytes: u64,
 }
 
+/// Runs one command through the same bounded, descendant-complete owner used by
+/// worker git and fingerprint effects. This is public only so compiled
+/// acceptance drivers can exercise that private production boundary directly.
+#[doc(hidden)]
+pub async fn run_managed_worker_command_for_acceptance(
+    command: Command,
+    cancellation: JobCancellation,
+) -> io::Result<ExitStatus> {
+    ManagedCommand::spawn(command, cancellation, ManagedCommandCapture::git())
+        .await
+        .map(|output| output.status)
+}
+
 struct OwnerState<T> {
     result: Option<io::Result<T>>,
     waker: Option<Waker>,
@@ -244,12 +257,14 @@ fn run_command(
         Stdio::piped(),
         Stdio::piped(),
     );
+    let containment_factory = job_cancellation.containment_factory();
     let prepared = crate::process_containment::prepare_with_observer(
         "worker-command",
         "local",
         ContainmentScope::WorkerCommand,
         owner.as_str(),
         Some(Arc::new(JobCleanupObserver(job_cancellation))),
+        containment_factory,
     )?;
     let process = prepared.spawn(contained_command)?;
 

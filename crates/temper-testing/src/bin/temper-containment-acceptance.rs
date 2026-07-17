@@ -20,11 +20,15 @@ mod linux {
     };
     use temper_worker::{
         AgentRunRequest, AgentRunner, AttemptFence, JobCancellation, JobProgressReporter,
-        OutOfProcessRunner, PrePushStatus, WorkerLivenessLimits, run_pre_push_checks,
+        OutOfProcessRunner, PrePushStatus, WorkerLivenessLimits,
+        run_managed_worker_command_for_acceptance, run_pre_push_checks_for_acceptance,
     };
     use tongs::tools::Tool as _;
 
     const MUTATION_SETTLE: Duration = Duration::from_millis(75);
+
+    #[path = "worker_lifecycle.rs"]
+    mod worker_lifecycle;
 
     #[derive(Clone, Copy, Debug)]
     enum BackendMode {
@@ -245,9 +249,6 @@ mod linux {
             }
             Some(reason) => println!("CGROUP SKIP: {reason}"),
         }
-
-        run_pre_push_case(fixture)?;
-        println!("PREPUSH auto PASS");
         Ok(())
     }
 
@@ -256,7 +257,20 @@ mod linux {
         managed_bash_deadline(mode, fixture)?;
         out_of_process_agent(mode, fixture, 0, true)?;
         out_of_process_agent(mode, fixture, 17, false)?;
-        out_of_process_cancellation(mode, fixture)
+        out_of_process_cancellation(mode, fixture)?;
+        worker_lifecycle::watchdog_capacity_one(mode, fixture)?;
+        println!("CASE {} capacity-one-watchdog PASS", mode.label());
+        worker_lifecycle::inspection_failure_retains_capacity(mode, fixture)?;
+        println!("CASE {} inspection-recovery PASS", mode.label());
+        worker_lifecycle::signal_shutdown(mode, fixture, false)?;
+        println!("CASE {} split-signal-shutdown PASS", mode.label());
+        worker_lifecycle::signal_shutdown(mode, fixture, true)?;
+        println!("CASE {} standalone-signal-shutdown PASS", mode.label());
+        worker_managed_command(mode, fixture)?;
+        println!("CASE {} worker-managed-command PASS", mode.label());
+        run_pre_push_case(mode, fixture)?;
+        println!("CASE {} pre-push PASS", mode.label());
+        Ok(())
     }
 
     fn managed_bash_success(mode: BackendMode, fixture: &Path) -> io::Result<()> {
@@ -381,8 +395,30 @@ mod linux {
         case.finish(3)
     }
 
-    fn run_pre_push_case(fixture: &Path) -> io::Result<()> {
-        let mut case = FixtureCase::start(fixture, "pre-push-auto")?;
+    fn worker_managed_command(mode: BackendMode, fixture: &Path) -> io::Result<()> {
+        let mut case = FixtureCase::start(fixture, &format!("worker-command-{}", mode.label()))?;
+        let mut command = Command::new("/bin/bash");
+        command.args(["-c", &case.detached_shell_command()]);
+        let cancellation = JobCancellation::with_containment_factory(factory(
+            mode,
+            "worker-command",
+            "acceptance",
+            None,
+        )?);
+        let status = temper_testing::block_on(run_managed_worker_command_for_acceptance(
+            command,
+            cancellation,
+        ))?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "worker-managed fixture command failed with {status}"
+            )));
+        }
+        case.finish(2)
+    }
+
+    fn run_pre_push_case(mode: BackendMode, fixture: &Path) -> io::Result<()> {
+        let mut case = FixtureCase::start(fixture, &format!("pre-push-{}", mode.label()))?;
         fs::create_dir(case.temporary.path().join(".temper"))?;
         let command = case.detached_shell_command();
         let config = format!(
@@ -391,8 +427,17 @@ mod linux {
             toml_string(&command),
         );
         fs::write(case.temporary.path().join(".temper/pre-push.toml"), config)?;
-        let report = temper_testing::block_on(run_pre_push_checks(case.temporary.path()))
-            .map_err(|error| io::Error::other(error.to_string()))?;
+        let cancellation = JobCancellation::with_containment_factory(factory(
+            mode,
+            "pre-push",
+            "acceptance",
+            None,
+        )?);
+        let report = temper_testing::block_on(run_pre_push_checks_for_acceptance(
+            case.temporary.path(),
+            cancellation,
+        ))
+        .map_err(|error| io::Error::other(error.to_string()))?;
         if report.status != PrePushStatus::Passed || report.commands.len() != 1 {
             return Err(io::Error::other(format!(
                 "unexpected pre-push report: {report:?}"
@@ -428,22 +473,31 @@ mod linux {
         attempt: &str,
         observer: Option<Arc<dyn CleanupObserver>>,
     ) -> io::Result<ContainmentFactory> {
+        let (policy, backend) = backend_factory(mode, job, attempt)?;
+        let factory = ContainmentFactory::new(policy, backend);
+        Ok(observer.map_or(factory.clone(), |observer| factory.with_observer(observer)))
+    }
+
+    fn backend_factory(
+        mode: BackendMode,
+        job: &str,
+        attempt: &str,
+    ) -> io::Result<(ContainmentBackendPolicy, Arc<dyn ContainmentBackendFactory>)> {
         let helper = std::env::current_exe()?;
         let supervisor: Arc<dyn ContainmentBackendFactory> = Arc::new(
             LinuxSupervisorBackendFactory::with_helper_executable(helper),
         );
-        let factory = match mode {
+        match mode {
             BackendMode::ForcedSupervisor => {
-                ContainmentFactory::new(ContainmentBackendPolicy::ForceLinuxSupervisor, supervisor)
+                Ok((ContainmentBackendPolicy::ForceLinuxSupervisor, supervisor))
             }
             BackendMode::AutoCgroup => {
                 let config = CgroupV2FactoryConfig::new(job, attempt)?;
                 let backend: Arc<dyn ContainmentBackendFactory> =
                     Arc::new(CgroupV2BackendFactory::system(config).with_fallback(supervisor));
-                ContainmentFactory::new(ContainmentBackendPolicy::Auto, backend)
+                Ok((ContainmentBackendPolicy::Auto, backend))
             }
-        };
-        Ok(observer.map_or(factory.clone(), |observer| factory.with_observer(observer)))
+        }
     }
 
     fn cgroup_capability() -> io::Result<Option<String>> {

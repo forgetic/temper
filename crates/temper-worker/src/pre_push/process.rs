@@ -224,6 +224,9 @@ fn run_command_sync(
         Stdio::piped(),
         Stdio::piped(),
     );
+    let containment_factory = cancellation
+        .as_ref()
+        .and_then(JobCancellation::containment_factory);
     let observer = cancellation.map(|cancellation| {
         Arc::new(JobCleanupObserver(cancellation))
             as Arc<dyn temper_process_containment::CleanupObserver>
@@ -234,6 +237,7 @@ fn run_command_sync(
         ContainmentScope::PrePush,
         &result.id,
         observer,
+        containment_factory,
     ) {
         Ok(prepared) => prepared,
         Err(error) => {

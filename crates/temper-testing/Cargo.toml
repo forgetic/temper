@@ -44,6 +44,7 @@ temper-forge-memory = { path = "../temper-forge-memory" }
 temper-engine = { path = "../temper-engine" }
 temper-daemon-transport = { path = "../temper-daemon-transport" }
 temper-worker = { path = "../temper-worker" }
+temper-worker-io = { path = "../temper-worker-io" }
 temper-process-containment = { path = "../temper-process-containment" }
 temper-agent-core = { path = "../temper-agent-core" }
 temper-agent = { path = "../temper-agent" }

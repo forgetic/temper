@@ -13,6 +13,7 @@
 
 mod agent_runner;
 mod banner;
+mod shutdown_signal;
 mod trace_config;
 mod transport;
 mod workstream_cleanup;
@@ -428,27 +429,24 @@ async fn run_async(
     // repos. This is the operator-facing "ready" the boot block closes on.
     emit_engine_status(banner::ready(&repo_paths));
 
-    let mut sigint = skein::signal::sigint()
-        .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
-    let mut sigterm = skein::signal::sigterm()
-        .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
-    std::future::poll_fn(|task_cx| {
-        if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
-            std::task::Poll::Ready(())
-        } else {
-            std::task::Poll::Pending
-        }
-    })
-    .await;
-    // Close dispatch and HTTP before worker proof; release assignments later.
+    shutdown_signal::wait().await?;
+    // Close dispatch and HTTP after the signal but before worker proof; release
+    // assignments only after the active-attempt registry has joined.
     daemon.begin_shutdown().await;
     server.begin_drain(std::time::Duration::from_secs(5));
-    worker.shutdown().await;
-    if let Some(trace_retention) = trace_retention {
-        trace_retention.stop().await;
-    }
-    daemon.release_assignments_for_shutdown().await;
-    server.finish_drain().await;
+    temper_worker::shutdown_worker_after_signal(
+        std::future::ready(()),
+        std::future::ready(()),
+        worker,
+        async {
+            if let Some(trace_retention) = trace_retention {
+                trace_retention.stop().await;
+            }
+            daemon.release_assignments_for_shutdown().await;
+            server.finish_drain().await;
+        },
+    )
+    .await;
     Ok(())
 }
 
