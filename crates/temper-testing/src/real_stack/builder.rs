@@ -321,6 +321,7 @@ impl HermeticRealStackBuilder {
             submit_for_pr: self.submit_for_pr,
             forge_context,
             hooks: hooks.clone(),
+            observed_agent_sessions: Default::default(),
         });
 
         let role_identities = role_identities(&self.worker_roles);
