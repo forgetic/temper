@@ -5,14 +5,15 @@ use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    CodingAgentError, ForgeContextHost, ProviderConfig, WorkspaceContext,
+    AgentAbortAuthority, CodingAgentError, ForgeContextHost, ProviderConfig, WorkspaceContext,
     run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
 use temper_engine::Daemon;
 use temper_protocol_agent::PullRequestFreshness;
 use temper_worker::{
-    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput, AgentRunner,
-    PrFreshnessFailure, PrFreshnessGuard,
+    AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput,
+    AgentRunRequest, AgentRunner, AttemptFence, JobCancellation, PrFreshnessFailure,
+    PrFreshnessGuard,
 };
 
 use super::pause::{PauseHooks, PausePoint};
@@ -38,6 +39,31 @@ impl AgentRunner for NativeJigAgentRunner {
         job_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
+    ) -> Result<AgentRunOutput, AgentRunError> {
+        self.run_attempt(job_id, context, cwd, None).await
+    }
+
+    async fn run_request(
+        &self,
+        request: AgentRunRequest<'_>,
+    ) -> Result<AgentRunOutput, AgentRunError> {
+        self.run_attempt(
+            request.job_id,
+            request.context,
+            request.cwd,
+            Some((request.fence, request.cancellation)),
+        )
+        .await
+    }
+}
+
+impl NativeJigAgentRunner {
+    async fn run_attempt(
+        &self,
+        job_id: &str,
+        context: &WorkspaceContext,
+        cwd: &Path,
+        attempt_control: Option<(AttemptFence, JobCancellation)>,
     ) -> Result<AgentRunOutput, AgentRunError> {
         // CodingExecutor invokes the runner only after checkout recovery and
         // durable agent-session attachment. This is therefore the stable seam
@@ -81,7 +107,15 @@ impl AgentRunner for NativeJigAgentRunner {
             temper_protocol_agent::AgentRuntimeLimitsV1::default(),
         )
         .await
-        .map_err(agent_error)?;
+        .map_err(|error| {
+            let worker_cancellation_requested =
+                attempt_control
+                    .as_ref()
+                    .is_some_and(|(fence, cancellation)| {
+                        cancellation.is_cancelled() || !fence.is_open()
+                    });
+            agent_error(error, worker_cancellation_requested)
+        })?;
         Ok(AgentRunOutput {
             result,
             accepted_submit: accepted_submit.latest(),
@@ -125,18 +159,83 @@ impl PrFreshnessGuard for DaemonPrFreshnessGuard {
     }
 }
 
-fn agent_error(error: CodingAgentError) -> AgentRunError {
-    match error {
+fn agent_error(error: CodingAgentError, worker_cancellation_requested: bool) -> AgentRunError {
+    let class = match &error {
+        CodingAgentError::Aborted { authority } => {
+            if *authority == AgentAbortAuthority::WorkerRequested || worker_cancellation_requested {
+                temper_protocol_worker::FailureClass::Canceled
+            } else {
+                temper_protocol_worker::FailureClass::Transient
+            }
+        }
         CodingAgentError::NoProduct
         | CodingAgentError::UndeclaredVerdict { .. }
-        | CodingAgentError::InvalidVerdictResult(_) => AgentRunError::permanent(error.to_string()),
+        | CodingAgentError::InvalidVerdictResult(_) => {
+            temper_protocol_worker::FailureClass::Permanent
+        }
         CodingAgentError::Provider(_)
         | CodingAgentError::Run(_)
         | CodingAgentError::AgentStopped(_)
         | CodingAgentError::BudgetExhausted { .. }
-        | CodingAgentError::Aborted { .. }
         | CodingAgentError::ModelUnavailable { .. }
         | CodingAgentError::CodebaseMemory(_)
-        | CodingAgentError::Parse { .. } => AgentRunError::transient(error.to_string()),
+        | CodingAgentError::Parse { .. } => temper_protocol_worker::FailureClass::Transient,
+    };
+    AgentRunError::new(class, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_protocol_worker::FailureClass;
+
+    #[test]
+    fn native_runner_classifies_typed_stop_errors() {
+        let budget = agent_error(
+            CodingAgentError::BudgetExhausted { max_iterations: 7 },
+            false,
+        );
+        assert_eq!(budget.class, FailureClass::Transient);
+        assert!(budget.message.contains("budget_exhausted"));
+
+        let requested = agent_error(
+            CodingAgentError::Aborted {
+                authority: AgentAbortAuthority::WorkerRequested,
+            },
+            false,
+        );
+        assert_eq!(requested.class, FailureClass::Canceled);
+
+        let unrequested = agent_error(
+            CodingAgentError::Aborted {
+                authority: AgentAbortAuthority::Unrequested,
+            },
+            false,
+        );
+        assert_eq!(unrequested.class, FailureClass::Transient);
+
+        let fenced = agent_error(
+            CodingAgentError::Aborted {
+                authority: AgentAbortAuthority::Unrequested,
+            },
+            true,
+        );
+        assert_eq!(fenced.class, FailureClass::Canceled);
+    }
+
+    #[test]
+    fn native_runner_retains_parse_and_permanent_classifications() {
+        let parse = agent_error(
+            CodingAgentError::Parse {
+                snippet: "not json".to_string(),
+                error: "expected value".to_string(),
+            },
+            false,
+        );
+        assert_eq!(parse.class, FailureClass::Transient);
+        assert_eq!(
+            agent_error(CodingAgentError::NoProduct, false).class,
+            FailureClass::Permanent
+        );
     }
 }
