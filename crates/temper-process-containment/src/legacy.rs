@@ -16,7 +16,9 @@ pub enum ContainmentKind {
     /// Non-descendant-complete compatibility behavior.
     UnixProcessGroup,
     WindowsJobObject,
-    DirectChildFallback,
+    /// No descendant-complete primitive exists for this target. Legacy attach
+    /// returns an explicit error rather than claiming direct-child containment.
+    UnsupportedPlatform,
 }
 
 /// Configures the legacy process-group migration adapter before spawn.
@@ -107,9 +109,10 @@ impl ProcessContainment {
         #[cfg(not(any(unix, windows)))]
         {
             let _ = child;
-            Ok(Self {
-                kind: ContainmentKind::DirectChildFallback,
-            })
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "process containment is unsupported on this platform",
+            ))
         }
     }
 

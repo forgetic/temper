@@ -75,6 +75,9 @@ pub use run::{
     WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
     start_worker_with_transport_and_hook,
 };
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use temper_process_containment::dispatch_linux_supervisor_helper;
 pub use temper_protocol_agent::{
     AGENT_LIFECYCLE_ADDRESS_FLAG, AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleAgentStatusV1,
     AgentLifecycleCancellationAckV1, AgentLifecycleCancellationAcknowledgementV1,

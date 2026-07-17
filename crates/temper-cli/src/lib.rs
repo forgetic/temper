@@ -22,6 +22,9 @@ use temper_config::EX_USAGE;
 
 // Re-exported so `src/bin/*` and tests construct the CLI's injected environment
 // snapshot with `temper_cli::CliEnv`.
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use temper_agent_session::dispatch_linux_supervisor_helper;
 pub use temper_cli_common::CliEnv;
 
 // Re-exported from `temper-cli-daemon` so existing standalone helpers and

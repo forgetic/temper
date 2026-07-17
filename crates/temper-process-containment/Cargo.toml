@@ -10,7 +10,20 @@ description = "Prepared descendant-complete process-containment contract for Tem
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_Diagnostics_ToolHelp"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[test]]
+name = "linux_supervisor"
+path = "tests/linux_supervisor.rs"
+harness = false
+
+[[test]]
+name = "windows_job"
+path = "tests/windows_job.rs"
+harness = false
 
 # This leaf is the sole OS FFI boundary and therefore cannot inherit the
 # workspace-wide `unsafe_code = "forbid"`. Keep unsafe operations explicit.
