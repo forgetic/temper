@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
@@ -9,7 +9,7 @@ use temper_agent::{
     run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
 use temper_engine::Daemon;
-use temper_protocol_agent::PullRequestFreshness;
+use temper_protocol_agent::{AgentSessionState, PullRequestFreshness};
 use temper_worker::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput,
     AgentRunRequest, AgentRunner, AttemptFence, JobCancellation, PrFreshnessFailure,
@@ -31,6 +31,7 @@ pub struct NativeJigAgentRunner {
     pub(crate) submit_for_pr: temper_agent::SubmitForPrHost,
     pub(crate) forge_context: AgentForgeContextHost,
     pub(crate) hooks: PauseHooks,
+    pub(crate) observed_agent_sessions: Arc<Mutex<Vec<Option<AgentSessionState>>>>,
 }
 
 impl AgentRunner for NativeJigAgentRunner {
@@ -65,6 +66,10 @@ impl NativeJigAgentRunner {
         cwd: &Path,
         attempt_control: Option<(AttemptFence, JobCancellation)>,
     ) -> Result<AgentRunOutput, AgentRunError> {
+        self.observed_agent_sessions
+            .lock()
+            .expect("observed agent sessions lock")
+            .push(context.agent_session.clone());
         // CodingExecutor invokes the runner only after checkout recovery and
         // durable agent-session attachment. This is therefore the stable seam
         // for restart tests that must mutate or inspect a prepared workspace
@@ -120,6 +125,13 @@ impl NativeJigAgentRunner {
             result,
             accepted_submit: accepted_submit.latest(),
         })
+    }
+
+    pub(crate) fn observed_agent_sessions(&self) -> Vec<Option<AgentSessionState>> {
+        self.observed_agent_sessions
+            .lock()
+            .expect("observed agent sessions lock")
+            .clone()
     }
 }
 
