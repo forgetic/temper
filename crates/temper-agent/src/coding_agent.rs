@@ -71,6 +71,7 @@ pub use run::{
     run_coding_agent_native_with_totals, run_coding_agent_native_with_totals_and_submit_for_pr,
     run_coding_agent_native_with_totals_tool_config_and_hosts,
     run_coding_agent_native_with_totals_tool_config_and_submit_for_pr,
+    run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
 };
 pub use submit::{
     SubmitForPrCallback, SubmitForPrFuture, SubmitForPrHost, bind_submit_for_pr_host,

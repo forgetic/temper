@@ -22,6 +22,7 @@ use tongs::model::{ContentBlock, TextContent};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
 
 use crate::mcp::{McpError, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig};
+use temper_agent_core::AgentContainmentContext;
 
 mod background;
 mod indexing;
@@ -221,6 +222,35 @@ pub async fn build_codebase_memory_toolset_with_timeout(
     cwd: &Path,
     generic_tool_timeout: Duration,
 ) -> std::result::Result<CodebaseMemoryToolset, CodebaseMemoryToolsetError> {
+    let containment = default_containment_context();
+    build_codebase_memory_toolset_with_timeout_and_containment(
+        config,
+        role,
+        context,
+        cwd,
+        generic_tool_timeout,
+        &containment,
+    )
+    .await
+}
+
+fn default_containment_context() -> AgentContainmentContext {
+    #[cfg(test)]
+    {
+        crate::containment_tests::containment_context()
+    }
+    #[cfg(not(test))]
+    AgentContainmentContext::production(None)
+}
+
+pub(crate) async fn build_codebase_memory_toolset_with_timeout_and_containment(
+    config: Option<&AgentToolConfig>,
+    role: &str,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    generic_tool_timeout: Duration,
+    containment: &AgentContainmentContext,
+) -> std::result::Result<CodebaseMemoryToolset, CodebaseMemoryToolsetError> {
     let Some(codebase_memory) = config.and_then(|config| config.codebase_memory.as_ref()) else {
         return Ok(CodebaseMemoryToolset::disabled(
             CodebaseMemoryToolsetStatus::NotConfigured,
@@ -248,7 +278,15 @@ pub async fn build_codebase_memory_toolset_with_timeout(
         }
     };
 
-    match start_toolset(codebase_memory, role, scope, generic_tool_timeout).await {
+    match start_toolset(
+        codebase_memory,
+        role,
+        scope,
+        generic_tool_timeout,
+        containment,
+    )
+    .await
+    {
         Ok(toolset) => Ok(toolset),
         Err(error) if codebase_memory.mode == CodebaseMemoryMode::Auto => Ok(
             CodebaseMemoryToolset::disabled(CodebaseMemoryToolsetStatus::AutoUnavailable {
@@ -264,6 +302,7 @@ async fn start_toolset(
     role: &str,
     mut scope: WorkspaceScope,
     generic_tool_timeout: Duration,
+    containment: &AgentContainmentContext,
 ) -> std::result::Result<CodebaseMemoryToolset, McpError> {
     let startup_timeout = Duration::from_secs(config.startup_timeout_secs);
     let index_timeout = Duration::from_secs(config.index_timeout_secs);
@@ -279,7 +318,8 @@ async fn start_toolset(
         model_visible: false,
         repo_root: &scope.primary_root().display().to_string(),
     });
-    let client = StdioMcpClient::connect(mcp_config.clone()).await?;
+    let client =
+        StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
     emit_mcp_server_started(McpServerStarted {
         tool_name: "codebase_memory",
         command: &config.command,
@@ -303,8 +343,17 @@ async fn start_toolset(
         scope.apply_discovered_projects(Vec::new(), false);
     }
 
-    setup_notes
-        .extend(prepare_indexes(config, &client, &mcp_config, &advertised, &mut scope).await?);
+    setup_notes.extend(
+        prepare_indexes(
+            config,
+            &client,
+            &mcp_config,
+            &advertised,
+            &mut scope,
+            containment,
+        )
+        .await?,
+    );
     scope.rebuild_alias_map();
     let prompt_status = scope.prompt_status(config.index, &setup_notes);
     let scope = Arc::new(scope);

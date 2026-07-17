@@ -31,7 +31,7 @@ const TOOL_EXECUTOR: &str = include_str!("../../temper-agent-core/src/shell/exec
 const TOOL_BATCHING: &str = include_str!("../../temper-agent-core/src/machine/tests/batching.rs");
 const AGENT_LIFECYCLE: &str =
     include_str!("../../temper-agent-core/src/machine/tests/loop_lifecycle.rs");
-const MANAGED_BASH: &str = include_str!("../../temper-agent-core/src/managed_bash.rs");
+const MANAGED_BASH: &str = include_str!("../../temper-agent-core/src/managed_bash/tests.rs");
 const SUBAGENT: &str = include_str!("../../temper-agent-core/src/subagent_tool.rs");
 const MCP: &str = include_str!("../../temper-agent/src/mcp/tests.rs");
 const ENGINE_DELIVERY: &str = include_str!("../../temper-engine/tests/apply/result_delivery.rs");
@@ -109,7 +109,7 @@ const MATRIX: &[Criterion] = &[
             Evidence {
                 crate_path: "temper-agent-core::managed_bash",
                 source: MANAGED_BASH,
-                test: "dropping_a_hung_command_reaps_its_grandchild_and_joins",
+                test: "direct_task_drop_is_a_synchronous_cleanup_boundary",
             },
             Evidence {
                 crate_path: "temper-agent-core::machine::batching",

@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    AgentAbortAuthority, AgentActivityConfig, CodingAgentError, ForgeContextHost, ProviderConfig,
-    RunTotals, SubmitForPrHost, run_coding_agent_native_with_totals_tool_config_and_hosts,
+    AgentAbortAuthority, AgentActivityConfig, AgentContainmentContext, CodingAgentError,
+    ForgeContextHost, ProviderConfig, RunTotals, SubmitForPrHost,
+    run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
 };
 use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
@@ -48,6 +49,7 @@ pub struct InProcessAgentRunner {
     trace_collector: TraceCollector,
     submit_for_pr: SubmitForPrHost,
     forge_context: Option<AgentForgeContextHost>,
+    containment: AgentContainmentContext,
 }
 
 impl InProcessAgentRunner {
@@ -74,7 +76,16 @@ impl InProcessAgentRunner {
                 })
             }),
             forge_context: None,
+            containment: AgentContainmentContext::production(None),
         }
+    }
+
+    /// Replaces the standalone process-containment factory. This is instance
+    /// scoped so tests can force a backend without ambient environment state.
+    #[must_use]
+    pub fn with_containment_context(mut self, containment: AgentContainmentContext) -> Self {
+        self.containment = containment;
+        self
     }
 
     /// Sets the non-secret agent tool config stored with this in-process
@@ -253,6 +264,7 @@ impl InProcessAgentRunner {
             std::sync::Arc::new(move |operation| host(job_id.clone(), operation))
                 as ForgeContextHost
         });
+        let containment = self.containment.clone();
         let lifecycle_reporter: temper_agent::AgentLifecycleReporter =
             std::sync::Arc::new(move |scope, event| {
                 let _ = progress.report(scope, event);
@@ -261,7 +273,7 @@ impl InProcessAgentRunner {
         let cwd = cwd.to_path_buf();
 
         Box::pin(async move {
-            let outcome = run_coding_agent_native_with_totals_tool_config_and_hosts(
+            let outcome = run_coding_agent_native_with_totals_tool_config_hosts_and_containment(
                 handle,
                 &provider,
                 &context,
@@ -280,6 +292,7 @@ impl InProcessAgentRunner {
                     cancellation: Default::default(),
                 },
                 runtime_limits,
+                containment,
             )
             .await;
             // The typed coding-agent error remains intact through both outer

@@ -1,9 +1,11 @@
 use crate::codebase_memory::{
-    CodebaseMemoryToolMetadata, CodebaseMemoryToolset, build_codebase_memory_toolset_with_timeout,
+    CodebaseMemoryToolMetadata, CodebaseMemoryToolset,
+    build_codebase_memory_toolset_with_timeout_and_containment,
 };
 use std::path::Path;
 use std::time::Duration;
 
+use temper_agent_core::AgentContainmentContext;
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
 use tongs::tools::ToolRegistry;
 
@@ -58,7 +60,15 @@ pub(super) async fn prepare_codebase_memory_tools(
     context: &WorkspaceContext,
     cwd: &Path,
 ) -> Result<PreparedCodebaseMemoryTools, CodingAgentError> {
-    prepare_codebase_memory_tools_with_timeout(tool_config, role, context, cwd, Duration::MAX).await
+    prepare_codebase_memory_tools_with_timeout(
+        tool_config,
+        role,
+        context,
+        cwd,
+        Duration::MAX,
+        &crate::containment_tests::containment_context(),
+    )
+    .await
 }
 
 pub(super) async fn prepare_codebase_memory_tools_with_timeout(
@@ -67,13 +77,15 @@ pub(super) async fn prepare_codebase_memory_tools_with_timeout(
     context: &WorkspaceContext,
     cwd: &Path,
     generic_tool_timeout: Duration,
+    containment: &AgentContainmentContext,
 ) -> Result<PreparedCodebaseMemoryTools, CodingAgentError> {
-    let toolset = build_codebase_memory_toolset_with_timeout(
+    let toolset = build_codebase_memory_toolset_with_timeout_and_containment(
         tool_config,
         role,
         context,
         cwd,
         generic_tool_timeout,
+        containment,
     )
     .await
     .map_err(|error| CodingAgentError::CodebaseMemory(error.to_string()))?;

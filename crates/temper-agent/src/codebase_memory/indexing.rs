@@ -8,6 +8,7 @@ use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMem
 use crate::mcp::{
     McpError, McpToolCallResult, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig,
 };
+use temper_agent_core::AgentContainmentContext;
 
 use super::advertised_tool;
 use super::background::BackgroundIndex;
@@ -31,6 +32,7 @@ pub(super) async fn prepare_indexes(
     mcp_config: &StdioMcpServerConfig,
     advertised: &[McpToolDescriptor],
     scope: &mut WorkspaceScope,
+    containment: &AgentContainmentContext,
 ) -> std::result::Result<Vec<String>, McpError> {
     let mut notes = Vec::new();
     if config.index == CodebaseMemoryIndex::Off {
@@ -61,7 +63,12 @@ pub(super) async fn prepare_indexes(
     for index in repo_indices {
         let path = scope.projects[index].root.clone();
         if config.index == CodebaseMemoryIndex::Background {
-            match start_background_index_repository(mcp_config, path.clone(), timeout) {
+            match start_background_index_repository(
+                mcp_config,
+                path.clone(),
+                timeout,
+                containment.clone(),
+            ) {
                 Ok(background) => {
                     scope.projects[index].index_state = ProjectIndexState::BackgroundInProgress;
                     scope.projects[index].background_index = Some(background);
@@ -82,7 +89,7 @@ pub(super) async fn prepare_indexes(
             continue;
         }
 
-        let result = call_index_repository(mcp_config, &path, timeout).await;
+        let result = call_index_repository(mcp_config, &path, timeout, containment).await;
         match result {
             Ok(result) if result.is_error => {
                 let message = format!(
@@ -170,6 +177,7 @@ fn start_background_index_repository(
     mcp_config: &StdioMcpServerConfig,
     path: PathBuf,
     timeout: Duration,
+    containment: AgentContainmentContext,
 ) -> std::result::Result<BackgroundIndex, String> {
     let mcp_config = mcp_config.clone();
     let tracker = BackgroundIndex::new();
@@ -177,7 +185,8 @@ fn start_background_index_repository(
     thread::Builder::new()
         .name("codebase-memory-index".to_string())
         .spawn(move || {
-            let completion = run_background_index_repository(mcp_config, path, timeout);
+            let completion =
+                run_background_index_repository(mcp_config, path, timeout, containment);
             match completion {
                 Ok(actual_project) => tracker_for_thread.complete_success(actual_project),
                 Err(message) => {
@@ -197,9 +206,11 @@ fn run_background_index_repository(
     mcp_config: StdioMcpServerConfig,
     path: PathBuf,
     timeout: Duration,
+    containment: AgentContainmentContext,
 ) -> std::result::Result<Option<String>, String> {
     let repo_path = path.display().to_string();
-    let client = StdioMcpClient::connect_blocking(mcp_config).map_err(|error| error.to_string())?;
+    let client = StdioMcpClient::connect_blocking_with_containment(mcp_config, containment)
+        .map_err(|error| error.to_string())?;
     let result = client
         .call_tool_blocking(
             "index_repository",
@@ -255,11 +266,13 @@ async fn call_index_repository(
     mcp_config: &StdioMcpServerConfig,
     path: &Path,
     timeout: Duration,
+    containment: &AgentContainmentContext,
 ) -> std::result::Result<McpToolCallResult, McpError> {
     // Use a short-lived MCP process for indexing so a blocking/timeout indexing
     // call cannot kill the long-lived client whose read-only tools are exposed
     // to the model.
-    let index_client = StdioMcpClient::connect(mcp_config.clone()).await?;
+    let index_client =
+        StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
     index_client
         .call_tool(
             "index_repository",

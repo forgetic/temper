@@ -10,8 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use temper_agent::{
-    AgentActivityConfig, CodingAgentError,
-    run_coding_agent_native_with_totals_tool_config_and_hosts,
+    AgentActivityConfig, AgentContainmentContext, CodingAgentError, ContainmentScope,
+    run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
 };
 use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 
@@ -64,22 +64,28 @@ fn drive_coding_loop(
         lifecycle_reporter: None,
         cancellation: Default::default(),
     };
+    // The out-of-process supervisor passes its delegated job cgroup as an
+    // inherited descriptor. The production factory discovers that descriptor;
+    // the typed outer scope records that every nested owner is below it.
+    let containment = AgentContainmentContext::production(Some(ContainmentScope::Job));
     temper_agent_io::block_on_with(move |_cx, handle| async move {
-        let (result, _totals) = run_coding_agent_native_with_totals_tool_config_and_hosts(
-            handle,
-            &provider,
-            &run_context,
-            &run_cwd,
-            max_iterations,
-            config_dir.as_deref(),
-            enable_subagents,
-            tool_config.as_ref(),
-            submit_for_pr,
-            forge_context,
-            activity_config,
-            runtime_limits,
-        )
-        .await?;
+        let (result, _totals) =
+            run_coding_agent_native_with_totals_tool_config_hosts_and_containment(
+                handle,
+                &provider,
+                &run_context,
+                &run_cwd,
+                max_iterations,
+                config_dir.as_deref(),
+                enable_subagents,
+                tool_config.as_ref(),
+                submit_for_pr,
+                forge_context,
+                activity_config,
+                runtime_limits,
+                containment,
+            )
+            .await?;
         Ok(result)
     })
 }

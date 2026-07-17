@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use temper_agent_core::{AgentContainmentContext, CleanupTrigger};
+
 use super::connection::{Connection, ProcessControl};
 use super::protocol::{
     McpToolCallResult, McpToolDescriptor, parse_call_tool_result, parse_tool_list,
@@ -125,7 +127,7 @@ pub struct McpCancellationHandle {
 
 impl McpCancellationHandle {
     pub fn cancel_and_join(&self) {
-        self.control.cancel_and_join();
+        self.control.cancel_and_join(CleanupTrigger::Cancellation);
     }
 }
 
@@ -149,7 +151,16 @@ impl StdioMcpClient {
     /// Spawns the configured command, sends MCP `initialize`, and sends the
     /// standard `notifications/initialized` notification.
     pub async fn connect(config: StdioMcpServerConfig) -> Result<Self, McpError> {
-        let client = Self::spawn(&config)?;
+        Self::connect_with_containment(config, default_containment_context()).await
+    }
+
+    /// Connects with the concrete containment context owned by the surrounding
+    /// agent session.
+    pub async fn connect_with_containment(
+        config: StdioMcpServerConfig,
+        containment: AgentContainmentContext,
+    ) -> Result<Self, McpError> {
+        let client = Self::spawn(&config, &containment)?;
         client.initialize(config.startup_timeout).await?;
         client
             .notify_initialized(config.startup_timeout)
@@ -166,7 +177,14 @@ impl StdioMcpClient {
 
     /// Spawns the configured command and initializes it from synchronous code.
     pub fn connect_blocking(config: StdioMcpServerConfig) -> Result<Self, McpError> {
-        let client = Self::spawn(&config)?;
+        Self::connect_blocking_with_containment(config, default_containment_context())
+    }
+
+    pub fn connect_blocking_with_containment(
+        config: StdioMcpServerConfig,
+        containment: AgentContainmentContext,
+    ) -> Result<Self, McpError> {
+        let client = Self::spawn(&config, &containment)?;
         client.initialize_blocking(config.startup_timeout)?;
         client
             .notify_initialized_blocking(config.startup_timeout)
@@ -180,8 +198,11 @@ impl StdioMcpClient {
         Ok(client)
     }
 
-    fn spawn(config: &StdioMcpServerConfig) -> Result<Self, McpError> {
-        let connection = Connection::spawn(config)?;
+    fn spawn(
+        config: &StdioMcpServerConfig,
+        containment: &AgentContainmentContext,
+    ) -> Result<Self, McpError> {
+        let connection = Connection::spawn(config, containment)?;
         let control = connection.control();
         Ok(Self {
             inner: Arc::new(ClientInner {
@@ -330,6 +351,15 @@ impl StdioMcpClient {
     }
 }
 
+fn default_containment_context() -> AgentContainmentContext {
+    #[cfg(test)]
+    {
+        crate::containment_tests::containment_context()
+    }
+    #[cfg(not(test))]
+    AgentContainmentContext::production(None)
+}
+
 fn normalize_arguments(arguments: Value) -> Value {
     if arguments.is_null() {
         json!({})
@@ -366,7 +396,7 @@ struct ClientInner {
 
 impl Drop for ClientInner {
     fn drop(&mut self) {
-        self.control.cancel_and_join();
+        self.control.cancel_and_join(CleanupTrigger::OwnerDrop);
     }
 }
 
