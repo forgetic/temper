@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1 as Event,
-    AgentAssignmentIdentityV1, AgentRunEventV1, AgentScopeKindV1, AgentScopeV1, CaptureModeV1,
-    CapturedContentV1, DroppedEventKindV1, InlineContentV1, ModelCallFinishedV1,
-    ModelCallStartedV1, ModelCallStatusV1, PromptCaptureDispositionV1, PromptPreparedV1,
-    PromptSnapshotV1, PromptToolDefinitionV1, RunFinishedV1, RunStartedV1, RunStatusV1,
-    ScopeFinishedV1, ScopeStartedV1, ScopeStatusV1, StopReasonV1, ToolFinishedV1, ToolStartedV1,
-    ToolStatusV1, TraceGapV1, TurnFinishedV1, TurnStartedV1, UsageV1, W3cTraceContext,
+    AgentAssignmentIdentityV1, AgentRunEventV1, AgentScopeKindV1, AgentScopeV1,
+    AgentTerminalReasonV1, CaptureModeV1, CapturedContentV1, DroppedEventKindV1, InlineContentV1,
+    ModelCallFinishedV1, ModelCallStartedV1, ModelCallStatusV1, PromptCaptureDispositionV1,
+    PromptPreparedV1, PromptSnapshotV1, PromptToolDefinitionV1, RunFinishedV1, RunStartedV1,
+    RunStatusV1, ScopeFinishedV1, ScopeStartedV1, ScopeStatusV1, StopReasonV1, ToolFinishedV1,
+    ToolStartedV1, ToolStatusV1, TraceGapV1, TurnFinishedV1, TurnStartedV1, UsageV1,
+    W3cTraceContext,
 };
 
 use super::*;
@@ -208,6 +209,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
             Event::ScopeFinished(ScopeFinishedV1 {
                 status: ScopeStatusV1::Succeeded,
                 duration_ms: 190,
+                terminal_reason: Some(AgentTerminalReasonV1::Completed),
             }),
         ),
         event(
@@ -271,6 +273,11 @@ fn canonical_boundaries_form_a_nested_privacy_safe_span_tree() {
     assert_eq!(model.attributes.usage.cache_read_tokens, 3);
     let turn = &spans[2];
     assert_eq!(turn.attributes.usage.input_tokens, 20);
+    let scope = &spans[3];
+    assert_eq!(
+        scope.attributes.terminal_reason,
+        Some(AgentTerminalReasonV1::Completed)
+    );
     let run = &spans[4];
     assert_eq!(run.start.remote_parent, assignment().trace_context);
     assert_eq!(run.attributes.retry_count, 0);
@@ -292,6 +299,65 @@ fn canonical_boundaries_form_a_nested_privacy_safe_span_tree() {
             !rendered.contains(forbidden),
             "span projection leaked {forbidden}"
         );
+    }
+}
+
+#[test]
+fn every_terminal_reason_is_projected_onto_the_finished_scope_span() {
+    let cases = [
+        (
+            ScopeStatusV1::Succeeded,
+            AgentTerminalReasonV1::Completed,
+            ActivitySpanStatus::Ok,
+        ),
+        (
+            ScopeStatusV1::Failed,
+            AgentTerminalReasonV1::ModelError,
+            ActivitySpanStatus::Error,
+        ),
+        (
+            ScopeStatusV1::Cancelled,
+            AgentTerminalReasonV1::Aborted,
+            ActivitySpanStatus::Cancelled,
+        ),
+        (
+            ScopeStatusV1::Failed,
+            AgentTerminalReasonV1::BudgetExhausted,
+            ActivitySpanStatus::Error,
+        ),
+    ];
+
+    for (scope_status, terminal_reason, span_status) in cases {
+        let exporter = Arc::new(InMemoryActivitySpanExporter::default());
+        let mut projector = CanonicalActivityProjector::new(exporter.clone());
+        let main = scope("main-1", AgentScopeKindV1::Main, None);
+        projector.project_all(&[
+            event(
+                1,
+                0,
+                main.clone(),
+                None,
+                Event::ScopeStarted(ScopeStartedV1 {
+                    display_name: Some("main".into()),
+                }),
+            ),
+            event(
+                2,
+                10,
+                main,
+                None,
+                Event::ScopeFinished(ScopeFinishedV1 {
+                    status: scope_status,
+                    duration_ms: 10,
+                    terminal_reason: Some(terminal_reason),
+                }),
+            ),
+        ]);
+
+        let spans = exporter.finished_spans();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].status, span_status);
+        assert_eq!(spans[0].attributes.terminal_reason, Some(terminal_reason));
     }
 }
 
@@ -347,6 +413,7 @@ fn parallel_sub_agent_scopes_keep_unique_ids_and_parentage() {
             Event::ScopeFinished(ScopeFinishedV1 {
                 status: ScopeStatusV1::Succeeded,
                 duration_ms: 5,
+                terminal_reason: Some(AgentTerminalReasonV1::Completed),
             }),
         ),
         event(
@@ -357,6 +424,7 @@ fn parallel_sub_agent_scopes_keep_unique_ids_and_parentage() {
             Event::ScopeFinished(ScopeFinishedV1 {
                 status: ScopeStatusV1::Succeeded,
                 duration_ms: 7,
+                terminal_reason: Some(AgentTerminalReasonV1::Completed),
             }),
         ),
         event(
@@ -367,6 +435,7 @@ fn parallel_sub_agent_scopes_keep_unique_ids_and_parentage() {
             Event::ScopeFinished(ScopeFinishedV1 {
                 status: ScopeStatusV1::Succeeded,
                 duration_ms: 9,
+                terminal_reason: Some(AgentTerminalReasonV1::Completed),
             }),
         ),
         event(
@@ -503,6 +572,9 @@ fn tracing_bridge_exports_nested_w3c_parented_privacy_safe_spans() {
     assert!(model_attributes.contains("duration_ms"));
     assert!(model_attributes.contains("gen_ai.provider.name"));
     assert!(model_attributes.contains("usage.input_tokens"));
+    let scope_attributes = format!("{:?}", scope.attributes);
+    assert!(scope_attributes.contains("agent.terminal_reason"));
+    assert!(scope_attributes.contains("completed"));
     let rendered = format!("{spans:?}");
     for forbidden in [
         "Bearer secret",

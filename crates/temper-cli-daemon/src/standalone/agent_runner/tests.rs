@@ -24,6 +24,46 @@ fn parse_failure_is_transient() {
 }
 
 #[test]
+fn typed_terminal_report_distinguishes_success_failure_and_cancellation() {
+    assert_eq!(
+        agent_terminal_report(&Result::<(), CodingAgentError>::Ok(())),
+        (
+            AgentTerminalStatus::Succeeded,
+            Some(AgentTerminalReasonV1::Completed)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(&Result::<(), CodingAgentError>::Err(
+            CodingAgentError::AgentStopped("provider stop".into())
+        )),
+        (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::ModelError)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(&Result::<(), CodingAgentError>::Err(
+            CodingAgentError::BudgetExhausted { max_iterations: 7 }
+        )),
+        (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::BudgetExhausted)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(&Result::<(), CodingAgentError>::Err(
+            CodingAgentError::Aborted {
+                authority: temper_agent::AgentAbortAuthority::WorkerRequested,
+            }
+        )),
+        (
+            AgentTerminalStatus::Cancelled,
+            Some(AgentTerminalReasonV1::Aborted)
+        )
+    );
+}
+
+#[test]
 fn in_process_runner_stores_tool_config_and_filters_by_role() {
     let tool_config = test_tool_config();
     let expected = tool_config.clone();

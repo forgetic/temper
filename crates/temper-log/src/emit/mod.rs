@@ -32,6 +32,8 @@ use crate::WorkItemRef;
 use crate::event::Event;
 use crate::service::Service;
 
+pub use temper_protocol_activity::AgentTerminalReasonV1;
+
 // ---------------------------------------------------------------------------
 // Input structs — one per event, so call sites name their fields.
 // ---------------------------------------------------------------------------
@@ -117,6 +119,32 @@ pub struct AgentStarted<'a> {
     pub detail: &'a str,
 }
 
+/// Typed outcome of an `agent.finished` boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentTerminalStatus {
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl AgentTerminalStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    const fn human_verb(self) -> &'static str {
+        match self {
+            Self::Succeeded => "done",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 /// Inputs for [`emit_agent_finished`] (`agent` / `agent.finished`).
 #[derive(Clone, Debug)]
 pub struct AgentFinished<'a> {
@@ -126,6 +154,10 @@ pub struct AgentFinished<'a> {
     pub role: &'a str,
     /// Run kind (e.g. `triage`, `coding`).
     pub kind: &'a str,
+    /// Typed terminal status used by both structured and human projections.
+    pub status: AgentTerminalStatus,
+    /// Typed agent-machine terminal reason, when the run reached that boundary.
+    pub terminal_reason: Option<AgentTerminalReasonV1>,
     /// Run duration in milliseconds (numeric field; human-formatted).
     pub duration_ms: u64,
     /// One-line result summary (free text; previewed + redacted).
@@ -425,9 +457,18 @@ pub fn emit_agent_started(ev: AgentStarted<'_>) {
 
 /// Emits `agent` / `agent.finished`.
 pub fn emit_agent_finished(ev: AgentFinished<'_>) {
+    let reason = ev.terminal_reason.map(AgentTerminalReasonV1::as_str);
     let message = prefixed(
         Service::Agent,
-        human::agent_finished(ev.item, ev.role, ev.kind, ev.duration_ms, ev.summary),
+        human::agent_finished(
+            ev.item,
+            ev.role,
+            ev.kind,
+            ev.status,
+            ev.terminal_reason,
+            ev.duration_ms,
+            ev.summary,
+        ),
     );
     tracing::info!(
         target: "temper::agent",
@@ -437,6 +478,8 @@ pub fn emit_agent_finished(ev: AgentFinished<'_>) {
         artifact.ref = %ev.item,
         role = ev.role,
         kind = ev.kind,
+        status = ev.status.as_str(),
+        reason = reason.unwrap_or(""),
         duration_ms = ev.duration_ms,
         "{message}",
     );

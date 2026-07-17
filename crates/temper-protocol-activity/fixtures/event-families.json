@@ -17,7 +17,11 @@
   },
   {
     "type": "scope.finished",
-    "data": { "status": "succeeded", "duration_ms": 900 }
+    "data": {
+      "status": "succeeded",
+      "duration_ms": 900,
+      "terminal_reason": "completed"
+    }
   },
   {
     "type": "prompt.prepared",

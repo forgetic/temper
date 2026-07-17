@@ -73,6 +73,9 @@ impl ActivitySpanExporter for TracingActivitySpanExporter {
         if let Some(stop_reason) = &finished.attributes.stop_reason {
             span.record("agent.stop_reason", stop_reason.as_str());
         }
+        if let Some(terminal_reason) = finished.attributes.terminal_reason {
+            span.record("agent.terminal_reason", terminal_reason.as_str());
+        }
         drop(span);
     }
 }
@@ -107,6 +110,7 @@ fn tracing_span(start: &ActivitySpanStart, parent: Option<&Span>) -> Span {
                 agent.status = tracing::field::Empty,
                 otel.status_code = tracing::field::Empty,
                 agent.stop_reason = tracing::field::Empty,
+                agent.terminal_reason = tracing::field::Empty,
                 llm.time_to_first_token_ms = tracing::field::Empty,
                 usage.input_tokens = tracing::field::Empty,
                 usage.output_tokens = tracing::field::Empty,
@@ -146,6 +150,7 @@ fn tracing_span(start: &ActivitySpanStart, parent: Option<&Span>) -> Span {
                 agent.status = tracing::field::Empty,
                 otel.status_code = tracing::field::Empty,
                 agent.stop_reason = tracing::field::Empty,
+                agent.terminal_reason = tracing::field::Empty,
                 llm.time_to_first_token_ms = tracing::field::Empty,
                 usage.input_tokens = tracing::field::Empty,
                 usage.output_tokens = tracing::field::Empty,

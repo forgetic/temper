@@ -21,7 +21,10 @@ use temper_agent::{
 };
 use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
-use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
+use temper_log::emit::{
+    AgentFinished, AgentStarted, AgentTerminalReasonV1, AgentTerminalStatus, emit_agent_finished,
+    emit_agent_started,
+};
 use temper_protocol_activity::FailureCodeV1;
 use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext};
 use temper_worker::{
@@ -275,16 +278,21 @@ impl InProcessAgentRunner {
                 },
                 runtime_limits,
             )
-            .await
-            .map_err(classify_coding_agent_error);
+            .await;
+            let (terminal_status, terminal_reason) = agent_terminal_report(&outcome);
+            let outcome = outcome.map_err(classify_coding_agent_error);
 
             if let Some(endpoint) = activity_endpoint {
                 endpoint.stop();
             }
             if let Some(trace) = trace {
-                let terminal = match &outcome {
-                    Ok(_) => trace.finish_success(None),
-                    Err(error) => trace.finish_failure(FailureCodeV1::Internal, error.class),
+                let terminal = match terminal_status {
+                    AgentTerminalStatus::Succeeded => trace.finish_success(None),
+                    AgentTerminalStatus::Cancelled => trace.finish_cancelled(),
+                    AgentTerminalStatus::Failed => match &outcome {
+                        Err(error) => trace.finish_failure(FailureCodeV1::Internal, error.class),
+                        Ok(_) => unreachable!("a successful result has successful terminal status"),
+                    },
                 };
                 match terminal {
                     Ok(sequence) => {
@@ -318,13 +326,9 @@ impl InProcessAgentRunner {
                 }
             }
 
-            // §7 `agent.finished` on BOTH paths: a stalled/failed run still
-            // gets a `done in <dur> | <summary>` line so the agent plane never
-            // shows a dangling `start` with no terminus. The summary carries
-            // the verdict on success (e.g. `verdict=ready_code`) or the error
-            // classification on failure. On success we also append the run's
-            // humanized token totals (`<Nk> in / <Nk> out, <N> tool calls`); a
-            // failed run has no meaningful totals to report.
+            // §7 `agent.finished` on both paths. Typed status and terminal
+            // reason keep abnormal agent stops queryable and ensure failures
+            // and cancellations are never rendered as successful `done` lines.
             let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let Some(item) = item.as_ref() {
                 let summary = match &outcome {
@@ -332,12 +336,14 @@ impl InProcessAgentRunner {
                         let base = result.summary.clone().unwrap_or_else(|| "done".to_string());
                         format!("{base} | {}", totals_suffix(*totals))
                     }
-                    Err(error) => format!("failed: {}", error.message),
+                    Err(error) => error.message.clone(),
                 };
                 emit_agent_finished(AgentFinished {
                     item,
                     role: &role,
                     kind,
+                    status: terminal_status,
+                    terminal_reason,
                     duration_ms,
                     summary: &summary,
                 });
@@ -350,6 +356,30 @@ impl InProcessAgentRunner {
                 accepted_submit: accepted_submit.latest(),
             })
         })
+    }
+}
+
+fn agent_terminal_report<T>(
+    outcome: &Result<T, CodingAgentError>,
+) -> (AgentTerminalStatus, Option<AgentTerminalReasonV1>) {
+    match outcome {
+        Ok(_) => (
+            AgentTerminalStatus::Succeeded,
+            Some(AgentTerminalReasonV1::Completed),
+        ),
+        Err(CodingAgentError::AgentStopped(_) | CodingAgentError::ModelUnavailable { .. }) => (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::ModelError),
+        ),
+        Err(CodingAgentError::BudgetExhausted { .. }) => (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::BudgetExhausted),
+        ),
+        Err(CodingAgentError::Aborted { .. }) => (
+            AgentTerminalStatus::Cancelled,
+            Some(AgentTerminalReasonV1::Aborted),
+        ),
+        Err(_) => (AgentTerminalStatus::Failed, None),
     }
 }
 

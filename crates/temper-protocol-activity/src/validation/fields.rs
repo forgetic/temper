@@ -1,8 +1,8 @@
 use crate::{
     AgentActivityEventV1, AgentAssignmentIdentityV1, AgentScopeKindV1, AgentScopeV1,
-    BlobMediaTypeV1, CapturedContentV1, FailureInfoV1, InlineContentV1, MAX_IDENTIFIER_BYTES,
-    MAX_INLINE_CONTENT_BYTES, MODEL_CALL_RETRY_FAILURE_MESSAGE, PromptCaptureDispositionV1,
-    PromptPreparedV1, PromptSnapshotV1,
+    AgentTerminalReasonV1, BlobMediaTypeV1, CapturedContentV1, FailureInfoV1, InlineContentV1,
+    MAX_IDENTIFIER_BYTES, MAX_INLINE_CONTENT_BYTES, MODEL_CALL_RETRY_FAILURE_MESSAGE,
+    PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1, ScopeFinishedV1, ScopeStatusV1,
 };
 
 use super::{ActivityValidationCode, ActivityValidationError, error, validate_blob_reference};
@@ -60,7 +60,7 @@ pub(super) fn event(
             value.display_name.as_deref(),
             &format!("{path}.data.display_name"),
         ),
-        Event::ScopeFinished(_) => Ok(()),
+        Event::ScopeFinished(value) => scope_finished(value, path),
         Event::PromptPrepared(value) => prompt_prepared(value, turn, path),
         Event::TurnStarted(_) | Event::TurnFinished(_) if turn.is_none() => Err(error(
             ActivityValidationCode::MissingTurn,
@@ -134,6 +134,36 @@ pub(super) fn event(
             Ok(())
         }
         Event::RunFailed(value) => failure(&value.failure, &format!("{path}.data.failure")),
+    }
+}
+
+fn scope_finished(value: &ScopeFinishedV1, path: &str) -> Result<(), ActivityValidationError> {
+    let Some(reason) = value.terminal_reason else {
+        // Retained v1 events written before terminal reasons were introduced
+        // remain valid and readable.
+        return Ok(());
+    };
+    let consistent = matches!(
+        (value.status, reason),
+        (ScopeStatusV1::Succeeded, AgentTerminalReasonV1::Completed)
+            | (ScopeStatusV1::Failed, AgentTerminalReasonV1::ModelError)
+            | (
+                ScopeStatusV1::Failed,
+                AgentTerminalReasonV1::BudgetExhausted
+            )
+            | (ScopeStatusV1::Cancelled, AgentTerminalReasonV1::Aborted)
+    );
+    if consistent {
+        Ok(())
+    } else {
+        Err(invalid_event(
+            &format!("{path}.data.terminal_reason"),
+            format!(
+                "{} is inconsistent with scope status {:?}",
+                reason.as_str(),
+                value.status
+            ),
+        ))
     }
 }
 
