@@ -92,6 +92,7 @@ impl AgentContainmentContext {
             owner.truncate(end);
         }
         let identity = ContainmentIdentity::new(format!("{owner}-{sequence:016x}"))
+            .and_then(|identity| identity.with_owner_identifier(owner))
             .expect("bounded non-empty agent containment identity");
         ContainmentSpec::new(identity, scope).with_timing(self.term_grace, self.inspection_retry)
     }

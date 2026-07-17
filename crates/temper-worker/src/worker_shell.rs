@@ -25,7 +25,7 @@ use temper_worker_io::{CqSender, Spawner, arm_timer};
 
 use crate::executor::{
     AttemptFence, CancellationOutcome, JobAttempt, JobCancellation, JobCleanup,
-    JobExecutionContext, JobExecutor, job_result_for_attempt,
+    JobContainmentObservation, JobExecutionContext, JobExecutor, job_result_for_attempt,
 };
 use crate::lifecycle_hook::{
     NoopWorkerLifecycleHook, WorkerLifecycleCheckpoint, WorkerLifecycleHook,
@@ -86,6 +86,7 @@ pub struct WorkerShell<E: JobExecutor, T: Transport = HttpTransport, S: Spawner 
     lifecycle_hook: Arc<dyn WorkerLifecycleHook>,
     task_registry: WorkerTaskRegistry,
     component_tasks: WorkerComponentTasks,
+    containment_events: crate::observability::ContainmentEventThrottle,
 }
 
 impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E, HttpTransport, RuntimeHandle> {
@@ -175,6 +176,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner> WorkerShe
             lifecycle_hook,
             task_registry,
             component_tasks,
+            containment_events: crate::observability::ContainmentEventThrottle::default(),
         }
     }
 
@@ -369,7 +371,40 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 let cleanup_registry = registry.clone();
                 let cleanup_job_id = job_id.clone();
                 let cleanup_attempt_id = attempt_id.clone();
-                job_cancellation.set_cleanup_observer(move |snapshot| {
+                let containment_events = self.containment_events.clone();
+                let containment_context = crate::observability::ContainmentEventContext::new(
+                    &self.worker_id,
+                    &job_id,
+                    &attempt_id,
+                );
+                job_cancellation.set_cleanup_observer(move |observation| {
+                    let blocked = match observation {
+                        JobContainmentObservation::Cleanup(observation) => {
+                            containment_events.cleanup(&containment_context, &observation);
+                            match observation.snapshot() {
+                                temper_process_containment::CleanupSnapshot::Blocked { .. } => {
+                                    Some(observation.snapshot().clone())
+                                }
+                                _ => None,
+                            }
+                        }
+                        JobContainmentObservation::Snapshot(snapshot) => matches!(
+                            &snapshot,
+                            temper_process_containment::CleanupSnapshot::Blocked { .. }
+                        )
+                        .then_some(snapshot),
+                        JobContainmentObservation::Fallback(fallback) => {
+                            containment_events.fallback(&containment_context, &fallback);
+                            None
+                        }
+                        // The worker emits one startup diagnostic before it
+                        // accepts jobs; per-factory copies are deliberately
+                        // suppressed here.
+                        JobContainmentObservation::Capability(_) => None,
+                    };
+                    let Some(snapshot) = blocked else {
+                        return;
+                    };
                     cleanup_registry.mark_cleanup_pending(
                         &cleanup_job_id,
                         &cleanup_attempt_id,

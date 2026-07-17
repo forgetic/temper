@@ -79,6 +79,7 @@ pub use cancellation::{
     CancellationOutcome, JobCancellation, JobCancellationOwner, JobCancellationRequest, JobCleanup,
     ResourceJoinReport, ResourceJoinStatus,
 };
+pub(crate) use cancellation::{JobCleanupObserver, JobContainmentObservation};
 
 /// Worker-owned controls supplied to every layer of one job execution.
 #[derive(Clone, Debug)]

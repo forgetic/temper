@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-use temper_process_containment::{CleanupReport, CleanupSnapshot, CleanupTrigger};
+use temper_process_containment::{
+    CleanupObservation, CleanupReport, CleanupSnapshot, CleanupTrigger,
+    ContainmentCapabilityDiagnostic, ContainmentFallbackObservation,
+};
 
 /// Escalation requested by the worker-owned watchdog.
 ///
@@ -154,7 +157,15 @@ impl JobCleanup {
     }
 }
 
-type CleanupSnapshotObserver = Arc<dyn Fn(CleanupSnapshot) + Send + Sync>;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum JobContainmentObservation {
+    Cleanup(CleanupObservation),
+    Snapshot(CleanupSnapshot),
+    Capability(ContainmentCapabilityDiagnostic),
+    Fallback(ContainmentFallbackObservation),
+}
+
+type CleanupSnapshotObserver = Arc<dyn Fn(JobContainmentObservation) + Send + Sync>;
 
 #[derive(Default)]
 struct JobCancellationState {
@@ -318,7 +329,7 @@ impl JobCancellation {
     /// synchronously wake the worker machine.
     pub(crate) fn set_cleanup_observer(
         &self,
-        observer: impl Fn(CleanupSnapshot) + Send + Sync + 'static,
+        observer: impl Fn(JobContainmentObservation) + Send + Sync + 'static,
     ) {
         self.state
             .lock()
@@ -327,6 +338,22 @@ impl JobCancellation {
     }
 
     pub(crate) fn observe_cleanup(&self, snapshot: CleanupSnapshot) {
+        self.observe_containment(JobContainmentObservation::Snapshot(snapshot));
+    }
+
+    pub(crate) fn observe_cleanup_observation(&self, observation: CleanupObservation) {
+        self.observe_containment(JobContainmentObservation::Cleanup(observation));
+    }
+
+    pub(crate) fn observe_capability(&self, diagnostic: ContainmentCapabilityDiagnostic) {
+        self.observe_containment(JobContainmentObservation::Capability(diagnostic));
+    }
+
+    pub(crate) fn observe_fallback(&self, fallback: ContainmentFallbackObservation) {
+        self.observe_containment(JobContainmentObservation::Fallback(fallback));
+    }
+
+    fn observe_containment(&self, observation: JobContainmentObservation) {
         let observer = self
             .state
             .lock()
@@ -334,7 +361,7 @@ impl JobCancellation {
             .cleanup_observer
             .clone();
         if let Some(observer) = observer {
-            observer(snapshot);
+            observer(observation);
         }
     }
 
@@ -440,6 +467,29 @@ impl JobCancellation {
             Poll::Pending
         })
         .await
+    }
+}
+
+/// Shared bridge from process-containment observations into the attempt-bound
+/// worker delivery. Every worker process owner uses this bridge so completed,
+/// blocked, capability, and fallback evidence follow the same identity path.
+pub(crate) struct JobCleanupObserver(pub(crate) JobCancellation);
+
+impl temper_process_containment::CleanupObserver for JobCleanupObserver {
+    fn observe(&self, snapshot: &CleanupSnapshot) {
+        self.0.observe_cleanup(snapshot.clone());
+    }
+
+    fn observe_cleanup(&self, observation: &CleanupObservation) {
+        self.0.observe_cleanup_observation(observation.clone());
+    }
+
+    fn observe_capability(&self, diagnostic: &ContainmentCapabilityDiagnostic) {
+        self.0.observe_capability(diagnostic.clone());
+    }
+
+    fn observe_fallback(&self, fallback: &ContainmentFallbackObservation) {
+        self.0.observe_fallback(fallback.clone());
     }
 }
 

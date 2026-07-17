@@ -79,6 +79,16 @@ pub trait ContainmentBackendFactory: Send + Sync {
         policy: ContainmentBackendPolicy,
         spec: &ContainmentSpec,
     ) -> io::Result<Box<dyn PreparedContainmentBackend>>;
+
+    /// Capability and selection evidence for the backend just returned by
+    /// [`Self::prepare_backend`]. Factories without a capability probe use the
+    /// default `None`.
+    fn capability_diagnostic(
+        &self,
+        _selected_backend: ContainmentBackendKind,
+    ) -> Option<ContainmentCapabilityDiagnostic> {
+        None
+    }
 }
 
 /// Instance-scoped entry point for prepared containment.
@@ -125,6 +135,23 @@ impl ContainmentFactory {
             return Err(io::Error::other(
                 "prepared backend root identity has a mismatched backend kind",
             ));
+        }
+        if let Some(diagnostic) = self.backend_factory.capability_diagnostic(kind) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.observer.observe_capability(&diagnostic);
+            }));
+            if let Some(reason) = diagnostic.fallback_reason() {
+                let fallback = ContainmentFallbackObservation::new(
+                    spec.identity.clone(),
+                    spec.scope.clone(),
+                    kind,
+                    root.clone(),
+                    reason,
+                );
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.observer.observe_fallback(&fallback);
+                }));
+            }
         }
         Ok(PreparedContainment {
             backend: Some(backend),
@@ -627,8 +654,15 @@ fn block(
 }
 
 fn observe(coordinator: &CleanupCoordinator, snapshot: CleanupSnapshot) {
+    let observation = CleanupObservation::new(
+        coordinator.spec.identity.clone(),
+        coordinator.spec.scope.clone(),
+        coordinator.backend,
+        coordinator.root.clone(),
+        snapshot,
+    );
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        coordinator.observer.observe(&snapshot);
+        coordinator.observer.observe_cleanup(&observation);
     }));
 }
 

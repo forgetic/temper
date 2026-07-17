@@ -83,21 +83,50 @@ The `%i` instance name becomes `--pool %i`. Use `--capacity` in a local override
 for a host-specific concurrency limit; otherwise the resolved pool policy is
 used.
 
-### Agent process containment and abrupt worker death
+### Descendant containment and abrupt worker death
 
-Each Unix agent run is placed in its own process group. On Linux, the child also
-installs a parent-death signal before `exec`; cancellation terminates and then
-hard-kills that group before the worker releases the run. Windows workers use a
-kill-on-close Job Object, so closing the worker's handle terminates the complete
-job tree. Other platforms retain the direct-child kill/reap fallback but cannot
-guarantee cleanup of independently re-parented grandchildren.
+The checked-in worker unit sets `Delegate=yes`. On a cgroup-v2 Linux host this
+gives Temper ownership of a writable service subtree. Temper creates the
+per-job cgroup before spawning the agent, places the child in it before `exec`,
+and creates nested per-tool and per-command cgroups below that job boundary.
+Descendants cannot escape cleanup by changing process group or session. Cleanup
+attempts TERM, escalates with `cgroup.kill` (or pidfd enumeration), reaps the
+direct child, and waits for recursive `populated 0`/empty-membership proof
+before accepting tool or job completion.
 
-For production Linux deployments, keep the worker and all of its children in a
-systemd cgroup (the checked-in template's default service layout does this) and
-do not use `KillMode=process`. The recommended `KillMode=control-group` (the
-systemd default) is the final backstop for `SIGKILL`, kernel failure, or power
-loss before Temper's joined supervisor can finish. Process-group cleanup is the
-normal in-process guarantee; cgroup cleanup covers abrupt service death.
+The preferred Linux backend requires all of the following:
+
+- a unified cgroup-v2 mount and systemd delegation (`Delegate=yes`);
+- a writable nested subtree and writable membership controls;
+- pidfd support for PID-reuse-safe signaling;
+- `cgroup.kill` when available (Temper safely enumerates nested members when it
+  is absent).
+
+At worker startup, `worker.containment.startup_capability` reports the cgroup-v2
+mount, delegation, nested-subtree writability, `cgroup.kill`, pidfd support,
+selected backend, and bounded fallback reason. If delegation is unavailable,
+Temper emits `worker.containment.fallback_activated` at warning level and uses
+its Linux subreaper/supervisor backend. That fallback tracks and reaps
+re-parented descendants across process groups and sessions; it is not the old
+process-group-only adapter. Windows workers require nested, kill-on-close Job
+Objects and recursive-empty verification. Unsupported platforms fail
+containment preparation rather than claiming a descendant-complete guarantee.
+
+Startup probing owns a dedicated `temper` subtree. Stale owned cgroups are
+inspected only below that boundary, killed and removed deepest-first when they
+can be proven empty, and retained with bounded diagnostics when inspection or
+cleanup cannot be proven. Never manually move unrelated processes into the
+Temper subtree.
+
+`SIGINT`/`SIGTERM` closes intake, fences every active attempt, requests cleanup,
+and waits for task and containment quiescence before worker shutdown returns.
+The unit retains `KillMode=control-group` as the abrupt-death backstop: if the
+worker is killed, the kernel fails, or cleanup remains blocked beyond
+`TimeoutStopSec=5min`, systemd sends SIGKILL to the entire service cgroup. That
+forced stop can preserve no application-level cleanup report; after restart,
+stale-subtree inspection supplies the available evidence. Increase
+`TimeoutStopSec` on hosts where kernel or storage stalls can legitimately delay
+cleanup, but do not use `KillMode=process` or remove delegation.
 
 ## 5. Register the webhook contract
 

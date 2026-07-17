@@ -10,8 +10,8 @@
 use std::io;
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod containment;
@@ -238,6 +238,7 @@ pub struct CgroupV2BackendFactory {
     processes: Arc<dyn LinuxProcessApi>,
     fallback: Option<Arc<dyn ContainmentBackendFactory>>,
     observer: Arc<dyn CgroupV2CapabilityObserver>,
+    fallback_reason: Mutex<Option<String>>,
     nonce_base: u64,
     nonce: AtomicU64,
 }
@@ -309,6 +310,7 @@ impl CgroupV2BackendFactory {
             processes,
             fallback: None,
             observer: Arc::new(NoopCapabilityObserver),
+            fallback_reason: Mutex::new(None),
             nonce_base: folded ^ u64::from(std::process::id()).rotate_left(17),
             nonce: AtomicU64::new(0),
         }
@@ -531,12 +533,32 @@ impl ContainmentBackendFactory for CgroupV2BackendFactory {
                     if !self.capability.probe_rollback_complete() {
                         return Err(unavailable_error(&self.capability));
                     }
+                    *self
+                        .fallback_reason
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(
+                        self.capability
+                            .diagnostic()
+                            .unwrap_or("delegated cgroup-v2 capability requirements were not met")
+                            .to_string(),
+                    );
                     return self.fallback(spec);
                 }
                 match self.prepare_cgroup(spec) {
-                    Ok(prepared) => Ok(prepared),
+                    Ok(prepared) => {
+                        *self
+                            .fallback_reason
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                        Ok(prepared)
+                    }
                     Err(error) if error.rollback_complete => {
                         let cgroup_error = error.into_io_error();
+                        *self
+                            .fallback_reason
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(format!("cgroup preparation failed: {cgroup_error}"));
                         self.fallback(spec).map_err(|fallback| {
                             io::Error::other(format!(
                                 "cgroup preparation failed: {cgroup_error}; fallback failed: {fallback}"
@@ -558,6 +580,34 @@ impl ContainmentBackendFactory for CgroupV2BackendFactory {
                 })?
                 .prepare_backend(policy, spec),
         }
+    }
+
+    fn capability_diagnostic(
+        &self,
+        selected_backend: ContainmentBackendKind,
+    ) -> Option<crate::ContainmentCapabilityDiagnostic> {
+        let fallback_reason =
+            (selected_backend != ContainmentBackendKind::LinuxCgroupV2).then(|| {
+                self.fallback_reason
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                    .or_else(|| self.capability.diagnostic().map(str::to_string))
+                    .unwrap_or_else(|| {
+                        "delegated cgroup-v2 capability requirements were not met".to_string()
+                    })
+            });
+        Some(crate::ContainmentCapabilityDiagnostic::new(
+            self.capability
+                .unified_mount()
+                .map(|path| path.to_string_lossy().into_owned()),
+            self.capability.delegation(),
+            self.capability.writable_subtree(),
+            self.capability.cgroup_kill(),
+            self.capability.pidfd(),
+            selected_backend,
+            fallback_reason,
+        ))
     }
 }
 

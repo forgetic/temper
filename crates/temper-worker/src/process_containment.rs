@@ -27,7 +27,8 @@ pub(crate) fn prepare_with_observer(
         None => factory,
     };
     let nonce = NEXT_OWNER_ID.fetch_add(1, Ordering::Relaxed);
-    let identity = ContainmentIdentity::new(format!("{owner}-{nonce}"))?;
+    let identity =
+        ContainmentIdentity::new(format!("{owner}-{nonce}"))?.with_owner_identifier(owner)?;
     let short_tool_grace = matches!(
         &scope,
         ContainmentScope::WorkerCommand | ContainmentScope::PrePush
