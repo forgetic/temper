@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use temper_forge::{Forge, ItemNumber, RepositoryPath};
+use temper_forge::{Forge, ForgeResult, ItemNumber, RepositoryId, RepositoryPath};
 use temper_log::emit::{LeaseLost, LeaseReleased, emit_lease_lost, emit_lease_released};
 use temper_log::{WorkItemRef, strip_provider_scheme, work_item_span};
 use temper_protocol_worker::{
@@ -74,10 +74,19 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         if let Some(outcome) = self.validate_claim_freshness(&job).await {
             return outcome;
         }
-        let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
-            return ClaimOutcome::Stale {
-                reason: "assignment target no longer exists".to_string(),
-            };
+        let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                return ClaimOutcome::Stale {
+                    reason: "assignment target no longer exists".to_string(),
+                };
+            }
+            Err(error) => {
+                report_target_lookup_failure(&job, "claim", &error);
+                return ClaimOutcome::Retryable {
+                    reason: format!("could not resolve assignment target: {error}"),
+                };
+            }
         };
         let assignment = durable_assignment(&job, &context);
         let mutation = self.inner.assignment_mutation(&job).await;
@@ -122,8 +131,22 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
             .lock()
             .expect("assignment claim lock")
             .remove(&job.job_id);
-        let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
-            return;
+        let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
+            Ok(Some(target)) => target,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::error!(
+                    target: "temper_daemon",
+                    operation = "release",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    %error,
+                    "lease applier repository lookup failed; durable assignment cleanup deferred to lease expiry and live reconciliation"
+                );
+                return;
+            }
         };
         let expected = durable_assignment(&job, &context);
         let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
@@ -148,9 +171,32 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     }
 
     async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
-        if let Err(error) = self.reattach_recovered_claim(&job, &context).await {
+        let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    operation = "heartbeat",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    "recovered assignment heartbeat target no longer exists"
+                );
+                return;
+            }
+            Err(error) => {
+                report_target_lookup_failure(&job, "heartbeat", &error);
+                return;
+            }
+        };
+        if let Err(error) = self
+            .reattach_recovered_claim(&job, &context, &repo_id, target)
+            .await
+        {
             tracing::warn!(
                 target: "temper_daemon",
+                operation = "heartbeat",
                 job_id = %job.job_id,
                 %error,
                 "recovered assignment heartbeat did not match durable claim"
@@ -164,9 +210,23 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         result: JobResult,
         context: ClaimContext,
     ) -> ApplyOutcome {
-        if let Err(error) = self.reattach_recovered_claim(&job, &context).await {
+        let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
+            Ok(Some(target)) => target,
+            Ok(None) => return ApplyOutcome::Stale,
+            Err(error) => {
+                report_target_lookup_failure(&job, "apply", &error);
+                return ApplyOutcome::Retryable {
+                    reason: format!("could not resolve recovered assignment target: {error}"),
+                };
+            }
+        };
+        if let Err(error) = self
+            .reattach_recovered_claim(&job, &context, &repo_id, target)
+            .await
+        {
             tracing::error!(
                 target: "temper_daemon",
+                operation = "apply",
                 job_id = %job.job_id,
                 %error,
                 "lease applier could not reattach recovered result claim"
@@ -191,16 +251,15 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         if claim_context.worker_id != result.worker_id || job.attempt_id != result.attempt_id {
             return ApplyOutcome::Stale;
         }
-        let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
-            tracing::warn!(
-                target: "temper_daemon",
-                job_id = %job.job_id,
-                repo = %job.repo,
-                artifact_kind = %job.artifact.kind,
-                artifact_item = %job.artifact.item,
-                "lease applier could not resolve target"
-            );
-            return ApplyOutcome::Stale;
+        let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
+            Ok(Some(target)) => target,
+            Ok(None) => return ApplyOutcome::Stale,
+            Err(error) => {
+                report_target_lookup_failure(&job, "apply", &error);
+                return ApplyOutcome::Retryable {
+                    reason: format!("could not resolve assignment target: {error}"),
+                };
+            }
         };
 
         // §7 work-item ref for the lease lifecycle lines; the bare owner/repo is
@@ -279,14 +338,13 @@ impl<F: Forge + ?Sized> LeaseApplier<F> {
         &self,
         job: &InFlightJob,
         context: &ClaimContext,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
     ) -> Result<(), String> {
-        let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), job).await else {
-            return Err("assignment target could not be resolved".to_string());
-        };
         let expected = durable_assignment(job, context);
         let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
         manager
-            .heartbeat_assignment(&repo_id, target, &expected, (self.clock)())
+            .heartbeat_assignment(repo_id, target, &expected, (self.clock)())
             .await
             .map_err(|error| error.to_string())?;
         self.claims
@@ -350,33 +408,45 @@ fn lease_item_ref(repo: &str, target: ArtifactSource) -> WorkItemRef {
 async fn resolve_target<F: Forge + ?Sized>(
     forge: &F,
     job: &InFlightJob,
-) -> Option<(temper_forge::RepositoryId, ArtifactSource)> {
-    let (owner, name) = job.repo.split_once('/')?;
-
-    let repository = match forge
-        .get_repository_by_path(&RepositoryPath::new(owner, name))
-        .await
-    {
-        Ok(Some(repository)) => repository,
-        Ok(None) => return None,
-        Err(error) => {
-            tracing::error!(
-                target: "temper_daemon",
-                job_id = %job.job_id,
-                repo = %job.repo,
-                %error,
-                "lease applier repository lookup failed"
-            );
-            return None;
-        }
+) -> ForgeResult<Option<(RepositoryId, ArtifactSource)>> {
+    let Some((owner, name)) = job.repo.split_once('/') else {
+        return Ok(None);
     };
-
-    let number = job.artifact.item.as_u64().map(ItemNumber::new)?;
+    if owner.is_empty() || name.is_empty() || name.contains('/') {
+        return Ok(None);
+    }
+    let Some(number) = job.artifact.item.as_u64().map(ItemNumber::new) else {
+        return Ok(None);
+    };
     let target = match job.artifact.kind.as_str() {
         "issue" => ArtifactSource::Issue { number },
         "pull_request" => ArtifactSource::PullRequest { number },
-        _ => return None,
+        _ => return Ok(None),
     };
 
-    Some((repository.id, target))
+    let Some(repository) = forge
+        .get_repository_by_path(&RepositoryPath::new(owner, name))
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some((repository.id, target)))
+}
+
+fn report_target_lookup_failure(
+    job: &InFlightJob,
+    operation: &'static str,
+    error: &temper_forge::ForgeError,
+) {
+    tracing::error!(
+        target: "temper_daemon",
+        operation,
+        job_id = %job.job_id,
+        repo = %job.repo,
+        artifact_kind = %job.artifact.kind,
+        artifact_item = %job.artifact.item,
+        %error,
+        "lease applier repository lookup failed"
+    );
 }
