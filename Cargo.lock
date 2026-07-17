@@ -2223,6 +2223,7 @@ dependencies = [
  "temper-forge-memory",
  "temper-forge-model",
  "temper-log",
+ "temper-process-containment",
  "temper-protocol-agent",
  "temper-protocol-worker",
  "temper-reference-delivery",
@@ -2233,6 +2234,7 @@ dependencies = [
  "temper-workflow",
  "tempfile",
  "toml",
+ "tongs",
  "tracing",
  "tracing-subscriber",
 ]

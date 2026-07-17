@@ -175,7 +175,9 @@ fn cancellation_reaps_the_mcp_server_grandchild_group() {
         Some(pid_path.display().to_string()),
     );
     temper_agent_io::block_on(async move {
-        let client = connect(config).await.expect("connect fake MCP server");
+        let client = connect(config.clone())
+            .await
+            .expect("connect fake MCP server");
         let server_pid = client.child_id();
         let outcome = temper_agent_io::timeout(
             Duration::from_millis(100),
@@ -195,7 +197,7 @@ fn cancellation_reaps_the_mcp_server_grandchild_group() {
             !process_alive(grandchild_pid),
             "MCP grandchild {grandchild_pid} survived cancellation"
         );
-        assert_eq!(super::connection::active_output_readers(), 0);
+        assert_reader_joined(&config);
     });
 }
 
@@ -205,8 +207,9 @@ fn request_timeout_waits_for_recursive_cleanup_and_reader_join() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = fake_server_script();
+    let config = fake_command(&dir, Some("hang_call"));
     temper_agent_io::block_on(async move {
-        let client = connect(fake_command(&dir, Some("hang_call")))
+        let client = connect(config.clone())
             .await
             .expect("connect fake MCP server");
         let pid = client.child_id();
@@ -216,7 +219,7 @@ fn request_timeout_waits_for_recursive_cleanup_and_reader_join() {
             .expect_err("request must time out");
         assert!(matches!(error, McpError::Timeout { .. }));
         assert!(!process_alive(pid), "timeout result preceded cleanup proof");
-        assert_eq!(super::connection::active_output_readers(), 0);
+        assert_reader_joined(&config);
     });
 }
 
@@ -233,7 +236,9 @@ fn server_exit_with_new_session_waits_for_recursive_cleanup_and_reader_join() {
         Some(pid_path.display().to_string()),
     );
     temper_agent_io::block_on(async move {
-        let client = connect(config).await.expect("connect fake MCP server");
+        let client = connect(config.clone())
+            .await
+            .expect("connect fake MCP server");
         let server_pid = client.child_id();
         let error = client
             .call_tool("exit", json!({}), Duration::from_secs(2))
@@ -252,7 +257,7 @@ fn server_exit_with_new_session_waits_for_recursive_cleanup_and_reader_join() {
             !process_alive(descendant),
             "new-session descendant survived server failure"
         );
-        assert_eq!(super::connection::active_output_readers(), 0);
+        assert_reader_joined(&config);
     });
 }
 
@@ -263,8 +268,9 @@ fn oversized_inbound_record_is_typed_and_joins_server() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = fake_server_script();
     let config = fake_command(&dir, Some("oversized_record"));
+    let connection_config = config.clone();
     let error = temper_agent_io::block_on(async move {
-        match connect(config).await {
+        match connect(connection_config).await {
             Ok(_) => panic!("oversized MCP record must fail"),
             Err(error) => error,
         }
@@ -278,7 +284,7 @@ fn oversized_inbound_record_is_typed_and_joins_server() {
             ..
         }
     ));
-    assert_eq!(super::connection::active_output_readers(), 0);
+    assert_reader_joined(&config);
 }
 
 #[test]
@@ -287,8 +293,9 @@ fn oversized_outbound_record_is_typed_and_contains_server() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = fake_server_script();
+    let config = fake_command(&dir, None);
     temper_agent_io::block_on(async move {
-        let client = connect(fake_command(&dir, None))
+        let client = connect(config.clone())
             .await
             .expect("connect fake MCP server");
         let pid = client.child_id();
@@ -313,7 +320,7 @@ fn oversized_outbound_record_is_typed_and_contains_server() {
             !process_alive(pid),
             "overflow result preceded cleanup proof"
         );
-        assert_eq!(super::connection::active_output_readers(), 0);
+        assert_reader_joined(&config);
     });
 }
 
@@ -358,7 +365,7 @@ fn codebase_memory_bridge_mcp_startup_timeout_kills_hung_server() {
     temper_agent_io::block_on(async move {
         let config =
             fake_command_with_extra(&dir, Some("hang"), Some(pid_path.display().to_string()));
-        let error = match connect(config).await {
+        let error = match connect(config.clone()).await {
             Ok(_) => panic!("hung server times out"),
             Err(error) => error,
         };
@@ -368,7 +375,7 @@ fn codebase_memory_bridge_mcp_startup_timeout_kills_hung_server() {
             .parse()
             .expect("numeric pid");
         assert!(!process_alive(pid), "startup error preceded cleanup proof");
-        assert_eq!(super::connection::active_output_readers(), 0);
+        assert_reader_joined(&config);
     });
 }
 
@@ -378,8 +385,10 @@ fn codebase_memory_bridge_mcp_child_exits_when_client_drops() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = fake_server_script();
+    let config = fake_command(&dir, None);
+    let connection_config = config.clone();
     let pid = temper_agent_io::block_on(async move {
-        let client = connect(fake_command(&dir, None))
+        let client = connect(connection_config)
             .await
             .expect("connect fake MCP server");
         let pid = client.child_id();
@@ -389,7 +398,7 @@ fn codebase_memory_bridge_mcp_child_exits_when_client_drops() {
 
     for _ in 0..50 {
         if !process_exists(pid) {
-            assert_eq!(super::connection::active_output_readers(), 0);
+            assert_reader_joined(&config);
             return;
         }
         std::thread::sleep(Duration::from_millis(20));
