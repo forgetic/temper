@@ -123,7 +123,14 @@ pub fn current_exact_identity(
     match process_identity(recorded.pid, recorded.role.clone()) {
         Ok(current) if current.start_time == recorded.start_time => Ok(Some(current)),
         Ok(_) => Ok(None),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(3) =>
+        {
+            // procfs can report ESRCH while a task is disappearing even though
+            // the path lookup itself succeeded. For an exact PID/start pair,
+            // both ENOENT and ESRCH are authoritative absence.
+            Ok(None)
+        }
         Err(error) => Err(error),
     }
 }

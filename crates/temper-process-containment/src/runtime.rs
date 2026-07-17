@@ -58,6 +58,20 @@ impl BackendSpawn {
     pub fn new(child: Child, kernel: Box<dyn ContainmentKernel>) -> Self {
         Self { child, kernel }
     }
+
+    /// Replaces the kernel adapter while preserving the already-contained
+    /// child. This is an injection seam for deterministic fault decorators;
+    /// the decorator cannot replace or re-spawn the backend-owned process.
+    #[doc(hidden)]
+    pub fn map_kernel(
+        self,
+        map: impl FnOnce(Box<dyn ContainmentKernel>) -> Box<dyn ContainmentKernel>,
+    ) -> Self {
+        Self {
+            child: self.child,
+            kernel: map(self.kernel),
+        }
+    }
 }
 
 /// Backend-specific resources prepared before any payload process exists.

@@ -61,6 +61,9 @@ pub use provider::{
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_CODEX_MODEL, PROVIDER_BASE_URL_ENV, ProviderConfig,
     ProviderEnv, ProviderError, default_auth_path,
 };
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use temper_agent_core::dispatch_linux_supervisor_helper;
 pub use temper_agent_core::{
     AgentContainmentContext, ContainmentFactory, ContainmentScope, TurnHook,
 };

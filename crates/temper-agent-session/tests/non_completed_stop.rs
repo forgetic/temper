@@ -2,7 +2,11 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead as _, BufReader, Read, Write as _};
 use std::net::TcpListener;
+#[cfg(target_os = "linux")]
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -107,8 +111,31 @@ fn budget_exhaustion_exits_nonzero_without_result_and_names_stable_reason() {
 #[test]
 fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
     let started = Instant::now();
-    let provider =
-        BoundedFixedProvider::start_looping_tool_response().expect("start bounded abort provider");
+    let temp = tempfile::tempdir().expect("aborted agent-session tempdir");
+    std::fs::create_dir_all(temp.path().join("demo")).expect("workspace repository directory");
+    let context_path = temp.path().join("context.json");
+    let result_path = temp.path().join("result.json");
+    std::fs::write(
+        &context_path,
+        serde_json::to_vec(&workspace_context()).expect("serialize workspace context"),
+    )
+    .expect("write workspace context");
+
+    #[cfg(target_os = "linux")]
+    let (descendant_fixture, descendant_identity, descendant_ready) = {
+        let fixture = write_nested_setsid_fixture(temp.path()).expect("write setsid fixture");
+        (
+            fixture,
+            temp.path().join("nested-setsid.identity"),
+            temp.path().join("nested-setsid.ready"),
+        )
+    };
+    #[cfg(target_os = "linux")]
+    let provider_command = "exec \"$TEMPER_ABORT_DESCENDANT_FIXTURE\"";
+    #[cfg(not(target_os = "linux"))]
+    let provider_command = "true";
+    let provider = BoundedFixedProvider::start_looping_tool_response(provider_command)
+        .expect("start bounded abort provider");
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind lifecycle endpoint");
     listener
         .set_nonblocking(true)
@@ -117,6 +144,8 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
         .local_addr()
         .expect("lifecycle endpoint address")
         .to_string();
+    #[cfg(target_os = "linux")]
+    let lifecycle_descendant_ready = descendant_ready.clone();
     let lifecycle = thread::spawn(move || {
         let accept_deadline = Instant::now() + ABORT_CANCELLATION_DEADLINE;
         while Instant::now() < accept_deadline {
@@ -139,6 +168,14 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
                         .expect("decode lifecycle hello")
                         .validate()
                         .expect("validate lifecycle hello");
+
+                    // Do not request cancellation until the first real bash tool
+                    // has created a child in a nested session. This makes the
+                    // abort regression prove descendant-complete cleanup rather
+                    // than merely exercising a direct agent process.
+                    #[cfg(target_os = "linux")]
+                    wait_for_path_until(&lifecycle_descendant_ready, accept_deadline)
+                        .expect("nested setsid child did not become ready");
 
                     serde_json::to_writer(
                         &mut stream,
@@ -187,15 +224,6 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
         panic!("agent did not connect before the named cancellation deadline");
     });
 
-    let temp = tempfile::tempdir().expect("aborted agent-session tempdir");
-    std::fs::create_dir_all(temp.path().join("demo")).expect("workspace repository directory");
-    let context_path = temp.path().join("context.json");
-    let result_path = temp.path().join("result.json");
-    std::fs::write(
-        &context_path,
-        serde_json::to_vec(&workspace_context()).expect("serialize workspace context"),
-    )
-    .expect("write workspace context");
     let provider_url = provider.base_url();
 
     let mut command = ContainmentCommand::new(env!("CARGO_BIN_EXE_temper-agent"));
@@ -227,8 +255,33 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(target_os = "linux")]
+    command
+        .env(
+            "TEMPER_ABORT_DESCENDANT_FIXTURE",
+            descendant_fixture.as_os_str(),
+        )
+        .env(
+            "TEMPER_ABORT_DESCENDANT_IDENTITY",
+            descendant_identity.as_os_str(),
+        )
+        .env(
+            "TEMPER_ABORT_DESCENDANT_READY",
+            descendant_ready.as_os_str(),
+        );
     let output = run_contained_with_bounded_output(command).expect("run aborted temper-agent");
     lifecycle.join().expect("join lifecycle endpoint");
+
+    #[cfg(target_os = "linux")]
+    {
+        let identity = read_start_identity(&descendant_identity)
+            .expect("nested setsid child published PID/start identity");
+        assert!(identity.start_time > 0, "fixture start identity was zero");
+        assert!(
+            !exact_process_exists(identity).expect("inspect nested setsid child identity"),
+            "nested setsid child {identity:?} survived agent completion"
+        );
+    }
 
     assert_eq!(output.status.code(), Some(2));
     assert!(
@@ -290,6 +343,127 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
     );
 }
 
+#[cfg(target_os = "linux")]
+fn abort_regression_containment_context() -> AgentContainmentContext {
+    use temper_process_containment::{
+        ContainmentBackendFactory, ContainmentBackendPolicy, ContainmentFactory,
+        LinuxSupervisorBackendFactory,
+    };
+
+    let backend: Arc<dyn ContainmentBackendFactory> = Arc::new(
+        LinuxSupervisorBackendFactory::with_helper_executable(env!("CARGO_BIN_EXE_temper-agent")),
+    );
+    AgentContainmentContext::new(
+        ContainmentFactory::new(ContainmentBackendPolicy::ForceLinuxSupervisor, backend),
+        None,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn abort_regression_containment_context() -> AgentContainmentContext {
+    AgentContainmentContext::production(None)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProcessStartIdentity {
+    pid: u32,
+    start_time: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn write_nested_setsid_fixture(directory: &Path) -> io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let fixture = directory.join("nested-setsid-fixture.sh");
+    std::fs::write(
+        &fixture,
+        r#"#!/bin/sh
+set -eu
+if [ "${1:-}" = "child" ]; then
+    stat=$(cat "/proc/$$/stat")
+    fields=${stat##*) }
+    set -- $fields
+    shift 19
+    printf '%s %s\n' "$$" "$1" > "$TEMPER_ABORT_DESCENDANT_IDENTITY"
+    trap '' TERM
+    : > "$TEMPER_ABORT_DESCENDANT_READY"
+    while :; do sleep 60; done
+fi
+setsid /bin/sh "$0" child </dev/null >/dev/null 2>&1 &
+limit=0
+while [ ! -s "$TEMPER_ABORT_DESCENDANT_IDENTITY" ] && [ "$limit" -lt 300 ]; do
+    sleep 0.01
+    limit=$((limit + 1))
+done
+test -s "$TEMPER_ABORT_DESCENDANT_IDENTITY"
+"#,
+    )?;
+    let mut permissions = std::fs::metadata(&fixture)?.permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&fixture, permissions)?;
+    Ok(fixture)
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_path_until(path: &Path, deadline: Instant) -> io::Result<()> {
+    while Instant::now() < deadline {
+        if path.exists() {
+            return Ok(());
+        }
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("timed out waiting for {}", path.display()),
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn read_start_identity(path: &Path) -> io::Result<ProcessStartIdentity> {
+    let contents = std::fs::read_to_string(path)?;
+    let mut fields = contents.split_whitespace();
+    let parse = |value: Option<&str>, field: &str| -> io::Result<u64> {
+        value
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("missing {field}")))?
+            .parse()
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid {field}: {error}"),
+                )
+            })
+    };
+    Ok(ProcessStartIdentity {
+        pid: u32::try_from(parse(fields.next(), "pid")?)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid exceeds u32"))?,
+        start_time: parse(fields.next(), "start time")?,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn exact_process_exists(identity: ProcessStartIdentity) -> io::Result<bool> {
+    let stat = match std::fs::read_to_string(format!("/proc/{}/stat", identity.pid)) {
+        Ok(stat) => stat,
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(3) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    let (_, fields) = stat
+        .rsplit_once(") ")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "malformed /proc stat"))?;
+    let start_time = fields
+        .split_whitespace()
+        .nth(19)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "short /proc stat"))?
+        .parse::<u64>()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    Ok(start_time == identity.start_time)
+}
+
 struct BoundedProcessOutput {
     status: ExitStatus,
     stdout: CapturedBytes,
@@ -300,7 +474,7 @@ struct BoundedProcessOutput {
 fn run_contained_with_bounded_output(
     command: ContainmentCommand,
 ) -> io::Result<BoundedProcessOutput> {
-    let containment = AgentContainmentContext::production(None)
+    let containment = abort_regression_containment_context()
         .with_cleanup_timing(Duration::from_millis(100), Duration::from_millis(10));
     let prepared = containment.factory().prepare(
         containment.containment_spec("bounded-abort-regression", ContainmentScope::Agent),
@@ -334,7 +508,14 @@ fn run_contained_with_bounded_output(
         }
         thread::sleep(PROCESS_POLL_INTERVAL);
     };
-    let _ = process.cleanup(CleanupTrigger::NormalRootExit);
+    let cleanup = process.cleanup(CleanupTrigger::NormalRootExit);
+    if !cleanup.proves_quiescence() {
+        let _ = join_capture_reader(stdout_reader, "stdout");
+        let _ = join_capture_reader(stderr_reader, "stderr");
+        return Err(io::Error::other(format!(
+            "abort regression completed without recursive-empty proof: {cleanup:?}"
+        )));
+    }
     let stdout = join_capture_reader(stdout_reader, "stdout")?;
     let stderr = join_capture_reader(stderr_reader, "stderr")?;
     Ok(BoundedProcessOutput {

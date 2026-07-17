@@ -26,7 +26,10 @@ protocol and runs the fixture matrix. Forced Linux-supervisor selection always
 runs. Auto runs with cgroup v2 when a delegated writable subtree is available;
 otherwise stdout contains a named `CGROUP SKIP` with the capability reason.
 The selector is factory-instance scoped, so the two runs cannot race through
-process environment.
+process environment. Generated Cargo test harnesses never substitute a
+process-group kernel: agent Cargo tests use a compiled helper with production
+Auto or an explicitly injected forced supervisor, while worker Cargo tests
+route the same real supervisor through their compiled custom-harness fixture.
 
 Every dynamic case requires TERM evidence, a recovered disposition, a bounded
 survivor identity with start tick and executable, recursive-empty proof, exact
@@ -47,7 +50,12 @@ Blocked cleanup is throttled operator evidence and remains non-terminal.
 | Split worker and standalone signal shutdown | `shutdown_joins_active_job_without_publishing_a_cancellation_result`, `shutdown_applies_forced_and_hard_deadlines_before_joining`, and capstone held-agent cancellation | Fixture cleanup under both backends; task registry and entrypoint ordering are backend-independent | Active attempt fence closes; containment and task group join before worker return or assignment release | cancellation/cleanup events; blocked cleanup retains shutdown wait |
 | Submit/pre-push and worker-managed commands | Capstone `run_pre_push_case`; `cancellation_joins_pre_push_before_late_workspace_mutation`; `dropping_command_kills_and_joins_before_late_mutation` | Pre-push production Auto plus shared primitive under forced supervisor; command owner logic is common | Gate/git/fingerprint result follows recursive cleanup and bounded stdout/stderr joins; complete git overflow is an error | cleanup-completed or cleanup-blocked with owner scope |
 | TERM failure, KILL escalation, survivor and inspection faults | Capstone ignored-TERM cases; `reports_bound_survivors_attempts_and_diagnostics`; `blocked_inspection_cannot_complete_cleanup`; `cleanup_blocked_retains_fence_permit_and_rejects_unproven_completion` | Shared deterministic kernel plus both live Linux backends | Failed inspection has no terminal report; capacity, attempt fence, and permit remain held until recovery | structured TERM/KILL outcomes, bounded PID/PPID/PGID/SID/executable; throttled `worker.containment.cleanup_blocked` |
-| Exact bounded `non_completed_stop` | `worker_abort_exits_nonzero_without_result_and_names_stable_reason` | Production Auto containment (cgroup or supervisor fallback) | Agent exit and lifecycle join precede assertion; no result is accepted | typed `aborted` / `worker_requested` failure, bounded diagnostics |
+| Exact bounded `non_completed_stop` | `worker_abort_exits_nonzero_without_result_and_names_stable_reason` | Explicit helper-capable forced Linux supervisor around the test-owned agent; production Auto containment remains active for the agent's nested bash tool | Cancellation waits until a nested `setsid` child has published PID/start identity; agent exit, recursive-empty proof, exact child absence, and lifecycle join precede assertion; no result is accepted | typed `aborted` / `worker_requested` failure, bounded diagnostics |
+
+The exact abort regression also records the nested session child's PID and
+`/proc` start tick, rejects a zero start identity, and checks that the exact
+identity is absent when contained agent completion returns. PID reuse therefore
+counts as absence rather than allowing a stale numeric-PID assertion.
 
 The exact abort regression names and asserts these limits:
 

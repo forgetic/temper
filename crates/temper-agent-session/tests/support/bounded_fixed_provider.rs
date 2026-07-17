@@ -48,7 +48,8 @@ pub struct BoundedFixedProvider {
 }
 
 impl BoundedFixedProvider {
-    pub fn start_looping_tool_response() -> io::Result<Self> {
+    pub fn start_looping_tool_response(command: impl Into<String>) -> io::Result<Self> {
+        let command = command.into();
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?;
@@ -58,7 +59,7 @@ impl BoundedFixedProvider {
         let owner_state = Arc::clone(&state);
         let thread = thread::Builder::new()
             .name("temper-bounded-fixed-provider".to_string())
-            .spawn(move || serve(listener, &owner_shutdown, &owner_state))?;
+            .spawn(move || serve(listener, &owner_shutdown, &owner_state, &command))?;
         Ok(Self {
             address,
             shutdown,
@@ -92,11 +93,16 @@ impl Drop for BoundedFixedProvider {
     }
 }
 
-fn serve(listener: TcpListener, shutdown: &AtomicBool, state: &Mutex<ProviderState>) {
+fn serve(
+    listener: TcpListener,
+    shutdown: &AtomicBool,
+    state: &Mutex<ProviderState>,
+    command: &str,
+) {
     while !shutdown.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((stream, _)) => {
-                let _ = handle_connection(stream, state);
+                let _ = handle_connection(stream, state, command);
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(PROVIDER_POLL_INTERVAL);
@@ -106,7 +112,11 @@ fn serve(listener: TcpListener, shutdown: &AtomicBool, state: &Mutex<ProviderSta
     }
 }
 
-fn handle_connection(mut stream: TcpStream, state: &Mutex<ProviderState>) -> io::Result<()> {
+fn handle_connection(
+    mut stream: TcpStream,
+    state: &Mutex<ProviderState>,
+    command: &str,
+) -> io::Result<()> {
     stream.set_read_timeout(Some(PROVIDER_IO_TIMEOUT))?;
     stream.set_write_timeout(Some(PROVIDER_IO_TIMEOUT))?;
     let header = read_header(&mut stream)?;
@@ -142,7 +152,7 @@ fn handle_connection(mut stream: TcpStream, state: &Mutex<ProviderState>) -> io:
         &mut stream,
         "200 OK",
         "text/event-stream",
-        looping_tool_response().as_bytes(),
+        looping_tool_response(command).as_bytes(),
     )
 }
 
@@ -221,7 +231,7 @@ fn record_request(state: &Mutex<ProviderState>, content_length: usize, tail: Vec
     state.stats.retained_history_bytes = state.retained.iter().map(Vec::len).sum();
 }
 
-fn looping_tool_response() -> String {
+fn looping_tool_response(command: &str) -> String {
     let frames = [
         serde_json::json!({
             "choices": [{"delta": {"role": "assistant"}, "finish_reason": null}]
@@ -240,7 +250,7 @@ fn looping_tool_response() -> String {
                     "index": 0,
                     "id": "abort-loop",
                     "type": "function",
-                    "function": {"name": "ls", "arguments": ""}
+                    "function": {"name": "bash", "arguments": ""}
                 }]},
                 "finish_reason": null
             }]
@@ -250,7 +260,7 @@ fn looping_tool_response() -> String {
             "choices": [{
                 "delta": {"tool_calls": [{
                     "index": 0,
-                    "function": {"arguments": "{\"path\":\".\"}"}
+                    "function": {"arguments": serde_json::json!({"command": command}).to_string()}
                 }]},
                 "finish_reason": null
             }]
