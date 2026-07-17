@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    AgentActivityConfig, CodingAgentError, ForgeContextHost, ProviderConfig, RunTotals,
-    SubmitForPrHost, run_coding_agent_native_with_totals_tool_config_and_hosts,
+    AgentAbortAuthority, AgentActivityConfig, CodingAgentError, ForgeContextHost, ProviderConfig,
+    RunTotals, SubmitForPrHost, run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
 use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
@@ -27,6 +27,7 @@ use temper_log::emit::{
 };
 use temper_protocol_activity::FailureCodeV1;
 use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext};
+use temper_protocol_worker::FailureClass;
 use temper_worker::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput,
     AgentRunRequest, AgentRunner, TraceCollector, WorkerAgentTraceConfig,
@@ -166,6 +167,8 @@ impl InProcessAgentRunner {
         let job_id = request.job_id;
         let context = request.context;
         let cwd = request.cwd;
+        let fence = request.fence;
+        let cancellation = request.cancellation;
         let progress = request.progress;
         // §7 agent boundary events. The `item` ref is the work-item subject tag
         // (`[repo#n]` / `[repo PR#n]`); `kind` is the role's activity verb
@@ -279,20 +282,27 @@ impl InProcessAgentRunner {
                 runtime_limits,
             )
             .await;
-            let (terminal_status, terminal_reason) = agent_terminal_report(&outcome);
-            let outcome = outcome.map_err(classify_coding_agent_error);
+            // The typed coding-agent error remains intact through both outer
+            // terminal projections. A closed attempt fence/watchdog request is
+            // stronger cancellation authority than an unrequested provider
+            // abort, but it must not reclassify unrelated failures.
+            let worker_cancellation_requested = cancellation.is_cancelled() || !fence.is_open();
+            let (terminal_status, terminal_reason) =
+                agent_terminal_report(&outcome, worker_cancellation_requested);
 
             if let Some(endpoint) = activity_endpoint {
                 endpoint.stop();
             }
             if let Some(trace) = trace {
-                let terminal = match terminal_status {
-                    AgentTerminalStatus::Succeeded => trace.finish_success(None),
-                    AgentTerminalStatus::Cancelled => trace.finish_cancelled(),
-                    AgentTerminalStatus::Failed => match &outcome {
-                        Err(error) => trace.finish_failure(FailureCodeV1::Internal, error.class),
-                        Ok(_) => unreachable!("a successful result has successful terminal status"),
-                    },
+                // Every non-completed agent path is a failed outer run. The
+                // failure class still distinguishes authoritative cancellation
+                // from retryable provider/budget failures.
+                let terminal = match &outcome {
+                    Ok(_) => trace.finish_success(None),
+                    Err(error) => trace.finish_failure(
+                        FailureCodeV1::Internal,
+                        coding_agent_failure_class(error, worker_cancellation_requested),
+                    ),
                 };
                 match terminal {
                     Ok(sequence) => {
@@ -336,7 +346,7 @@ impl InProcessAgentRunner {
                         let base = result.summary.clone().unwrap_or_else(|| "done".to_string());
                         format!("{base} | {}", totals_suffix(*totals))
                     }
-                    Err(error) => error.message.clone(),
+                    Err(error) => error.to_string(),
                 };
                 emit_agent_finished(AgentFinished {
                     item,
@@ -349,7 +359,11 @@ impl InProcessAgentRunner {
                 });
             }
 
-            let (result, _totals) = outcome?;
+            // Conversion to the generic worker boundary happens only after the
+            // trace and operator event have selected their typed terminal data.
+            let (result, _totals) = outcome.map_err(|error| {
+                classify_coding_agent_error(error, worker_cancellation_requested)
+            })?;
 
             Ok(AgentRunOutput {
                 result,
@@ -361,6 +375,7 @@ impl InProcessAgentRunner {
 
 fn agent_terminal_report<T>(
     outcome: &Result<T, CodingAgentError>,
+    worker_cancellation_requested: bool,
 ) -> (AgentTerminalStatus, Option<AgentTerminalReasonV1>) {
     match outcome {
         Ok(_) => (
@@ -375,12 +390,23 @@ fn agent_terminal_report<T>(
             AgentTerminalStatus::Failed,
             Some(AgentTerminalReasonV1::BudgetExhausted),
         ),
-        Err(CodingAgentError::Aborted { .. }) => (
-            AgentTerminalStatus::Cancelled,
+        Err(CodingAgentError::Aborted { authority }) => (
+            if abort_is_authoritative(*authority, worker_cancellation_requested) {
+                AgentTerminalStatus::Cancelled
+            } else {
+                AgentTerminalStatus::Failed
+            },
             Some(AgentTerminalReasonV1::Aborted),
         ),
         Err(_) => (AgentTerminalStatus::Failed, None),
     }
+}
+
+fn abort_is_authoritative(
+    authority: AgentAbortAuthority,
+    worker_cancellation_requested: bool,
+) -> bool {
+    authority == AgentAbortAuthority::WorkerRequested || worker_cancellation_requested
 }
 
 /// The §7 run-kind (`role/kind`) for a worker role.
@@ -492,20 +518,37 @@ fn parse_target_number(target: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// Map an agent-core error to the worker's transient/permanent classification.
-fn classify_coding_agent_error(error: CodingAgentError) -> AgentRunError {
+/// Map an agent-core error to the worker's retry/cancellation classification.
+fn classify_coding_agent_error(
+    error: CodingAgentError,
+    worker_cancellation_requested: bool,
+) -> AgentRunError {
+    let class = coding_agent_failure_class(&error, worker_cancellation_requested);
+    AgentRunError::new(class, error.to_string())
+}
+
+fn coding_agent_failure_class(
+    error: &CodingAgentError,
+    worker_cancellation_requested: bool,
+) -> FailureClass {
     match error {
+        CodingAgentError::Aborted { authority } => {
+            if abort_is_authoritative(*authority, worker_cancellation_requested) {
+                FailureClass::Canceled
+            } else {
+                FailureClass::Transient
+            }
+        }
         CodingAgentError::Provider(_)
         | CodingAgentError::Run(_)
         | CodingAgentError::AgentStopped(_)
         | CodingAgentError::BudgetExhausted { .. }
-        | CodingAgentError::Aborted { .. }
         | CodingAgentError::ModelUnavailable { .. }
         | CodingAgentError::CodebaseMemory(_)
-        | CodingAgentError::Parse { .. } => AgentRunError::transient(error.to_string()),
+        | CodingAgentError::Parse { .. } => FailureClass::Transient,
         CodingAgentError::NoProduct
         | CodingAgentError::UndeclaredVerdict { .. }
-        | CodingAgentError::InvalidVerdictResult(_) => AgentRunError::permanent(error.to_string()),
+        | CodingAgentError::InvalidVerdictResult(_) => FailureClass::Permanent,
     }
 }
 

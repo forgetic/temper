@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use temper_protocol_activity::{AgentActivityChildRecordV1, AgentActivityFrameV1};
+use temper_protocol_activity::{
+    AgentActivityChildRecordV1, AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1,
+};
 
 use super::{MAX_CHILD_ACTIVITY_FRAME_BYTES, MAX_CHILD_ACTIVITY_RECORD_BYTES, TraceRun};
 
@@ -16,9 +18,18 @@ const FRAME_READ_TIMEOUT: Duration = Duration::from_secs(2);
 /// newline-delimited stream of independently bounded bare frames or
 /// attachment-bearing child records. The stream may remain idle while the run
 /// is active.
+#[derive(Clone, Default)]
+struct ActivityEndpointState {
+    stopping: Arc<AtomicBool>,
+    connected: Arc<AtomicBool>,
+    stream_finished: Arc<AtomicBool>,
+    main_scope_started: Arc<AtomicBool>,
+    main_scope_finished: Arc<AtomicBool>,
+}
+
 pub struct ActivityEndpoint {
     address: String,
-    stopping: Arc<AtomicBool>,
+    state: ActivityEndpointState,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -41,8 +52,8 @@ impl ActivityEndpoint {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?.to_string();
-        let stopping = Arc::new(AtomicBool::new(false));
-        let thread_stopping = Arc::clone(&stopping);
+        let state = ActivityEndpointState::default();
+        let thread_state = state.clone();
         let thread_address = address.clone();
         let thread = thread::Builder::new()
             .name(format!("trace-{}", run.run_id()))
@@ -50,14 +61,14 @@ impl ActivityEndpoint {
                 serve(
                     listener,
                     run,
-                    thread_stopping,
+                    thread_state,
                     &thread_address,
                     read_poll_duration,
                 )
             })?;
         Ok(Self {
             address,
-            stopping,
+            state,
             thread: Some(thread),
         })
     }
@@ -74,7 +85,41 @@ impl ActivityEndpoint {
     }
 
     fn stop_inner(&mut self) {
-        self.stopping.store(true, Ordering::Release);
+        // A main-scope terminus is the final child record for the run. Give an
+        // already-connected producer a short bounded opportunity to make that
+        // record durable before closing the endpoint; otherwise the host's
+        // outer terminal event could race ahead and reject the typed child
+        // reason as `AlreadyTerminal`.
+        for _ in 0..10 {
+            if self.state.connected.load(Ordering::Acquire) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        if self.state.connected.load(Ordering::Acquire) {
+            // `connect` can win just before the receiver ingests scope.started.
+            // Let it identify a real main-scope stream before deciding whether
+            // the terminal drain applies.
+            for _ in 0..10 {
+                if self.state.main_scope_started.load(Ordering::Acquire)
+                    || self.state.stream_finished.load(Ordering::Acquire)
+                {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        if self.state.main_scope_started.load(Ordering::Acquire) {
+            for _ in 0..250 {
+                if self.state.main_scope_finished.load(Ordering::Acquire)
+                    || self.state.stream_finished.load(Ordering::Acquire)
+                {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        self.state.stopping.store(true, Ordering::Release);
         let _ = TcpStream::connect(&self.address);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -91,19 +136,28 @@ impl Drop for ActivityEndpoint {
 fn serve(
     listener: TcpListener,
     run: TraceRun,
-    stopping: Arc<AtomicBool>,
+    state: ActivityEndpointState,
     address: &str,
     read_poll_duration: Duration,
 ) {
-    while !stopping.load(Ordering::Acquire) {
+    while !state.stopping.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((stream, peer)) => {
-                if stopping.load(Ordering::Acquire) {
+                if state.stopping.load(Ordering::Acquire) {
                     break;
                 }
-                if let Err(error) =
-                    receive_activity_stream(stream, &run, &stopping, read_poll_duration)
-                {
+                state.connected.store(true, Ordering::Release);
+                state.stream_finished.store(false, Ordering::Release);
+                let outcome = receive_activity_stream(
+                    stream,
+                    &run,
+                    &state.stopping,
+                    &state.main_scope_started,
+                    &state.main_scope_finished,
+                    read_poll_duration,
+                );
+                state.stream_finished.store(true, Ordering::Release);
+                if let Err(error) = outcome {
                     tracing::warn!(
                         target: "temper::worker",
                         service = "worker",
@@ -141,6 +195,8 @@ fn receive_activity_stream(
     stream: TcpStream,
     run: &TraceRun,
     stopping: &AtomicBool,
+    main_scope_started: &AtomicBool,
+    main_scope_finished: &AtomicBool,
     read_poll_duration: Duration,
 ) -> Result<(), String> {
     stream
@@ -241,11 +297,27 @@ fn receive_activity_stream(
                         "child frame exceeds {MAX_CHILD_ACTIVITY_FRAME_BYTES} bytes"
                     ));
                 }
+                let is_main_start = is_main_scope_start(&frame);
+                let is_main_terminal = is_main_scope_terminal(&frame);
                 run.accept_frame(frame).map_err(|error| error.to_string())?;
+                if is_main_start {
+                    main_scope_started.store(true, Ordering::Release);
+                }
+                if is_main_terminal {
+                    main_scope_finished.store(true, Ordering::Release);
+                }
             }
             (Err(_), Ok(record)) => {
+                let is_main_start = is_main_scope_start(&record.frame);
+                let is_main_terminal = is_main_scope_terminal(&record.frame);
                 run.accept_record(record)
                     .map_err(|error| error.to_string())?;
+                if is_main_start {
+                    main_scope_started.store(true, Ordering::Release);
+                }
+                if is_main_terminal {
+                    main_scope_finished.store(true, Ordering::Release);
+                }
             }
             (Ok(_), Ok(_)) => {
                 return Err("child activity input is ambiguous".to_string());
@@ -256,4 +328,14 @@ fn receive_activity_stream(
         }
         received = true;
     }
+}
+
+fn is_main_scope_start(frame: &AgentActivityFrameV1) -> bool {
+    frame.scope.kind == AgentScopeKindV1::Main
+        && matches!(frame.event, AgentActivityEventV1::ScopeStarted(_))
+}
+
+fn is_main_scope_terminal(frame: &AgentActivityFrameV1) -> bool {
+    frame.scope.kind == AgentScopeKindV1::Main
+        && matches!(frame.event, AgentActivityEventV1::ScopeFinished(_))
 }

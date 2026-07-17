@@ -23,6 +23,10 @@ temper-agent-io = { path = "../temper-agent-io" }
 temper-protocol-agent = { path = "../temper-protocol-agent" }
 temper-protocol-activity = { path = "../temper-protocol-activity" }
 
+[dev-dependencies]
+jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+
 [[bin]]
 name = "temper-agent"
 path = "src/bin/temper-agent.rs"

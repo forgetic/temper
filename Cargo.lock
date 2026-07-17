@@ -1702,6 +1702,8 @@ name = "temper-agent-session"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "jig-core",
+ "jig-server",
  "serde_json",
  "skein",
  "temper-agent",
@@ -1763,6 +1765,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "jig-core",
+ "jig-server",
+ "serde_json",
  "skein",
  "temper-agent",
  "temper-agent-session",
@@ -1783,6 +1788,7 @@ dependencies = [
  "temper-workflow",
  "tempfile",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
