@@ -1,0 +1,7 @@
+{
+  "type": "scope.finished",
+  "data": {
+    "status": "succeeded",
+    "duration_ms": 900
+  }
+}

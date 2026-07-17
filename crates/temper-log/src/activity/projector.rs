@@ -137,6 +137,9 @@ impl CanonicalActivityProjector {
             }
             Event::ScopeFinished(scope) => {
                 self.flush_pending(event, Some(event.scope.id.as_str()));
+                self.with_active(event, &scope_span_id(event), |span| {
+                    span.attributes.terminal_reason = scope.terminal_reason;
+                });
                 self.finish_span(
                     event,
                     &scope_span_id(event),

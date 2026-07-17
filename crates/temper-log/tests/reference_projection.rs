@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use temper_log::emit::{
-    self, AgentFinished, AgentStarted, CiCompleted, GateEvaluated, IssueOpened, ItemResolved,
-    LeaseClaimed, LeaseReleased, PrHandoffFacts, PrMerged, PrOpened, PrUpdated, QueueEntered,
-    RoleSaturated, TransitionApplied, WakeReceived,
+    self, AgentFinished, AgentStarted, AgentTerminalReasonV1, AgentTerminalStatus, CiCompleted,
+    GateEvaluated, IssueOpened, ItemResolved, LeaseClaimed, LeaseReleased, PrHandoffFacts,
+    PrMerged, PrOpened, PrUpdated, QueueEntered, RoleSaturated, TransitionApplied, WakeReceived,
 };
 use temper_log::{Event, WorkItemRef, work_item_span};
 use tracing::field::{Field, Visit};
@@ -191,6 +191,8 @@ fn section_seven_reference_projection_is_prefixed_and_structured() {
     assert_eq!(agent_finished.target, "temper::agent");
     assert_eq!(agent_finished.text("service"), "agent");
     assert_eq!(agent_finished.u64("duration_ms"), 73_000);
+    assert_eq!(agent_finished.text("status"), "succeeded");
+    assert_eq!(agent_finished.text("reason"), "completed");
     assert!(agent_finished.text("message").contains("1m13s"));
 
     let transition = event_named(&captured, Event::TransitionApplied.as_str());
@@ -279,8 +281,10 @@ fn json_fmt_projection_keeps_prefixed_message_and_queryable_fields() {
             item: &item,
             role: "architect",
             kind: "triage",
+            status: AgentTerminalStatus::Failed,
+            terminal_reason: Some(AgentTerminalReasonV1::BudgetExhausted),
             duration_ms: 73_000,
-            summary: "verdict=ready_code",
+            summary: "agent exceeded its tool budget",
         });
     });
 
@@ -302,9 +306,14 @@ fn json_fmt_projection_keeps_prefixed_message_and_queryable_fields() {
 
     assert_eq!(
         fields.get("message").and_then(Value::as_str),
-        Some("agent:   [acme/widgets#42] architect/triage done in 1m13s | verdict=ready_code")
+        Some("agent:   [acme/widgets#42] architect/triage failed in 1m13s | budget_exhausted")
     );
     assert_eq!(fields.get("service").and_then(Value::as_str), Some("agent"));
+    assert_eq!(fields.get("status").and_then(Value::as_str), Some("failed"));
+    assert_eq!(
+        fields.get("reason").and_then(Value::as_str),
+        Some("budget_exhausted")
+    );
     assert_eq!(
         fields.get("artifact.ref").and_then(Value::as_str),
         Some("acme/widgets#42")
@@ -371,6 +380,8 @@ fn emit_reference_lifecycle() {
         item: &issue,
         role: "architect",
         kind: "triage",
+        status: AgentTerminalStatus::Succeeded,
+        terminal_reason: Some(AgentTerminalReasonV1::Completed),
         duration_ms: 73_000,
         summary: "verdict=ready_code",
     });
