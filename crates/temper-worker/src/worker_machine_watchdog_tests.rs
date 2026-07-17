@@ -11,13 +11,11 @@ use temper_worker_io::{EngineTime, Machine};
 
 use super::tests::{assign, params};
 use super::{
-    JobCleanup, JobPhase, TimeoutReason, WatchdogTimerKind, WorkerCompletion, WorkerMachine,
-    WorkerRequest,
+    AttemptCompletion, JobCleanup, JobPhase, TimeoutReason, WatchdogTimerKind, WorkerCompletion,
+    WorkerMachine, WorkerRequest,
 };
 use crate::agent_runner::JobProgress;
-use crate::executor::{
-    CancellationOutcome, DescendantCleanupStatus, JobOutcome, job_result_for_attempt,
-};
+use crate::executor::{CancellationOutcome, JobOutcome, job_result_for_attempt};
 use crate::result_outbox::ResultOutboxEntry;
 
 fn dispatch_at(machine: &mut WorkerMachine, job_id: &str, now: EngineTime) -> Vec<WorkerRequest> {
@@ -58,6 +56,38 @@ fn terminal_result(job_id: &str) -> temper_protocol_worker::JobResult {
             message: "finished".to_string(),
         },
     )
+}
+
+fn normal_completion(
+    job_id: &str,
+    generation: u64,
+    result: temper_protocol_worker::JobResult,
+) -> WorkerCompletion {
+    WorkerCompletion::AttemptQuiesced {
+        job_id: job_id.to_string(),
+        attempt_id: format!("attempt-{job_id}"),
+        generation,
+        completion: AttemptCompletion {
+            result: Some(result),
+            cleanup: JobCleanup::no_process(None),
+        },
+    }
+}
+
+fn cancelled_completion(
+    job_id: &str,
+    generation: u64,
+    cancellation: CancellationOutcome,
+) -> WorkerCompletion {
+    WorkerCompletion::AttemptQuiesced {
+        job_id: job_id.to_string(),
+        attempt_id: format!("attempt-{job_id}"),
+        generation,
+        completion: AttemptCompletion {
+            result: None,
+            cleanup: JobCleanup::no_process(Some(cancellation)),
+        },
+    }
 }
 
 #[test]
@@ -239,15 +269,7 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
 
     let record = machine.on_completion(
         EngineTime::from_nanos(14),
-        WorkerCompletion::JobQuiesced {
-            job_id: "job-timeout".to_string(),
-            attempt_id: "attempt-job-timeout".to_string(),
-            generation,
-            cleanup: JobCleanup {
-                cancellation: CancellationOutcome::Graceful,
-                descendants: DescendantCleanupStatus::Clean,
-            },
-        },
+        cancelled_completion("job-timeout", generation, CancellationOutcome::Graceful),
     );
     assert_eq!(machine.free_capacity(), 0, "recording precedes release");
     assert!(record.iter().any(|request| matches!(
@@ -257,7 +279,7 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
             forced: false,
             descendant_cleanup,
             ..
-        }) if outcome == "graceful" && descendant_cleanup == "clean"
+        }) if outcome == "graceful" && descendant_cleanup == "AlreadyEmpty"
     )));
     let result = record
         .iter()
@@ -284,12 +306,7 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
         machine
             .on_completion(
                 EngineTime::from_nanos(14),
-                WorkerCompletion::JobFinished {
-                    job_id: "job-timeout".to_string(),
-                    attempt_id: "attempt-job-timeout".to_string(),
-                    generation,
-                    result: terminal_result("job-timeout"),
-                },
+                normal_completion("job-timeout", generation, terminal_result("job-timeout")),
             )
             .is_empty()
     );
@@ -333,12 +350,7 @@ fn normal_completion_beats_timeout_and_duplicate_completion_releases_once() {
 
     let first = machine.on_completion(
         EngineTime::from_nanos(11),
-        WorkerCompletion::JobFinished {
-            job_id: "job-race".to_string(),
-            attempt_id: "attempt-job-race".to_string(),
-            generation,
-            result: result.clone(),
-        },
+        normal_completion("job-race", generation, result.clone()),
     );
     assert!(
         first
@@ -363,12 +375,7 @@ fn normal_completion_beats_timeout_and_duplicate_completion_releases_once() {
         machine
             .on_completion(
                 EngineTime::from_nanos(12),
-                WorkerCompletion::JobFinished {
-                    job_id: "job-race".to_string(),
-                    attempt_id: "attempt-job-race".to_string(),
-                    generation,
-                    result: result.clone(),
-                },
+                normal_completion("job-race", generation, result.clone()),
             )
             .is_empty()
     );
@@ -453,15 +460,11 @@ fn max_run_is_independent_of_progress_and_releasing_one_of_many_preserves_member
     );
     let record = machine.on_completion(
         EngineTime::from_nanos(22),
-        WorkerCompletion::JobQuiesced {
-            job_id: "job-a".to_string(),
-            attempt_id: "attempt-job-a".to_string(),
-            generation: generation_a,
-            cleanup: JobCleanup {
-                cancellation: CancellationOutcome::ForcedTermination,
-                descendants: DescendantCleanupStatus::Terminated,
-            },
-        },
+        cancelled_completion(
+            "job-a",
+            generation_a,
+            CancellationOutcome::ForcedTermination,
+        ),
     );
     let result = record
         .iter()

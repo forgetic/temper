@@ -76,8 +76,8 @@ impl AttemptFence {
 
 mod cancellation;
 pub use cancellation::{
-    CancellationOutcome, DescendantCleanupStatus, JobCancellation, JobCancellationRequest,
-    JobCleanup,
+    CancellationOutcome, JobCancellation, JobCancellationRequest, JobCleanup, ResourceJoinReport,
+    ResourceJoinStatus,
 };
 
 /// Worker-owned controls supplied to every layer of one job execution.
@@ -289,15 +289,12 @@ mod tests {
             cancellation.poll_request(Some(JobCancellationRequest::ForcedTermination), &mut cx),
             Poll::Ready(JobCancellationRequest::HardKill)
         );
-        let cleanup = JobCleanup {
-            cancellation: CancellationOutcome::HardKill,
-            descendants: DescendantCleanupStatus::HardKilled,
-        };
+        let cleanup = JobCleanup::no_process(Some(CancellationOutcome::HardKill));
         assert!(cancellation.record_cleanup(cleanup.clone()));
-        assert!(!cancellation.record_cleanup(JobCleanup {
-            cancellation: CancellationOutcome::Graceful,
-            descendants: DescendantCleanupStatus::Clean,
-        }));
+        assert!(
+            !cancellation
+                .record_cleanup(JobCleanup::no_process(Some(CancellationOutcome::Graceful,)))
+        );
         assert_eq!(cancellation.cleanup(), Some(cleanup));
 
         let owned = JobCancellation::default();

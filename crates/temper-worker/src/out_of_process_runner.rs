@@ -24,10 +24,11 @@ use std::future::Future;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::task::Poll;
 
+use temper_process_containment::{ContainmentFactory, ContainmentScope};
 use temper_protocol_activity::{
     ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, TRACE_POLICY_FLAG,
 };
@@ -43,7 +44,6 @@ use crate::agent_runner::{
     AgentRunOutput, WorkspaceResult,
 };
 use crate::executor::{AttemptFence, JobCancellation};
-use crate::pre_push::submit_for_pr_pre_push_response;
 use crate::trace::{TraceCollector, TraceRun};
 use crate::{WorkerAgentTraceConfig, WorkerLivenessLimits};
 
@@ -55,7 +55,7 @@ mod side_channel;
 mod stderr;
 mod supervisor;
 mod terminal;
-pub use crate::executor::{CancellationOutcome, DescendantCleanupStatus};
+pub use crate::executor::CancellationOutcome;
 use side_channel::{
     ForgeSideChannelRequest, LocalServer, SubmitSideChannelRequest, start_forge_server,
     start_submit_server, submit_for_pr_available,
@@ -68,13 +68,31 @@ use supervisor::{ManagedAgentProcess, SupervisorResult};
 
 /// Host-side submit gate used by the out-of-process carrier.
 type SubmitForPrFuture = Pin<Box<dyn Future<Output = SubmitForPrResponse> + Send + 'static>>;
-type SubmitForPrHandler =
-    Arc<dyn Fn(SubmitForPrRequest, WorkspaceContext, PathBuf) -> SubmitForPrFuture + Send + Sync>;
+type SubmitForPrHandler = Arc<
+    dyn Fn(SubmitForPrRequest, WorkspaceContext, PathBuf, JobCancellation) -> SubmitForPrFuture
+        + Send
+        + Sync,
+>;
 
 fn default_submit_for_pr_handler() -> SubmitForPrHandler {
-    Arc::new(|request, context, cwd| {
-        Box::pin(async move { submit_for_pr_pre_push_response(&request, &context, cwd).await })
+    Arc::new(|request, context, cwd, cancellation| {
+        Box::pin(async move {
+            crate::pre_push::submit_for_pr_pre_push_response_controlled(
+                &request,
+                &context,
+                cwd,
+                cancellation,
+            )
+            .await
+        })
     })
+}
+
+type ContainmentFactoryProvider =
+    Arc<dyn Fn(&str, &str) -> std::io::Result<ContainmentFactory> + Send + Sync>;
+
+fn default_containment_factory_provider() -> ContainmentFactoryProvider {
+    Arc::new(crate::process_containment::production_factory)
 }
 
 /// Spawns an agent program speaking the `smith-agent-protocol`.
@@ -109,6 +127,8 @@ pub struct OutOfProcessRunner {
     submit_for_pr: SubmitForPrHandler,
     /// Optional authenticated, assignment-bound read-only Forge host.
     forge_context: Option<AgentForgeContextHost>,
+    /// Attempt-scoped descendant-complete containment composition.
+    containment_factory: ContainmentFactoryProvider,
     /// Unit-test override used to verify diagnostics emitted from the blocking
     /// pool without installing a process-global subscriber.
     #[cfg(test)]
@@ -134,6 +154,7 @@ impl std::fmt::Debug for OutOfProcessRunner {
                 "forge_context",
                 &self.forge_context.as_ref().map(|_| "<host>"),
             )
+            .field("containment_factory", &"<factory>")
             .finish()
     }
 }
@@ -151,6 +172,7 @@ impl OutOfProcessRunner {
             trace_collector: TraceCollector::default(),
             submit_for_pr: default_submit_for_pr_handler(),
             forge_context: None,
+            containment_factory: default_containment_factory_provider(),
             #[cfg(test)]
             diagnostic_dispatch: None,
         }
@@ -210,7 +232,7 @@ impl OutOfProcessRunner {
             + Sync
             + 'static,
     {
-        self.submit_for_pr = Arc::new(move |request, context, cwd| {
+        self.submit_for_pr = Arc::new(move |request, context, cwd, _cancellation| {
             let response = handler(request, &context, &cwd);
             Box::pin(std::future::ready(response))
         });
@@ -224,8 +246,9 @@ impl OutOfProcessRunner {
         F: Fn(SubmitForPrRequest, WorkspaceContext, PathBuf) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = SubmitForPrResponse> + Send + 'static,
     {
-        self.submit_for_pr =
-            Arc::new(move |request, context, cwd| Box::pin(handler(request, context, cwd)));
+        self.submit_for_pr = Arc::new(move |request, context, cwd, _cancellation| {
+            Box::pin(handler(request, context, cwd))
+        });
         self
     }
 
@@ -233,6 +256,16 @@ impl OutOfProcessRunner {
     #[must_use]
     pub fn with_forge_context_host(mut self, host: AgentForgeContextHost) -> Self {
         self.forge_context = Some(host);
+        self
+    }
+
+    /// Overrides attempt containment selection without process-global state.
+    #[must_use]
+    pub fn with_containment_factory<F>(mut self, factory: F) -> Self
+    where
+        F: Fn(&str, &str) -> std::io::Result<ContainmentFactory> + Send + Sync + 'static,
+    {
+        self.containment_factory = Arc::new(factory);
         self
     }
 

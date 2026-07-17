@@ -16,7 +16,9 @@ use std::task::{Context, Poll, Waker};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use temper_process_containment::{ProcessContainment, configure_command};
+use temper_process_containment::{CleanupSnapshot, CleanupTrigger, ContainmentScope};
+
+use crate::executor::JobCancellation;
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -93,6 +95,16 @@ impl<T> Drop for JoinedBlocking<T> {
     }
 }
 
+struct CommandCleanupObserver(JobCancellation);
+
+impl temper_process_containment::CleanupObserver for CommandCleanupObserver {
+    fn observe(&self, snapshot: &CleanupSnapshot) {
+        if matches!(snapshot, CleanupSnapshot::Blocked { .. }) {
+            self.0.observe_cleanup(snapshot.clone());
+        }
+    }
+}
+
 /// A contained subprocess whose process tree and waiter/readers are joined on
 /// every completion path. Dropping it requests an immediate group kill.
 pub(crate) struct ManagedCommand {
@@ -102,13 +114,7 @@ pub(crate) struct ManagedCommand {
 }
 
 impl ManagedCommand {
-    pub(crate) fn spawn(mut command: Command) -> Self {
-        configure_command(&mut command);
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
+    pub(crate) fn spawn(command: Command, job_cancellation: JobCancellation) -> Self {
         let state = Arc::new(Mutex::new(OwnerState {
             result: None,
             waker: None,
@@ -120,7 +126,7 @@ impl ManagedCommand {
             .name("temper-worker-command".to_string())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_command(command, &thread_cancelled)
+                    run_command(command, &thread_cancelled, job_cancellation)
                 }))
                 .unwrap_or_else(|_| Err(io::Error::other("worker command owner panicked")));
                 publish(&thread_state, result);
@@ -176,49 +182,51 @@ impl Drop for ManagedCommand {
     }
 }
 
-fn run_command(mut command: Command, cancelled: &AtomicBool) -> io::Result<Output> {
-    let mut child = command.spawn()?;
-    let containment = match ProcessContainment::attach(&child) {
-        Ok(containment) => containment,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::new(
-                error.kind(),
-                format!("attach process containment: {error}"),
-            ));
-        }
-    };
+fn run_command(
+    command: Command,
+    cancelled: &AtomicBool,
+    job_cancellation: JobCancellation,
+) -> io::Result<Output> {
+    let contained_command = crate::process_containment::containment_command(
+        &command,
+        Stdio::null(),
+        Stdio::piped(),
+        Stdio::piped(),
+    );
+    let prepared = crate::process_containment::prepare_with_observer(
+        "worker-command",
+        "local",
+        ContainmentScope::WorkerCommand,
+        "managed-command",
+        Some(Arc::new(CommandCleanupObserver(job_cancellation))),
+    )?;
+    let process = prepared.spawn(contained_command)?;
 
-    let stdout = match child.stdout.take() {
+    let stdout = match process.take_stdout()? {
         Some(stdout) => stdout,
         None => {
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.wait();
+            let _ = process.cleanup(CleanupTrigger::Shutdown);
             return Err(io::Error::other("worker command stdout was not piped"));
         }
     };
-    let stderr = match child.stderr.take() {
+    let stderr = match process.take_stderr()? {
         Some(stderr) => stderr,
         None => {
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.wait();
+            let _ = process.cleanup(CleanupTrigger::Shutdown);
             return Err(io::Error::other("worker command stderr was not piped"));
         }
     };
     let stdout_reader = match spawn_reader("stdout", stdout) {
         Ok(reader) => reader,
         Err(error) => {
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.wait();
+            let _ = process.cleanup(CleanupTrigger::Shutdown);
             return Err(error);
         }
     };
     let stderr_reader = match spawn_reader("stderr", stderr) {
         Ok(reader) => reader,
         Err(error) => {
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.wait();
+            let _ = process.cleanup(CleanupTrigger::Shutdown);
             let _ = stdout_reader.join();
             return Err(error);
         }
@@ -226,29 +234,34 @@ fn run_command(mut command: Command, cancelled: &AtomicBool) -> io::Result<Outpu
 
     let status = loop {
         if cancelled.load(Ordering::Acquire) {
-            let _ = containment.hard_kill(&mut child);
-            break child.wait();
+            let _ = process.cleanup(CleanupTrigger::Cancellation);
+            let _ = join_reader(stdout_reader, "stdout");
+            let _ = join_reader(stderr_reader, "stderr");
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "worker command cancelled after proven cleanup",
+            ));
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
+        match process.try_wait_root() {
+            Ok(Some(status)) => break status,
             Ok(None) => thread::park_timeout(PROCESS_POLL_INTERVAL),
             Err(error) => {
-                let _ = containment.hard_kill(&mut child);
-                let _ = child.wait();
-                break Err(error);
+                let _ = process.cleanup(CleanupTrigger::Shutdown);
+                let _ = join_reader(stdout_reader, "stdout");
+                let _ = join_reader(stderr_reader, "stderr");
+                return Err(error);
             }
         }
     };
 
     // Git and configured helpers can background descendants which retain the
-    // output pipes after the direct child exits. Empty the containment before
-    // joining readers so the quiescence boundary covers the complete tree.
-    let _ = containment.hard_kill(&mut child);
-    let _ = child.wait();
+    // output pipes after the direct child exits. Cleanup proves recursive
+    // emptiness before joining readers or publishing command completion.
+    let _cleanup = process.cleanup(CleanupTrigger::NormalRootExit);
     let stdout = join_reader(stdout_reader, "stdout");
     let stderr = join_reader(stderr_reader, "stderr");
     Ok(Output {
-        status: status?,
+        status,
         stdout: stdout?,
         stderr: stderr?,
     })
@@ -345,7 +358,7 @@ mod tests {
 
         let mut process = Command::new(&script);
         process.args([&pid, &entered, &release, &late_mutation]);
-        let mut effect = ManagedCommand::spawn(process);
+        let mut effect = ManagedCommand::spawn(process, JobCancellation::default());
         let waker = Waker::from(Arc::new(NoopWake));
         let mut cx = Context::from_waker(&waker);
         assert!(Pin::new(&mut effect).poll(&mut cx).is_pending());

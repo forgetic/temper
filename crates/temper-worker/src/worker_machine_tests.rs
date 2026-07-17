@@ -14,7 +14,7 @@ use temper_protocol_worker::{
 };
 use temper_worker_io::{EngineTime, Machine, drive_sync};
 
-use super::{WorkerCompletion, WorkerMachine, WorkerRequest};
+use super::{AttemptCompletion, JobCleanup, WorkerCompletion, WorkerMachine, WorkerRequest};
 use crate::config::{CapabilitySpec, WorkerParams};
 use crate::executor::{JobOutcome, job_result_for_attempt};
 use crate::result_outbox::ResultOutboxEntry;
@@ -288,11 +288,14 @@ fn job_finished_reports_result_frees_capacity_and_repolls() {
     );
     let record_requests = run(
         &mut machine,
-        vec![WorkerCompletion::JobFinished {
+        vec![WorkerCompletion::AttemptQuiesced {
             job_id: "job-1".to_string(),
             attempt_id: "attempt-job-1".to_string(),
             generation: 1,
-            result: result.clone(),
+            completion: AttemptCompletion {
+                result: Some(result.clone()),
+                cleanup: JobCleanup::no_process(None),
+            },
         }],
     );
     assert_eq!(machine.free_capacity(), 0);

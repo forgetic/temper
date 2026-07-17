@@ -202,13 +202,15 @@ fn cancelled_paused_commit_joins_before_next_capacity_one_job() {
     let record = temper_worker_io::Machine::on_completion(
         &mut machine,
         temper_worker_io::EngineTime::from_nanos(12),
-        temper_worker::WorkerCompletion::JobQuiesced {
+        temper_worker::WorkerCompletion::AttemptQuiesced {
             job_id: assignment.job_id.clone(),
             attempt_id: assignment.attempt_id.clone().expect("attempt id"),
             generation,
-            cleanup: temper_worker::JobCleanup {
-                cancellation: temper_worker::CancellationOutcome::Graceful,
-                descendants: temper_worker::DescendantCleanupStatus::Clean,
+            completion: temper_worker::AttemptCompletion {
+                result: None,
+                cleanup: temper_worker::JobCleanup::no_process(Some(
+                    temper_worker::CancellationOutcome::Graceful,
+                )),
             },
         },
     );

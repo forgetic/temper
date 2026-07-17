@@ -217,7 +217,7 @@ async fn run_git(
         .arg(&repo)
         .args(&args);
     let output = cancellation
-        .run(ManagedCommand::spawn(git))
+        .run(ManagedCommand::spawn(git, cancellation.clone()))
         .await
         .ok_or(WorkspaceFingerprintError::Cancelled)?
         .map_err(|source| WorkspaceFingerprintError::Io {

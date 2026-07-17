@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+use temper_process_containment::{CleanupReport, CleanupSnapshot, CleanupTrigger};
+
 /// Escalation requested by the worker-owned watchdog.
 ///
 /// Values are ordered so a late or duplicate lower-severity request can never
@@ -58,21 +60,25 @@ impl CancellationOutcome {
     }
 }
 
-/// Final state of the attempt's descendant containment.
+/// Join proof for one attempt-owned thread or endpoint.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DescendantCleanupStatus {
-    Clean,
-    Terminated,
-    HardKilled,
+pub enum ResourceJoinStatus {
+    NotApplicable,
+    Pending,
+    Joined,
     Failed(String),
 }
 
-impl DescendantCleanupStatus {
+impl ResourceJoinStatus {
+    pub fn is_proven(&self) -> bool {
+        matches!(self, Self::NotApplicable | Self::Joined)
+    }
+
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Clean => "clean",
-            Self::Terminated => "terminated",
-            Self::HardKilled => "hard_killed",
+            Self::NotApplicable => "not_applicable",
+            Self::Pending => "pending",
+            Self::Joined => "joined",
             Self::Failed(_) => "failed",
         }
     }
@@ -85,18 +91,77 @@ impl DescendantCleanupStatus {
     }
 }
 
-/// The supervisor's single terminal cancellation report.
+/// Structured proof that every non-process resource at the agent boundary was
+/// stopped and joined before the attempt became terminal.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct JobCleanup {
-    pub cancellation: CancellationOutcome,
-    pub descendants: DescendantCleanupStatus,
+pub struct ResourceJoinReport {
+    pub process_supervisor: ResourceJoinStatus,
+    pub stderr_reader: ResourceJoinStatus,
+    pub lifecycle_endpoint: ResourceJoinStatus,
+    pub activity_endpoint: ResourceJoinStatus,
+    pub submit_endpoint: ResourceJoinStatus,
+    pub forge_endpoint: ResourceJoinStatus,
+    pub lifecycle_cancellation: ResourceJoinStatus,
 }
 
-#[derive(Debug, Default)]
+impl ResourceJoinReport {
+    pub fn no_process() -> Self {
+        Self {
+            process_supervisor: ResourceJoinStatus::NotApplicable,
+            stderr_reader: ResourceJoinStatus::NotApplicable,
+            lifecycle_endpoint: ResourceJoinStatus::NotApplicable,
+            activity_endpoint: ResourceJoinStatus::NotApplicable,
+            submit_endpoint: ResourceJoinStatus::NotApplicable,
+            forge_endpoint: ResourceJoinStatus::NotApplicable,
+            lifecycle_cancellation: ResourceJoinStatus::NotApplicable,
+        }
+    }
+
+    pub fn all_joined(&self) -> bool {
+        self.process_supervisor.is_proven()
+            && self.stderr_reader.is_proven()
+            && self.lifecycle_endpoint.is_proven()
+            && self.activity_endpoint.is_proven()
+            && self.submit_endpoint.is_proven()
+            && self.forge_endpoint.is_proven()
+            && self.lifecycle_cancellation.is_proven()
+    }
+}
+
+/// The attempt owner's single terminal cleanup proof.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobCleanup {
+    pub cancellation: Option<CancellationOutcome>,
+    pub containment: CleanupReport,
+    pub resources: ResourceJoinReport,
+}
+
+impl JobCleanup {
+    pub fn no_process(cancellation: Option<CancellationOutcome>) -> Self {
+        Self {
+            cancellation,
+            containment: CleanupReport::no_process(if cancellation.is_some() {
+                CleanupTrigger::Cancellation
+            } else {
+                CleanupTrigger::NormalRootExit
+            }),
+            resources: ResourceJoinReport::no_process(),
+        }
+    }
+
+    pub fn proves_quiescence(&self) -> bool {
+        self.containment.proves_quiescence() && self.resources.all_joined()
+    }
+}
+
+type CleanupSnapshotObserver = Arc<dyn Fn(CleanupSnapshot) + Send + Sync>;
+
+#[derive(Default)]
 struct JobCancellationState {
     request_waiters: Vec<Waker>,
     async_owners: usize,
     cleanup: Option<JobCleanup>,
+    cleanup_observer: Option<CleanupSnapshotObserver>,
 }
 
 /// Attempt-local cancellation handshake shared by the worker shell and every
@@ -106,10 +171,20 @@ struct JobCancellationState {
 /// wake the async process owner. The process owner records the real joined
 /// cleanup report before returning. Drop remains only an abrupt-owner safety
 /// net; the watchdog path does not rely on it.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct JobCancellation {
     request: Arc<AtomicU8>,
     state: Arc<Mutex<JobCancellationState>>,
+}
+
+impl std::fmt::Debug for JobCancellation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("JobCancellation")
+            .field("requested", &self.requested())
+            .field("cleanup", &self.cleanup())
+            .finish_non_exhaustive()
+    }
 }
 
 impl JobCancellation {
@@ -211,6 +286,31 @@ impl JobCancellation {
                 Some(JobCancellationRequest::HardKill)
             }
             _ => None,
+        }
+    }
+
+    /// Installs the attempt-bound delivery used by containment observers. The
+    /// callback is invoked outside the state lock so a completion queue may
+    /// synchronously wake the worker machine.
+    pub(crate) fn set_cleanup_observer(
+        &self,
+        observer: impl Fn(CleanupSnapshot) + Send + Sync + 'static,
+    ) {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cleanup_observer = Some(Arc::new(observer));
+    }
+
+    pub(crate) fn observe_cleanup(&self, snapshot: CleanupSnapshot) {
+        let observer = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cleanup_observer
+            .clone();
+        if let Some(observer) = observer {
+            observer(snapshot);
         }
     }
 

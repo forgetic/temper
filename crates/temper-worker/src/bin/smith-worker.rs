@@ -1,3 +1,4 @@
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use temper_worker::{
@@ -5,7 +6,13 @@ use temper_worker::{
     ParseOutcome, StubExecutor, USAGE, role_identities_from_env, run_worker,
 };
 
-fn main() {
+fn main() -> ExitCode {
+    #[cfg(target_os = "linux")]
+    if let Some(status) =
+        temper_worker::dispatch_linux_supervisor_helper(std::env::args_os().skip(1))
+    {
+        return status;
+    }
     let outcome = temper_worker::config::parse(std::env::args().skip(1));
     match outcome {
         Ok(ParseOutcome::Help) => {
@@ -22,6 +29,7 @@ fn main() {
             std::process::exit(2);
         }
     }
+    ExitCode::SUCCESS
 }
 
 /// Builds the selected executor and runs the worker on the skein runtime.
