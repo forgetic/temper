@@ -244,6 +244,7 @@ impl JobWatchState {
             AgentLifecycleEventV1::AgentFinished { .. } => self.active_operations.clear(),
             AgentLifecycleEventV1::ModelProgress { .. }
             | AgentLifecycleEventV1::ModelRetrying { .. }
+            | AgentLifecycleEventV1::Containment { .. }
             | AgentLifecycleEventV1::SteeringApplied => {}
         }
     }

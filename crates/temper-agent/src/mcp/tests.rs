@@ -138,6 +138,21 @@ fn assert_reader_joined(config: &StdioMcpServerConfig) {
 }
 
 #[test]
+fn containment_identity_never_uses_mcp_command_or_arguments() {
+    let config = StdioMcpServerConfig::new(
+        "credential=secret-token-sentinel",
+        vec!["--token=secret-token-sentinel".to_string()],
+    );
+    assert_eq!(config.containment_identity(), "mcp-server");
+    assert_eq!(
+        config
+            .with_containment_identity("codebase-memory")
+            .containment_identity(),
+        "codebase-memory"
+    );
+}
+
+#[test]
 fn cancellation_wakes_a_request_mutex_waiter_and_joins_both_operations() {
     let _serial = PROCESS_TEST_LOCK
         .lock()

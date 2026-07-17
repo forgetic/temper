@@ -308,6 +308,7 @@ async fn start_toolset(
     let index_timeout = Duration::from_secs(config.index_timeout_secs);
     let call_timeout = effective_mcp_call_timeout(index_timeout, generic_tool_timeout);
     let mcp_config = StdioMcpServerConfig::new(config.command.clone(), config.args.clone())
+        .with_containment_identity("codebase-memory")
         .with_startup_timeout(startup_timeout)
         .with_call_timeout(index_timeout);
     emit_agent_tool_configured(AgentToolConfigured {

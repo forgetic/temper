@@ -116,6 +116,15 @@ impl ContainmentFactory {
         self
     }
 
+    /// Adds an observer without discarding one already installed by a
+    /// composition root or deterministic test.
+    pub fn with_additional_observer(mut self, observer: Arc<dyn CleanupObserver>) -> Self {
+        self.observer = Arc::new(CompositeCleanupObserver {
+            observers: [Arc::clone(&self.observer), observer],
+        });
+        self
+    }
+
     pub fn policy(&self) -> ContainmentBackendPolicy {
         self.policy
     }
@@ -158,6 +167,36 @@ impl ContainmentFactory {
             spec,
             observer: Arc::clone(&self.observer),
         })
+    }
+}
+
+struct CompositeCleanupObserver {
+    observers: [Arc<dyn CleanupObserver>; 2],
+}
+
+impl CleanupObserver for CompositeCleanupObserver {
+    fn observe(&self, snapshot: &CleanupSnapshot) {
+        for observer in &self.observers {
+            observer.observe(snapshot);
+        }
+    }
+
+    fn observe_cleanup(&self, observation: &CleanupObservation) {
+        for observer in &self.observers {
+            observer.observe_cleanup(observation);
+        }
+    }
+
+    fn observe_capability(&self, diagnostic: &ContainmentCapabilityDiagnostic) {
+        for observer in &self.observers {
+            observer.observe_capability(diagnostic);
+        }
+    }
+
+    fn observe_fallback(&self, fallback: &ContainmentFallbackObservation) {
+        for observer in &self.observers {
+            observer.observe_fallback(fallback);
+        }
     }
 }
 

@@ -7,6 +7,11 @@ use temper_process_containment::{
     CleanupPhase, CleanupReport, CleanupSnapshot, ContainmentBackendKind, ContainmentIdentity,
     ContainmentRootIdentity, ContainmentScope, ProcessIdentity,
 };
+use temper_protocol_agent::{
+    AgentContainmentBackendV1, AgentContainmentCleanupBlockedV1, AgentContainmentEventV1,
+    AgentContainmentOwnerV1, AgentContainmentPhaseV1, AgentContainmentProcessV1,
+    AgentContainmentTriggerV1,
+};
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::*;
@@ -25,10 +30,13 @@ fn startup_capability_uses_the_injected_observer() {
     let observer = RecordingObserver::default();
     observe_startup_containment_capability("worker-startup", &observer);
     let events = observer.0.lock().expect("events");
-    assert_eq!(events.len(), 1);
-    let ContainmentEvent::StartupCapability(event) = &events[0] else {
-        panic!("expected startup capability")
-    };
+    let event = events
+        .iter()
+        .find_map(|event| match event {
+            ContainmentEvent::StartupCapability(event) => Some(event),
+            _ => None,
+        })
+        .expect("expected startup capability");
     assert_eq!(event.worker_id, "worker-startup");
     assert!(!event.selected_backend.is_empty());
     assert!(!event.cgroup_v2_mount.is_empty());
@@ -224,6 +232,89 @@ fn repeated_blocked_cleanup_is_throttled_by_root() {
     drop(events);
     throttle.cleanup(&context, &observation);
     assert_eq!(observer.0.lock().expect("events").len(), 2);
+}
+
+#[test]
+fn lifecycle_nested_cleanup_is_attempt_stamped_and_redacted() {
+    let observer = Arc::new(RecordingObserver::default());
+    let throttle = ContainmentEventThrottle::new(observer.clone(), Duration::from_secs(60));
+    let context = ContainmentEventContext::new("worker-nested", "job-nested", "attempt-nested");
+    let observation = AgentContainmentEventV1::CleanupBlocked(AgentContainmentCleanupBlockedV1 {
+        owner: AgentContainmentOwnerV1 {
+            owner_kind: "mcp_server".to_string(),
+            tool_command_id: "credential=secret-token-sentinel".to_string(),
+            backend: AgentContainmentBackendV1::LinuxSupervisor,
+            root: "supervisor:nested".to_string(),
+        },
+        trigger: AgentContainmentTriggerV1::Cancellation,
+        phase: AgentContainmentPhaseV1::VerifyEmpty,
+        repeated_failures: 1,
+        term_attempts: Vec::new(),
+        omitted_term_attempts: 0,
+        kill_attempts: Vec::new(),
+        omitted_kill_attempts: 0,
+        survivors: vec![AgentContainmentProcessV1 {
+            pid: 41,
+            ppid: 1,
+            pgid: 41,
+            session_id: 41,
+            start_time: 99,
+            executable: "/tmp/token=secret-token-sentinel/server".to_string(),
+        }],
+        omitted_survivors: 2,
+    });
+
+    throttle.lifecycle(&context, &observation);
+    let events = observer.0.lock().expect("events");
+    let ContainmentEvent::CleanupBlocked(event) = &events[0] else {
+        panic!("nested blocked event")
+    };
+    assert_eq!(event.owner.context.worker_id, "worker-nested");
+    assert_eq!(event.owner.context.job_id, "job-nested");
+    assert_eq!(event.owner.context.attempt_id, "attempt-nested");
+    assert_eq!(event.owner.owner_kind, "mcp_server");
+    assert_eq!(event.owner.tool_command_id, "[redacted]");
+    let encoded = format!("{:?}", events[0]);
+    assert!(!encoded.contains("secret-token-sentinel"));
+    assert!(!event.survivors.contains("secret-token-sentinel"));
+}
+
+#[test]
+fn stale_cgroup_failures_are_bounded_warn_evidence() {
+    let entries = (0..(MAX_EVENT_SURVIVORS + 5))
+        .map(|index| {
+            (
+                PathBuf::from(format!(
+                    "/sys/fs/cgroup/temper/token=secret-token-sentinel/{index}"
+                )),
+                "authorization: bearer secret-token-sentinel".to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let event = startup_scavenge_from_parts(
+        "worker-stale",
+        3,
+        entries
+            .iter()
+            .map(|(path, diagnostic)| (path.as_path(), diagnostic.as_str())),
+        9,
+    )
+    .expect("non-empty stale report produces evidence");
+    let captured = capture_events(|| event.emit());
+    assert_eq!(captured[0]["level"], "WARN");
+    let fields = &captured[0]["fields"];
+    assert_eq!(fields["event"], "worker.containment.startup_scavenge");
+    assert_eq!(fields["worker_id"], "worker-stale");
+    assert_eq!(fields["removed_count"], 3);
+    assert_eq!(fields["retained_count"], MAX_EVENT_SURVIVORS + 5);
+    assert_eq!(fields["omitted_diagnostics"], 14);
+    let retained: Vec<Value> =
+        serde_json::from_str(fields["retained_diagnostics"].as_str().unwrap()).unwrap();
+    assert_eq!(retained.len(), MAX_EVENT_SURVIVORS);
+    let encoded = serde_json::to_string(&captured).unwrap();
+    assert!(!encoded.contains("secret-token-sentinel"));
+    assert!(!encoded.contains("authorization:"));
+    assert!(!encoded.contains("bearer "));
 }
 
 #[derive(Clone, Default)]

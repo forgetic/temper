@@ -72,6 +72,16 @@ impl AgentContainmentContext {
         &self.factory
     }
 
+    /// Adds attempt-scoped cleanup delivery while preserving any observer
+    /// installed by the caller's backend-injection seam.
+    pub fn with_observer(
+        mut self,
+        observer: Arc<dyn temper_process_containment::CleanupObserver>,
+    ) -> Self {
+        self.factory = self.factory.with_additional_observer(observer);
+        self
+    }
+
     pub fn outer_scope(&self) -> Option<&ContainmentScope> {
         self.outer_scope.as_ref()
     }

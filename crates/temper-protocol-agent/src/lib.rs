@@ -44,6 +44,8 @@ mod forge;
 pub use forge::{
     FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextRequest, ForgeContextResponse, ForgeContextToolOutcome,
 };
+mod containment;
+pub use containment::*;
 mod lifecycle;
 pub use lifecycle::{
     AGENT_LIFECYCLE_ADDRESS_FLAG, AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleAgentStatusV1,

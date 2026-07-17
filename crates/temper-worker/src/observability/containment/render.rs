@@ -137,6 +137,30 @@ pub(super) fn emit_startup(event: &ContainmentStartupCapability) {
     }
 }
 
+pub(super) fn emit_startup_scavenge(event: &ContainmentStartupScavenge) {
+    macro_rules! emit {
+        ($level:expr) => {
+            tracing::event!(
+                target: "temper::worker",
+                $level,
+                service = "worker",
+                event = "worker.containment.startup_scavenge",
+                worker_id = event.worker_id.as_str(),
+                removed_count = event.removed_count,
+                retained_count = event.retained_count,
+                retained_diagnostics = event.retained_diagnostics.as_str(),
+                omitted_diagnostics = event.omitted_diagnostics,
+                "worker scavenged stale delegated cgroups before accepting jobs"
+            );
+        };
+    }
+    if event.retained_count > 0 || event.omitted_diagnostics > 0 {
+        emit!(tracing::Level::WARN);
+    } else {
+        emit!(tracing::Level::DEBUG);
+    }
+}
+
 #[derive(Serialize)]
 struct SerializableProcess {
     pid: u32,

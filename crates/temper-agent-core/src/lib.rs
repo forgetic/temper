@@ -52,6 +52,9 @@ pub use subagent_tool::{SubAgentFactory, SubAgentObserverFactory, SubAgentTool};
 #[doc(hidden)]
 pub use temper_process_containment::dispatch_linux_supervisor_helper;
 pub use temper_process_containment::{
-    BoundedCapture, CaptureMode, CaptureOverflow, CapturedBytes, CleanupReport, CleanupTrigger,
-    ContainedProcess, ContainmentCommand, ContainmentFactory, ContainmentScope,
+    BoundedCapture, CaptureMode, CaptureOverflow, CapturedBytes, CleanupDisposition,
+    CleanupObservation, CleanupObserver, CleanupPhase, CleanupReport, CleanupSnapshot,
+    CleanupTrigger, ContainedProcess, ContainmentBackendKind, ContainmentCommand,
+    ContainmentFactory, ContainmentFallbackObservation, ContainmentScope, ContainmentSignal,
+    DirectChildReap, ProcessIdentity, RecursiveEmptyProof, SignalAttempt, SignalAttemptOutcome,
 };

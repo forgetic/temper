@@ -104,7 +104,10 @@ The preferred Linux backend requires all of the following:
 
 At worker startup, `worker.containment.startup_capability` reports the cgroup-v2
 mount, delegation, nested-subtree writability, `cgroup.kill`, pidfd support,
-selected backend, and bounded fallback reason. If delegation is unavailable,
+selected backend, and bounded fallback reason. Managed bash and MCP cleanup is
+reported over the attempt-bound lifecycle carrier in both split-agent and
+standalone mode, so nested blocked/fallback/completed events retain
+worker/job/attempt and owner/tool identity. If delegation is unavailable,
 Temper emits `worker.containment.fallback_activated` at warning level and uses
 its Linux subreaper/supervisor backend. That fallback tracks and reaps
 re-parented descendants across process groups and sessions; it is not the old
@@ -114,9 +117,11 @@ containment preparation rather than claiming a descendant-complete guarantee.
 
 Startup probing owns a dedicated `temper` subtree. Stale owned cgroups are
 inspected only below that boundary, killed and removed deepest-first when they
-can be proven empty, and retained with bounded diagnostics when inspection or
-cleanup cannot be proven. Never manually move unrelated processes into the
-Temper subtree.
+can be proven empty, and retained when inspection or cleanup cannot be proven.
+`worker.containment.startup_scavenge` reports removed and retained counts,
+bounded retained-path diagnostics, and omitted counts without command or
+credential content. Never manually move unrelated processes into the Temper
+subtree.
 
 `SIGINT`/`SIGTERM` closes intake, fences every active attempt, requests cleanup,
 and waits for task and containment quiescence before worker shutdown returns.
