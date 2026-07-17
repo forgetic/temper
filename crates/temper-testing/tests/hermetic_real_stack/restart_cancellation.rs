@@ -23,9 +23,10 @@ enum CancellationRestartPhase {
     PostAckPreCompaction,
 }
 
-// The native-agent fixture owns process-like background resources. Keep the
-// six fault-injection worlds independent without multiplying those resources
-// when the integration-test binary runs with its default parallel scheduler.
+// Nextest assigns these six fault-injection worlds to the exclusive
+// `native-process-fixtures` resource class because it launches each test in a
+// separate process. Keep this in-binary lock as equivalent protection for
+// `cargo test`, whose default scheduler runs all six in one process.
 static RESTART_MATRIX_LOCK: Mutex<()> = Mutex::new(());
 
 impl CancellationRestartPhase {
