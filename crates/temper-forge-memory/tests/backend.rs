@@ -156,6 +156,32 @@ fn repositories_use_deterministic_ids_and_reject_duplicate_paths() {
 }
 
 #[test]
+fn repository_path_lookup_fault_is_one_shot_and_preserves_state() {
+    let forge = MemoryForge::new();
+    let repository = block_on(forge.create_repository(repo_input("alice", "project"))).unwrap();
+    let path = RepositoryPath::new("alice", "project");
+
+    forge.fail_next(
+        FaultOp::GetRepositoryByPath,
+        "simulated repository lookup failure",
+    );
+    let failed = block_on(forge.get_repository_by_path(&path));
+    assert!(matches!(
+        failed,
+        Err(ForgeError::Backend(message)) if message.contains("repository lookup failure")
+    ));
+
+    assert_eq!(
+        block_on(forge.get_repository(&repository.id)).unwrap(),
+        Some(repository.clone())
+    );
+    assert_eq!(
+        block_on(forge.get_repository_by_path(&path)).unwrap(),
+        Some(repository)
+    );
+}
+
+#[test]
 fn empty_repository_fields_are_rejected() {
     let forge = MemoryForge::new();
     assert!(matches!(
