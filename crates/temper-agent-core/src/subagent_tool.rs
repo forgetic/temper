@@ -170,11 +170,12 @@ impl Tool for SubAgentTool {
             .await
             .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
 
-        // The sub-agent's product is the text of its final message. A
-        // sub-agent that ended in an error stop reports a tool error so the
-        // parent model can react.
+        // The sub-agent's product is ordinary output only after a completed
+        // stop. Every other terminal reason is returned as a failed tool result
+        // so parseable-looking text cannot masquerade as successful nested
+        // output.
         let text = collect_text(&outcome.final_message.content);
-        let is_error = matches!(outcome.stop, crate::machine::AgentStop::ModelError);
+        let is_error = sub_agent_stop_is_error(outcome.stop);
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(tongs::model::TextContent {
                 text,
@@ -183,6 +184,15 @@ impl Tool for SubAgentTool {
             details: Some(serde_json::json!({ "sub_agent_stop": format!("{:?}", outcome.stop) })),
             is_error,
         })
+    }
+}
+
+fn sub_agent_stop_is_error(stop: crate::machine::AgentStop) -> bool {
+    match stop {
+        crate::machine::AgentStop::Completed => false,
+        crate::machine::AgentStop::ModelError
+        | crate::machine::AgentStop::Aborted
+        | crate::machine::AgentStop::BudgetExhausted => true,
     }
 }
 
@@ -371,6 +381,20 @@ mod tests {
             let _drop = DropFlag(Arc::clone(&self.dropped));
             self.started.store(true, Ordering::Release);
             futures::future::pending().await
+        }
+    }
+
+    #[test]
+    fn every_non_completed_nested_stop_is_an_error() {
+        assert!(!sub_agent_stop_is_error(
+            crate::machine::AgentStop::Completed
+        ));
+        for stop in [
+            crate::machine::AgentStop::ModelError,
+            crate::machine::AgentStop::Aborted,
+            crate::machine::AgentStop::BudgetExhausted,
+        ] {
+            assert!(sub_agent_stop_is_error(stop), "{stop:?} must be an error");
         }
     }
 

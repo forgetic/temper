@@ -2,15 +2,39 @@
 
 use crate::provider::ProviderError;
 
+/// Authority associated with an aborted coding-agent run.
+///
+/// Only a validated cancellation command received on the worker-owned
+/// lifecycle channel may produce [`Self::WorkerRequested`]. Provider-originated
+/// aborts and aborts without that command remain [`Self::Unrequested`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentAbortAuthority {
+    WorkerRequested,
+    Unrequested,
+}
+
+impl std::fmt::Display for AgentAbortAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::WorkerRequested => "worker_requested",
+            Self::Unrequested => "unrequested",
+        })
+    }
+}
+
 /// Why a coding-workspace run could not produce a result.
 #[derive(Debug)]
 pub enum CodingAgentError {
     /// Building the provider or loading credentials failed.
     Provider(ProviderError),
-    /// The SDK agent run failed (network, provider rejection, abort).
+    /// The SDK agent run failed (network or provider rejection).
     Run(String),
     /// The agent stopped with an error stop reason.
     AgentStopped(String),
+    /// The model requested another tool round after the configured budget.
+    BudgetExhausted { max_iterations: usize },
+    /// The run was aborted before normal completion.
+    Aborted { authority: AgentAbortAuthority },
     /// The provider reported the requested model is unavailable (e.g. a model
     /// alias was suspended, or the subscription tier does not grant it). Kept
     /// distinct from a generic abnormal stop so the failure names the model and
@@ -43,6 +67,16 @@ impl std::fmt::Display for CodingAgentError {
             CodingAgentError::Run(message) => write!(formatter, "LLM run failed: {message}"),
             CodingAgentError::AgentStopped(reason) => {
                 write!(formatter, "agent stopped abnormally: {reason}")
+            }
+            CodingAgentError::BudgetExhausted { max_iterations } => write!(
+                formatter,
+                "budget_exhausted: agent exceeded the {max_iterations}-iteration tool budget"
+            ),
+            CodingAgentError::Aborted { authority } => {
+                write!(
+                    formatter,
+                    "aborted: agent run stopped (authority={authority})"
+                )
             }
             CodingAgentError::ModelUnavailable { model, detail } => write!(
                 formatter,

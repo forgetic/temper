@@ -110,14 +110,10 @@ pub async fn run_decision<D: DeserializeOwned>(
     )
     .await
     .map_err(|error| DecisionError::Run(error.to_string()))?;
-    if matches!(outcome.stop, temper_agent_core::AgentStop::ModelError) {
-        return Err(DecisionError::Run(
-            outcome
-                .final_message
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "provider reported an error stop".to_string()),
-        ));
+    if let Some(error) =
+        non_completed_stop_error(outcome.stop, outcome.final_message.error_message.as_deref())
+    {
+        return Err(error);
     }
 
     let text = collect_text(&outcome.final_message.content);
@@ -125,6 +121,28 @@ pub async fn run_decision<D: DeserializeOwned>(
         return Err(DecisionError::Empty);
     }
     parse_decision(&text)
+}
+
+/// Converts every non-completed core stop into a decision error before the
+/// final message can be parsed as an ordinary decision.
+fn non_completed_stop_error(
+    stop: temper_agent_core::AgentStop,
+    model_error: Option<&str>,
+) -> Option<DecisionError> {
+    match stop {
+        temper_agent_core::AgentStop::Completed => None,
+        temper_agent_core::AgentStop::ModelError => Some(DecisionError::Run(
+            model_error
+                .unwrap_or("provider reported an error stop")
+                .to_string(),
+        )),
+        temper_agent_core::AgentStop::BudgetExhausted => Some(DecisionError::Run(format!(
+            "budget_exhausted: decision agent exceeded the {MAX_TOOL_ITERATIONS}-iteration tool budget"
+        ))),
+        temper_agent_core::AgentStop::Aborted => Some(DecisionError::Run(
+            "aborted: decision agent stopped before completion".to_string(),
+        )),
+    }
 }
 
 /// Concatenates the assistant message's text blocks (ignoring thinking/tool
@@ -196,6 +214,8 @@ fn snippet(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jig_core::{Reply, Script, StopReason, Turn};
+    use jig_server::FakeLlm;
     use serde::Deserialize;
 
     #[derive(Debug, PartialEq, Eq, Deserialize)]
@@ -237,5 +257,54 @@ mod tests {
         let text = r#"prefix {"a": {"b": "}"}, "c": 1} suffix"#;
         let extracted = extract_json_object(text).unwrap();
         assert_eq!(extracted, r#"{"a": {"b": "}"}, "c": 1}"#);
+    }
+
+    #[test]
+    fn every_non_completed_stop_is_a_decision_error() {
+        assert!(non_completed_stop_error(temper_agent_core::AgentStop::Completed, None).is_none());
+        for (stop, token) in [
+            (temper_agent_core::AgentStop::ModelError, "provider failed"),
+            (
+                temper_agent_core::AgentStop::BudgetExhausted,
+                "budget_exhausted",
+            ),
+            (temper_agent_core::AgentStop::Aborted, "aborted"),
+        ] {
+            let error = non_completed_stop_error(stop, Some("provider failed"))
+                .expect("non-completed stop must fail");
+            assert!(error.to_string().contains(token));
+        }
+    }
+
+    #[test]
+    fn decision_budget_exhaustion_beats_parseable_text() {
+        let fake = FakeLlm::start(Script::Fixed(Reply {
+            turns: vec![
+                Turn::Text(r#"{"action":"do_thing"}"#.to_string()),
+                Turn::ToolCall {
+                    id: "undispatchable".to_string(),
+                    name: "not_registered".to_string(),
+                    args: serde_json::json!({}),
+                },
+            ],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        }))
+        .expect("start fake LLM");
+        let provider = ProviderConfig::new(
+            "jig-openai-compatible",
+            "decision-budget",
+            "https://example.invalid/unused",
+            "sk-jig-test",
+        )
+        .with_base_url_override(fake.base_url());
+
+        let error = temper_agent_io::block_on_with(move |_cx, handle| async move {
+            run_decision::<TestDecision>(handle, &provider, "decide", "do it").await
+        })
+        .expect_err("budget exhaustion must reject parseable decision text");
+
+        assert!(error.to_string().contains("budget_exhausted"));
+        assert_eq!(fake.requests().len(), MAX_TOOL_ITERATIONS + 1);
     }
 }
