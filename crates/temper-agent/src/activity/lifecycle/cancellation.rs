@@ -38,6 +38,16 @@ impl AgentCancellationLatch {
         }
     }
 
+    /// Whether a validated worker lifecycle cancellation command has been
+    /// received. The state is set before the installed callback runs, so an
+    /// abort caused by that callback cannot race ahead of this query.
+    pub fn worker_cancellation_requested(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .requested
+    }
+
     fn request(&self) {
         let callback = {
             let mut state = self
@@ -117,9 +127,11 @@ mod tests {
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancelled_for_callback = Arc::clone(&cancelled);
         let latch = AgentCancellationLatch::default();
+        assert!(!latch.worker_cancellation_requested());
+        let latch_for_reader = latch.clone();
         latch.install(move || cancelled_for_callback.store(true, Ordering::Release));
         let reader = std::thread::spawn(move || {
-            lifecycle_command_reader(server, writer, latch);
+            lifecycle_command_reader(server, writer, latch_for_reader);
         });
 
         serde_json::to_writer(
@@ -138,5 +150,32 @@ mod tests {
         reader.join().unwrap();
         acknowledgement.validate().unwrap();
         assert!(cancelled.load(Ordering::Acquire));
+        assert!(latch.worker_cancellation_requested());
+    }
+
+    #[test]
+    fn invalid_command_does_not_confer_worker_cancellation_authority() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let writer = Arc::new(Mutex::new(server.try_clone().unwrap()));
+        let latch = AgentCancellationLatch::default();
+        let latch_for_reader = latch.clone();
+        let reader = std::thread::spawn(move || {
+            lifecycle_command_reader(server, writer, latch_for_reader);
+        });
+
+        serde_json::to_writer(
+            &mut client,
+            &AgentLifecycleCommandV1::Cancel {
+                reason: String::new(),
+            },
+        )
+        .unwrap();
+        client.write_all(b"\n").unwrap();
+        reader.join().unwrap();
+
+        assert!(!latch.worker_cancellation_requested());
     }
 }

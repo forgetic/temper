@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_agent::{
-    ProviderConfig, SubmitForPrHost, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
-    WorkspaceWorkItem, run_coding_agent_native, run_coding_agent_native_with_submit_for_pr,
+    CodingAgentError, ProviderConfig, SubmitForPrHost, WorkspaceContext, WorkspaceGuidance,
+    WorkspaceRepository, WorkspaceWorkItem, run_coding_agent_native,
+    run_coding_agent_native_with_submit_for_pr,
 };
 use temper_protocol_agent::{SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse};
 
@@ -189,6 +190,115 @@ fn submit_retry_fake() -> FakeLlm {
         _ => Reply::text(r#"{"summary":"submit_for_pr passed after fixing NOTES.md."}"#),
     }))
     .expect("start fake LLM")
+}
+
+#[test]
+fn budget_exhaustion_rejects_result_text_and_does_not_dispatch_submit() {
+    let checkout = TempCheckout::new("jig-budget-submit-not-dispatched");
+    checkout.init_git();
+    let fake = FakeLlm::start(Script::Fixed(Reply {
+        turns: vec![
+            Turn::Text(
+                r#"{"verdict":"needs_architect","summary":"parseable but not completed"}"#
+                    .to_string(),
+            ),
+            Turn::ToolCall {
+                id: "undispatchable-submit".to_string(),
+                name: "submit_for_pr".to_string(),
+                args: serde_json::json!({ "summary": "must not run" }),
+            },
+        ],
+        usage: Default::default(),
+        stop: StopReason::ToolCalls,
+    }))
+    .expect("start fake LLM");
+    let provider = ProviderConfig::new(
+        "jig-openai-compatible",
+        "jig-budget-submit-not-dispatched",
+        "https://example.invalid/unused-production-url",
+        "sk-jig-test",
+    )
+    .with_base_url_override(fake.base_url());
+    let submit_calls = Arc::new(AtomicUsize::new(0));
+    let submit_calls_for_host = Arc::clone(&submit_calls);
+    let host: SubmitForPrHost = Arc::new(move |_request, _context, _cwd| {
+        submit_calls_for_host.fetch_add(1, Ordering::SeqCst);
+        Box::pin(std::future::ready(SubmitForPrResponse {
+            accepted: true,
+            message: "unexpected".to_string(),
+            gates: Vec::new(),
+        }))
+    });
+
+    let context = workspace_context();
+    let cwd = checkout.path().to_path_buf();
+    let error = temper_agent_io::block_on_with(move |_cx, handle| async move {
+        run_coding_agent_native_with_submit_for_pr(
+            handle,
+            &provider,
+            &context,
+            &cwd,
+            0,
+            None,
+            Some(host),
+        )
+        .await
+    })
+    .expect_err("budget exhaustion must reject co-emitted result text");
+
+    assert!(matches!(
+        &error,
+        CodingAgentError::BudgetExhausted { max_iterations: 0 }
+    ));
+    assert!(error.to_string().contains("budget_exhausted"));
+    assert_eq!(submit_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[test]
+fn budget_exhaustion_does_not_dispatch_final_side_effecting_tool() {
+    let checkout = TempCheckout::new("jig-budget-write-not-dispatched");
+    checkout.init_git();
+    let fake = FakeLlm::start(Script::Fixed(Reply {
+        turns: vec![
+            Turn::Text(
+                r#"{"verdict":"needs_architect","summary":"parseable but not completed"}"#
+                    .to_string(),
+            ),
+            Turn::ToolCall {
+                id: "undispatchable-write".to_string(),
+                name: "write".to_string(),
+                args: serde_json::json!({
+                    "path": "demo/NEVER_WRITTEN.md",
+                    "content": "must not be written\n"
+                }),
+            },
+        ],
+        usage: Default::default(),
+        stop: StopReason::ToolCalls,
+    }))
+    .expect("start fake LLM");
+    let provider = ProviderConfig::new(
+        "jig-openai-compatible",
+        "jig-budget-write-not-dispatched",
+        "https://example.invalid/unused-production-url",
+        "sk-jig-test",
+    )
+    .with_base_url_override(fake.base_url());
+
+    let context = workspace_context();
+    let cwd = checkout.path().to_path_buf();
+    let error = temper_agent_io::block_on_with(move |_cx, handle| async move {
+        run_coding_agent_native(handle, &provider, &context, &cwd, 0, None).await
+    })
+    .expect_err("budget exhaustion must reject co-emitted result text");
+
+    assert!(matches!(
+        error,
+        CodingAgentError::BudgetExhausted { max_iterations: 0 }
+    ));
+    assert!(!checkout.repo_path().join("NEVER_WRITTEN.md").exists());
+    assert_eq!(fake.requests().len(), 1);
 }
 
 fn coding_agent_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
