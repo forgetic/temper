@@ -10,7 +10,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use temper_process_containment::{CleanupTrigger, ContainedProcess, ContainmentScope};
+use temper_process_containment::{
+    BoundedCapture, CaptureMode, CapturedBytes, CleanupTrigger, ContainedProcess, ContainmentScope,
+};
 
 use super::PrePushCommand;
 use crate::executor::{JobCancellation, JobCleanupObserver};
@@ -31,6 +33,10 @@ pub struct PrePushCommandResult {
     pub elapsed_ms: u64,
     pub stdout_tail: String,
     pub stderr_tail: String,
+    #[serde(default)]
+    pub stdout_dropped_bytes: u64,
+    #[serde(default)]
+    pub stderr_dropped_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -175,6 +181,8 @@ fn spawn_error_result(
         elapsed_ms: 0,
         stdout_tail: String::new(),
         stderr_tail: String::new(),
+        stdout_dropped_bytes: 0,
+        stderr_dropped_bytes: 0,
         error: Some(format!("start command owner: {error}")),
     }
 }
@@ -197,6 +205,8 @@ fn run_command_sync(
         elapsed_ms: 0,
         stdout_tail: String::new(),
         stderr_tail: String::new(),
+        stdout_dropped_bytes: 0,
+        stderr_dropped_bytes: 0,
         error: None,
     };
 
@@ -313,11 +323,17 @@ fn run_command_sync(
     let _cleanup = child.cleanup(CleanupTrigger::NormalRootExit);
 
     match join_reader(stdout_reader, "stdout") {
-        Ok(output) => result.stdout_tail = tail_utf8(&output, OUTPUT_TAIL_BYTES),
+        Ok(output) => {
+            result.stdout_dropped_bytes = output.dropped_bytes();
+            result.stdout_tail = rendered_tail(&output);
+        }
         Err(error) => set_error(&mut result, error),
     }
     match join_reader(stderr_reader, "stderr") {
-        Ok(output) => result.stderr_tail = tail_utf8(&output, OUTPUT_TAIL_BYTES),
+        Ok(output) => {
+            result.stderr_dropped_bytes = output.dropped_bytes();
+            result.stderr_tail = rendered_tail(&output);
+        }
         Err(error) => set_error(&mut result, error),
     }
     result.elapsed_ms = elapsed_ms(started);
@@ -376,13 +392,17 @@ fn exit_status_from_cleanup(
 fn spawn_reader<R>(
     mut reader: R,
     stream: &'static str,
-) -> io::Result<thread::JoinHandle<io::Result<Vec<u8>>>>
+) -> io::Result<thread::JoinHandle<io::Result<CapturedBytes>>>
 where
     R: Read + Send + 'static,
 {
     thread::Builder::new()
         .name(format!("temper-pre-push-{stream}"))
-        .spawn(move || read_tail(&mut reader, OUTPUT_TAIL_BYTES))
+        .spawn(move || {
+            let mut capture = BoundedCapture::new(CaptureMode::Tail, OUTPUT_TAIL_BYTES);
+            capture.drain(&mut reader)?;
+            Ok(capture.finish().expect("tail capture cannot overflow"))
+        })
         .map_err(|error| {
             io::Error::new(
                 error.kind(),
@@ -391,38 +411,10 @@ where
         })
 }
 
-fn read_tail(reader: &mut impl Read, max_len: usize) -> io::Result<Vec<u8>> {
-    let mut tail = Vec::new();
-    let mut buffer = [0_u8; 8 * 1024];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            return Ok(tail);
-        }
-        append_tail(&mut tail, &buffer[..read], max_len);
-    }
-}
-
-fn append_tail(tail: &mut Vec<u8>, chunk: &[u8], max_len: usize) {
-    if chunk.len() >= max_len {
-        tail.clear();
-        tail.extend_from_slice(&chunk[chunk.len() - max_len..]);
-        return;
-    }
-    let overflow = tail
-        .len()
-        .saturating_add(chunk.len())
-        .saturating_sub(max_len);
-    if overflow > 0 {
-        tail.drain(..overflow);
-    }
-    tail.extend_from_slice(chunk);
-}
-
 fn join_reader(
-    handle: thread::JoinHandle<io::Result<Vec<u8>>>,
+    handle: thread::JoinHandle<io::Result<CapturedBytes>>,
     stream: &'static str,
-) -> Result<Vec<u8>, String> {
+) -> Result<CapturedBytes, String> {
     match handle.join() {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(error)) => Err(format!("read {stream}: {error}")),
@@ -442,6 +434,10 @@ fn set_error(result: &mut PrePushCommandResult, message: String) {
 
 fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn rendered_tail(output: &CapturedBytes) -> String {
+    tail_utf8(output.as_bytes(), OUTPUT_TAIL_BYTES)
 }
 
 fn tail_utf8(bytes: &[u8], max_len: usize) -> String {

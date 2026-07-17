@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -7,11 +7,98 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use temper_agent_core::{
-    AgentContainmentContext, CleanupTrigger, ContainedProcess, ContainmentCommand, ContainmentScope,
+    AgentContainmentContext, BoundedCapture, CaptureMode, CleanupTrigger, ContainedProcess,
+    ContainmentCommand, ContainmentScope,
 };
 
 use super::client::{McpError, StdioMcpServerConfig};
 use super::protocol::render_json;
+
+/// Maximum JSON bytes in one inbound or outbound newline-delimited MCP record.
+pub(super) const MAX_MCP_RECORD_BYTES: usize = 1024 * 1024;
+/// Maximum unread records retained between the stdout reader and requester.
+pub(super) const MAX_MCP_QUEUED_RECORDS: usize = 16;
+
+#[derive(Clone, Copy, Debug)]
+struct ProtocolOverflow {
+    direction: &'static str,
+    resource: &'static str,
+    limit: usize,
+    observed: usize,
+}
+
+impl ProtocolOverflow {
+    fn record(direction: &'static str, observed: u64) -> Self {
+        Self {
+            direction,
+            resource: "record bytes",
+            limit: MAX_MCP_RECORD_BYTES,
+            observed: usize::try_from(observed).unwrap_or(usize::MAX),
+        }
+    }
+
+    fn queue() -> Self {
+        Self {
+            direction: "inbound",
+            resource: "queued records",
+            limit: MAX_MCP_QUEUED_RECORDS,
+            observed: MAX_MCP_QUEUED_RECORDS.saturating_add(1),
+        }
+    }
+
+    fn into_error(self) -> McpError {
+        McpError::ProtocolOverflow {
+            direction: self.direction,
+            resource: self.resource,
+            limit: self.limit,
+            observed: self.observed,
+        }
+    }
+}
+
+struct BoundedRecordWriter {
+    bytes: Vec<u8>,
+    overflow: Option<ProtocolOverflow>,
+}
+
+impl BoundedRecordWriter {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(limit.min(8 * 1024)),
+            overflow: None,
+        }
+    }
+
+    fn overflow(&self) -> Option<ProtocolOverflow> {
+        self.overflow
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl Write for BoundedRecordWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let observed = self.bytes.len().saturating_add(bytes.len());
+        if observed > MAX_MCP_RECORD_BYTES {
+            self.overflow = Some(ProtocolOverflow::record(
+                "outbound",
+                u64::try_from(observed).unwrap_or(u64::MAX),
+            ));
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "outbound MCP record exceeds byte limit",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 static ACTIVE_OUTPUT_READERS: std::sync::atomic::AtomicUsize =
@@ -104,10 +191,29 @@ impl ProcessControl {
                 method: method.to_string(),
             });
         }
-        let mut bytes = serde_json::to_vec(&request).map_err(|error| McpError::Json {
+        let mut writer = BoundedRecordWriter::new(MAX_MCP_RECORD_BYTES);
+        let encoded = serde_json::to_writer(&mut writer, &request);
+        if let Some(overflow) = writer.overflow() {
+            let error = overflow.into_error();
+            self.cancel_and_join(CleanupTrigger::Cancellation);
+            return Err(error);
+        }
+        encoded.map_err(|error| McpError::Json {
             operation: "encode request",
             message: error.to_string(),
         })?;
+        let mut bytes = writer.into_bytes();
+        if bytes.len() == MAX_MCP_RECORD_BYTES {
+            let error = ProtocolOverflow::record(
+                "outbound",
+                u64::try_from(bytes.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            )
+            .into_error();
+            self.cancel_and_join(CleanupTrigger::Cancellation);
+            return Err(error);
+        }
         bytes.push(b'\n');
         let write = {
             let mut stdin = self
@@ -212,7 +318,8 @@ impl ProcessControl {
 
 pub(super) struct Connection {
     control: Arc<ProcessControl>,
-    stdout_lines: mpsc::Receiver<String>,
+    stdout_records: mpsc::Receiver<Vec<u8>>,
+    reader_overflow: Arc<Mutex<Option<ProtocolOverflow>>>,
     next_id: u64,
 }
 
@@ -280,7 +387,9 @@ impl Connection {
                 });
             }
         };
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(MAX_MCP_QUEUED_RECORDS);
+        let reader_overflow = Arc::new(Mutex::new(None));
+        let output_overflow = Arc::clone(&reader_overflow);
         #[cfg(test)]
         let reader_key = render_command(&config.command, &config.args);
         let reader = thread::Builder::new()
@@ -288,15 +397,24 @@ impl Connection {
             .spawn(move || {
                 #[cfg(test)]
                 let _active_reader = ActiveReaderGuard::enter(reader_key);
-                let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    match line {
-                        Ok(line) => {
-                            if tx.send(line).is_err() {
+                let mut reader = BufReader::new(stdout);
+                loop {
+                    match read_bounded_record(&mut reader) {
+                        Ok(Some(Ok(record))) => match tx.try_send(record) {
+                            Ok(()) => {}
+                            Err(mpsc::TrySendError::Full(_)) => {
+                                set_reader_overflow(&output_overflow, ProtocolOverflow::queue());
                                 break;
                             }
+                            Err(mpsc::TrySendError::Disconnected(_)) => break,
+                        },
+                        Ok(Some(Err(overflow))) => {
+                            // read_bounded_record has drained through the record
+                            // delimiter before surfacing this typed failure.
+                            set_reader_overflow(&output_overflow, overflow);
+                            break;
                         }
-                        Err(_) => break,
+                        Ok(None) | Err(_) => break,
                     }
                 }
             });
@@ -315,7 +433,8 @@ impl Connection {
 
         Ok(Self {
             control,
-            stdout_lines: rx,
+            stdout_records: rx,
+            reader_overflow,
             next_id: 1,
         })
     }
@@ -365,6 +484,9 @@ impl Connection {
 
         let deadline = Instant::now() + timeout;
         loop {
+            if let Some(overflow) = self.take_reader_overflow() {
+                return Err(self.control.protocol_failure(overflow.into_error()));
+            }
             if self.control.is_cancelled() {
                 self.control.cancel_and_join(CleanupTrigger::Cancellation);
                 return Err(McpError::Cancelled {
@@ -380,9 +502,12 @@ impl Connection {
                 });
             }
             let remaining = deadline.saturating_duration_since(now);
-            let line = match self.stdout_lines.recv_timeout(remaining) {
-                Ok(line) => line,
+            let record = match self.stdout_records.recv_timeout(remaining) {
+                Ok(record) => record,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if let Some(overflow) = self.take_reader_overflow() {
+                        return Err(self.control.protocol_failure(overflow.into_error()));
+                    }
                     self.control.cancel_and_join(CleanupTrigger::Timeout);
                     return Err(McpError::Timeout {
                         method: method.to_string(),
@@ -390,13 +515,16 @@ impl Connection {
                     });
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    if let Some(overflow) = self.take_reader_overflow() {
+                        return Err(self.control.protocol_failure(overflow.into_error()));
+                    }
                     return Err(self.control.process_exited_error_and_join(method));
                 }
             };
-            if line.trim().is_empty() {
+            if record.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
-            let response: Value = match serde_json::from_str(&line) {
+            let response: Value = match serde_json::from_slice(&record) {
                 Ok(response) => response,
                 Err(error) => {
                     return Err(self.control.protocol_failure(McpError::Json {
@@ -421,6 +549,66 @@ impl Connection {
             }
             return Ok(response.get("result").cloned().unwrap_or(Value::Null));
         }
+    }
+
+    fn take_reader_overflow(&self) -> Option<ProtocolOverflow> {
+        self.reader_overflow
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }
+}
+
+fn set_reader_overflow(state: &Mutex<Option<ProtocolOverflow>>, overflow: ProtocolOverflow) {
+    let mut state = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.is_none() {
+        *state = Some(overflow);
+    }
+}
+
+/// Reads one newline-delimited record without retaining more than the record
+/// limit. Oversized records are drained through their delimiter before the
+/// typed overflow is returned.
+fn read_bounded_record(
+    reader: &mut impl BufRead,
+) -> io::Result<Option<Result<Vec<u8>, ProtocolOverflow>>> {
+    let mut capture = BoundedCapture::new(CaptureMode::Complete, MAX_MCP_RECORD_BYTES);
+    let mut saw_bytes = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if !saw_bytes {
+                return Ok(None);
+            }
+            return Ok(Some(finish_inbound_record(capture)));
+        }
+        saw_bytes = true;
+        if let Some(newline) = available.iter().position(|byte| *byte == b'\n') {
+            capture.push(&available[..newline]);
+            reader.consume(newline + 1);
+            return Ok(Some(finish_inbound_record(capture)));
+        }
+        let consumed = available.len();
+        capture.push(available);
+        reader.consume(consumed);
+    }
+}
+
+fn finish_inbound_record(capture: BoundedCapture) -> Result<Vec<u8>, ProtocolOverflow> {
+    match capture.finish() {
+        Ok(captured) => {
+            let mut bytes = captured.into_bytes();
+            if bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
+            Ok(bytes)
+        }
+        Err(overflow) => Err(ProtocolOverflow::record(
+            "inbound",
+            overflow.observed_bytes(),
+        )),
     }
 }
 

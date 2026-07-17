@@ -4,15 +4,19 @@
 //! actionable before the worker or hosted agent pushes to the PR branch.
 
 use std::future::Future;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::pin::Pin;
 use std::time::Duration;
 
+use temper_process_containment::{BoundedCapture, CaptureMode};
 use temper_protocol_agent::PullRequestFreshness;
 use temper_protocol_worker::{PullRequestFreshnessResponse, PullRequestFreshnessStatus};
 
 use crate::managed_effect::JoinedBlocking;
+
+/// Freshness is machine-readable protocol data and must never be truncated.
+const PR_FRESHNESS_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrFreshnessFailure {
@@ -101,10 +105,14 @@ fn post_json(endpoint: &str, body: &[u8]) -> Result<PullRequestFreshnessResponse
         .write_all(request.as_bytes())
         .and_then(|_| stream.write_all(body))
         .map_err(|error| format!("write PR freshness request: {error}"))?;
-    let mut bytes = Vec::new();
-    stream
-        .read_to_end(&mut bytes)
+    let mut capture = BoundedCapture::new(CaptureMode::Complete, PR_FRESHNESS_RESPONSE_BYTES);
+    capture
+        .drain(&mut stream)
         .map_err(|error| format!("read PR freshness response: {error}"))?;
+    let bytes = capture
+        .finish()
+        .map_err(|overflow| format!("read PR freshness response: {overflow}"))?
+        .into_bytes();
     parse_http_response(&bytes)
 }
 

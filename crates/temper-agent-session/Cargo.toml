@@ -26,6 +26,7 @@ temper-protocol-activity = { path = "../temper-protocol-activity" }
 [dev-dependencies]
 jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+temper-process-containment = { path = "../temper-process-containment" }
 
 [[bin]]
 name = "temper-agent"

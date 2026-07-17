@@ -5,12 +5,16 @@
 //! product/verdict contract temper relies on.
 
 use std::path::Path;
+use std::process::Stdio;
 
+use temper_agent_core::{BoundedCapture, CaptureMode};
 use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 use temper_verdict::{SourceMetadata, VerdictContracts};
 use tongs::model::ContentBlock;
 
 use super::{Capability, CodingAgentError};
+
+const AGENT_GIT_MACHINE_OUTPUT_BYTES: usize = 1024 * 1024;
 
 /// Concatenates the assistant message's text blocks (ignoring thinking/tool
 /// blocks).
@@ -128,15 +132,25 @@ pub(crate) fn validate_contract(
             // repo has working-tree changes or a committed tree diff from its
             // base branch. Commits-ahead alone are not product unless the tree
             // differs.
-            let produced = context
-                .repos
-                .iter()
-                .filter(|repo| repo.is_writable())
-                .any(|repo| {
-                    let dir = cwd.join(&repo.dir);
-                    working_tree_has_changes(&dir)
-                        || tree_differs_from_base(&dir, &repo.base_branch)
-                });
+            let mut produced = false;
+            for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
+                let dir = cwd.join(&repo.dir);
+                let working_tree_changed = working_tree_has_changes(&dir).map_err(|error| {
+                    CodingAgentError::AgentStopped(format!(
+                        "bounded git status probe failed: {error}"
+                    ))
+                })?;
+                let committed_tree_changed = tree_differs_from_base(&dir, &repo.base_branch)
+                    .map_err(|error| {
+                        CodingAgentError::AgentStopped(format!(
+                            "bounded git tree probe failed: {error}"
+                        ))
+                    })?;
+                if working_tree_changed || committed_tree_changed {
+                    produced = true;
+                    break;
+                }
+            }
             if produced {
                 Ok(())
             } else {
@@ -156,36 +170,63 @@ pub(crate) fn validate_contract(
 }
 
 /// Returns true when `HEAD`'s tree differs from `origin/<base_branch>` in
-/// `cwd`. Falls back to `false` when git cannot answer, leaving the
-/// working-tree check decisive.
-fn tree_differs_from_base(cwd: &Path, base_branch: &str) -> bool {
+/// `cwd`. Complete filename output is bounded and rejected on overflow; git
+/// failures retain the historical `false` fallback.
+fn tree_differs_from_base(cwd: &Path, base_branch: &str) -> Result<bool, String> {
     let base_branch = base_branch.trim();
     if base_branch.is_empty() {
-        return false;
+        return Ok(false);
     }
-    std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .arg("diff")
         .arg("--name-only")
         .arg(format!("origin/{base_branch}"))
         .arg("HEAD")
-        .current_dir(cwd)
-        .output()
-        .map(|output| output.status.success() && !output.stdout.is_empty())
-        .unwrap_or(false)
+        .current_dir(cwd);
+    bounded_git_stdout_nonempty(&mut command, "git tree diff")
 }
 
 /// Returns true when `git status --porcelain` reports any change in `cwd`.
-/// Falls back to `false` when git cannot be invoked, which the contract check
-/// then surfaces as [`CodingAgentError::NoProduct`].
-fn working_tree_has_changes(cwd: &Path) -> bool {
-    std::process::Command::new("git")
+/// Spawn failures retain the historical `false` fallback. Read failures and
+/// complete-capture overflow are explicit errors, never partial porcelain.
+fn working_tree_has_changes(cwd: &Path) -> Result<bool, String> {
+    let mut command = std::process::Command::new("git");
+    command
         .arg("status")
         .arg("--porcelain=v1")
         .arg("--untracked-files=all")
-        .current_dir(cwd)
-        .output()
-        .map(|output| output.status.success() && !output.stdout.is_empty())
-        .unwrap_or(false)
+        .current_dir(cwd);
+    bounded_git_stdout_nonempty(&mut command, "git status")
+}
+
+fn bounded_git_stdout_nonempty(
+    command: &mut std::process::Command,
+    operation: &str,
+) -> Result<bool, String> {
+    let mut child = match command.stdout(Stdio::piped()).stderr(Stdio::null()).spawn() {
+        Ok(child) => child,
+        Err(_) => return Ok(false),
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{operation} stdout was not piped"));
+    };
+    let mut capture = BoundedCapture::new(CaptureMode::Complete, AGENT_GIT_MACHINE_OUTPUT_BYTES);
+    let read = capture.drain(&mut stdout);
+    if let Err(error) = read {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("read {operation} stdout: {error}"));
+    }
+    let output = capture
+        .finish()
+        .map_err(|overflow| format!("{operation} {overflow}"))?;
+    let status = child
+        .wait()
+        .map_err(|error| format!("wait for {operation}: {error}"))?;
+    Ok(status.success() && !output.as_bytes().is_empty())
 }
 
 /// Returns every balanced top-level `{...}` substring, in source order. Nested
