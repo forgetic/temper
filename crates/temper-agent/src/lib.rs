@@ -24,7 +24,7 @@ pub mod provider;
 mod tool_preview;
 pub mod usage;
 
-pub use activity::{AgentActivityConfig, AgentLifecycleReporter};
+pub use activity::{AgentActivityConfig, AgentCancellationLatch, AgentLifecycleReporter};
 pub use coding_agent::{
     AgentAbortAuthority, AgentSessionState, Capability, CodingAgentError, DEFAULT_MAX_ITERATIONS,
     ForgeContextFuture, ForgeContextHost, SubmitForPrCallback, SubmitForPrFuture, SubmitForPrHost,

@@ -238,6 +238,12 @@ impl DaemonMachine {
         auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
+        if self.shutting_down {
+            return vec![DaemonRequest::Respond {
+                responder,
+                response: HttpResponseData::status_only(204),
+            }];
+        }
         if self.startup_recovery {
             let id = self.next_token();
             self.waiters.insert(
@@ -411,6 +417,9 @@ impl DaemonMachine {
         artifact: Artifact,
         job_payload: serde_json::Value,
     ) -> Vec<DaemonRequest> {
+        if self.shutting_down {
+            return Vec::new();
+        }
         if self.startup_recovery {
             self.deferred_enqueues.push(DeferredEnqueue {
                 job_id,
@@ -533,7 +542,7 @@ impl DaemonMachine {
     }
 
     pub(super) fn fulfil_waiters(&mut self) -> Vec<DaemonRequest> {
-        if self.startup_recovery {
+        if self.startup_recovery || self.shutting_down {
             return Vec::new();
         }
         let mut requests = Vec::new();

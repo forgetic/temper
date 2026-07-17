@@ -76,8 +76,8 @@ impl AttemptFence {
 
 mod cancellation;
 pub use cancellation::{
-    CancellationOutcome, JobCancellation, JobCancellationRequest, JobCleanup, ResourceJoinReport,
-    ResourceJoinStatus,
+    CancellationOutcome, JobCancellation, JobCancellationOwner, JobCancellationRequest, JobCleanup,
+    ResourceJoinReport, ResourceJoinStatus,
 };
 
 /// Worker-owned controls supplied to every layer of one job execution.

@@ -330,6 +330,24 @@ impl Daemon {
         }
     }
 
+    /// Closes new worker dispatch and local change-source intake without
+    /// releasing any durable assignment. Standalone shutdown calls this before
+    /// HTTP drain and before joining its co-resident worker.
+    pub async fn begin_shutdown(&self) {
+        self.change_source_listeners
+            .lock()
+            .expect("change source listeners")
+            .clear();
+        let (reply, rx) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::BeginShutdown { reply })
+            .is_ok()
+        {
+            let _ = rx.recv().await;
+        }
+    }
+
     /// Signals clean shutdown by releasing every assignment still owned by this
     /// daemon boot. Crash recovery remains independent because this is only a
     /// best-effort fast path through the same conditional claim rollback.

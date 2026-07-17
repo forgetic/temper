@@ -106,6 +106,9 @@ pub enum WorkerCompletion {
     HeartbeatDelivered(Result<(), String>),
     PollTimer,
     HeartbeatTimer,
+    /// Close assignment intake while keeping the drive loop alive for attempt
+    /// registry quiescence and heartbeat ownership.
+    BeginShutdown,
     Shutdown,
 }
 
@@ -182,6 +185,7 @@ pub struct WorkerMachine {
     outbox: BTreeMap<String, ResultOutboxEntry>,
     replay_attempts: BTreeMap<String, u32>,
     registered: bool,
+    shutting_down: bool,
     stopped: bool,
 }
 
@@ -204,6 +208,7 @@ impl WorkerMachine {
             outbox,
             replay_attempts: BTreeMap::new(),
             registered: false,
+            shutting_down: false,
             stopped: false,
         }
     }
@@ -221,6 +226,9 @@ impl WorkerMachine {
     }
 
     fn poll_or_backoff(&self) -> Vec<WorkerRequest> {
+        if self.shutting_down {
+            return Vec::new();
+        }
         if self.free_capacity > 0 {
             vec![WorkerRequest::SendPoll(crate::client::poll_message_params(
                 &self.params,
@@ -236,6 +244,9 @@ impl WorkerMachine {
         now: EngineTime,
         reply: Result<Option<WorkerProtocolMessage>, String>,
     ) -> Vec<WorkerRequest> {
+        if self.shutting_down {
+            return Vec::new();
+        }
         let mut requests = Vec::new();
         match reply {
             Ok(Some(WorkerProtocolMessage::Assign(assign))) => {
@@ -351,6 +362,9 @@ impl Machine for WorkerMachine {
                         &self.params.capabilities,
                     ),
                 )];
+                if self.shutting_down {
+                    return requests;
+                }
                 requests.extend(self.outbox.values().map(Self::send_entry));
                 requests.extend(self.poll_or_backoff());
                 requests
@@ -361,7 +375,9 @@ impl Machine for WorkerMachine {
             ],
             WorkerCompletion::PollReply(reply) => self.on_poll_reply(now, reply),
             WorkerCompletion::PollTimer => {
-                if self.registered {
+                if self.shutting_down {
+                    Vec::new()
+                } else if self.registered {
                     self.poll_or_backoff()
                 } else {
                     vec![WorkerRequest::SendRegister(
@@ -619,14 +635,24 @@ impl Machine for WorkerMachine {
             }
             WorkerCompletion::HeartbeatDelivered(Err(error)) => {
                 self.registered = false;
-                vec![
-                    WorkerRequest::Log(format!("worker: heartbeat failed: {error}")),
-                    WorkerRequest::SendRegister(crate::client::register_message_params(
-                        &self.params,
-                    )),
-                ]
+                if self.shutting_down {
+                    vec![WorkerRequest::Log(format!(
+                        "worker: heartbeat failed during shutdown: {error}"
+                    ))]
+                } else {
+                    vec![
+                        WorkerRequest::Log(format!("worker: heartbeat failed: {error}")),
+                        WorkerRequest::SendRegister(crate::client::register_message_params(
+                            &self.params,
+                        )),
+                    ]
+                }
             }
             WorkerCompletion::HeartbeatDelivered(Ok(())) => Vec::new(),
+            WorkerCompletion::BeginShutdown => {
+                self.shutting_down = true;
+                Vec::new()
+            }
             WorkerCompletion::Shutdown => {
                 self.stopped = true;
                 Vec::new()

@@ -11,13 +11,14 @@
 //! This is the worker→agent carrier the standalone daemon uses; the distributed
 //! deployment keeps the subprocess `OutOfProcessRunner`.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
-    AgentAbortAuthority, AgentActivityConfig, AgentContainmentContext, CodingAgentError,
-    ForgeContextHost, ProviderConfig, RunTotals, SubmitForPrHost,
+    AgentAbortAuthority, AgentActivityConfig, AgentCancellationLatch, AgentContainmentContext,
+    CodingAgentError, ForgeContextHost, ProviderConfig, RunTotals, SubmitForPrHost,
     run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
 };
 use temper_config::AgentActivityCapturePolicyV1;
@@ -265,6 +266,8 @@ impl InProcessAgentRunner {
                 as ForgeContextHost
         });
         let containment = self.containment.clone();
+        let agent_cancellation = AgentCancellationLatch::default();
+        let cancellation_owner = cancellation.register_async_owner();
         let lifecycle_reporter: temper_agent::AgentLifecycleReporter =
             std::sync::Arc::new(move |scope, event| {
                 let _ = progress.report(scope, event);
@@ -273,7 +276,8 @@ impl InProcessAgentRunner {
         let cwd = cwd.to_path_buf();
 
         Box::pin(async move {
-            let outcome = run_coding_agent_native_with_totals_tool_config_hosts_and_containment(
+            let _cancellation_owner = cancellation_owner;
+            let run = run_coding_agent_native_with_totals_tool_config_hosts_and_containment(
                 handle,
                 &provider,
                 &context,
@@ -289,11 +293,21 @@ impl InProcessAgentRunner {
                     address: activity_address,
                     lifecycle_address: None,
                     lifecycle_reporter: Some(lifecycle_reporter),
-                    cancellation: Default::default(),
+                    cancellation: agent_cancellation.clone(),
                 },
                 runtime_limits,
                 containment,
-            )
+            );
+            let mut run = std::pin::pin!(run);
+            let mut cancellation_requested = std::pin::pin!(cancellation.cancelled());
+            let mut forwarded_cancellation = false;
+            let outcome = std::future::poll_fn(|cx| {
+                if !forwarded_cancellation && cancellation_requested.as_mut().poll(cx).is_ready() {
+                    forwarded_cancellation = true;
+                    agent_cancellation.request_cancel();
+                }
+                run.as_mut().poll(cx)
+            })
             .await;
             // The typed coding-agent error remains intact through both outer
             // terminal projections. A closed attempt fence/watchdog request is

@@ -239,6 +239,30 @@ impl JobCancellation {
         self.requested().is_some()
     }
 
+    pub async fn cancelled(&self) {
+        std::future::poll_fn(|cx| {
+            if self.is_cancelled() {
+                return Poll::Ready(());
+            }
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if self.is_cancelled() {
+                return Poll::Ready(());
+            }
+            if !state
+                .request_waiters
+                .iter()
+                .any(|waker| waker.will_wake(cx.waker()))
+            {
+                state.request_waiters.push(cx.waker().clone());
+            }
+            Poll::Pending
+        })
+        .await
+    }
+
     /// Polls for the next request after `observed`. Intermediate escalation
     /// stages are never coalesced: if the shell publishes soft and hard
     /// escalation before the owner is polled again, the owner still observes
@@ -338,7 +362,7 @@ impl JobCancellation {
     /// Registers an owner that must receive escalation requests and report
     /// quiescence asynchronously instead of being destroyed by the shell's
     /// compatibility cancellation race.
-    pub(crate) fn register_async_owner(&self) -> JobCancellationOwner {
+    pub fn register_async_owner(&self) -> JobCancellationOwner {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -419,7 +443,7 @@ impl JobCancellation {
     }
 }
 
-pub(crate) struct JobCancellationOwner {
+pub struct JobCancellationOwner {
     cancellation: JobCancellation,
 }
 

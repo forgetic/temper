@@ -21,7 +21,7 @@ use skein::http::h1::{
     Http1Listener, Http1ListenerConfig, Method, Request as H1Request, Response as H1Response,
 };
 use skein::net::tcp::TcpListenerBuilder;
-use skein::runtime::RuntimeHandle;
+use skein::runtime::{JoinHandle, RuntimeHandle};
 use skein::server::shutdown::ShutdownSignal;
 
 use crate::queue::{CqSender, OneshotSender, oneshot};
@@ -102,6 +102,7 @@ impl HttpResponder {
 pub struct EngineHttpServer {
     local_addr: SocketAddr,
     shutdown: ShutdownSignal,
+    joined: Option<JoinHandle<()>>,
 }
 
 impl EngineHttpServer {
@@ -112,6 +113,13 @@ impl EngineHttpServer {
     /// Begin graceful drain (stop accepting, let in-flight requests finish).
     pub fn begin_drain(&self, timeout: Duration) {
         let _ = self.shutdown.begin_drain(timeout);
+    }
+
+    /// Wait until the listener and every accepted connection have joined.
+    pub async fn finish_drain(mut self) {
+        if let Some(joined) = self.joined.take() {
+            let _ = joined.await;
+        }
     }
 }
 
@@ -198,13 +206,14 @@ where
     let local_addr = listener.local_addr()?;
     let shutdown = listener.shutdown_signal();
     let run_handle = handle.clone();
-    handle.spawn(async move {
+    let joined = handle.spawn(async move {
         let _ = listener.run(&run_handle).await;
     });
 
     Ok(EngineHttpServer {
         local_addr,
         shutdown,
+        joined: Some(joined),
     })
 }
 

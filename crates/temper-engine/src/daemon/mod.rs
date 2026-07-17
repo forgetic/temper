@@ -19,6 +19,7 @@ mod handlers;
 mod machine;
 mod protocol;
 mod result_application;
+mod shutdown;
 pub mod state_dto;
 // The coordinator's complete role/mechanical/poll contract is consumed in
 // stages; constructors not used by the compatibility scanner remain exercised
