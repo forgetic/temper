@@ -16,9 +16,9 @@ use std::task::{Context, Poll, Waker};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use temper_process_containment::{CleanupSnapshot, CleanupTrigger, ContainmentScope};
+use temper_process_containment::{CleanupTrigger, ContainmentScope};
 
-use crate::executor::JobCancellation;
+use crate::executor::{JobCancellation, JobCleanupObserver};
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -92,16 +92,6 @@ impl<T> Future for JoinedBlocking<T> {
 impl<T> Drop for JoinedBlocking<T> {
     fn drop(&mut self) {
         self.join();
-    }
-}
-
-struct CommandCleanupObserver(JobCancellation);
-
-impl temper_process_containment::CleanupObserver for CommandCleanupObserver {
-    fn observe(&self, snapshot: &CleanupSnapshot) {
-        if matches!(snapshot, CleanupSnapshot::Blocked { .. }) {
-            self.0.observe_cleanup(snapshot.clone());
-        }
     }
 }
 
@@ -187,6 +177,10 @@ fn run_command(
     cancelled: &AtomicBool,
     job_cancellation: JobCancellation,
 ) -> io::Result<Output> {
+    let owner = std::path::Path::new(command.get_program())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map_or_else(|| "worker-command".to_string(), bounded_owner_identifier);
     let contained_command = crate::process_containment::containment_command(
         &command,
         Stdio::null(),
@@ -197,8 +191,8 @@ fn run_command(
         "worker-command",
         "local",
         ContainmentScope::WorkerCommand,
-        "managed-command",
-        Some(Arc::new(CommandCleanupObserver(job_cancellation))),
+        owner.as_str(),
+        Some(Arc::new(JobCleanupObserver(job_cancellation))),
     )?;
     let process = prepared.spawn(contained_command)?;
 
@@ -265,6 +259,23 @@ fn run_command(
         stdout: stdout?,
         stderr: stderr?,
     })
+}
+
+fn bounded_owner_identifier(value: &str) -> String {
+    let mut value = value.to_string();
+    let limit = temper_process_containment::MAX_CONTAINMENT_IDENTITY_BYTES;
+    if value.len() > limit {
+        let mut end = limit;
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
+    }
+    if value.is_empty() {
+        "worker-command".to_string()
+    } else {
+        value
+    }
 }
 
 fn spawn_reader(

@@ -3,7 +3,9 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::executor::{JobCancellationRequest, ResourceJoinReport, ResourceJoinStatus};
+use crate::executor::{
+    JobCancellationRequest, JobCleanupObserver, ResourceJoinReport, ResourceJoinStatus,
+};
 use crate::managed_effect::JoinedBlocking;
 use crate::trace::ActivityEndpoint;
 
@@ -20,19 +22,6 @@ struct SubmitHostTask {
 }
 
 const LIFECYCLE_CONNECT_GRACE: Duration = Duration::from_millis(100);
-
-struct AttemptCleanupObserver(JobCancellation);
-
-impl temper_process_containment::CleanupObserver for AttemptCleanupObserver {
-    fn observe(&self, snapshot: &temper_process_containment::CleanupSnapshot) {
-        if matches!(
-            snapshot,
-            temper_process_containment::CleanupSnapshot::Blocked { .. }
-        ) {
-            self.0.observe_cleanup(snapshot.clone());
-        }
-    }
-}
 
 /// Every blocking or threaded resource owned by one attempt. The explicit
 /// cancellation path drives this owner to `finish`; Drop is only the abrupt
@@ -282,12 +271,13 @@ impl OutOfProcessRunner {
             (self.containment_factory)(job_id, attempt_id).map_err(|error| {
                 AgentRunError::transient(format!("create agent containment factory: {error}"))
             })?;
-        let containment_factory = containment_factory
-            .with_observer(Arc::new(AttemptCleanupObserver(cancellation.clone())));
+        let containment_factory =
+            containment_factory.with_observer(Arc::new(JobCleanupObserver(cancellation.clone())));
         let containment_spec = temper_process_containment::ContainmentSpec::new(
             temper_process_containment::ContainmentIdentity::new(format!(
                 "job-{job_id}-attempt-{attempt_id}"
             ))
+            .and_then(|identity| identity.with_owner_identifier("agent"))
             .map_err(|error| {
                 AgentRunError::transient(format!("identify agent containment: {error}"))
             })?,

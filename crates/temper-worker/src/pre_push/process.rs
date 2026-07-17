@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use temper_process_containment::{CleanupTrigger, ContainedProcess, ContainmentScope};
 
 use super::PrePushCommand;
-use crate::executor::JobCancellation;
+use crate::executor::{JobCancellation, JobCleanupObserver};
 
 const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -47,19 +47,6 @@ pub(super) async fn run_command(
     cancellation: Option<JobCancellation>,
 ) -> PrePushCommandResult {
     ManagedPrePushCommand::spawn(command, cwd, cancellation).await
-}
-
-struct PrePushCleanupObserver(JobCancellation);
-
-impl temper_process_containment::CleanupObserver for PrePushCleanupObserver {
-    fn observe(&self, snapshot: &temper_process_containment::CleanupSnapshot) {
-        if matches!(
-            snapshot,
-            temper_process_containment::CleanupSnapshot::Blocked { .. }
-        ) {
-            self.0.observe_cleanup(snapshot.clone());
-        }
-    }
 }
 
 struct ManagedCommandState {
@@ -228,7 +215,7 @@ fn run_command_sync(
         Stdio::piped(),
     );
     let observer = cancellation.map(|cancellation| {
-        Arc::new(PrePushCleanupObserver(cancellation))
+        Arc::new(JobCleanupObserver(cancellation))
             as Arc<dyn temper_process_containment::CleanupObserver>
     });
     let prepared = match crate::process_containment::prepare_with_observer(

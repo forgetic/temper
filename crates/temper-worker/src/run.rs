@@ -213,6 +213,7 @@ where
     T: Transport,
     S: Spawner,
 {
+    crate::observability::emit_startup_containment_capability_once(&config.worker_id);
     let params = WorkerParams::from_config(&config);
     let liveness_limits = params.liveness_limits;
     let outbox = Arc::new(ResultOutbox::new(params.result_root.clone()));

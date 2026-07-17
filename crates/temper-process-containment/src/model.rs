@@ -59,30 +59,54 @@ impl ContainmentBackendPolicy {
 }
 
 /// Stable logical identity assigned by the process owner before preparation.
+///
+/// `value` is unique within the factory and is safe for backend ownership
+/// names. `owner_identifier` is the bounded, content-free tool or command name
+/// used by observability. Keeping them separate prevents a generated nonce (or
+/// a backend path) from obscuring which owner required cleanup.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ContainmentIdentity(String);
+pub struct ContainmentIdentity {
+    value: String,
+    owner_identifier: String,
+}
 
 impl ContainmentIdentity {
     pub fn new(value: impl Into<String>) -> io::Result<Self> {
-        let value = value.into();
-        if value.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "containment identity must not be empty",
-            ));
-        }
-        if value.len() > MAX_CONTAINMENT_IDENTITY_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("containment identity exceeds {MAX_CONTAINMENT_IDENTITY_BYTES} bytes"),
-            ));
-        }
-        Ok(Self(value))
+        let value = validate_identity(value.into(), "containment identity")?;
+        Ok(Self {
+            owner_identifier: value.clone(),
+            value,
+        })
+    }
+
+    pub fn with_owner_identifier(mut self, owner: impl Into<String>) -> io::Result<Self> {
+        self.owner_identifier = validate_identity(owner.into(), "containment owner identifier")?;
+        Ok(self)
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.value
     }
+
+    pub fn owner_identifier(&self) -> &str {
+        &self.owner_identifier
+    }
+}
+
+fn validate_identity(value: String, field: &str) -> io::Result<String> {
+    if value.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{field} must not be empty"),
+        ));
+    }
+    if value.len() > MAX_CONTAINMENT_IDENTITY_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{field} exceeds {MAX_CONTAINMENT_IDENTITY_BYTES} bytes"),
+        ));
+    }
+    Ok(value)
 }
 
 /// The owner boundary protected by a containment.
@@ -596,10 +620,25 @@ pub enum CleanupSnapshot {
     },
 }
 
+mod observation;
+pub use observation::*;
+
 /// Per-factory observer seam. Implementations should return promptly; observer
-/// panics are isolated from process cleanup.
+/// panics are isolated from process selection and cleanup.
+///
+/// `observe` remains the compatibility hook for snapshot-only consumers. New
+/// observers should override the identified hooks; their default behavior
+/// delegates cleanup to `observe` and ignores selection diagnostics.
 pub trait CleanupObserver: Send + Sync {
     fn observe(&self, snapshot: &CleanupSnapshot);
+
+    fn observe_cleanup(&self, observation: &CleanupObservation) {
+        self.observe(observation.snapshot());
+    }
+
+    fn observe_capability(&self, _diagnostic: &ContainmentCapabilityDiagnostic) {}
+
+    fn observe_fallback(&self, _fallback: &ContainmentFallbackObservation) {}
 }
 
 #[derive(Debug)]
