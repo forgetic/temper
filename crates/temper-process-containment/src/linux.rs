@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
@@ -23,6 +24,11 @@ use process::PidFd;
 use protocol::{ProtocolFrame, SupervisorClient};
 
 pub(super) const HELPER_MODE: &str = "--temper-linux-supervisor-helper";
+/// Per-process transport used only by [`LinuxSupervisorBackendFactory::with_helper_invocation`]
+/// to run the hidden helper through a Rust test harness.
+#[doc(hidden)]
+pub const LINUX_SUPERVISOR_TEST_HELPER_ENV: &str = "TEMPER_LINUX_SUPERVISOR_TEST_HELPER_ARGS";
+const TEST_PAYLOAD_STDOUT_FD: i32 = 197;
 static NEXT_SUPERVISOR_ROOT: AtomicU64 = AtomicU64::new(0);
 
 /// Prepared Linux fallback based on one dedicated child subreaper per
@@ -33,18 +39,38 @@ static NEXT_SUPERVISOR_ROOT: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Debug)]
 pub struct LinuxSupervisorBackendFactory {
     helper_executable: Option<PathBuf>,
+    helper_argument_prefix: Vec<OsString>,
 }
 
 impl LinuxSupervisorBackendFactory {
     pub fn new() -> Self {
         Self {
             helper_executable: None,
+            helper_argument_prefix: Vec::new(),
         }
     }
 
     pub fn with_helper_executable(helper_executable: impl Into<PathBuf>) -> Self {
         Self {
             helper_executable: Some(helper_executable.into()),
+            helper_argument_prefix: Vec::new(),
+        }
+    }
+
+    /// Prepends arguments before the hidden helper mode. This is primarily for
+    /// injecting a Rust test-harness entrypoint (`--exact ... --`) without any
+    /// process-global backend selector.
+    pub fn with_helper_invocation<I, S>(
+        helper_executable: impl Into<PathBuf>,
+        argument_prefix: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        Self {
+            helper_executable: Some(helper_executable.into()),
+            helper_argument_prefix: argument_prefix.into_iter().map(Into::into).collect(),
         }
     }
 
@@ -89,6 +115,7 @@ impl ContainmentBackendFactory for LinuxSupervisorBackendFactory {
         );
         Ok(Box::new(PreparedLinuxSupervisor {
             helper_executable,
+            helper_argument_prefix: self.helper_argument_prefix.clone(),
             root,
             term_grace: spec.term_grace,
             inspection_retry: spec.inspection_retry,
@@ -181,6 +208,7 @@ fn cgroup_is_unavailable(error: &io::Error) -> bool {
 
 struct PreparedLinuxSupervisor {
     helper_executable: PathBuf,
+    helper_argument_prefix: Vec<OsString>,
     root: ContainmentRootIdentity,
     term_grace: Duration,
     inspection_retry: Duration,
@@ -207,20 +235,50 @@ impl PreparedContainmentBackend for PreparedLinuxSupervisor {
         let helper_channel = move_stream_above_stdio(helper_channel)?;
         let writer = owner_channel.try_clone()?;
         let helper_fd = helper_channel.as_raw_fd();
-        let helper_arguments = vec![
+        let verify_helper_status = self.helper_argument_prefix.is_empty();
+        let hidden_arguments = [
             OsString::from(HELPER_MODE),
             OsString::from(helper_fd.to_string()),
             OsString::from(duration_millis(self.term_grace).to_string()),
             OsString::from(duration_millis(self.inspection_retry).to_string()),
         ];
+        let (helper_arguments, test_helper_environment) = if verify_helper_status {
+            (hidden_arguments.to_vec(), None)
+        } else {
+            let encoded = hidden_arguments
+                .iter()
+                .map(|argument| argument.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ");
+            (self.helper_argument_prefix, Some(encoded))
+        };
         let mut helper = command
             .into_linux_supervisor_command(self.helper_executable.as_os_str(), helper_arguments);
+        let test_stdout_null = test_helper_environment
+            .as_ref()
+            .map(|_| File::open("/dev/null"))
+            .transpose()?;
+        if let Some(arguments) = test_helper_environment {
+            helper.env(LINUX_SUPERVISOR_TEST_HELPER_ENV, arguments);
+        }
 
         // SAFETY: this closure runs in the post-fork helper process. It only
         // changes the close-on-exec bit of the valid socket fd captured above;
         // no allocation or borrowed pointer crosses the call.
+        let test_stdout_null_fd = test_stdout_null.as_ref().map(AsRawFd::as_raw_fd);
         unsafe {
-            helper.pre_exec(move || helper::set_close_on_exec(helper_fd, false));
+            helper.pre_exec(move || {
+                helper::set_close_on_exec(helper_fd, false)?;
+                if let Some(null_fd) = test_stdout_null_fd {
+                    if libc::dup2(libc::STDOUT_FILENO, TEST_PAYLOAD_STDOUT_FD) == -1
+                        || libc::fcntl(TEST_PAYLOAD_STDOUT_FD, libc::F_SETFD, 0) == -1
+                        || libc::dup2(null_fd, libc::STDOUT_FILENO) == -1
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
         }
         let mut child = helper.spawn()?;
         drop(helper_channel);
@@ -265,6 +323,7 @@ impl PreparedContainmentBackend for PreparedLinuxSupervisor {
             inspections: 0,
             automatic_term_taken: false,
             automatic_kill_taken: false,
+            verify_helper_status,
         };
         Ok(BackendSpawn::new(child, Box::new(kernel)))
     }
@@ -314,6 +373,7 @@ struct LinuxSupervisorKernel {
     inspections: u64,
     automatic_term_taken: bool,
     automatic_kill_taken: bool,
+    verify_helper_status: bool,
 }
 
 impl ContainmentKernel for LinuxSupervisorKernel {
@@ -384,11 +444,15 @@ impl ContainmentKernel for LinuxSupervisorKernel {
         let pid = child.id();
         match child.try_wait()? {
             Some(status) => {
-                if let Some(ProtocolFrame::Final { payload_status, .. }) = self.client.terminal() {
-                    if !helper_status_matches_payload(*payload_status, status) {
-                        return Err(io::Error::other(format!(
-                            "Linux supervisor exit status {status:?} did not mirror payload status {payload_status}"
-                        )));
+                if self.verify_helper_status {
+                    if let Some(ProtocolFrame::Final { payload_status, .. }) =
+                        self.client.terminal()
+                    {
+                        if !helper_status_matches_payload(*payload_status, status) {
+                            return Err(io::Error::other(format!(
+                                "Linux supervisor exit status {status:?} did not mirror payload status {payload_status}"
+                            )));
+                        }
                     }
                 }
                 Ok(DirectChildReap::Reaped {
@@ -431,6 +495,28 @@ fn invalid_response(operation: &str, frame: &ProtocolFrame) -> io::Error {
         io::ErrorKind::InvalidData,
         format!("invalid Linux supervisor {operation} response: {frame:?}"),
     )
+}
+
+/// Restores the payload stdout pipe after a Rust test harness has printed its
+/// own pre-test chatter to `/dev/null`.
+#[doc(hidden)]
+pub fn restore_linux_supervisor_test_payload_stdout() -> io::Result<()> {
+    // SAFETY: the injected helper pre-exec path owns both descriptors. dup2
+    // atomically replaces stdout and close releases the private duplicate.
+    if unsafe { libc::dup2(TEST_PAYLOAD_STDOUT_FD, libc::STDOUT_FILENO) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let _ = unsafe { libc::close(TEST_PAYLOAD_STDOUT_FD) };
+    Ok(())
+}
+
+/// Closes the restored test payload stream before libtest prints its post-test
+/// status, so protocol/output readers observe only payload bytes.
+#[doc(hidden)]
+pub fn close_linux_supervisor_test_payload_stdout() {
+    // SAFETY: this runs only in the injected helper process after its payload
+    // and descendants have been reaped.
+    let _ = unsafe { libc::close(libc::STDOUT_FILENO) };
 }
 
 /// Dispatch the hidden Linux helper mode before logging, runtimes, or ordinary

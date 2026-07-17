@@ -30,6 +30,7 @@ jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-record = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 tempfile = { workspace = true }
+temper-process-containment = { path = "../temper-process-containment" }
 # Test-only: the jig-record request oracle runs its recorder on a jig-runtime
 # (skein) thread.
 jig-runtime = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }

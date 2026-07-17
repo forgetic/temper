@@ -1659,6 +1659,7 @@ dependencies = [
  "skein",
  "temper-agent-core",
  "temper-agent-io",
+ "temper-process-containment",
  "temper-protocol-activity",
  "temper-protocol-agent",
  "temper-protocol-interaction",

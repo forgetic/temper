@@ -15,6 +15,9 @@
 //! emitted as data, not callbacks), control (steering at turn boundaries +
 //! abort), and testability from the start.
 
+mod containment;
+#[cfg(test)]
+mod containment_tests;
 pub mod machine;
 mod managed_bash;
 mod managed_fs;
@@ -22,6 +25,7 @@ pub mod run;
 pub mod shell;
 pub mod subagent_tool;
 
+pub use containment::AgentContainmentContext;
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,
     BatchGeneration, ModelCallStatus, OperationGeneration, StreamDelta, ToolCallStatus,
@@ -47,4 +51,7 @@ pub use subagent_tool::{SubAgentFactory, SubAgentObserverFactory, SubAgentTool};
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use temper_process_containment::dispatch_linux_supervisor_helper;
-pub use temper_process_containment::{ProcessContainment, configure_descendant_command};
+pub use temper_process_containment::{
+    CleanupReport, CleanupTrigger, ContainedProcess, ContainmentCommand, ContainmentFactory,
+    ContainmentScope,
+};

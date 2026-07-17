@@ -12,7 +12,7 @@ use tongs::tools::{
 use super::Capability;
 use super::forge::{ForgeContextHost, ForgeGetItemTool, ForgeListRelatedTool};
 use super::submit::{SubmitForPrCallback, SubmitForPrTool, submit_for_pr_available};
-use temper_agent_core::{ManagedBashTool, joined_filesystem_tool};
+use temper_agent_core::{AgentContainmentContext, ManagedBashTool, joined_filesystem_tool};
 use temper_protocol_agent::WorkspaceContext;
 
 /// Builds the tool registry for a capability, scoped to `cwd`.
@@ -21,11 +21,13 @@ use temper_protocol_agent::WorkspaceContext;
 /// capabilities get inspection tools plus bash (so they can `git diff`,
 /// `git log`, inspect CI artifacts, etc.) but no file-writing tools.
 pub fn tool_registry(capability: Capability, cwd: &Path) -> ToolRegistry {
-    ToolRegistry::from_tools(coding_tools_vec(capability, cwd))
+    let containment = AgentContainmentContext::production(None);
+    ToolRegistry::from_tools(coding_tools_vec(capability, cwd, &containment))
 }
 
 /// Builds the tool registry for a concrete workspace context, optionally adding
 /// the host-controlled `submit_for_pr` relay for writable engineer sessions.
+#[cfg(test)]
 pub(crate) fn tool_registry_for_context(
     capability: Capability,
     context: &WorkspaceContext,
@@ -33,7 +35,26 @@ pub(crate) fn tool_registry_for_context(
     submit_for_pr: Option<SubmitForPrCallback>,
     forge_context: Option<ForgeContextHost>,
 ) -> ToolRegistry {
-    let mut tools = coding_tools_vec(capability, cwd);
+    let containment = AgentContainmentContext::production(None);
+    tool_registry_for_context_with_containment(
+        capability,
+        context,
+        cwd,
+        submit_for_pr,
+        forge_context,
+        &containment,
+    )
+}
+
+pub(crate) fn tool_registry_for_context_with_containment(
+    capability: Capability,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    submit_for_pr: Option<SubmitForPrCallback>,
+    forge_context: Option<ForgeContextHost>,
+    containment: &AgentContainmentContext,
+) -> ToolRegistry {
+    let mut tools = coding_tools_vec(capability, cwd, containment);
     if let Some(callback) = submit_for_pr.filter(|_| submit_for_pr_available(context)) {
         tools.push(Box::new(SubmitForPrTool::new(context, callback)));
     }
@@ -47,13 +68,17 @@ pub(crate) fn tool_registry_for_context(
 /// The base tool list for a capability (read-only inspection tools for everyone,
 /// plus edit/write for the writable engineer). Returned as a `Vec` so callers
 /// can append extra tools (e.g. a sub-agent tool) before building the registry.
-fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::tools::Tool>> {
+fn coding_tools_vec(
+    capability: Capability,
+    cwd: &Path,
+    containment: &AgentContainmentContext,
+) -> Vec<Box<dyn tongs::tools::Tool>> {
     let mut tools = vec![
         joined_filesystem_tool(create_read_tool(cwd)),
         joined_filesystem_tool(create_ls_tool(cwd)),
         joined_filesystem_tool(create_grep_tool(cwd)),
         joined_filesystem_tool(create_find_tool(cwd)),
-        Box::new(ManagedBashTool::new(cwd)),
+        Box::new(ManagedBashTool::with_containment(cwd, containment.clone())),
     ];
     if capability.is_writable() {
         tools.push(joined_filesystem_tool(create_edit_tool(cwd)));
@@ -181,7 +206,33 @@ pub(crate) fn subagent_specs() -> &'static [SubAgentSpec] {
 /// is prompt-constrained to read-only inspection, matching Claude's parallel
 /// `general-purpose` reviewers).
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn add_subagents(
+    handle: skein::runtime::RuntimeHandle,
+    base: ToolRegistry,
+    provider_config: &ProviderConfig,
+    stream_options: &tongs::provider::StreamOptions,
+    cwd: &Path,
+    scope_factory: &crate::activity::ScopeFactory,
+    parent_scope_id: &str,
+    operation_limits: temper_agent_core::AgentOperationLimits,
+) -> ToolRegistry {
+    let containment = AgentContainmentContext::production(None);
+    add_subagents_with_containment(
+        handle,
+        base,
+        provider_config,
+        stream_options,
+        cwd,
+        scope_factory,
+        parent_scope_id,
+        operation_limits,
+        &containment,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn add_subagents_with_containment(
     handle: skein::runtime::RuntimeHandle,
     mut base: ToolRegistry,
     provider_config: &ProviderConfig,
@@ -190,6 +241,7 @@ pub(crate) fn add_subagents(
     scope_factory: &crate::activity::ScopeFactory,
     parent_scope_id: &str,
     operation_limits: temper_agent_core::AgentOperationLimits,
+    containment: &AgentContainmentContext,
 ) -> ToolRegistry {
     for spec in subagent_specs() {
         base = add_one_subagent(
@@ -201,6 +253,7 @@ pub(crate) fn add_subagents(
             cwd,
             (scope_factory, parent_scope_id),
             operation_limits,
+            containment,
         );
     }
     base
@@ -217,6 +270,7 @@ fn add_one_subagent(
     cwd: &Path,
     scope: (&crate::activity::ScopeFactory, &str),
     operation_limits: temper_agent_core::AgentOperationLimits,
+    containment: &AgentContainmentContext,
 ) -> ToolRegistry {
     // The role's model tier. The cheap tier (e.g. Haiku) is for the read-only
     // searcher whose product is a focused report and which dominates token spend
@@ -243,6 +297,7 @@ fn add_one_subagent(
     let prompt = spec.prompt;
     let with_bash = spec.with_bash;
     let max_iterations = spec.max_iterations;
+    let containment = containment.clone();
     let factory: temper_agent_core::SubAgentFactory = std::sync::Arc::new(move |task: String| {
         // Build a fresh provider for the nested run (cheap; reuses the resolved
         // bearer in stream_options).
@@ -256,7 +311,10 @@ fn add_one_subagent(
             joined_filesystem_tool(create_find_tool(&cwd)),
         ];
         if with_bash {
-            tools.push(Box::new(ManagedBashTool::new(&cwd)));
+            tools.push(Box::new(ManagedBashTool::with_containment(
+                &cwd,
+                containment.clone(),
+            )));
         }
         temper_agent_core::SubAgent {
             system_prompt: Some(prompt.to_string()),
