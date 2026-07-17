@@ -11,14 +11,18 @@
 //! cannot be selected by the prepared backend model.
 //!
 //! This crate is the sole process-containment OS FFI boundary. Its public
-//! surface is safe; platform-specific unsafe operations stay in `legacy` until
-//! the prepared platform backends replace that adapter.
+//! surface is safe; platform-specific unsafe operations stay inside the
+//! prepared backends and the temporary `legacy` adapter.
 
+#[cfg(target_os = "linux")]
+mod cgroup_v2;
 mod command;
 mod legacy;
 mod model;
 mod runtime;
 
+#[cfg(target_os = "linux")]
+pub use cgroup_v2::*;
 pub use command::*;
 pub use legacy::{
     ContainmentKind, ProcessContainment, configure_command, configure_descendant_command,
