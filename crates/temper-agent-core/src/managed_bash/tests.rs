@@ -26,173 +26,107 @@ struct CleanupErrorFactory;
 impl temper_process_containment::ContainmentBackendFactory for CleanupErrorFactory {
     fn prepare_backend(
         &self,
-        _policy: temper_process_containment::ContainmentBackendPolicy,
+        policy: temper_process_containment::ContainmentBackendPolicy,
         spec: &temper_process_containment::ContainmentSpec,
     ) -> std::io::Result<Box<dyn temper_process_containment::PreparedContainmentBackend>> {
-        Ok(Box::new(CleanupErrorPrepared {
-            root: temper_process_containment::ContainmentRootIdentity::new(
-                temper_process_containment::ContainmentBackendKind::LinuxSupervisor,
-                format!("cleanup-error:{}", spec.identity.as_str()),
-            ),
-        }))
+        let executable = std::env::current_exe()?;
+        let inner =
+            temper_process_containment::LinuxSupervisorBackendFactory::with_helper_invocation(
+                executable,
+                [
+                    "--exact",
+                    "containment_tests::linux_supervisor_helper_entrypoint",
+                    "--nocapture",
+                ],
+            )
+            .prepare_backend(policy, spec)?;
+        Ok(Box::new(CleanupErrorPrepared { inner }))
     }
 }
 
 #[cfg(target_os = "linux")]
 struct CleanupErrorPrepared {
-    root: temper_process_containment::ContainmentRootIdentity,
+    inner: Box<dyn temper_process_containment::PreparedContainmentBackend>,
 }
 
 #[cfg(target_os = "linux")]
 impl temper_process_containment::PreparedContainmentBackend for CleanupErrorPrepared {
     fn kind(&self) -> temper_process_containment::ContainmentBackendKind {
-        temper_process_containment::ContainmentBackendKind::LinuxSupervisor
+        self.inner.kind()
     }
 
     fn root_identity(&self) -> temper_process_containment::ContainmentRootIdentity {
-        self.root.clone()
+        self.inner.root_identity()
     }
 
     fn spawn_precontained(
         self: Box<Self>,
         command: ContainmentCommand,
     ) -> std::io::Result<temper_process_containment::BackendSpawn> {
-        use std::os::unix::process::CommandExt;
-        let mut command = command.into_std_command();
-        command.process_group(0);
-        let child = command.spawn()?;
-        let pid = child.id();
-        Ok(temper_process_containment::BackendSpawn::new(
-            child,
-            Box::new(CleanupErrorKernel {
-                root: self.root,
-                pid,
-                inspections: 0,
-                injected_error: false,
-                reaped: None,
-            }),
-        ))
+        self.inner.spawn_precontained(command).map(|spawned| {
+            spawned.map_kernel(|inner| {
+                Box::new(CleanupErrorKernel {
+                    inner,
+                    injected_error: false,
+                })
+            })
+        })
     }
 }
 
 #[cfg(target_os = "linux")]
 struct CleanupErrorKernel {
-    root: temper_process_containment::ContainmentRootIdentity,
-    pid: u32,
-    inspections: u64,
+    inner: Box<dyn temper_process_containment::ContainmentKernel>,
     injected_error: bool,
-    reaped: Option<Option<i32>>,
-}
-
-#[cfg(target_os = "linux")]
-impl CleanupErrorKernel {
-    fn group_exists(&self) -> bool {
-        StdCommand::new("kill")
-            .args(["-0", "--", &format!("-{}", self.pid)])
-            .stderr(StdStdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-    }
-
-    fn member(&self) -> temper_process_containment::ProcessIdentity {
-        temper_process_containment::ProcessIdentity::new(
-            self.pid,
-            std::process::id(),
-            self.pid,
-            self.pid,
-            1,
-            "[injected-cleanup-error]",
-        )
-    }
 }
 
 #[cfg(target_os = "linux")]
 impl temper_process_containment::ContainmentKernel for CleanupErrorKernel {
     fn backend_kind(&self) -> temper_process_containment::ContainmentBackendKind {
-        temper_process_containment::ContainmentBackendKind::LinuxSupervisor
+        self.inner.backend_kind()
     }
 
     fn root_identity(&self) -> temper_process_containment::ContainmentRootIdentity {
-        self.root.clone()
+        self.inner.root_identity()
     }
 
     fn discover_members(&mut self) -> std::io::Result<temper_process_containment::MemberDiscovery> {
-        self.inspections += 1;
         if !self.injected_error {
             self.injected_error = true;
             return Err(std::io::Error::other("injected cleanup inspection failure"));
         }
-        Ok(if self.group_exists() {
-            temper_process_containment::MemberDiscovery::new(vec![self.member()], 0)
-        } else {
-            temper_process_containment::MemberDiscovery::empty()
-        })
+        self.inner.discover_members()
     }
 
     fn signal_members(
         &mut self,
         signal: temper_process_containment::ContainmentSignal,
     ) -> std::io::Result<temper_process_containment::SignalBatch> {
-        let argument = match signal {
-            temper_process_containment::ContainmentSignal::Term => "-TERM",
-            temper_process_containment::ContainmentSignal::Kill => "-KILL",
-        };
-        let member = self.member();
-        let status = StdCommand::new("kill")
-            .args([argument, "--", &format!("-{}", self.pid)])
-            .stderr(StdStdio::null())
-            .status()?;
-        let attempt = if status.success() {
-            temper_process_containment::SignalAttempt::succeeded(member, signal)
-        } else {
-            temper_process_containment::SignalAttempt::process_gone(member, signal)
-        };
-        Ok(temper_process_containment::SignalBatch::new(
-            vec![attempt],
-            0,
-        ))
+        self.inner.signal_members(signal)
+    }
+
+    fn take_backend_signal_batch(
+        &mut self,
+        signal: temper_process_containment::ContainmentSignal,
+    ) -> Option<temper_process_containment::SignalBatch> {
+        self.inner.take_backend_signal_batch(signal)
     }
 
     fn reap_direct_child(
         &mut self,
         child: &mut std::process::Child,
     ) -> std::io::Result<temper_process_containment::DirectChildReap> {
-        if let Some(exit_code) = self.reaped {
-            return Ok(temper_process_containment::DirectChildReap::AlreadyReaped {
-                pid: self.pid,
-                exit_code,
-            });
-        }
-        match child.try_wait()? {
-            Some(status) => {
-                let exit_code = status.code();
-                self.reaped = Some(exit_code);
-                Ok(temper_process_containment::DirectChildReap::Reaped {
-                    pid: self.pid,
-                    exit_code,
-                })
-            }
-            None => Ok(temper_process_containment::DirectChildReap::Pending { pid: self.pid }),
-        }
+        self.inner.reap_direct_child(child)
     }
 
     fn verify_recursive_empty(
         &mut self,
     ) -> std::io::Result<temper_process_containment::RecursiveEmptyProof> {
-        if self.group_exists() {
-            Ok(temper_process_containment::RecursiveEmptyProof::not_empty(
-                vec![self.member()],
-                0,
-            ))
-        } else {
-            Ok(temper_process_containment::RecursiveEmptyProof::proven(
-                self.inspections,
-            ))
-        }
+        self.inner.verify_recursive_empty()
     }
 
     fn wait(&mut self, duration: Duration) {
-        thread::sleep(duration.min(Duration::from_millis(5)));
+        self.inner.wait(duration);
     }
 }
 

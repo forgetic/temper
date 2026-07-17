@@ -35,5 +35,10 @@ temper-process-containment = { path = "../temper-process-containment" }
 # (skein) thread.
 jig-runtime = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 
+[[bin]]
+name = "temper-agent-containment-helper"
+path = "tests/support/containment_helper.rs"
+test = false
+
 [lints]
 workspace = true
