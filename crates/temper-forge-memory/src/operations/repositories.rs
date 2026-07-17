@@ -1,6 +1,7 @@
 //! User, repository, and label operations for [`MemoryForge`](crate::MemoryForge).
 
 use crate::MemoryForge;
+use crate::fault::FaultOp;
 use crate::ids::label_id;
 use crate::lists::{sort_labels, sort_repositories};
 use crate::util::{validate_create_repository, validate_upsert_label};
@@ -72,7 +73,9 @@ pub(crate) fn get_repository_by_path(
     forge: &MemoryForge,
     path: &RepositoryPath,
 ) -> ForgeResult<Option<Repository>> {
-    Ok(forge.lock().state.find_repository_by_path(path))
+    let mut inner = forge.lock();
+    inner.faults.take(FaultOp::GetRepositoryByPath)?;
+    Ok(inner.state.find_repository_by_path(path))
 }
 
 pub(crate) fn list_labels(forge: &MemoryForge, repo_id: &RepositoryId) -> ForgeResult<Vec<Label>> {

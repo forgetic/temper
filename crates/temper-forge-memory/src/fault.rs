@@ -24,6 +24,8 @@ use temper_forge_model::{ForgeError, ForgeResult};
 /// failure at a precise step without corrupting any on-disk fixture.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FaultOp {
+    /// `get_repository_by_path`.
+    GetRepositoryByPath,
     /// `list_issues`.
     ListIssues,
     /// `create_issue`.
