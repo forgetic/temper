@@ -30,6 +30,16 @@ pub async fn run_pre_push_checks(
     run_pre_push_checks_controlled(repo_root.as_ref().to_path_buf(), None).await
 }
 
+/// Runs repository gates through their normal command owner while allowing a
+/// compiled acceptance driver to select a backend per instance.
+#[doc(hidden)]
+pub async fn run_pre_push_checks_for_acceptance(
+    repo_root: impl AsRef<Path>,
+    cancellation: crate::executor::JobCancellation,
+) -> Result<PrePushReport, PrePushError> {
+    run_pre_push_checks_controlled(repo_root.as_ref().to_path_buf(), Some(cancellation)).await
+}
+
 async fn run_pre_push_checks_controlled(
     repo_root: PathBuf,
     cancellation: Option<crate::executor::JobCancellation>,

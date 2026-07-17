@@ -23,6 +23,8 @@ pub mod context_client;
 pub mod executor;
 mod lifecycle_hook;
 mod managed_effect;
+#[doc(hidden)]
+pub use managed_effect::run_managed_worker_command_for_acceptance;
 pub mod observability;
 pub mod out_of_process_runner;
 pub mod pr_freshness;
@@ -67,15 +69,16 @@ pub use pr_freshness::{
 pub use pre_push::{
     PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, WorkspaceFingerprint,
     WorkspaceFingerprintError, final_pre_push_response, fingerprint_writable_repos,
-    fingerprint_writable_repos_blocking, run_pre_push_checks, submit_for_pr_pre_push_response,
+    fingerprint_writable_repos_blocking, run_pre_push_checks, run_pre_push_checks_for_acceptance,
+    submit_for_pr_pre_push_response,
 };
 pub use result_outbox::{
     RESULT_OUTBOX_VERSION, ResultAcknowledgement, ResultAssignmentIdentity, ResultDeliveryState,
     ResultOutbox, ResultOutboxEntry, ResultOutboxError,
 };
 pub use run::{
-    WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
-    start_worker_with_transport_and_hook,
+    WorkerComponentHandle, run_worker, run_worker_with_transport, shutdown_worker_after_signal,
+    start_worker_with_transport, start_worker_with_transport_and_hook,
 };
 pub use task_registry::{
     ActiveJobJoinState, ActiveJobTask, WorkerShutdown, WorkerTaskJoinNotification,

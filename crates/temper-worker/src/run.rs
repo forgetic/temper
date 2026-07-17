@@ -154,6 +154,30 @@ impl WorkerComponentHandle {
     }
 }
 
+/// Awaits the service's termination signal, performs topology-specific intake
+/// closure, joins the worker's active-attempt registry, and only then runs the
+/// topology's assignment-release/drain completion step.
+///
+/// Split-worker and standalone composition roots share this ordering primitive.
+/// The injected futures let deterministic acceptance drivers trigger the real
+/// signal path without sending process-global signals.
+#[doc(hidden)]
+pub async fn shutdown_worker_after_signal<S, B, A>(
+    signal: S,
+    before_worker_join: B,
+    worker: WorkerComponentHandle,
+    after_worker_join: A,
+) where
+    S: Future<Output = ()>,
+    B: Future<Output = ()>,
+    A: Future<Output = ()>,
+{
+    signal.await;
+    before_worker_join.await;
+    worker.shutdown().await;
+    after_worker_join.await;
+}
+
 async fn wait_until_or_timeout(
     notification: WorkerTaskJoinNotification,
     timeout: Duration,

@@ -173,6 +173,7 @@ struct JobCancellationState {
     async_owners: usize,
     cleanup: Option<JobCleanup>,
     cleanup_observer: Option<CleanupSnapshotObserver>,
+    containment_factory: Option<temper_process_containment::ContainmentFactory>,
 }
 
 /// Attempt-local cancellation handshake shared by the worker shell and every
@@ -199,6 +200,33 @@ impl std::fmt::Debug for JobCancellation {
 }
 
 impl JobCancellation {
+    /// Installs an instance-scoped containment factory for worker-owned child
+    /// commands. Production attempts use automatic backend selection; compiled
+    /// acceptance drivers use this seam to exercise the exact same owners with
+    /// a forced supervisor or required delegated cgroup without global state.
+    #[doc(hidden)]
+    pub fn with_containment_factory(
+        factory: temper_process_containment::ContainmentFactory,
+    ) -> Self {
+        let cancellation = Self::default();
+        cancellation
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .containment_factory = Some(factory);
+        cancellation
+    }
+
+    pub(crate) fn containment_factory(
+        &self,
+    ) -> Option<temper_process_containment::ContainmentFactory> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .containment_factory
+            .clone()
+    }
+
     /// Requests cooperative cancellation. Compatibility callers use this
     /// method; the worker shell maps `CancelJob` to the same request.
     pub fn cancel(&self) {

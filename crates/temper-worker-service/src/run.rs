@@ -83,18 +83,26 @@ async fn run_async(
     let mut sigterm = skein::signal::sigterm()
         .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
     let worker = start_worker_with_transport(handle, worker_config, executor, transport);
+    let signal = async move {
+        std::future::poll_fn(|task_cx| {
+            if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+        .await;
+    };
 
-    std::future::poll_fn(|task_cx| {
-        if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
-            std::task::Poll::Ready(())
-        } else {
-            std::task::Poll::Pending
-        }
-    })
-    .await;
     // Intentionally has no timeout: if kernel cleanup is blocked, systemd's
     // service timeout and control-group kill remain the abrupt-death backstop.
-    worker.shutdown().await;
+    temper_worker::shutdown_worker_after_signal(
+        signal,
+        std::future::ready(()),
+        worker,
+        std::future::ready(()),
+    )
+    .await;
     Ok(())
 }
 

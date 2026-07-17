@@ -2231,6 +2231,7 @@ dependencies = [
  "temper-trigger-forgejo",
  "temper-wake",
  "temper-worker",
+ "temper-worker-io",
  "temper-workflow",
  "tempfile",
  "toml",

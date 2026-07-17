@@ -20,8 +20,12 @@ pub(crate) fn prepare_with_observer(
     scope: ContainmentScope,
     owner: &str,
     observer: Option<Arc<dyn temper_process_containment::CleanupObserver>>,
+    injected_factory: Option<ContainmentFactory>,
 ) -> io::Result<PreparedContainment> {
-    let factory = production_factory(job, attempt)?;
+    let factory = match injected_factory {
+        Some(factory) => factory,
+        None => production_factory(job, attempt)?,
+    };
     let factory = match observer {
         Some(observer) => factory.with_observer(observer),
         None => factory,
