@@ -6,9 +6,21 @@ use std::time::{Duration, Instant};
 use temper_protocol_activity::{ACTIVITY_PROTOCOL_VERSION, AgentActivityBatch, AgentRunEventV1};
 
 use super::{
-    RecoveredTraceRun, TraceCollector, TraceError, acknowledge_recovered_run,
-    event_blob_references, read_acknowledged_sequence, read_dir, recover_run, set_private_dir,
+    ForwardingAcknowledgementBoundary, RecoveredForwardingRun, RecoveredTraceRun, TraceCollector,
+    TraceError, acknowledge_forwarded_run, acknowledge_recovered_run, event_blob_references,
+    read_acknowledged_sequence, read_dir, recover_forwarding_run, set_private_dir,
 };
+
+pub(super) struct ForwardingBatch {
+    pub(super) batch: AgentActivityBatch,
+    boundaries: Vec<ForwardingAcknowledgementBoundary>,
+}
+
+impl ForwardingBatch {
+    pub(super) fn into_parts(self) -> (AgentActivityBatch, Vec<ForwardingAcknowledgementBoundary>) {
+        (self.batch, self.boundaries)
+    }
+}
 
 impl RecoveredTraceRun {
     /// Builds the next at-least-once forwarding batch after the durable cursor.
@@ -70,11 +82,73 @@ impl RecoveredTraceRun {
     }
 }
 
+impl RecoveredForwardingRun {
+    pub(super) fn pending_batch_bounded(
+        &self,
+        max_events: usize,
+        max_encoded_bytes: usize,
+    ) -> Option<ForwardingBatch> {
+        if max_events == 0 || max_encoded_bytes == 0 {
+            return None;
+        }
+        let pending = self
+            .events
+            .iter()
+            .zip(&self.event_end_offsets)
+            .filter(|(event, _)| event.seq > self.acknowledged_seq);
+        let mut selected_events = Vec::new();
+        let mut boundaries = Vec::new();
+        for (event, event_end_offset) in pending.take(max_events) {
+            selected_events.push(event.clone());
+            boundaries.push(ForwardingAcknowledgementBoundary {
+                sequence: event.seq,
+                event_end_offset: *event_end_offset,
+                terminal: event.event.is_terminal(),
+            });
+            let candidate = self.batch_for_events(&selected_events)?;
+            if selected_events.len() > 1
+                && serde_json::to_vec(&candidate)
+                    .map_or(true, |encoded| encoded.len() > max_encoded_bytes)
+            {
+                selected_events.pop();
+                boundaries.pop();
+                break;
+            }
+        }
+        Some(ForwardingBatch {
+            batch: self.batch_for_events(&selected_events)?,
+            boundaries,
+        })
+    }
+
+    fn batch_for_events(&self, events: &[AgentRunEventV1]) -> Option<AgentActivityBatch> {
+        let first_seq = events.first()?.seq;
+        let referenced = events
+            .iter()
+            .flat_map(|event| event_blob_references(&event.event))
+            .map(|reference| reference.digest.as_str())
+            .collect::<BTreeSet<_>>();
+        let blobs = self
+            .blobs
+            .iter()
+            .filter(|attachment| referenced.contains(attachment.blob.digest.as_str()))
+            .cloned()
+            .collect();
+        Some(AgentActivityBatch {
+            version: ACTIVITY_PROTOCOL_VERSION,
+            run_id: self.manifest.run_id.clone(),
+            first_seq,
+            events: events.to_vec(),
+            blobs,
+        })
+    }
+}
+
 impl TraceCollector {
     /// Recovers every independently readable run while quarantining corrupt
     /// siblings from the forwarding pass. A single damaged spool must not
     /// prevent unrelated jobs' traces from draining.
-    pub(super) fn recover_forwardable(&self) -> Result<Vec<RecoveredTraceRun>, TraceError> {
+    pub(super) fn recover_forwardable(&self) -> Result<Vec<RecoveredForwardingRun>, TraceError> {
         let Some(root) = self.config.spool_root.as_deref() else {
             return Ok(Vec::new());
         };
@@ -92,7 +166,7 @@ impl TraceCollector {
         run_dirs.sort();
         let mut runs = Vec::new();
         for run_dir in run_dirs {
-            match recover_run(&run_dir) {
+            match recover_forwarding_run(&run_dir) {
                 Ok(run) => runs.push(run),
                 Err(error) => tracing::warn!(
                     target: "temper::worker",
@@ -105,6 +179,23 @@ impl TraceCollector {
             }
         }
         Ok(runs)
+    }
+
+    pub(super) fn acknowledge_forwarded(
+        &self,
+        run_id: &str,
+        boundary: ForwardingAcknowledgementBoundary,
+    ) -> Result<(), TraceError> {
+        let root = self
+            .config
+            .spool_root
+            .as_deref()
+            .ok_or(TraceError::Disabled)?;
+        let advanced = acknowledge_forwarded_run(&root.join(run_id), boundary)?;
+        if advanced {
+            self.coordination.publish_acknowledgement();
+        }
+        Ok(())
     }
 
     /// Advances one recovered run's durable forwarding cursor. Partial

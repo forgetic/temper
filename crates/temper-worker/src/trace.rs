@@ -36,6 +36,7 @@ mod endpoint_tests;
 mod forward;
 mod forwarder;
 mod model;
+mod run_acknowledgement;
 mod scope;
 mod spool;
 use coordination::TraceCoordination;
@@ -192,6 +193,7 @@ struct RunState {
     used_bytes: u64,
     terminal_reserve: u64,
     acknowledged_seq: u64,
+    event_end_offsets: Vec<u64>,
     terminal: bool,
     disabled: bool,
     scopes: BTreeMap<String, AgentScopeV1>,
@@ -301,6 +303,7 @@ impl TraceRun {
                         used_bytes,
                         terminal_reserve,
                         acknowledged_seq: 0,
+                        event_end_offsets: Vec::new(),
                         terminal: false,
                         disabled: false,
                         scopes,
@@ -436,42 +439,6 @@ impl TraceRun {
         }))
     }
 
-    /// Atomically advances the durable forwarding cursor. Retransmitted or
-    /// lower acknowledgements are idempotent; a cursor beyond durable data is rejected.
-    pub fn acknowledge(&self, highest_contiguous_seq: u64) -> Result<(), TraceError> {
-        let mut state = self.inner.state.lock().expect("trace run state lock");
-        if state.disabled {
-            return Err(TraceError::Disabled);
-        }
-        let last_seq = state.next_seq.saturating_sub(1);
-        if highest_contiguous_seq > last_seq {
-            return Err(TraceError::InvalidAcknowledgement {
-                acknowledged: highest_contiguous_seq,
-                last_seq,
-            });
-        }
-        if highest_contiguous_seq <= state.acknowledged_seq {
-            return Ok(());
-        }
-        let cursor = TraceAckCursorV1::new(&self.inner.manifest.run_id, highest_contiguous_seq);
-        let bytes = serde_json::to_vec_pretty(&cursor)?;
-        lock_spool(&self.inner)?;
-        if let Err(error) = atomic_write(&self.inner.cursor_path, &bytes, true) {
-            let _ = unlock_spool(&self.inner);
-            state.disabled = true;
-            return Err(error);
-        }
-        unlock_spool(&self.inner)?;
-        state.acknowledged_seq = highest_contiguous_seq;
-        let compact_terminal = state.terminal && highest_contiguous_seq == last_seq;
-        drop(state);
-        self.inner.coordination.publish_acknowledgement();
-        if compact_terminal {
-            acknowledge_recovered_run(&self.inner.run_dir, highest_contiguous_seq)?;
-        }
-        Ok(())
-    }
-
     fn finish(&self, event: AgentActivityEventV1) -> Result<u64, TraceError> {
         let mut state = self.inner.state.lock().expect("trace run state lock");
         if state.terminal {
@@ -564,6 +531,14 @@ fn append_event(
         ));
     }
     unlock_spool(inner)?;
+    state.event_end_offsets.push(
+        state
+            .event_end_offsets
+            .last()
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+    );
     state.used_bytes = state
         .used_bytes
         .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
@@ -614,6 +589,9 @@ fn ensure_quota(
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod forward_index_tests;
 
 #[cfg(test)]
 mod full_path_fixture;
