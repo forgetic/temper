@@ -2,8 +2,7 @@
 
 use crate::observability::gate_summary;
 use chrono::{DateTime, Utc};
-use std::collections::HashSet;
-use temper_forge::{Forge, Issue, PullRequest, RepositoryId};
+use temper_forge::{Forge, RepositoryId};
 use temper_log::emit::{CiCompleted, GateEvaluated, emit_ci_completed, emit_gate_evaluated};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
@@ -154,65 +153,68 @@ async fn read_artifacts<F: Forge + ?Sized>(
 ) -> Result<Vec<ScannedArtifact>, ScanError> {
     let classifier = Classifier::new(workflow);
     let mut artifacts = Vec::new();
-    let mut seen_issues = HashSet::new();
-    let mut seen_pull_requests = HashSet::new();
-
+    let mut issues = Vec::new();
     for query in &query_plan.issue_queries {
-        for issue in forge.list_issues(repo, query.clone()).await? {
-            if !seen_issues.insert(issue_key(&issue)) {
-                continue;
-            }
-            let Ok(classified) = classifier.classify_issue(&issue) else {
-                continue;
-            };
-            push_candidate(
-                forge,
-                repo,
-                workflow,
-                queues,
-                classified,
-                None,
-                &mut artifacts,
-                emit_ci_completed,
-            )
-            .await?;
-        }
+        issues.extend(forge.list_issue_candidates(repo, query.clone()).await?);
+    }
+    issues.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    issues.dedup_by(|left, right| left.id == right.id);
+
+    for issue in issues {
+        let Ok(classified) = classifier.classify_issue(&issue) else {
+            continue;
+        };
+        push_candidate(
+            forge,
+            repo,
+            workflow,
+            queues,
+            classified,
+            None,
+            &mut artifacts,
+            emit_ci_completed,
+        )
+        .await?;
     }
 
+    let mut pull_requests = Vec::new();
     for query in &query_plan.pull_request_queries {
-        for pull_request in forge.list_pull_requests(repo, query.clone()).await? {
-            if !seen_pull_requests.insert(pull_request_key(&pull_request)) {
-                continue;
-            }
-            let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
-                continue;
-            };
-            push_candidate(
-                forge,
-                repo,
-                workflow,
-                queues,
-                classified,
-                None,
-                &mut artifacts,
-                emit_ci_completed,
-            )
-            .await?;
-        }
+        pull_requests.extend(
+            forge
+                .list_pull_request_candidates(repo, query.clone())
+                .await?,
+        );
+    }
+    pull_requests.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    pull_requests.dedup_by(|left, right| left.id == right.id);
+
+    for pull_request in pull_requests {
+        let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
+            continue;
+        };
+        push_candidate(
+            forge,
+            repo,
+            workflow,
+            queues,
+            classified,
+            None,
+            &mut artifacts,
+            emit_ci_completed,
+        )
+        .await?;
     }
 
     artifacts.sort_by_key(scanned_order_key);
     Ok(artifacts)
-}
-
-fn issue_key(issue: &Issue) -> (temper_forge::IssueId, temper_forge::ItemNumber) {
-    (issue.id.clone(), issue.number)
-}
-
-fn pull_request_key(
-    pull_request: &PullRequest,
-) -> (temper_forge::PullRequestId, temper_forge::ItemNumber) {
-    (pull_request.id.clone(), pull_request.number)
 }
 
 #[allow(clippy::too_many_arguments)]

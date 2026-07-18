@@ -1,4 +1,7 @@
-use temper_forge_model::{IssueQuery, PullRequestQuery};
+use temper_forge_model::{
+    CandidateLabelSelection, CandidateLifecycle, IssueCandidateQuery, IssueQuery, ItemListDetails,
+    PullRequestCandidateQuery, PullRequestQuery,
+};
 
 #[test]
 fn query_defaults_have_no_body_filter() {
@@ -44,4 +47,37 @@ fn query_limit_round_trips_including_zero() {
     let pull: PullRequestQuery = serde_json::from_str(r#"{"labels":[],"limit":2}"#).unwrap();
     assert_eq!(pull.limit, Some(2));
     assert_eq!(serde_json::to_value(pull).unwrap()["limit"], 2);
+}
+
+#[test]
+fn candidate_queries_default_to_open_unfiltered_summary() {
+    let issue = IssueCandidateQuery::default();
+    assert_eq!(issue.lifecycle, CandidateLifecycle::Open);
+    assert_eq!(issue.labels, CandidateLabelSelection::Unfiltered);
+    assert_eq!(issue.details, ItemListDetails::summary());
+
+    let pull = PullRequestCandidateQuery::default();
+    assert_eq!(pull.lifecycle, CandidateLifecycle::Open);
+    assert_eq!(pull.labels, CandidateLabelSelection::Unfiltered);
+    assert_eq!(pull.details, ItemListDetails::summary());
+
+    let decoded_issue: IssueCandidateQuery = serde_json::from_str("{}").unwrap();
+    let decoded_pull: PullRequestCandidateQuery = serde_json::from_str("{}").unwrap();
+    assert_eq!(decoded_issue, issue);
+    assert_eq!(decoded_pull, pull);
+}
+
+#[test]
+fn candidate_any_of_is_non_empty_normalized_and_deduplicated() {
+    assert_eq!(
+        CandidateLabelSelection::any_of(vec!["ready", "code", "ready"]).unwrap(),
+        CandidateLabelSelection::AnyOf(vec!["code".into(), "ready".into()])
+    );
+    assert!(CandidateLabelSelection::any_of(Vec::<String>::new()).is_err());
+    assert!(
+        CandidateLabelSelection::AnyOf(Vec::new())
+            .normalized()
+            .is_err()
+    );
+    assert!(serde_json::from_str::<CandidateLabelSelection>(r#"{"any_of":[]}"#).is_err());
 }

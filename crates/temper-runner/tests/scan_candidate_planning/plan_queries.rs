@@ -1,82 +1,75 @@
 use super::*;
 
 #[test]
-fn normal_candidate_plan_keeps_open_queues_and_bounded_terminal_recovery() {
+fn normal_and_automated_plans_use_constant_lifecycle_buckets() {
     let workflow = workflow_from_json(PLANNER_FIXTURE);
     let compiled = workflow.compile();
     let role = RoleId::new("engineer");
 
-    // Normal role scans keep their open queue interest...
     let normal = candidate_query_plan(&workflow, &compiled, Some(&role), ScanMode::Normal);
+    assert_eq!(normal.issue_queries.len(), 2);
+    assert_eq!(normal.pull_request_queries.len(), 1);
     assert!(has_issue_query(
         &normal.issue_queries,
-        IssueState::Open,
-        &["ready", "urgent"]
-    ));
-    assert!(has_issue_query(
-        &normal.issue_queries,
-        IssueState::Open,
-        &["ready", "bug"]
+        CandidateLifecycle::Open,
+        &["ready", "urgent", "bug"]
     ));
     assert!(has_pull_request_query(
         &normal.pull_request_queries,
-        PullRequestState::Open,
+        CandidateLifecycle::Open,
         &[]
     ));
-    // ...and now also carry the same bounded, label-scoped terminal recovery
-    // queries as wake/audit so poll-only fleets converge terminal transitions.
-    // Unlabelled closed history is still never requested.
+    assert!(has_issue_query(
+        &normal.issue_queries,
+        CandidateLifecycle::Terminal,
+        &["ready"]
+    ));
     assert!(closed_issue_queries_have_labels(&normal.issue_queries));
     assert!(closed_pull_request_queries_have_labels(
         &normal.pull_request_queries
     ));
-    assert!(has_issue_query(
-        &normal.issue_queries,
-        IssueState::Closed,
-        &["ready"]
-    ));
 
-    // The mechanical automated hot-poll path stays open-only: no closed/merged
-    // queries on the 1s poll.
     let automated = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
     assert!(
-        !automated
+        automated
             .issue_queries
             .iter()
-            .any(|query| query.state == Some(IssueState::Closed))
+            .all(|query| query.lifecycle == CandidateLifecycle::Open)
     );
-    assert!(!automated.pull_request_queries.iter().any(|query| {
-        matches!(
-            query.state,
-            Some(PullRequestState::Closed | PullRequestState::Merged)
-        )
-    }));
+    assert!(
+        automated
+            .pull_request_queries
+            .iter()
+            .all(|query| query.lifecycle == CandidateLifecycle::Open)
+    );
 }
 
 #[test]
-fn audit_candidate_plan_keeps_terminal_workflow_label_recovery_queries() {
+fn audit_uses_shared_bounded_terminal_interest() {
     let workflow = workflow_from_json(PLANNER_FIXTURE);
     let compiled = workflow.compile();
-
     let audit = candidate_query_plan(&workflow, &compiled, None, ScanMode::Audit);
-    assert!(closed_issue_queries_have_labels(&audit.issue_queries));
-    assert!(closed_pull_request_queries_have_labels(
-        &audit.pull_request_queries
-    ));
+
+    assert_eq!(audit.issue_queries.len(), 2);
+    assert_eq!(audit.pull_request_queries.len(), 1);
     assert!(has_issue_query(
         &audit.issue_queries,
-        IssueState::Closed,
+        CandidateLifecycle::Terminal,
         &["ready"]
     ));
     assert!(!has_issue_query(
         &audit.issue_queries,
-        IssueState::Closed,
+        CandidateLifecycle::Terminal,
         &["code"]
     ));
     assert!(!has_pull_request_query(
         &audit.pull_request_queries,
-        PullRequestState::Merged,
+        CandidateLifecycle::Terminal,
         &["implementation"]
+    ));
+    assert!(closed_issue_queries_have_labels(&audit.issue_queries));
+    assert!(closed_pull_request_queries_have_labels(
+        &audit.pull_request_queries
     ));
 }
 
@@ -84,51 +77,35 @@ fn audit_candidate_plan_keeps_terminal_workflow_label_recovery_queries() {
 fn basic_delivery_landing_recovery_is_bounded_to_handoff_labels() {
     let workflow = workflow_from_json(BASIC_FIXTURE);
     let compiled = workflow.compile();
-
-    // The basic landing queue is label-bounded by the engineer's `landing`
-    // handoff. Terminal recovery may revisit landing-labelled PRs to finish a
-    // queued merge/cleanup, but it must not query already-merged PRs merely
-    // because they retain the stable `implementation` identity label.
     let audit = candidate_query_plan(&workflow, &compiled, None, ScanMode::Audit);
+
     assert!(!has_pull_request_query(
         &audit.pull_request_queries,
-        PullRequestState::Closed,
+        CandidateLifecycle::Terminal,
         &["implementation"]
-    ));
-    assert!(!has_pull_request_query(
-        &audit.pull_request_queries,
-        PullRequestState::Merged,
-        &["implementation"]
-    ));
-    assert!(closed_pull_request_queries_have_labels(
-        &audit.pull_request_queries
     ));
     assert!(has_pull_request_query(
         &audit.pull_request_queries,
-        PullRequestState::Closed,
-        &["landing"]
-    ));
-    assert!(has_pull_request_query(
-        &audit.pull_request_queries,
-        PullRequestState::Merged,
+        CandidateLifecycle::Terminal,
         &["landing"]
     ));
 
     let automated = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
+    assert_eq!(automated.pull_request_queries.len(), 1);
     assert!(has_pull_request_query(
         &automated.pull_request_queries,
-        PullRequestState::Open,
+        CandidateLifecycle::Open,
         &["landing"]
     ));
     assert!(!has_pull_request_query(
         &automated.pull_request_queries,
-        PullRequestState::Open,
+        CandidateLifecycle::Open,
         &[]
     ));
 }
 
 #[test]
-fn wake_candidate_plan_keeps_terminal_recovery_but_preserves_role_queue_scope() {
+fn wake_preserves_role_scope_with_one_bucket_per_lifecycle() {
     let workflow = workflow_from_json(PLANNER_FIXTURE);
     let compiled = workflow.compile();
     let role = RoleId::new("engineer");
@@ -136,27 +113,18 @@ fn wake_candidate_plan_keeps_terminal_recovery_but_preserves_role_queue_scope() 
     let wake = candidate_query_plan(&workflow, &compiled, Some(&role), ScanMode::Wake);
     assert!(has_issue_query(
         &wake.issue_queries,
-        IssueState::Open,
-        &["ready", "urgent"]
+        CandidateLifecycle::Open,
+        &["ready", "urgent", "bug"]
     ));
     assert!(has_issue_query(
         &wake.issue_queries,
-        IssueState::Open,
-        &["ready", "bug"]
-    ));
-    assert!(has_issue_query(
-        &wake.issue_queries,
-        IssueState::Closed,
+        CandidateLifecycle::Terminal,
         &["ready"]
     ));
     assert!(has_pull_request_query(
         &wake.pull_request_queries,
-        PullRequestState::Open,
+        CandidateLifecycle::Open,
         &[]
-    ));
-    assert!(closed_issue_queries_have_labels(&wake.issue_queries));
-    assert!(closed_pull_request_queries_have_labels(
-        &wake.pull_request_queries
     ));
 
     let broad_wake = candidate_query_plan(&workflow, &compiled, None, ScanMode::Wake);
@@ -165,52 +133,39 @@ fn wake_candidate_plan_keeps_terminal_recovery_but_preserves_role_queue_scope() 
 }
 
 #[test]
-fn automated_reference_plan_permits_single_default_kind_open_all_issue_query() {
-    // The mechanical/automated scan is label-bounded, with one deliberate
-    // exception: the reference workflow's default-kind `raw_intake` automation
-    // queue carries no label, so raw human intake is discovered with a single
-    // state-bounded open-all issue listing (open + summary, never closed
-    // history). Landing's automation query stays label-bounded.
+fn unfiltered_default_intake_dominates_labelled_open_interest() {
     let workflow = workflow_from_json(REFERENCE_FIXTURE);
     let compiled = workflow.compile();
     let plan = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
 
-    let open_all_issue_queries: Vec<&IssueQuery> = plan
+    let open_all_issue_queries: Vec<&IssueCandidateQuery> = plan
         .issue_queries
         .iter()
-        .filter(|query| query.labels.is_empty())
+        .filter(|query| {
+            query.lifecycle == CandidateLifecycle::Open
+                && query.labels == CandidateLabelSelection::Unfiltered
+        })
         .collect();
+    assert_eq!(open_all_issue_queries.len(), 1);
     assert_eq!(
-        open_all_issue_queries.len(),
-        1,
-        "exactly one default-kind open-all issue listing"
+        open_all_issue_queries[0].details,
+        ItemListDetails::summary()
     );
-    let open_all = open_all_issue_queries[0];
-    assert_eq!(open_all.state, Some(IssueState::Open));
-    assert_eq!(open_all.details, ItemListDetails::summary());
-
-    // No terminal history is listed during active mechanical automation scans.
     assert!(
         plan.issue_queries
             .iter()
-            .all(|query| query.state != Some(IssueState::Closed))
+            .all(|query| query.lifecycle == CandidateLifecycle::Open)
     );
 
-    // The landing automation queue stays label-bounded.
+    assert_eq!(plan.pull_request_queries.len(), 1);
+    assert!(has_pull_request_query(
+        &plan.pull_request_queries,
+        CandidateLifecycle::Open,
+        &["landing"]
+    ));
     assert!(
         plan.pull_request_queries
             .iter()
-            .all(|query| !query.labels.is_empty())
+            .all(|query| query.lifecycle == CandidateLifecycle::Open)
     );
-    assert!(has_pull_request_query(
-        &plan.pull_request_queries,
-        PullRequestState::Open,
-        &["landing"]
-    ));
-    assert!(!plan.pull_request_queries.iter().any(|query| {
-        matches!(
-            query.state,
-            Some(PullRequestState::Closed | PullRequestState::Merged)
-        )
-    }));
 }

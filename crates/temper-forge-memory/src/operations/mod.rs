@@ -19,10 +19,11 @@ use crate::MemoryForge;
 use async_trait::async_trait;
 use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
-    ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueCandidateQuery,
+    IssueId, IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord,
+    PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview,
+    Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait]
@@ -68,6 +69,14 @@ impl Forge for MemoryForge {
         query: IssueQuery,
     ) -> ForgeResult<Vec<Issue>> {
         issues::list_issues(self, repo_id, query)
+    }
+
+    async fn list_issue_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: IssueCandidateQuery,
+    ) -> ForgeResult<Vec<Issue>> {
+        issues::list_issue_candidates(self, repo_id, query)
     }
 
     async fn create_issue(&self, repo_id: &RepositoryId, input: CreateIssue) -> ForgeResult<Issue> {
@@ -155,6 +164,14 @@ impl Forge for MemoryForge {
         pull_requests::list_pull_requests(self, repo_id, query)
     }
 
+    async fn list_pull_request_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: PullRequestCandidateQuery,
+    ) -> ForgeResult<Vec<PullRequest>> {
+        pull_requests::list_pull_request_candidates(self, repo_id, query)
+    }
+
     async fn create_pull_request(
         &self,
         repo_id: &RepositoryId,
@@ -167,12 +184,41 @@ impl Forge for MemoryForge {
         pull_requests::get_pull_request(self, id)
     }
 
+    async fn get_pull_request_with_details(
+        &self,
+        id: &PullRequestId,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
+        let mut pull_request = pull_requests::get_pull_request(self, id)?;
+        if !details.dependencies {
+            if let Some(pull_request) = &mut pull_request {
+                pull_request.dependencies.clear();
+            }
+        }
+        Ok(pull_request)
+    }
+
     async fn get_pull_request_by_number(
         &self,
         repo_id: &RepositoryId,
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>> {
         pull_requests::get_pull_request_by_number(self, repo_id, number)
+    }
+
+    async fn get_pull_request_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
+        let mut pull_request = pull_requests::get_pull_request_by_number(self, repo_id, number)?;
+        if !details.dependencies {
+            if let Some(pull_request) = &mut pull_request {
+                pull_request.dependencies.clear();
+            }
+        }
+        Ok(pull_request)
     }
 
     async fn update_pull_request(

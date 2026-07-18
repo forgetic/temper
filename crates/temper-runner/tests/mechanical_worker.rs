@@ -8,8 +8,9 @@ mod support;
 
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
-    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery, IssueState,
-    ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
+    BranchRef, CandidateLabelSelection, CandidateLifecycle, CreateIssue, CreatePullRequest,
+    CreateRepository, Forge, IssueCandidateQuery, IssueQuery, IssueState, ItemListDetails,
+    ItemNumber, MergeMethod, MergePullRequest, PullRequestCandidateQuery, PullRequestQuery,
     PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
@@ -191,33 +192,27 @@ fn expired_lease_body() -> String {
     })
 }
 
-// The mechanical scan stays label-bounded with one deliberate exception: the
-// reference workflow's default-kind `raw_intake` automation queue has no label
-// to filter on, so discovering raw human intake costs a single state-bounded
-// open-all issue listing (open + summary, never closed history). See the
-// reference-workflow gap record.
-fn is_bounded_issue_query(query: &IssueQuery) -> bool {
+// Candidate reads may be unfiltered only for open default-kind intake. Every
+// terminal bucket remains label-bounded and all scan buckets request summary.
+fn is_bounded_issue_query(query: &IssueCandidateQuery) -> bool {
     query.details == ItemListDetails::summary()
-        && match query.state {
-            Some(IssueState::Open) => true,
-            Some(_) => !query.labels.is_empty(),
-            None => false,
-        }
+        && (query.lifecycle == CandidateLifecycle::Open
+            || matches!(query.labels, CandidateLabelSelection::AnyOf(_)))
 }
 
-fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {
-    query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+fn is_bounded_pull_request_query(query: &PullRequestCandidateQuery) -> bool {
+    query.details == ItemListDetails::summary()
+        && (query.lifecycle == CandidateLifecycle::Open
+            || matches!(query.labels, CandidateLabelSelection::AnyOf(_)))
 }
 
-fn is_terminal_implementation_query(query: &PullRequestQuery) -> bool {
-    matches!(
-        query.state,
-        Some(PullRequestState::Closed | PullRequestState::Merged)
-    ) && has_single_label(&query.labels, "implementation")
+fn is_terminal_implementation_query(query: &PullRequestCandidateQuery) -> bool {
+    query.lifecycle == CandidateLifecycle::Terminal
+        && candidate_has_label(&query.labels, "implementation")
 }
 
-fn has_single_label(labels: &[String], label: &str) -> bool {
-    labels.len() == 1 && labels[0] == label
+fn candidate_has_label(labels: &CandidateLabelSelection, label: &str) -> bool {
+    matches!(labels, CandidateLabelSelection::AnyOf(labels) if labels.iter().any(|candidate| candidate == label))
 }
 
 fn mechanical_worker<'a>(
@@ -292,46 +287,35 @@ fn normal_mechanical_tick_avoids_default_all_history_lists() {
         block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("tick succeeds"),
         Progress::unchanged()
     );
-    assert!(counted.count(CountedForgeOp::ListIssues) > 0);
-    assert!(counted.count(CountedForgeOp::ListPullRequests) > 0);
-    assert!(
-        !counted
-            .issue_queries()
-            .iter()
-            .any(|query| query == &IssueQuery::default())
-    );
-    assert!(
-        !counted
-            .pull_request_queries()
-            .iter()
-            .any(|query| query == &PullRequestQuery::default())
-    );
-    assert!(counted.issue_queries().iter().all(is_bounded_issue_query));
+    assert!(counted.count(CountedForgeOp::ListIssueCandidates) > 0);
+    assert!(counted.count(CountedForgeOp::ListPullRequestCandidates) > 0);
+    assert!(counted.issue_queries().is_empty());
+    assert!(counted.pull_request_queries().is_empty());
     assert!(
         counted
-            .pull_request_queries()
+            .issue_candidate_queries()
+            .iter()
+            .all(is_bounded_issue_query)
+    );
+    assert!(
+        counted
+            .pull_request_candidate_queries()
             .iter()
             .all(is_bounded_pull_request_query)
     );
-    // The only open-all issue listing is the default-kind `raw_intake`
-    // automation queue's single state-bounded scan; everything else is
-    // label-bounded and no closed history is listed open-ended.
-    let open_all_issue_queries: Vec<IssueQuery> = counted
-        .issue_queries()
+    let open_all_issue_queries: Vec<IssueCandidateQuery> = counted
+        .issue_candidate_queries()
         .into_iter()
-        .filter(|query| query.labels.is_empty())
+        .filter(|query| query.labels == CandidateLabelSelection::Unfiltered)
         .collect();
     assert_eq!(
         open_all_issue_queries.len(),
         1,
-        "exactly one default-kind open-all issue listing per mechanical tick"
+        "exactly one default-kind open-all issue bucket per mechanical tick"
     );
-    assert!(
-        open_all_issue_queries
-            .iter()
-            .all(|query| query.state == Some(IssueState::Open)
-                && query.details == ItemListDetails::summary())
-    );
+    assert!(open_all_issue_queries.iter().all(|query| {
+        query.lifecycle == CandidateLifecycle::Open && query.details == ItemListDetails::summary()
+    }));
 }
 
 #[test]
@@ -353,14 +337,14 @@ fn normal_mechanical_tick_skips_terminal_implementation_only_pr_history() {
     );
     assert!(
         counted
-            .pull_request_queries()
+            .pull_request_candidate_queries()
             .iter()
-            .any(|query| query.state == Some(PullRequestState::Open)
-                && has_single_label(&query.labels, "implementation"))
+            .any(|query| query.lifecycle == CandidateLifecycle::Open
+                && candidate_has_label(&query.labels, "implementation"))
     );
     assert!(
         !counted
-            .pull_request_queries()
+            .pull_request_candidate_queries()
             .iter()
             .any(is_terminal_implementation_query)
     );

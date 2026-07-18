@@ -15,10 +15,10 @@ use crate::lists::{
 use crate::reviews::{list_reviews, request_reviewers, submit_review};
 use crate::util::{check_expected_version, next_comment_number, next_item_number};
 use temper_forge_model::{
-    ChangeKind, Comment, CreateComment, CreatePullRequest, CreatePullRequestReview, ForgeError,
-    ForgeResult, ItemNumber, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestReview, PullRequestState, RepositoryId, RequestReviewers,
-    UpdatePullRequest, Version,
+    CandidateLifecycle, ChangeKind, Comment, CreateComment, CreatePullRequest,
+    CreatePullRequestReview, ForgeError, ForgeResult, ItemNumber, MergePullRequest, MergeRecord,
+    PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview,
+    PullRequestState, RepositoryId, RequestReviewers, UpdatePullRequest, Version,
 };
 
 pub(crate) fn list_pull_requests(
@@ -44,6 +44,43 @@ pub(crate) fn list_pull_requests(
     if let Some(limit) = query.limit {
         pull_requests.truncate(limit);
     }
+    Ok(pull_requests)
+}
+
+pub(crate) fn list_pull_request_candidates(
+    forge: &MemoryForge,
+    repo_id: &RepositoryId,
+    query: PullRequestCandidateQuery,
+) -> ForgeResult<Vec<PullRequest>> {
+    let labels = query.labels.normalized()?;
+    let mut inner = forge.lock();
+    inner.faults.take(FaultOp::ListPullRequests)?;
+    inner.state.require_repository(repo_id)?;
+    let mut pull_requests = inner
+        .state
+        .pull_requests(repo_id)
+        .into_iter()
+        .filter(|pull_request| match query.lifecycle {
+            CandidateLifecycle::Open => pull_request.state == PullRequestState::Open,
+            CandidateLifecycle::Terminal => matches!(
+                pull_request.state,
+                PullRequestState::Closed | PullRequestState::Merged
+            ),
+        })
+        .filter(|pull_request| {
+            labels.as_ref().is_none_or(|labels| {
+                labels
+                    .iter()
+                    .any(|required| pull_request.labels.iter().any(|label| label == required))
+            })
+        })
+        .collect::<Vec<_>>();
+    if !query.details.dependencies {
+        for pull_request in &mut pull_requests {
+            pull_request.dependencies.clear();
+        }
+    }
+    sort_pull_requests_by_number(&mut pull_requests);
     Ok(pull_requests)
 }
 

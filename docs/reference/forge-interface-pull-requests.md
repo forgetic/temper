@@ -11,9 +11,12 @@ issues, dependencies, and comments.
 Required methods:
 
 - `list_pull_requests`
+- `list_pull_request_candidates`
 - `create_pull_request`
 - `get_pull_request`
+- `get_pull_request_with_details`
 - `get_pull_request_by_number`
+- `get_pull_request_by_number_with_details`
 - `update_pull_request`
 - `add_pull_request_dependency`
 - `remove_pull_request_dependency`

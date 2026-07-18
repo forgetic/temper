@@ -1,51 +1,36 @@
-use temper_forge::{IssueQuery, IssueState, ItemListDetails, PullRequestQuery, PullRequestState};
+use temper_forge::{
+    CandidateLabelSelection, CandidateLifecycle, IssueCandidateQuery, ItemListDetails,
+    PullRequestCandidateQuery,
+};
 use temper_workflow::{
-    ArtifactTarget, CompiledWorkflow, Effect, GateCondition, LabelId, QueueManifest, RoleId,
-    ValidatedTransition, ValidatedWorkflow,
+    ArtifactTarget, CompiledWorkflow, QueueManifest, RoleId, ValidatedWorkflow, workflow_interest,
 };
 
 /// Breadth of artifact listing a scan should plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScanMode {
-    /// Normal role/work scans. When a role is supplied, only that role's
-    /// subscribed queues contribute candidate queries. Bounded workflow-label
-    /// terminal/recovery interest is included so terminal transitions fire on
-    /// poll-only fleets (no wake, no audit) too.
+    /// Normal role/work scans, scoped to the selected role when supplied.
     Normal,
-    /// Wake-triggered role/work scans. Identical query planning to
-    /// [`ScanMode::Normal`] (role queue scoping plus bounded workflow-label
-    /// terminal/recovery interest); retained as a distinct reason so the
-    /// Forgejo event path can route wakes to an immediate recovery-inclusive
-    /// tick.
+    /// Wake-triggered role/work scans, with the same bounded recovery interest.
     Wake,
-    /// Normal mechanical automation scans. Only queues that declare automation
-    /// metadata contribute candidate queries, and no audit/recovery interest is
-    /// added.
+    /// Open-only queues carrying automation metadata.
     Automated,
-    /// Broader audit scans. Audit includes all queues for candidate discovery
-    /// and adds workflow-label recovery interest while still avoiding unlabelled
-    /// closed history; callers may still filter emitted work to one role.
+    /// All queues plus bounded terminal recovery interest.
     Audit,
 }
 
-/// Forge list queries needed to fetch scan candidates.
+/// Consolidated Forge candidate buckets needed for one scan.
+///
+/// Each vector contains at most one open and one terminal query. Terminal
+/// queries are always label-bounded; an unfiltered open query dominates other
+/// open label interest for the same artifact target.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CandidateQueryPlan {
-    /// Issue queries, each conjunctive by state and labels.
-    pub issue_queries: Vec<IssueQuery>,
-    /// Pull-request queries, each conjunctive by state and labels.
-    pub pull_request_queries: Vec<PullRequestQuery>,
+    pub issue_queries: Vec<IssueCandidateQuery>,
+    pub pull_request_queries: Vec<PullRequestCandidateQuery>,
 }
 
-/// Plans Forge list queries from queue interest.
-///
-/// Active queue candidates are queried by open state. Bounded terminal
-/// (closed issue / closed-or-merged PR) recovery queries over workflow labels
-/// are added for every role scan mode (`Normal`, `Wake`, `Audit`) so terminal
-/// transitions keyed on closed/merged artifacts fire even on poll-only fleets
-/// that run neither wakes nor audits. The mechanical `Automated` hot-poll path
-/// stays open-only so the 1s mechanical poll never issues closed/merged
-/// queries (the high-CPU path).
+/// Plans one role, audit, wake, or automated candidate pass.
 pub fn candidate_query_plan(
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
@@ -56,10 +41,6 @@ pub fn candidate_query_plan(
 }
 
 /// Plans one candidate pass for the union of queues subscribed by `roles`.
-///
-/// This is the broad daemon-wake counterpart to role-at-a-time planning: queue
-/// overlap and recovery label interest are deduplicated by one builder before
-/// any Forge list request is issued.
 pub fn candidate_query_plan_for_roles(
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
@@ -75,23 +56,18 @@ fn candidate_query_plan_for_queues(
     mode: ScanMode,
 ) -> CandidateQueryPlan {
     let mut builder = CandidateQueryBuilder::default();
-
     for queue in queues {
-        let targets = queue_targets(workflow, queue);
-        let label_sets = queue_label_sets(queue);
-        for target in targets {
-            builder.add_queue_interest(target, &label_sets);
+        for target in queue_targets(workflow, queue) {
+            builder.add_open_queue(target, queue);
         }
     }
 
     if !matches!(mode, ScanMode::Automated) {
-        let targets = workflow_targets(workflow);
-        for target in targets {
-            let recovery_label_sets = terminal_workflow_label_sets(workflow, target);
-            builder.add_recovery_interest(target, &recovery_label_sets);
+        let interest = workflow_interest(workflow);
+        for &target in interest.targets() {
+            builder.add_terminal(target, interest.terminal_labels(target));
         }
     }
-
     builder.build()
 }
 
@@ -134,91 +110,83 @@ pub(crate) fn queues_for_roles<'a>(
 struct CandidateQueryBuilder {
     issue_open_all: bool,
     pull_request_open_all: bool,
-    issue_open_labels: Vec<Vec<String>>,
-    issue_closed_labels: Vec<Vec<String>>,
-    pull_request_open_labels: Vec<Vec<String>>,
-    pull_request_closed_labels: Vec<Vec<String>>,
+    issue_open_labels: Vec<String>,
+    issue_terminal_labels: Vec<String>,
+    pull_request_open_labels: Vec<String>,
+    pull_request_terminal_labels: Vec<String>,
 }
 
 impl CandidateQueryBuilder {
-    fn add_queue_interest(&mut self, target: ArtifactTarget, label_sets: &[Vec<String>]) {
-        self.add_open_interest(target, label_sets);
-    }
-
-    fn add_recovery_interest(&mut self, target: ArtifactTarget, label_sets: &[Vec<String>]) {
-        for labels in label_sets.iter().filter(|labels| !labels.is_empty()) {
-            self.push_open_labels(target, labels.clone());
-            self.push_closed_labels(target, labels.clone());
-        }
-    }
-
-    fn add_open_interest(&mut self, target: ArtifactTarget, label_sets: &[Vec<String>]) {
-        for labels in label_sets {
-            if labels.is_empty() {
-                match target {
-                    ArtifactTarget::Issue => self.issue_open_all = true,
-                    ArtifactTarget::PullRequest => self.pull_request_open_all = true,
-                }
-            } else {
-                self.push_open_labels(target, labels.clone());
+    fn add_open_queue(&mut self, target: ArtifactTarget, queue: &QueueManifest) {
+        let labels = queue_discovery_labels(queue);
+        if labels.is_empty() {
+            match target {
+                ArtifactTarget::Issue => self.issue_open_all = true,
+                ArtifactTarget::PullRequest => self.pull_request_open_all = true,
             }
+            return;
         }
+        let destination = match target {
+            ArtifactTarget::Issue => &mut self.issue_open_labels,
+            ArtifactTarget::PullRequest => &mut self.pull_request_open_labels,
+        };
+        extend_unique(destination, labels);
     }
 
-    fn push_open_labels(&mut self, target: ArtifactTarget, labels: Vec<String>) {
-        match target {
-            ArtifactTarget::Issue => push_unique_label_set(&mut self.issue_open_labels, labels),
-            ArtifactTarget::PullRequest => {
-                push_unique_label_set(&mut self.pull_request_open_labels, labels);
-            }
+    fn add_terminal(&mut self, target: ArtifactTarget, labels: &[String]) {
+        if labels.is_empty() {
+            return;
         }
+        let destination = match target {
+            ArtifactTarget::Issue => &mut self.issue_terminal_labels,
+            ArtifactTarget::PullRequest => &mut self.pull_request_terminal_labels,
+        };
+        extend_unique(destination, labels.iter().cloned());
     }
 
-    fn push_closed_labels(&mut self, target: ArtifactTarget, labels: Vec<String>) {
-        match target {
-            ArtifactTarget::Issue => push_unique_label_set(&mut self.issue_closed_labels, labels),
-            ArtifactTarget::PullRequest => {
-                push_unique_label_set(&mut self.pull_request_closed_labels, labels);
-            }
-        }
-    }
+    fn build(mut self) -> CandidateQueryPlan {
+        normalize(&mut self.issue_open_labels);
+        normalize(&mut self.issue_terminal_labels);
+        normalize(&mut self.pull_request_open_labels);
+        normalize(&mut self.pull_request_terminal_labels);
 
-    fn build(self) -> CandidateQueryPlan {
-        let mut issue_queries = Vec::new();
+        let mut plan = CandidateQueryPlan::default();
         if self.issue_open_all {
-            issue_queries.push(issue_query(IssueState::Open, Vec::new()));
-        } else {
-            issue_queries.extend(
-                self.issue_open_labels
-                    .into_iter()
-                    .map(|labels| issue_query(IssueState::Open, labels)),
-            );
+            plan.issue_queries.push(issue_candidate(
+                CandidateLifecycle::Open,
+                CandidateLabelSelection::Unfiltered,
+            ));
+        } else if !self.issue_open_labels.is_empty() {
+            plan.issue_queries.push(issue_candidate(
+                CandidateLifecycle::Open,
+                CandidateLabelSelection::AnyOf(self.issue_open_labels),
+            ));
         }
-        issue_queries.extend(
-            self.issue_closed_labels
-                .into_iter()
-                .map(|labels| issue_query(IssueState::Closed, labels)),
-        );
+        if !self.issue_terminal_labels.is_empty() {
+            plan.issue_queries.push(issue_candidate(
+                CandidateLifecycle::Terminal,
+                CandidateLabelSelection::AnyOf(self.issue_terminal_labels),
+            ));
+        }
 
-        let mut pull_request_queries = Vec::new();
         if self.pull_request_open_all {
-            pull_request_queries.push(pull_request_query(PullRequestState::Open, Vec::new()));
-        } else {
-            pull_request_queries.extend(
-                self.pull_request_open_labels
-                    .into_iter()
-                    .map(|labels| pull_request_query(PullRequestState::Open, labels)),
-            );
+            plan.pull_request_queries.push(pull_request_candidate(
+                CandidateLifecycle::Open,
+                CandidateLabelSelection::Unfiltered,
+            ));
+        } else if !self.pull_request_open_labels.is_empty() {
+            plan.pull_request_queries.push(pull_request_candidate(
+                CandidateLifecycle::Open,
+                CandidateLabelSelection::AnyOf(self.pull_request_open_labels),
+            ));
         }
-        for labels in self.pull_request_closed_labels {
-            pull_request_queries.push(pull_request_query(PullRequestState::Closed, labels.clone()));
-            pull_request_queries.push(pull_request_query(PullRequestState::Merged, labels));
+        if !self.pull_request_terminal_labels.is_empty() {
+            plan.pull_request_queries.push(pull_request_candidate(
+                CandidateLifecycle::Terminal,
+                CandidateLabelSelection::AnyOf(self.pull_request_terminal_labels),
+            ));
         }
-
-        CandidateQueryPlan {
-            issue_queries,
-            pull_request_queries,
-        }
+        plan
     }
 }
 
@@ -235,246 +203,62 @@ fn queue_targets(workflow: &ValidatedWorkflow, queue: &QueueManifest) -> Vec<Art
     targets
 }
 
-fn workflow_targets(workflow: &ValidatedWorkflow) -> Vec<ArtifactTarget> {
-    let mut targets = Vec::new();
-    for kind in workflow.artifact_kinds() {
-        if !targets.contains(&kind.target) {
-            targets.push(kind.target);
-        }
-    }
-    targets
-}
-
-fn queue_label_sets(queue: &QueueManifest) -> Vec<Vec<String>> {
-    let base = normalize_labels(queue.labels.iter());
-    if queue.any_of.is_empty() {
-        return vec![base];
+/// Positive queue labels are only a discovery superset. Their conjunction and
+/// any-of branch structure remain local classifier/queue matching rules.
+fn queue_discovery_labels(queue: &QueueManifest) -> Vec<String> {
+    // With no common labels, an empty disjunct is itself an unfiltered match
+    // and must dominate labelled sibling branches just like a label-free queue.
+    if queue.labels.is_empty()
+        && (queue.any_of.is_empty() || queue.any_of.iter().any(|branch| branch.labels.is_empty()))
+    {
+        return Vec::new();
     }
 
-    queue
-        .any_of
-        .iter()
-        .map(|branch| {
-            let mut labels = base.clone();
-            for label in &branch.labels {
-                push_label(&mut labels, label);
-            }
-            labels
-        })
-        .collect()
+    let mut labels = Vec::new();
+    extend_unique(
+        &mut labels,
+        queue.labels.iter().map(|label| label.as_str().to_string()),
+    );
+    for branch in &queue.any_of {
+        extend_unique(
+            &mut labels,
+            branch.labels.iter().map(|label| label.as_str().to_string()),
+        );
+    }
+    labels
 }
 
-fn terminal_workflow_label_sets(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-) -> Vec<Vec<String>> {
-    let mut interest = Vec::new();
-
-    record_state_labels(workflow, target, &mut interest);
-    record_queue_labels(workflow, target, &mut interest);
-    record_transition_effect_labels(workflow, target, &mut interest);
-    record_gate_condition_labels(workflow, target, &mut interest);
-
-    workflow
-        .labels()
-        .iter()
-        .filter(|label| interest.contains(label))
-        .map(|label| vec![label.as_str().to_string()])
-        .collect()
-}
-
-fn record_state_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for dimension in workflow.state_dimensions() {
-        for state in &dimension.states {
-            if !state_allows_target(workflow, state, target) {
-                continue;
-            }
-            if let Some(label) = &state.label {
-                push_label_id(labels, label);
-            }
+fn extend_unique(labels: &mut Vec<String>, values: impl IntoIterator<Item = String>) {
+    for label in values {
+        if !labels.contains(&label) {
+            labels.push(label);
         }
     }
 }
 
-fn record_queue_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for queue in workflow.queues() {
-        if !queue.artifacts.iter().any(|artifact| {
-            workflow
-                .artifact_kind(artifact)
-                .is_some_and(|kind| kind.target == target)
-        }) {
-            continue;
-        }
-        for label in &queue.labels {
-            push_label_id(labels, label);
-        }
-        for label in &queue.excluded_labels {
-            push_label_id(labels, label);
-        }
-        for label_set in &queue.any_of {
-            for label in &label_set.labels {
-                push_label_id(labels, label);
-            }
-        }
-        if let Some(condition) = &queue.condition {
-            if let Some(label) = condition_label(workflow, condition) {
-                push_label_id(labels, label);
-            }
-        }
-    }
+fn normalize(labels: &mut Vec<String>) {
+    labels.sort();
+    labels.dedup();
 }
 
-fn record_transition_effect_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for transition in workflow.transitions() {
-        if !transition_targets(workflow, transition, target) {
-            continue;
-        }
-        for effect in &transition.effects {
-            if let Some(label) = effect_label(effect) {
-                push_label_id(labels, label);
-            }
-        }
-    }
-}
-
-fn record_gate_condition_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for gate in workflow.gates() {
-        if !workflow.transitions().iter().any(|transition| {
-            transition.requires_gates.contains(&gate.id)
-                && transition_targets(workflow, transition, target)
-        }) {
-            continue;
-        }
-        if let Some(condition) = &gate.condition {
-            if let Some(label) = condition_label(workflow, condition) {
-                push_label_id(labels, label);
-            }
-        }
-    }
-}
-
-fn state_allows_target(
-    workflow: &ValidatedWorkflow,
-    state: &temper_workflow::ValidatedState,
-    target: ArtifactTarget,
-) -> bool {
-    state.artifacts.is_empty()
-        || state.artifacts.iter().any(|artifact| {
-            workflow
-                .artifact_kind(artifact)
-                .is_some_and(|kind| kind.target == target)
-        })
-}
-
-fn transition_targets(
-    workflow: &ValidatedWorkflow,
-    transition: &ValidatedTransition,
-    target: ArtifactTarget,
-) -> bool {
-    workflow
-        .artifact_kind(&transition.artifact)
-        .is_some_and(|kind| kind.target == target)
-}
-
-fn condition_label<'a>(
-    workflow: &'a ValidatedWorkflow,
-    condition: &'a GateCondition,
-) -> Option<&'a LabelId> {
-    match condition {
-        GateCondition::LabelPresent(label) => Some(label),
-        GateCondition::StateEquals { dimension, state } => workflow
-            .state_dimensions()
-            .iter()
-            .find(|candidate| &candidate.id == dimension)?
-            .states
-            .iter()
-            .find(|candidate| &candidate.id == state)?
-            .label
-            .as_ref(),
-        GateCondition::DependenciesResolved
-        | GateCondition::CiPassed
-        | GateCondition::CiFailed
-        | GateCondition::ReviewApproved
-        | GateCondition::ReviewChangesRequested => None,
-    }
-}
-
-fn effect_label(effect: &Effect) -> Option<&LabelId> {
-    match effect {
-        Effect::AddLabel(label)
-        | Effect::RemoveLabel(label)
-        | Effect::RemoveLabelIfPresent(label) => Some(label),
-        Effect::SetAssignee(_)
-        | Effect::RemoveAssignee(_)
-        | Effect::CreateComment { .. }
-        | Effect::CreatePullRequest { .. }
-        | Effect::RequestReviewers { .. }
-        | Effect::SubmitReview { .. }
-        | Effect::SetBody { .. }
-        | Effect::AttachReview { .. }
-        | Effect::CreateIssues { .. }
-        | Effect::MergePullRequest
-        | Effect::CloseParentIssues => None,
-    }
-}
-
-fn push_label_id(labels: &mut Vec<LabelId>, label: &LabelId) {
-    if !labels.contains(label) {
-        labels.push(label.clone());
-    }
-}
-
-fn normalize_labels<'a>(labels: impl IntoIterator<Item = &'a LabelId>) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for label in labels {
-        push_label(&mut normalized, label);
-    }
-    normalized
-}
-
-fn push_label(labels: &mut Vec<String>, label: &LabelId) {
-    let label = label.as_str().to_string();
-    if !labels.contains(&label) {
-        labels.push(label);
-    }
-}
-
-fn push_unique_label_set(label_sets: &mut Vec<Vec<String>>, labels: Vec<String>) {
-    if !label_sets.contains(&labels) {
-        label_sets.push(labels);
-    }
-}
-
-fn issue_query(state: IssueState, labels: Vec<String>) -> IssueQuery {
-    IssueQuery {
-        state: Some(state),
+fn issue_candidate(
+    lifecycle: CandidateLifecycle,
+    labels: CandidateLabelSelection,
+) -> IssueCandidateQuery {
+    IssueCandidateQuery {
+        lifecycle,
         labels,
         details: ItemListDetails::summary(),
-        ..IssueQuery::default()
     }
 }
 
-fn pull_request_query(state: PullRequestState, labels: Vec<String>) -> PullRequestQuery {
-    PullRequestQuery {
-        state: Some(state),
+fn pull_request_candidate(
+    lifecycle: CandidateLifecycle,
+    labels: CandidateLabelSelection,
+) -> PullRequestCandidateQuery {
+    PullRequestCandidateQuery {
+        lifecycle,
         labels,
         details: ItemListDetails::summary(),
-        ..PullRequestQuery::default()
     }
 }
