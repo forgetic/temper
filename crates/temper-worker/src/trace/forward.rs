@@ -8,7 +8,7 @@ use temper_protocol_activity::{ACTIVITY_PROTOCOL_VERSION, AgentActivityBatch, Ag
 use super::{
     ForwardingAcknowledgementBoundary, RecoveredForwardingRun, RecoveredTraceRun, TraceCollector,
     TraceError, acknowledge_forwarded_run, acknowledge_recovered_run, event_blob_references,
-    read_acknowledged_sequence, read_dir, recover_forwarding_run, set_private_dir,
+    read_acknowledged_sequence, read_dir, recover_forwarding_run, repair_spool_root_permissions,
 };
 
 pub(super) struct ForwardingBatch {
@@ -149,13 +149,31 @@ impl TraceCollector {
     /// siblings from the forwarding pass. A single damaged spool must not
     /// prevent unrelated jobs' traces from draining.
     pub(super) fn recover_forwardable(&self) -> Result<Vec<RecoveredForwardingRun>, TraceError> {
+        self.recover_forwardable_with_permission_repair(false)
+    }
+
+    /// Performs the one deliberate legacy permission repair associated with
+    /// forwarder startup. Notification and backstop recovery use ordinary
+    /// access and never issue recurring chmod operations.
+    pub(super) fn recover_forwardable_at_startup(
+        &self,
+    ) -> Result<Vec<RecoveredForwardingRun>, TraceError> {
+        self.recover_forwardable_with_permission_repair(true)
+    }
+
+    fn recover_forwardable_with_permission_repair(
+        &self,
+        repair_permissions: bool,
+    ) -> Result<Vec<RecoveredForwardingRun>, TraceError> {
         let Some(root) = self.config.spool_root.as_deref() else {
             return Ok(Vec::new());
         };
         if !root.exists() {
             return Ok(Vec::new());
         }
-        set_private_dir(root)?;
+        if repair_permissions {
+            repair_spool_root_permissions(root)?;
+        }
         let mut run_dirs = read_dir(root)?
             .filter_map(Result::ok)
             .filter_map(|entry| match entry.file_type() {
@@ -166,7 +184,7 @@ impl TraceCollector {
         run_dirs.sort();
         let mut runs = Vec::new();
         for run_dir in run_dirs {
-            match recover_forwarding_run(&run_dir) {
+            match recover_forwarding_run(&run_dir, repair_permissions) {
                 Ok(run) => runs.push(run),
                 Err(error) => warn_skipped_spool(&run_dir, &error),
             }
@@ -183,7 +201,7 @@ impl TraceCollector {
         if !run_dir.is_dir() {
             return None;
         }
-        match recover_forwarding_run(&run_dir) {
+        match recover_forwarding_run(&run_dir, false) {
             Ok(run) => Some(run),
             Err(error) => {
                 warn_skipped_spool(&run_dir, &error);

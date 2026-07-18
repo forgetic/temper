@@ -112,8 +112,12 @@ fn append_after_index_recovers_only_suffix_blob_and_exact_ack_boundary() {
             .collect::<Vec<_>>(),
         vec![suffix_sequence]
     );
-    assert_eq!(recovered.blobs, vec![attachment]);
+    assert_eq!(recovered.blobs, vec![attachment.clone()]);
     assert_eq!(event_payload_bytes_read(), grown_len - indexed_len);
+    assert_eq!(
+        spool_operation_counts().blob_payload_bytes_read,
+        attachment.blob.bytes
+    );
 
     let forwarding_batch = recovered
         .pending_batch_bounded(50, 64 * 1024)
@@ -229,4 +233,144 @@ fn assert_full_fallback_then_idle(collector: &TraceCollector, acknowledged: u64)
     assert!(idle[0].events.is_empty());
     assert_eq!(idle[0].acknowledged_seq, acknowledged);
     assert_eq!(event_payload_bytes_read(), 0);
+}
+
+#[test]
+fn scale_fixture_has_no_payload_reads_or_filesystem_mutations_when_idle() {
+    const COMPACTED_RUNS: usize = 32;
+    const ACKNOWLEDGED_HISTORY_RUNS: usize = 3;
+    const EVENTS_PER_HISTORY: usize = 256;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let collector = collector(temp.path(), CaptureModeV1::Metadata);
+
+    for index in 0..COMPACTED_RUNS {
+        let run = collector
+            .begin_run(&format!("clean-compacted-{index}"), &context())
+            .expect("begin compacted run")
+            .expect("enabled compacted run");
+        run.accept_frame(usage_frame(index as u64 + 1))
+            .expect("append compacted event");
+        let terminal = run.finish_success(None).expect("finish compacted run");
+        run.acknowledge(terminal).expect("compact acknowledged run");
+    }
+
+    for index in 0..ACKNOWLEDGED_HISTORY_RUNS {
+        let run = collector
+            .begin_run(&format!("large-acknowledged-history-{index}"), &context())
+            .expect("begin history run")
+            .expect("enabled history run");
+        let mut acknowledged = 1;
+        for event in 0..EVENTS_PER_HISTORY {
+            acknowledged = run
+                .accept_frame(usage_frame((index * EVENTS_PER_HISTORY + event + 1) as u64))
+                .expect("append history event");
+        }
+        run.acknowledge(acknowledged)
+            .expect("acknowledge retained non-terminal history");
+        let run_dir = run.spool_dir().to_path_buf();
+        drop(run);
+
+        // Model a legacy acknowledged run. The first convergence pass must
+        // parse it once and derive the cheap forwarding boundary.
+        fs::remove_file(run_dir.join(FORWARDING_INDEX_FILE))
+            .expect("remove derived forwarding index");
+    }
+
+    reset_spool_operation_counts();
+    let converged = collector
+        .recover_forwardable()
+        .expect("converge scale fixture");
+    assert_eq!(converged.len(), COMPACTED_RUNS + ACKNOWLEDGED_HISTORY_RUNS);
+    assert!(
+        spool_operation_counts().event_payload_bytes_read > 0,
+        "legacy histories should be parsed during convergence"
+    );
+
+    reset_spool_operation_counts();
+    let idle = collector
+        .recover_forwardable()
+        .expect("perform second idle backstop");
+    assert_eq!(idle.len(), COMPACTED_RUNS + ACKNOWLEDGED_HISTORY_RUNS);
+    assert!(
+        idle.iter()
+            .all(|run| run.events.is_empty() && run.blobs.is_empty())
+    );
+    assert_eq!(
+        spool_operation_counts(),
+        TraceSpoolOperationCounts::default(),
+        "an idle backstop must remain payload-read and filesystem-mutation free"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn startup_repairs_legacy_permissions_without_recurring_chmod() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("spool");
+    let collector = collector(&root, CaptureModeV1::Metadata);
+    let run = collector
+        .begin_run("legacy-permissions", &context())
+        .expect("begin legacy run")
+        .expect("enabled legacy run");
+    let run_dir = run.spool_dir().to_path_buf();
+    run.acknowledge(1).expect("index acknowledged run");
+    drop(run);
+
+    let directories = [root.clone(), run_dir.clone(), run_dir.join("blobs")];
+    let files = [
+        root.join(".spool-root.lock"),
+        run_dir.join(".spool.lock"),
+        run_dir.join("manifest.json"),
+        run_dir.join("events.jsonl"),
+        run_dir.join("acknowledgement.json"),
+        run_dir.join(FORWARDING_INDEX_FILE),
+    ];
+    for directory in &directories {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o777))
+            .expect("make legacy directory permissive");
+    }
+    for file in &files {
+        fs::set_permissions(file, fs::Permissions::from_mode(0o666))
+            .expect("make legacy file permissive");
+    }
+
+    reset_spool_operation_counts();
+    collector
+        .recover_forwardable()
+        .expect("ordinary recovery reads legacy spool");
+    assert_eq!(spool_operation_counts().permission_changes, 0);
+    assert_eq!(mode(&root), 0o777);
+    assert_eq!(mode(&run_dir.join(".spool.lock")), 0o666);
+
+    reset_spool_operation_counts();
+    collector
+        .recover_forwardable_at_startup()
+        .expect("startup repairs legacy spool");
+    assert!(spool_operation_counts().permission_changes > 0);
+    assert_eq!(mode(&root), 0o700);
+    assert_eq!(mode(&run_dir), 0o700);
+    assert_eq!(mode(&run_dir.join("blobs")), 0o700);
+    for file in files {
+        assert_eq!(mode(&file), 0o600);
+    }
+
+    reset_spool_operation_counts();
+    collector
+        .recover_forwardable()
+        .expect("ordinary idle recovery after repair");
+    assert_eq!(
+        spool_operation_counts(),
+        TraceSpoolOperationCounts::default()
+    );
+
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path)
+            .expect("permission metadata")
+            .permissions()
+            .mode()
+            & 0o777
+    }
 }

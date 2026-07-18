@@ -152,7 +152,7 @@ impl TraceCollector {
         if !root.exists() {
             return Ok(Vec::new());
         }
-        set_private_dir(root)?;
+        repair_spool_root_permissions(root)?;
         let mut run_dirs = read_dir(root)?
             .filter_map(Result::ok)
             .filter_map(|entry| match entry.file_type() {
@@ -520,7 +520,7 @@ fn append_event(
     let write_result = state
         .event_file
         .write_all(&bytes)
-        .and_then(|()| state.event_file.sync_data());
+        .and_then(|()| sync_file_data(&state.event_file));
     if let Err(source) = write_result {
         let _ = unlock_spool(inner);
         state.disabled = true;
@@ -607,6 +607,9 @@ mod full_path_tests;
 
 #[cfg(test)]
 mod prompt_tests;
+
+#[cfg(test)]
+mod spool_idle_tests;
 
 #[cfg(test)]
 mod tests;

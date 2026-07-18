@@ -12,10 +12,19 @@ use temper_protocol_activity::{
 
 use super::{RecoveredTraceRun, TraceError, TraceManifestV1, event_blob_references};
 
+mod filesystem;
 mod forwarding_index;
+mod operation_counts;
 mod recovery;
+pub(super) use filesystem::{repair_private_dir, repair_spool_root_permissions, sync_file_data};
+use filesystem::{repair_run_permissions, sync_directory, sync_file_all};
 use forwarding_index::persist_forwarding_index_best_effort;
 pub(super) use forwarding_index::{acknowledge_forwarded_run, persist_forwarding_index};
+use operation_counts::*;
+#[cfg(test)]
+pub(super) use operation_counts::{
+    TraceSpoolOperationCounts, reset_spool_operation_counts, spool_operation_counts,
+};
 use recovery::{recover_compacted_marker, recover_run_with_offsets_locked, recover_spool_metadata};
 pub(super) use recovery::{recover_forwarding_run, recover_run};
 
@@ -272,7 +281,6 @@ fn open_named_lock(directory: &Path, name: &str) -> Result<(PathBuf, File), Trac
     let file = options
         .open(&path)
         .map_err(|source| io_error("open trace spool lock", &path, source))?;
-    set_private_file(&path)?;
     Ok((path, file))
 }
 
@@ -341,23 +349,24 @@ fn directory_bytes(directory: &Path) -> Result<u64, TraceError> {
 
 fn reclaim_compacted_payload(run_dir: &Path) -> Result<(), TraceError> {
     let events_path = run_dir.join("events.jsonl");
-    let events = OpenOptions::new()
-        .write(true)
-        .open(&events_path)
-        .map_err(|source| io_error("open acknowledged activity payload", &events_path, source))?;
-    events
-        .set_len(0)
-        .and_then(|()| events.sync_all())
-        .map_err(|source| {
-            io_error(
-                "truncate acknowledged activity payload",
-                &events_path,
-                source,
-            )
-        })?;
+    let events_metadata = fs::symlink_metadata(&events_path).map_err(|source| {
+        io_error(
+            "inspect acknowledged activity payload",
+            &events_path,
+            source,
+        )
+    })?;
+    if !events_metadata.is_file() || events_metadata.file_type().is_symlink() {
+        return Err(TraceError::InvalidSpool(format!(
+            "acknowledged event payload is not a regular file: {}",
+            events_path.display()
+        )));
+    }
 
+    // Validate the complete blob directory before changing either payload.
+    // A corrupt sibling must not leave reclamation half-complete.
     let blobs_dir = run_dir.join("blobs");
-    set_private_dir(&blobs_dir)?;
+    let mut blob_payloads = Vec::new();
     for entry in read_dir(&blobs_dir)? {
         let entry = entry
             .map_err(|source| io_error("read acknowledged activity blobs", &blobs_dir, source))?;
@@ -365,8 +374,7 @@ fn reclaim_compacted_payload(run_dir: &Path) -> Result<(), TraceError> {
         let metadata = fs::symlink_metadata(&path)
             .map_err(|source| io_error("inspect acknowledged activity blob", &path, source))?;
         if metadata.is_file() && !metadata.file_type().is_symlink() {
-            fs::remove_file(&path)
-                .map_err(|source| io_error("remove acknowledged activity blob", &path, source))?;
+            blob_payloads.push(path);
         } else {
             return Err(TraceError::InvalidSpool(format!(
                 "acknowledged blob payload is not a regular file: {}",
@@ -374,12 +382,45 @@ fn reclaim_compacted_payload(run_dir: &Path) -> Result<(), TraceError> {
             )));
         }
     }
-    File::open(&blobs_dir)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| io_error("sync compacted activity blobs", &blobs_dir, source))?;
-    File::open(run_dir)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| io_error("sync compacted activity spool", run_dir, source))
+
+    if events_metadata.len() == 0 && blob_payloads.is_empty() {
+        return Ok(());
+    }
+
+    if events_metadata.len() > 0 {
+        let events = OpenOptions::new()
+            .write(true)
+            .open(&events_path)
+            .map_err(|source| {
+                io_error("open acknowledged activity payload", &events_path, source)
+            })?;
+        events.set_len(0).map_err(|source| {
+            io_error(
+                "truncate acknowledged activity payload",
+                &events_path,
+                source,
+            )
+        })?;
+        record_truncation();
+        sync_file_all(&events).map_err(|source| {
+            io_error(
+                "sync truncated acknowledged activity payload",
+                &events_path,
+                source,
+            )
+        })?;
+    }
+
+    if !blob_payloads.is_empty() {
+        for path in blob_payloads {
+            fs::remove_file(&path)
+                .map_err(|source| io_error("remove acknowledged activity blob", &path, source))?;
+            record_deletion();
+        }
+        sync_directory(&blobs_dir)
+            .map_err(|source| io_error("sync compacted activity blobs", &blobs_dir, source))?;
+    }
+    Ok(())
 }
 
 fn recover_event_records(
@@ -391,7 +432,6 @@ fn recover_event_records(
         .write(true)
         .open(path)
         .map_err(|source| io_error("open activity records", path, source))?;
-    set_private_file(path)?;
     file.seek(SeekFrom::Start(start_offset))
         .map_err(|source| io_error("seek activity records", path, source))?;
     let mut bytes = Vec::new();
@@ -408,8 +448,10 @@ fn recover_event_records(
             TraceError::InvalidSpool("activity record byte offset overflowed".to_string())
         })?;
         file.set_len(truncate_to)
-            .and_then(|()| file.sync_data())
             .map_err(|source| io_error("truncate incomplete activity record", path, source))?;
+        record_truncation();
+        sync_file_data(&file)
+            .map_err(|source| io_error("sync truncated activity record", path, source))?;
         bytes.truncate(complete_len);
     }
 
@@ -435,32 +477,13 @@ fn recover_event_records(
 }
 
 #[cfg(test)]
-thread_local! {
-    static EVENT_PAYLOAD_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-fn record_event_payload_bytes_read(bytes: usize) {
-    EVENT_PAYLOAD_BYTES_READ.with(|total| {
-        total.set(
-            total
-                .get()
-                .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX)),
-        );
-    });
-}
-
-#[cfg(not(test))]
-fn record_event_payload_bytes_read(_bytes: usize) {}
-
-#[cfg(test)]
 pub(super) fn reset_event_payload_bytes_read() {
-    EVENT_PAYLOAD_BYTES_READ.with(|total| total.set(0));
+    reset_spool_operation_counts();
 }
 
 #[cfg(test)]
 pub(super) fn event_payload_bytes_read() -> u64 {
-    EVENT_PAYLOAD_BYTES_READ.with(std::cell::Cell::get)
+    spool_operation_counts().event_payload_bytes_read
 }
 
 pub(super) fn validate_manifest(manifest: &TraceManifestV1) -> Result<(), TraceError> {
@@ -500,8 +523,14 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, TraceError>
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, TraceError> {
-    set_private_file(path)?;
     fs::read(path).map_err(|source| io_error("read trace spool file", path, source))
+}
+
+fn read_blob_bytes(path: &Path) -> Result<Vec<u8>, TraceError> {
+    let bytes =
+        fs::read(path).map_err(|source| io_error("read trace blob payload", path, source))?;
+    record_blob_payload_bytes_read(bytes.len());
+    Ok(bytes)
 }
 
 pub(super) fn read_dir(path: &Path) -> Result<fs::ReadDir, TraceError> {
@@ -509,14 +538,32 @@ pub(super) fn read_dir(path: &Path) -> Result<fs::ReadDir, TraceError> {
 }
 
 pub(super) fn create_private_dir_all(path: &Path) -> Result<(), TraceError> {
-    fs::create_dir_all(path)
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder
+        .create(path)
         .map_err(|source| io_error("create trace spool directory", path, source))?;
-    set_private_dir(path)
+    // The configured root may predate trace capture (or be supplied by a
+    // caller as an existing directory). Run creation is a deliberate boundary
+    // where that legacy root can be repaired once, unlike recurring reads.
+    repair_private_dir(path)
 }
 
 pub(super) fn create_private_dir(path: &Path) -> Result<(), TraceError> {
-    fs::create_dir(path).map_err(|source| io_error("create trace run directory", path, source))?;
-    set_private_dir(path)
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder
+        .create(path)
+        .map_err(|source| io_error("create trace run directory", path, source))
 }
 
 pub(super) fn create_private_file(path: &Path, create_new: bool) -> Result<File, TraceError> {
@@ -531,11 +578,9 @@ pub(super) fn create_private_file(path: &Path, create_new: bool) -> Result<File,
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
-    let file = options
+    options
         .open(path)
-        .map_err(|source| io_error("create trace spool file", path, source))?;
-    set_private_file(path)?;
-    Ok(file)
+        .map_err(|source| io_error("create trace spool file", path, source))
 }
 
 pub(super) fn atomic_write(path: &Path, bytes: &[u8], replace: bool) -> Result<(), TraceError> {
@@ -561,9 +606,8 @@ pub(super) fn atomic_write(path: &Path, bytes: &[u8], replace: bool) -> Result<(
             .open(&temp_path)
             .map_err(|source| io_error("create atomic trace metadata", &temp_path, source))?;
         file.write_all(bytes)
-            .and_then(|()| file.sync_all())
+            .and_then(|()| sync_file_all(&file))
             .map_err(|source| io_error("write atomic trace metadata", &temp_path, source))?;
-        set_private_file(&temp_path)?;
         if !replace && path.exists() {
             return Err(TraceError::InvalidSpool(format!(
                 "immutable trace metadata already exists at {}",
@@ -572,9 +616,7 @@ pub(super) fn atomic_write(path: &Path, bytes: &[u8], replace: bool) -> Result<(
         }
         fs::rename(&temp_path, path)
             .map_err(|source| io_error("install atomic trace metadata", path, source))?;
-        set_private_file(path)?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
+        sync_directory(parent)
             .map_err(|source| io_error("sync trace metadata directory", parent, source))?;
         Ok(())
     })();
@@ -582,30 +624,6 @@ pub(super) fn atomic_write(path: &Path, bytes: &[u8], replace: bool) -> Result<(
         let _ = fs::remove_file(&temp_path);
     }
     write_result
-}
-
-#[cfg(unix)]
-pub(super) fn set_private_dir(path: &Path) -> Result<(), TraceError> {
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .map_err(|source| io_error("set private trace directory permissions", path, source))
-}
-
-#[cfg(not(unix))]
-pub(super) fn set_private_dir(_path: &Path) -> Result<(), TraceError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_private_file(path: &Path) -> Result<(), TraceError> {
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|source| io_error("set private trace file permissions", path, source))
-}
-
-#[cfg(not(unix))]
-fn set_private_file(_path: &Path) -> Result<(), TraceError> {
-    Ok(())
 }
 
 pub(super) fn io_error(operation: &'static str, path: &Path, source: io::Error) -> TraceError {
