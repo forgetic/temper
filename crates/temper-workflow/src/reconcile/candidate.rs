@@ -1,5 +1,9 @@
-use super::{ArtifactSnapshot, ReconcileError, Reconciler, RecoveryPolicy};
+use super::{
+    ArtifactSnapshot, ReconcileError, Reconciler, ReconciliationDetailCache,
+    ReconciliationDetailCacheStats, RecoveryPolicy,
+};
 use crate::classify::Classifier;
+use crate::dependency_state::DependencyStateIndex;
 use crate::ids::ArtifactKindId;
 use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
 use crate::{ArtifactTarget, workflow_interest};
@@ -7,6 +11,12 @@ use temper_forge::{
     CandidateLabelSelection, CandidateLifecycle, Forge, Issue, IssueCandidateQuery,
     ItemListDetails, PullRequest, PullRequestCandidateQuery, RepositoryId,
 };
+
+pub(crate) struct CandidateLoad {
+    pub(crate) snapshots: Vec<ArtifactSnapshot>,
+    pub(crate) state_index: DependencyStateIndex,
+    pub(crate) cache_stats: ReconciliationDetailCacheStats,
+}
 
 /// Consolidated Forge candidate buckets used by bounded reconciliation.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -81,8 +91,28 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
     where
         F: Forge + ?Sized,
     {
+        Ok(self
+            .load_bounded_candidate_snapshots_inner(forge, repo_id, chrono::Utc::now(), None)
+            .await?
+            .snapshots)
+    }
+
+    pub(crate) async fn load_bounded_candidate_snapshots_inner<F>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: Option<&ReconciliationDetailCache>,
+    ) -> Result<CandidateLoad, ReconcileError>
+    where
+        F: Forge + ?Sized,
+    {
         let plan = self.candidate_query_plan();
         let classifier = Classifier::new(self.workflow);
+        let mut cache_stats = ReconciliationDetailCacheStats::default();
+        if let Some(cache) = cache {
+            cache.begin_pass(now, &mut cache_stats);
+        }
         let mut issue_candidates = Vec::new();
         for query in plan.issue_queries {
             issue_candidates.extend(forge.list_issue_candidates(repo_id, query).await?);
@@ -106,10 +136,20 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         });
         pull_request_candidates.dedup_by(|left, right| left.id == right.id);
 
+        let state_index =
+            DependencyStateIndex::from_candidates(&issue_candidates, &pull_request_candidates);
         let mut snapshots = Vec::new();
         for issue in issue_candidates {
             if let Some(snapshot) = self
-                .snapshot_for_issue_candidate(forge, repo_id, &classifier, issue)
+                .snapshot_for_issue_candidate(
+                    forge,
+                    repo_id,
+                    &classifier,
+                    issue,
+                    now,
+                    cache,
+                    &mut cache_stats,
+                )
                 .await?
             {
                 snapshots.push(snapshot);
@@ -117,13 +157,25 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         }
         for pull_request in pull_request_candidates {
             if let Some(snapshot) = self
-                .snapshot_for_pull_request_candidate(forge, repo_id, &classifier, pull_request)
+                .snapshot_for_pull_request_candidate(
+                    forge,
+                    repo_id,
+                    &classifier,
+                    pull_request,
+                    now,
+                    cache,
+                    &mut cache_stats,
+                )
                 .await?
             {
                 snapshots.push(snapshot);
             }
         }
-        Ok(snapshots)
+        Ok(CandidateLoad {
+            snapshots,
+            state_index,
+            cache_stats,
+        })
     }
 
     async fn snapshot_for_issue_candidate<F>(
@@ -131,17 +183,40 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         forge: &F,
         repo_id: &RepositoryId,
         classifier: &Classifier<'_>,
-        issue: Issue,
+        mut issue: Issue,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: Option<&ReconciliationDetailCache>,
+        stats: &mut ReconciliationDetailCacheStats,
     ) -> Result<Option<ArtifactSnapshot>, ReconcileError>
     where
         F: Forge + ?Sized,
     {
         if self.issue_candidate_needs_dependency_detail(classifier, &issue) {
-            return Ok(forge
-                .get_issue_by_number(repo_id, issue.number)
-                .await?
-                .as_ref()
-                .map(ArtifactSnapshot::from_issue));
+            if let Some(dependencies) =
+                cache.and_then(|cache| cache.issue_dependencies(repo_id, &issue, now, stats))
+            {
+                issue.dependencies = dependencies;
+                return Ok(Some(ArtifactSnapshot::from_issue(&issue)));
+            }
+            let exact = forge.get_issue_by_number(repo_id, issue.number).await?;
+            if let Some(exact) = &exact {
+                if let Some(cache) = cache {
+                    stats.add_evictions(cache.store_issue_dependencies(
+                        repo_id,
+                        &issue,
+                        exact.dependencies.clone(),
+                        now,
+                    ));
+                }
+            } else if let Some(cache) = cache {
+                stats.add_invalidations(cache.invalidate(
+                    repo_id,
+                    crate::ArtifactSource::Issue {
+                        number: issue.number,
+                    },
+                ));
+            }
+            return Ok(exact.as_ref().map(ArtifactSnapshot::from_issue));
         }
         Ok(Some(ArtifactSnapshot::from_issue(&issue)))
     }
@@ -151,17 +226,42 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         forge: &F,
         repo_id: &RepositoryId,
         classifier: &Classifier<'_>,
-        pull_request: PullRequest,
+        mut pull_request: PullRequest,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: Option<&ReconciliationDetailCache>,
+        stats: &mut ReconciliationDetailCacheStats,
     ) -> Result<Option<ArtifactSnapshot>, ReconcileError>
     where
         F: Forge + ?Sized,
     {
         if self.pull_request_candidate_needs_dependency_detail(classifier, &pull_request) {
-            return Ok(forge
+            if let Some(dependencies) = cache.and_then(|cache| {
+                cache.pull_request_dependencies(repo_id, &pull_request, now, stats)
+            }) {
+                pull_request.dependencies = dependencies;
+                return Ok(Some(ArtifactSnapshot::from_pull_request(&pull_request)));
+            }
+            let exact = forge
                 .get_pull_request_by_number(repo_id, pull_request.number)
-                .await?
-                .as_ref()
-                .map(ArtifactSnapshot::from_pull_request));
+                .await?;
+            if let Some(exact) = &exact {
+                if let Some(cache) = cache {
+                    stats.add_evictions(cache.store_pull_request_dependencies(
+                        repo_id,
+                        &pull_request,
+                        exact.dependencies.clone(),
+                        now,
+                    ));
+                }
+            } else if let Some(cache) = cache {
+                stats.add_invalidations(cache.invalidate(
+                    repo_id,
+                    crate::ArtifactSource::PullRequest {
+                        number: pull_request.number,
+                    },
+                ));
+            }
+            return Ok(exact.as_ref().map(ArtifactSnapshot::from_pull_request));
         }
         Ok(Some(ArtifactSnapshot::from_pull_request(&pull_request)))
     }

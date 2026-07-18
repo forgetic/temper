@@ -77,6 +77,7 @@ pub struct CountingForge<F: Forge> {
     advance_heads_on_conflict_resolution: Mutex<bool>,
     issue_queries: Mutex<Vec<IssueQuery>>,
     issue_candidate_queries: Mutex<Vec<IssueCandidateQuery>>,
+    issue_candidate_overrides: Mutex<HashMap<IssueId, Issue>>,
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
     pull_request_candidate_queries: Mutex<Vec<PullRequestCandidateQuery>>,
     ci_job_queries: Mutex<Vec<CiJobQuery>>,
@@ -96,6 +97,7 @@ impl<F: Forge> CountingForge<F> {
             advance_heads_on_conflict_resolution: Mutex::new(false),
             issue_queries: Mutex::new(Vec::new()),
             issue_candidate_queries: Mutex::new(Vec::new()),
+            issue_candidate_overrides: Mutex::new(HashMap::new()),
             pull_request_queries: Mutex::new(Vec::new()),
             pull_request_candidate_queries: Mutex::new(Vec::new()),
             ci_job_queries: Mutex::new(Vec::new()),
@@ -180,6 +182,16 @@ impl<F: Forge> CountingForge<F> {
             .lock()
             .expect("issue query mutex")
             .clone()
+    }
+
+    /// Overrides one issue only in candidate-list results. Exact reads still
+    /// reach the wrapped forge, allowing tests to model providers whose list
+    /// summaries lag dependency-link changes.
+    pub fn override_issue_candidate_summary(&self, issue: Issue) {
+        self.issue_candidate_overrides
+            .lock()
+            .expect("issue candidate overrides mutex")
+            .insert(issue.id.clone(), issue);
     }
 
     pub fn issue_candidate_queries(&self) -> Vec<IssueCandidateQuery> {

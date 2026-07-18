@@ -309,6 +309,28 @@ fn get_pull_request_by_number_maps_fields() {
 }
 
 #[test]
+fn get_pull_request_summary_does_not_read_dependencies() {
+    let client = MockHttpClient::new();
+    client.push_response(200, pr_json(42, "open", "[]", ""));
+    let forge = forge(client.clone());
+
+    let pull = block_on(forge.get_pull_request_by_number_with_details(
+        &repo_id(),
+        ItemNumber::new(42),
+        ItemListDetails::summary(),
+    ))
+    .unwrap()
+    .expect("pull request present");
+
+    assert!(pull.dependencies.is_empty());
+    assert_eq!(client.call_count(), 1);
+    assert_eq!(
+        client.last_request().unwrap().path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/42")
+    );
+}
+
+#[test]
 fn get_pull_request_missing_is_none() {
     let client = MockHttpClient::new();
     client.push_response(404, r#"{"message":"not found"}"#);
