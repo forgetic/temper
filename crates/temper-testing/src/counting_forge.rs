@@ -4,15 +4,17 @@ use std::future::Future;
 use std::sync::Mutex;
 use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
-    IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest,
-    PullRequestId, PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath,
-    RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue,
+    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace,
+    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId,
+    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
+    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 use operation_log::ForgeOperationLog;
 pub use operation_log::ForgeOperationPause;
 
+mod forge_impl;
 mod operation_log;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -26,6 +28,7 @@ pub enum CountedForgeOp {
     ListLabels,
     UpsertLabel,
     ListIssues,
+    ListIssueCandidates,
     CreateIssue,
     GetIssue,
     GetIssueByNumber,
@@ -35,6 +38,7 @@ pub enum CountedForgeOp {
     ListIssueComments,
     AddIssueComment,
     ListPullRequests,
+    ListPullRequestCandidates,
     CreatePullRequest,
     GetPullRequest,
     GetPullRequestByNumber,
@@ -57,8 +61,25 @@ pub struct ExactIssueRead {
     pub details: ItemListDetails,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExactPullRequestRead {
+    pub by_number: bool,
+    pub details: ItemListDetails,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ForgeReadShape {
+    /// Consolidated issue/PR candidate-list calls.
+    pub candidate_list_calls: usize,
+    /// Exact artifact reads that requested summary detail only.
+    pub exact_summary_reads: usize,
+    /// Exact artifact reads that requested dependency-enriched full detail.
+    pub exact_full_reads: usize,
+}
+
 pub struct CountingForge<F: Forge> {
     inner: F,
+    item_number_namespace: Option<ItemNumberNamespace>,
     operations: ForgeOperationLog,
     merge_conflicts: Mutex<HashMap<PullRequestId, String>>,
     synthetic_heads: Mutex<bool>,
@@ -66,15 +87,20 @@ pub struct CountingForge<F: Forge> {
     head_generations: Mutex<HashMap<PullRequestId, u64>>,
     advance_heads_on_conflict_resolution: Mutex<bool>,
     issue_queries: Mutex<Vec<IssueQuery>>,
+    issue_candidate_queries: Mutex<Vec<IssueCandidateQuery>>,
+    issue_candidate_overrides: Mutex<HashMap<IssueId, Issue>>,
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
+    pull_request_candidate_queries: Mutex<Vec<PullRequestCandidateQuery>>,
     ci_job_queries: Mutex<Vec<CiJobQuery>>,
     exact_issue_reads: Mutex<Vec<ExactIssueRead>>,
+    exact_pull_request_reads: Mutex<Vec<ExactPullRequestRead>>,
 }
 
 impl<F: Forge> CountingForge<F> {
     pub fn new(inner: F) -> Self {
         Self {
             inner,
+            item_number_namespace: None,
             operations: ForgeOperationLog::default(),
             merge_conflicts: Mutex::new(HashMap::new()),
             synthetic_heads: Mutex::new(false),
@@ -82,9 +108,25 @@ impl<F: Forge> CountingForge<F> {
             head_generations: Mutex::new(HashMap::new()),
             advance_heads_on_conflict_resolution: Mutex::new(false),
             issue_queries: Mutex::new(Vec::new()),
+            issue_candidate_queries: Mutex::new(Vec::new()),
+            issue_candidate_overrides: Mutex::new(HashMap::new()),
             pull_request_queries: Mutex::new(Vec::new()),
+            pull_request_candidate_queries: Mutex::new(Vec::new()),
             ci_job_queries: Mutex::new(Vec::new()),
             exact_issue_reads: Mutex::new(Vec::new()),
+            exact_pull_request_reads: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Wraps a fixture while modelling a specific provider number namespace.
+    ///
+    /// Most tests should use [`Self::new`] and inherit the wrapped backend's
+    /// capability. This constructor lets production-shaped tests run against a
+    /// local fixture whose storage counters differ from the modelled provider.
+    pub fn with_item_number_namespace(inner: F, namespace: ItemNumberNamespace) -> Self {
+        Self {
+            item_number_namespace: Some(namespace),
+            ..Self::new(inner)
         }
     }
 
@@ -166,11 +208,35 @@ impl<F: Forge> CountingForge<F> {
             .clone()
     }
 
+    /// Overrides one issue only in candidate-list results. Exact reads still
+    /// reach the wrapped forge, allowing tests to model providers whose list
+    /// summaries lag dependency-link changes.
+    pub fn override_issue_candidate_summary(&self, issue: Issue) {
+        self.issue_candidate_overrides
+            .lock()
+            .expect("issue candidate overrides mutex")
+            .insert(issue.id.clone(), issue);
+    }
+
+    pub fn issue_candidate_queries(&self) -> Vec<IssueCandidateQuery> {
+        self.issue_candidate_queries
+            .lock()
+            .expect("issue candidate query mutex")
+            .clone()
+    }
+
     #[allow(dead_code)]
     pub fn pull_request_queries(&self) -> Vec<PullRequestQuery> {
         self.pull_request_queries
             .lock()
             .expect("pull request query mutex")
+            .clone()
+    }
+
+    pub fn pull_request_candidate_queries(&self) -> Vec<PullRequestCandidateQuery> {
+        self.pull_request_candidate_queries
+            .lock()
+            .expect("pull request candidate query mutex")
             .clone()
     }
 
@@ -188,11 +254,59 @@ impl<F: Forge> CountingForge<F> {
             .clone()
     }
 
+    pub fn exact_pull_request_reads(&self) -> Vec<ExactPullRequestRead> {
+        self.exact_pull_request_reads
+            .lock()
+            .expect("exact pull request reads mutex")
+            .clone()
+    }
+
+    /// Returns the read shape recorded so far. Writes are deliberately absent:
+    /// this helper is for request-budget assertions, not total operation volume.
+    pub fn read_shape(&self) -> ForgeReadShape {
+        let exact_issue_reads = self.exact_issue_reads();
+        let exact_pull_request_reads = self.exact_pull_request_reads();
+        let exact_summary_reads = exact_issue_reads
+            .iter()
+            .filter(|read| !read.details.dependencies)
+            .count()
+            .saturating_add(
+                exact_pull_request_reads
+                    .iter()
+                    .filter(|read| !read.details.dependencies)
+                    .count(),
+            );
+        let exact_full_reads = exact_issue_reads
+            .iter()
+            .filter(|read| read.details.dependencies)
+            .count()
+            .saturating_add(
+                exact_pull_request_reads
+                    .iter()
+                    .filter(|read| read.details.dependencies)
+                    .count(),
+            );
+        ForgeReadShape {
+            candidate_list_calls: self
+                .count(CountedForgeOp::ListIssueCandidates)
+                .saturating_add(self.count(CountedForgeOp::ListPullRequestCandidates)),
+            exact_summary_reads,
+            exact_full_reads,
+        }
+    }
+
     fn record_exact_issue_read(&self, by_number: bool, details: ItemListDetails) {
         self.exact_issue_reads
             .lock()
             .expect("exact issue reads mutex")
             .push(ExactIssueRead { by_number, details });
+    }
+
+    fn record_exact_pull_request_read(&self, by_number: bool, details: ItemListDetails) {
+        self.exact_pull_request_reads
+            .lock()
+            .expect("exact pull request reads mutex")
+            .push(ExactPullRequestRead { by_number, details });
     }
 
     async fn perform<T>(&self, op: CountedForgeOp, operation: impl Future<Output = T>) -> T {
@@ -209,10 +323,24 @@ impl<F: Forge> CountingForge<F> {
             .push(query.clone());
     }
 
+    fn record_issue_candidate_query(&self, query: &IssueCandidateQuery) {
+        self.issue_candidate_queries
+            .lock()
+            .expect("issue candidate query mutex")
+            .push(query.clone());
+    }
+
     fn record_pull_request_query(&self, query: &PullRequestQuery) {
         self.pull_request_queries
             .lock()
             .expect("pull request query mutex")
+            .push(query.clone());
+    }
+
+    fn record_pull_request_candidate_query(&self, query: &PullRequestCandidateQuery) {
+        self.pull_request_candidate_queries
+            .lock()
+            .expect("pull request candidate query mutex")
             .push(query.clone());
     }
 
@@ -274,384 +402,4 @@ impl<F: Forge> CountingForge<F> {
 
 fn default_synthetic_head(number: ItemNumber) -> String {
     format!("pr-{}-head", number.get())
-}
-
-#[async_trait]
-impl<F: Forge> Forge for CountingForge<F> {
-    fn provider_request_count(&self) -> Option<u64> {
-        self.inner
-            .provider_request_count()
-            .or_else(|| Some(u64::try_from(self.operations.total_count()).unwrap_or(u64::MAX)))
-    }
-
-    async fn current_user(&self) -> ForgeResult<User> {
-        self.perform(CountedForgeOp::CurrentUser, self.inner.current_user())
-            .await
-    }
-
-    async fn get_user(&self, id: &UserId) -> ForgeResult<Option<User>> {
-        self.perform(CountedForgeOp::GetUser, self.inner.get_user(id))
-            .await
-    }
-
-    async fn list_repositories(&self, query: RepositoryQuery) -> ForgeResult<Vec<Repository>> {
-        self.perform(
-            CountedForgeOp::ListRepositories,
-            self.inner.list_repositories(query),
-        )
-        .await
-    }
-
-    async fn create_repository(&self, input: CreateRepository) -> ForgeResult<Repository> {
-        self.perform(
-            CountedForgeOp::CreateRepository,
-            self.inner.create_repository(input),
-        )
-        .await
-    }
-
-    async fn get_repository(&self, id: &RepositoryId) -> ForgeResult<Option<Repository>> {
-        self.perform(CountedForgeOp::GetRepository, self.inner.get_repository(id))
-            .await
-    }
-
-    async fn get_repository_by_path(
-        &self,
-        path: &RepositoryPath,
-    ) -> ForgeResult<Option<Repository>> {
-        self.perform(
-            CountedForgeOp::GetRepositoryByPath,
-            self.inner.get_repository_by_path(path),
-        )
-        .await
-    }
-
-    async fn list_labels(&self, repo_id: &RepositoryId) -> ForgeResult<Vec<Label>> {
-        self.perform(CountedForgeOp::ListLabels, self.inner.list_labels(repo_id))
-            .await
-    }
-
-    async fn upsert_label(&self, repo_id: &RepositoryId, input: UpsertLabel) -> ForgeResult<Label> {
-        self.perform(
-            CountedForgeOp::UpsertLabel,
-            self.inner.upsert_label(repo_id, input),
-        )
-        .await
-    }
-
-    async fn list_issues(
-        &self,
-        repo_id: &RepositoryId,
-        query: IssueQuery,
-    ) -> ForgeResult<Vec<Issue>> {
-        self.record_issue_query(&query);
-        self.perform(
-            CountedForgeOp::ListIssues,
-            self.inner.list_issues(repo_id, query),
-        )
-        .await
-    }
-
-    async fn create_issue(&self, repo_id: &RepositoryId, input: CreateIssue) -> ForgeResult<Issue> {
-        self.perform(
-            CountedForgeOp::CreateIssue,
-            self.inner.create_issue(repo_id, input),
-        )
-        .await
-    }
-
-    async fn get_issue(&self, id: &IssueId) -> ForgeResult<Option<Issue>> {
-        self.record_exact_issue_read(false, ItemListDetails::full());
-        self.perform(CountedForgeOp::GetIssue, self.inner.get_issue(id))
-            .await
-    }
-
-    async fn get_issue_with_details(
-        &self,
-        id: &IssueId,
-        details: ItemListDetails,
-    ) -> ForgeResult<Option<Issue>> {
-        self.record_exact_issue_read(false, details);
-        self.perform(
-            CountedForgeOp::GetIssue,
-            self.inner.get_issue_with_details(id, details),
-        )
-        .await
-    }
-
-    async fn get_issue_by_number(
-        &self,
-        repo_id: &RepositoryId,
-        number: ItemNumber,
-    ) -> ForgeResult<Option<Issue>> {
-        self.record_exact_issue_read(true, ItemListDetails::full());
-        self.perform(
-            CountedForgeOp::GetIssueByNumber,
-            self.inner.get_issue_by_number(repo_id, number),
-        )
-        .await
-    }
-
-    async fn get_issue_by_number_with_details(
-        &self,
-        repo_id: &RepositoryId,
-        number: ItemNumber,
-        details: ItemListDetails,
-    ) -> ForgeResult<Option<Issue>> {
-        self.record_exact_issue_read(true, details);
-        self.perform(
-            CountedForgeOp::GetIssueByNumber,
-            self.inner
-                .get_issue_by_number_with_details(repo_id, number, details),
-        )
-        .await
-    }
-
-    async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue> {
-        self.perform(
-            CountedForgeOp::UpdateIssue,
-            self.inner.update_issue(id, input),
-        )
-        .await
-    }
-
-    async fn update_issue_from_snapshot(
-        &self,
-        current: &Issue,
-        input: UpdateIssue,
-    ) -> ForgeResult<Issue> {
-        self.perform(
-            CountedForgeOp::UpdateIssue,
-            self.inner.update_issue_from_snapshot(current, input),
-        )
-        .await
-    }
-
-    async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {
-        self.perform(
-            CountedForgeOp::AddIssueDependency,
-            self.inner.add_issue_dependency(id, target),
-        )
-        .await
-    }
-
-    async fn remove_issue_dependency(
-        &self,
-        id: &IssueId,
-        target: ItemNumber,
-    ) -> ForgeResult<Issue> {
-        self.perform(
-            CountedForgeOp::RemoveIssueDependency,
-            self.inner.remove_issue_dependency(id, target),
-        )
-        .await
-    }
-
-    async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
-        self.perform(
-            CountedForgeOp::ListIssueComments,
-            self.inner.list_issue_comments(id),
-        )
-        .await
-    }
-
-    async fn add_issue_comment(&self, id: &IssueId, input: CreateComment) -> ForgeResult<Comment> {
-        self.perform(
-            CountedForgeOp::AddIssueComment,
-            self.inner.add_issue_comment(id, input),
-        )
-        .await
-    }
-
-    async fn list_pull_requests(
-        &self,
-        repo_id: &RepositoryId,
-        query: PullRequestQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
-        self.record_pull_request_query(&query);
-        self.perform(CountedForgeOp::ListPullRequests, async {
-            Ok(self
-                .inner
-                .list_pull_requests(repo_id, query)
-                .await?
-                .into_iter()
-                .map(|pull_request| self.project_pull_request(pull_request))
-                .collect())
-        })
-        .await
-    }
-
-    async fn create_pull_request(
-        &self,
-        repo_id: &RepositoryId,
-        input: CreatePullRequest,
-    ) -> ForgeResult<PullRequest> {
-        self.perform(CountedForgeOp::CreatePullRequest, async {
-            self.inner
-                .create_pull_request(repo_id, input)
-                .await
-                .map(|pull_request| self.project_pull_request(pull_request))
-        })
-        .await
-    }
-
-    async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>> {
-        self.perform(CountedForgeOp::GetPullRequest, async {
-            Ok(self
-                .inner
-                .get_pull_request(id)
-                .await?
-                .map(|pull_request| self.project_pull_request(pull_request)))
-        })
-        .await
-    }
-
-    async fn get_pull_request_by_number(
-        &self,
-        repo_id: &RepositoryId,
-        number: ItemNumber,
-    ) -> ForgeResult<Option<PullRequest>> {
-        self.perform(CountedForgeOp::GetPullRequestByNumber, async {
-            Ok(self
-                .inner
-                .get_pull_request_by_number(repo_id, number)
-                .await?
-                .map(|pull_request| self.project_pull_request(pull_request)))
-        })
-        .await
-    }
-
-    async fn update_pull_request(
-        &self,
-        id: &PullRequestId,
-        input: UpdatePullRequest,
-    ) -> ForgeResult<PullRequest> {
-        self.perform(CountedForgeOp::UpdatePullRequest, async {
-            let updated = self.inner.update_pull_request(id, input.clone()).await?;
-            let mut projected = self.project_pull_request(updated.clone());
-            if let Some(head) = self.maybe_advance_head_after_update(&input, &updated) {
-                projected.head_sha = Some(head);
-            }
-            Ok(projected)
-        })
-        .await
-    }
-
-    async fn add_pull_request_dependency(
-        &self,
-        id: &PullRequestId,
-        target: ItemNumber,
-    ) -> ForgeResult<PullRequest> {
-        self.perform(
-            CountedForgeOp::AddPullRequestDependency,
-            self.inner.add_pull_request_dependency(id, target),
-        )
-        .await
-    }
-
-    async fn remove_pull_request_dependency(
-        &self,
-        id: &PullRequestId,
-        target: ItemNumber,
-    ) -> ForgeResult<PullRequest> {
-        self.perform(
-            CountedForgeOp::RemovePullRequestDependency,
-            self.inner.remove_pull_request_dependency(id, target),
-        )
-        .await
-    }
-
-    async fn request_pull_request_reviewers(
-        &self,
-        id: &PullRequestId,
-        input: RequestReviewers,
-    ) -> ForgeResult<PullRequest> {
-        self.perform(
-            CountedForgeOp::RequestPullRequestReviewers,
-            self.inner.request_pull_request_reviewers(id, input),
-        )
-        .await
-    }
-
-    async fn list_pull_request_reviews(
-        &self,
-        id: &PullRequestId,
-    ) -> ForgeResult<Vec<PullRequestReview>> {
-        self.perform(
-            CountedForgeOp::ListPullRequestReviews,
-            self.inner.list_pull_request_reviews(id),
-        )
-        .await
-    }
-
-    async fn submit_pull_request_review(
-        &self,
-        id: &PullRequestId,
-        input: CreatePullRequestReview,
-    ) -> ForgeResult<PullRequestReview> {
-        self.perform(
-            CountedForgeOp::SubmitPullRequestReview,
-            self.inner.submit_pull_request_review(id, input),
-        )
-        .await
-    }
-
-    async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
-        self.perform(
-            CountedForgeOp::ListPullRequestComments,
-            self.inner.list_pull_request_comments(id),
-        )
-        .await
-    }
-
-    async fn add_pull_request_comment(
-        &self,
-        id: &PullRequestId,
-        input: CreateComment,
-    ) -> ForgeResult<Comment> {
-        self.perform(
-            CountedForgeOp::AddPullRequestComment,
-            self.inner.add_pull_request_comment(id, input),
-        )
-        .await
-    }
-
-    async fn merge_pull_request(
-        &self,
-        id: &PullRequestId,
-        input: MergePullRequest,
-    ) -> ForgeResult<MergeRecord> {
-        let conflict = self
-            .merge_conflicts
-            .lock()
-            .expect("merge conflicts mutex")
-            .get(id)
-            .cloned();
-        self.perform(CountedForgeOp::MergePullRequest, async move {
-            if let Some(message) = conflict {
-                Err(ForgeError::Conflict(message))
-            } else {
-                self.inner.merge_pull_request(id, input).await
-            }
-        })
-        .await
-    }
-
-    async fn list_ci_jobs(
-        &self,
-        repo_id: &RepositoryId,
-        query: CiJobQuery,
-    ) -> ForgeResult<Vec<CiJob>> {
-        self.record_ci_job_query(&query);
-        self.perform(
-            CountedForgeOp::ListCiJobs,
-            self.inner.list_ci_jobs(repo_id, query),
-        )
-        .await
-    }
-
-    async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
-        self.perform(CountedForgeOp::GetCiJob, self.inner.get_ci_job(id))
-            .await
-    }
 }

@@ -14,13 +14,18 @@ use crate::{GitHubForge, HttpClient};
 use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
-    ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    ItemListDetails, ItemNumber, ItemNumberNamespace, Label, MergePullRequest, MergeRecord,
+    PullRequest, PullRequestId, PullRequestQuery, PullRequestReview, Repository, RepositoryId,
+    RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel,
+    User, UserId,
 };
 
 #[async_trait::async_trait]
 impl<C: HttpClient> Forge for GitHubForge<C> {
+    fn item_number_namespace(&self) -> ItemNumberNamespace {
+        ItemNumberNamespace::Shared
+    }
+
     async fn current_user(&self) -> ForgeResult<User> {
         self.current_user().await
     }

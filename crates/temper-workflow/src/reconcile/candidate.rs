@@ -1,72 +1,89 @@
-use super::{ArtifactSnapshot, ReconcileError, Reconciler, RecoveryPolicy};
-use crate::ArtifactTarget;
-use crate::classify::{ArtifactSource, Classifier};
-use crate::ids::{ArtifactKindId, LabelId};
-use crate::validated::{Effect, GateCondition, ValidatedTransition, ValidatedWorkflow};
+use super::{
+    ArtifactSnapshot, ReconcileError, Reconciler, ReconciliationDetailCache,
+    ReconciliationDetailCacheStats, RecoveryPolicy,
+};
+use crate::classify::Classifier;
+use crate::dependency_state::DependencyStateIndex;
+use crate::ids::ArtifactKindId;
+use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
+use crate::{ArtifactTarget, workflow_interest};
+use std::time::Instant;
 use temper_forge::{
-    Forge, Issue, IssueQuery, IssueState, ItemListDetails, PullRequest, PullRequestQuery,
-    PullRequestState, RepositoryId,
+    CandidateLabelSelection, CandidateLifecycle, Forge, Issue, IssueCandidateQuery,
+    ItemListDetails, PullRequest, PullRequestCandidateQuery, RepositoryId,
 };
 
-/// Forge list queries used to discover bounded reconciliation candidates.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ReconciliationCandidateQueryPlan {
-    /// Issue queries, each conjunctive by explicit state and one workflow label.
-    pub issue_queries: Vec<IssueQuery>,
-    /// Pull-request queries, each conjunctive by explicit state and one workflow label.
-    pub pull_request_queries: Vec<PullRequestQuery>,
+pub(crate) struct CandidateLoad {
+    pub(crate) snapshots: Vec<ArtifactSnapshot>,
+    pub(crate) state_index: DependencyStateIndex,
+    pub(crate) cache_stats: ReconciliationDetailCacheStats,
 }
 
-/// Plans workflow-labelled candidate queries from a validated workflow alone.
+/// Consolidated Forge candidate buckets used by bounded reconciliation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReconciliationCandidateQueryPlan {
+    /// At most one open and one terminal issue bucket.
+    pub issue_queries: Vec<IssueCandidateQuery>,
+    /// At most one open and one terminal pull-request bucket.
+    pub pull_request_queries: Vec<PullRequestCandidateQuery>,
+}
+
+/// Plans workflow-labelled candidate buckets from a validated workflow.
 ///
-/// Every declared workflow label is treated as OR interest for open artifacts.
-/// Terminal artifacts use only labels that can indicate active or recoverable
-/// workflow work for that Forge target. Each emitted query uses one label, an
-/// explicit state, and summary list detail, so bounded reconciliation never asks
-/// for unlabelled closed or merged history, nor for terminal artifacts carrying
-/// only pure artifact-kind identity labels.
+/// Open reconciliation is interested in any declared workflow label. Terminal
+/// reconciliation uses the shared, target-specific recovery interest and never
+/// emits an unfiltered terminal bucket.
 pub fn reconciliation_candidate_query_plan(
     workflow: &ValidatedWorkflow,
 ) -> ReconciliationCandidateQueryPlan {
-    let targets = workflow_targets(workflow);
-    let labels = workflow_labels(workflow);
+    let interest = workflow_interest(workflow);
     let mut plan = ReconciliationCandidateQueryPlan::default();
 
-    if targets.contains(&ArtifactTarget::Issue) {
-        for label in &labels {
-            plan.issue_queries
-                .push(issue_query(IssueState::Open, label.clone()));
+    if interest.has_target(ArtifactTarget::Issue) {
+        if !interest.open_labels().is_empty() {
+            plan.issue_queries.push(issue_candidate(
+                CandidateLifecycle::Open,
+                interest.open_labels().to_vec(),
+            ));
         }
-        for label in terminal_workflow_labels(workflow, ArtifactTarget::Issue) {
-            plan.issue_queries
-                .push(issue_query(IssueState::Closed, label));
-        }
-    }
-
-    if targets.contains(&ArtifactTarget::PullRequest) {
-        for label in &labels {
-            plan.pull_request_queries
-                .push(pull_request_query(PullRequestState::Open, label.clone()));
-        }
-        for label in terminal_workflow_labels(workflow, ArtifactTarget::PullRequest) {
-            plan.pull_request_queries
-                .push(pull_request_query(PullRequestState::Closed, label.clone()));
-            plan.pull_request_queries
-                .push(pull_request_query(PullRequestState::Merged, label));
+        if !interest.terminal_labels(ArtifactTarget::Issue).is_empty() {
+            plan.issue_queries.push(issue_candidate(
+                CandidateLifecycle::Terminal,
+                interest.terminal_labels(ArtifactTarget::Issue).to_vec(),
+            ));
         }
     }
 
+    if interest.has_target(ArtifactTarget::PullRequest) {
+        if !interest.open_labels().is_empty() {
+            plan.pull_request_queries.push(pull_request_candidate(
+                CandidateLifecycle::Open,
+                interest.open_labels().to_vec(),
+            ));
+        }
+        if !interest
+            .terminal_labels(ArtifactTarget::PullRequest)
+            .is_empty()
+        {
+            plan.pull_request_queries.push(pull_request_candidate(
+                CandidateLifecycle::Terminal,
+                interest
+                    .terminal_labels(ArtifactTarget::PullRequest)
+                    .to_vec(),
+            ));
+        }
+    }
     plan
 }
 
-impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
+impl<P: RecoveryPolicy> Reconciler<'_, P> {
     /// Returns the workflow-labelled query plan used by bounded reconciliation.
     pub fn candidate_query_plan(&self) -> ReconciliationCandidateQueryPlan {
         reconciliation_candidate_query_plan(self.workflow)
     }
 
-    /// Loads workflow-labelled reconciliation candidates with summary list
-    /// queries and exact dependency detail only for dependency-gated kinds.
+    /// Loads workflow-labelled reconciliation candidates with summary candidate
+    /// reads and exact dependency detail only for dependency-gated kinds.
     pub async fn load_bounded_candidate_snapshots<F>(
         &self,
         forge: &F,
@@ -75,48 +92,71 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
     where
         F: Forge + ?Sized,
     {
+        Ok(self
+            .load_bounded_candidate_snapshots_inner(forge, repo_id, chrono::Utc::now(), None)
+            .await?
+            .snapshots)
+    }
+
+    pub(crate) async fn load_bounded_candidate_snapshots_inner<F>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: Option<&ReconciliationDetailCache>,
+    ) -> Result<CandidateLoad, ReconcileError>
+    where
+        F: Forge + ?Sized,
+    {
         let plan = self.candidate_query_plan();
         let classifier = Classifier::new(self.workflow);
+        let mut cache_stats = ReconciliationDetailCacheStats::default();
+        if let Some(cache) = cache {
+            cache.begin_pass(now, &mut cache_stats);
+        }
+        let (issue_candidates, pull_request_candidates) =
+            read_reconciliation_candidate_summaries(forge, repo_id, &plan).await?;
+
+        let state_index =
+            DependencyStateIndex::from_candidates(&issue_candidates, &pull_request_candidates);
         let mut snapshots = Vec::new();
-        let mut seen = Vec::new();
-
-        for query in plan.issue_queries {
-            for issue in forge.list_issues(repo_id, query).await? {
-                let source = ArtifactSource::Issue {
-                    number: issue.number,
-                };
-                if seen.contains(&source) {
-                    continue;
-                }
-                seen.push(source);
-                if let Some(snapshot) = self
-                    .snapshot_for_issue_candidate(forge, repo_id, &classifier, issue)
-                    .await?
-                {
-                    snapshots.push(snapshot);
-                }
+        for issue in issue_candidates {
+            if let Some(snapshot) = self
+                .snapshot_for_issue_candidate(
+                    forge,
+                    repo_id,
+                    &classifier,
+                    issue,
+                    now,
+                    cache,
+                    &mut cache_stats,
+                )
+                .await?
+            {
+                snapshots.push(snapshot);
             }
         }
-
-        for query in plan.pull_request_queries {
-            for pull_request in forge.list_pull_requests(repo_id, query).await? {
-                let source = ArtifactSource::PullRequest {
-                    number: pull_request.number,
-                };
-                if seen.contains(&source) {
-                    continue;
-                }
-                seen.push(source);
-                if let Some(snapshot) = self
-                    .snapshot_for_pull_request_candidate(forge, repo_id, &classifier, pull_request)
-                    .await?
-                {
-                    snapshots.push(snapshot);
-                }
+        for pull_request in pull_request_candidates {
+            if let Some(snapshot) = self
+                .snapshot_for_pull_request_candidate(
+                    forge,
+                    repo_id,
+                    &classifier,
+                    pull_request,
+                    now,
+                    cache,
+                    &mut cache_stats,
+                )
+                .await?
+            {
+                snapshots.push(snapshot);
             }
         }
-
-        Ok(snapshots)
+        Ok(CandidateLoad {
+            snapshots,
+            state_index,
+            cache_stats,
+        })
     }
 
     async fn snapshot_for_issue_candidate<F>(
@@ -124,17 +164,40 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         forge: &F,
         repo_id: &RepositoryId,
         classifier: &Classifier<'_>,
-        issue: Issue,
+        mut issue: Issue,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: Option<&ReconciliationDetailCache>,
+        stats: &mut ReconciliationDetailCacheStats,
     ) -> Result<Option<ArtifactSnapshot>, ReconcileError>
     where
         F: Forge + ?Sized,
     {
         if self.issue_candidate_needs_dependency_detail(classifier, &issue) {
-            return Ok(forge
-                .get_issue_by_number(repo_id, issue.number)
-                .await?
-                .as_ref()
-                .map(ArtifactSnapshot::from_issue));
+            if let Some(dependencies) =
+                cache.and_then(|cache| cache.issue_dependencies(repo_id, &issue, now, stats))
+            {
+                issue.dependencies = dependencies;
+                return Ok(Some(ArtifactSnapshot::from_issue(&issue)));
+            }
+            let exact = forge.get_issue_by_number(repo_id, issue.number).await?;
+            if let Some(exact) = &exact {
+                if let Some(cache) = cache {
+                    stats.add_evictions(cache.store_issue_dependencies(
+                        repo_id,
+                        &issue,
+                        exact.dependencies.clone(),
+                        now,
+                    ));
+                }
+            } else if let Some(cache) = cache {
+                stats.add_invalidations(cache.invalidate(
+                    repo_id,
+                    crate::ArtifactSource::Issue {
+                        number: issue.number,
+                    },
+                ));
+            }
+            return Ok(exact.as_ref().map(ArtifactSnapshot::from_issue));
         }
         Ok(Some(ArtifactSnapshot::from_issue(&issue)))
     }
@@ -144,17 +207,42 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         forge: &F,
         repo_id: &RepositoryId,
         classifier: &Classifier<'_>,
-        pull_request: PullRequest,
+        mut pull_request: PullRequest,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: Option<&ReconciliationDetailCache>,
+        stats: &mut ReconciliationDetailCacheStats,
     ) -> Result<Option<ArtifactSnapshot>, ReconcileError>
     where
         F: Forge + ?Sized,
     {
         if self.pull_request_candidate_needs_dependency_detail(classifier, &pull_request) {
-            return Ok(forge
+            if let Some(dependencies) = cache.and_then(|cache| {
+                cache.pull_request_dependencies(repo_id, &pull_request, now, stats)
+            }) {
+                pull_request.dependencies = dependencies;
+                return Ok(Some(ArtifactSnapshot::from_pull_request(&pull_request)));
+            }
+            let exact = forge
                 .get_pull_request_by_number(repo_id, pull_request.number)
-                .await?
-                .as_ref()
-                .map(ArtifactSnapshot::from_pull_request));
+                .await?;
+            if let Some(exact) = &exact {
+                if let Some(cache) = cache {
+                    stats.add_evictions(cache.store_pull_request_dependencies(
+                        repo_id,
+                        &pull_request,
+                        exact.dependencies.clone(),
+                        now,
+                    ));
+                }
+            } else if let Some(cache) = cache {
+                stats.add_invalidations(cache.invalidate(
+                    repo_id,
+                    crate::ArtifactSource::PullRequest {
+                        number: pull_request.number,
+                    },
+                ));
+            }
+            return Ok(exact.as_ref().map(ArtifactSnapshot::from_pull_request));
         }
         Ok(Some(ArtifactSnapshot::from_pull_request(&pull_request)))
     }
@@ -188,195 +276,88 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
     }
 }
 
-fn workflow_targets(workflow: &ValidatedWorkflow) -> Vec<ArtifactTarget> {
-    let mut targets = Vec::new();
-    for kind in workflow.artifact_kinds() {
-        if !targets.contains(&kind.target) {
-            targets.push(kind.target);
+async fn read_reconciliation_candidate_summaries<F: Forge + ?Sized>(
+    forge: &F,
+    repo_id: &RepositoryId,
+    plan: &ReconciliationCandidateQueryPlan,
+) -> Result<(Vec<Issue>, Vec<PullRequest>), ReconcileError> {
+    let started = Instant::now();
+    let provider_requests_before = forge.provider_request_count();
+    let logical_bucket_count = plan
+        .issue_queries
+        .len()
+        .saturating_add(plan.pull_request_queries.len());
+    let mut issues = Vec::new();
+    let mut pull_requests = Vec::new();
+    let result: Result<(), ReconcileError> = async {
+        for query in &plan.issue_queries {
+            issues.extend(forge.list_issue_candidates(repo_id, query.clone()).await?);
         }
+        for query in &plan.pull_request_queries {
+            pull_requests.extend(
+                forge
+                    .list_pull_request_candidates(repo_id, query.clone())
+                    .await?,
+            );
+        }
+        Ok(())
     }
-    targets
+    .await;
+
+    normalize_issue_candidates(&mut issues);
+    normalize_pull_request_candidates(&mut pull_requests);
+    let unique_count = issues.len().saturating_add(pull_requests.len());
+    let provider_requests = provider_requests_before.and_then(|before| {
+        forge
+            .provider_request_count()
+            .map(|after| after.saturating_sub(before))
+    });
+    let outcome = if result.is_ok() { "success" } else { "failed" };
+    tracing::debug!(
+        target: "temper::worker",
+        measurement = "candidate.discovery",
+        repo = repository_label(repo_id),
+        candidate.consumer = "mechanical",
+        candidate.scope = "reconciliation",
+        candidate.logical_bucket_count = saturating_u64(logical_bucket_count),
+        candidate.provider_request_total = provider_requests.unwrap_or(0),
+        candidate.provider_requests_available = provider_requests.is_some(),
+        candidate.unique_count = saturating_u64(unique_count),
+        outcome,
+        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "candidate discovery {outcome} for mechanical/reconciliation"
+    );
+    result?;
+    Ok((issues, pull_requests))
 }
 
-fn workflow_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
-    let mut labels = Vec::new();
-    for label in workflow.labels() {
-        let label = label.as_str().to_string();
-        if !labels.contains(&label) {
-            labels.push(label);
-        }
-    }
-    labels
+fn normalize_issue_candidates(issues: &mut Vec<Issue>) {
+    issues.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    issues.dedup_by(|left, right| left.id == right.id);
 }
 
-fn terminal_workflow_labels(workflow: &ValidatedWorkflow, target: ArtifactTarget) -> Vec<String> {
-    let mut interest = Vec::new();
-
-    record_state_labels(workflow, target, &mut interest);
-    record_queue_labels(workflow, target, &mut interest);
-    record_transition_effect_labels(workflow, target, &mut interest);
-    record_gate_condition_labels(workflow, target, &mut interest);
-
-    workflow
-        .labels()
-        .iter()
-        .filter(|label| interest.contains(label))
-        .map(|label| label.as_str().to_string())
-        .collect()
+fn normalize_pull_request_candidates(pull_requests: &mut Vec<PullRequest>) {
+    pull_requests.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    pull_requests.dedup_by(|left, right| left.id == right.id);
 }
 
-fn record_state_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for dimension in workflow.state_dimensions() {
-        for state in &dimension.states {
-            if !state_allows_target(workflow, state, target) {
-                continue;
-            }
-            if let Some(label) = &state.label {
-                push_label(labels, label);
-            }
-        }
-    }
-}
-
-fn record_queue_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for queue in workflow.queues() {
-        if !queue.artifacts.iter().any(|artifact| {
-            workflow
-                .artifact_kind(artifact)
-                .is_some_and(|kind| kind.target == target)
-        }) {
-            continue;
-        }
-        for label in &queue.labels {
-            push_label(labels, label);
-        }
-        for label_set in &queue.any_of {
-            for label in &label_set.labels {
-                push_label(labels, label);
-            }
-        }
-        if let Some(condition) = &queue.condition {
-            if let Some(label) = condition_label(workflow, condition) {
-                push_label(labels, label);
-            }
-        }
+fn repository_label(repo_id: &RepositoryId) -> &str {
+    match repo_id.as_str().split_once(':') {
+        Some((_provider, path)) if path.contains('/') => path,
+        _ => repo_id.as_str(),
     }
 }
 
-fn record_transition_effect_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for transition in workflow.transitions() {
-        if !transition_targets(workflow, transition, target) {
-            continue;
-        }
-        for effect in &transition.effects {
-            if let Some(label) = effect_label(effect) {
-                push_label(labels, label);
-            }
-        }
-    }
-}
-
-fn record_gate_condition_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for gate in workflow.gates() {
-        if !workflow.transitions().iter().any(|transition| {
-            transition.requires_gates.contains(&gate.id)
-                && transition_targets(workflow, transition, target)
-        }) {
-            continue;
-        }
-        if let Some(condition) = &gate.condition {
-            if let Some(label) = condition_label(workflow, condition) {
-                push_label(labels, label);
-            }
-        }
-    }
-}
-
-fn state_allows_target(
-    workflow: &ValidatedWorkflow,
-    state: &crate::validated::ValidatedState,
-    target: ArtifactTarget,
-) -> bool {
-    state.artifacts.is_empty()
-        || state.artifacts.iter().any(|artifact| {
-            workflow
-                .artifact_kind(artifact)
-                .is_some_and(|kind| kind.target == target)
-        })
-}
-
-fn transition_targets(
-    workflow: &ValidatedWorkflow,
-    transition: &ValidatedTransition,
-    target: ArtifactTarget,
-) -> bool {
-    workflow
-        .artifact_kind(&transition.artifact)
-        .is_some_and(|kind| kind.target == target)
-}
-
-fn condition_label<'a>(
-    workflow: &'a ValidatedWorkflow,
-    condition: &'a GateCondition,
-) -> Option<&'a LabelId> {
-    match condition {
-        GateCondition::LabelPresent(label) => Some(label),
-        GateCondition::StateEquals { dimension, state } => workflow
-            .state_dimensions()
-            .iter()
-            .find(|candidate| &candidate.id == dimension)?
-            .states
-            .iter()
-            .find(|candidate| &candidate.id == state)?
-            .label
-            .as_ref(),
-        GateCondition::DependenciesResolved
-        | GateCondition::CiPassed
-        | GateCondition::CiFailed
-        | GateCondition::ReviewApproved
-        | GateCondition::ReviewChangesRequested => None,
-    }
-}
-
-fn effect_label(effect: &Effect) -> Option<&LabelId> {
-    match effect {
-        Effect::AddLabel(label)
-        | Effect::RemoveLabel(label)
-        | Effect::RemoveLabelIfPresent(label) => Some(label),
-        Effect::SetAssignee(_)
-        | Effect::RemoveAssignee(_)
-        | Effect::CreateComment { .. }
-        | Effect::CreatePullRequest { .. }
-        | Effect::RequestReviewers { .. }
-        | Effect::SubmitReview { .. }
-        | Effect::SetBody { .. }
-        | Effect::AttachReview { .. }
-        | Effect::CreateIssues { .. }
-        | Effect::MergePullRequest
-        | Effect::CloseParentIssues => None,
-    }
-}
-
-fn push_label(labels: &mut Vec<LabelId>, label: &LabelId) {
-    if !labels.contains(label) {
-        labels.push(label.clone());
-    }
+fn saturating_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 fn requires_dependency_gate(
@@ -391,20 +372,21 @@ fn requires_dependency_gate(
     })
 }
 
-fn issue_query(state: IssueState, label: String) -> IssueQuery {
-    IssueQuery {
-        state: Some(state),
-        labels: vec![label],
+fn issue_candidate(lifecycle: CandidateLifecycle, labels: Vec<String>) -> IssueCandidateQuery {
+    IssueCandidateQuery {
+        lifecycle,
+        labels: CandidateLabelSelection::AnyOf(labels),
         details: ItemListDetails::summary(),
-        ..IssueQuery::default()
     }
 }
 
-fn pull_request_query(state: PullRequestState, label: String) -> PullRequestQuery {
-    PullRequestQuery {
-        state: Some(state),
-        labels: vec![label],
+fn pull_request_candidate(
+    lifecycle: CandidateLifecycle,
+    labels: Vec<String>,
+) -> PullRequestCandidateQuery {
+    PullRequestCandidateQuery {
+        lifecycle,
+        labels: CandidateLabelSelection::AnyOf(labels),
         details: ItemListDetails::summary(),
-        ..PullRequestQuery::default()
     }
 }

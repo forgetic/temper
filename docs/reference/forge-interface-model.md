@@ -30,6 +30,16 @@ number. Use these values for display and lookup convenience, not as stable
 identity. Do not assume issue and pull-request numbers are cross-type unique on
 every backend.
 
+`Forge::item_number_namespace()` makes that distinction explicit without I/O.
+Its conservative default is `ItemNumberNamespace::Independent`, where an issue
+and a pull request may have the same number. A backend may return `Shared` only
+when one repository number identifies at most one artifact across both types.
+Wrappers must forward the wrapped backend's value. This capability lets a fresh,
+same-pass typed PR candidate resolve an otherwise untyped dependency number
+without an issue collision probe; independent backends retain issue-first exact
+resolution. Unlisted and cross-repository dependency targets still use summary
+exact lookups.
+
 ## Lookup semantics
 
 Read lookups return `ForgeResult<Option<T>>`:
@@ -52,9 +62,38 @@ number or stable ID. If sort is absent, backends should still return
 deterministic results.
 
 `RepositoryQuery` supports sorting by path, creation time, or update time.
-`IssueQuery` and `PullRequestQuery` support state, conjunctive labels, exact body
-substring, author, assignee, detail level, and sorting by number, creation time,
-or update time. `CiJobQuery` supports pull request, commit SHA, status, and
+`IssueQuery` and `PullRequestQuery` support state, **conjunctive (all-of)**
+labels, exact body substring, author, assignee, detail level, and sorting by
+number, creation time, or update time. Supplying `["ready", "urgent"]` to an
+ordinary query returns only artifacts carrying both labels; this legacy
+contract is not an any-label search.
+
+Consolidated discovery uses the separate `IssueCandidateQuery` and
+`PullRequestCandidateQuery` contracts. A candidate query selects one lifecycle
+bucket (`Open` or `Terminal`) and either `Unfiltered` or a non-empty
+`AnyOf(Vec<String>)` label selection. `Terminal` means closed issues and both
+closed and merged pull requests. Candidate detail defaults to `summary()`.
+`AnyOf` labels are normalized and deduplicated; results are unioned by typed
+stable identity and sorted by item number then stable ID. Compatibility
+backends may perform one ordinary conjunctive list per normalized label/state.
+Thus candidate reads can intentionally return a superset while queue matching
+continues to enforce label conjunctions and any-of branches locally.
+
+Unfiltered candidate discovery is intended for open default-kind intake.
+Bounded workflow planning never emits an unfiltered terminal bucket, avoiding
+unlabelled closed/merged history reads.
+
+For a backend with provider-side any-label support, one-page request budgets are
+therefore constant: broad role discovery and bounded reconciliation each use at
+most four populated buckets (issue/PR x open/terminal), independent of workflow
+label and configured-role counts. Automated discovery is open-only and adds at
+most its populated issue and pull-request buckets. Pagination multiplies each
+populated bucket by its page count; it never changes the bucket count or falls
+back to per-label lists. Compatibility backends may spend more provider calls
+inside a bucket as documented above, but portable callers still issue one
+candidate operation per logical bucket.
+
+`CiJobQuery` supports pull request, commit SHA, status, and
 sorting by name, creation time, or update time. All populated `CiJobQuery`
 filters compose conjunctively: when pull request and commit SHA are both set,
 every returned job must belong to that pull request and identify that commit.
@@ -76,8 +115,10 @@ metadata key because the filter is only a narrowing hint.
 
 ### Issue and pull-request detail levels
 
-Issue and pull-request list queries, plus the `get_issue_with_details` /
-`get_issue_by_number_with_details` exact variants, carry `ItemListDetails`. The
+Issue and pull-request list queries, candidate queries, plus the
+`get_issue_with_details` / `get_issue_by_number_with_details` and
+`get_pull_request_with_details` / `get_pull_request_by_number_with_details`
+exact variants, carry `ItemListDetails`. The
 default is full detail (`dependencies=true`), preserving the historical
 contract that results populate native dependency links and provider detail
 fields.
@@ -86,9 +127,9 @@ Callers that only need scan-summary fields may set `details.dependencies=false`.
 Backends may then skip dependency-link enrichment and must return an empty
 `dependencies` vector in each listed item. Summary callers should rely only on
 artifact identity, number, title/body, state, author, labels, assignees,
-timestamps, version, and the empty dependency vector. Exact issue summary reads
-have the same guarantee and are intended for workflow metadata/checkpoint
-recovery that does not inspect native dependency state.
+timestamps, version, and the empty dependency vector. Exact issue and pull-request summary reads have the same guarantee and are
+intended for workflow metadata/checkpoint or target-state recovery that does
+not inspect native dependency state.
 
 Pull-request fields that commonly require provider detail rendering — branch
 refs, head/base SHAs, requested reviewers, and merge records — may be absent or

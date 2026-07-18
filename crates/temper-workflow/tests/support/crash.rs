@@ -23,11 +23,14 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use temper_forge::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
-    IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest,
-    PullRequestId, PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath,
-    RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue,
+    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace,
+    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId,
+    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
+    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
+
+mod forge_impl;
 
 /// The fault-aware Forge operations.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -37,11 +40,14 @@ pub enum ForgeOp {
     GetIssue,
     GetIssueByNumber,
     ListIssues,
+    ListIssueCandidates,
     ListIssuesDefault,
     CreatePullRequest,
     UpdatePullRequest,
+    GetPullRequest,
     GetPullRequestByNumber,
     ListPullRequests,
+    ListPullRequestCandidates,
     ListPullRequestsDefault,
     ListPullRequestReviews,
     ListCiJobs,
@@ -124,9 +130,12 @@ pub struct CrashForge<F: Forge> {
     faults: Vec<Fault>,
     counts: Mutex<HashMap<ForgeOp, usize>>,
     issue_queries: Mutex<Vec<IssueQuery>>,
+    issue_candidate_queries: Mutex<Vec<IssueCandidateQuery>>,
     issue_exact_details: Mutex<Vec<ItemListDetails>>,
     issue_updates: Mutex<Vec<UpdateIssue>>,
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
+    pull_request_candidate_queries: Mutex<Vec<PullRequestCandidateQuery>>,
+    pull_request_exact_details: Mutex<Vec<ItemListDetails>>,
     merge_inputs: Mutex<Vec<MergePullRequest>>,
 }
 
@@ -138,9 +147,12 @@ impl<F: Forge> CrashForge<F> {
             faults,
             counts: Mutex::new(HashMap::new()),
             issue_queries: Mutex::new(Vec::new()),
+            issue_candidate_queries: Mutex::new(Vec::new()),
             issue_exact_details: Mutex::new(Vec::new()),
             issue_updates: Mutex::new(Vec::new()),
             pull_request_queries: Mutex::new(Vec::new()),
+            pull_request_candidate_queries: Mutex::new(Vec::new()),
+            pull_request_exact_details: Mutex::new(Vec::new()),
             merge_inputs: Mutex::new(Vec::new()),
         }
     }
@@ -168,6 +180,14 @@ impl<F: Forge> CrashForge<F> {
             .clone()
     }
 
+    /// Returns the issue candidate queries this wrapper observed.
+    pub fn issue_candidate_queries(&self) -> Vec<IssueCandidateQuery> {
+        self.issue_candidate_queries
+            .lock()
+            .expect("issue candidate queries mutex")
+            .clone()
+    }
+
     /// Returns the exact-issue detail budgets this wrapper observed.
     pub fn issue_exact_details(&self) -> Vec<ItemListDetails> {
         self.issue_exact_details
@@ -189,6 +209,22 @@ impl<F: Forge> CrashForge<F> {
         self.pull_request_queries
             .lock()
             .expect("pull request queries mutex")
+            .clone()
+    }
+
+    /// Returns the pull-request candidate queries this wrapper observed.
+    pub fn pull_request_candidate_queries(&self) -> Vec<PullRequestCandidateQuery> {
+        self.pull_request_candidate_queries
+            .lock()
+            .expect("pull request candidate queries mutex")
+            .clone()
+    }
+
+    /// Returns the exact pull-request detail budgets this wrapper observed.
+    pub fn pull_request_exact_details(&self) -> Vec<ItemListDetails> {
+        self.pull_request_exact_details
+            .lock()
+            .expect("pull request exact details mutex")
             .clone()
     }
 
@@ -223,334 +259,5 @@ impl<F: Forge> CrashForge<F> {
             ))),
             None => Ok(()),
         }
-    }
-}
-
-#[async_trait]
-impl<F: Forge> Forge for CrashForge<F> {
-    async fn current_user(&self) -> ForgeResult<User> {
-        self.inner.current_user().await
-    }
-
-    async fn get_user(&self, id: &UserId) -> ForgeResult<Option<User>> {
-        self.inner.get_user(id).await
-    }
-
-    async fn list_repositories(&self, query: RepositoryQuery) -> ForgeResult<Vec<Repository>> {
-        self.inner.list_repositories(query).await
-    }
-
-    async fn create_repository(&self, input: CreateRepository) -> ForgeResult<Repository> {
-        self.inner.create_repository(input).await
-    }
-
-    async fn get_repository(&self, id: &RepositoryId) -> ForgeResult<Option<Repository>> {
-        self.inner.get_repository(id).await
-    }
-
-    async fn get_repository_by_path(
-        &self,
-        path: &RepositoryPath,
-    ) -> ForgeResult<Option<Repository>> {
-        self.inner.get_repository_by_path(path).await
-    }
-
-    async fn list_labels(&self, repo_id: &RepositoryId) -> ForgeResult<Vec<Label>> {
-        self.inner.list_labels(repo_id).await
-    }
-
-    async fn upsert_label(&self, repo_id: &RepositoryId, input: UpsertLabel) -> ForgeResult<Label> {
-        self.inner.upsert_label(repo_id, input).await
-    }
-
-    async fn list_issues(
-        &self,
-        repo_id: &RepositoryId,
-        query: IssueQuery,
-    ) -> ForgeResult<Vec<Issue>> {
-        let n = self.tick(ForgeOp::ListIssues);
-        if query == IssueQuery::default() {
-            self.tick(ForgeOp::ListIssuesDefault);
-        }
-        self.issue_queries
-            .lock()
-            .expect("issue queries mutex")
-            .push(query.clone());
-        self.guard(ForgeOp::ListIssues, n, FaultPoint::Before)?;
-        let result = self.inner.list_issues(repo_id, query).await?;
-        self.guard(ForgeOp::ListIssues, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn create_issue(&self, repo_id: &RepositoryId, input: CreateIssue) -> ForgeResult<Issue> {
-        let n = self.tick(ForgeOp::CreateIssue);
-        self.guard(ForgeOp::CreateIssue, n, FaultPoint::Before)?;
-        let result = self.inner.create_issue(repo_id, input).await?;
-        self.guard(ForgeOp::CreateIssue, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn get_issue(&self, id: &IssueId) -> ForgeResult<Option<Issue>> {
-        let n = self.tick(ForgeOp::GetIssue);
-        self.issue_exact_details
-            .lock()
-            .expect("issue exact details mutex")
-            .push(ItemListDetails::full());
-        self.guard(ForgeOp::GetIssue, n, FaultPoint::Before)?;
-        let result = self.inner.get_issue(id).await?;
-        self.guard(ForgeOp::GetIssue, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn get_issue_with_details(
-        &self,
-        id: &IssueId,
-        details: ItemListDetails,
-    ) -> ForgeResult<Option<Issue>> {
-        let n = self.tick(ForgeOp::GetIssue);
-        self.issue_exact_details
-            .lock()
-            .expect("issue exact details mutex")
-            .push(details);
-        self.guard(ForgeOp::GetIssue, n, FaultPoint::Before)?;
-        let result = self.inner.get_issue_with_details(id, details).await?;
-        self.guard(ForgeOp::GetIssue, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn get_issue_by_number(
-        &self,
-        repo_id: &RepositoryId,
-        number: ItemNumber,
-    ) -> ForgeResult<Option<Issue>> {
-        let n = self.tick(ForgeOp::GetIssueByNumber);
-        self.issue_exact_details
-            .lock()
-            .expect("issue exact details mutex")
-            .push(ItemListDetails::full());
-        self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::Before)?;
-        let result = self.inner.get_issue_by_number(repo_id, number).await?;
-        self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn get_issue_by_number_with_details(
-        &self,
-        repo_id: &RepositoryId,
-        number: ItemNumber,
-        details: ItemListDetails,
-    ) -> ForgeResult<Option<Issue>> {
-        let n = self.tick(ForgeOp::GetIssueByNumber);
-        self.issue_exact_details
-            .lock()
-            .expect("issue exact details mutex")
-            .push(details);
-        self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::Before)?;
-        let result = self
-            .inner
-            .get_issue_by_number_with_details(repo_id, number, details)
-            .await?;
-        self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue> {
-        let n = self.tick(ForgeOp::UpdateIssue);
-        self.guard(ForgeOp::UpdateIssue, n, FaultPoint::Before)?;
-        self.issue_updates
-            .lock()
-            .expect("issue updates mutex")
-            .push(input.clone());
-        let result = self.inner.update_issue(id, input).await?;
-        self.guard(ForgeOp::UpdateIssue, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn update_issue_from_snapshot(
-        &self,
-        current: &Issue,
-        input: UpdateIssue,
-    ) -> ForgeResult<Issue> {
-        let n = self.tick(ForgeOp::UpdateIssue);
-        self.guard(ForgeOp::UpdateIssue, n, FaultPoint::Before)?;
-        self.issue_updates
-            .lock()
-            .expect("issue updates mutex")
-            .push(input.clone());
-        let result = self
-            .inner
-            .update_issue_from_snapshot(current, input)
-            .await?;
-        self.guard(ForgeOp::UpdateIssue, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {
-        self.inner.add_issue_dependency(id, target).await
-    }
-
-    async fn remove_issue_dependency(
-        &self,
-        id: &IssueId,
-        target: ItemNumber,
-    ) -> ForgeResult<Issue> {
-        self.inner.remove_issue_dependency(id, target).await
-    }
-
-    async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
-        self.inner.list_issue_comments(id).await
-    }
-
-    async fn add_issue_comment(&self, id: &IssueId, input: CreateComment) -> ForgeResult<Comment> {
-        self.inner.add_issue_comment(id, input).await
-    }
-
-    async fn list_pull_requests(
-        &self,
-        repo_id: &RepositoryId,
-        query: PullRequestQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
-        let n = self.tick(ForgeOp::ListPullRequests);
-        if query == PullRequestQuery::default() {
-            self.tick(ForgeOp::ListPullRequestsDefault);
-        }
-        self.pull_request_queries
-            .lock()
-            .expect("pull request queries mutex")
-            .push(query.clone());
-        self.guard(ForgeOp::ListPullRequests, n, FaultPoint::Before)?;
-        let result = self.inner.list_pull_requests(repo_id, query).await?;
-        self.guard(ForgeOp::ListPullRequests, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn create_pull_request(
-        &self,
-        repo_id: &RepositoryId,
-        input: CreatePullRequest,
-    ) -> ForgeResult<PullRequest> {
-        let n = self.tick(ForgeOp::CreatePullRequest);
-        self.guard(ForgeOp::CreatePullRequest, n, FaultPoint::Before)?;
-        let result = self.inner.create_pull_request(repo_id, input).await?;
-        self.guard(ForgeOp::CreatePullRequest, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>> {
-        self.inner.get_pull_request(id).await
-    }
-
-    async fn get_pull_request_by_number(
-        &self,
-        repo_id: &RepositoryId,
-        number: ItemNumber,
-    ) -> ForgeResult<Option<PullRequest>> {
-        let n = self.tick(ForgeOp::GetPullRequestByNumber);
-        self.guard(ForgeOp::GetPullRequestByNumber, n, FaultPoint::Before)?;
-        let result = self
-            .inner
-            .get_pull_request_by_number(repo_id, number)
-            .await?;
-        self.guard(ForgeOp::GetPullRequestByNumber, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn update_pull_request(
-        &self,
-        id: &PullRequestId,
-        input: UpdatePullRequest,
-    ) -> ForgeResult<PullRequest> {
-        let n = self.tick(ForgeOp::UpdatePullRequest);
-        self.guard(ForgeOp::UpdatePullRequest, n, FaultPoint::Before)?;
-        let result = self.inner.update_pull_request(id, input).await?;
-        self.guard(ForgeOp::UpdatePullRequest, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn add_pull_request_dependency(
-        &self,
-        id: &PullRequestId,
-        target: ItemNumber,
-    ) -> ForgeResult<PullRequest> {
-        self.inner.add_pull_request_dependency(id, target).await
-    }
-
-    async fn remove_pull_request_dependency(
-        &self,
-        id: &PullRequestId,
-        target: ItemNumber,
-    ) -> ForgeResult<PullRequest> {
-        self.inner.remove_pull_request_dependency(id, target).await
-    }
-
-    async fn request_pull_request_reviewers(
-        &self,
-        id: &PullRequestId,
-        input: RequestReviewers,
-    ) -> ForgeResult<PullRequest> {
-        self.inner.request_pull_request_reviewers(id, input).await
-    }
-
-    async fn list_pull_request_reviews(
-        &self,
-        id: &PullRequestId,
-    ) -> ForgeResult<Vec<PullRequestReview>> {
-        let n = self.tick(ForgeOp::ListPullRequestReviews);
-        self.guard(ForgeOp::ListPullRequestReviews, n, FaultPoint::Before)?;
-        let result = self.inner.list_pull_request_reviews(id).await?;
-        self.guard(ForgeOp::ListPullRequestReviews, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn submit_pull_request_review(
-        &self,
-        id: &PullRequestId,
-        input: CreatePullRequestReview,
-    ) -> ForgeResult<PullRequestReview> {
-        self.inner.submit_pull_request_review(id, input).await
-    }
-
-    async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
-        self.inner.list_pull_request_comments(id).await
-    }
-
-    async fn add_pull_request_comment(
-        &self,
-        id: &PullRequestId,
-        input: CreateComment,
-    ) -> ForgeResult<Comment> {
-        self.inner.add_pull_request_comment(id, input).await
-    }
-
-    async fn merge_pull_request(
-        &self,
-        id: &PullRequestId,
-        input: MergePullRequest,
-    ) -> ForgeResult<MergeRecord> {
-        let n = self.tick(ForgeOp::MergePullRequest);
-        self.guard(ForgeOp::MergePullRequest, n, FaultPoint::Before)?;
-        self.merge_inputs
-            .lock()
-            .expect("merge inputs mutex")
-            .push(input.clone());
-        let result = self.inner.merge_pull_request(id, input).await?;
-        self.guard(ForgeOp::MergePullRequest, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn list_ci_jobs(
-        &self,
-        repo_id: &RepositoryId,
-        query: CiJobQuery,
-    ) -> ForgeResult<Vec<CiJob>> {
-        let n = self.tick(ForgeOp::ListCiJobs);
-        self.guard(ForgeOp::ListCiJobs, n, FaultPoint::Before)?;
-        let result = self.inner.list_ci_jobs(repo_id, query).await?;
-        self.guard(ForgeOp::ListCiJobs, n, FaultPoint::After)?;
-        Ok(result)
-    }
-
-    async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
-        self.inner.get_ci_job(id).await
     }
 }

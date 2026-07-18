@@ -4,8 +4,8 @@ mod support;
 
 use support::{TestRoot, block_on, create_pr, new_repo, ts, workflow};
 use temper_forge::{
-    Forge, IssueQuery, IssueState, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery,
-    PullRequestState, RepositoryId,
+    CandidateLabelSelection, CandidateLifecycle, Forge, IssueCandidateQuery, ItemNumber,
+    MergeMethod, MergePullRequest, PullRequestCandidateQuery, RepositoryId,
 };
 use temper_workflow::{
     ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
@@ -13,24 +13,28 @@ use temper_workflow::{
     reconciliation_candidate_query_plan,
 };
 
-fn has_issue_query(queries: &[IssueQuery], state: IssueState, label: &str) -> bool {
-    queries
-        .iter()
-        .any(|query| query.state == Some(state) && has_single_label(&query.labels, label))
-}
-
-fn has_pull_request_query(
-    queries: &[PullRequestQuery],
-    state: PullRequestState,
+fn has_issue_query(
+    queries: &[IssueCandidateQuery],
+    lifecycle: CandidateLifecycle,
     label: &str,
 ) -> bool {
     queries
         .iter()
-        .any(|query| query.state == Some(state) && has_single_label(&query.labels, label))
+        .any(|query| query.lifecycle == lifecycle && has_label(&query.labels, label))
 }
 
-fn has_single_label(labels: &[String], label: &str) -> bool {
-    labels.len() == 1 && labels[0] == label
+fn has_pull_request_query(
+    queries: &[PullRequestCandidateQuery],
+    lifecycle: CandidateLifecycle,
+    label: &str,
+) -> bool {
+    queries
+        .iter()
+        .any(|query| query.lifecycle == lifecycle && has_label(&query.labels, label))
+}
+
+fn has_label(labels: &CandidateLabelSelection, label: &str) -> bool {
+    matches!(labels, CandidateLabelSelection::AnyOf(labels) if labels.iter().any(|candidate| candidate == label))
 }
 
 fn merge_pr<F: Forge + ?Sized>(forge: &F, repo: &RepositoryId, number: ItemNumber) {
@@ -54,34 +58,31 @@ fn bounded_reconciliation_skips_pure_terminal_identity_labels() {
     let workflow = workflow();
     let plan = reconciliation_candidate_query_plan(&workflow);
 
+    assert_eq!(plan.issue_queries.len(), 2);
+    assert_eq!(plan.pull_request_queries.len(), 2);
     assert!(has_issue_query(
         &plan.issue_queries,
-        IssueState::Open,
+        CandidateLifecycle::Open,
         "epic"
     ));
     assert!(!has_issue_query(
         &plan.issue_queries,
-        IssueState::Closed,
+        CandidateLifecycle::Terminal,
         "epic"
     ));
     assert!(has_pull_request_query(
         &plan.pull_request_queries,
-        PullRequestState::Open,
+        CandidateLifecycle::Open,
         "implementation"
     ));
     assert!(!has_pull_request_query(
         &plan.pull_request_queries,
-        PullRequestState::Closed,
-        "implementation"
-    ));
-    assert!(!has_pull_request_query(
-        &plan.pull_request_queries,
-        PullRequestState::Merged,
+        CandidateLifecycle::Terminal,
         "implementation"
     ));
     assert!(has_pull_request_query(
         &plan.pull_request_queries,
-        PullRequestState::Merged,
+        CandidateLifecycle::Terminal,
         "landed"
     ));
 }

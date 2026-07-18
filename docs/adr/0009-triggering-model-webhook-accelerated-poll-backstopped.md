@@ -128,6 +128,34 @@ second lossy boolean admission guard and could bypass the daemon coordinator.
 startup, webhook, and cadence callers all enter through the same coordinator
 and mutation serialization path.
 
+### Consolidated discovery and cold-start authority
+
+Broad scans are level-triggered, but "broad" no longer means one Forge list per
+workflow label or role. Role discovery unions the queues of all admitted roles;
+bounded reconciliation independently derives the same workflow-interest label
+sets. Each consumer reads at most one issue and one pull-request bucket for each
+of the open and terminal lifecycles. Open default-kind intake may be
+unlabelled. Terminal buckets are always bounded by workflow-derived labels, so
+consolidation never introduces an all-closed-history scan. Queue conjunctions,
+disjunctions, exclusions, classification, and staged-artifact rejection remain
+local correctness filters over that discovery superset.
+
+Every process startup is cold and authoritative: it schedules broad discovery
+for every configured repository and begins with an empty reconciliation-detail
+cache. The long-lived `MechanicalTrigger` owns that bounded cache across later
+passes. Candidate summaries are still re-read every pass, including body,
+labels, assignees, state, and `updated_at`; only dependency enrichment absent
+from those summaries is reused. A changed summary fingerprint, an exact
+dependency hint, or a local recovery/automation mutation invalidates affected
+entries (repository-wide when the target cannot be named). Deterministic LRU and
+unseen-age eviction bound memory.
+
+Because providers can drop hints or fail to advance summary timestamps for a
+dependency edit, a cache entry is forcibly refreshed after **15 minutes** even
+when its fingerprint is unchanged. Thus polling remains sufficient for
+convergence after webhook loss: the cache changes request shape, never the
+fresh-state correctness model or the executor's mandatory pre-mutation read.
+
 ### Portable push, if ever needed
 
 Do not add a notification method to `Forge`. If backend-agnostic push is wanted,

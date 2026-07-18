@@ -91,6 +91,7 @@ pub mod dependency_state;
 pub mod diagnostics;
 pub mod execute;
 pub mod ids;
+pub mod interest;
 pub mod journal;
 pub mod lease;
 pub mod load;
@@ -131,6 +132,7 @@ pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
     TransitionId, ValidationBindingId, VerdictId,
 };
+pub use interest::{WorkflowInterest, workflow_interest};
 pub use journal::{
     CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,
 };
@@ -156,8 +158,9 @@ pub use plan::{
 };
 pub use reconcile::{
     ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,
-    Reconciler, ReconciliationCandidateQueryPlan, ReconciliationMode, RecoveryAction,
-    RecoveryPolicy, reconciliation_candidate_query_plan,
+    Reconciler, ReconciliationCandidateQueryPlan, ReconciliationDetailCache,
+    ReconciliationDetailCachePolicy, ReconciliationDetailCacheStats, ReconciliationMode,
+    RecoveryAction, RecoveryPolicy, reconciliation_candidate_query_plan,
 };
 pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;

@@ -1,6 +1,7 @@
 //! Forgejo issue-row DTOs (issues, the PR-as-issue marker, dependency refs).
 
 use super::{LabelDto, UserDto};
+use crate::ids::RepoCoord;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
@@ -28,6 +29,9 @@ pub(crate) struct IssueDto {
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
     pub closed_at: Option<DateTime<Utc>>,
+    /// Repository identity embedded by Forgejo's owner-scoped issue search.
+    #[serde(default)]
+    pub repository: Option<IssueRepositoryDto>,
     /// Present (a non-null object) when this row is actually a pull request.
     ///
     /// Forgejo serves pull requests through the issue endpoints, tagging each
@@ -36,6 +40,13 @@ pub(crate) struct IssueDto {
     /// pull requests from issue results, so the contents are ignored.
     #[serde(default)]
     pub pull_request: Option<PullRequestMarkerDto>,
+}
+
+/// Minimal repository identity embedded in issue-search rows.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct IssueRepositoryDto {
+    pub name: String,
+    pub full_name: String,
 }
 
 /// Marker object Forgejo attaches to a PR-as-issue row's `pull_request` field.
@@ -56,6 +67,15 @@ impl IssueDto {
     /// Reports whether this row is a pull request masquerading as an issue.
     pub(crate) fn is_pull_request(&self) -> bool {
         self.pull_request.is_some()
+    }
+
+    /// Reports whether an owner-scoped search row belongs to the requested
+    /// repository. Search responses always carry this identity; missing
+    /// metadata is rejected rather than misattributed to the requested repo.
+    pub(crate) fn is_in_repository(&self, repo: &RepoCoord) -> bool {
+        self.repository.as_ref().is_some_and(|candidate| {
+            candidate.name == repo.name && candidate.full_name == repo.path_segment()
+        })
     }
 }
 

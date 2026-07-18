@@ -7,6 +7,8 @@ use std::error::Error;
 use std::fmt;
 use temper_forge::ForgeError;
 
+use super::ReconciliationDetailCacheStats;
+
 /// A single problem reconciliation found in durable state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReconcileFinding {
@@ -215,6 +217,8 @@ pub struct ReconcileReport {
     /// Number of deduplicated artifact snapshots scanned by the loading path.
     /// Pure [`Reconciler::scan`](crate::reconcile::Reconciler::scan) reports `0`.
     pub snapshot_count: usize,
+    /// Dependency-detail cache activity for this loading pass.
+    pub cache_stats: ReconciliationDetailCacheStats,
     pub findings: Vec<ReconcileFinding>,
     pub actions: Vec<RecoveryAction>,
 }

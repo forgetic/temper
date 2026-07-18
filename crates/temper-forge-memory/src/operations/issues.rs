@@ -10,8 +10,9 @@ use crate::lists::{
 };
 use crate::util::{check_expected_version, next_comment_number, next_item_number};
 use temper_forge_model::{
-    ChangeKind, Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue, IssueId,
-    IssueQuery, IssueState, ItemNumber, RepositoryId, UpdateIssue, Version,
+    CandidateLifecycle, ChangeKind, Comment, CreateComment, CreateIssue, ForgeError, ForgeResult,
+    Issue, IssueCandidateQuery, IssueId, IssueQuery, IssueState, ItemNumber, RepositoryId,
+    UpdateIssue, Version,
 };
 
 pub(crate) fn list_issues(
@@ -37,6 +38,40 @@ pub(crate) fn list_issues(
     if let Some(limit) = query.limit {
         issues.truncate(limit);
     }
+    Ok(issues)
+}
+
+pub(crate) fn list_issue_candidates(
+    forge: &MemoryForge,
+    repo_id: &RepositoryId,
+    query: IssueCandidateQuery,
+) -> ForgeResult<Vec<Issue>> {
+    let labels = query.labels.normalized()?;
+    let mut inner = forge.lock();
+    inner.faults.take(FaultOp::ListIssues)?;
+    inner.state.require_repository(repo_id)?;
+    let mut issues = inner
+        .state
+        .issues(repo_id)
+        .into_iter()
+        .filter(|issue| match query.lifecycle {
+            CandidateLifecycle::Open => issue.state == IssueState::Open,
+            CandidateLifecycle::Terminal => issue.state == IssueState::Closed,
+        })
+        .filter(|issue| {
+            labels.as_ref().is_none_or(|labels| {
+                labels
+                    .iter()
+                    .any(|required| issue.labels.iter().any(|label| label == required))
+            })
+        })
+        .collect::<Vec<_>>();
+    if !query.details.dependencies {
+        for issue in &mut issues {
+            issue.dependencies.clear();
+        }
+    }
+    sort_issues_by_number(&mut issues);
     Ok(issues)
 }
 

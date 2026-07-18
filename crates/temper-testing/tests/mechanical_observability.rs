@@ -9,10 +9,10 @@ use temper_forge_model::{
     BranchRef, ChangeKind, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue,
     CreatePullRequest, CreateRepository, Forge, HintArtifactKind, RepositoryId, UserId,
 };
-use temper_runner::{MechanicalWorker, Worker};
+use temper_runner::{MechanicalWorker, Worker, scan_roles_wake};
 use temper_testing::counting_forge::CountingForge;
 use temper_testing::{block_on, ts};
-use temper_workflow::{InMemoryJournal, LeasePolicy, RawWorkflowSpec, ValidatedWorkflow};
+use temper_workflow::{InMemoryJournal, LeasePolicy, RawWorkflowSpec, RoleId, ValidatedWorkflow};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::with_default;
@@ -21,6 +21,9 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry;
 use tracing_subscriber::registry::LookupSpan;
+
+const REFERENCE_WORKFLOW: &str =
+    include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
 const MECHANICAL_WORKFLOW: &str = r#"
 {
@@ -340,50 +343,12 @@ fn assert_phase_common(event: &Captured, repository: &str, scope: &str, wake_run
     );
 }
 
+#[path = "mechanical_observability/candidate.rs"]
+mod candidate;
+
 #[test]
 fn broad_phase_measurements_include_provider_deltas_and_non_merge_has_no_attempt() {
-    let memory = MemoryForge::new();
-    let repo = create_repo(&memory);
-    let repo_label = temper_log::strip_provider_scheme(repo.as_str()).to_string();
-    create_ready_issue(&memory, &repo);
-    let forge = CountingForge::new(memory);
-    let workflow = workflow();
-    let journal = InMemoryJournal::new();
-    let worker = MechanicalWorker::new(&workflow, &forge, &repo, &journal, lease_policy());
-
-    let events = capture(|| {
-        let wake = tracing::debug_span!("wake", wake.run_id = "acme/service:41");
-        block_on(worker.tick(ts("2026-07-13T12:00:00Z")).instrument(wake))
-            .expect("broad mechanical tick succeeds");
-    });
-
-    let phases = events_with_measurement(&events, "mechanical.phase");
-    assert_eq!(phases.len(), 3, "one terminal event per broad phase");
-    let names = phases
-        .iter()
-        .map(|event| event.text("mechanical.phase").expect("phase name"))
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        names,
-        BTreeSet::from([
-            "reconciliation".to_string(),
-            "automated_scan".to_string(),
-            "transition_application".to_string(),
-        ])
-    );
-    for phase in phases {
-        assert_phase_common(phase, &repo_label, "broad", "acme/service:41");
-        assert_eq!(phase.text("outcome").as_deref(), Some("success"));
-        assert_eq!(phase.bool("provider.requests_available"), Some(true));
-        assert!(
-            phase.u64("provider.request_total").is_some(),
-            "provider request delta remains numeric: {phase:?}"
-        );
-    }
-    assert!(
-        events_with_measurement(&events, "mechanical.landing_attempt").is_empty(),
-        "a direct non-merge automation is not a landing attempt"
-    );
+    candidate::broad_phase_measurements_include_provider_deltas_and_non_merge_has_no_attempt();
 }
 
 #[test]

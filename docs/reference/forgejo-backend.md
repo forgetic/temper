@@ -83,15 +83,78 @@ Forgejo models pull requests as issues. Consequences:
 - issue reads must exclude rows with a `pull_request` marker;
 - PR comments, labels, assignees, and dependency links use `/issues/{number}`;
 - issue and PR numbers are one repository-scoped namespace on Forgejo;
+- `Forge::item_number_namespace()` therefore reports `Shared`, allowing fresh
+  same-pass PR candidates to resolve dependency target state without a redundant
+  `/issues/{number}` collision probe;
 - labelled PR scans use `/issues?type=pulls&labels=...` as the provider label
   index, not `/pulls`.
 
 `body_contains`, author, and assignee filters are applied client-side after the
 narrowest safe provider query. Forgejo 7.0.x has no reliable exact body-substring
-search. Summary list calls (`details.dependencies=false`) skip dependency
-N+1s; labelled PR summary rows may also omit branch refs, head/base SHAs,
-requested reviewers, and merge records. Use exact `get_*` or full-detail lists
-when those fields matter.
+search. Ordinary `IssueQuery.labels` and `PullRequestQuery.labels` remain portable
+all-of filters: although Forgejo versions may interpret the single
+comma-separated provider filter as OR, the backend applies a final local
+all-label check.
+
+Consolidated candidate reads use Forgejo's provider-side any-label search, with
+one request shape per lifecycle bucket. Forgejo 15's repository-scoped
+`/repos/{owner}/{repo}/issues` endpoint actually applies multiple label names as
+all-of even though its API description says any-of. Consequently, a candidate
+bucket with multiple interest labels uses the owner-scoped
+`/repos/issues/search?owner=...&labels=...` index and locally rejects rows whose
+embedded repository identity is not the requested repository. Single-label and
+unfiltered buckets stay on the repository endpoint. Rows are always locally
+retained only when they carry at least one requested label. Issue buckets send
+`type=issues`; PR buckets send `type=pulls`. Open buckets send `state=open`.
+Terminal issue buckets send `state=closed`, while terminal PR discovery also
+sends just one `state=closed` request and locally separates portable `Closed`
+and `Merged` rows. Terminal workflow planning always supplies labels, and the
+backend never substitutes an unlabelled issue or pull-history read for labelled
+discovery. Every bucket follows the shared `limit`/`page` pagination loop,
+deduplicates rows repeated across pages, and returns deterministic number/ID
+order. Thus a one-page bucket costs one provider list request regardless of
+interest-label count.
+
+Summary list calls (`details.dependencies=false`) skip dependency N+1s;
+labelled PR summary rows may also omit branch refs, head/base SHAs, requested
+reviewers, and merge records. Unambiguous candidate summaries are materialized
+from the issue index without exact PR reads. A closed PR-as-issue row that lacks
+a sufficient merge marker is the exception: `/pulls/{number}` is read before
+closed/merged filtering. Exact PR summary reads similarly perform only
+`/pulls/{number}` and return empty dependencies; exact full reads additionally
+use `/issues/{number}/dependencies`.
+
+The checked-in 17-label `reference-delivery` workflow locks these one-page
+provider ceilings:
+
+| Consumer | Candidate-list requests |
+| --- | ---: |
+| broad role discovery | <= 4 populated issue/PR lifecycle buckets |
+| bounded reconciliation | <= 4 populated issue/PR lifecycle buckets |
+| automated discovery | <= 2 populated open issue/PR buckets |
+| second unchanged mechanical pass | 6 for the reference workflow; 0 exact artifact and 0 dependency requests |
+
+Terminal requests always include workflow-derived labels. The only candidate
+row allowed to add a summary exact read is a closed PR row whose issue-index
+merge marker is ambiguous. Cold dependency-gated reconciliation may additionally
+perform one full exact read per uncached source; the long-lived mechanical cache
+removes those reads on an unchanged warm pass and forcibly refreshes them within
+15 minutes.
+
+The ignored local benchmark runs that cold/warm pair against the cached Forgejo
+fixture and the real HTTP client:
+
+```sh
+cargo test -p temper-testing --test idle_request_budgets \
+  local_forgejo_two_pass_idle_broad_benchmark \
+  -- --ignored --exact --nocapture
+```
+
+It prints each broad-pass duration and normalized warm-pass method/path counts,
+then enforces the warm shape above. The first invocation may populate the pinned
+Forgejo binary cache (or use `TEMPER_FORGEJO_BINARY`); default CI never starts a
+server. Additional pages multiply requests per bucket. They do not reintroduce
+one request per workflow label.
 
 ### Labels and assignees are set-like but Forgejo wants label ids
 

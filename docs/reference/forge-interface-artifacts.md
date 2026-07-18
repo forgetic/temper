@@ -47,6 +47,7 @@ additions.
 Required methods:
 
 - `list_issues`
+- `list_issue_candidates`
 - `create_issue`
 - `get_issue`
 - `get_issue_with_details`
@@ -69,10 +70,12 @@ updates apply `set_labels`, then removals, then additions. Assignee removals are
 applied before additions. `UpdateIssue` also carries `expected_version`; see
 [optimistic concurrency](forge-interface-concurrency.md).
 
-The `*_with_details` exact reads accept the same `ItemListDetails` budget as
-list queries. `summary()` returns the complete workflow/body representation but
-may omit native dependency enrichment. The historical exact methods retain full
-detail.
+The `*_with_details` exact reads for both issues and pull requests accept the
+same `ItemListDetails` budget as list and candidate queries. `summary()` returns
+the complete workflow/body representation but may omit native dependency
+enrichment. The historical exact methods retain full detail. Candidate reads
+are lifecycle-bucketed any-label discovery; ordinary list labels remain
+conjunctive. See [model and query semantics](forge-interface-model.md).
 
 `update_issue_from_snapshot(current, input)` carries a previously validated
 `Issue` into a mutation. Successful calls return the committed representation
@@ -94,7 +97,10 @@ Required methods:
 A dependency link means the source issue or pull request is blocked by a target
 `ItemNumber` in the same repository. Links are directed: adding A→B does not add
 B→A. Multiple targets are allowed; dependency lists are set-like, sorted by item
-number, and contain no duplicates.
+number, and contain no duplicates. Because the link itself is untyped, target
+state resolution is issue-first on `ItemNumberNamespace::Independent` backends.
+A fresh typed candidate may bypass that probe only when the backend advertises a
+`Shared` issue/PR namespace.
 
 Adds require the source to exist and the target item number to resolve to an
 issue or pull request in the same repository. Missing sources return

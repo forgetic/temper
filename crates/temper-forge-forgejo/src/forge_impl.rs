@@ -13,14 +13,19 @@
 use crate::{ForgejoForge, HttpClient};
 use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
-    ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueCandidateQuery,
+    IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace, Label, MergePullRequest,
+    MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery,
+    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
+    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait::async_trait]
 impl<C: HttpClient> Forge for ForgejoForge<C> {
+    fn item_number_namespace(&self) -> ItemNumberNamespace {
+        ItemNumberNamespace::Shared
+    }
+
     fn provider_request_count(&self) -> Option<u64> {
         Some(ForgejoForge::provider_request_count(self))
     }
@@ -66,6 +71,14 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         query: IssueQuery,
     ) -> ForgeResult<Vec<Issue>> {
         self.list_issues(repo_id, query).await
+    }
+
+    async fn list_issue_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: IssueCandidateQuery,
+    ) -> ForgeResult<Vec<Issue>> {
+        self.list_issue_candidates(repo_id, query).await
     }
 
     async fn create_issue(&self, repo_id: &RepositoryId, input: CreateIssue) -> ForgeResult<Issue> {
@@ -142,6 +155,14 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         self.list_pull_requests(repo_id, query).await
     }
 
+    async fn list_pull_request_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: PullRequestCandidateQuery,
+    ) -> ForgeResult<Vec<PullRequest>> {
+        self.list_pull_request_candidates(repo_id, query).await
+    }
+
     async fn create_pull_request(
         &self,
         repo_id: &RepositoryId,
@@ -154,12 +175,30 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         self.get_pull_request(id).await
     }
 
+    async fn get_pull_request_with_details(
+        &self,
+        id: &PullRequestId,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
+        self.get_pull_request_with_details(id, details).await
+    }
+
     async fn get_pull_request_by_number(
         &self,
         repo_id: &RepositoryId,
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>> {
         self.get_pull_request_by_number(repo_id, number).await
+    }
+
+    async fn get_pull_request_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
+        self.get_pull_request_by_number_with_details(repo_id, number, details)
+            .await
     }
 
     async fn update_pull_request(

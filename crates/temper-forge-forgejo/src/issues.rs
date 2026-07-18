@@ -17,11 +17,11 @@ use crate::pulls::response_validator;
 use crate::types::IssueDto;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use temper_forge_model::{
-    Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue, IssueId, IssueQuery,
-    IssueState, ItemListDetails, ItemNumber, ItemSortField, RepositoryId, SortDirection,
-    UpdateIssue, UserId,
+    CandidateLifecycle, Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue,
+    IssueCandidateQuery, IssueId, IssueQuery, IssueState, ItemListDetails, ItemNumber,
+    ItemSortField, RepositoryId, SortDirection, UpdateIssue, UserId,
 };
 
 impl<C: HttpClient> ForgejoForge<C> {
@@ -67,6 +67,65 @@ impl<C: HttpClient> ForgejoForge<C> {
         if let Some(limit) = query.limit {
             issues.truncate(limit);
         }
+        if query.details.dependencies {
+            for issue in &mut issues {
+                issue.dependencies = self.load_item_dependencies(&repo, issue.number).await?;
+            }
+        }
+        Ok(issues)
+    }
+
+    /// Lists one lifecycle bucket of issue candidates through Forgejo's issue
+    /// label index.
+    ///
+    /// The repository-scoped issue endpoint applies multiple label names as an
+    /// all-of filter despite its API documentation describing any-of semantics.
+    /// A multi-label candidate bucket therefore uses the owner-scoped search
+    /// endpoint, whose label filter is genuinely any-of, and rejects rows from
+    /// sibling repositories locally. Single-label and unfiltered buckets stay
+    /// on the repository endpoint. Either shape costs one request per page.
+    pub async fn list_issue_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: IssueCandidateQuery,
+    ) -> ForgeResult<Vec<Issue>> {
+        let repo = parse_repository_id(repo_id)?;
+        let labels = query.labels.normalized()?;
+        let state = match query.lifecycle {
+            CandidateLifecycle::Open => "open",
+            CandidateLifecycle::Terminal => "closed",
+        };
+        let rows = self
+            .list_candidate_issue_rows(&repo, state, "issues", labels.as_deref())
+            .await?;
+
+        let expected_state = match query.lifecycle {
+            CandidateLifecycle::Open => IssueState::Open,
+            CandidateLifecycle::Terminal => IssueState::Closed,
+        };
+        let mut rows_by_number = BTreeMap::new();
+        for row in rows {
+            if !row.is_pull_request() {
+                rows_by_number.entry(row.number).or_insert(row);
+            }
+        }
+
+        let mut by_id = BTreeMap::new();
+        for row in rows_by_number.into_values() {
+            let issue = self.materialize_issue(&repo, row, None);
+            if issue.state != expected_state || !matches_any_label(&issue.labels, labels.as_deref())
+            {
+                continue;
+            }
+            by_id.entry(issue.id.clone()).or_insert(issue);
+        }
+
+        let mut issues = by_id.into_values().collect::<Vec<_>>();
+        issues.sort_by(|left, right| {
+            left.number
+                .cmp(&right.number)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         if query.details.dependencies {
             for issue in &mut issues {
                 issue.dependencies = self.load_item_dependencies(&repo, issue.number).await?;
@@ -499,9 +558,19 @@ fn apply_committed_assignees(current: &mut Vec<UserId>, remove: Vec<UserId>, add
 
 /// Returns whether an issue satisfies the client-side filters of `query`.
 ///
-/// State and labels are filtered by the provider; body, author, and assignee
-/// are checked here after the provider has already narrowed the result.
+/// State is narrowed by the provider. Labels, body, author, and assignee are
+/// checked here so portable semantics do not depend on Forgejo's filter quirks.
 fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {
+    // Forgejo versions differ on whether a comma-separated provider label
+    // filter is all-of or any-of. Preserve the portable ordinary-query contract
+    // by always enforcing every requested label locally.
+    if !query
+        .labels
+        .iter()
+        .all(|required| issue.labels.iter().any(|label| label == required))
+    {
+        return false;
+    }
     if let Some(needle) = &query.body_contains {
         if !needle.is_empty() && !issue.body.contains(needle) {
             return false;
@@ -522,6 +591,14 @@ fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {
         }
     }
     true
+}
+
+fn matches_any_label(actual: &[String], required: Option<&[String]>) -> bool {
+    required.is_none_or(|required| {
+        required
+            .iter()
+            .any(|candidate| actual.iter().any(|label| label == candidate))
+    })
 }
 
 /// Orders issues by the requested sort, then by number, then by id.

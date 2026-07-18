@@ -102,7 +102,12 @@ next reconciler scan can repair or mark it reconciled.
 command records, dependency status, recovery policy, and `now`. The bounded
 runtime `reconcile` path loads exact incomplete-journal targets and
 workflow-labelled candidates; `reconcile_deep_audit` is the deliberate
-all-history operator path.
+all-history operator path. Candidate summaries remain fresh on every bounded
+pass. A caller-owned, bounded detail cache may retain only native dependency
+enrichment: summary fingerprint changes, targeted dependency hints, and local
+mutations invalidate it; deterministic LRU/unseen-age eviction bounds it; and an
+unchanged entry is forcibly refreshed within 15 minutes. Restart constructs an
+empty cache, so startup broad reconciliation is cold and authoritative.
 
 Findings include:
 

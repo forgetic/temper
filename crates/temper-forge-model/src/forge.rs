@@ -9,6 +9,12 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod candidate;
+pub use candidate::{
+    CandidateLabelSelection, CandidateLabels, CandidateLifecycle, CandidateLifecycleBucket,
+    IssueCandidateQuery, PullRequestCandidateQuery,
+};
+
 /// Result type returned by Forge operations.
 pub type ForgeResult<T> = Result<T, ForgeError>;
 
@@ -37,6 +43,19 @@ pub enum ForgeError {
 pub enum SortDirection {
     Asc,
     Desc,
+}
+
+/// Whether issue and pull-request numbers can collide within a repository.
+///
+/// The conservative default is [`Self::Independent`]. A backend may advertise
+/// [`Self::Shared`] only when one repository-scoped item number identifies at
+/// most one issue or pull request.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ItemNumberNamespace {
+    /// Issue and pull-request counters are independent and may collide.
+    Independent,
+    /// Issues and pull requests share one collision-free number sequence.
+    Shared,
 }
 
 /// Repository field used for sorting repository lists.
@@ -117,6 +136,10 @@ const fn default_include_dependencies() -> bool {
 }
 
 /// Issue listing query.
+///
+/// All populated filters compose conjunctively. In particular, `labels`
+/// requires every listed label; use [`IssueCandidateQuery`] for portable
+/// any-label discovery.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IssueQuery {
     pub state: Option<IssueState>,
@@ -134,6 +157,10 @@ pub struct IssueQuery {
 }
 
 /// Pull-request listing query.
+///
+/// All populated filters compose conjunctively. In particular, `labels`
+/// requires every listed label; use [`PullRequestCandidateQuery`] for portable
+/// any-label discovery.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PullRequestQuery {
     pub state: Option<PullRequestState>,
@@ -187,6 +214,16 @@ pub struct CiJobQuery {
 /// across backends.
 #[async_trait]
 pub trait Forge: Send + Sync {
+    /// Describes whether issue and pull-request [`ItemNumber`] values can
+    /// collide within one repository.
+    ///
+    /// This is a static backend capability and must not perform I/O. The
+    /// independent default preserves issue-first resolution correctness for
+    /// compatibility backends with separate counters.
+    fn item_number_namespace(&self) -> ItemNumberNamespace {
+        ItemNumberNamespace::Independent
+    }
+
     /// Returns the cumulative provider HTTP request count when the backend can
     /// expose it without performing I/O. Callers use deltas only for debug
     /// measurements; correctness must never depend on this optional counter.
@@ -221,12 +258,56 @@ pub trait Forge: Send + Sync {
     /// Creates or updates a repository label by name.
     async fn upsert_label(&self, repo_id: &RepositoryId, input: UpsertLabel) -> ForgeResult<Label>;
 
-    /// Lists issues in a repository.
+    /// Lists issues in a repository. Query labels are conjunctive (all-of).
     async fn list_issues(
         &self,
         repo_id: &RepositoryId,
         query: IssueQuery,
     ) -> ForgeResult<Vec<Issue>>;
+
+    /// Lists a consolidated lifecycle bucket of issue candidates.
+    ///
+    /// The compatibility fallback normalizes and deduplicates `AnyOf` labels,
+    /// performs one existing conjunctive list call per label/state, unions by
+    /// stable issue identity, and returns deterministic number/ID order.
+    async fn list_issue_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: IssueCandidateQuery,
+    ) -> ForgeResult<Vec<Issue>> {
+        let labels = query.labels.normalized()?;
+        let state = match query.lifecycle {
+            CandidateLifecycle::Open => IssueState::Open,
+            CandidateLifecycle::Terminal => IssueState::Closed,
+        };
+        let label_queries = labels
+            .map(|labels| labels.into_iter().map(|label| vec![label]).collect())
+            .unwrap_or_else(|| vec![Vec::new()]);
+        let mut by_id = std::collections::BTreeMap::new();
+        for labels in label_queries {
+            for issue in self
+                .list_issues(
+                    repo_id,
+                    IssueQuery {
+                        state: Some(state),
+                        labels,
+                        details: query.details,
+                        ..IssueQuery::default()
+                    },
+                )
+                .await?
+            {
+                by_id.entry(issue.id.clone()).or_insert(issue);
+            }
+        }
+        let mut issues = by_id.into_values().collect::<Vec<_>>();
+        issues.sort_by(|left, right| {
+            left.number
+                .cmp(&right.number)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(issues)
+    }
 
     /// Creates an issue in a repository.
     async fn create_issue(&self, repo_id: &RepositoryId, input: CreateIssue) -> ForgeResult<Issue>;
@@ -327,12 +408,57 @@ pub trait Forge: Send + Sync {
     /// Adds a comment to an issue.
     async fn add_issue_comment(&self, id: &IssueId, input: CreateComment) -> ForgeResult<Comment>;
 
-    /// Lists pull requests in a repository.
+    /// Lists pull requests in a repository. Query labels are conjunctive (all-of).
     async fn list_pull_requests(
         &self,
         repo_id: &RepositoryId,
         query: PullRequestQuery,
     ) -> ForgeResult<Vec<PullRequest>>;
+
+    /// Lists a consolidated lifecycle bucket of pull-request candidates.
+    ///
+    /// The deterministic compatibility fallback follows the issue fallback and
+    /// reads both closed and merged states for a terminal bucket.
+    async fn list_pull_request_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: PullRequestCandidateQuery,
+    ) -> ForgeResult<Vec<PullRequest>> {
+        let labels = query.labels.normalized()?;
+        let states: &[PullRequestState] = match query.lifecycle {
+            CandidateLifecycle::Open => &[PullRequestState::Open],
+            CandidateLifecycle::Terminal => &[PullRequestState::Closed, PullRequestState::Merged],
+        };
+        let label_queries: Vec<Vec<String>> = labels
+            .map(|labels| labels.into_iter().map(|label| vec![label]).collect())
+            .unwrap_or_else(|| vec![Vec::new()]);
+        let mut by_id = std::collections::BTreeMap::new();
+        for state in states {
+            for labels in &label_queries {
+                for pull_request in self
+                    .list_pull_requests(
+                        repo_id,
+                        PullRequestQuery {
+                            state: Some(*state),
+                            labels: labels.clone(),
+                            details: query.details,
+                            ..PullRequestQuery::default()
+                        },
+                    )
+                    .await?
+                {
+                    by_id.entry(pull_request.id.clone()).or_insert(pull_request);
+                }
+            }
+        }
+        let mut pull_requests = by_id.into_values().collect::<Vec<_>>();
+        pull_requests.sort_by(|left, right| {
+            left.number
+                .cmp(&right.number)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(pull_requests)
+    }
 
     /// Creates a pull request in a repository.
     async fn create_pull_request(
@@ -344,12 +470,49 @@ pub trait Forge: Send + Sync {
     /// Looks up a pull request by stable backend identifier.
     async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>>;
 
+    /// Looks up a pull request by stable identifier with an explicit detail budget.
+    ///
+    /// The compatibility default performs the historical full read and clears
+    /// dependencies for a summary result.
+    async fn get_pull_request_with_details(
+        &self,
+        id: &PullRequestId,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
+        let mut pull_request = self.get_pull_request(id).await?;
+        if !details.dependencies {
+            if let Some(pull_request) = &mut pull_request {
+                pull_request.dependencies.clear();
+            }
+        }
+        Ok(pull_request)
+    }
+
     /// Looks up a pull request by its repository-scoped human-facing number.
     async fn get_pull_request_by_number(
         &self,
         repo_id: &RepositoryId,
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>>;
+
+    /// Looks up a pull request by number with an explicit detail budget.
+    ///
+    /// The compatibility default performs the historical full read and clears
+    /// dependencies for a summary result.
+    async fn get_pull_request_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
+        let mut pull_request = self.get_pull_request_by_number(repo_id, number).await?;
+        if !details.dependencies {
+            if let Some(pull_request) = &mut pull_request {
+                pull_request.dependencies.clear();
+            }
+        }
+        Ok(pull_request)
+    }
 
     /// Updates a pull request.
     ///

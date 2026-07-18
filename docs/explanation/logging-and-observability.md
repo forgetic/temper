@@ -256,6 +256,23 @@ availability flag means the backend cannot supply the optional delta. These
 records execute inside the admitted wake span, so JSON output carries the
 inherited `wake.run_id` without a second admission or execution path.
 
+Broad list work additionally emits `measurement=candidate.discovery` exactly
+once per consumer pass. Its fields are `repo`, `candidate.consumer=role|mechanical`,
+`candidate.scope=normal|wake|audit|reconciliation|automation`, numeric
+`candidate.logical_bucket_count`, numeric `candidate.unique_count` before local
+classification/queue filtering, `outcome`, and numeric `duration_ms`. When the
+backend exposes a counter, `candidate.provider_request_total` is the actual
+provider request delta around candidate-list calls and
+`candidate.provider_requests_available=true`; otherwise the numeric total is
+zero and the availability flag is false. This measurement performs no Forge I/O.
+
+Broad reconciliation also emits `measurement=mechanical.reconciliation` with
+numeric `snapshot_count` and cache fields `detail_cache.hit_count`,
+`detail_cache.miss_count`, `detail_cache.forced_refresh_count`,
+`detail_cache.invalidation_count`, and `detail_cache.eviction_count`. Candidate,
+cache, and phase records run under the admitted wake span and therefore inherit
+`wake.run_id`.
+
 A gate read and a landing attempt are different events. `gate.evaluated` retains
 its structured `event`, `repo`, `pr.ref`, `artifact.ref`, `gates`, and human
 rendering, but is debug-only because every scan may repeat the same read-side
@@ -295,6 +312,23 @@ journalctl -u temper -o cat | jq -c \
    {phase:."mechanical.phase",scope:."mechanical.scope",outcome,duration_ms,
     requests:(if ."provider.requests_available" then ."provider.request_total" else null end)}'
 
+# Candidate volume, logical buckets, and provider list traffic for one wake.
+journalctl -u temper -o cat | jq -c \
+  'select(.measurement=="candidate.discovery" and
+          (.span."wake.run_id" // ."wake.run_id")=="acme/widgets:17") |
+   {consumer:."candidate.consumer",scope:."candidate.scope",
+    buckets:."candidate.logical_bucket_count",unique:."candidate.unique_count",
+    requests:(if ."candidate.provider_requests_available" then ."candidate.provider_request_total" else null end),
+    outcome,duration_ms}'
+
+# Reconciliation dependency-cache effectiveness for broad wakes.
+journalctl -u temper -o cat | jq -c \
+  'select(.measurement=="mechanical.reconciliation") |
+   {run:(.span."wake.run_id" // ."wake.run_id"),repo,
+    hits:."detail_cache.hit_count",misses:."detail_cache.miss_count",
+    forced:."detail_cache.forced_refresh_count",
+    invalidations:."detail_cache.invalidation_count",evictions:."detail_cache.eviction_count"}'
+
 # Actual merge executions only (gate.evaluated observations are intentionally excluded).
 journalctl -u temper -o cat | jq -c \
   'select(.measurement=="mechanical.landing_attempt") |
@@ -305,13 +339,19 @@ journalctl -u temper -o cat | jq -c \
   'select((.span."apply.id" // ."apply.id")=="job-42" or .measurement=="fan_out.completed")'
 ```
 
-If a phase is slow, compare its `provider.request_total` delta with the Forge HTTP
-records carrying the same `wake.run_id`. A high delta points to query shape or
-fan-out; a small delta with high `duration_ms` points to slow individual provider
-calls. When `provider.requests_available=false`, count the correlated HTTP
-`operation` records instead. A repeated eligible `gate.evaluated` record proves
-only that state was read; look for a paired landing-attempt `started` and terminal
-record to prove Temper actually tried the merge.
+If a phase is slow, inspect its matching `candidate.discovery` first: a logical
+bucket count above four for role/reconciliation (or above two for automation) is
+a planning regression; a larger provider delta with the same logical count
+usually means pagination. Compare the provider delta with Forge HTTP records
+carrying the same `wake.run_id`. A high delta points to query shape or fan-out;
+a small delta with high `duration_ms` points to slow individual provider calls.
+Cache misses are expected on cold startup, fingerprint change, or invalidation;
+unchanged warm passes should report hits, while forced refreshes prove the
+15-minute missed-hint convergence bound is active. When
+`provider.requests_available=false`, count the correlated HTTP `operation`
+records instead. A repeated eligible `gate.evaluated` record proves only that
+state was read; look for a paired landing-attempt `started` and terminal record
+to prove Temper actually tried the merge.
 
 If accepted deliveries have no `started` decision, first inspect `deferred`
 (apply active), `coalesced` (already represented), and global in-flight counts.

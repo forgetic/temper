@@ -34,6 +34,7 @@
 //! mechanically unblock dependency-gated work once its prerequisites land.
 
 mod candidate;
+mod detail_cache;
 mod finding;
 mod load;
 mod scan;
@@ -43,6 +44,9 @@ use crate::validated::ValidatedWorkflow;
 use temper_forge::{Issue, ItemNumber, PullRequest};
 
 pub use candidate::{ReconciliationCandidateQueryPlan, reconciliation_candidate_query_plan};
+pub use detail_cache::{
+    ReconciliationDetailCache, ReconciliationDetailCachePolicy, ReconciliationDetailCacheStats,
+};
 pub use finding::{
     DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport, RecoveryAction,
     RecoveryPolicy,

@@ -7,10 +7,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant};
 use temper_forge::{
-    CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequestReview, Forge,
-    IssueQuery, IssueState, ItemListDetails, PullRequest, PullRequestId, PullRequestQuery,
-    PullRequestState, RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue,
-    UpdatePullRequest, UserId,
+    CandidateLabelSelection, CandidateLifecycle, CiJob, CiJobConclusion, CiJobId, CiJobStatus,
+    CreateIssue, CreatePullRequestReview, Forge, IssueCandidateQuery, ItemListDetails, PullRequest,
+    PullRequestCandidateQuery, PullRequestId, PullRequestState, RepositoryId, RequestReviewers,
+    ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_filesystem::FilesystemForge;
 use temper_runner::{
@@ -195,22 +195,16 @@ fn pull_request_is_merged(forge: &FilesystemForge, id: &PullRequestId) -> bool {
         .is_some_and(|pr| pr.state == PullRequestState::Merged)
 }
 
-// The mechanical scan stays label-bounded with one deliberate exception: the
-// reference workflow's default-kind `raw_intake` automation queue has no label
-// to filter on, so discovering raw human intake costs a single state-bounded
-// open-all issue listing (open + summary, never closed history). See the
-// reference-workflow gap record.
-fn is_bounded_issue_query(query: &IssueQuery) -> bool {
+fn is_bounded_issue_query(query: &IssueCandidateQuery) -> bool {
     query.details == ItemListDetails::summary()
-        && match query.state {
-            Some(IssueState::Open) => true,
-            Some(_) => !query.labels.is_empty(),
-            None => false,
-        }
+        && (query.lifecycle == CandidateLifecycle::Open
+            || matches!(query.labels, CandidateLabelSelection::AnyOf(_)))
 }
 
-fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {
-    query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+fn is_bounded_pull_request_query(query: &PullRequestCandidateQuery) -> bool {
+    query.details == ItemListDetails::summary()
+        && (query.lifecycle == CandidateLifecycle::Open
+            || matches!(query.labels, CandidateLabelSelection::AnyOf(_)))
 }
 
 #[derive(Clone, Copy)]
@@ -319,22 +313,17 @@ fn mechanical_landing_wake_driven_by(final_wake: LandingWake) {
     );
     assert!(pull_request_is_merged(&root.forge(), &pr.id));
     assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
-    assert!(
-        !counted
-            .issue_queries()
-            .iter()
-            .any(|query| query == &IssueQuery::default())
-    );
-    assert!(
-        !counted
-            .pull_request_queries()
-            .iter()
-            .any(|query| query == &PullRequestQuery::default())
-    );
-    assert!(counted.issue_queries().iter().all(is_bounded_issue_query));
+    assert!(counted.issue_queries().is_empty());
+    assert!(counted.pull_request_queries().is_empty());
     assert!(
         counted
-            .pull_request_queries()
+            .issue_candidate_queries()
+            .iter()
+            .all(is_bounded_issue_query)
+    );
+    assert!(
+        counted
+            .pull_request_candidate_queries()
             .iter()
             .all(is_bounded_pull_request_query)
     );

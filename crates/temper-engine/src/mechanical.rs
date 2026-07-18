@@ -11,7 +11,10 @@ use temper_runner::{
     ArtifactAddress, MultiRepoMechanicalWorker, MultiRepoTickReport, Progress,
     PullRequestMergeObserver, RepositoryJournal, RepositorySet, WorkerError,
 };
-use temper_workflow::{InMemoryJournal, LeasePolicy, ValidatedWorkflow};
+use temper_workflow::{
+    InMemoryJournal, LeasePolicy, ReconciliationDetailCache, ReconciliationDetailCachePolicy,
+    ValidatedWorkflow,
+};
 
 /// Configuration for the daemon's mechanical backstop loop.
 #[derive(Clone)]
@@ -68,6 +71,20 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
     journals: &[InMemoryJournal],
     scope: &MechanicalScope,
 ) -> Result<Progress, WorkerError> {
+    let cache = ReconciliationDetailCache::default();
+    run_mechanical_backstop_tick_with_cache(forge, workflow, now, config, journals, scope, cache)
+        .await
+}
+
+async fn run_mechanical_backstop_tick_with_cache<F: Forge + ?Sized>(
+    forge: &F,
+    workflow: &ValidatedWorkflow,
+    now: DateTime<Utc>,
+    config: &MechanicalBackstopConfig,
+    journals: &[InMemoryJournal],
+    scope: &MechanicalScope,
+    cache: ReconciliationDetailCache,
+) -> Result<Progress, WorkerError> {
     if journals.len() != config.repositories.repositories().len() {
         let error = setup_error(format!(
             "mechanical backstop has {} repositories but {} journals",
@@ -95,7 +112,7 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
         journal_bindings,
         config.lease_policy,
     ) {
-        Ok(worker) => worker,
+        Ok(worker) => worker.with_reconciliation_detail_cache(cache),
         Err(error) => {
             let error = setup_error(format!("mechanical backstop setup failed: {error}"));
             tracing::warn!(target: "temper_daemon", %error, "mechanical backstop tick failed");
@@ -120,8 +137,9 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
     }
 }
 
-/// Owns the per-repository journals and forge/workflow handles used to execute
-/// mechanical work already admitted by the daemon `WakeCoordinator`.
+/// Owns the per-repository journals, bounded reconciliation detail cache, and
+/// forge/workflow handles used to execute mechanical work already admitted by
+/// the daemon `WakeCoordinator`.
 ///
 /// This type intentionally has no admission or coalescing state. The daemon
 /// coordinator is the sole production owner of pending, in-flight, dirty, and
@@ -132,6 +150,7 @@ pub struct MechanicalTrigger<F: Forge + Send + Sync + ?Sized + 'static> {
     workflow: Arc<ValidatedWorkflow>,
     config: MechanicalBackstopConfig,
     journals: Arc<Vec<InMemoryJournal>>,
+    reconciliation_detail_cache: ReconciliationDetailCache,
     clock: crate::WallClock,
 }
 
@@ -142,18 +161,37 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> Clone for MechanicalTrigger<F> {
             workflow: Arc::clone(&self.workflow),
             config: self.config.clone(),
             journals: Arc::clone(&self.journals),
+            reconciliation_detail_cache: self.reconciliation_detail_cache.clone(),
             clock: self.clock.clone(),
         }
     }
 }
 
 impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
-    /// Builds a trigger with one fresh in-memory journal per configured repo.
+    /// Builds a trigger with one fresh in-memory journal per configured repo
+    /// and the production reconciliation detail-cache policy.
     pub fn new(
         forge: Arc<F>,
         workflow: Arc<ValidatedWorkflow>,
         config: MechanicalBackstopConfig,
         clock: crate::WallClock,
+    ) -> Self {
+        Self::new_with_reconciliation_cache_policy(
+            forge,
+            workflow,
+            config,
+            clock,
+            ReconciliationDetailCachePolicy::default(),
+        )
+    }
+
+    /// Builds a trigger with an injectable reconciliation detail-cache policy.
+    pub fn new_with_reconciliation_cache_policy(
+        forge: Arc<F>,
+        workflow: Arc<ValidatedWorkflow>,
+        config: MechanicalBackstopConfig,
+        clock: crate::WallClock,
+        cache_policy: ReconciliationDetailCachePolicy,
     ) -> Self {
         let journals = Arc::new(
             config
@@ -168,8 +206,15 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
             workflow,
             config,
             journals,
+            reconciliation_detail_cache: ReconciliationDetailCache::new(cache_policy),
             clock,
         }
+    }
+
+    /// Returns a shared handle for cache observability and explicit runtime
+    /// invalidation wiring.
+    pub fn reconciliation_detail_cache(&self) -> ReconciliationDetailCache {
+        self.reconciliation_detail_cache.clone()
     }
 
     /// Runs one pass admitted by the daemon coordinator.
@@ -182,13 +227,14 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
         scope: MechanicalScope,
     ) -> Result<Progress, WorkerError> {
         let now = (self.clock)();
-        run_mechanical_backstop_tick(
+        run_mechanical_backstop_tick_with_cache(
             self.forge.as_ref(),
             self.workflow.as_ref(),
             now,
             &self.config,
             &self.journals,
             &scope,
+            self.reconciliation_detail_cache.clone(),
         )
         .await
     }

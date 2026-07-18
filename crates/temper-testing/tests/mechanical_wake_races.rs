@@ -443,8 +443,11 @@ fn heartbeat_burst_keeps_ci_target_bounded_and_ahead_of_broad_work() {
         // Retained broad work is part of the same dirty follow-up, but it must
         // start only after priority targets and their serialized mutation.
         let mut broad_read = fixture.forge.pause_after(
-            CountedForgeOp::ListPullRequests,
-            fixture.forge.count(CountedForgeOp::ListPullRequests) + 1,
+            CountedForgeOp::ListPullRequestCandidates,
+            fixture
+                .forge
+                .count(CountedForgeOp::ListPullRequestCandidates)
+                + 1,
         );
         merge.release();
         broad_read.wait_until_paused().await;
@@ -457,7 +460,11 @@ fn heartbeat_burst_keeps_ci_target_bounded_and_ahead_of_broad_work() {
         );
         let merge_index = first_op(&trace, stale_boundary, CountedForgeOp::MergePullRequest);
         let issue_index = first_op(&trace, stale_boundary, CountedForgeOp::GetIssueByNumber);
-        let broad_index = first_op(&trace, stale_boundary, CountedForgeOp::ListPullRequests);
+        let broad_index = first_op(
+            &trace,
+            stale_boundary,
+            CountedForgeOp::ListPullRequestCandidates,
+        );
         assert!(pr_index < merge_index && merge_index < issue_index && issue_index < broad_index);
         let before_broad = &trace[stale_boundary..broad_index];
         assert_eq!(
@@ -485,7 +492,7 @@ fn heartbeat_burst_keeps_ci_target_bounded_and_ahead_of_broad_work() {
             "mechanical mutation remains serialized"
         );
         assert!(
-            !before_broad.contains(&CountedForgeOp::ListPullRequests),
+            !before_broad.contains(&CountedForgeOp::ListPullRequestCandidates),
             "targeted landing precedes broad candidate discovery"
         );
         assert_eq!(pull_request_state(&fixture).await, PullRequestState::Merged);
@@ -534,14 +541,21 @@ fn mechanical_poll_racing_targeted_work_runs_one_immediate_broad_follow_up() {
         );
 
         let mut broad_read = fixture.forge.pause_after(
-            CountedForgeOp::ListPullRequests,
-            fixture.forge.count(CountedForgeOp::ListPullRequests) + 1,
+            CountedForgeOp::ListPullRequestCandidates,
+            fixture
+                .forge
+                .count(CountedForgeOp::ListPullRequestCandidates)
+                + 1,
         );
         targeted_read.release();
         broad_read.wait_until_paused().await;
 
         let trace = fixture.forge.operation_trace();
-        let broad_index = first_op(&trace, targeted_start, CountedForgeOp::ListPullRequests);
+        let broad_index = first_op(
+            &trace,
+            targeted_start,
+            CountedForgeOp::ListPullRequestCandidates,
+        );
         let completed_targeted = &trace[targeted_start..broad_index];
         assert_eq!(
             completed_targeted
@@ -552,11 +566,13 @@ fn mechanical_poll_racing_targeted_work_runs_one_immediate_broad_follow_up() {
             "the admitted targeted pass completes before broad work"
         );
         assert!(
-            !completed_targeted.contains(&CountedForgeOp::ListPullRequests),
+            !completed_targeted.contains(&CountedForgeOp::ListPullRequestCandidates),
             "no broad candidate read runs concurrently with targeted work"
         );
         assert_eq!(
-            fixture.forge.count(CountedForgeOp::ListPullRequests),
+            fixture
+                .forge
+                .count(CountedForgeOp::ListPullRequestCandidates),
             1,
             "one retained poll starts one immediate broad dirty follow-up"
         );

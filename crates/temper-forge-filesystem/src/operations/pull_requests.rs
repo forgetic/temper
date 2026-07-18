@@ -9,8 +9,9 @@ use crate::metadata::next_timestamp;
 use crate::record_ids::pull_request_id;
 use crate::validation::check_expected_version;
 use temper_forge_model::{
-    ChangeKind, CreatePullRequest, ForgeError, ForgeResult, ItemNumber, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestState, RepositoryId, UpdatePullRequest, Version,
+    CandidateLifecycle, ChangeKind, CreatePullRequest, ForgeError, ForgeResult, ItemNumber,
+    PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestState,
+    RepositoryId, UpdatePullRequest, Version,
 };
 
 pub(crate) fn list_pull_requests(
@@ -34,6 +35,40 @@ pub(crate) fn list_pull_requests(
     if let Some(limit) = query.limit {
         pull_requests.truncate(limit);
     }
+    Ok(pull_requests)
+}
+
+pub(crate) fn list_pull_request_candidates(
+    forge: &FilesystemForge,
+    repo_id: &RepositoryId,
+    query: PullRequestCandidateQuery,
+) -> ForgeResult<Vec<PullRequest>> {
+    let labels = query.labels.normalized()?;
+    forge.require_repository(repo_id)?;
+    let mut pull_requests = forge
+        .read_pull_requests_for_existing_repository(repo_id)?
+        .into_iter()
+        .filter(|pull_request| match query.lifecycle {
+            CandidateLifecycle::Open => pull_request.state == PullRequestState::Open,
+            CandidateLifecycle::Terminal => matches!(
+                pull_request.state,
+                PullRequestState::Closed | PullRequestState::Merged
+            ),
+        })
+        .filter(|pull_request| {
+            labels.as_ref().is_none_or(|labels| {
+                labels
+                    .iter()
+                    .any(|required| pull_request.labels.iter().any(|label| label == required))
+            })
+        })
+        .collect::<Vec<_>>();
+    if !query.details.dependencies {
+        for pull_request in &mut pull_requests {
+            pull_request.dependencies.clear();
+        }
+    }
+    sort_pull_requests_by_number(&mut pull_requests);
     Ok(pull_requests)
 }
 
