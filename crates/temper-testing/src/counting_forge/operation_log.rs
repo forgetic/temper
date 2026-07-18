@@ -117,6 +117,10 @@ impl ForgeOperationLog {
             .sum()
     }
 
+    pub(super) fn total_count(&self) -> usize {
+        self.state.lock().expect("operation log mutex").trace.len()
+    }
+
     pub(super) fn pause_after(&self, op: CountedForgeOp, occurrence: usize) -> ForgeOperationPause {
         assert!(
             occurrence > 0,

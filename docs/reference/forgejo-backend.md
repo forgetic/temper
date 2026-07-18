@@ -223,7 +223,22 @@ journalctl -u temper -o cat | jq -s \
 # Fan-out budget summaries that exceeded the documented provider ceiling.
 journalctl -u temper -o cat | jq -c \
   'select(.measurement=="fan_out.completed" and ."provider.request_total">60)'
+
+# Slow mechanical phases and the provider-request delta for their admitted wake.
+journalctl -u temper -o cat | jq -c \
+  'select(.measurement=="mechanical.phase" and .duration_ms>1000) |
+   {run:(.span."wake.run_id" // ."wake.run_id"),phase:."mechanical.phase",
+    scope:."mechanical.scope",duration_ms,requests:."provider.request_total"}'
 ```
+
+A successful admitted run ends with `wake.phase=finish` and
+`wake.outcome=completed`. Repeated `gate.evaluated` debug records only show that
+a PR's state was read. To confirm a merge execution, query
+`measurement=mechanical.landing_attempt` and require a `started` record followed
+by a terminal outcome and `duration_ms` for the same repo, PR, queue, and
+transition. When phase records report `provider.requests_available=false`, use
+the correlated HTTP operation count because that backend cannot expose a
+cumulative provider counter.
 
 ### Optimistic concurrency is per backend instance
 

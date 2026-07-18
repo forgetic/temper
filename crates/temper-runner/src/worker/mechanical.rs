@@ -3,13 +3,17 @@
 use super::automation;
 use super::{Progress, Worker, WorkerError, saturating_u32, saturating_u64};
 use crate::coding_workspace::ExternalToolExecutors;
+use crate::observability::artifact_ref;
 use crate::scan::{ArtifactAddress, TargetedArtifactSnapshot, load_targeted_artifact};
 use crate::worker::PullRequestMergeObserver;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use temper_forge::{ChangeKind, Forge, ForgeError, HintArtifactKind, ItemNumber, RepositoryId};
+use temper_log::strip_provider_scheme;
 use temper_workflow::{
     Applier, ApplyOutcome, ArtifactSnapshot, AssignmentConverger, CompiledWorkflow,
     DefaultRecoveryPolicy, Executor, LeaseManager, LeasePolicy, ReconciliationMode, RecoveryPolicy,
@@ -154,72 +158,101 @@ where
         artifact_kind: HintArtifactKind,
         change: ChangeKind,
     ) -> Result<Progress, WorkerError> {
-        let mut targeted_snapshots = Vec::new();
-        let Some(loaded) = load_targeted_artifact(
+        let address = ArtifactAddress::new(artifact_kind, item);
+        let targeted = measure_mechanical_phase(
             self.forge,
             self.repo,
-            self.workflow,
-            ArtifactAddress::new(artifact_kind, item),
-        )
-        .await?
-        else {
-            return Ok(Progress::unchanged());
-        };
-        // Staged fan-out children are not externally dispatchable yet. This
-        // guard must precede both targeted automation and reconciliation so a
-        // webhook cannot mutate a partially wired child.
-        if loaded.classified.metadata.staged {
-            return Ok(Progress::unchanged());
-        }
-        if let TargetedArtifactSnapshot::PullRequest(pull_request) = &loaded.snapshot {
-            targeted_snapshots.push(ArtifactSnapshot::from_pull_request(pull_request));
-            if change != ChangeKind::Ci {
-                if let Some(metadata) = parse_metadata_block(&pull_request.body)
-                    .map_err(|error| ForgeError::Backend(error.to_string()))?
-                {
-                    for parent in metadata
-                        .parents
-                        .iter()
-                        .filter(|parent| parent.is_in_repository(self.repo))
-                    {
-                        if let Some(issue) = self
-                            .forge
-                            .get_issue_by_number(self.repo, parent.number)
-                            .await?
+            "targeted",
+            Some(address),
+            "automated_scan",
+            async {
+                let mut targeted_snapshots = Vec::new();
+                let Some(loaded) =
+                    load_targeted_artifact(self.forge, self.repo, self.workflow, address).await?
+                else {
+                    return Ok(None);
+                };
+                // Staged fan-out children are not externally dispatchable yet.
+                // This guard must precede both targeted automation and
+                // reconciliation so a webhook cannot mutate a partially wired
+                // child.
+                if loaded.classified.metadata.staged {
+                    return Ok(None);
+                }
+                if let TargetedArtifactSnapshot::PullRequest(pull_request) = &loaded.snapshot {
+                    targeted_snapshots.push(ArtifactSnapshot::from_pull_request(pull_request));
+                    if change != ChangeKind::Ci {
+                        if let Some(metadata) = parse_metadata_block(&pull_request.body)
+                            .map_err(|error| ForgeError::Backend(error.to_string()))?
                         {
-                            targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                            for parent in metadata
+                                .parents
+                                .iter()
+                                .filter(|parent| parent.is_in_repository(self.repo))
+                            {
+                                if let Some(issue) = self
+                                    .forge
+                                    .get_issue_by_number(self.repo, parent.number)
+                                    .await?
+                                {
+                                    targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
-        let automation_items = crate::scan::targeted_automated_work_items(
-            self.forge,
-            self.repo,
-            self.workflow,
-            &self.compiled,
-            &loaded,
-            now,
+                let automation_items = crate::scan::targeted_automated_work_items(
+                    self.forge,
+                    self.repo,
+                    self.workflow,
+                    &self.compiled,
+                    &loaded,
+                    now,
+                )
+                .await?;
+                Ok::<_, WorkerError>(Some((targeted_snapshots, automation_items)))
+            },
         )
         .await?;
-        let automation_progress = automation::execute_automated_items(
-            &self.name,
-            self.repo,
-            self.workflow,
-            &self.compiled,
-            &self.executor,
-            &self.external_tool_executors,
+        let Some((targeted_snapshots, automation_items)) = targeted else {
+            return Ok(Progress::unchanged());
+        };
+
+        let automation_progress = measure_mechanical_phase(
             self.forge,
-            automation_items,
-            self.pull_request_merge_observer.as_ref(),
+            self.repo,
+            "targeted",
+            Some(address),
+            "transition_application",
+            automation::execute_automated_items(
+                &self.name,
+                self.repo,
+                self.workflow,
+                &self.compiled,
+                &self.executor,
+                &self.external_tool_executors,
+                self.forge,
+                automation_items,
+                self.pull_request_merge_observer.as_ref(),
+            ),
         )
         .await?;
-        if targeted_snapshots.is_empty() {
-            return Ok(automation_progress);
-        }
-        let reconciliation_progress = self
-            .reconcile_targeted_snapshots(now, targeted_snapshots)
-            .await?;
+        let reconciliation_progress = measure_mechanical_phase(
+            self.forge,
+            self.repo,
+            "targeted",
+            Some(address),
+            "reconciliation",
+            async {
+                if targeted_snapshots.is_empty() {
+                    Ok(Progress::unchanged())
+                } else {
+                    self.reconcile_targeted_snapshots(now, targeted_snapshots)
+                        .await
+                }
+            },
+        )
+        .await?;
         Ok(Progress {
             changed: automation_progress.changed || reconciliation_progress.changed,
             actions: automation_progress
@@ -268,53 +301,93 @@ where
         now: DateTime<Utc>,
         mode: ReconciliationMode,
     ) -> Result<Progress, WorkerError> {
-        let reconciler = self.workflow.reconciler(&self.policy);
-        let report = reconciler
-            .reconcile_with_mode(self.forge, self.repo, self.journal, mode, now)
-            .await?;
-        let outcome = if report.is_clean() {
-            ApplyOutcome::default()
-        } else {
-            log_mechanical_reconciliation(&self.name, self.repo, &report);
-            Applier::new(&self.executor, &self.lease_manager, self.journal)
-                .apply_report_with_assignment_converger(
-                    self.repo,
-                    &report,
-                    now,
-                    &self.assignment_converger,
-                )
-                .await?
-        };
-        if !outcome.advisory.is_empty() {
-            self.advisory_actions
-                .fetch_add(saturating_u64(outcome.advisory.len()), Ordering::Relaxed);
-        }
-        let reconciliation_progress = Progress {
-            changed: !outcome.applied.is_empty(),
-            actions: saturating_u32(outcome.applied.len()),
-        };
-        log_mechanical_reconciliation_summary(
-            &self.name,
+        let reconciliation_progress = measure_mechanical_phase(
+            self.forge,
             self.repo,
-            mode,
-            &report,
-            &outcome,
-            reconciliation_progress,
-        );
+            "broad",
+            None,
+            "reconciliation",
+            async {
+                let reconciler = self.workflow.reconciler(&self.policy);
+                let report = reconciler
+                    .reconcile_with_mode(self.forge, self.repo, self.journal, mode, now)
+                    .await?;
+                let outcome = if report.is_clean() {
+                    ApplyOutcome::default()
+                } else {
+                    log_mechanical_reconciliation(&self.name, self.repo, &report);
+                    Applier::new(&self.executor, &self.lease_manager, self.journal)
+                        .apply_report_with_assignment_converger(
+                            self.repo,
+                            &report,
+                            now,
+                            &self.assignment_converger,
+                        )
+                        .await?
+                };
+                if !outcome.advisory.is_empty() {
+                    self.advisory_actions
+                        .fetch_add(saturating_u64(outcome.advisory.len()), Ordering::Relaxed);
+                }
+                let progress = Progress {
+                    changed: !outcome.applied.is_empty(),
+                    actions: saturating_u32(outcome.applied.len()),
+                };
+                log_mechanical_reconciliation_summary(
+                    &self.name, self.repo, mode, &report, &outcome, progress,
+                );
+                Ok::<_, WorkerError>(progress)
+            },
+        )
+        .await?;
         if mode == ReconciliationMode::DeepAudit {
             return Ok(reconciliation_progress);
         }
 
-        let automation_progress = automation::execute_automated_queues(
-            &self.name,
-            self.repo,
-            self.workflow,
-            &self.compiled,
-            &self.executor,
-            &self.external_tool_executors,
+        let automation_items = measure_mechanical_phase(
             self.forge,
-            now,
-            self.pull_request_merge_observer.as_ref(),
+            self.repo,
+            "broad",
+            None,
+            "automated_scan",
+            async {
+                if !self
+                    .compiled
+                    .queues()
+                    .iter()
+                    .any(|queue| queue.automation.is_some())
+                {
+                    return Ok(Vec::new());
+                }
+                crate::scan::scan_automated_queues(
+                    self.forge,
+                    self.repo,
+                    self.workflow,
+                    &self.compiled,
+                    now,
+                )
+                .await
+                .map_err(WorkerError::from)
+            },
+        )
+        .await?;
+        let automation_progress = measure_mechanical_phase(
+            self.forge,
+            self.repo,
+            "broad",
+            None,
+            "transition_application",
+            automation::execute_automated_items(
+                &self.name,
+                self.repo,
+                self.workflow,
+                &self.compiled,
+                &self.executor,
+                &self.external_tool_executors,
+                self.forge,
+                automation_items,
+                self.pull_request_merge_observer.as_ref(),
+            ),
         )
         .await?;
         Ok(combine_progress(
@@ -322,6 +395,67 @@ where
             automation_progress,
         ))
     }
+}
+
+/// Runs one expensive mechanical phase and emits exactly one terminal debug
+/// measurement. The optional backend counter is sampled around the phase so
+/// Forgejo-backed runs expose a request delta without making observability part
+/// of correctness.
+async fn measure_mechanical_phase<F, Fut, T, E>(
+    forge: &F,
+    repo: &RepositoryId,
+    scope: &'static str,
+    address: Option<ArtifactAddress>,
+    phase: &'static str,
+    future: Fut,
+) -> Result<T, E>
+where
+    F: Forge + ?Sized,
+    Fut: Future<Output = Result<T, E>>,
+{
+    let started = Instant::now();
+    let provider_requests_before = forge.provider_request_count();
+    let result = future.await;
+    let provider_requests = provider_requests_before.and_then(|before| {
+        forge
+            .provider_request_count()
+            .map(|after| after.saturating_sub(before))
+    });
+    let outcome = if result.is_ok() { "success" } else { "failed" };
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let provider_request_total = provider_requests.unwrap_or(0);
+    let provider_requests_available = provider_requests.is_some();
+    let repository = strip_provider_scheme(repo.as_str());
+    if let Some(address) = address {
+        let artifact = artifact_ref(repo, address.source()).to_string();
+        tracing::debug!(
+            target: "temper::worker",
+            measurement = "mechanical.phase",
+            repo = repository,
+            mechanical.scope = scope,
+            mechanical.phase = phase,
+            artifact.ref = artifact,
+            outcome,
+            duration_ms,
+            provider.request_total = provider_request_total,
+            provider.requests_available = provider_requests_available,
+            "mechanical {scope} {phase} {outcome}"
+        );
+    } else {
+        tracing::debug!(
+            target: "temper::worker",
+            measurement = "mechanical.phase",
+            repo = repository,
+            mechanical.scope = scope,
+            mechanical.phase = phase,
+            outcome,
+            duration_ms,
+            provider.request_total = provider_request_total,
+            provider.requests_available = provider_requests_available,
+            "mechanical {scope} {phase} {outcome}"
+        );
+    }
+    result
 }
 
 #[async_trait]

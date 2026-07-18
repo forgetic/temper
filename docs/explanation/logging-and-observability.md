@@ -42,7 +42,7 @@ operator topology those facts arrive on the engine/standalone
 
 | `service` | tracing `target` | Responsibility | Example events |
 | --- | --- | --- | --- |
-| `engine`  | `temper::engine`  | Orchestrator: applied transitions, label diffs, queue moves, gate evaluation, merges, resolution. The authoritative state-change log. | `transition.applied`, `gate.evaluated`, `pr.merged`, `item.resolved` |
+| `engine`  | `temper::engine`  | Orchestrator: applied transitions, label diffs, queue moves, merges, resolution, plus debug gate observations. The authoritative state-change log at info. | `transition.applied`, `gate.evaluated` (debug), `pr.merged`, `item.resolved` |
 | `worker`  | `temper::worker`  | Lease lifecycle and "what each role is doing right now": claims, saturation/queue-behind, releases. The concurrency view. | `lease.claimed`, `role.saturated`, `lease.released` |
 | `agent`   | `temper::agent`   | The LLM workspace runs (triage, coding): start/finish with duration and a one-line result. The slow, opaque steps. | `agent.started`, `agent.finished` |
 | `trigger` | `temper::trigger` | Inbound Forgejo webhook/wake facts emitted by the engine/standalone HTTP surface (and legacy/internal wake adapters). The only lines cross-checkable against Forgejo directly. | `issue.opened`, `wake.received`, `ci.completed` |
@@ -173,6 +173,12 @@ Altitude decides level. The rule that keeps it honest:
 | **debug** | Causes *between* state changes: each forge HTTP call (method, path, status, ms); feed/queue-scan decisions ("considered #42 eligible; #43 skipped: role saturated, holder #42"); gate re-evaluations; lease renewals; agent tool-call boundaries; reconcile passes. All inherit the `work_item` span. | Debugging *this daemon* — "why did #43 wait 4 minutes?" |
 | **trace** | Wire-level: full request/response bodies, JSON payloads, completion-queue churn, per-poll cadence ticks, raw webhook bodies. | Debugging *temper itself* or a forge-mapping bug. |
 
+`gate.evaluated` is the deliberate read-side exception to the historical event
+catalog: it keeps the typed `event` field and human renderer but is emitted at
+debug, not info. It may repeat on every scan and is not a workflow state change;
+operator alerts for actual merge execution should use
+`measurement=mechanical.landing_attempt` instead.
+
 Example debug rendering of the `#42`/`#43` contention (every line inherits
 `artifact.ref` from its span; the `INFO` line is the operator-facing one):
 
@@ -229,17 +235,42 @@ decision emits these structured fields:
 | `wake.run_id` | stable `{owner}/{repo}:{generation}` join key once a run exists |
 | `wake.reason` | targeted change (`label`, `review`, `ci`, …) or broad cause (`push`, `startup`, `poll`, `recovery`, `target_overflow`) |
 | `wake.scope` | `targeted`, `broad`, or `mixed` for a compacted follow-up |
-| `wake.outcome` | `accepted`, `suppressed`, `deferred`, `coalesced`, `promoted`, `started`, `dirty_follow_up`, or `failed` |
+| `wake.outcome` | `accepted`, `suppressed`, `deferred`, `coalesced`, `promoted`, `started`, `dirty_follow_up`, `completed`, or `failed` |
 | `wake.pending_target_count` | bounded artifact addresses still pending for the repository |
 | `wake.in_flight_repository_count` | repository runs currently holding the global permits |
 | `wake.queue_latency_ms`, `wake.execution_duration_ms` | numeric queue and execution latency |
 
-A successful completion retains `wake.outcome=started` and sets
-`wake.phase=finish`; failures use `wake.outcome=failed` with `error`. Result
-application runs carry `apply.id=<job_id>` and emit a numeric `duration_ms` at
-completion. Forgejo HTTP events inherit the current `wake.run_id` or `apply.id`
-span and expose `method`, normalized `path`, `operation`, `status`, and numeric
-`duration_ms`. Fan-out completion emits one
+A successful completion uses `wake.outcome=completed` and
+`wake.phase=finish`; `started` is reserved for `wake.phase=start`. Completion
+retains the same `wake.run_id`, queue latency, and execution duration. Failures
+use `wake.outcome=failed` with `error`.
+
+Expensive mechanical work emits one terminal
+`measurement=mechanical.phase` debug record for each phase that starts:
+`reconciliation`, `automated_scan`, and `transition_application`. The fields are
+`repo`, `mechanical.scope=broad|targeted`, optional `artifact.ref` for an exact
+target, `outcome=success|failed`, and numeric `duration_ms`. Forge backends that
+expose a cumulative request counter also produce a numeric
+`provider.request_total` delta with `provider.requests_available=true`; a false
+availability flag means the backend cannot supply the optional delta. These
+records execute inside the admitted wake span, so JSON output carries the
+inherited `wake.run_id` without a second admission or execution path.
+
+A gate read and a landing attempt are different events. `gate.evaluated` retains
+its structured `event`, `repo`, `pr.ref`, `artifact.ref`, `gates`, and human
+rendering, but is debug-only because every scan may repeat the same read-side
+observation. No cross-pass deduplication cache is maintained. Immediately before
+a direct automated transition containing `merge_pull_request`, the worker emits
+`measurement=mechanical.landing_attempt` with `repo`, numeric `pr.number`,
+`queue`, `transition`, and `landing.outcome=started`. Exactly one terminal record
+for that attempt adds numeric `duration_ms` and one of `applied`,
+`gate_not_satisfied`, `conflict_routed`, `stale`, or `failed`. Non-merge
+automation emits no landing attempt.
+
+Result application runs carry `apply.id=<job_id>` and emit a numeric
+`duration_ms` at completion. Forgejo HTTP events inherit the current
+`wake.run_id` or `apply.id` span and expose `method`, normalized `path`,
+`operation`, `status`, and numeric `duration_ms`. Fan-out completion emits one
 `measurement=fan_out.completed` record with `parent.ref`, child/dependency-edge
 counts, Forge read/write totals, an optional provider request delta, recovery,
 and total duration.
@@ -257,10 +288,30 @@ journalctl -u temper -o cat | jq -s \
   '[.[] | select((.span."wake.run_id" // ."wake.run_id")=="acme/widgets:17" and .operation != null)] |
    {count:length, slowest:(sort_by(.duration_ms) | reverse | .[:10])}'
 
+# Mechanical phase latency and provider request deltas for one wake.
+journalctl -u temper -o cat | jq -c \
+  'select(.measurement=="mechanical.phase" and
+          (.span."wake.run_id" // ."wake.run_id")=="acme/widgets:17") |
+   {phase:."mechanical.phase",scope:."mechanical.scope",outcome,duration_ms,
+    requests:(if ."provider.requests_available" then ."provider.request_total" else null end)}'
+
+# Actual merge executions only (gate.evaluated observations are intentionally excluded).
+journalctl -u temper -o cat | jq -c \
+  'select(.measurement=="mechanical.landing_attempt") |
+   {repo,pr:."pr.number",queue,transition,outcome:."landing.outcome",duration_ms}'
+
 # A result apply and its fan-out summary.
 journalctl -u temper -o cat | jq -c \
   'select((.span."apply.id" // ."apply.id")=="job-42" or .measurement=="fan_out.completed")'
 ```
+
+If a phase is slow, compare its `provider.request_total` delta with the Forge HTTP
+records carrying the same `wake.run_id`. A high delta points to query shape or
+fan-out; a small delta with high `duration_ms` points to slow individual provider
+calls. When `provider.requests_available=false`, count the correlated HTTP
+`operation` records instead. A repeated eligible `gate.evaluated` record proves
+only that state was read; look for a paired landing-attempt `started` and terminal
+record to prove Temper actually tried the merge.
 
 If accepted deliveries have no `started` decision, first inspect `deferred`
 (apply active), `coalesced` (already represented), and global in-flight counts.
@@ -310,6 +361,11 @@ The approved operator view, multi-repo with concurrent intake. Two repos
 (`acme/widgets`, `acme/api`), three issues filed within seconds; the single
 per-role worker (concurrency=1, shared across repos) serializes work, and the
 `role.saturated` lines name the cross-repo wait queue.
+
+The gate lines in the transcript are available only with engine debug logging;
+they illustrate the human projection of repeatable read-side observations and
+are absent from the default info-only operator view. The merge and resolution
+lines remain info workflow-state changes.
 
 ```text
 $ journalctl -u temper -o short-iso
