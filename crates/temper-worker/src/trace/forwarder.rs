@@ -96,9 +96,10 @@ pub(crate) async fn forward_pending<T: Transport>(
         .recover_forwardable()
         .map_err(|error| format!("recover activity spools: {error}"))?;
     for mut run in runs {
-        while let Some(batch) =
+        while let Some(forwarding_batch) =
             run.pending_batch_bounded(FORWARD_BATCH_EVENT_LIMIT, FORWARD_BATCH_ENCODED_BYTE_LIMIT)
         {
+            let (batch, boundaries) = forwarding_batch.into_parts();
             let last_sent = batch
                 .events
                 .last()
@@ -134,13 +135,18 @@ pub(crate) async fn forward_pending<T: Transport>(
             {
                 return Err("activity acknowledgement cursor is outside the sent batch".to_string());
             }
+            let acknowledged = reply.acknowledgement.highest_contiguous_seq;
+            let boundary = boundaries
+                .iter()
+                .copied()
+                .find(|boundary| boundary.sequence == acknowledged)
+                .ok_or_else(|| {
+                    "activity acknowledgement has no durable event boundary".to_string()
+                })?;
             collector
-                .acknowledge(
-                    &run.manifest.run_id,
-                    reply.acknowledgement.highest_contiguous_seq,
-                )
+                .acknowledge_forwarded(&run.manifest.run_id, boundary)
                 .map_err(|error| format!("persist activity acknowledgement: {error}"))?;
-            run.acknowledged_seq = reply.acknowledgement.highest_contiguous_seq;
+            run.acknowledged_seq = acknowledged;
         }
     }
     Ok(())
@@ -288,7 +294,14 @@ mod tests {
                     .await
                     .is_err()
                 );
-                assert_eq!(collector.recover().expect("recover")[0].acknowledged_seq, 0);
+                let unacknowledged = collector.recover().expect("recover");
+                assert_eq!(unacknowledged[0].acknowledged_seq, 0);
+                let index: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(temp.path().join(&run_id).join(".forwarding-index.json"))
+                        .expect("forwarding index after lost reply"),
+                )
+                .expect("parse forwarding index after lost reply");
+                assert_eq!(index["highest_contiguous_seq"], 0);
 
                 forward_pending(
                     cx.clone(),

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt as _;
@@ -11,6 +11,16 @@ use temper_protocol_activity::{
 };
 
 use super::{RecoveredTraceRun, TraceError, TraceManifestV1, event_blob_references};
+
+mod forwarding_index;
+mod recovery;
+use forwarding_index::persist_forwarding_index_best_effort;
+pub(super) use forwarding_index::{acknowledge_forwarded_run, persist_forwarding_index};
+use recovery::{recover_compacted_marker, recover_run_with_offsets_locked, recover_spool_metadata};
+pub(super) use recovery::{recover_forwarding_run, recover_run};
+
+const FORWARDING_INDEX_VERSION: u32 = 1;
+pub(super) const FORWARDING_INDEX_FILE: &str = ".forwarding-index.json";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +41,39 @@ struct TraceCompactedAckV1 {
     terminal: bool,
 }
 
+/// Discardable forwarding metadata. The acknowledgement cursor remains the
+/// sole authority; this sidecar only identifies the byte boundary from which a
+/// forwarding-only recovery may safely resume validation.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraceForwardingIndexV1 {
+    version: u32,
+    run_id: String,
+    highest_contiguous_seq: u64,
+    event_end_offset: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RecoveredForwardingRun {
+    pub(super) manifest: TraceManifestV1,
+    pub(super) events: Vec<AgentRunEventV1>,
+    pub(super) event_end_offsets: Vec<u64>,
+    pub(super) blobs: Vec<BlobAttachmentV1>,
+    pub(super) acknowledged_seq: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ForwardingAcknowledgementBoundary {
+    pub(super) sequence: u64,
+    pub(super) event_end_offset: u64,
+    pub(super) terminal: bool,
+}
+
+struct RecoveredSpoolMetadata {
+    manifest: TraceManifestV1,
+    cursor: TraceAckCursorV1,
+}
+
 impl TraceAckCursorV1 {
     pub(super) fn new(run_id: &str, highest_contiguous_seq: u64) -> Self {
         Self {
@@ -41,159 +84,41 @@ impl TraceAckCursorV1 {
     }
 }
 
-pub(super) fn recover_run(run_dir: &Path) -> Result<RecoveredTraceRun, TraceError> {
-    let (lock_path, lock_file) = open_spool_lock(run_dir)?;
-    lock_file
-        .lock_exclusive()
-        .map_err(|source| io_error("lock trace spool for recovery", &lock_path, source))?;
-    let recovered = recover_run_locked(run_dir);
-    let unlocked = fs2::FileExt::unlock(&lock_file)
-        .map_err(|source| io_error("unlock trace spool after recovery", &lock_path, source));
-    match (recovered, unlocked) {
-        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
-        (Ok(run), Ok(())) => Ok(run),
-    }
+fn write_acknowledgement_cursor(
+    run_dir: &Path,
+    run_id: &str,
+    highest_contiguous_seq: u64,
+) -> Result<(), TraceError> {
+    let cursor = TraceAckCursorV1::new(run_id, highest_contiguous_seq);
+    let bytes = serde_json::to_vec_pretty(&cursor)?;
+    atomic_write(&run_dir.join("acknowledgement.json"), &bytes, true)
 }
 
-fn recover_run_locked(run_dir: &Path) -> Result<RecoveredTraceRun, TraceError> {
-    set_private_dir(run_dir)?;
-    let manifest_path = run_dir.join("manifest.json");
-    let manifest: TraceManifestV1 = read_json(&manifest_path)?;
-    validate_manifest(&manifest)?;
-    if run_dir.file_name().and_then(|name| name.to_str()) != Some(manifest.run_id.as_str()) {
-        return Err(TraceError::InvalidSpool(format!(
-            "run directory does not match manifest run ID {}",
-            manifest.run_id
-        )));
-    }
-
-    let cursor_path = run_dir.join("acknowledgement.json");
-    let cursor: TraceAckCursorV1 = read_json(&cursor_path)?;
-    if cursor.version != ACTIVITY_PROTOCOL_VERSION || cursor.run_id != manifest.run_id {
-        return Err(TraceError::InvalidSpool(format!(
-            "run {} has a mismatched acknowledgement cursor",
-            manifest.run_id
-        )));
-    }
-
-    let compacted_path = run_dir.join("compacted.json");
-    if compacted_path.exists() {
-        let compacted: TraceCompactedAckV1 = read_json(&compacted_path)?;
-        if compacted.version != ACTIVITY_PROTOCOL_VERSION
-            || compacted.run_id != manifest.run_id
-            || compacted.highest_contiguous_seq == 0
-            || compacted.highest_contiguous_seq != cursor.highest_contiguous_seq
-            || !compacted.terminal
-        {
-            return Err(TraceError::InvalidSpool(format!(
-                "run {} has a mismatched compact acknowledgement marker",
-                manifest.run_id
-            )));
-        }
-        reclaim_compacted_payload(run_dir)?;
-        return Ok(RecoveredTraceRun {
-            manifest,
-            events: Vec::new(),
-            blobs: Vec::new(),
-            acknowledged_seq: cursor.highest_contiguous_seq,
-        });
-    }
-
-    let events_path = run_dir.join("events.jsonl");
-    let events = recover_event_records(&events_path)?;
-    if events.is_empty() || !matches!(events[0].event, AgentActivityEventV1::RunStarted(_)) {
-        return Err(TraceError::InvalidSpool(format!(
-            "run {} does not begin with run.started",
-            manifest.run_id
-        )));
-    }
-    temper_protocol_activity::validate_run_stream(&events)?;
-    let mut terminal_seen = false;
-    for event in &events {
-        if event.run_id != manifest.run_id
-            || event.assignment != manifest.assignment
-            || event.agent_session_id != manifest.agent_session_id
-        {
-            return Err(TraceError::InvalidSpool(format!(
-                "run {} event identity differs from immutable manifest",
-                manifest.run_id
-            )));
-        }
-        if terminal_seen {
-            return Err(TraceError::InvalidSpool(format!(
-                "run {} contains an event after its terminal event",
-                manifest.run_id
-            )));
-        }
-        terminal_seen = event.event.is_terminal();
-    }
-
-    let last_seq = events.last().map_or(0, |event| event.seq);
-    if cursor.highest_contiguous_seq > last_seq {
-        return Err(TraceError::InvalidAcknowledgement {
-            acknowledged: cursor.highest_contiguous_seq,
-            last_seq,
-        });
-    }
-
-    let mut references = BTreeMap::<String, BlobReferenceV1>::new();
-    for event in &events {
-        for reference in event_blob_references(&event.event) {
-            if references
-                .insert(reference.digest.clone(), reference.clone())
-                .is_some_and(|existing| existing != *reference)
-            {
-                return Err(TraceError::InvalidSpool(
-                    "one recovered blob digest has conflicting metadata".to_string(),
-                ));
-            }
-        }
-    }
-    let blobs_dir = run_dir.join("blobs");
-    set_private_dir(&blobs_dir)?;
-    let mut blobs = Vec::with_capacity(references.len());
-    for reference in references.values() {
-        let path = blob_path(&blobs_dir, reference)?;
-        let bytes = read_bytes(&path)?;
-        let attachment = BlobAttachmentV1::from_bytes(reference.media_type, &bytes);
-        if attachment.blob != *reference {
-            return Err(TraceError::InvalidSpool(format!(
-                "recovered blob {} does not match its event reference",
-                reference.digest
-            )));
-        }
-        blobs.push(attachment);
-    }
-
-    Ok(RecoveredTraceRun {
-        manifest,
-        events,
-        blobs,
-        acknowledged_seq: cursor.highest_contiguous_seq,
-    })
+fn compact_fully_acknowledged_run(
+    run_dir: &Path,
+    run_id: &str,
+    highest_contiguous_seq: u64,
+) -> Result<(), TraceError> {
+    let compacted = TraceCompactedAckV1 {
+        version: ACTIVITY_PROTOCOL_VERSION,
+        run_id: run_id.to_string(),
+        highest_contiguous_seq,
+        terminal: true,
+    };
+    let bytes = serde_json::to_vec_pretty(&compacted)?;
+    // The marker is installed and synced before any accepted payload is
+    // removed. Recovery can therefore finish an interrupted reclaim, while a
+    // crash before this write leaves the complete spool.
+    atomic_write(&run_dir.join("compacted.json"), &bytes, false)?;
+    reclaim_compacted_payload(run_dir)
 }
 
 pub(super) fn acknowledge_recovered_run(
     run_dir: &Path,
     highest_contiguous_seq: u64,
 ) -> Result<bool, TraceError> {
-    let root = run_dir.parent().ok_or_else(|| {
-        TraceError::InvalidSpool(format!("{} has no spool root", run_dir.display()))
-    })?;
-    let (root_lock_path, root_lock_file) = open_spool_root_lock(root)?;
-    root_lock_file.lock_exclusive().map_err(|source| {
-        io_error(
-            "lock aggregate trace spool for acknowledgement",
-            &root_lock_path,
-            source,
-        )
-    })?;
-    let (lock_path, lock_file) = open_spool_lock(run_dir)?;
-    lock_file
-        .lock_exclusive()
-        .map_err(|source| io_error("lock trace spool for acknowledgement", &lock_path, source))?;
-    let result = (|| {
-        let recovered = recover_run_locked(run_dir)?;
+    acknowledge_run_locked_at_root(run_dir, |run_dir| {
+        let recovered = recover_run_with_offsets_locked(run_dir)?;
         if recovered.events.is_empty() {
             return if highest_contiguous_seq <= recovered.acknowledged_seq {
                 Ok(false)
@@ -212,32 +137,63 @@ pub(super) fn acknowledge_recovered_run(
             });
         }
         let advanced = highest_contiguous_seq > recovered.acknowledged_seq;
+        let acknowledged_seq = recovered.acknowledged_seq.max(highest_contiguous_seq);
         if advanced {
-            let cursor = TraceAckCursorV1::new(&recovered.manifest.run_id, highest_contiguous_seq);
-            let bytes = serde_json::to_vec_pretty(&cursor)?;
-            atomic_write(&run_dir.join("acknowledgement.json"), &bytes, true)?;
+            // The cursor is authoritative and must reach stable storage before
+            // the discardable byte-boundary index is replaced.
+            write_acknowledgement_cursor(run_dir, &recovered.manifest.run_id, acknowledged_seq)?;
         }
-        if highest_contiguous_seq == last_seq
-            && recovered
-                .events
-                .last()
-                .is_some_and(|event| event.event.is_terminal())
-        {
-            let compacted = TraceCompactedAckV1 {
-                version: ACTIVITY_PROTOCOL_VERSION,
-                run_id: recovered.manifest.run_id,
-                highest_contiguous_seq,
-                terminal: true,
+        let acknowledged_index = usize::try_from(acknowledged_seq.saturating_sub(1)).ok();
+        let terminal = acknowledged_index
+            .and_then(|index| recovered.events.get(index))
+            .is_some_and(|event| event.seq == last_seq && event.event.is_terminal());
+        if terminal {
+            compact_fully_acknowledged_run(run_dir, &recovered.manifest.run_id, acknowledged_seq)?;
+        } else {
+            let event_end_offset = if acknowledged_seq == 0 {
+                0
+            } else {
+                acknowledged_index
+                    .and_then(|index| recovered.event_end_offsets.get(index))
+                    .copied()
+                    .ok_or_else(|| {
+                        TraceError::InvalidSpool(format!(
+                            "run {} has no event boundary for acknowledgement {}",
+                            recovered.manifest.run_id, acknowledged_seq
+                        ))
+                    })?
             };
-            let bytes = serde_json::to_vec_pretty(&compacted)?;
-            // The marker is installed and synced before any accepted payload is
-            // removed. Recovery can therefore finish an interrupted reclaim,
-            // while a crash before this write leaves the complete spool.
-            atomic_write(&run_dir.join("compacted.json"), &bytes, false)?;
-            reclaim_compacted_payload(run_dir)?;
+            persist_forwarding_index_best_effort(
+                run_dir,
+                &recovered.manifest.run_id,
+                acknowledged_seq,
+                event_end_offset,
+            );
         }
         Ok(advanced)
-    })();
+    })
+}
+
+fn acknowledge_run_locked_at_root<T>(
+    run_dir: &Path,
+    operation: impl FnOnce(&Path) -> Result<T, TraceError>,
+) -> Result<T, TraceError> {
+    let root = run_dir.parent().ok_or_else(|| {
+        TraceError::InvalidSpool(format!("{} has no spool root", run_dir.display()))
+    })?;
+    let (root_lock_path, root_lock_file) = open_spool_root_lock(root)?;
+    root_lock_file.lock_exclusive().map_err(|source| {
+        io_error(
+            "lock aggregate trace spool for acknowledgement",
+            &root_lock_path,
+            source,
+        )
+    })?;
+    let (lock_path, lock_file) = open_spool_lock(run_dir)?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|source| io_error("lock trace spool for acknowledgement", &lock_path, source))?;
+    let result = operation(run_dir);
     let unlocked = fs2::FileExt::unlock(&lock_file).map_err(|source| {
         io_error(
             "unlock trace spool after acknowledgement",
@@ -254,7 +210,7 @@ pub(super) fn acknowledge_recovered_run(
     });
     match (result, unlocked, root_unlocked) {
         (Err(error), _, _) | (Ok(_), Err(error), _) | (Ok(_), Ok(_), Err(error)) => Err(error),
-        (Ok(advanced), Ok(()), Ok(())) => Ok(advanced),
+        (Ok(value), Ok(()), Ok(())) => Ok(value),
     }
 }
 
@@ -426,32 +382,85 @@ fn reclaim_compacted_payload(run_dir: &Path) -> Result<(), TraceError> {
         .map_err(|source| io_error("sync compacted activity spool", run_dir, source))
 }
 
-fn recover_event_records(path: &Path) -> Result<Vec<AgentRunEventV1>, TraceError> {
+fn recover_event_records(
+    path: &Path,
+    start_offset: u64,
+) -> Result<(Vec<AgentRunEventV1>, Vec<u64>), TraceError> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
         .map_err(|source| io_error("open activity records", path, source))?;
     set_private_file(path)?;
+    file.seek(SeekFrom::Start(start_offset))
+        .map_err(|source| io_error("seek activity records", path, source))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|source| io_error("read activity records", path, source))?;
+    record_event_payload_bytes_read(bytes.len());
     if !bytes.is_empty() && !bytes.ends_with(b"\n") {
         let complete_len = bytes
             .iter()
             .rposition(|byte| *byte == b'\n')
             .map_or(0, |index| index + 1);
-        file.set_len(u64::try_from(complete_len).unwrap_or(0))
+        let complete_len_u64 = u64::try_from(complete_len).unwrap_or(u64::MAX);
+        let truncate_to = start_offset.checked_add(complete_len_u64).ok_or_else(|| {
+            TraceError::InvalidSpool("activity record byte offset overflowed".to_string())
+        })?;
+        file.set_len(truncate_to)
             .and_then(|()| file.sync_data())
             .map_err(|source| io_error("truncate incomplete activity record", path, source))?;
         bytes.truncate(complete_len);
     }
-    bytes
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(serde_json::from_slice)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(TraceError::Json)
+
+    let mut events = Vec::new();
+    let mut event_end_offsets = Vec::new();
+    let mut consumed = 0u64;
+    for record in bytes.split_inclusive(|byte| *byte == b'\n') {
+        consumed = consumed
+            .checked_add(u64::try_from(record.len()).unwrap_or(u64::MAX))
+            .ok_or_else(|| {
+                TraceError::InvalidSpool("activity record byte offset overflowed".to_string())
+            })?;
+        let line = record.strip_suffix(b"\n").unwrap_or(record);
+        if line.is_empty() {
+            continue;
+        }
+        events.push(serde_json::from_slice(line)?);
+        event_end_offsets.push(start_offset.checked_add(consumed).ok_or_else(|| {
+            TraceError::InvalidSpool("activity record byte offset overflowed".to_string())
+        })?);
+    }
+    Ok((events, event_end_offsets))
+}
+
+#[cfg(test)]
+thread_local! {
+    static EVENT_PAYLOAD_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_event_payload_bytes_read(bytes: usize) {
+    EVENT_PAYLOAD_BYTES_READ.with(|total| {
+        total.set(
+            total
+                .get()
+                .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX)),
+        );
+    });
+}
+
+#[cfg(not(test))]
+fn record_event_payload_bytes_read(_bytes: usize) {}
+
+#[cfg(test)]
+pub(super) fn reset_event_payload_bytes_read() {
+    EVENT_PAYLOAD_BYTES_READ.with(|total| total.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn event_payload_bytes_read() -> u64 {
+    EVENT_PAYLOAD_BYTES_READ.with(std::cell::Cell::get)
 }
 
 pub(super) fn validate_manifest(manifest: &TraceManifestV1) -> Result<(), TraceError> {
