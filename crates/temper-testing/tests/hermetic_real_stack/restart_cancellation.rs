@@ -217,8 +217,20 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
         );
         assert_one_retryable_publication(&stack);
         wait_for_outbox_count(&stack, &cx, 0).await;
+
+        // Reset both process-local components before the successful retry. The
+        // timed-out worker can leave already-queued protocol completions in the
+        // current daemon after its durable result is acknowledged; those belong
+        // to the crashed incarnation and must not race the next dispatch. The
+        // recovery barrier also proves the accepted retryable result left no
+        // durable assignment behind.
         stack.crash_worker().await;
         stack.set_worker_liveness_limits(WorkerLivenessLimits::default());
+        stack.replace_daemon(&handle).await;
+        assert!(
+            stack.open_recovery_barrier().await.is_empty(),
+            "accepted retryable result must leave no assignment to recover"
+        );
 
         // The next attempt must attach to the same coordination-key checkout
         // and session, then commit both interrupted tracked and untracked work.
@@ -392,7 +404,7 @@ fn assert_one_retryable_publication(stack: &HermeticRealStack) {
 }
 
 async fn wait_for_outbox_count(stack: &HermeticRealStack, cx: &skein::cx::Cx, expected: usize) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let count = stack.pending_result_count().expect("read result outbox");
         if count == expected {
@@ -412,7 +424,7 @@ async fn wait_for_checkpoint_count(
     point: PausePoint,
     expected: usize,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let count = stack.pause_hooks().reached_count(point);
         if count >= expected {

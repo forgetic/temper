@@ -145,7 +145,34 @@ pub(super) fn read_proc_stat(pid: u32) -> io::Result<ProcStat> {
         fields[index].parse().map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("invalid {name} in /proc pid stat"),
+                format!(
+                    "invalid {name} `{}` in /proc pid stat for pid {pid}",
+                    fields[index]
+                ),
+            )
+        })
+    };
+    let parse_process_id = |index: usize, name: &str| -> io::Result<u32> {
+        let value = fields[index].parse::<i64>().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid {name} `{}` in /proc pid stat for pid {pid}",
+                    fields[index]
+                ),
+            )
+        })?;
+        // proc_pid_stat(5) defines ancestry identifiers as signed values and
+        // the kernel can expose -1 while a task is passing through release.
+        // ProcessIdentity uses zero for an unavailable relationship, so retain
+        // the member/start identity without failing the whole procfs scan.
+        if value == -1 {
+            return Ok(0);
+        }
+        u32::try_from(value).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{name} `{value}` is outside the process-id range"),
             )
         })
     };
@@ -153,12 +180,9 @@ pub(super) fn read_proc_stat(pid: u32) -> io::Result<ProcStat> {
         .unwrap_or_else(|_| PathBuf::from(format!("[pid:{pid}]")));
     Ok(ProcStat {
         pid,
-        ppid: u32::try_from(parse(1, "ppid")?)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "ppid exceeds u32"))?,
-        process_group: u32::try_from(parse(2, "process group")?)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "process group exceeds u32"))?,
-        session: u32::try_from(parse(3, "session")?)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "session exceeds u32"))?,
+        ppid: parse_process_id(1, "ppid")?,
+        process_group: parse_process_id(2, "process group")?,
+        session: parse_process_id(3, "session")?,
         start_time: parse(19, "start time")?,
         executable,
     })

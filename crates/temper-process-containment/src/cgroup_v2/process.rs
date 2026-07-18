@@ -21,16 +21,39 @@ pub(super) fn proc_identity(pid: u32) -> io::Result<ProcessIdentity> {
         fields[index].parse().map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("invalid {name} in /proc stat: {error}"),
+                format!(
+                    "invalid {name} `{}` in /proc stat for pid {pid}: {error}",
+                    fields[index]
+                ),
             )
         })
     };
-    let ppid = u32::try_from(parse(1, "ppid")?)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "ppid exceeds u32"))?;
-    let pgrp = u32::try_from(parse(2, "process group")?)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pgrp exceeds u32"))?;
-    let session = u32::try_from(parse(3, "session")?)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "session exceeds u32"))?;
+    let parse_process_id = |index: usize, name: &str| -> io::Result<u32> {
+        let value = fields[index].parse::<i64>().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid {name} `{}` in /proc stat for pid {pid}: {error}",
+                    fields[index]
+                ),
+            )
+        })?;
+        // proc_pid_stat(5) uses signed ancestry fields and can expose -1 for a
+        // task in release. Preserve the exact PID/start identity and represent
+        // that unavailable relationship with ProcessIdentity's zero sentinel.
+        if value == -1 {
+            return Ok(0);
+        }
+        u32::try_from(value).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{name} `{value}` is outside the process-id range"),
+            )
+        })
+    };
+    let ppid = parse_process_id(1, "ppid")?;
+    let pgrp = parse_process_id(2, "process group")?;
+    let session = parse_process_id(3, "session")?;
     let start_time = parse(19, "start time")?;
     let executable = fs::read_link(format!("/proc/{pid}/exe")).map_err(normalize_proc_error)?;
     Ok(ProcessIdentity::new(

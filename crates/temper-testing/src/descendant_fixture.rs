@@ -35,20 +35,43 @@ pub fn process_identity(pid: u32, role: impl Into<String>) -> io::Result<Recorde
         fields[index].parse().map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("invalid {name} in /proc stat: {error}"),
+                format!(
+                    "invalid {name} `{}` in /proc stat for pid {pid}: {error}",
+                    fields[index]
+                ),
             )
         })
     };
-    let as_u32 = |value: u64, name: &str| {
-        u32::try_from(value)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("{name} exceeds u32")))
+    let parse_process_id = |index: usize, name: &str| -> io::Result<u32> {
+        let value = fields[index].parse::<i64>().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid {name} `{}` in /proc stat for pid {pid}: {error}",
+                    fields[index]
+                ),
+            )
+        })?;
+        // proc_pid_stat(5) exposes these fields as signed integers. The
+        // kernel can publish -1 while a task is passing through release; use
+        // zero as the existing "no process identity" sentinel rather than
+        // turning that ordinary exit race into an inspection failure.
+        if value == -1 {
+            return Ok(0);
+        }
+        u32::try_from(value).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{name} `{value}` is outside the process-id range"),
+            )
+        })
     };
     Ok(RecordedProcessIdentity {
         role: role.into(),
         pid,
-        ppid: as_u32(parse(1, "ppid")?, "ppid")?,
-        process_group: as_u32(parse(2, "process group")?, "process group")?,
-        session: as_u32(parse(3, "session")?, "session")?,
+        ppid: parse_process_id(1, "ppid")?,
+        process_group: parse_process_id(2, "process group")?,
+        session: parse_process_id(3, "session")?,
         start_time: parse(19, "start time")?,
         executable: fs::read_link(format!("/proc/{pid}/exe"))
             .unwrap_or_else(|_| PathBuf::from(format!("[pid:{pid}]"))),
