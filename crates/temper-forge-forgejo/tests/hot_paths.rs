@@ -158,15 +158,12 @@ fn assert_no_all_history_lists(requests: &[HttpRequest]) {
 #[test]
 fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
     let client = MockHttpClient::new();
-    // Open candidate queries still cover every workflow label. Terminal queries
-    // are skipped here because both labels are pure artifact-kind identities.
-    // One summary issue candidate proves no dependency enrichment happens on
-    // list results.
+    // Each artifact type uses one consolidated open lifecycle bucket regardless
+    // of workflow-label count. One summary issue candidate proves no dependency
+    // enrichment happens on list results.
     client.push_response(200, format!("[{}]", issue_json(1, "open", "", &["code"])));
-    client.push_response(200, "[]");
     // PR discovery uses the issue label index directly for summary candidates;
     // no exact `/pulls/{number}` detail is needed on the open hot path.
-    client.push_response(200, "[]");
     client.push_response(
         200,
         format!("[{}]", pr_issue_json(2, "open", "", &["implementation"])),
@@ -198,7 +195,7 @@ fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
         .iter()
         .filter(|request| request.path == issue_list_path() || request.path == pull_list_path())
         .collect();
-    assert_eq!(list_requests.len(), 4);
+    assert_eq!(list_requests.len(), 2);
     for request in list_requests {
         assert_eq!(request.method, HttpMethod::Get);
         assert_eq!(query_value(request, "state"), Some("open"));

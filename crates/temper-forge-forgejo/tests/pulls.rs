@@ -9,7 +9,7 @@ use support::{
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
 use temper_forge_model::{
-    BranchRef, CreateComment, CreatePullRequest, ItemListDetails, ItemNumber, ItemSort,
+    BranchRef, CreateComment, CreatePullRequest, Forge, ItemListDetails, ItemNumber, ItemSort,
     ItemSortField, PullRequestQuery, PullRequestState, PullRequestUpdateState, SortDirection,
     UpdatePullRequest, UserId,
 };
@@ -305,6 +305,66 @@ fn get_pull_request_by_number_maps_fields() {
     assert_eq!(
         requests[1].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/42/dependencies")
+    );
+}
+
+#[test]
+fn exact_pull_request_detail_budgets_are_wired_through_forge_trait() {
+    let client = MockHttpClient::new();
+    client.push_response(200, pr_json(41, "open", "[]", ""));
+    client.push_response(200, pr_json(42, "open", "[]", ""));
+    client.push_response(200, pr_json(43, "open", "[]", ""));
+    client.push_response(200, r#"[{"number": 7}]"#);
+    let backend = forge(client.clone());
+    let forge: &dyn Forge = &backend;
+
+    let by_id =
+        block_on(forge.get_pull_request_with_details(&pull_id(41), ItemListDetails::summary()))
+            .unwrap()
+            .expect("summary pull by id");
+    let by_number = block_on(forge.get_pull_request_by_number_with_details(
+        &repo_id(),
+        ItemNumber::new(42),
+        ItemListDetails::summary(),
+    ))
+    .unwrap()
+    .expect("summary pull by number");
+    let full = block_on(forge.get_pull_request_by_number_with_details(
+        &repo_id(),
+        ItemNumber::new(43),
+        ItemListDetails::full(),
+    ))
+    .unwrap()
+    .expect("full pull by number");
+
+    assert!(by_id.dependencies.is_empty());
+    assert!(by_number.dependencies.is_empty());
+    assert_eq!(full.dependencies, vec![ItemNumber::new(7)]);
+    let requests = client.recorded();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.path.ends_with("/dependencies"))
+            .count(),
+        1,
+        "summary exact reads must never load dependencies"
+    );
+    assert_eq!(
+        requests[0].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/41")
+    );
+    assert_eq!(
+        requests[1].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/42")
+    );
+    assert_eq!(
+        requests[2].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/43")
+    );
+    assert_eq!(
+        requests[3].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues/43/dependencies")
     );
 }
 
