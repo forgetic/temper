@@ -168,17 +168,28 @@ impl TraceCollector {
         for run_dir in run_dirs {
             match recover_forwarding_run(&run_dir) {
                 Ok(run) => runs.push(run),
-                Err(error) => tracing::warn!(
-                    target: "temper::worker",
-                    service = "worker",
-                    event = "agent.activity.spool_skipped",
-                    spool = %run_dir.display(),
-                    %error,
-                    "worker skipped a corrupt activity spool and continued forwarding others"
-                ),
+                Err(error) => warn_skipped_spool(&run_dir, &error),
             }
         }
         Ok(runs)
+    }
+
+    /// Recovers one notified run without walking unrelated spool directories.
+    /// A damaged run is warned and isolated just like one entry in a full
+    /// recovery pass; a future append or recovery backstop may try it again.
+    pub(super) fn recover_notified_run(&self, run_id: &str) -> Option<RecoveredForwardingRun> {
+        let root = self.config.spool_root.as_deref()?;
+        let run_dir = root.join(run_id);
+        if !run_dir.is_dir() {
+            return None;
+        }
+        match recover_forwarding_run(&run_dir) {
+            Ok(run) => Some(run),
+            Err(error) => {
+                warn_skipped_spool(&run_dir, &error);
+                None
+            }
+        }
     }
 
     pub(super) fn acknowledge_forwarded(
@@ -261,4 +272,15 @@ impl TraceCollector {
             }
         }
     }
+}
+
+fn warn_skipped_spool(run_dir: &std::path::Path, error: &TraceError) {
+    tracing::warn!(
+        target: "temper::worker",
+        service = "worker",
+        event = "agent.activity.spool_skipped",
+        spool = %run_dir.display(),
+        %error,
+        "worker skipped a corrupt activity spool and continued forwarding others"
+    );
 }
