@@ -45,6 +45,19 @@ pub enum SortDirection {
     Desc,
 }
 
+/// Whether issue and pull-request numbers can collide within a repository.
+///
+/// The conservative default is [`Self::Independent`]. A backend may advertise
+/// [`Self::Shared`] only when one repository-scoped item number identifies at
+/// most one issue or pull request.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ItemNumberNamespace {
+    /// Issue and pull-request counters are independent and may collide.
+    Independent,
+    /// Issues and pull requests share one collision-free number sequence.
+    Shared,
+}
+
 /// Repository field used for sorting repository lists.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -201,6 +214,16 @@ pub struct CiJobQuery {
 /// across backends.
 #[async_trait]
 pub trait Forge: Send + Sync {
+    /// Describes whether issue and pull-request [`ItemNumber`] values can
+    /// collide within one repository.
+    ///
+    /// This is a static backend capability and must not perform I/O. The
+    /// independent default preserves issue-first resolution correctness for
+    /// compatibility backends with separate counters.
+    fn item_number_namespace(&self) -> ItemNumberNamespace {
+        ItemNumberNamespace::Independent
+    }
+
     /// Returns the cumulative provider HTTP request count when the backend can
     /// expose it without performing I/O. Callers use deltas only for debug
     /// measurements; correctness must never depend on this optional counter.

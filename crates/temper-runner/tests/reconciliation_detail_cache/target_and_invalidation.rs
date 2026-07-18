@@ -60,7 +60,70 @@ fn candidate_state_index_preserves_issue_first_collision_without_target_reads() 
 }
 
 #[test]
-fn listed_pr_target_reuses_state_after_issue_summary_collision_probe() {
+fn independent_namespace_probes_unlisted_issue_before_listed_pr() {
+    let inner = MemoryForge::new();
+    let repo = repo(&inner, "unlisted-collision");
+    let target_issue = issue(&inner, &repo, &[], "");
+    let colliding_pr = temper_testing::block_on(inner.create_pull_request(
+        &repo,
+        CreatePullRequest {
+            title: "collision".into(),
+            body: String::new(),
+            source: BranchRef {
+                repository_id: repo.clone(),
+                branch: "collision".into(),
+            },
+            target: BranchRef {
+                repository_id: repo.clone(),
+                branch: "main".into(),
+            },
+            labels: vec!["landed".into()],
+            assignees: Vec::new(),
+        },
+    ))
+    .expect("PR is created");
+    assert_eq!(target_issue, colliding_pr.number);
+    temper_testing::block_on(inner.merge_pull_request(
+        &colliding_pr.id,
+        MergePullRequest {
+            method: MergeMethod::Squash,
+            commit_title: None,
+            commit_body: None,
+            delete_source_branch: false,
+        },
+    ))
+    .expect("PR merges");
+    let source = issue(&inner, &repo, &["code", "blocked"], "");
+    add_dependency(&inner, &repo, source, target_issue);
+    let forge = CountingForge::new(inner);
+
+    let report = reconcile(
+        &forge,
+        &repo,
+        &ReconciliationDetailCache::default(),
+        ts("2026-05-29T00:00:00Z"),
+    );
+    assert!(
+        !report.findings.iter().any(|finding| matches!(
+            finding,
+            ReconcileFinding::DependenciesResolved {
+                target: ArtifactSource::Issue { number },
+                ..
+            } if *number == source
+        )),
+        "open issue must win over listed merged PR: {report:?}"
+    );
+    assert_eq!(forge.exact_pull_request_reads().len(), 0);
+    assert!(
+        forge
+            .exact_issue_reads()
+            .iter()
+            .any(|read| read.details == ItemListDetails::summary())
+    );
+}
+
+#[test]
+fn shared_namespace_listed_pr_target_avoids_collision_probe() {
     let inner = MemoryForge::new();
     let repo = repo(&inner, "listed-pr");
     let source = issue(&inner, &repo, &["code", "blocked"], "");
@@ -112,7 +175,7 @@ fn listed_pr_target_reuses_state_after_issue_summary_collision_probe() {
         },
     ))
     .expect("target PR merges");
-    let forge = CountingForge::new(inner);
+    let forge = CountingForge::with_item_number_namespace(inner, ItemNumberNamespace::Shared);
 
     let report = reconcile(
         &forge,
@@ -136,7 +199,8 @@ fn listed_pr_target_reuses_state_after_issue_summary_collision_probe() {
         forge
             .exact_issue_reads()
             .iter()
-            .any(|read| read.details == ItemListDetails::summary())
+            .all(|read| read.details == ItemListDetails::full()),
+        "shared PR numbers must not trigger an issue summary collision probe"
     );
 }
 
@@ -179,7 +243,7 @@ fn unlisted_cross_repo_target_uses_summary_apis_without_dependency_detail() {
         ..WorkflowMetadata::default()
     });
     let source = issue(&inner, &parent_repo, &["code", "blocked"], body);
-    let forge = CountingForge::new(inner);
+    let forge = CountingForge::with_item_number_namespace(inner, ItemNumberNamespace::Shared);
 
     let report = reconcile(
         &forge,

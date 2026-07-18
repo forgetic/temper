@@ -8,7 +8,7 @@ use temper_forge_forgejo::{EngineHttpClient, ForgejoConfig, ForgejoForge};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{
     CandidateLabelSelection, CandidateLifecycle, CreateIssue, CreateRepository, Forge,
-    RepositoryPath,
+    ItemNumberNamespace, PullRequest, RepositoryId, RepositoryPath,
 };
 use temper_runner::{RepositorySet, RepositoryTarget, scan_automated_queues, scan_roles_wake};
 use temper_testing::block_on;
@@ -43,6 +43,49 @@ fn assert_terminal_queries_are_labelled(
             "terminal discovery must always carry workflow-derived labels: {labels:?}"
         );
     }
+}
+
+fn create_pr(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    title: &str,
+    branch: &str,
+    labels: &[&str],
+) -> PullRequest {
+    block_on(forge.create_pull_request(
+        repo,
+        temper_testing::pull_request_input(
+            repo,
+            title,
+            "",
+            branch,
+            labels.iter().map(|label| (*label).into()).collect(),
+        ),
+    ))
+    .expect("PR is created")
+}
+
+fn seed_implementation_pr_dependency(forge: &MemoryForge, repo: &RepositoryId) {
+    // MemoryForge intentionally has independent issue/PR counters. Skip the
+    // two colliding issue numbers before modelling Forgejo's shared namespace.
+    create_pr(forge, repo, "dummy one", "dummy-1", &[]);
+    create_pr(forge, repo, "dummy two", "dummy-2", &[]);
+    let target = create_pr(
+        forge,
+        repo,
+        "Earlier implementation",
+        "earlier-implementation",
+        &["implementation", "in-progress"],
+    );
+    let blocked = create_pr(
+        forge,
+        repo,
+        "Dependent implementation",
+        "dependent-implementation",
+        &["implementation", "in-progress"],
+    );
+    block_on(forge.add_pull_request_dependency(&blocked.id, target.number))
+        .expect("PR dependency link is created");
 }
 
 #[test]
@@ -167,7 +210,14 @@ fn long_lived_mechanical_trigger_warm_pass_has_candidate_lists_only() {
     block_on(memory.add_issue_dependency(&blocked.id, dependency.number))
         .expect("dependency link is created");
 
-    let forge = Arc::new(CountingForge::new(memory));
+    // Exercise a dependency-gated implementation PR whose PR target is also
+    // present in the current candidate pass.
+    seed_implementation_pr_dependency(&memory, &repository.id);
+
+    let forge = Arc::new(CountingForge::with_item_number_namespace(
+        memory,
+        ItemNumberNamespace::Shared,
+    ));
     let path = RepositoryPath::new("acme", "service");
     let target = RepositoryTarget::new(repository.id, path.clone());
     let trigger = MechanicalTrigger::new(
@@ -189,7 +239,7 @@ fn long_lived_mechanical_trigger_warm_pass_has_candidate_lists_only() {
         .saturating_add(forge.count(CountedForgeOp::ListPullRequestCandidates));
     let issue_exact_before = forge.exact_issue_reads().len();
     let pull_exact_before = forge.exact_pull_request_reads().len();
-    assert_eq!(trigger.reconciliation_detail_cache().len(), 1);
+    assert_eq!(trigger.reconciliation_detail_cache().len(), 3);
 
     block_on(trigger.run_coordinated_broad(path))
         .expect("warm coordinated mechanical pass succeeds");
@@ -214,7 +264,7 @@ fn long_lived_mechanical_trigger_warm_pass_has_candidate_lists_only() {
     );
     assert_eq!(
         forge.read_shape().exact_full_reads,
-        1,
+        3,
         "only the cold pass requests dependency-enriched detail"
     );
 }

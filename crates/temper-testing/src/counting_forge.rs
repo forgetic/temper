@@ -5,10 +5,10 @@ use std::sync::Mutex;
 use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue,
-    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest,
-    MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery,
-    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
-    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace,
+    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId,
+    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
+    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 use operation_log::ForgeOperationLog;
@@ -79,6 +79,7 @@ pub struct ForgeReadShape {
 
 pub struct CountingForge<F: Forge> {
     inner: F,
+    item_number_namespace: Option<ItemNumberNamespace>,
     operations: ForgeOperationLog,
     merge_conflicts: Mutex<HashMap<PullRequestId, String>>,
     synthetic_heads: Mutex<bool>,
@@ -99,6 +100,7 @@ impl<F: Forge> CountingForge<F> {
     pub fn new(inner: F) -> Self {
         Self {
             inner,
+            item_number_namespace: None,
             operations: ForgeOperationLog::default(),
             merge_conflicts: Mutex::new(HashMap::new()),
             synthetic_heads: Mutex::new(false),
@@ -113,6 +115,18 @@ impl<F: Forge> CountingForge<F> {
             ci_job_queries: Mutex::new(Vec::new()),
             exact_issue_reads: Mutex::new(Vec::new()),
             exact_pull_request_reads: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Wraps a fixture while modelling a specific provider number namespace.
+    ///
+    /// Most tests should use [`Self::new`] and inherit the wrapped backend's
+    /// capability. This constructor lets production-shaped tests run against a
+    /// local fixture whose storage counters differ from the modelled provider.
+    pub fn with_item_number_namespace(inner: F, namespace: ItemNumberNamespace) -> Self {
+        Self {
+            item_number_namespace: Some(namespace),
+            ..Self::new(inner)
         }
     }
 

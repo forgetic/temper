@@ -4,10 +4,17 @@ mod support;
 
 use std::sync::Arc;
 use support::{MockHttpClient, block_on, forge, issue_id, repo_id};
-use temper_forge_model::{Forge, ForgeError, ItemNumber, UserId};
+use temper_forge_model::{Forge, ForgeError, ItemNumber, ItemNumberNamespace, UserId};
 
 fn as_dyn(forge: temper_forge_github::GitHubForge<MockHttpClient>) -> Arc<dyn Forge> {
     Arc::new(forge)
+}
+
+#[test]
+fn advertises_shared_item_number_namespace() {
+    let backend = as_dyn(forge(MockHttpClient::new()));
+
+    assert_eq!(backend.item_number_namespace(), ItemNumberNamespace::Shared);
 }
 
 #[test]

@@ -30,6 +30,16 @@ number. Use these values for display and lookup convenience, not as stable
 identity. Do not assume issue and pull-request numbers are cross-type unique on
 every backend.
 
+`Forge::item_number_namespace()` makes that distinction explicit without I/O.
+Its conservative default is `ItemNumberNamespace::Independent`, where an issue
+and a pull request may have the same number. A backend may return `Shared` only
+when one repository number identifies at most one artifact across both types.
+Wrappers must forward the wrapped backend's value. This capability lets a fresh,
+same-pass typed PR candidate resolve an otherwise untyped dependency number
+without an issue collision probe; independent backends retain issue-first exact
+resolution. Unlisted and cross-repository dependency targets still use summary
+exact lookups.
+
 ## Lookup semantics
 
 Read lookups return `ForgeResult<Option<T>>`:

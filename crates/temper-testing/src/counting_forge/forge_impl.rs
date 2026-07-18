@@ -2,6 +2,11 @@ use super::*;
 
 #[async_trait]
 impl<F: Forge> Forge for CountingForge<F> {
+    fn item_number_namespace(&self) -> ItemNumberNamespace {
+        self.item_number_namespace
+            .unwrap_or_else(|| self.inner.item_number_namespace())
+    }
+
     fn provider_request_count(&self) -> Option<u64> {
         self.inner
             .provider_request_count()
