@@ -2,13 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use skein::cx::Cx;
-use temper_protocol_activity::CaptureModeV1;
 use temper_protocol_worker::{
     WORKER_PROTOCOL_VERSION, WorkerActivityBatch, WorkerAuth, WorkerProtocolMessage,
 };
 use temper_worker_io::{OneshotReceiver, Spawner, oneshot, sleep_for};
 
-use crate::config::WorkerAgentTraceConfig;
 use crate::transport::Transport;
 use crate::worker_shell::WorkerCancellation;
 
@@ -22,7 +20,7 @@ const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(5);
 
 pub(crate) fn spawn_activity_forwarder<T, S>(
     spawner: S,
-    config: WorkerAgentTraceConfig,
+    collector: TraceCollector,
     transport: Arc<T>,
     worker_id: String,
     auth: Option<WorkerAuth>,
@@ -32,14 +30,17 @@ where
     T: Transport,
     S: Spawner,
 {
-    if config.policy.capture == CaptureModeV1::Off || config.spool_root.is_none() {
+    if !collector.forwarding_enabled() {
         return None;
     }
-    let collector = TraceCollector::new(config);
     let (joined_tx, joined) = oneshot();
     spawner.spawn_task_with_cx(move |cx| async move {
         let mut backoff = INITIAL_RETRY_BACKOFF;
         loop {
+            // A full scan immediately follows this drain. Appends that race
+            // with the scan remain dirty for the next pass, while already
+            // covered IDs do not accumulate for the worker's lifetime.
+            let _covered_dirty_runs = collector.drain_dirty_runs();
             let attempt = cancellation
                 .run(forward_pending(
                     cx.clone(),
@@ -162,6 +163,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::config::WorkerAgentTraceConfig;
     use crate::trace::TraceCollector;
 
     struct ReplyTransport {
