@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use temper_forge::{ChangeHint, ChangeKind, Forge, RepositoryPath};
 use temper_workflow::{
-    CommandJournal, DefaultRecoveryPolicy, LeasePolicy, ReconciliationMode, RecoveryPolicy,
-    ValidatedWorkflow,
+    CommandJournal, DefaultRecoveryPolicy, LeasePolicy, ReconciliationDetailCache,
+    ReconciliationMode, RecoveryPolicy, ValidatedWorkflow,
 };
 
 pub struct MultiRepoMechanicalWorker<
@@ -29,6 +29,7 @@ pub struct MultiRepoMechanicalWorker<
     mechanical_repositories: Vec<RepositoryMechanical<'a, J>>,
     lease_policy: LeasePolicy,
     policy: P,
+    reconciliation_detail_cache: ReconciliationDetailCache,
     external_tool_executors: ExternalToolExecutors,
     pull_request_merge_observer: Option<Arc<dyn PullRequestMergeObserver>>,
 }
@@ -99,9 +100,17 @@ where
             mechanical_repositories: bound,
             lease_policy,
             policy,
+            reconciliation_detail_cache: ReconciliationDetailCache::default(),
             external_tool_executors: ExternalToolExecutors::new(),
             pull_request_merge_observer: None,
         })
+    }
+
+    /// Binds shared reconciliation dependency detail across reconstructed
+    /// per-repository workers and subsequent ticks.
+    pub fn with_reconciliation_detail_cache(mut self, cache: ReconciliationDetailCache) -> Self {
+        self.reconciliation_detail_cache = cache;
+        self
     }
 
     /// Binds workspace executors the per-repo mechanical workers can invoke from
@@ -201,6 +210,7 @@ where
                 self.lease_policy,
                 self.policy.clone(),
             )
+            .with_reconciliation_detail_cache(self.reconciliation_detail_cache.clone())
             .with_external_tool_executors(self.external_tool_executors.clone());
             if let Some(observer) = &self.pull_request_merge_observer {
                 worker = worker.with_pull_request_merge_observer(Arc::clone(observer));
@@ -248,6 +258,7 @@ where
                 self.lease_policy,
                 self.policy.clone(),
             )
+            .with_reconciliation_detail_cache(self.reconciliation_detail_cache.clone())
             .with_external_tool_executors(self.external_tool_executors.clone());
             if let Some(observer) = &self.pull_request_merge_observer {
                 worker = worker.with_pull_request_merge_observer(Arc::clone(observer));

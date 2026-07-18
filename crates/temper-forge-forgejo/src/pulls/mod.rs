@@ -9,8 +9,8 @@ use crate::map::{map_pull_request, merge_method_token};
 use crate::types::PullRequestDto;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use temper_forge_model::{
-    Comment, CreateComment, CreatePullRequest, ForgeError, ForgeResult, ItemNumber,
-    MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestUpdateState,
+    Comment, CreateComment, CreatePullRequest, ForgeError, ForgeResult, ItemListDetails,
+    ItemNumber, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestUpdateState,
     RepositoryId, UpdatePullRequest,
 };
 
@@ -20,8 +20,18 @@ mod reviews;
 impl<C: HttpClient> ForgejoForge<C> {
     /// Looks up a pull request by stable backend identifier.
     pub async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>> {
+        self.get_pull_request_with_details(id, ItemListDetails::full())
+            .await
+    }
+
+    /// Looks up a pull request by stable id with an explicit dependency-detail budget.
+    pub async fn get_pull_request_with_details(
+        &self,
+        id: &PullRequestId,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
         let (repo, number) = parse_pull_request_id(id)?;
-        self.fetch_pull_request_with_dependencies(&repo, number)
+        self.fetch_pull_request_with_details(&repo, number, details)
             .await
     }
 
@@ -31,8 +41,19 @@ impl<C: HttpClient> ForgejoForge<C> {
         repo_id: &RepositoryId,
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>> {
+        self.get_pull_request_by_number_with_details(repo_id, number, ItemListDetails::full())
+            .await
+    }
+
+    /// Looks up a pull request by number with an explicit dependency-detail budget.
+    pub async fn get_pull_request_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
         let repo = parse_repository_id(repo_id)?;
-        self.fetch_pull_request_with_dependencies(&repo, number)
+        self.fetch_pull_request_with_details(&repo, number, details)
             .await
     }
 
@@ -253,10 +274,22 @@ impl<C: HttpClient> ForgejoForge<C> {
         repo: &RepoCoord,
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>> {
+        self.fetch_pull_request_with_details(repo, number, ItemListDetails::full())
+            .await
+    }
+
+    async fn fetch_pull_request_with_details(
+        &self,
+        repo: &RepoCoord,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
         let Some(mut pull) = self.fetch_pull_request(repo, number).await? else {
             return Ok(None);
         };
-        pull.dependencies = self.load_item_dependencies(repo, number).await?;
+        if details.dependencies {
+            pull.dependencies = self.load_item_dependencies(repo, number).await?;
+        }
         Ok(Some(pull))
     }
 

@@ -338,6 +338,48 @@ fn mechanical_trigger_executes_only_coordinator_admitted_broad_work() {
 }
 
 #[test]
+fn mechanical_trigger_clones_share_cache_while_new_triggers_restart_empty() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge).await;
+        let dependency = create_issue(&forge, &repo.id, &["design", "draft"]).await;
+        let blocked = create_issue(&forge, &repo.id, &["code", "blocked"]).await;
+        add_issue_dependency(&forge, &repo.id, blocked, dependency).await;
+        let config = MechanicalBackstopConfig {
+            repositories: RepositorySet::new(vec![repo.clone()]),
+            cadence: Duration::from_secs(300),
+            lease_policy: lease_policy(),
+            pull_request_merge_observer: None,
+        };
+        let clock: temper_engine::WallClock = Arc::new(|| ts("2026-05-29T00:00:00Z"));
+        let trigger = MechanicalTrigger::new(
+            Arc::clone(&forge),
+            Arc::new(workflow()),
+            config.clone(),
+            clock.clone(),
+        );
+        let clone = trigger.clone();
+
+        clone
+            .run_coordinated_broad(repo.path.clone())
+            .await
+            .expect("first broad pass succeeds");
+        assert_eq!(trigger.reconciliation_detail_cache().len(), 1);
+        trigger
+            .run_coordinated_broad(repo.path.clone())
+            .await
+            .expect("second broad pass succeeds");
+        assert_eq!(clone.reconciliation_detail_cache().len(), 1);
+
+        let restarted = MechanicalTrigger::new(forge, Arc::new(workflow()), config, clock);
+        assert!(
+            restarted.reconciliation_detail_cache().is_empty(),
+            "a reconstructed runtime must start with an authoritative cold cache"
+        );
+    })
+}
+
+#[test]
 fn run_mechanical_backstop_tick_with_no_repositories_is_unchanged() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = MemoryForge::new();

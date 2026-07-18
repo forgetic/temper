@@ -1,23 +1,25 @@
 //! Controller-plane worker that runs mechanical recovery and automation.
 
+mod observability;
+
+use observability::{
+    log_mechanical_reconciliation, log_mechanical_reconciliation_summary, measure_mechanical_phase,
+};
+
 use super::automation;
 use super::{Progress, Worker, WorkerError, saturating_u32, saturating_u64};
 use crate::coding_workspace::ExternalToolExecutors;
-use crate::observability::artifact_ref;
 use crate::scan::{ArtifactAddress, TargetedArtifactSnapshot, load_targeted_artifact};
 use crate::worker::PullRequestMergeObserver;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 use temper_forge::{ChangeKind, Forge, ForgeError, HintArtifactKind, ItemNumber, RepositoryId};
-use temper_log::strip_provider_scheme;
 use temper_workflow::{
     Applier, ApplyOutcome, ArtifactSnapshot, AssignmentConverger, CompiledWorkflow,
-    DefaultRecoveryPolicy, Executor, LeaseManager, LeasePolicy, ReconciliationMode, RecoveryPolicy,
-    ValidatedWorkflow, parse_metadata_block,
+    DefaultRecoveryPolicy, Executor, LeaseManager, LeasePolicy, ReconciliationDetailCache,
+    ReconciliationMode, RecoveryAction, RecoveryPolicy, ValidatedWorkflow, parse_metadata_block,
 };
 
 /// Controller-plane worker that runs mechanical recovery and automation.
@@ -45,6 +47,7 @@ pub struct MechanicalWorker<
     assignment_converger: AssignmentConverger<'a, F>,
     journal: &'a J,
     policy: P,
+    reconciliation_detail_cache: ReconciliationDetailCache,
     /// Workspace executors the actor roles of workspace-backed automations can
     /// invoke. Empty when no executor is bound; such automations no-op until a
     /// binding exists, never failing the tick.
@@ -103,10 +106,18 @@ where
             assignment_converger: AssignmentConverger::new(workflow, forge, lease_policy),
             journal,
             policy,
+            reconciliation_detail_cache: ReconciliationDetailCache::default(),
             external_tool_executors: ExternalToolExecutors::new(),
             pull_request_merge_observer: None,
             advisory_actions: AtomicU64::new(0),
         }
+    }
+
+    /// Binds dependency detail state owned by a longer-lived runtime. Clones of
+    /// the cache share the same bounded entries.
+    pub fn with_reconciliation_detail_cache(mut self, cache: ReconciliationDetailCache) -> Self {
+        self.reconciliation_detail_cache = cache;
+        self
     }
 
     /// Binds workspace executors this worker can invoke from workspace-backed
@@ -166,12 +177,29 @@ where
             Some(address),
             "automated_scan",
             async {
+                if change == ChangeKind::Dependency {
+                    self.reconciliation_detail_cache
+                        .invalidate(self.repo, address.source());
+                }
                 let mut targeted_snapshots = Vec::new();
                 let Some(loaded) =
                     load_targeted_artifact(self.forge, self.repo, self.workflow, address).await?
                 else {
                     return Ok(None);
                 };
+                match &loaded.snapshot {
+                    TargetedArtifactSnapshot::Issue(issue) => {
+                        self.reconciliation_detail_cache
+                            .store_issue(self.repo, issue, now);
+                    }
+                    TargetedArtifactSnapshot::PullRequest(pull_request) => {
+                        self.reconciliation_detail_cache.store_pull_request(
+                            self.repo,
+                            pull_request,
+                            now,
+                        );
+                    }
+                }
                 // Staged fan-out children are not externally dispatchable yet.
                 // This guard must precede both targeted automation and
                 // reconciliation so a webhook cannot mutate a partially wired
@@ -179,23 +207,29 @@ where
                 if loaded.classified.metadata.staged {
                     return Ok(None);
                 }
-                if let TargetedArtifactSnapshot::PullRequest(pull_request) = &loaded.snapshot {
-                    targeted_snapshots.push(ArtifactSnapshot::from_pull_request(pull_request));
-                    if change != ChangeKind::Ci {
-                        if let Some(metadata) = parse_metadata_block(&pull_request.body)
-                            .map_err(|error| ForgeError::Backend(error.to_string()))?
-                        {
-                            for parent in metadata
-                                .parents
-                                .iter()
-                                .filter(|parent| parent.is_in_repository(self.repo))
+                match &loaded.snapshot {
+                    TargetedArtifactSnapshot::Issue(issue) => {
+                        targeted_snapshots.push(ArtifactSnapshot::from_issue(issue));
+                    }
+                    TargetedArtifactSnapshot::PullRequest(pull_request) => {
+                        targeted_snapshots.push(ArtifactSnapshot::from_pull_request(pull_request));
+                        if change != ChangeKind::Ci {
+                            if let Some(metadata) = parse_metadata_block(&pull_request.body)
+                                .map_err(|error| ForgeError::Backend(error.to_string()))?
                             {
-                                if let Some(issue) = self
-                                    .forge
-                                    .get_issue_by_number(self.repo, parent.number)
-                                    .await?
+                                for parent in metadata
+                                    .parents
+                                    .iter()
+                                    .filter(|parent| parent.is_in_repository(self.repo))
                                 {
-                                    targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                                    if let Some(issue) = self
+                                        .forge
+                                        .get_issue_by_number(self.repo, parent.number)
+                                        .await?
+                                    {
+                                        targeted_snapshots
+                                            .push(ArtifactSnapshot::from_issue(&issue));
+                                    }
                                 }
                             }
                         }
@@ -237,6 +271,10 @@ where
             ),
         )
         .await?;
+        if automation_progress.changed {
+            self.reconciliation_detail_cache
+                .invalidate_repository(self.repo);
+        }
         let reconciliation_progress = measure_mechanical_phase(
             self.forge,
             self.repo,
@@ -268,7 +306,7 @@ where
         snapshots: Vec<temper_workflow::ArtifactSnapshot>,
     ) -> Result<Progress, WorkerError> {
         let reconciler = self.workflow.reconciler(&self.policy);
-        let report = reconciler
+        let mut report = reconciler
             .reconcile_bounded(self.forge, self.repo, self.journal, snapshots, now)
             .await?;
         let outcome = if report.is_clean() {
@@ -284,6 +322,13 @@ where
                 )
                 .await?
         };
+        report
+            .cache_stats
+            .add_invalidations(invalidate_applied_actions(
+                &self.reconciliation_detail_cache,
+                self.repo,
+                &outcome,
+            ));
         Ok(Progress {
             changed: !outcome.applied.is_empty(),
             actions: saturating_u32(outcome.applied.len()),
@@ -309,9 +354,29 @@ where
             "reconciliation",
             async {
                 let reconciler = self.workflow.reconciler(&self.policy);
-                let report = reconciler
-                    .reconcile_with_mode(self.forge, self.repo, self.journal, mode, now)
-                    .await?;
+                let mut report = match mode {
+                    ReconciliationMode::Bounded => {
+                        reconciler
+                            .reconcile_with_detail_cache(
+                                self.forge,
+                                self.repo,
+                                self.journal,
+                                now,
+                                &self.reconciliation_detail_cache,
+                            )
+                            .await?
+                    }
+                    ReconciliationMode::DeepAudit => {
+                        let invalidations = self
+                            .reconciliation_detail_cache
+                            .invalidate_repository(self.repo);
+                        let mut report = reconciler
+                            .reconcile_deep_audit(self.forge, self.repo, self.journal, now)
+                            .await?;
+                        report.cache_stats.add_invalidations(invalidations);
+                        report
+                    }
+                };
                 let outcome = if report.is_clean() {
                     ApplyOutcome::default()
                 } else {
@@ -325,6 +390,13 @@ where
                         )
                         .await?
                 };
+                report
+                    .cache_stats
+                    .add_invalidations(invalidate_applied_actions(
+                        &self.reconciliation_detail_cache,
+                        self.repo,
+                        &outcome,
+                    ));
                 if !outcome.advisory.is_empty() {
                     self.advisory_actions
                         .fetch_add(saturating_u64(outcome.advisory.len()), Ordering::Relaxed);
@@ -390,72 +462,15 @@ where
             ),
         )
         .await?;
+        if automation_progress.changed {
+            self.reconciliation_detail_cache
+                .invalidate_repository(self.repo);
+        }
         Ok(combine_progress(
             reconciliation_progress,
             automation_progress,
         ))
     }
-}
-
-/// Runs one expensive mechanical phase and emits exactly one terminal debug
-/// measurement. The optional backend counter is sampled around the phase so
-/// Forgejo-backed runs expose a request delta without making observability part
-/// of correctness.
-async fn measure_mechanical_phase<F, Fut, T, E>(
-    forge: &F,
-    repo: &RepositoryId,
-    scope: &'static str,
-    address: Option<ArtifactAddress>,
-    phase: &'static str,
-    future: Fut,
-) -> Result<T, E>
-where
-    F: Forge + ?Sized,
-    Fut: Future<Output = Result<T, E>>,
-{
-    let started = Instant::now();
-    let provider_requests_before = forge.provider_request_count();
-    let result = future.await;
-    let provider_requests = provider_requests_before.and_then(|before| {
-        forge
-            .provider_request_count()
-            .map(|after| after.saturating_sub(before))
-    });
-    let outcome = if result.is_ok() { "success" } else { "failed" };
-    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let provider_request_total = provider_requests.unwrap_or(0);
-    let provider_requests_available = provider_requests.is_some();
-    let repository = strip_provider_scheme(repo.as_str());
-    if let Some(address) = address {
-        let artifact = artifact_ref(repo, address.source()).to_string();
-        tracing::debug!(
-            target: "temper::worker",
-            measurement = "mechanical.phase",
-            repo = repository,
-            mechanical.scope = scope,
-            mechanical.phase = phase,
-            artifact.ref = artifact,
-            outcome,
-            duration_ms,
-            provider.request_total = provider_request_total,
-            provider.requests_available = provider_requests_available,
-            "mechanical {scope} {phase} {outcome}"
-        );
-    } else {
-        tracing::debug!(
-            target: "temper::worker",
-            measurement = "mechanical.phase",
-            repo = repository,
-            mechanical.scope = scope,
-            mechanical.phase = phase,
-            outcome,
-            duration_ms,
-            provider.request_total = provider_request_total,
-            provider.requests_available = provider_requests_available,
-            "mechanical {scope} {phase} {outcome}"
-        );
-    }
-    result
 }
 
 #[async_trait]
@@ -475,91 +490,28 @@ where
     }
 }
 
-/// Logs mechanical recovery findings/actions at debug.
-///
-/// Reconciliation recovery is a §5 "between" cause (lease requeues, drift
-/// repairs, advisory diagnoses), not a §7 workflow state change, so it stays at
-/// debug under the worker target. The names are the same compact, body-free
-/// tokens the old structured event used.
-fn log_mechanical_reconciliation(
-    worker: &str,
+fn invalidate_applied_actions(
+    cache: &ReconciliationDetailCache,
     repo: &RepositoryId,
-    report: &temper_workflow::ReconcileReport,
-) {
-    for (finding, action) in report.findings.iter().zip(report.actions.iter()) {
-        tracing::debug!(
-            target: "temper::worker",
-            worker_kind = "mechanical",
-            worker,
-            repo = repo.as_str(),
-            finding = finding_name(finding),
-            action = action_name(action),
-            "reconcile: {} -> {}",
-            finding_name(finding),
-            action_name(action),
-        );
-    }
-}
-
-fn log_mechanical_reconciliation_summary(
-    worker: &str,
-    repo: &RepositoryId,
-    mode: ReconciliationMode,
-    report: &temper_workflow::ReconcileReport,
     outcome: &ApplyOutcome,
-    progress: Progress,
-) {
-    tracing::debug!(
-        target: "temper::worker",
-        worker_kind = "mechanical",
-        worker,
-        repo = repo.as_str(),
-        mode = reconciliation_mode_name(mode),
-        snapshot_count = saturating_u64(report.snapshot_count),
-        finding_count = saturating_u64(report.findings.len()),
-        recovery_action_count = saturating_u64(report.actions.len()),
-        applied_action_count = saturating_u64(outcome.applied.len()),
-        advisory_action_count = saturating_u64(outcome.advisory.len()),
-        changed = progress.changed,
-        progress_actions = u64::from(progress.actions),
-        "reconcile {} pass: {} finding(s), {} applied",
-        reconciliation_mode_name(mode),
-        report.findings.len(),
-        outcome.applied.len(),
-    );
+) -> usize {
+    outcome
+        .applied
+        .iter()
+        .filter_map(recovery_action_target)
+        .map(|target| cache.invalidate(repo, target))
+        .sum()
 }
 
-fn finding_name(finding: &temper_workflow::ReconcileFinding) -> &'static str {
-    use temper_workflow::ReconcileFinding;
-    match finding {
-        ReconcileFinding::ExpiredAssignment { .. } => "expired_assignment",
-        ReconcileFinding::ExpiredLease { .. } => "expired_lease",
-        ReconcileFinding::ImpossibleState { .. } => "impossible_state",
-        ReconcileFinding::ClassificationDrift { .. } => "classification_drift",
-        ReconcileFinding::BlockedWithoutDependencies { .. } => "blocked_without_dependencies",
-        ReconcileFinding::PartialTransition { .. } => "partial_transition",
-        ReconcileFinding::StaleCommand { .. } => "stale_command",
-        ReconcileFinding::DependenciesResolved { .. } => "dependencies_resolved",
-    }
-}
-
-fn action_name(action: &temper_workflow::RecoveryAction) -> &'static str {
-    use temper_workflow::RecoveryAction;
+fn recovery_action_target(action: &RecoveryAction) -> Option<temper_workflow::ArtifactSource> {
     match action {
-        RecoveryAction::ConvergeAssignment { .. } => "converge_assignment",
-        RecoveryAction::RequeueLease { .. } => "requeue_lease",
-        RecoveryAction::Escalate { .. } => "escalate",
-        RecoveryAction::Repair { .. } => "repair",
-        RecoveryAction::MarkReconciled { .. } => "mark_reconciled",
-        RecoveryAction::Unblock { .. } => "unblock",
-        RecoveryAction::Diagnose { .. } => "diagnose",
-    }
-}
-
-fn reconciliation_mode_name(mode: ReconciliationMode) -> &'static str {
-    match mode {
-        ReconciliationMode::Bounded => "bounded",
-        ReconciliationMode::DeepAudit => "deep-audit",
+        RecoveryAction::ConvergeAssignment { target, .. }
+        | RecoveryAction::RequeueLease { target }
+        | RecoveryAction::Repair { target, .. }
+        | RecoveryAction::Unblock { target, .. } => Some(*target),
+        RecoveryAction::MarkReconciled { .. }
+        | RecoveryAction::Escalate { .. }
+        | RecoveryAction::Diagnose { .. } => None,
     }
 }
 

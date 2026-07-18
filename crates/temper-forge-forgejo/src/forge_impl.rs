@@ -154,12 +154,30 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         self.get_pull_request(id).await
     }
 
+    async fn get_pull_request_with_details(
+        &self,
+        id: &PullRequestId,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
+        self.get_pull_request_with_details(id, details).await
+    }
+
     async fn get_pull_request_by_number(
         &self,
         repo_id: &RepositoryId,
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>> {
         self.get_pull_request_by_number(repo_id, number).await
+    }
+
+    async fn get_pull_request_by_number_with_details(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        details: ItemListDetails,
+    ) -> ForgeResult<Option<PullRequest>> {
+        self.get_pull_request_by_number_with_details(repo_id, number, details)
+            .await
     }
 
     async fn update_pull_request(
