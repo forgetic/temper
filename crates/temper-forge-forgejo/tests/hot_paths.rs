@@ -10,34 +10,22 @@ use chrono::{DateTime, Utc};
 use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
 use temper_forge_forgejo::{HttpMethod, HttpRequest};
 use temper_forge_model::{
-    BranchRef, CreateIssue, CreatePullRequest, ItemNumber, PullRequestState, UserId,
+    BranchRef, CandidateLabelSelection, CandidateLifecycle, CreateIssue, CreatePullRequest,
+    ItemNumber, PullRequestCandidateQuery, PullRequestState, UserId,
 };
 use temper_workflow::{
     DefaultRecoveryPolicy, EnsureOutcome, InMemoryJournal, RawWorkflowSpec, ValidatedWorkflow,
-    WorkflowMetadata, render_metadata_block,
+    WorkflowMetadata, render_metadata_block, workflow_interest,
 };
 
-const HOT_PATH_WORKFLOW: &str = r#"
-{
-  "name": "forgejo-hot-paths",
-  "labels": [
-    { "id": "code" },
-    { "id": "implementation" }
-  ],
-  "artifact_kinds": [
-    { "id": "code", "target": "issue", "identifying_labels": ["code"] },
-    {
-      "id": "implementation_pr",
-      "target": "pull_request",
-      "identifying_labels": ["implementation"]
-    }
-  ]
-}
-"#;
+const REFERENCE_WORKFLOW: &str =
+    include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
 fn workflow() -> ValidatedWorkflow {
-    let spec: RawWorkflowSpec = serde_json::from_str(HOT_PATH_WORKFLOW).expect("workflow parses");
-    spec.validate().expect("workflow validates")
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(REFERENCE_WORKFLOW).expect("reference workflow parses");
+    assert_eq!(spec.labels.len(), 17, "request budget fixture label count");
+    spec.validate().expect("reference workflow validates")
 }
 
 fn ts(value: &str) -> DateTime<Utc> {
@@ -156,18 +144,14 @@ fn assert_no_all_history_lists(requests: &[HttpRequest]) {
 }
 
 #[test]
-fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
+fn reference_workflow_bounded_reconciliation_uses_four_one_page_buckets() {
     let client = MockHttpClient::new();
-    // Each artifact type uses one consolidated open lifecycle bucket regardless
-    // of workflow-label count. One summary issue candidate proves no dependency
-    // enrichment happens on list results.
-    client.push_response(200, format!("[{}]", issue_json(1, "open", "", &["code"])));
-    // PR discovery uses the issue label index directly for summary candidates;
-    // no exact `/pulls/{number}` detail is needed on the open hot path.
-    client.push_response(
-        200,
-        format!("[{}]", pr_issue_json(2, "open", "", &["implementation"])),
-    );
+    // The checked-in 17-label workflow has both artifact kinds and both
+    // lifecycle states populated in its interest plan. Empty provider pages
+    // keep this assertion focused on aggregate list shape, not enrichment.
+    for _ in 0..4 {
+        client.push_response(200, "[]");
+    }
 
     let forge = forge(client.clone());
     let workflow = workflow();
@@ -182,34 +166,113 @@ fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
     ))
     .expect("bounded reconciliation succeeds");
 
-    assert_eq!(report.snapshot_count, 2);
+    assert_eq!(report.snapshot_count, 0);
     let requests = client.recorded();
     assert_no_all_history_lists(&requests);
+    assert_eq!(
+        requests.len(),
+        4,
+        "17 labels must collapse to issue/PR x open/terminal buckets"
+    );
+    assert!(requests.iter().all(|request| {
+        request.method == HttpMethod::Get && request.path == candidate_search_path()
+    }));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| has_query(request, "type", "issues"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| has_query(request, "type", "pulls"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| has_query(request, "state", "open"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| has_query(request, "state", "closed"))
+            .count(),
+        2
+    );
+    assert!(requests.iter().all(|request| {
+        query_value(request, "labels").is_some() || has_query(request, "state", "open")
+    }));
     assert!(
         !requests
             .iter()
             .any(|request| request.path.ends_with("/dependencies"))
     );
+}
 
-    let list_requests: Vec<&HttpRequest> = requests
-        .iter()
-        .filter(|request| request.path == candidate_search_path())
-        .collect();
-    assert_eq!(list_requests.len(), 2);
-    for request in list_requests {
-        assert_eq!(request.method, HttpMethod::Get);
-        assert_eq!(query_value(request, "state"), Some("open"));
-        assert!(query_value(request, "labels").is_some());
-    }
+#[test]
+fn reference_terminal_pr_bucket_adds_exact_read_only_for_ambiguous_row() {
+    let client = MockHttpClient::new();
+    let unambiguous =
+        pr_issue_json_with_merge(7, "closed", "", &["implementation", "landed"], Some(true));
+    client.push_response(
+        200,
+        format!(
+            "[{unambiguous},{}]",
+            pr_issue_json(8, "closed", "", &["implementation", "landed"]),
+        ),
+    );
+    client.push_response(
+        200,
+        serde_json::json!({
+            "number": 8,
+            "title": "PR 8",
+            "body": "",
+            "state": "closed",
+            "merged": false,
+            "user": {"login": "author"},
+            "head": {"ref": "feature", "sha": "head8"},
+            "base": {"ref": "main", "sha": "base8"},
+            "labels": label_values(&["implementation", "landed"]),
+            "created_at": "2024-03-01T00:00:00Z",
+            "updated_at": "2024-03-02T00:00:00Z"
+        })
+        .to_string(),
+    );
+    let forge = forge(client.clone());
+    let workflow = workflow();
+    let labels = workflow_interest(&workflow)
+        .terminal_labels(temper_workflow::ArtifactTarget::PullRequest)
+        .to_vec();
+
+    let pulls = block_on(forge.list_pull_request_candidates(
+        &repo_id(),
+        PullRequestCandidateQuery {
+            lifecycle: CandidateLifecycle::Terminal,
+            labels: CandidateLabelSelection::AnyOf(labels),
+            ..PullRequestCandidateQuery::default()
+        },
+    ))
+    .expect("terminal candidate discovery succeeds");
+
+    assert_eq!(pulls.len(), 2);
+    let requests = client.recorded();
+    assert_eq!(requests.len(), 2, "one bucket plus one ambiguous fallback");
+    assert_eq!(requests[0].path, candidate_search_path());
+    assert!(query_value(&requests[0], "labels").is_some());
+    assert_eq!(
+        requests[1].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/8")
+    );
     assert!(
         requests
             .iter()
-            .all(|request| request.path != pull_list_path())
-    );
-    assert!(
-        !requests
-            .iter()
-            .any(|request| request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/2"))
+            .all(|request| request.path != format!("/api/v1/repos/{OWNER}/{REPO}/pulls/7"))
     );
 }
 

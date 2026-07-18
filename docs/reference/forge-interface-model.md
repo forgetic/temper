@@ -73,6 +73,16 @@ Unfiltered candidate discovery is intended for open default-kind intake.
 Bounded workflow planning never emits an unfiltered terminal bucket, avoiding
 unlabelled closed/merged history reads.
 
+For a backend with provider-side any-label support, one-page request budgets are
+therefore constant: broad role discovery and bounded reconciliation each use at
+most four populated buckets (issue/PR x open/terminal), independent of workflow
+label and configured-role counts. Automated discovery is open-only and adds at
+most its populated issue and pull-request buckets. Pagination multiplies each
+populated bucket by its page count; it never changes the bucket count or falls
+back to per-label lists. Compatibility backends may spend more provider calls
+inside a bucket as documented above, but portable callers still issue one
+candidate operation per logical bucket.
+
 `CiJobQuery` supports pull request, commit SHA, status, and
 sorting by name, creation time, or update time. All populated `CiJobQuery`
 filters compose conjunctively: when pull request and commit SHA are both set,

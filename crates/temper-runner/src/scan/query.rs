@@ -2,7 +2,8 @@
 
 use crate::observability::gate_summary;
 use chrono::{DateTime, Utc};
-use temper_forge::{Forge, RepositoryId};
+use std::time::Instant;
+use temper_forge::{Forge, Issue, PullRequest, RepositoryId};
 use temper_log::emit::{CiCompleted, GateEvaluated, emit_ci_completed, emit_gate_evaluated};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
@@ -39,7 +40,17 @@ pub(super) async fn scan_inner<F: Forge + ?Sized>(
     }
 
     let query_plan = candidate_query_plan(workflow, compiled, role, mode);
-    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan, false).await?;
+    let artifacts = read_artifacts(
+        forge,
+        repo,
+        workflow,
+        &queues,
+        &query_plan,
+        "role",
+        scan_mode_name(mode),
+        false,
+    )
+    .await?;
     Ok(work_items(&queues, &artifacts, now, role_filter))
 }
 
@@ -58,7 +69,17 @@ pub(super) async fn scan_roles_inner<F: Forge + ?Sized>(
     }
 
     let query_plan = candidate_query_plan_for_roles(workflow, compiled, roles, mode);
-    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan, false).await?;
+    let artifacts = read_artifacts(
+        forge,
+        repo,
+        workflow,
+        &queues,
+        &query_plan,
+        "role",
+        scan_mode_name(mode),
+        false,
+    )
+    .await?;
     Ok(work_items_for_roles(&queues, &artifacts, now, roles))
 }
 
@@ -75,7 +96,17 @@ pub(super) async fn scan_automated_inner<F: Forge + ?Sized>(
     }
 
     let query_plan = candidate_query_plan(workflow, compiled, None, ScanMode::Automated);
-    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan, true).await?;
+    let artifacts = read_artifacts(
+        forge,
+        repo,
+        workflow,
+        &queues,
+        &query_plan,
+        "mechanical",
+        "automation",
+        true,
+    )
+    .await?;
     Ok(automated_work_items(&queues, &artifacts, now))
 }
 
@@ -143,26 +174,21 @@ async fn targeted_artifacts<F: Forge + ?Sized>(
     Ok(artifacts)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn read_artifacts<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
     queues: &[&QueueManifest],
     query_plan: &CandidateQueryPlan,
+    consumer: &'static str,
+    scope: &'static str,
     emit_ci_completed: bool,
 ) -> Result<Vec<ScannedArtifact>, ScanError> {
     let classifier = Classifier::new(workflow);
     let mut artifacts = Vec::new();
-    let mut issues = Vec::new();
-    for query in &query_plan.issue_queries {
-        issues.extend(forge.list_issue_candidates(repo, query.clone()).await?);
-    }
-    issues.sort_by(|left, right| {
-        left.number
-            .cmp(&right.number)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    issues.dedup_by(|left, right| left.id == right.id);
+    let (issues, pull_requests) =
+        read_candidate_summaries(forge, repo, query_plan, consumer, scope).await?;
 
     for issue in issues {
         let Ok(classified) = classifier.classify_issue(&issue) else {
@@ -180,21 +206,6 @@ async fn read_artifacts<F: Forge + ?Sized>(
         )
         .await?;
     }
-
-    let mut pull_requests = Vec::new();
-    for query in &query_plan.pull_request_queries {
-        pull_requests.extend(
-            forge
-                .list_pull_request_candidates(repo, query.clone())
-                .await?,
-        );
-    }
-    pull_requests.sort_by(|left, right| {
-        left.number
-            .cmp(&right.number)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    pull_requests.dedup_by(|left, right| left.id == right.id);
 
     for pull_request in pull_requests {
         let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
@@ -215,6 +226,94 @@ async fn read_artifacts<F: Forge + ?Sized>(
 
     artifacts.sort_by_key(scanned_order_key);
     Ok(artifacts)
+}
+
+async fn read_candidate_summaries<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    query_plan: &CandidateQueryPlan,
+    consumer: &'static str,
+    scope: &'static str,
+) -> Result<(Vec<Issue>, Vec<PullRequest>), ScanError> {
+    let started = Instant::now();
+    let provider_requests_before = forge.provider_request_count();
+    let logical_bucket_count = query_plan
+        .issue_queries
+        .len()
+        .saturating_add(query_plan.pull_request_queries.len());
+    let mut issues = Vec::new();
+    let mut pull_requests = Vec::new();
+    let result: Result<(), ScanError> = async {
+        for query in &query_plan.issue_queries {
+            issues.extend(forge.list_issue_candidates(repo, query.clone()).await?);
+        }
+        for query in &query_plan.pull_request_queries {
+            pull_requests.extend(
+                forge
+                    .list_pull_request_candidates(repo, query.clone())
+                    .await?,
+            );
+        }
+        Ok(())
+    }
+    .await;
+
+    normalize_issue_candidates(&mut issues);
+    normalize_pull_request_candidates(&mut pull_requests);
+    let unique_count = issues.len().saturating_add(pull_requests.len());
+    let provider_requests = provider_requests_before.and_then(|before| {
+        forge
+            .provider_request_count()
+            .map(|after| after.saturating_sub(before))
+    });
+    let outcome = if result.is_ok() { "success" } else { "failed" };
+    tracing::debug!(
+        target: "temper::worker",
+        measurement = "candidate.discovery",
+        repo = strip_provider_scheme(repo.as_str()),
+        candidate.consumer = consumer,
+        candidate.scope = scope,
+        candidate.logical_bucket_count = saturating_u64(logical_bucket_count),
+        candidate.provider_request_total = provider_requests.unwrap_or(0),
+        candidate.provider_requests_available = provider_requests.is_some(),
+        candidate.unique_count = saturating_u64(unique_count),
+        outcome,
+        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "candidate discovery {outcome} for {consumer}/{scope}"
+    );
+    result?;
+    Ok((issues, pull_requests))
+}
+
+fn normalize_issue_candidates(issues: &mut Vec<Issue>) {
+    issues.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    issues.dedup_by(|left, right| left.id == right.id);
+}
+
+fn normalize_pull_request_candidates(pull_requests: &mut Vec<PullRequest>) {
+    pull_requests.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    pull_requests.dedup_by(|left, right| left.id == right.id);
+}
+
+fn scan_mode_name(mode: ScanMode) -> &'static str {
+    match mode {
+        ScanMode::Normal => "normal",
+        ScanMode::Wake => "wake",
+        ScanMode::Automated => "automation",
+        ScanMode::Audit => "audit",
+    }
+}
+
+fn saturating_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 #[allow(clippy::too_many_arguments)]
