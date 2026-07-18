@@ -12,6 +12,7 @@ impl RecoveredForwardingRun {
 }
 
 pub(in crate::trace) fn recover_run(run_dir: &Path) -> Result<RecoveredTraceRun, TraceError> {
+    repair_run_permissions(run_dir)?;
     let (lock_path, lock_file) = open_spool_lock(run_dir)?;
     lock_file
         .lock_exclusive()
@@ -29,7 +30,11 @@ pub(in crate::trace) fn recover_run(run_dir: &Path) -> Result<RecoveredTraceRun,
 /// index at EOF returns metadata only; a grown file validates just its suffix.
 pub(in crate::trace) fn recover_forwarding_run(
     run_dir: &Path,
+    repair_permissions: bool,
 ) -> Result<RecoveredForwardingRun, TraceError> {
+    if repair_permissions {
+        repair_run_permissions(run_dir)?;
+    }
     let (lock_path, lock_file) = open_spool_lock(run_dir)?;
     lock_file.lock_exclusive().map_err(|source| {
         io_error(
@@ -154,7 +159,6 @@ fn recover_run_payload_locked(
 }
 
 pub(super) fn recover_spool_metadata(run_dir: &Path) -> Result<RecoveredSpoolMetadata, TraceError> {
-    set_private_dir(run_dir)?;
     let manifest_path = run_dir.join("manifest.json");
     let manifest: TraceManifestV1 = read_json(&manifest_path)?;
     validate_manifest(&manifest)?;
@@ -285,11 +289,10 @@ fn recover_referenced_blobs(
         }
     }
     let blobs_dir = run_dir.join("blobs");
-    set_private_dir(&blobs_dir)?;
     let mut blobs = Vec::with_capacity(references.len());
     for reference in references.values() {
         let path = blob_path(&blobs_dir, reference)?;
-        let bytes = read_bytes(&path)?;
+        let bytes = read_blob_bytes(&path)?;
         let attachment = BlobAttachmentV1::from_bytes(reference.media_type, &bytes);
         if attachment.blob != *reference {
             return Err(TraceError::InvalidSpool(format!(

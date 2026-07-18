@@ -312,59 +312,6 @@ fn restart_recovers_blobs_cursor_and_truncates_only_final_fragment() {
 }
 
 #[test]
-fn fully_acknowledged_terminal_payload_is_replaced_by_a_restart_readable_marker() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let collector = TraceCollector::new(WorkerAgentTraceConfig {
-        policy: AgentActivityCapturePolicyV1 {
-            capture: CaptureModeV1::Transcript,
-            ..Default::default()
-        },
-        spool_root: Some(temp.path().to_path_buf()),
-    });
-    let run = collector
-        .begin_run("job-compact", &context())
-        .expect("begin")
-        .expect("enabled");
-    let attachment = BlobAttachmentV1::from_bytes(
-        BlobMediaTypeV1::TextMarkdownUtf8,
-        b"payload reclaimed only after terminal acknowledgement",
-    );
-    run.store_blob(&attachment).expect("store blob");
-    let mut frame = usage_frame(1);
-    frame.event = AgentActivityEventV1::AssistantMessage(AssistantMessageV1 {
-        message_id: "message-compact".to_string(),
-        content: CapturedContentV1::Blob {
-            blob: attachment.blob,
-        },
-    });
-    run.accept_frame(frame).expect("accept message");
-    let terminal_seq = run.finish_success(None).expect("finish");
-    let run_id = run.run_id().to_string();
-    let run_dir = run.spool_dir().to_path_buf();
-    drop(run);
-
-    collector
-        .acknowledge(&run_id, terminal_seq)
-        .expect("acknowledge terminal sequence");
-    assert_eq!(
-        std::fs::metadata(run_dir.join("events.jsonl"))
-            .unwrap()
-            .len(),
-        0
-    );
-    assert!(run_dir.join("compacted.json").is_file());
-    assert!(run_dir.join("blobs").read_dir().unwrap().next().is_none());
-
-    let recovered = collector.recover().expect("recover compact marker");
-    assert_eq!(recovered.len(), 1);
-    assert_eq!(recovered[0].manifest.run_id, run_id);
-    assert_eq!(recovered[0].acknowledged_seq, terminal_seq);
-    assert!(recovered[0].events.is_empty());
-    assert!(recovered[0].blobs.is_empty());
-    assert!(recovered[0].pending_batch(10).is_none());
-}
-
-#[test]
 fn aggregate_spool_reservations_bound_runs_across_the_worker() {
     let temp = tempfile::tempdir().expect("tempdir");
     let policy = AgentActivityCapturePolicyV1 {

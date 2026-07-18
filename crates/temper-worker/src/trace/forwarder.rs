@@ -22,13 +22,14 @@ const INITIAL_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(5);
 
 enum ForwarderWork {
-    FullRecovery,
+    FullRecovery { repair_permissions: bool },
     Notified(BTreeSet<String>),
 }
 
 #[derive(Default)]
 struct ForwarderRetry {
     full_recovery: bool,
+    repair_permissions: bool,
     run_ids: BTreeSet<String>,
     failures: Vec<ForwardingFailure>,
 }
@@ -39,9 +40,10 @@ struct ForwardingFailure {
 }
 
 impl ForwarderRetry {
-    fn full_recovery(error: String) -> Self {
+    fn full_recovery(repair_permissions: bool, error: String) -> Self {
         Self {
             full_recovery: true,
+            repair_permissions,
             failures: vec![ForwardingFailure {
                 run_id: None,
                 error,
@@ -65,6 +67,7 @@ impl ForwarderRetry {
 
     fn merge(&mut self, mut other: Self) {
         self.full_recovery |= other.full_recovery;
+        self.repair_permissions |= other.repair_permissions;
         self.run_ids.append(&mut other.run_ids);
         self.failures.append(&mut other.failures);
     }
@@ -98,9 +101,11 @@ where
     spawner.spawn_task_with_cx(move |cx| async move {
         let mut backoff = INITIAL_RETRY_BACKOFF;
         let mut next_full_recovery = timer_now(&cx);
-        let mut work = ForwarderWork::FullRecovery;
+        let mut work = ForwarderWork::FullRecovery {
+            repair_permissions: true,
+        };
         loop {
-            let full_recovery = matches!(&work, ForwarderWork::FullRecovery);
+            let full_recovery = matches!(&work, ForwarderWork::FullRecovery { .. });
             if full_recovery {
                 // Everything published before this drain is covered by the
                 // full pass. An append during recovery stays dirty and is
@@ -142,7 +147,9 @@ where
                 }
                 backoff = backoff.saturating_mul(2).min(MAX_RETRY_BACKOFF);
                 if retry.full_recovery {
-                    work = ForwarderWork::FullRecovery;
+                    work = ForwarderWork::FullRecovery {
+                        repair_permissions: retry.repair_permissions,
+                    };
                 } else {
                     let mut run_ids = retry.run_ids;
                     run_ids.extend(
@@ -163,7 +170,9 @@ where
                 next_full_recovery.duration_since(timer_now(&cx)),
             );
             if until_recovery.is_zero() {
-                work = ForwarderWork::FullRecovery;
+                work = ForwarderWork::FullRecovery {
+                    repair_permissions: false,
+                };
                 continue;
             }
             if !dirty.runs.is_empty() {
@@ -196,7 +205,9 @@ where
                         .map(|run| run.run_id)
                         .collect(),
                 ),
-                ForwarderWake::RecoveryBackstop => ForwarderWork::FullRecovery,
+                ForwarderWake::RecoveryBackstop => ForwarderWork::FullRecovery {
+                    repair_permissions: false,
+                },
             };
         }
         joined_tx.send(());
@@ -232,12 +243,22 @@ async fn forward_work<T: Transport>(
     work: ForwarderWork,
 ) -> ForwarderRetry {
     let runs = match work {
-        ForwarderWork::FullRecovery => match collector.recover_forwardable() {
-            Ok(runs) => runs,
-            Err(error) => {
-                return ForwarderRetry::full_recovery(format!("recover activity spools: {error}"));
+        ForwarderWork::FullRecovery { repair_permissions } => {
+            let recovered = if repair_permissions {
+                collector.recover_forwardable_at_startup()
+            } else {
+                collector.recover_forwardable()
+            };
+            match recovered {
+                Ok(runs) => runs,
+                Err(error) => {
+                    return ForwarderRetry::full_recovery(
+                        repair_permissions,
+                        format!("recover activity spools: {error}"),
+                    );
+                }
             }
-        },
+        }
         ForwarderWork::Notified(run_ids) => run_ids
             .into_iter()
             .filter_map(|run_id| collector.recover_notified_run(&run_id))
@@ -275,7 +296,7 @@ pub(crate) async fn forward_pending<T: Transport>(
     auth: Option<WorkerAuth>,
 ) -> Result<(), String> {
     let runs = collector
-        .recover_forwardable()
+        .recover_forwardable_at_startup()
         .map_err(|error| format!("recover activity spools: {error}"))?;
     for run in runs {
         forward_run(
