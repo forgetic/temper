@@ -285,19 +285,13 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
             }
         }
 
-        // Broad work subsumes targeted work only for the same lane.
-        for (_, roles) in targeted_roles.values_mut() {
-            roles.retain(|role| !broad_roles.contains(role));
-        }
-        targeted_roles.retain(|_, (_, roles)| !roles.is_empty());
-
         let mut failures = Vec::new();
         let now = (self.clock)();
 
         // Exact mechanical transitions run in explicit priority order before
         // retained broad reconciliation. Role work starts only after all
         // mechanical mutation has completed for this repository generation.
-        execute_mechanical_work(
+        let mechanical_changed = execute_mechanical_work(
             self.mechanical.as_ref(),
             &route.path,
             &mechanical_targets,
@@ -305,6 +299,22 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
             &mut failures,
         )
         .await;
+
+        // A mechanical transition is itself a fresh change hint. Do not rely
+        // solely on Forgejo delivering the resulting label/state webhook: wake
+        // all subscribed roles once after a mutating pass so work created by
+        // automation is visible immediately, while unchanged idle passes stay
+        // request-neutral for role scans.
+        if mechanical_changed {
+            broad_roles.extend(route.roles.iter().cloned());
+        }
+
+        // Broad work subsumes targeted work only for the same lane, including
+        // a broad role follow-up introduced by a local mechanical mutation.
+        for (_, roles) in targeted_roles.values_mut() {
+            roles.retain(|role| !broad_roles.contains(role));
+        }
+        targeted_roles.retain(|_, (_, roles)| !roles.is_empty());
 
         if !broad_roles.is_empty() {
             let roles = broad_roles.into_iter().collect::<Vec<_>>();
@@ -380,30 +390,34 @@ async fn execute_mechanical_work(
     targets: &WakeTargets,
     broad: bool,
     failures: &mut Vec<String>,
-) {
+) -> bool {
     let Some(mechanical) = mechanical else {
-        return;
+        return false;
     };
+    let mut changed = false;
 
     for ((kind, number), change) in prioritized_targets(targets) {
         let address = ArtifactAddress::new(kind, number);
-        if let Err(error) = mechanical
+        match mechanical
             .run_coordinated_targeted(repo.clone(), address, change)
             .await
         {
-            failures.push(format!(
+            Ok(target_changed) => changed |= target_changed,
+            Err(error) => failures.push(format!(
                 "targeted mechanical wake failed for {}#{}: {error}",
                 artifact_kind(address.kind),
                 address.number
-            ));
+            )),
         }
     }
 
     if broad {
-        if let Err(error) = mechanical.run_coordinated_broad(repo.clone()).await {
-            failures.push(format!("broad mechanical wake failed: {error}"));
+        match mechanical.run_coordinated_broad(repo.clone()).await {
+            Ok(broad_changed) => changed |= broad_changed,
+            Err(error) => failures.push(format!("broad mechanical wake failed: {error}")),
         }
     }
+    changed
 }
 
 impl<F: Forge + Send + Sync + ?Sized + 'static> WakeExecutor for ForgeWakeExecutor<F> {
@@ -456,6 +470,7 @@ mod tests {
         events: Arc<std::sync::Mutex<Vec<String>>>,
         active: Arc<AtomicUsize>,
         max_active: Arc<AtomicUsize>,
+        changed: bool,
     }
 
     impl RecordingMechanical {
@@ -482,12 +497,12 @@ mod tests {
         fn run_coordinated_broad(
             &self,
             _repo: RepositoryPath,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>>
         {
             let recorder = self.clone();
             Box::pin(async move {
                 recorder.record("mechanical:broad".to_string()).await;
-                Ok(())
+                Ok(recorder.changed)
             })
         }
 
@@ -496,7 +511,7 @@ mod tests {
             _repo: RepositoryPath,
             artifact: ArtifactAddress,
             change: ChangeKind,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>>
         {
             let recorder = self.clone();
             Box::pin(async move {
@@ -507,7 +522,7 @@ mod tests {
                         artifact.number
                     ))
                     .await;
-                Ok(())
+                Ok(recorder.changed)
             })
         }
     }
@@ -534,7 +549,7 @@ mod tests {
             );
             let mut failures = Vec::new();
 
-            execute_mechanical_work(
+            let changed = execute_mechanical_work(
                 Some(&mechanical),
                 &RepositoryPath::new("ai", "temper"),
                 &targets,
@@ -548,6 +563,7 @@ mod tests {
                 .push("role:scan".to_string());
 
             assert!(failures.is_empty());
+            assert!(!changed);
             assert_eq!(
                 *events.lock().expect("event log"),
                 vec![
@@ -559,6 +575,30 @@ mod tests {
                 ]
             );
             assert_eq!(max_active.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn mechanical_change_is_reported_for_role_followup() {
+        temper_engine_io::block_on_with(move |_cx, _handle| async move {
+            let recorder = RecordingMechanical {
+                changed: true,
+                ..RecordingMechanical::default()
+            };
+            let mechanical: Arc<dyn CoordinatedMechanical> = Arc::new(recorder);
+            let mut failures = Vec::new();
+
+            let changed = execute_mechanical_work(
+                Some(&mechanical),
+                &RepositoryPath::new("ai", "temper"),
+                &WakeTargets::new(),
+                true,
+                &mut failures,
+            )
+            .await;
+
+            assert!(failures.is_empty());
+            assert!(changed);
         });
     }
 }

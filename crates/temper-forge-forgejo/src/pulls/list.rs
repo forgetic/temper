@@ -9,8 +9,10 @@ use crate::ids::format_pull_request_id;
 use crate::map::map_issue;
 use crate::types::IssueDto;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use temper_forge_model::{
-    BranchRef, ItemSortField, PullRequestQuery, PullRequestState, SortDirection,
+    BranchRef, CandidateLifecycle, ItemSortField, PullRequestCandidateQuery, PullRequestQuery,
+    PullRequestState, SortDirection,
 };
 
 impl<C: HttpClient> ForgejoForge<C> {
@@ -36,6 +38,75 @@ impl<C: HttpClient> ForgejoForge<C> {
         if let Some(limit) = query.limit {
             pulls.truncate(limit);
         }
+        if query.details.dependencies {
+            for pull in &mut pulls {
+                pull.dependencies = self.load_item_dependencies(&repo, pull.number).await?;
+            }
+        }
+        Ok(pulls)
+    }
+
+    /// Lists one lifecycle bucket of pull-request candidates through Forgejo's
+    /// issue label index. Multi-label buckets use the owner-scoped search index
+    /// because the repository issue endpoint treats multiple labels as all-of;
+    /// foreign-repository rows are discarded before materialization. A terminal
+    /// bucket still uses one `state=closed` discovery request and separates
+    /// portable closed and merged states locally.
+    ///
+    /// Unambiguous summary rows are materialized directly. A closed row without
+    /// a usable merge marker retains the established exact `/pulls/{number}`
+    /// fallback before lifecycle and label filtering. No unlabelled pull
+    /// history request is used as a fallback.
+    pub async fn list_pull_request_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: PullRequestCandidateQuery,
+    ) -> ForgeResult<Vec<PullRequest>> {
+        let repo = parse_repository_id(repo_id)?;
+        let labels = query.labels.normalized()?;
+        let state = match query.lifecycle {
+            CandidateLifecycle::Open => "open",
+            CandidateLifecycle::Terminal => "closed",
+        };
+        let rows = self
+            .list_candidate_issue_rows(&repo, state, "pulls", labels.as_deref())
+            .await?;
+
+        let mut rows_by_number = BTreeMap::new();
+        for row in rows {
+            if row.is_pull_request() {
+                rows_by_number.entry(row.number).or_insert(row);
+            }
+        }
+
+        let mut by_id = BTreeMap::new();
+        for row in rows_by_number.into_values() {
+            let number = ItemNumber::new(row.number);
+            let pull = if pr_issue_row_can_answer_candidate_query(
+                &row,
+                query.lifecycle,
+                labels.as_deref(),
+                query.details.dependencies,
+            ) {
+                Some(self.materialize_pull_request_summary(&repo, row))
+            } else {
+                self.fetch_pull_request(&repo, number).await?
+            };
+            let Some(pull) = pull else {
+                continue;
+            };
+            if !pull_matches_candidate_query(&pull, query.lifecycle, labels.as_deref()) {
+                continue;
+            }
+            by_id.entry(pull.id.clone()).or_insert(pull);
+        }
+
+        let mut pulls = by_id.into_values().collect::<Vec<_>>();
+        pulls.sort_by(|left, right| {
+            left.number
+                .cmp(&right.number)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         if query.details.dependencies {
             for pull in &mut pulls {
                 pull.dependencies = self.load_item_dependencies(&repo, pull.number).await?;
@@ -303,6 +374,53 @@ fn pull_matches_query(pull: &PullRequest, query: &PullRequestQuery) -> bool {
         }
     }
     true
+}
+
+fn pr_issue_row_can_answer_candidate_query(
+    row: &IssueDto,
+    lifecycle: CandidateLifecycle,
+    labels: Option<&[String]>,
+    dependencies: bool,
+) -> bool {
+    // Full candidates need exact PR fields before dependency enrichment.
+    if dependencies {
+        return false;
+    }
+    // A labelled provider row without labels cannot prove the local any-of
+    // contract or preserve the labels summary, so use exact detail.
+    if labels.is_some() && row.labels.is_none() {
+        return false;
+    }
+    // Forgejo exposes both terminal portable states as provider `closed`.
+    // Exact detail is required only when the marker cannot distinguish them.
+    if lifecycle == CandidateLifecycle::Terminal && row.state.eq_ignore_ascii_case("closed") {
+        return row
+            .pull_request
+            .as_ref()
+            .and_then(pull_request_marker_merge_state)
+            .is_some();
+    }
+    true
+}
+
+fn pull_matches_candidate_query(
+    pull: &PullRequest,
+    lifecycle: CandidateLifecycle,
+    labels: Option<&[String]>,
+) -> bool {
+    let state_matches = match lifecycle {
+        CandidateLifecycle::Open => pull.state == PullRequestState::Open,
+        CandidateLifecycle::Terminal => matches!(
+            pull.state,
+            PullRequestState::Closed | PullRequestState::Merged
+        ),
+    };
+    state_matches
+        && labels.is_none_or(|required| {
+            required
+                .iter()
+                .any(|candidate| pull.labels.iter().any(|label| label == candidate))
+        })
 }
 
 fn compare_pull_requests(

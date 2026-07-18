@@ -88,10 +88,38 @@ Forgejo models pull requests as issues. Consequences:
 
 `body_contains`, author, and assignee filters are applied client-side after the
 narrowest safe provider query. Forgejo 7.0.x has no reliable exact body-substring
-search. Summary list calls (`details.dependencies=false`) skip dependency
-N+1s; labelled PR summary rows may also omit branch refs, head/base SHAs,
-requested reviewers, and merge records. Use exact `get_*` or full-detail lists
-when those fields matter.
+search. Ordinary `IssueQuery.labels` and `PullRequestQuery.labels` remain portable
+all-of filters: although Forgejo versions may interpret the single
+comma-separated provider filter as OR, the backend applies a final local
+all-label check.
+
+Consolidated candidate reads use Forgejo's provider-side any-label search, with
+one request shape per lifecycle bucket. Forgejo 15's repository-scoped
+`/repos/{owner}/{repo}/issues` endpoint actually applies multiple label names as
+all-of even though its API description says any-of. Consequently, a candidate
+bucket with multiple interest labels uses the owner-scoped
+`/repos/issues/search?owner=...&labels=...` index and locally rejects rows whose
+embedded repository identity is not the requested repository. Single-label and
+unfiltered buckets stay on the repository endpoint. Rows are always locally
+retained only when they carry at least one requested label. Issue buckets send
+`type=issues`; PR buckets send `type=pulls`. Open buckets send `state=open`.
+Terminal issue buckets send `state=closed`, while terminal PR discovery also
+sends just one `state=closed` request and locally separates portable `Closed`
+and `Merged` rows. Terminal workflow planning always supplies labels, and the
+backend never substitutes an unlabelled issue or pull-history read for labelled
+discovery. Every bucket follows the shared `limit`/`page` pagination loop,
+deduplicates rows repeated across pages, and returns deterministic number/ID
+order. Thus a one-page bucket costs one provider list request regardless of
+interest-label count.
+
+Summary list calls (`details.dependencies=false`) skip dependency N+1s;
+labelled PR summary rows may also omit branch refs, head/base SHAs, requested
+reviewers, and merge records. Unambiguous candidate summaries are materialized
+from the issue index without exact PR reads. A closed PR-as-issue row that lacks
+a sufficient merge marker is the exception: `/pulls/{number}` is read before
+closed/merged filtering. Exact PR summary reads similarly perform only
+`/pulls/{number}` and return empty dependencies; exact full reads additionally
+use `/issues/{number}/dependencies`.
 
 ### Labels and assignees are set-like but Forgejo wants label ids
 

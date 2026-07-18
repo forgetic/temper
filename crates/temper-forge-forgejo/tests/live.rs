@@ -18,8 +18,9 @@ use std::time::{Duration, Instant};
 use temper_engine_io::http::{HttpCall, HttpResponseData, http_call};
 use temper_forge_forgejo::{EngineHttpClient, ForgejoConfig, ForgejoForge};
 use temper_forge_model::{
-    CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, IssueQuery, IssueState,
-    PullRequestQuery, RepositoryId, RepositoryPath, UpdateIssue,
+    CandidateLabelSelection, CandidateLifecycle, CiJobConclusion, CiJobQuery, CiJobStatus,
+    CreateIssue, IssueCandidateQuery, IssueQuery, IssueState, PullRequestQuery, RepositoryId,
+    RepositoryPath, UpdateIssue, UpsertLabel,
 };
 
 const ADMIN_USER: &str = "liveadmin";
@@ -102,6 +103,7 @@ fn live_smoke_suite_against_throwaway_forgejo() {
             .expect("list_pull_requests should succeed");
         assert!(pulls.iter().all(|pull| pull.repo_id == world.repo_id));
 
+        candidate_label_filter_is_any_of(&world).await;
         create_and_close_issue(&world).await;
         wait_for_ci_success(&cx, &world).await;
     });
@@ -267,6 +269,60 @@ fn assert_success_json(response: &HttpResponseData, what: &str) -> Value {
     assert_success(response, what);
     serde_json::from_slice(&response.body)
         .unwrap_or_else(|error| panic!("{what} response should be json: {error}"))
+}
+
+async fn candidate_label_filter_is_any_of(world: &LiveWorld) {
+    for name in ["candidate-ready", "candidate-queued"] {
+        world
+            .forge
+            .upsert_label(
+                &world.repo_id,
+                UpsertLabel {
+                    name: name.to_string(),
+                    color: Some("1d76db".to_string()),
+                    description: None,
+                },
+            )
+            .await
+            .expect("candidate label should be created");
+    }
+    let created = world
+        .forge
+        .create_issue(
+            &world.repo_id,
+            CreateIssue {
+                title: "Forgejo any-label candidate".to_string(),
+                body: "Carries only one of the requested candidate labels.".to_string(),
+                labels: vec!["candidate-ready".to_string()],
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("candidate issue should be created");
+
+    let candidates = world
+        .forge
+        .list_issue_candidates(
+            &world.repo_id,
+            IssueCandidateQuery {
+                lifecycle: CandidateLifecycle::Open,
+                labels: CandidateLabelSelection::AnyOf(vec![
+                    "candidate-ready".to_string(),
+                    "candidate-queued".to_string(),
+                ]),
+                ..IssueCandidateQuery::default()
+            },
+        )
+        .await
+        .expect("candidate issue list should succeed");
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate.number)
+            .collect::<Vec<_>>(),
+        vec![created.number],
+        "Forgejo candidate discovery must retain any-label semantics"
+    );
 }
 
 async fn create_and_close_issue(world: &LiveWorld) {

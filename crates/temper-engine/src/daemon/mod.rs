@@ -73,21 +73,25 @@ pub(crate) trait WakeExecutor: Send + Sync {
 
 /// Type-erased execution boundary for mechanical work already admitted by the
 /// daemon coordinator. Both methods are required so implementations cannot
-/// fall back to an uncoordinated or lossy hinted path.
+/// fall back to an uncoordinated or lossy hinted path. A successful result
+/// reports whether the pass mutated workflow state, allowing the coordinator to
+/// wake subscribed roles even when the provider drops the mutation webhook.
 pub trait CoordinatedMechanical: Send + Sync {
-    /// Executes repository-wide mechanical reconciliation.
+    /// Executes repository-wide mechanical reconciliation and reports whether
+    /// it changed workflow state.
     fn run_coordinated_broad(
         &self,
         repo: RepositoryPath,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>>;
 
-    /// Executes one exact artifact request.
+    /// Executes one exact artifact request and reports whether it changed
+    /// workflow state.
     fn run_coordinated_targeted(
         &self,
         repo: RepositoryPath,
         artifact: ArtifactAddress,
         change: ChangeKind,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>>;
 }
 
 impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> CoordinatedMechanical
@@ -96,7 +100,7 @@ impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> CoordinatedMechani
     fn run_coordinated_broad(
         &self,
         repo: RepositoryPath,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>> {
         let trigger = self.clone();
         Box::pin(async move {
             trigger
@@ -104,7 +108,7 @@ impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> CoordinatedMechani
                     temper_forge::ChangeHint::repository(repo, ChangeKind::Unknown),
                 ]))
                 .await
-                .map(|_| ())
+                .map(|progress| progress.changed)
                 .map_err(|error| error.to_string())
         })
     }
@@ -114,7 +118,7 @@ impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> CoordinatedMechani
         repo: RepositoryPath,
         artifact: ArtifactAddress,
         change: ChangeKind,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>> {
         let trigger = self.clone();
         Box::pin(async move {
             trigger
@@ -122,7 +126,7 @@ impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> CoordinatedMechani
                     repo, artifact, change,
                 )]))
                 .await
-                .map(|_| ())
+                .map(|progress| progress.changed)
                 .map_err(|error| error.to_string())
         })
     }

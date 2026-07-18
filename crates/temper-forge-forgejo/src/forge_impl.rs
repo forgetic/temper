@@ -13,10 +13,11 @@
 use crate::{ForgejoForge, HttpClient};
 use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
-    ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueCandidateQuery,
+    IssueId, IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord,
+    PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview,
+    Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait::async_trait]
@@ -66,6 +67,14 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         query: IssueQuery,
     ) -> ForgeResult<Vec<Issue>> {
         self.list_issues(repo_id, query).await
+    }
+
+    async fn list_issue_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: IssueCandidateQuery,
+    ) -> ForgeResult<Vec<Issue>> {
+        self.list_issue_candidates(repo_id, query).await
     }
 
     async fn create_issue(&self, repo_id: &RepositoryId, input: CreateIssue) -> ForgeResult<Issue> {
@@ -140,6 +149,14 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         query: PullRequestQuery,
     ) -> ForgeResult<Vec<PullRequest>> {
         self.list_pull_requests(repo_id, query).await
+    }
+
+    async fn list_pull_request_candidates(
+        &self,
+        repo_id: &RepositoryId,
+        query: PullRequestCandidateQuery,
+    ) -> ForgeResult<Vec<PullRequest>> {
+        self.list_pull_request_candidates(repo_id, query).await
     }
 
     async fn create_pull_request(

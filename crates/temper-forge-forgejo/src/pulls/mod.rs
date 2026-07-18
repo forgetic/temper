@@ -24,7 +24,9 @@ impl<C: HttpClient> ForgejoForge<C> {
             .await
     }
 
-    /// Looks up a pull request by stable id with an explicit dependency-detail budget.
+    /// Looks up a pull request by stable identifier with an explicit detail
+    /// budget. Summary reads use only `/pulls/{number}`; full reads additionally
+    /// load the shared issue dependency endpoint.
     pub async fn get_pull_request_with_details(
         &self,
         id: &PullRequestId,
@@ -45,7 +47,7 @@ impl<C: HttpClient> ForgejoForge<C> {
             .await
     }
 
-    /// Looks up a pull request by number with an explicit dependency-detail budget.
+    /// Looks up a pull request by number with an explicit detail budget.
     pub async fn get_pull_request_by_number_with_details(
         &self,
         repo_id: &RepositoryId,
@@ -278,7 +280,8 @@ impl<C: HttpClient> ForgejoForge<C> {
             .await
     }
 
-    async fn fetch_pull_request_with_details(
+    /// Fetches a pull request and enriches only the requested detail fields.
+    pub(crate) async fn fetch_pull_request_with_details(
         &self,
         repo: &RepoCoord,
         number: ItemNumber,

@@ -109,6 +109,45 @@ fn list_issues_constructs_request_excludes_pulls_and_maps() {
 }
 
 #[test]
+fn ordinary_multi_label_issue_query_remains_conjunctive() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        format!(
+            "[{},{}]",
+            issue_json(1, "open", r#"[{"id":1,"name":"ready"}]"#, ""),
+            issue_json(
+                2,
+                "open",
+                r#"[{"id":1,"name":"ready"},{"id":2,"name":"urgent"}]"#,
+                ""
+            )
+        ),
+    );
+    let forge = forge(client.clone());
+
+    let issues = block_on(forge.list_issues(
+        &repo_id(),
+        IssueQuery {
+            state: Some(IssueState::Open),
+            labels: vec!["ready".into(), "urgent".into()],
+            details: ItemListDetails::summary(),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].number, ItemNumber::new(2));
+    assert_eq!(client.call_count(), 1);
+    assert!(
+        client.recorded()[0]
+            .query
+            .contains(&("labels".into(), "ready,urgent".into()))
+    );
+}
+
+#[test]
 fn list_issues_dependency_detail_is_demand_driven() {
     let client = MockHttpClient::new();
     client.push_response(200, format!("[{}]", issue_json(1, "open", "[]", "")));
