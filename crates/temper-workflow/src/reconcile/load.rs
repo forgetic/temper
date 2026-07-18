@@ -7,9 +7,12 @@
 //! source-size budget.
 
 use super::finding::{ReconcileError, ReconcileReport, RecoveryPolicy};
-use super::{ArtifactSnapshot, Reconciler, ReconciliationMode};
+use super::{
+    ArtifactSnapshot, Reconciler, ReconciliationDetailCache, ReconciliationDetailCacheStats,
+    ReconciliationMode,
+};
 use crate::classify::{ArtifactSource, Classifier};
-use crate::dependency_state;
+use crate::dependency_state::{self, DependencyStateIndex};
 use crate::journal::{CommandJournal, CommandRecord};
 use crate::plan::DependencyStatus;
 use temper_forge::{Forge, IssueQuery, ItemNumber, PullRequestQuery, RepositoryId};
@@ -27,16 +30,58 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         F: Forge + ?Sized,
         J: CommandJournal,
     {
+        self.reconcile_bounded_candidates(forge, repo_id, journal, now, None)
+            .await
+    }
+
+    /// Runs bounded reconciliation while retaining only native dependency
+    /// enrichment in the caller-owned cache.
+    pub async fn reconcile_with_detail_cache<F, J>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        journal: &J,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: &ReconciliationDetailCache,
+    ) -> Result<ReconcileReport, ReconcileError>
+    where
+        F: Forge + ?Sized,
+        J: CommandJournal,
+    {
+        self.reconcile_bounded_candidates(forge, repo_id, journal, now, Some(cache))
+            .await
+    }
+
+    async fn reconcile_bounded_candidates<F, J>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        journal: &J,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: Option<&ReconciliationDetailCache>,
+    ) -> Result<ReconcileReport, ReconcileError>
+    where
+        F: Forge + ?Sized,
+        J: CommandJournal,
+    {
         let entries = journal.list().await?;
         let mut snapshots = self
             .load_incomplete_journal_snapshots(forge, repo_id, &entries)
             .await?;
         let candidates = self
-            .load_bounded_candidate_snapshots(forge, repo_id)
+            .load_bounded_candidate_snapshots_inner(forge, repo_id, now, cache)
             .await?;
-        snapshots.extend(candidates);
+        snapshots.extend(candidates.snapshots);
         Ok(self
-            .reconcile_loaded_snapshots(forge, repo_id, snapshots, &entries, now)
+            .reconcile_loaded_snapshots(
+                forge,
+                repo_id,
+                snapshots,
+                &entries,
+                now,
+                Some(&candidates.state_index),
+                candidates.cache_stats,
+            )
             .await)
     }
 
@@ -82,7 +127,15 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
             .await?;
         snapshots.extend(bounded_snapshots);
         Ok(self
-            .reconcile_loaded_snapshots(forge, repo_id, snapshots, &entries, now)
+            .reconcile_loaded_snapshots(
+                forge,
+                repo_id,
+                snapshots,
+                &entries,
+                now,
+                None,
+                ReconciliationDetailCacheStats::default(),
+            )
             .await)
     }
 
@@ -143,7 +196,15 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         let entries = journal.list().await?;
         let snapshots = self.load_deep_audit_snapshots(forge, repo_id).await?;
         Ok(self
-            .reconcile_loaded_snapshots(forge, repo_id, snapshots, &entries, now)
+            .reconcile_loaded_snapshots(
+                forge,
+                repo_id,
+                snapshots,
+                &entries,
+                now,
+                None,
+                ReconciliationDetailCacheStats::default(),
+            )
             .await)
     }
 
@@ -176,12 +237,17 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         mut snapshots: Vec<ArtifactSnapshot>,
         entries: &[CommandRecord],
         now: chrono::DateTime<chrono::Utc>,
+        state_index: Option<&DependencyStateIndex>,
+        cache_stats: ReconciliationDetailCacheStats,
     ) -> ReconcileReport {
         normalize_snapshots(&mut snapshots);
         let snapshot_count = snapshots.len();
-        let deps = self.dependency_status(forge, repo_id, &snapshots).await;
+        let deps = self
+            .dependency_status(forge, repo_id, &snapshots, state_index)
+            .await;
         let mut report = self.scan(&snapshots, entries, &deps, now);
         report.snapshot_count = snapshot_count;
+        report.cache_stats = cache_stats;
         report
     }
 
@@ -190,6 +256,7 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         forge: &F,
         repo_id: &RepositoryId,
         snapshots: &[ArtifactSnapshot],
+        state_index: Option<&DependencyStateIndex>,
     ) -> DependencyStatus {
         let classifier = Classifier::new(self.workflow);
         let artifacts = snapshots
@@ -205,7 +272,8 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
                     .ok()
             })
             .collect::<Vec<_>>();
-        dependency_state::status_for_artifacts(forge, repo_id, &artifacts).await
+        dependency_state::status_for_artifacts_with_index(forge, repo_id, &artifacts, state_index)
+            .await
     }
 }
 

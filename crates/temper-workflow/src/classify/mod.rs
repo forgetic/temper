@@ -28,7 +28,7 @@ pub use classifier::Classifier;
 pub use diagnostic::{ClassificationDiagnostic, ClassificationError};
 
 /// Where a classified artifact came from in the Forge.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ArtifactSource {
     /// The artifact is a Forge issue with the given item number.
     Issue { number: ItemNumber },

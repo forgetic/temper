@@ -82,10 +82,20 @@ impl<F: Forge> Forge for CountingForge<F> {
         query: IssueCandidateQuery,
     ) -> ForgeResult<Vec<Issue>> {
         self.record_issue_candidate_query(&query);
-        self.perform(
-            CountedForgeOp::ListIssueCandidates,
-            self.inner.list_issue_candidates(repo_id, query),
-        )
+        self.perform(CountedForgeOp::ListIssueCandidates, async {
+            let overrides = self
+                .issue_candidate_overrides
+                .lock()
+                .expect("issue candidate overrides mutex")
+                .clone();
+            Ok(self
+                .inner
+                .list_issue_candidates(repo_id, query)
+                .await?
+                .into_iter()
+                .map(|issue| overrides.get(&issue.id).cloned().unwrap_or(issue))
+                .collect())
+        })
         .await
     }
 

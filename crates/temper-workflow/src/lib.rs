@@ -158,8 +158,9 @@ pub use plan::{
 };
 pub use reconcile::{
     ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,
-    Reconciler, ReconciliationCandidateQueryPlan, ReconciliationMode, RecoveryAction,
-    RecoveryPolicy, reconciliation_candidate_query_plan,
+    Reconciler, ReconciliationCandidateQueryPlan, ReconciliationDetailCache,
+    ReconciliationDetailCachePolicy, ReconciliationDetailCacheStats, ReconciliationMode,
+    RecoveryAction, RecoveryPolicy, reconciliation_candidate_query_plan,
 };
 pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
