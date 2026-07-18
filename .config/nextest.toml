@@ -6,9 +6,9 @@
 # in parallel. The advisory file lock in tests/support/e2e_lock.rs intentionally
 # remains as belt-and-suspenders protection for direct `cargo test -- --ignored`
 # invocations and older/manual runners that do not honor this nextest config.
-[profile.default]
-test-threads = 1
-
+# Keep the default profile's thread count unset so nextest runs the ordinary
+# quick suite across all available CPUs. Resource-heavy exceptions below reserve
+# the full scheduler explicitly instead of serializing unrelated tests.
 [test-groups]
 root-forgejo-e2e = { max-threads = 1 }
 # Native-process acceptance starts real agents and worker/daemon worlds. Nextest
@@ -23,17 +23,17 @@ native-process-fixtures = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = 'package(temper-testing) & binary(hermetic_real_stack) & test(/^restart_cancellation::/)'
 test-group = 'native-process-fixtures'
-threads-required = 1
+threads-required = "num-cpus"
 
 [[profile.default.overrides]]
 filter = 'package(temper-testing) & binary(descendant_containment_acceptance)'
 test-group = 'native-process-fixtures'
-threads-required = 1
+threads-required = "num-cpus"
 
 [[profile.default.overrides]]
 filter = 'package(temper-worker) & binary(temper_worker) & test(/^out_of_process_runner::supervisor_tests::/)'
 test-group = 'native-process-fixtures'
-threads-required = 1
+threads-required = "num-cpus"
 
 [profile.e2e]
 test-threads = 4
