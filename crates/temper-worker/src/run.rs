@@ -26,7 +26,7 @@ use crate::result_outbox::ResultOutbox;
 use crate::task_registry::{
     WorkerComponentTasks, WorkerShutdown, WorkerTaskJoinNotification, WorkerTaskRegistry,
 };
-use crate::trace::spawn_activity_forwarder;
+use crate::trace::{TraceCollector, spawn_activity_forwarder};
 use crate::transport::{HttpTransport, Transport};
 use crate::worker_machine::{WorkerCompletion, WorkerMachine};
 use crate::worker_shell::{WorkerCancellation, WorkerShell};
@@ -48,8 +48,25 @@ pub async fn run_worker<E>(
 where
     E: JobExecutor + Send + Sync + 'static,
 {
+    let collector = TraceCollector::new(config.agent_traces.clone());
+    run_worker_with_trace_collector(handle, config, executor, collector).await
+}
+
+/// [`run_worker`] with an explicitly shared trace collector. Production
+/// composition roots use this variant to give the runner and forwarder clones
+/// of the same coordination state.
+pub async fn run_worker_with_trace_collector<E>(
+    handle: RuntimeHandle,
+    config: WorkerConfig,
+    executor: Arc<E>,
+    collector: TraceCollector,
+) -> Result<(), WorkerError>
+where
+    E: JobExecutor + Send + Sync + 'static,
+{
     let transport = Arc::new(HttpTransport::new(&config.daemon_url));
-    run_worker_with_transport(handle, config, executor, transport).await
+    run_worker_with_transport_and_trace_collector(handle, config, executor, transport, collector)
+        .await
 }
 
 /// [`run_worker`] over an arbitrary [`Transport`] — the seam the unified
@@ -67,9 +84,30 @@ where
     T: Transport,
     S: Spawner,
 {
-    start_worker_with_transport(spawner, config, executor, transport)
-        .join()
-        .await;
+    let collector = TraceCollector::new(config.agent_traces.clone());
+    run_worker_with_transport_and_trace_collector(spawner, config, executor, transport, collector)
+        .await
+}
+
+/// [`run_worker_with_transport`] with clone-shared producer/forwarder trace
+/// coordination supplied by the caller.
+pub async fn run_worker_with_transport_and_trace_collector<E, T, S>(
+    spawner: S,
+    config: WorkerConfig,
+    executor: Arc<E>,
+    transport: Arc<T>,
+    collector: TraceCollector,
+) -> Result<(), WorkerError>
+where
+    E: JobExecutor + Send + Sync + 'static,
+    T: Transport,
+    S: Spawner,
+{
+    start_worker_with_transport_and_trace_collector(
+        spawner, config, executor, transport, collector,
+    )
+    .join()
+    .await;
     Ok(())
 }
 
@@ -213,12 +251,30 @@ where
     T: Transport,
     S: Spawner,
 {
-    start_worker_with_transport_and_hook(
+    let collector = TraceCollector::new(config.agent_traces.clone());
+    start_worker_with_transport_and_trace_collector(spawner, config, executor, transport, collector)
+}
+
+/// Starts a worker whose forwarder uses a clone of the caller-owned collector.
+pub fn start_worker_with_transport_and_trace_collector<E, T, S>(
+    spawner: S,
+    config: WorkerConfig,
+    executor: Arc<E>,
+    transport: Arc<T>,
+    collector: TraceCollector,
+) -> WorkerComponentHandle
+where
+    E: JobExecutor + Send + Sync + 'static,
+    T: Transport,
+    S: Spawner,
+{
+    start_worker_with_transport_and_hook_and_trace_collector(
         spawner,
         config,
         executor,
         transport,
         Arc::new(NoopWorkerLifecycleHook),
+        collector,
     )
 }
 
@@ -231,6 +287,31 @@ pub fn start_worker_with_transport_and_hook<E, T, S>(
     executor: Arc<E>,
     transport: Arc<T>,
     lifecycle_hook: Arc<dyn WorkerLifecycleHook>,
+) -> WorkerComponentHandle
+where
+    E: JobExecutor + Send + Sync + 'static,
+    T: Transport,
+    S: Spawner,
+{
+    let collector = TraceCollector::new(config.agent_traces.clone());
+    start_worker_with_transport_and_hook_and_trace_collector(
+        spawner,
+        config,
+        executor,
+        transport,
+        lifecycle_hook,
+        collector,
+    )
+}
+
+/// Hook-enabled worker startup with explicit clone-shared trace coordination.
+pub fn start_worker_with_transport_and_hook_and_trace_collector<E, T, S>(
+    spawner: S,
+    config: WorkerConfig,
+    executor: Arc<E>,
+    transport: Arc<T>,
+    lifecycle_hook: Arc<dyn WorkerLifecycleHook>,
+    collector: TraceCollector,
 ) -> WorkerComponentHandle
 where
     E: JobExecutor + Send + Sync + 'static,
@@ -259,7 +340,7 @@ where
     let component_tasks = WorkerComponentTasks::default();
     let forwarder_joined = spawn_activity_forwarder(
         spawner.clone(),
-        config.agent_traces.clone(),
+        collector,
         Arc::clone(&transport),
         config.worker_id.clone(),
         config.worker_auth.clone(),

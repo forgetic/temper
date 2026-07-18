@@ -176,7 +176,7 @@ fn recover_run_locked(run_dir: &Path) -> Result<RecoveredTraceRun, TraceError> {
 pub(super) fn acknowledge_recovered_run(
     run_dir: &Path,
     highest_contiguous_seq: u64,
-) -> Result<(), TraceError> {
+) -> Result<bool, TraceError> {
     let root = run_dir.parent().ok_or_else(|| {
         TraceError::InvalidSpool(format!("{} has no spool root", run_dir.display()))
     })?;
@@ -196,7 +196,7 @@ pub(super) fn acknowledge_recovered_run(
         let recovered = recover_run_locked(run_dir)?;
         if recovered.events.is_empty() {
             return if highest_contiguous_seq <= recovered.acknowledged_seq {
-                Ok(())
+                Ok(false)
             } else {
                 Err(TraceError::InvalidAcknowledgement {
                     acknowledged: highest_contiguous_seq,
@@ -211,7 +211,8 @@ pub(super) fn acknowledge_recovered_run(
                 last_seq,
             });
         }
-        if highest_contiguous_seq > recovered.acknowledged_seq {
+        let advanced = highest_contiguous_seq > recovered.acknowledged_seq;
+        if advanced {
             let cursor = TraceAckCursorV1::new(&recovered.manifest.run_id, highest_contiguous_seq);
             let bytes = serde_json::to_vec_pretty(&cursor)?;
             atomic_write(&run_dir.join("acknowledgement.json"), &bytes, true)?;
@@ -235,7 +236,7 @@ pub(super) fn acknowledge_recovered_run(
             atomic_write(&run_dir.join("compacted.json"), &bytes, false)?;
             reclaim_compacted_payload(run_dir)?;
         }
-        Ok(())
+        Ok(advanced)
     })();
     let unlocked = fs2::FileExt::unlock(&lock_file).map_err(|source| {
         io_error(
@@ -253,7 +254,45 @@ pub(super) fn acknowledge_recovered_run(
     });
     match (result, unlocked, root_unlocked) {
         (Err(error), _, _) | (Ok(_), Err(error), _) | (Ok(_), Ok(_), Err(error)) => Err(error),
-        (Ok(()), Ok(()), Ok(())) => Ok(()),
+        (Ok(advanced), Ok(()), Ok(())) => Ok(advanced),
+    }
+}
+
+/// Reads only the authoritative durable cursor for one known run.
+///
+/// This deliberately avoids recovering `events.jsonl`: terminal flush waiters
+/// need cursor durability, not a full validation and payload scan.
+pub(super) fn read_acknowledged_sequence(
+    run_dir: &Path,
+    expected_run_id: &str,
+) -> Result<u64, TraceError> {
+    let (lock_path, lock_file) = open_spool_lock(run_dir)?;
+    lock_file.lock_exclusive().map_err(|source| {
+        io_error(
+            "lock trace spool for acknowledgement read",
+            &lock_path,
+            source,
+        )
+    })?;
+    let cursor_path = run_dir.join("acknowledgement.json");
+    let cursor = read_json::<TraceAckCursorV1>(&cursor_path);
+    let unlocked = fs2::FileExt::unlock(&lock_file).map_err(|source| {
+        io_error(
+            "unlock trace spool after acknowledgement read",
+            &lock_path,
+            source,
+        )
+    });
+    match (cursor, unlocked) {
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        (Ok(cursor), Ok(()))
+            if cursor.version == ACTIVITY_PROTOCOL_VERSION && cursor.run_id == expected_run_id =>
+        {
+            Ok(cursor.highest_contiguous_seq)
+        }
+        (Ok(_), Ok(())) => Err(TraceError::InvalidSpool(format!(
+            "run {expected_run_id} has a mismatched acknowledgement cursor"
+        ))),
     }
 }
 

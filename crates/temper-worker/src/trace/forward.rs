@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
+use std::future::Future;
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use temper_protocol_activity::{ACTIVITY_PROTOCOL_VERSION, AgentActivityBatch, AgentRunEventV1};
 
 use super::{
     RecoveredTraceRun, TraceCollector, TraceError, acknowledge_recovered_run,
-    event_blob_references, read_dir, recover_run, set_private_dir,
+    event_blob_references, read_acknowledged_sequence, read_dir, recover_run, set_private_dir,
 };
 
 impl RecoveredTraceRun {
@@ -115,29 +117,57 @@ impl TraceCollector {
             .spool_root
             .as_deref()
             .ok_or(TraceError::Disabled)?;
-        acknowledge_recovered_run(&root.join(run_id), highest_contiguous_seq)
+        let advanced = acknowledge_recovered_run(&root.join(run_id), highest_contiguous_seq)?;
+        if advanced {
+            self.coordination.publish_acknowledgement();
+        }
+        Ok(())
     }
 
     /// Gives the independent forwarder a bounded opportunity to durably flush
     /// a terminal cursor. Timeout/storage failures return `false`; callers must
     /// always preserve the original agent/job outcome.
     pub async fn await_acknowledged(&self, run_id: &str, sequence: u64, timeout: Duration) -> bool {
+        let Some(root) = self.config.spool_root.as_deref() else {
+            return false;
+        };
+        let run_dir = root.join(run_id);
         let started = Instant::now();
         loop {
-            if self.recover_forwardable().ok().is_some_and(|runs| {
-                runs.into_iter()
-                    .any(|run| run.manifest.run_id == run_id && run.acknowledged_seq >= sequence)
-            }) {
+            // Snapshot before reading the cursor. An acknowledgement published
+            // between this read and waiter registration necessarily advances
+            // the generation, making the wait immediately ready.
+            let generation = self.coordination_snapshot().acknowledgement_generation;
+            if read_acknowledged_sequence(&run_dir, run_id)
+                .is_ok_and(|acknowledged| acknowledged >= sequence)
+            {
                 return true;
             }
             let elapsed = started.elapsed();
             if elapsed >= timeout {
                 return false;
             }
-            temper_worker_io::sleep_for(
-                Duration::from_millis(25).min(timeout.saturating_sub(elapsed)),
-            )
+            let remaining = timeout.saturating_sub(elapsed);
+            let mut changed = std::pin::pin!(self.wait_for_acknowledgement(generation));
+            let mut timed_out = std::pin::pin!(temper_worker_io::sleep_for(remaining));
+            let acknowledgement_changed = std::future::poll_fn(|cx| {
+                if changed.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(true);
+                }
+                if timed_out.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(false);
+                }
+                Poll::Pending
+            })
             .await;
+            if !acknowledgement_changed {
+                // Config-based compatibility composition may still construct
+                // a separate collector for the forwarder. One final targeted
+                // cursor read preserves its bounded flush behavior without
+                // returning to full-spool polling.
+                return read_acknowledged_sequence(&run_dir, run_id)
+                    .is_ok_and(|acknowledged| acknowledged >= sequence);
+            }
         }
     }
 }

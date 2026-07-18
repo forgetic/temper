@@ -17,11 +17,15 @@ identity log. The nested process can inherit ignored TERM and waits for an
 explicit post-completion mutation trigger.
 
 The same binary's `monitor` mode is spawned outside the containment under test.
-It polls every recorded `(PID, start_tick)`, records any transition to PPID 1,
-and treats a different start tick as PID reuse rather than survival. Tests stop
-and join the monitor only after the production completion boundary. They then
-require every exact identity to be absent, no PPID-1 observation, no mutation,
-and one terminal cleanup observation.
+It polls every recorded `(PID, start_tick)`, records transitions to PPID 1, and
+treats a different start tick as PID reuse rather than survival. Tests stop and
+join the monitor only after the production completion boundary. They then
+require every exact identity to be absent, no mutation, and one terminal cleanup
+observation. The dedicated Linux supervisor must additionally prevent every
+PPID-1 transition because it owns descendants as a subreaper. A delegated
+cgroup remains the kernel ownership boundary across ordinary reparenting, so
+its proof is recursive cgroup emptiness plus exact process absence rather than
+unchanged process parentage.
 
 `temper-containment-acceptance` dispatches the supervisor's private early-main
 protocol and runs the fixture matrix. Forced Linux-supervisor selection always

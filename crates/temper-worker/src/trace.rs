@@ -23,9 +23,13 @@ use temper_protocol_agent::WorkspaceContext;
 use temper_protocol_worker::FailureClass;
 use thiserror::Error;
 
+#[cfg(test)]
 use crate::config::WorkerAgentTraceConfig;
 
 mod accept;
+mod coordination;
+#[cfg(test)]
+mod coordination_tests;
 mod endpoint;
 #[cfg(test)]
 mod endpoint_tests;
@@ -34,6 +38,8 @@ mod forwarder;
 mod model;
 mod scope;
 mod spool;
+use coordination::TraceCoordination;
+pub use coordination::{DirtyTraceRun, DirtyTraceRuns, TraceCollector, TraceCoordinationSnapshot};
 pub use endpoint::ActivityEndpoint;
 pub(crate) use forwarder::spawn_activity_forwarder;
 use model::*;
@@ -108,23 +114,7 @@ pub enum TraceError {
     InvalidAcknowledgement { acknowledged: u64, last_seq: u64 },
 }
 
-/// Factory for new worker-stamped runs and restart recovery.
-#[derive(Clone, Debug)]
-pub struct TraceCollector {
-    config: WorkerAgentTraceConfig,
-}
-
-impl Default for TraceCollector {
-    fn default() -> Self {
-        Self::new(WorkerAgentTraceConfig::default())
-    }
-}
-
 impl TraceCollector {
-    pub fn new(config: WorkerAgentTraceConfig) -> Self {
-        Self { config }
-    }
-
     /// Starts one run. Capture `off` intentionally returns `Ok(None)` and does
     /// not create a spool directory.
     pub fn begin_run(
@@ -141,7 +131,14 @@ impl TraceCollector {
                 "capture is enabled but no durable worker spool root is configured".to_string(),
             )
         })?;
-        TraceRun::create(root, self.config.policy.clone(), job_id, context).map(Some)
+        TraceRun::create(
+            root,
+            self.config.policy.clone(),
+            job_id,
+            context,
+            Arc::clone(&self.coordination),
+        )
+        .map(Some)
     }
 
     /// Recovers every complete JSONL record, blob, and acknowledgement cursor.
@@ -186,6 +183,7 @@ struct TraceRunInner {
     lock_file: File,
     started: Instant,
     state: Mutex<RunState>,
+    coordination: Arc<TraceCoordination>,
 }
 
 struct RunState {
@@ -219,6 +217,7 @@ impl TraceRun {
         policy: AgentActivityCapturePolicyV1,
         job_id: &str,
         context: &WorkspaceContext,
+        coordination: Arc<TraceCoordination>,
     ) -> Result<Self, TraceError> {
         create_private_dir_all(root)?;
         let (root_lock_path, root_lock_file) = open_spool_root_lock(root)?;
@@ -310,6 +309,7 @@ impl TraceRun {
                         accepted_child_records: BTreeMap::new(),
                         accepted_prompts: BTreeMap::new(),
                     }),
+                    coordination,
                 }),
             };
             fs2::FileExt::unlock(&run.inner.lock_file)
@@ -465,6 +465,7 @@ impl TraceRun {
         state.acknowledged_seq = highest_contiguous_seq;
         let compact_terminal = state.terminal && highest_contiguous_seq == last_seq;
         drop(state);
+        self.inner.coordination.publish_acknowledgement();
         if compact_terminal {
             acknowledge_recovered_run(&self.inner.run_dir, highest_contiguous_seq)?;
         }
@@ -571,6 +572,7 @@ fn append_event(
         .scopes
         .entry(event.scope.id.clone())
         .or_insert_with(|| event.scope.clone());
+    inner.coordination.publish_append(&inner.manifest.run_id);
     Ok(())
 }
 

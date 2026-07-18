@@ -77,8 +77,11 @@ pub use result_outbox::{
     ResultOutbox, ResultOutboxEntry, ResultOutboxError,
 };
 pub use run::{
-    WorkerComponentHandle, run_worker, run_worker_with_transport, shutdown_worker_after_signal,
+    WorkerComponentHandle, run_worker, run_worker_with_trace_collector, run_worker_with_transport,
+    run_worker_with_transport_and_trace_collector, shutdown_worker_after_signal,
     start_worker_with_transport, start_worker_with_transport_and_hook,
+    start_worker_with_transport_and_hook_and_trace_collector,
+    start_worker_with_transport_and_trace_collector,
 };
 pub use task_registry::{
     ActiveJobJoinState, ActiveJobTask, WorkerShutdown, WorkerTaskJoinNotification,
@@ -97,9 +100,9 @@ pub use temper_protocol_agent::{
 };
 pub use temper_protocol_worker::WorkerAuth;
 pub use trace::{
-    ActivityEndpoint, MAX_CHILD_ACTIVITY_FRAME_BYTES, MAX_CHILD_ACTIVITY_RECORD_BYTES,
-    RecoveredTraceRun, TraceCollector, TraceError, TraceManifestV1, TraceRun,
-    WORKER_SPOOL_RUN_CAPACITY,
+    ActivityEndpoint, DirtyTraceRun, DirtyTraceRuns, MAX_CHILD_ACTIVITY_FRAME_BYTES,
+    MAX_CHILD_ACTIVITY_RECORD_BYTES, RecoveredTraceRun, TraceCollector, TraceCoordinationSnapshot,
+    TraceError, TraceManifestV1, TraceRun, WORKER_SPOOL_RUN_CAPACITY,
 };
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{

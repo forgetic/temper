@@ -111,7 +111,7 @@ fn run_worker_case(mode: BackendMode, fixture: &Path, kind: WorkerCase) -> io::R
                     cleanup_complete.load(Ordering::Acquire)
                 })
                 .await?;
-                case.finish(3)?;
+                case.finish(3, mode)?;
                 wait_for_second_dispatch(&executor, &transport).await?;
                 worker.shutdown().await;
             }
@@ -134,7 +134,7 @@ fn run_worker_case(mode: BackendMode, fixture: &Path, kind: WorkerCase) -> io::R
                     cleanup_complete.load(Ordering::Acquire)
                 })
                 .await?;
-                case.finish(3)?;
+                case.finish(3, mode)?;
                 wait_for_second_dispatch(&executor, &transport).await?;
                 worker.shutdown().await;
             }
@@ -182,7 +182,7 @@ fn run_worker_case(mode: BackendMode, fixture: &Path, kind: WorkerCase) -> io::R
                         "signal shutdown returned before active fixture cleanup joined",
                     ));
                 }
-                case.finish(3)?;
+                case.finish(3, mode)?;
                 if transport.polls() != 1 || executor.dispatches() != 1 || transport.results() != 0
                 {
                     return Err(io::Error::other(format!(

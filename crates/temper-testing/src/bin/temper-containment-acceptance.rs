@@ -151,7 +151,7 @@ mod linux {
             ]
         }
 
-        fn finish(&mut self, minimum_identities: usize) -> io::Result<()> {
+        fn finish(&mut self, minimum_identities: usize, mode: BackendMode) -> io::Result<()> {
             let records = unique_identities(read_recorded_identities(&self.identities)?);
             if records.len() < minimum_identities {
                 return Err(io::Error::other(format!(
@@ -189,7 +189,6 @@ mod linux {
             let report = fs::read_to_string(&self.monitor_report)?;
             for expected in [
                 format!("identity_count={}", records.len()),
-                "orphaned=0".to_string(),
                 "alive=0".to_string(),
             ] {
                 if !report.lines().any(|line| line == expected) {
@@ -197,6 +196,18 @@ mod linux {
                         "monitor omitted `{expected}`: {report}"
                     )));
                 }
+            }
+            // The dedicated Linux supervisor is a subreaper and must prevent
+            // every PPID-1 transition. A delegated cgroup remains the kernel
+            // ownership boundary even while an exiting root's descendants are
+            // transiently reparented, so its authority is exact absence and
+            // recursive-empty proof rather than process parentage.
+            if matches!(mode, BackendMode::ForcedSupervisor)
+                && !report.lines().any(|line| line == "orphaned=0")
+            {
+                return Err(io::Error::other(format!(
+                    "monitor omitted `orphaned=0`: {report}"
+                )));
             }
             Ok(())
         }
@@ -294,7 +305,7 @@ mod linux {
             ));
         }
         assert_recovered_cleanup(&observer.one_report(), mode, CleanupTrigger::NormalRootExit)?;
-        case.finish(2)
+        case.finish(2, mode)
     }
 
     fn managed_bash_deadline(mode: BackendMode, fixture: &Path) -> io::Result<()> {
@@ -316,7 +327,7 @@ mod linux {
             return Err(io::Error::other("managed bash deadline reported success"));
         }
         assert_recovered_cleanup(&observer.one_report(), mode, CleanupTrigger::Timeout)?;
-        case.finish(2)
+        case.finish(2, mode)
     }
 
     fn out_of_process_agent(
@@ -353,7 +364,7 @@ mod linux {
             )));
         }
         assert_recovered_cleanup(&cleanup.containment, mode, CleanupTrigger::NormalRootExit)?;
-        case.finish(3)
+        case.finish(3, mode)
     }
 
     fn out_of_process_cancellation(mode: BackendMode, fixture: &Path) -> io::Result<()> {
@@ -392,7 +403,7 @@ mod linux {
             )));
         }
         assert_recovered_cleanup(&cleanup.containment, mode, CleanupTrigger::Watchdog)?;
-        case.finish(3)
+        case.finish(3, mode)
     }
 
     fn worker_managed_command(mode: BackendMode, fixture: &Path) -> io::Result<()> {
@@ -414,7 +425,7 @@ mod linux {
                 "worker-managed fixture command failed with {status}"
             )));
         }
-        case.finish(2)
+        case.finish(2, mode)
     }
 
     fn run_pre_push_case(mode: BackendMode, fixture: &Path) -> io::Result<()> {
@@ -443,7 +454,7 @@ mod linux {
                 "unexpected pre-push report: {report:?}"
             )));
         }
-        case.finish(2)
+        case.finish(2, mode)
     }
 
     fn runner(mode: BackendMode, command: Vec<String>) -> OutOfProcessRunner {
