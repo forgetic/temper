@@ -7,6 +7,7 @@ use crate::dependency_state::DependencyStateIndex;
 use crate::ids::ArtifactKindId;
 use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
 use crate::{ArtifactTarget, workflow_interest};
+use std::time::Instant;
 use temper_forge::{
     CandidateLabelSelection, CandidateLifecycle, Forge, Issue, IssueCandidateQuery,
     ItemListDetails, PullRequest, PullRequestCandidateQuery, RepositoryId,
@@ -113,28 +114,8 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         if let Some(cache) = cache {
             cache.begin_pass(now, &mut cache_stats);
         }
-        let mut issue_candidates = Vec::new();
-        for query in plan.issue_queries {
-            issue_candidates.extend(forge.list_issue_candidates(repo_id, query).await?);
-        }
-        issue_candidates.sort_by(|left, right| {
-            left.number
-                .cmp(&right.number)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        issue_candidates.dedup_by(|left, right| left.id == right.id);
-
-        let mut pull_request_candidates = Vec::new();
-        for query in plan.pull_request_queries {
-            pull_request_candidates
-                .extend(forge.list_pull_request_candidates(repo_id, query).await?);
-        }
-        pull_request_candidates.sort_by(|left, right| {
-            left.number
-                .cmp(&right.number)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        pull_request_candidates.dedup_by(|left, right| left.id == right.id);
+        let (issue_candidates, pull_request_candidates) =
+            read_reconciliation_candidate_summaries(forge, repo_id, &plan).await?;
 
         let state_index =
             DependencyStateIndex::from_candidates(&issue_candidates, &pull_request_candidates);
@@ -293,6 +274,90 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
             &transition.artifact == kind && requires_dependency_gate(self.workflow, transition)
         })
     }
+}
+
+async fn read_reconciliation_candidate_summaries<F: Forge + ?Sized>(
+    forge: &F,
+    repo_id: &RepositoryId,
+    plan: &ReconciliationCandidateQueryPlan,
+) -> Result<(Vec<Issue>, Vec<PullRequest>), ReconcileError> {
+    let started = Instant::now();
+    let provider_requests_before = forge.provider_request_count();
+    let logical_bucket_count = plan
+        .issue_queries
+        .len()
+        .saturating_add(plan.pull_request_queries.len());
+    let mut issues = Vec::new();
+    let mut pull_requests = Vec::new();
+    let result: Result<(), ReconcileError> = async {
+        for query in &plan.issue_queries {
+            issues.extend(forge.list_issue_candidates(repo_id, query.clone()).await?);
+        }
+        for query in &plan.pull_request_queries {
+            pull_requests.extend(
+                forge
+                    .list_pull_request_candidates(repo_id, query.clone())
+                    .await?,
+            );
+        }
+        Ok(())
+    }
+    .await;
+
+    normalize_issue_candidates(&mut issues);
+    normalize_pull_request_candidates(&mut pull_requests);
+    let unique_count = issues.len().saturating_add(pull_requests.len());
+    let provider_requests = provider_requests_before.and_then(|before| {
+        forge
+            .provider_request_count()
+            .map(|after| after.saturating_sub(before))
+    });
+    let outcome = if result.is_ok() { "success" } else { "failed" };
+    tracing::debug!(
+        target: "temper::worker",
+        measurement = "candidate.discovery",
+        repo = repository_label(repo_id),
+        candidate.consumer = "mechanical",
+        candidate.scope = "reconciliation",
+        candidate.logical_bucket_count = saturating_u64(logical_bucket_count),
+        candidate.provider_request_total = provider_requests.unwrap_or(0),
+        candidate.provider_requests_available = provider_requests.is_some(),
+        candidate.unique_count = saturating_u64(unique_count),
+        outcome,
+        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "candidate discovery {outcome} for mechanical/reconciliation"
+    );
+    result?;
+    Ok((issues, pull_requests))
+}
+
+fn normalize_issue_candidates(issues: &mut Vec<Issue>) {
+    issues.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    issues.dedup_by(|left, right| left.id == right.id);
+}
+
+fn normalize_pull_request_candidates(pull_requests: &mut Vec<PullRequest>) {
+    pull_requests.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    pull_requests.dedup_by(|left, right| left.id == right.id);
+}
+
+fn repository_label(repo_id: &RepositoryId) -> &str {
+    match repo_id.as_str().split_once(':') {
+        Some((_provider, path)) if path.contains('/') => path,
+        _ => repo_id.as_str(),
+    }
+}
+
+fn saturating_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 fn requires_dependency_gate(

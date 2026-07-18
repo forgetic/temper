@@ -121,6 +121,38 @@ closed/merged filtering. Exact PR summary reads similarly perform only
 `/pulls/{number}` and return empty dependencies; exact full reads additionally
 use `/issues/{number}/dependencies`.
 
+The checked-in 17-label `reference-delivery` workflow locks these one-page
+provider ceilings:
+
+| Consumer | Candidate-list requests |
+| --- | ---: |
+| broad role discovery | <= 4 populated issue/PR lifecycle buckets |
+| bounded reconciliation | <= 4 populated issue/PR lifecycle buckets |
+| automated discovery | <= 2 populated open issue/PR buckets |
+| second unchanged mechanical pass | 6 for the reference workflow; 0 exact artifact and 0 dependency requests |
+
+Terminal requests always include workflow-derived labels. The only candidate
+row allowed to add a summary exact read is a closed PR row whose issue-index
+merge marker is ambiguous. Cold dependency-gated reconciliation may additionally
+perform one full exact read per uncached source; the long-lived mechanical cache
+removes those reads on an unchanged warm pass and forcibly refreshes them within
+15 minutes.
+
+The ignored local benchmark runs that cold/warm pair against the cached Forgejo
+fixture and the real HTTP client:
+
+```sh
+cargo test -p temper-testing --test idle_request_budgets \
+  local_forgejo_two_pass_idle_broad_benchmark \
+  -- --ignored --exact --nocapture
+```
+
+It prints each broad-pass duration and normalized warm-pass method/path counts,
+then enforces the warm shape above. The first invocation may populate the pinned
+Forgejo binary cache (or use `TEMPER_FORGEJO_BINARY`); default CI never starts a
+server. Additional pages multiply requests per bucket. They do not reintroduce
+one request per workflow label.
+
 ### Labels and assignees are set-like but Forgejo wants label ids
 
 Forgejo issue-label endpoints take numeric label ids, not names. When a label

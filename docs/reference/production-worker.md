@@ -174,6 +174,35 @@ the enclosing `wake.run_id`. `provider.requests_available=false` means the
 backend has no portable request counter; use Forge HTTP `operation` records with
 the same wake id instead.
 
+Broad role and mechanical list work emits `measurement=candidate.discovery`.
+Use `candidate.logical_bucket_count`, `candidate.unique_count`,
+`candidate.provider_request_total`, and `duration_ms` to separate workflow
+breadth, candidate volume, pagination/provider traffic, and latency. For the
+17-label reference workflow, role and reconciliation discovery each stay at no
+more than four one-page buckets; automation adds its two populated open buckets.
+Pagination multiplies provider requests per bucket but never by label or role
+count.
+
+Broad reconciliation emits `measurement=mechanical.reconciliation` with numeric
+`detail_cache.hit_count`, `miss_count`, `forced_refresh_count`,
+`invalidation_count`, and `eviction_count`. Cold startup begins with misses; a
+second unchanged pass should have hits and no exact/dependency reads. Forced
+refreshes occur by 15 minutes even after missed hints. All candidate/cache
+measurements inherit `wake.run_id` and never perform Forge I/O themselves.
+
+The local real-Forgejo check is ignored by default and uses the cached fixture:
+
+```sh
+cargo test -p temper-testing --test idle_request_budgets \
+  local_forgejo_two_pass_idle_broad_benchmark \
+  -- --ignored --exact --nocapture
+```
+
+It prints cold/warm durations and normalized warm method/path counts, then
+requires six one-page candidate lists and no per-artifact exact or
+`/dependencies` requests on the warm pass. See the
+[Forgejo backend reference](forgejo-backend.md) for bucket and pagination details.
+
 `gate.evaluated` is also debug: repeated lines are repeatable read-side
 observations, not merge execution. Actual direct merge execution is paired as
 `measurement=mechanical.landing_attempt`: `landing.outcome=started` followed by

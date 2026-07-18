@@ -67,6 +67,16 @@ pub struct ExactPullRequestRead {
     pub details: ItemListDetails,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ForgeReadShape {
+    /// Consolidated issue/PR candidate-list calls.
+    pub candidate_list_calls: usize,
+    /// Exact artifact reads that requested summary detail only.
+    pub exact_summary_reads: usize,
+    /// Exact artifact reads that requested dependency-enriched full detail.
+    pub exact_full_reads: usize,
+}
+
 pub struct CountingForge<F: Forge> {
     inner: F,
     operations: ForgeOperationLog,
@@ -235,6 +245,40 @@ impl<F: Forge> CountingForge<F> {
             .lock()
             .expect("exact pull request reads mutex")
             .clone()
+    }
+
+    /// Returns the read shape recorded so far. Writes are deliberately absent:
+    /// this helper is for request-budget assertions, not total operation volume.
+    pub fn read_shape(&self) -> ForgeReadShape {
+        let exact_issue_reads = self.exact_issue_reads();
+        let exact_pull_request_reads = self.exact_pull_request_reads();
+        let exact_summary_reads = exact_issue_reads
+            .iter()
+            .filter(|read| !read.details.dependencies)
+            .count()
+            .saturating_add(
+                exact_pull_request_reads
+                    .iter()
+                    .filter(|read| !read.details.dependencies)
+                    .count(),
+            );
+        let exact_full_reads = exact_issue_reads
+            .iter()
+            .filter(|read| read.details.dependencies)
+            .count()
+            .saturating_add(
+                exact_pull_request_reads
+                    .iter()
+                    .filter(|read| read.details.dependencies)
+                    .count(),
+            );
+        ForgeReadShape {
+            candidate_list_calls: self
+                .count(CountedForgeOp::ListIssueCandidates)
+                .saturating_add(self.count(CountedForgeOp::ListPullRequestCandidates)),
+            exact_summary_reads,
+            exact_full_reads,
+        }
     }
 
     fn record_exact_issue_read(&self, by_number: bool, details: ItemListDetails) {
