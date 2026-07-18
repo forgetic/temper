@@ -8,10 +8,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
-    BranchRef, CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge,
-    IssueQuery, IssueState, ItemListDetails, ItemNumber, MergeMethod, MergePullRequest,
-    PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId, RequestReviewers,
-    ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
+    BranchRef, CandidateLabelSelection, CandidateLifecycle, CreateIssue, CreatePullRequest,
+    CreatePullRequestReview, CreateRepository, Forge, IssueCandidateQuery, IssueState,
+    ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestCandidateQuery,
+    PullRequestUpdateState, RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue,
+    UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{
@@ -225,49 +226,45 @@ fn submit_review(
     .expect("review submitted");
 }
 
-fn closed_issue_queries_have_labels(queries: &[IssueQuery]) -> bool {
+fn closed_issue_queries_have_labels(queries: &[IssueCandidateQuery]) -> bool {
     queries
         .iter()
-        .filter(|query| query.state == Some(IssueState::Closed))
-        .all(|query| !query.labels.is_empty())
+        .filter(|query| query.lifecycle == CandidateLifecycle::Terminal)
+        .all(|query| matches!(query.labels, CandidateLabelSelection::AnyOf(ref labels) if !labels.is_empty()))
 }
 
-fn closed_pull_request_queries_have_labels(queries: &[PullRequestQuery]) -> bool {
+fn closed_pull_request_queries_have_labels(queries: &[PullRequestCandidateQuery]) -> bool {
     queries
         .iter()
-        .filter(|query| {
-            matches!(
-                query.state,
-                Some(PullRequestState::Closed | PullRequestState::Merged)
-            )
-        })
-        .all(|query| !query.labels.is_empty())
+        .filter(|query| query.lifecycle == CandidateLifecycle::Terminal)
+        .all(|query| matches!(query.labels, CandidateLabelSelection::AnyOf(ref labels) if !labels.is_empty()))
 }
 
-fn has_issue_query(queries: &[IssueQuery], state: IssueState, labels: &[&str]) -> bool {
-    queries.iter().any(|query| {
-        query.state == Some(state)
-            && query.labels
-                == labels
-                    .iter()
-                    .map(|label| (*label).to_string())
-                    .collect::<Vec<_>>()
-    })
+fn has_issue_query(
+    queries: &[IssueCandidateQuery],
+    lifecycle: CandidateLifecycle,
+    labels: &[&str],
+) -> bool {
+    queries
+        .iter()
+        .any(|query| query.lifecycle == lifecycle && candidate_labels_match(&query.labels, labels))
 }
 
 fn has_pull_request_query(
-    queries: &[PullRequestQuery],
-    state: PullRequestState,
+    queries: &[PullRequestCandidateQuery],
+    lifecycle: CandidateLifecycle,
     labels: &[&str],
 ) -> bool {
-    queries.iter().any(|query| {
-        query.state == Some(state)
-            && query.labels
-                == labels
-                    .iter()
-                    .map(|label| (*label).to_string())
-                    .collect::<Vec<_>>()
-    })
+    queries
+        .iter()
+        .any(|query| query.lifecycle == lifecycle && candidate_labels_match(&query.labels, labels))
+}
+
+fn candidate_labels_match(selection: &CandidateLabelSelection, labels: &[&str]) -> bool {
+    if labels.is_empty() {
+        return matches!(selection, CandidateLabelSelection::Unfiltered);
+    }
+    matches!(selection, CandidateLabelSelection::AnyOf(actual) if labels.iter().all(|expected| actual.iter().any(|label| label == expected)))
 }
 
 #[path = "scan_candidate_planning/plan_queries.rs"]

@@ -8,8 +8,8 @@ use support::{
     workflow,
 };
 use temper_forge::{
-    Forge, IssueQuery, IssueState, ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState,
-    PullRequestUpdateState, RepositoryId, UpdatePullRequest,
+    CandidateLabelSelection, CandidateLifecycle, Forge, IssueCandidateQuery, ItemListDetails,
+    ItemNumber, PullRequestCandidateQuery, PullRequestUpdateState, RepositoryId, UpdatePullRequest,
 };
 use temper_workflow::{
     ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
@@ -41,47 +41,39 @@ fn append_applying(journal: &InMemoryJournal, record: CommandRecord) {
 }
 
 #[test]
-fn candidate_plan_uses_workflow_labels_explicit_states_and_summary_details() {
+fn candidate_plan_uses_constant_lifecycle_buckets_and_shared_interest() {
     let workflow = workflow();
     let plan = reconciliation_candidate_query_plan(&workflow);
-    let label_count = workflow.labels().len();
+    let interest = temper_workflow::workflow_interest(&workflow);
 
-    let issue_terminal_count = 8;
-    let pull_request_terminal_count = 9;
-
-    assert_eq!(plan.issue_queries.len(), label_count + issue_terminal_count);
-    assert_eq!(
-        plan.pull_request_queries.len(),
-        label_count + pull_request_terminal_count * 2
-    );
-    assert_eq!(
-        count_issue_state(&plan.issue_queries, IssueState::Open),
-        label_count
-    );
-    assert_eq!(
-        count_issue_state(&plan.issue_queries, IssueState::Closed),
-        issue_terminal_count
-    );
-    assert_eq!(
-        count_pull_request_state(&plan.pull_request_queries, PullRequestState::Open),
-        label_count
-    );
-    assert_eq!(
-        count_pull_request_state(&plan.pull_request_queries, PullRequestState::Closed),
-        pull_request_terminal_count
-    );
-    assert_eq!(
-        count_pull_request_state(&plan.pull_request_queries, PullRequestState::Merged),
-        pull_request_terminal_count
-    );
-    assert!(!has_pull_request_query(
+    assert_eq!(plan.issue_queries.len(), 2);
+    assert_eq!(plan.pull_request_queries.len(), 2);
+    assert!(has_candidate_bucket(
+        &plan.issue_queries,
+        CandidateLifecycle::Open,
+        interest.open_labels()
+    ));
+    assert!(has_candidate_bucket(
+        &plan.issue_queries,
+        CandidateLifecycle::Terminal,
+        interest.terminal_labels(temper_workflow::ArtifactTarget::Issue)
+    ));
+    assert!(has_pull_candidate_bucket(
         &plan.pull_request_queries,
-        PullRequestState::Merged,
+        CandidateLifecycle::Open,
+        interest.open_labels()
+    ));
+    assert!(has_pull_candidate_bucket(
+        &plan.pull_request_queries,
+        CandidateLifecycle::Terminal,
+        interest.terminal_labels(temper_workflow::ArtifactTarget::PullRequest)
+    ));
+    assert!(!candidate_has_label(
+        &plan.pull_request_queries[1].labels,
         "implementation"
     ));
-    assert!(has_pull_request_query(
-        &plan.pull_request_queries,
-        PullRequestState::Merged,
+    assert!(candidate_has_label(
+        &plan.pull_request_queries[1].labels,
         "landed"
     ));
     assert!(plan.issue_queries.iter().all(is_bounded_issue_query));
@@ -214,11 +206,12 @@ fn bounded_candidate_discovery_finds_impossible_state_on_closed_artifact_once() 
         })
         .count();
     assert_eq!(impossible, 1, "overlapping label queries must deduplicate");
+    assert!(crash.issue_queries().is_empty());
     assert!(
         crash
-            .issue_queries()
+            .issue_candidate_queries()
             .iter()
-            .any(|query| query.state == Some(IssueState::Closed) && !query.labels.is_empty())
+            .any(|query| query.lifecycle == CandidateLifecycle::Terminal)
     );
     assert_observed_bounded_summary_queries(&crash);
 }
@@ -370,50 +363,59 @@ fn exact_journal_snapshots_are_deduplicated_and_ordered_deterministically() {
     );
 }
 
-fn count_issue_state(queries: &[IssueQuery], state: IssueState) -> usize {
-    queries
-        .iter()
-        .filter(|query| query.state == Some(state))
-        .count()
-}
-
-fn count_pull_request_state(queries: &[PullRequestQuery], state: PullRequestState) -> usize {
-    queries
-        .iter()
-        .filter(|query| query.state == Some(state))
-        .count()
-}
-
-fn has_pull_request_query(
-    queries: &[PullRequestQuery],
-    state: PullRequestState,
-    label: &str,
+fn has_candidate_bucket(
+    queries: &[IssueCandidateQuery],
+    lifecycle: CandidateLifecycle,
+    labels: &[String],
 ) -> bool {
-    queries
-        .iter()
-        .any(|query| query.state == Some(state) && has_single_label(&query.labels, label))
+    queries.iter().any(|query| {
+        query.lifecycle == lifecycle
+            && matches!(&query.labels, CandidateLabelSelection::AnyOf(actual) if actual == labels)
+    })
 }
 
-fn has_single_label(labels: &[String], label: &str) -> bool {
-    labels.len() == 1 && labels[0] == label
+fn has_pull_candidate_bucket(
+    queries: &[PullRequestCandidateQuery],
+    lifecycle: CandidateLifecycle,
+    labels: &[String],
+) -> bool {
+    queries.iter().any(|query| {
+        query.lifecycle == lifecycle
+            && matches!(&query.labels, CandidateLabelSelection::AnyOf(actual) if actual == labels)
+    })
 }
 
-fn is_bounded_issue_query(query: &IssueQuery) -> bool {
-    query.state.is_some() && query.labels.len() == 1 && query.details == ItemListDetails::summary()
+fn candidate_has_label(labels: &CandidateLabelSelection, label: &str) -> bool {
+    matches!(labels, CandidateLabelSelection::AnyOf(labels) if labels.iter().any(|candidate| candidate == label))
 }
 
-fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {
-    query.state.is_some() && query.labels.len() == 1 && query.details == ItemListDetails::summary()
+fn is_bounded_issue_query(query: &IssueCandidateQuery) -> bool {
+    matches!(query.labels, CandidateLabelSelection::AnyOf(_))
+        && query.details == ItemListDetails::summary()
+}
+
+fn is_bounded_pull_request_query(query: &PullRequestCandidateQuery) -> bool {
+    matches!(query.labels, CandidateLabelSelection::AnyOf(_))
+        && query.details == ItemListDetails::summary()
 }
 
 fn assert_observed_bounded_summary_queries<F: Forge>(crash: &CrashForge<F>) {
-    assert!(crash.issue_queries().iter().all(is_bounded_issue_query));
+    assert_eq!(crash.count(ForgeOp::ListIssueCandidates), 2);
+    assert_eq!(crash.count(ForgeOp::ListPullRequestCandidates), 2);
     assert!(
         crash
-            .pull_request_queries()
+            .issue_candidate_queries()
+            .iter()
+            .all(is_bounded_issue_query)
+    );
+    assert!(
+        crash
+            .pull_request_candidate_queries()
             .iter()
             .all(is_bounded_pull_request_query)
     );
+    assert!(crash.issue_queries().is_empty());
+    assert!(crash.pull_request_queries().is_empty());
 }
 
 fn close_pull_request<F: Forge + ?Sized>(forge: &F, repo: &RepositoryId, number: ItemNumber) {

@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
-    BranchRef, ChangeKind, CreateIssue, CreatePullRequest, CreateRepository, Forge,
-    HintArtifactKind, IssueQuery, IssueState, ItemListDetails, ItemNumber, PullRequestQuery,
-    PullRequestState, PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
+    BranchRef, CandidateLabelSelection, CandidateLifecycle, ChangeKind, CreateIssue,
+    CreatePullRequest, CreateRepository, Forge, HintArtifactKind, IssueCandidateQuery, IssueState,
+    ItemListDetails, ItemNumber, PullRequestCandidateQuery, PullRequestState,
+    PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Progress, Worker};
@@ -320,12 +321,16 @@ fn pull_request_state(
         .state
 }
 
-fn is_bounded_issue_query(query: &IssueQuery) -> bool {
-    query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+fn is_bounded_issue_query(query: &IssueCandidateQuery) -> bool {
+    query.details == ItemListDetails::summary()
+        && (query.lifecycle == CandidateLifecycle::Open
+            || matches!(query.labels, CandidateLabelSelection::AnyOf(_)))
 }
 
-fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {
-    query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+fn is_bounded_pull_request_query(query: &PullRequestCandidateQuery) -> bool {
+    query.details == ItemListDetails::summary()
+        && (query.lifecycle == CandidateLifecycle::Open
+            || matches!(query.labels, CandidateLabelSelection::AnyOf(_)))
 }
 
 #[test]
@@ -413,22 +418,17 @@ fn automated_queue_scan_keeps_normal_tick_bounded() {
             actions: 1,
         }
     );
-    assert!(
-        !counted
-            .issue_queries()
-            .iter()
-            .any(|query| query == &IssueQuery::default())
-    );
-    assert!(
-        !counted
-            .pull_request_queries()
-            .iter()
-            .any(|query| query == &PullRequestQuery::default())
-    );
-    assert!(counted.issue_queries().iter().all(is_bounded_issue_query));
+    assert!(counted.issue_queries().is_empty());
+    assert!(counted.pull_request_queries().is_empty());
     assert!(
         counted
-            .pull_request_queries()
+            .issue_candidate_queries()
+            .iter()
+            .all(is_bounded_issue_query)
+    );
+    assert!(
+        counted
+            .pull_request_candidate_queries()
             .iter()
             .all(is_bounded_pull_request_query)
     );
@@ -465,16 +465,8 @@ fn targeted_ci_wake_lands_pr_without_terminal_list_queries() {
         pull_request_state(&forge, &repo, ready),
         PullRequestState::Merged
     );
-    assert!(
-        counted
-            .issue_queries()
-            .iter()
-            .all(|query| query.state != Some(IssueState::Closed))
-    );
-    assert!(counted.pull_request_queries().iter().all(|query| !matches!(
-        query.state,
-        Some(PullRequestState::Closed | PullRequestState::Merged)
-    )));
+    assert!(counted.issue_candidate_queries().is_empty());
+    assert!(counted.pull_request_candidate_queries().is_empty());
 }
 
 #[test]
@@ -497,15 +489,10 @@ fn automated_pr_merges_continue_after_gate_miss_and_retry_later() {
     );
     assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
     assert!(counted.count(CountedForgeOp::GetPullRequestByNumber) >= 2);
-    assert!(
-        !counted
-            .pull_request_queries()
-            .iter()
-            .any(|query| query == &PullRequestQuery::default())
-    );
+    assert!(counted.pull_request_queries().is_empty());
     assert!(
         counted
-            .pull_request_queries()
+            .pull_request_candidate_queries()
             .iter()
             .all(is_bounded_pull_request_query)
     );

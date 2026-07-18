@@ -47,6 +47,7 @@ additions.
 Required methods:
 
 - `list_issues`
+- `list_issue_candidates`
 - `create_issue`
 - `get_issue`
 - `get_issue_with_details`
@@ -69,10 +70,12 @@ updates apply `set_labels`, then removals, then additions. Assignee removals are
 applied before additions. `UpdateIssue` also carries `expected_version`; see
 [optimistic concurrency](forge-interface-concurrency.md).
 
-The `*_with_details` exact reads accept the same `ItemListDetails` budget as
-list queries. `summary()` returns the complete workflow/body representation but
-may omit native dependency enrichment. The historical exact methods retain full
-detail.
+The `*_with_details` exact reads for both issues and pull requests accept the
+same `ItemListDetails` budget as list and candidate queries. `summary()` returns
+the complete workflow/body representation but may omit native dependency
+enrichment. The historical exact methods retain full detail. Candidate reads
+are lifecycle-bucketed any-label discovery; ordinary list labels remain
+conjunctive. See [model and query semantics](forge-interface-model.md).
 
 `update_issue_from_snapshot(current, input)` carries a previously validated
 `Issue` into a mutation. Successful calls return the committed representation

@@ -5,8 +5,8 @@ mod support;
 use support::{MockHttpClient, block_on, body_json, forge, forge_with, issue_id, repo_id};
 use temper_forge_github::{CasMode, HttpMethod};
 use temper_forge_model::{
-    CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemListDetails, ItemNumber,
-    UpdateIssue, UserId,
+    CandidateLabelSelection, CandidateLifecycle, CreateComment, CreateIssue, Forge, ForgeError,
+    IssueCandidateQuery, IssueQuery, IssueState, ItemListDetails, ItemNumber, UpdateIssue, UserId,
 };
 
 fn issue_json(number: u64, title: &str, state: &str) -> String {
@@ -23,6 +23,13 @@ fn issue_json(number: u64, title: &str, state: &str) -> String {
             "updated_at": "2024-03-02T00:00:00Z",
             "pull_request": null
         }}"#
+    )
+}
+
+fn issue_json_with_label(number: u64, title: &str, state: &str, label: &str) -> String {
+    issue_json(number, title, state).replace(
+        r#""labels": [{"id": 1, "name": "task"}]"#,
+        &format!(r#""labels": [{{"id": 1, "name": "{label}"}}]"#),
     )
 }
 
@@ -141,6 +148,57 @@ fn list_issues_applies_client_side_filters() {
     .unwrap();
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].number, ItemNumber::new(7));
+}
+
+#[test]
+fn candidate_fallback_normalizes_any_labels_deduplicates_and_sorts() {
+    let client = MockHttpClient::new();
+    // Normalized labels are read in lexical order: ready, then task.
+    client.push_response(
+        200,
+        format!(
+            "[{}, {}]",
+            issue_json_with_label(8, "ready", "open", "ready"),
+            issue_json_with_label(7, "both", "open", "ready")
+        ),
+    );
+    client.push_response(
+        200,
+        format!("[{}]", issue_json_with_label(7, "task", "open", "task")),
+    );
+    let forge = forge(client.clone());
+
+    let issues = block_on(Forge::list_issue_candidates(
+        &forge,
+        &repo_id(),
+        IssueCandidateQuery {
+            lifecycle: CandidateLifecycle::Open,
+            labels: CandidateLabelSelection::AnyOf(vec![
+                "task".into(),
+                "ready".into(),
+                "task".into(),
+            ]),
+            ..IssueCandidateQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(
+        issues.iter().map(|issue| issue.number).collect::<Vec<_>>(),
+        vec![ItemNumber::new(7), ItemNumber::new(8)]
+    );
+    let recorded = client.recorded();
+    assert_eq!(recorded.len(), 2);
+    assert!(
+        recorded[0]
+            .query
+            .contains(&("labels".into(), "ready".into()))
+    );
+    assert!(
+        recorded[1]
+            .query
+            .contains(&("labels".into(), "task".into()))
+    );
 }
 
 #[test]

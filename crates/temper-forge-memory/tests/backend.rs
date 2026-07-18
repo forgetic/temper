@@ -11,11 +11,12 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_forge_model::{
-    BranchRef, ChangeSource, ChangeSourceEvent, CiJob, CiJobQuery, CiJobStatus, CreateComment,
-    CreateIssue, CreatePullRequest, CreateRepository, Forge, ForgeError, IssueQuery, IssueState,
-    ItemListDetails, ItemNumber, ItemSort, ItemSortField, MergeMethod, MergePullRequest,
-    PullRequestQuery, PullRequestState, RepositoryId, RepositoryPath, SortDirection, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, UserId, Version,
+    BranchRef, CandidateLabelSelection, CandidateLifecycle, ChangeSource, ChangeSourceEvent, CiJob,
+    CiJobQuery, CiJobStatus, CreateComment, CreateIssue, CreatePullRequest, CreateRepository,
+    Forge, ForgeError, IssueCandidateQuery, IssueQuery, IssueState, ItemListDetails, ItemNumber,
+    ItemSort, ItemSortField, MergeMethod, MergePullRequest, PullRequestCandidateQuery,
+    PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId, RepositoryPath,
+    SortDirection, UpdateIssue, UpdatePullRequest, UpsertLabel, UserId, Version,
 };
 
 struct NoopWake;
@@ -291,6 +292,107 @@ fn issues_create_list_and_update_labels() {
     .unwrap();
     assert_eq!(closed.state, IssueState::Closed);
     assert!(closed.closed_at.is_some());
+}
+
+#[test]
+fn candidate_reads_are_any_label_while_ordinary_queries_remain_conjunctive() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let both = block_on(forge.create_issue(&repo, issue_input(&["code", "ready"]))).unwrap();
+    let code = block_on(forge.create_issue(&repo, issue_input(&["code"]))).unwrap();
+    let unrelated = block_on(forge.create_issue(&repo, issue_input(&["docs"]))).unwrap();
+
+    let conjunctive = block_on(forge.list_issues(
+        &repo,
+        IssueQuery {
+            state: Some(IssueState::Open),
+            labels: vec!["code".into(), "ready".into()],
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        conjunctive
+            .iter()
+            .map(|issue| issue.id.clone())
+            .collect::<Vec<_>>(),
+        vec![both.id.clone()]
+    );
+
+    let candidates = block_on(forge.list_issue_candidates(
+        &repo,
+        IssueCandidateQuery {
+            lifecycle: CandidateLifecycle::Open,
+            labels: CandidateLabelSelection::AnyOf(vec![
+                "ready".into(),
+                "code".into(),
+                "ready".into(),
+            ]),
+            ..IssueCandidateQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|issue| issue.number)
+            .collect::<Vec<_>>(),
+        vec![both.number, code.number]
+    );
+    assert!(!candidates.iter().any(|issue| issue.id == unrelated.id));
+    assert!(candidates.iter().all(|issue| issue.dependencies.is_empty()));
+}
+
+#[test]
+fn terminal_pull_candidate_bucket_covers_closed_and_merged_without_type_collisions() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let issue = block_on(forge.create_issue(&repo, issue_input(&["landed"]))).unwrap();
+    let closed = block_on(forge.create_pull_request(&repo, pr_input(&repo, &["landed"]))).unwrap();
+    let merged = block_on(forge.create_pull_request(&repo, pr_input(&repo, &["landed"]))).unwrap();
+    assert_eq!(
+        issue.number, closed.number,
+        "issue and PR numbers collide by type"
+    );
+
+    block_on(forge.update_pull_request(
+        &closed.id,
+        UpdatePullRequest {
+            state: Some(PullRequestUpdateState::Closed),
+            ..UpdatePullRequest::default()
+        },
+    ))
+    .unwrap();
+    block_on(forge.merge_pull_request(
+        &merged.id,
+        MergePullRequest {
+            method: MergeMethod::Squash,
+            commit_title: None,
+            commit_body: None,
+            delete_source_branch: false,
+        },
+    ))
+    .unwrap();
+
+    let candidates = block_on(forge.list_pull_request_candidates(
+        &repo,
+        PullRequestCandidateQuery {
+            lifecycle: CandidateLifecycle::Terminal,
+            labels: CandidateLabelSelection::AnyOf(vec!["landed".into()]),
+            ..PullRequestCandidateQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|pull_request| (pull_request.number, pull_request.state))
+            .collect::<Vec<_>>(),
+        vec![
+            (closed.number, PullRequestState::Closed),
+            (merged.number, PullRequestState::Merged),
+        ]
+    );
 }
 
 #[test]

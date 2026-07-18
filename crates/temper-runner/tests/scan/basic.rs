@@ -239,10 +239,10 @@ fn broad_multi_role_wake_shares_one_candidate_query_plan() {
         ))
         .expect("role wake succeeds");
     }
-    let broad_lists =
-        broad.count(CountedForgeOp::ListIssues) + broad.count(CountedForgeOp::ListPullRequests);
-    let separate_lists = separate.count(CountedForgeOp::ListIssues)
-        + separate.count(CountedForgeOp::ListPullRequests);
+    let broad_lists = broad.count(CountedForgeOp::ListIssueCandidates)
+        + broad.count(CountedForgeOp::ListPullRequestCandidates);
+    let separate_lists = separate.count(CountedForgeOp::ListIssueCandidates)
+        + separate.count(CountedForgeOp::ListPullRequestCandidates);
     assert!(
         broad_lists < separate_lists,
         "broad={broad_lists} separate={separate_lists}"
@@ -272,13 +272,13 @@ fn role_scan_without_ci_gated_queue_does_not_list_ci_jobs() {
     assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
     assert!(
         counting
-            .issue_queries()
+            .issue_candidate_queries()
             .iter()
             .all(|query| query.details == ItemListDetails::summary())
     );
     assert!(
         counting
-            .pull_request_queries()
+            .pull_request_candidate_queries()
             .iter()
             .all(|query| query.details == ItemListDetails::summary())
     );

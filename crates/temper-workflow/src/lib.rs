@@ -91,6 +91,7 @@ pub mod dependency_state;
 pub mod diagnostics;
 pub mod execute;
 pub mod ids;
+pub mod interest;
 pub mod journal;
 pub mod lease;
 pub mod load;
@@ -131,6 +132,7 @@ pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
     TransitionId, ValidationBindingId, VerdictId,
 };
+pub use interest::{WorkflowInterest, workflow_interest};
 pub use journal::{
     CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,
 };

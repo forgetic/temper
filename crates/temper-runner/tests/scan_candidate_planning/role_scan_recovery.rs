@@ -31,14 +31,17 @@ fn overlapping_candidate_queries_deduplicate_artifacts() {
     // recovery queries now included on Normal role scans.
     assert_eq!(
         counting
-            .issue_queries()
+            .issue_candidate_queries()
             .iter()
-            .filter(|query| query.state == Some(IssueState::Open) && query.labels.is_empty())
+            .filter(|query| {
+                query.lifecycle == CandidateLifecycle::Open
+                    && query.labels == CandidateLabelSelection::Unfiltered
+            })
             .count(),
         0,
         "no unlabelled open-all issue listing for this role"
     );
-    assert!(counting.count(CountedForgeOp::ListIssues) >= 2);
+    assert_eq!(counting.count(CountedForgeOp::ListIssueCandidates), 2);
 }
 
 #[test]
@@ -48,8 +51,8 @@ fn closed_unlabelled_history_does_not_change_scan_result_or_query_count() {
         items: Vec<WorkItem>,
         issue_calls: usize,
         pull_request_calls: usize,
-        issue_queries: Vec<IssueQuery>,
-        pull_request_queries: Vec<PullRequestQuery>,
+        issue_queries: Vec<IssueCandidateQuery>,
+        pull_request_queries: Vec<PullRequestCandidateQuery>,
         ci_calls: usize,
     }
 
@@ -77,10 +80,10 @@ fn closed_unlabelled_history_does_not_change_scan_result_or_query_count() {
         .expect("scan succeeds");
         ScanShape {
             items,
-            issue_calls: counting.count(CountedForgeOp::ListIssues),
-            pull_request_calls: counting.count(CountedForgeOp::ListPullRequests),
-            issue_queries: counting.issue_queries(),
-            pull_request_queries: counting.pull_request_queries(),
+            issue_calls: counting.count(CountedForgeOp::ListIssueCandidates),
+            pull_request_calls: counting.count(CountedForgeOp::ListPullRequestCandidates),
+            issue_queries: counting.issue_candidate_queries(),
+            pull_request_queries: counting.pull_request_candidate_queries(),
             ci_calls: counting.count(CountedForgeOp::ListCiJobs),
         }
     }
@@ -130,25 +133,28 @@ fn role_scan_does_not_request_closed_unlabelled_history() {
             kind: ArtifactKindId::new("code"),
         }]
     );
-    assert!(closed_issue_queries_have_labels(&counting.issue_queries()));
+    assert!(closed_issue_queries_have_labels(
+        &counting.issue_candidate_queries()
+    ));
     assert!(closed_pull_request_queries_have_labels(
-        &counting.pull_request_queries()
+        &counting.pull_request_candidate_queries()
     ));
     // Bounded terminal-label recovery queries are label-scoped, so unlabelled
     // closed history is never requested regardless of how much of it exists, and
     // the abundant unlabelled closed issues/PRs never pollute the scan result.
+    assert!(!counting.issue_candidate_queries().iter().any(|query| {
+        query.lifecycle == CandidateLifecycle::Terminal
+            && query.labels == CandidateLabelSelection::Unfiltered
+    }));
     assert!(
         !counting
-            .issue_queries()
+            .pull_request_candidate_queries()
             .iter()
-            .any(|query| query.state == Some(IssueState::Closed) && query.labels.is_empty())
+            .any(|query| {
+                query.lifecycle == CandidateLifecycle::Terminal
+                    && query.labels == CandidateLabelSelection::Unfiltered
+            })
     );
-    assert!(!counting.pull_request_queries().iter().any(|query| {
-        matches!(
-            query.state,
-            Some(PullRequestState::Closed | PullRequestState::Merged)
-        ) && query.labels.is_empty()
-    }));
 }
 
 #[test]
@@ -183,8 +189,8 @@ fn merged_pr_with_landed_queue_label_is_found_by_role_scans() {
         expected
     );
     assert!(has_pull_request_query(
-        &normal_counting.pull_request_queries(),
-        PullRequestState::Merged,
+        &normal_counting.pull_request_candidate_queries(),
+        CandidateLifecycle::Terminal,
         &["landed"]
     ));
 
@@ -207,8 +213,8 @@ fn merged_pr_with_landed_queue_label_is_found_by_role_scans() {
         }]
     );
     assert!(has_pull_request_query(
-        &wake_counting.pull_request_queries(),
-        PullRequestState::Merged,
+        &wake_counting.pull_request_candidate_queries(),
+        CandidateLifecycle::Terminal,
         &["landed"]
     ));
 
@@ -231,8 +237,8 @@ fn merged_pr_with_landed_queue_label_is_found_by_role_scans() {
         }]
     );
     assert!(has_pull_request_query(
-        &audit_counting.pull_request_queries(),
-        PullRequestState::Merged,
+        &audit_counting.pull_request_candidate_queries(),
+        CandidateLifecycle::Terminal,
         &["landed"]
     ));
 }
@@ -264,16 +270,15 @@ fn open_all_fallback_queues_still_find_open_unlabelled_candidates() {
             kind: ArtifactKindId::new("implementation_pr"),
         }]
     );
-    assert!(counting.issue_queries().is_empty());
-    assert_eq!(counting.count(CountedForgeOp::ListIssues), 0);
-    assert_eq!(counting.count(CountedForgeOp::ListPullRequests), 1);
+    assert!(counting.issue_candidate_queries().is_empty());
+    assert_eq!(counting.count(CountedForgeOp::ListIssueCandidates), 0);
+    assert_eq!(counting.count(CountedForgeOp::ListPullRequestCandidates), 1);
     assert_eq!(
-        counting.pull_request_queries(),
-        vec![PullRequestQuery {
-            state: Some(PullRequestState::Open),
-            labels: Vec::new(),
+        counting.pull_request_candidate_queries(),
+        vec![PullRequestCandidateQuery {
+            lifecycle: CandidateLifecycle::Open,
+            labels: CandidateLabelSelection::Unfiltered,
             details: ItemListDetails::summary(),
-            ..PullRequestQuery::default()
         }]
     );
 }

@@ -22,9 +22,10 @@ pub mod model;
 pub use admin::{AccessGrant, ForgeAdmin, NewUser, TokenScope, WebhookSpec};
 pub use content::{CommitFile, CreateBranch, EnsureRepository, ForgeContent};
 pub use forge::{
-    CiJobQuery, CiJobSort, CiJobSortField, Forge, ForgeError, ForgeResult, IssueQuery,
-    ItemListDetails, ItemSort, ItemSortField, PullRequestQuery, RepositoryQuery, RepositorySort,
-    RepositorySortField, SortDirection,
+    CandidateLabelSelection, CandidateLabels, CandidateLifecycle, CandidateLifecycleBucket,
+    CiJobQuery, CiJobSort, CiJobSortField, Forge, ForgeError, ForgeResult, IssueCandidateQuery,
+    IssueQuery, ItemListDetails, ItemSort, ItemSortField, PullRequestCandidateQuery,
+    PullRequestQuery, RepositoryQuery, RepositorySort, RepositorySortField, SortDirection,
 };
 pub use hint::*;
 pub use ids::*;
