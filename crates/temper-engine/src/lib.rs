@@ -65,7 +65,7 @@ pub use artifact_context::{
     resolve_initial_artifact_context_with_policy,
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
-pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
+pub use daemon::{CoordinatedMechanical, Daemon, h1_handler, serve};
 pub use engine_config::{EngineAgentTraceConfig, EngineConfig};
 pub use feed::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, TargetedRoleFeedResult, WorkItemJob,
@@ -78,7 +78,7 @@ pub use forge_applier::ForgeApplier;
 pub use lease_applier::{LeaseApplier, WallClock, system_clock};
 pub use mechanical::{
     MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger, run_mechanical_backstop_tick,
-    spawn_coordinated_mechanical_backstop, spawn_mechanical_backstop,
+    spawn_coordinated_mechanical_backstop,
 };
 pub use pr_freshness::check_pull_request_freshness;
 pub use trace_journal::{

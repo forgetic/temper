@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use temper_config::{ExposeSecret, Resolved};
 use temper_engine::{
-    AgentTraceJournal, Daemon, DaemonRunConfig, EngineAgentTraceConfig, EngineConfig,
-    HintedMechanical, MechanicalBackstopConfig, MechanicalTrigger, PollBackstopConfig,
-    RepositorySet, RetentionProtection, RoleFeedMode, RoleFeedTarget, WebhookConfig,
+    AgentTraceJournal, CoordinatedMechanical, Daemon, DaemonRunConfig, EngineAgentTraceConfig,
+    EngineConfig, MechanicalBackstopConfig, MechanicalTrigger, PollBackstopConfig, RepositorySet,
+    RetentionProtection, RoleFeedMode, RoleFeedTarget, WebhookConfig,
     spawn_coordinated_mechanical_backstop, spawn_coordinated_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath};
@@ -302,7 +302,7 @@ async fn configure_wake_execution(
         // request before enabling landed-workstream cleanup outside standalone.
         pull_request_merge_observer: None,
     };
-    let trigger: Arc<dyn HintedMechanical> = Arc::new(MechanicalTrigger::new(
+    let trigger: Arc<dyn CoordinatedMechanical> = Arc::new(MechanicalTrigger::new(
         forge.clone(),
         workflow.clone(),
         mechanical_config,

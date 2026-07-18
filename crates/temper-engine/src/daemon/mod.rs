@@ -27,6 +27,8 @@ pub mod state_dto;
 #[allow(dead_code)]
 mod wake_coordinator;
 mod wake_observability;
+#[allow(dead_code)]
+mod wake_scope;
 mod webhook_handlers;
 mod webhook_wiring;
 
@@ -69,67 +71,28 @@ pub(crate) trait WakeExecutor: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = WakeOutcome> + Send>>;
 }
 
-/// Type-erased mechanical accelerator: run a hinted mechanical pass for the
-/// repositories named by a webhook delivery. Lets the webhook path drive the
-/// generic [`crate::MechanicalTrigger<F>`] without the daemon being generic over
-/// `F`.
-pub trait HintedMechanical: Send + Sync {
-    /// Compatibility accelerator for non-daemon embedding. The daemon path
-    /// uses the exact coordinated entry points below.
-    fn run_hinted(
-        &self,
-        hints: Vec<temper_forge::ChangeHint>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
-
-    /// Executes repository-wide mechanical work already admitted by the daemon
-    /// coordinator.
+/// Type-erased execution boundary for mechanical work already admitted by the
+/// daemon coordinator. Both methods are required so implementations cannot
+/// fall back to an uncoordinated or lossy hinted path.
+pub trait CoordinatedMechanical: Send + Sync {
+    /// Executes repository-wide mechanical reconciliation.
     fn run_coordinated_broad(
         &self,
         repo: RepositoryPath,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
-        let future = self.run_hinted(vec![temper_forge::ChangeHint::repository(
-            repo,
-            ChangeKind::Unknown,
-        )]);
-        Box::pin(async move {
-            future.await;
-            Ok(())
-        })
-    }
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>;
 
-    /// Executes one exact artifact already admitted by the daemon coordinator.
+    /// Executes one exact artifact request.
     fn run_coordinated_targeted(
         &self,
         repo: RepositoryPath,
         artifact: ArtifactAddress,
         change: ChangeKind,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
-        let future = self.run_hinted(vec![temper_forge::ChangeHint::artifact(
-            repo,
-            artifact.kind,
-            artifact.number,
-            change,
-        )]);
-        Box::pin(async move {
-            future.await;
-            Ok(())
-        })
-    }
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>;
 }
 
-impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> HintedMechanical
+impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> CoordinatedMechanical
     for crate::MechanicalTrigger<F>
 {
-    fn run_hinted(
-        &self,
-        hints: Vec<temper_forge::ChangeHint>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-        let trigger = self.clone();
-        Box::pin(async move {
-            trigger.run_hinted(hints).await;
-        })
-    }
-
     fn run_coordinated_broad(
         &self,
         repo: RepositoryPath,
