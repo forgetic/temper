@@ -31,7 +31,7 @@ use std::time::Duration;
 use skein::runtime::RuntimeHandle;
 use temper_config::{ExposeSecret, Resolved, WorkerSettings};
 use temper_engine::{
-    Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, MechanicalTrigger,
+    CoordinatedMechanical, Daemon, EngineConfig, MechanicalBackstopConfig, MechanicalTrigger,
     PollBackstopConfig, RoleFeedMode, WebhookConfig, spawn_coordinated_mechanical_backstop,
     spawn_coordinated_poll_backstop,
 };
@@ -247,7 +247,7 @@ async fn run_async(
             resolved.worker.workspace_root.clone(),
         ))),
     };
-    let mechanical_trigger: Arc<dyn HintedMechanical> = Arc::new(MechanicalTrigger::new(
+    let mechanical_trigger: Arc<dyn CoordinatedMechanical> = Arc::new(MechanicalTrigger::new(
         forge.clone(),
         workflow.clone(),
         startup_mechanical_config,

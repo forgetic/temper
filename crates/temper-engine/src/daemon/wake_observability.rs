@@ -98,7 +98,7 @@ impl DaemonMachine {
                     }));
                 }
                 WakeDecision::BroadPromoted { repo, lane, mode } => {
-                    let scope = WakeScope::Broad(mode);
+                    let scope = WakeScope::broad(mode);
                     requests.push(DaemonRequest::WakeMeasurement(self.wake_measurement(
                         &repo,
                         Some(&lane),
@@ -261,7 +261,8 @@ impl DaemonMachine {
             reason: wake_scope_reason(scope).to_string(),
             scope: match scope {
                 WakeScope::Targeted(_) => "targeted",
-                WakeScope::Broad(_) => "broad",
+                WakeScope::Broad { targets, .. } if targets.is_empty() => "broad",
+                WakeScope::Broad { .. } => "mixed",
             }
             .to_string(),
             outcome,
@@ -297,7 +298,7 @@ fn wake_scope_reason(scope: &WakeScope) -> &'static str {
             .next()
             .map(change_reason)
             .unwrap_or("targeted"),
-        WakeScope::Broad(mode) => broad_reason(*mode),
+        WakeScope::Broad { mode, .. } => broad_reason(*mode),
     }
 }
 

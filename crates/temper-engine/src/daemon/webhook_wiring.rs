@@ -20,8 +20,10 @@ use crate::lease_applier::WallClock;
 use crate::webhook::WebhookConfig;
 
 use super::machine::DaemonCompletion;
-use super::wake_coordinator::{WakeLane, WakeOutcome, WakeScope, WakeWork};
-use super::{Daemon, HintedMechanical, WakeExecutor};
+use super::wake_coordinator::{
+    WakeLane, WakeOutcome, WakeScope, WakeTargets, WakeWork, merge_change_kind, prioritized_targets,
+};
+use super::{CoordinatedMechanical, Daemon, WakeExecutor};
 
 impl Daemon {
     /// Enables verified `POST /forgejo/webhook` intake and installs coordinated
@@ -55,7 +57,7 @@ impl Daemon {
         compiled: Arc<CompiledWorkflow>,
         config: Arc<WebhookConfig>,
         clock: WallClock,
-        mechanical: Option<Arc<dyn HintedMechanical>>,
+        mechanical: Option<Arc<dyn CoordinatedMechanical>>,
     ) -> Self {
         let daemon = self.with_wake_execution(
             forge,
@@ -77,7 +79,7 @@ impl Daemon {
         compiled: Arc<CompiledWorkflow>,
         wake_targets: Vec<RoleFeedTarget>,
         clock: WallClock,
-        mechanical: Option<Arc<dyn HintedMechanical>>,
+        mechanical: Option<Arc<dyn CoordinatedMechanical>>,
     ) -> Self {
         let has_mechanical = mechanical.is_some();
         let configuration = wake_repositories(&wake_targets, has_mechanical);
@@ -198,7 +200,7 @@ struct ForgeWakeExecutor<F: Forge + Send + Sync + ?Sized + 'static> {
     /// configured route, then reused by targeted and broad enrichment.
     repositories: Arc<std::sync::Mutex<BTreeMap<String, Repository>>>,
     clock: WallClock,
-    mechanical: Option<Arc<dyn HintedMechanical>>,
+    mechanical: Option<Arc<dyn CoordinatedMechanical>>,
 }
 
 impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
@@ -244,12 +246,12 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
         let mut targeted_roles: BTreeMap<ArtifactAddress, (ChangeKind, BTreeSet<RoleId>)> =
             BTreeMap::new();
         let mut mechanical_broad = false;
-        let mut mechanical_targets = BTreeMap::<ArtifactAddress, ChangeKind>::new();
+        let mut mechanical_targets = WakeTargets::new();
 
         for (lane, scope) in work.batch.lanes() {
             match lane {
                 WakeLane::Role(role) if route.roles.contains(role) => match scope {
-                    WakeScope::Broad(_) => {
+                    WakeScope::Broad { .. } => {
                         broad_roles.insert(role.clone());
                     }
                     WakeScope::Targeted(targets) => {
@@ -257,22 +259,28 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
                             let entry = targeted_roles
                                 .entry(ArtifactAddress::new(*kind, *number))
                                 .or_insert_with(|| (*change, BTreeSet::new()));
-                            entry.0 = entry.0.max(*change);
+                            entry.0 = merge_change_kind(entry.0, *change);
                             entry.1.insert(role.clone());
                         }
                     }
                 },
-                WakeLane::Mechanical => match scope {
-                    WakeScope::Broad(_) => mechanical_broad = true,
-                    WakeScope::Targeted(targets) => {
-                        for ((kind, number), change) in targets {
-                            mechanical_targets
-                                .entry(ArtifactAddress::new(*kind, *number))
-                                .and_modify(|current| *current = (*current).max(*change))
-                                .or_insert(*change);
+                WakeLane::Mechanical => {
+                    let targets = match scope {
+                        WakeScope::Broad { targets, .. } => {
+                            mechanical_broad = true;
+                            targets
                         }
+                        WakeScope::Targeted(targets) => targets,
+                    };
+                    for (address, change) in targets {
+                        mechanical_targets
+                            .entry(*address)
+                            .and_modify(|current| {
+                                *current = merge_change_kind(*current, *change);
+                            })
+                            .or_insert(*change);
                     }
-                },
+                }
                 WakeLane::Role(_) => {}
             }
         }
@@ -282,35 +290,21 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
             roles.retain(|role| !broad_roles.contains(role));
         }
         targeted_roles.retain(|_, (_, roles)| !roles.is_empty());
-        if mechanical_broad {
-            mechanical_targets.clear();
-        }
 
         let mut failures = Vec::new();
         let now = (self.clock)();
 
-        // Mechanical transitions run first so the role pass in this same
-        // admitted generation observes freshly unblocked/reconciled state.
-        if let Some(mechanical) = &self.mechanical {
-            if mechanical_broad {
-                if let Err(error) = mechanical.run_coordinated_broad(route.path.clone()).await {
-                    failures.push(format!("broad mechanical wake failed: {error}"));
-                }
-            } else {
-                for (address, change) in mechanical_targets {
-                    if let Err(error) = mechanical
-                        .run_coordinated_targeted(route.path.clone(), address, change)
-                        .await
-                    {
-                        failures.push(format!(
-                            "targeted mechanical wake failed for {}#{}: {error}",
-                            artifact_kind(address.kind),
-                            address.number
-                        ));
-                    }
-                }
-            }
-        }
+        // Exact mechanical transitions run in explicit priority order before
+        // retained broad reconciliation. Role work starts only after all
+        // mechanical mutation has completed for this repository generation.
+        execute_mechanical_work(
+            self.mechanical.as_ref(),
+            &route.path,
+            &mechanical_targets,
+            mechanical_broad,
+            &mut failures,
+        )
+        .await;
 
         if !broad_roles.is_empty() {
             let roles = broad_roles.into_iter().collect::<Vec<_>>();
@@ -380,6 +374,38 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
     }
 }
 
+async fn execute_mechanical_work(
+    mechanical: Option<&Arc<dyn CoordinatedMechanical>>,
+    repo: &RepositoryPath,
+    targets: &WakeTargets,
+    broad: bool,
+    failures: &mut Vec<String>,
+) {
+    let Some(mechanical) = mechanical else {
+        return;
+    };
+
+    for ((kind, number), change) in prioritized_targets(targets) {
+        let address = ArtifactAddress::new(kind, number);
+        if let Err(error) = mechanical
+            .run_coordinated_targeted(repo.clone(), address, change)
+            .await
+        {
+            failures.push(format!(
+                "targeted mechanical wake failed for {}#{}: {error}",
+                artifact_kind(address.kind),
+                address.number
+            ));
+        }
+    }
+
+    if broad {
+        if let Err(error) = mechanical.run_coordinated_broad(repo.clone()).await {
+            failures.push(format!("broad mechanical wake failed: {error}"));
+        }
+    }
+}
+
 impl<F: Forge + Send + Sync + ?Sized + 'static> WakeExecutor for ForgeWakeExecutor<F> {
     fn run(
         &self,
@@ -415,4 +441,124 @@ fn artifact_kind(kind: HintArtifactKind) -> &'static str {
 
 fn repository_key(repo: &RepositoryPath) -> String {
     format!("{}/{}", repo.owner, repo.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use temper_forge::ItemNumber;
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct RecordingMechanical {
+        events: Arc<std::sync::Mutex<Vec<String>>>,
+        active: Arc<AtomicUsize>,
+        max_active: Arc<AtomicUsize>,
+    }
+
+    impl RecordingMechanical {
+        async fn record(&self, event: String) {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active.fetch_max(active, Ordering::SeqCst);
+            self.events.lock().expect("event log").push(event);
+            let mut yielded = false;
+            std::future::poll_fn(move |cx| {
+                if yielded {
+                    std::task::Poll::Ready(())
+                } else {
+                    yielded = true;
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    impl CoordinatedMechanical for RecordingMechanical {
+        fn run_coordinated_broad(
+            &self,
+            _repo: RepositoryPath,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+        {
+            let recorder = self.clone();
+            Box::pin(async move {
+                recorder.record("mechanical:broad".to_string()).await;
+                Ok(())
+            })
+        }
+
+        fn run_coordinated_targeted(
+            &self,
+            _repo: RepositoryPath,
+            artifact: ArtifactAddress,
+            change: ChangeKind,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+        {
+            let recorder = self.clone();
+            Box::pin(async move {
+                recorder
+                    .record(format!(
+                        "mechanical:{}#{}:{change:?}",
+                        artifact_kind(artifact.kind),
+                        artifact.number
+                    ))
+                    .await;
+                Ok(())
+            })
+        }
+    }
+
+    #[test]
+    fn executor_serializes_priority_targets_then_broad_then_role_work() {
+        temper_engine_io::block_on_with(move |_cx, _handle| async move {
+            let recorder = RecordingMechanical::default();
+            let events = Arc::clone(&recorder.events);
+            let max_active = Arc::clone(&recorder.max_active);
+            let mechanical: Arc<dyn CoordinatedMechanical> = Arc::new(recorder);
+            let mut targets = WakeTargets::new();
+            targets.insert(
+                (HintArtifactKind::Issue, ItemNumber::new(2)),
+                ChangeKind::Label,
+            );
+            targets.insert(
+                (HintArtifactKind::PullRequest, ItemNumber::new(8)),
+                ChangeKind::Edited,
+            );
+            targets.insert(
+                (HintArtifactKind::PullRequest, ItemNumber::new(9)),
+                ChangeKind::Ci,
+            );
+            let mut failures = Vec::new();
+
+            execute_mechanical_work(
+                Some(&mechanical),
+                &RepositoryPath::new("ai", "temper"),
+                &targets,
+                true,
+                &mut failures,
+            )
+            .await;
+            events
+                .lock()
+                .expect("event log")
+                .push("role:scan".to_string());
+
+            assert!(failures.is_empty());
+            assert_eq!(
+                *events.lock().expect("event log"),
+                vec![
+                    "mechanical:pull_request#9:Ci",
+                    "mechanical:pull_request#8:Edited",
+                    "mechanical:issue#2:Label",
+                    "mechanical:broad",
+                    "role:scan",
+                ]
+            );
+            assert_eq!(max_active.load(Ordering::SeqCst), 1);
+        });
+    }
 }

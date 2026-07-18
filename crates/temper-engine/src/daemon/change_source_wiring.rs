@@ -16,7 +16,7 @@ use crate::lease_applier::WallClock;
 
 use super::machine::DaemonCompletion;
 use super::wake_coordinator::WakeRequest;
-use super::{Daemon, HintedMechanical};
+use super::{CoordinatedMechanical, Daemon};
 
 const CHANGE_SOURCE_RECV_TIMEOUT: Duration = Duration::from_millis(100);
 
@@ -101,7 +101,7 @@ impl Daemon {
         source: Box<dyn ChangeSource + Send>,
         wake_targets: Vec<RoleFeedTarget>,
         clock: WallClock,
-        mechanical: Option<Arc<dyn HintedMechanical>>,
+        mechanical: Option<Arc<dyn CoordinatedMechanical>>,
     ) -> Self {
         let daemon =
             self.with_wake_execution(forge, workflow, compiled, wake_targets, clock, mechanical);

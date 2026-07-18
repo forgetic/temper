@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
+use temper_workflow::RoleId;
 
 fn t(nanos: u64) -> EngineTime {
     EngineTime::from_nanos(nanos)
@@ -123,7 +124,7 @@ fn repository_unknown_push_recovery_poll_and_startup_requests_are_broad() {
                 .unwrap()
                 .pending
                 .scope(&lane),
-            Some(WakeScope::Broad(_))
+            Some(WakeScope::Broad { .. })
         ));
     }
 }
