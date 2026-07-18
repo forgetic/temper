@@ -9,16 +9,83 @@
 use std::future::Future;
 use std::io::{self, Read};
 use std::pin::Pin;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use temper_process_containment::{ProcessContainment, configure_command};
+use temper_process_containment::{
+    BoundedCapture, CaptureMode, CapturedBytes, CleanupTrigger, ContainmentScope,
+};
+
+use crate::executor::{JobCancellation, JobCleanupObserver};
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Machine-readable git/fingerprint output is rejected rather than truncated.
+pub(crate) const WORKER_COMMAND_COMPLETE_BYTES: usize = 16 * 1024 * 1024;
+/// Human-readable command failures retain only a bounded diagnostic tail.
+pub(crate) const WORKER_COMMAND_TAIL_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ManagedCommandCapture {
+    stdout_mode: CaptureMode,
+    stdout_limit: usize,
+    stderr_mode: CaptureMode,
+    stderr_limit: usize,
+}
+
+impl ManagedCommandCapture {
+    pub(crate) const fn new(
+        stdout_mode: CaptureMode,
+        stdout_limit: usize,
+        stderr_mode: CaptureMode,
+        stderr_limit: usize,
+    ) -> Self {
+        Self {
+            stdout_mode,
+            stdout_limit,
+            stderr_mode,
+            stderr_limit,
+        }
+    }
+
+    /// Git stdout can contain filenames, hashes, porcelain, patches, or remote
+    /// protocol data and therefore must be complete. Stderr is diagnostic.
+    pub(crate) const fn git() -> Self {
+        Self::new(
+            CaptureMode::Complete,
+            WORKER_COMMAND_COMPLETE_BYTES,
+            CaptureMode::Tail,
+            WORKER_COMMAND_TAIL_BYTES,
+        )
+    }
+}
+
+/// Result of a worker-owned command after both streams have been drained and
+/// the process containment has been proven empty.
+#[derive(Debug)]
+pub(crate) struct ManagedCommandOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) stderr_dropped_bytes: u64,
+}
+
+/// Runs one command through the same bounded, descendant-complete owner used by
+/// worker git and fingerprint effects. This is public only so compiled
+/// acceptance drivers can exercise that private production boundary directly.
+#[doc(hidden)]
+pub async fn run_managed_worker_command_for_acceptance(
+    command: Command,
+    cancellation: JobCancellation,
+) -> io::Result<ExitStatus> {
+    ManagedCommand::spawn(command, cancellation, ManagedCommandCapture::git())
+        .await
+        .map(|output| output.status)
+}
 
 struct OwnerState<T> {
     result: Option<io::Result<T>>,
@@ -96,19 +163,17 @@ impl<T> Drop for JoinedBlocking<T> {
 /// A contained subprocess whose process tree and waiter/readers are joined on
 /// every completion path. Dropping it requests an immediate group kill.
 pub(crate) struct ManagedCommand {
-    state: Arc<Mutex<OwnerState<Output>>>,
+    state: Arc<Mutex<OwnerState<ManagedCommandOutput>>>,
     cancelled: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl ManagedCommand {
-    pub(crate) fn spawn(mut command: Command) -> Self {
-        configure_command(&mut command);
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
+    pub(crate) fn spawn(
+        command: Command,
+        job_cancellation: JobCancellation,
+        capture: ManagedCommandCapture,
+    ) -> Self {
         let state = Arc::new(Mutex::new(OwnerState {
             result: None,
             waker: None,
@@ -120,7 +185,7 @@ impl ManagedCommand {
             .name("temper-worker-command".to_string())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_command(command, &thread_cancelled)
+                    run_command(command, &thread_cancelled, job_cancellation, capture)
                 }))
                 .unwrap_or_else(|_| Err(io::Error::other("worker command owner panicked")));
                 publish(&thread_state, result);
@@ -152,7 +217,7 @@ impl ManagedCommand {
 }
 
 impl Future for ManagedCommand {
-    type Output = io::Result<Output>;
+    type Output = io::Result<ManagedCommandOutput>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let result = take_result(&self.state, cx.waker());
@@ -176,94 +241,132 @@ impl Drop for ManagedCommand {
     }
 }
 
-fn run_command(mut command: Command, cancelled: &AtomicBool) -> io::Result<Output> {
-    let mut child = command.spawn()?;
-    let containment = match ProcessContainment::attach(&child) {
-        Ok(containment) => containment,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::new(
-                error.kind(),
-                format!("attach process containment: {error}"),
-            ));
-        }
-    };
+fn run_command(
+    command: Command,
+    cancelled: &AtomicBool,
+    job_cancellation: JobCancellation,
+    capture: ManagedCommandCapture,
+) -> io::Result<ManagedCommandOutput> {
+    let owner = std::path::Path::new(command.get_program())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map_or_else(|| "worker-command".to_string(), bounded_owner_identifier);
+    let contained_command = crate::process_containment::containment_command(
+        &command,
+        Stdio::null(),
+        Stdio::piped(),
+        Stdio::piped(),
+    );
+    let containment_factory = job_cancellation.containment_factory();
+    let prepared = crate::process_containment::prepare_with_observer(
+        "worker-command",
+        "local",
+        ContainmentScope::WorkerCommand,
+        owner.as_str(),
+        Some(Arc::new(JobCleanupObserver(job_cancellation))),
+        containment_factory,
+    )?;
+    let process = prepared.spawn(contained_command)?;
 
-    let stdout = match child.stdout.take() {
+    let stdout = match process.take_stdout()? {
         Some(stdout) => stdout,
         None => {
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.wait();
+            let _ = process.cleanup(CleanupTrigger::Shutdown);
             return Err(io::Error::other("worker command stdout was not piped"));
         }
     };
-    let stderr = match child.stderr.take() {
+    let stderr = match process.take_stderr()? {
         Some(stderr) => stderr,
         None => {
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.wait();
+            let _ = process.cleanup(CleanupTrigger::Shutdown);
             return Err(io::Error::other("worker command stderr was not piped"));
         }
     };
-    let stdout_reader = match spawn_reader("stdout", stdout) {
-        Ok(reader) => reader,
-        Err(error) => {
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.wait();
-            return Err(error);
-        }
-    };
-    let stderr_reader = match spawn_reader("stderr", stderr) {
-        Ok(reader) => reader,
-        Err(error) => {
-            let _ = containment.hard_kill(&mut child);
-            let _ = child.wait();
-            let _ = stdout_reader.join();
-            return Err(error);
-        }
-    };
+    let stdout_reader =
+        match spawn_reader("stdout", stdout, capture.stdout_mode, capture.stdout_limit) {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = process.cleanup(CleanupTrigger::Shutdown);
+                return Err(error);
+            }
+        };
+    let stderr_reader =
+        match spawn_reader("stderr", stderr, capture.stderr_mode, capture.stderr_limit) {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = process.cleanup(CleanupTrigger::Shutdown);
+                let _ = stdout_reader.join();
+                return Err(error);
+            }
+        };
 
     let status = loop {
         if cancelled.load(Ordering::Acquire) {
-            let _ = containment.hard_kill(&mut child);
-            break child.wait();
+            let _ = process.cleanup(CleanupTrigger::Cancellation);
+            let _ = join_reader(stdout_reader, "stdout");
+            let _ = join_reader(stderr_reader, "stderr");
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "worker command cancelled after proven cleanup",
+            ));
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
+        match process.try_wait_root() {
+            Ok(Some(status)) => break status,
             Ok(None) => thread::park_timeout(PROCESS_POLL_INTERVAL),
             Err(error) => {
-                let _ = containment.hard_kill(&mut child);
-                let _ = child.wait();
-                break Err(error);
+                let _ = process.cleanup(CleanupTrigger::Shutdown);
+                let _ = join_reader(stdout_reader, "stdout");
+                let _ = join_reader(stderr_reader, "stderr");
+                return Err(error);
             }
         }
     };
 
     // Git and configured helpers can background descendants which retain the
-    // output pipes after the direct child exits. Empty the containment before
-    // joining readers so the quiescence boundary covers the complete tree.
-    let _ = containment.hard_kill(&mut child);
-    let _ = child.wait();
-    let stdout = join_reader(stdout_reader, "stdout");
-    let stderr = join_reader(stderr_reader, "stderr");
-    Ok(Output {
-        status: status?,
-        stdout: stdout?,
-        stderr: stderr?,
+    // output pipes after the direct child exits. Cleanup proves recursive
+    // emptiness before joining readers or publishing command completion.
+    let _cleanup = process.cleanup(CleanupTrigger::NormalRootExit);
+    let stdout = join_reader(stdout_reader, "stdout")?;
+    let stderr = join_reader(stderr_reader, "stderr")?;
+    Ok(ManagedCommandOutput {
+        status,
+        stdout: stdout.as_bytes().to_vec(),
+        stderr: stderr.as_bytes().to_vec(),
+        stderr_dropped_bytes: stderr.dropped_bytes(),
     })
+}
+
+fn bounded_owner_identifier(value: &str) -> String {
+    let mut value = value.to_string();
+    let limit = temper_process_containment::MAX_CONTAINMENT_IDENTITY_BYTES;
+    if value.len() > limit {
+        let mut end = limit;
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
+    }
+    if value.is_empty() {
+        "worker-command".to_string()
+    } else {
+        value
+    }
 }
 
 fn spawn_reader(
     stream: &'static str,
     mut reader: impl Read + Send + 'static,
-) -> io::Result<JoinHandle<io::Result<Vec<u8>>>> {
+    mode: CaptureMode,
+    limit: usize,
+) -> io::Result<JoinHandle<io::Result<CapturedBytes>>> {
     thread::Builder::new()
         .name(format!("temper-worker-command-{stream}"))
         .spawn(move || {
-            let mut bytes = Vec::new();
-            reader.read_to_end(&mut bytes)?;
-            Ok(bytes)
+            let mut capture = BoundedCapture::new(mode, limit);
+            capture.drain(&mut reader)?;
+            capture
+                .finish()
+                .map_err(|overflow| io::Error::new(io::ErrorKind::FileTooLarge, overflow))
         })
         .map_err(|error| {
             io::Error::new(
@@ -273,7 +376,10 @@ fn spawn_reader(
         })
 }
 
-fn join_reader(reader: JoinHandle<io::Result<Vec<u8>>>, stream: &str) -> io::Result<Vec<u8>> {
+fn join_reader(
+    reader: JoinHandle<io::Result<CapturedBytes>>,
+    stream: &str,
+) -> io::Result<CapturedBytes> {
     reader
         .join()
         .map_err(|_| io::Error::other(format!("worker command {stream} reader panicked")))?
@@ -325,6 +431,40 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn complete_capture_fails_after_draining_overflow() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf abcdef"]);
+        let error = run_command(
+            command,
+            &AtomicBool::new(false),
+            JobCancellation::default(),
+            ManagedCommandCapture::new(CaptureMode::Complete, 4, CaptureMode::Tail, 4),
+        )
+        .expect_err("partial machine output must not escape");
+
+        assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+        assert!(error.to_string().contains("observing 6 bytes"), "{error}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn tail_capture_reports_dropped_diagnostics() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf abcdef >&2"]);
+        let output = run_command(
+            command,
+            &AtomicBool::new(false),
+            JobCancellation::default(),
+            ManagedCommandCapture::new(CaptureMode::Complete, 4, CaptureMode::Tail, 4),
+        )
+        .expect("tail capture");
+
+        assert_eq!(output.stderr, b"cdef");
+        assert_eq!(output.stderr_dropped_bytes, 2);
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn dropping_command_kills_and_joins_before_late_mutation() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -345,7 +485,11 @@ mod tests {
 
         let mut process = Command::new(&script);
         process.args([&pid, &entered, &release, &late_mutation]);
-        let mut effect = ManagedCommand::spawn(process);
+        let mut effect = ManagedCommand::spawn(
+            process,
+            JobCancellation::default(),
+            ManagedCommandCapture::git(),
+        );
         let waker = Waker::from(Arc::new(NoopWake));
         let mut cx = Context::from_waker(&waker);
         assert!(Pin::new(&mut effect).poll(&mut cx).is_pending());

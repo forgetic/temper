@@ -56,6 +56,11 @@ tongs.workspace = true
 # out-of-process boundary without a cross-repo binary path or an LLM, via
 # CARGO_BIN_EXE_temper-fake-agent.
 [[bin]]
+name = "temper-worker-containment-fixture"
+path = "tests/support/worker_containment.rs"
+test = false
+
+[[bin]]
 name = "temper-fake-agent"
 path = "tests/support/smith_fake_agent.rs"
 test = false

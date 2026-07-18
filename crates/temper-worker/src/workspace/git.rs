@@ -1,8 +1,8 @@
 use std::ffi::OsString;
 use std::path::Path;
-use std::process::{Command, ExitStatus, Output};
+use std::process::{Command, ExitStatus};
 
-use crate::managed_effect::ManagedCommand;
+use crate::managed_effect::{ManagedCommand, ManagedCommandCapture, ManagedCommandOutput};
 
 use super::{Workspace, WorkspaceError};
 
@@ -54,7 +54,7 @@ impl Workspace {
         include_remote_header: bool,
         command: String,
         args: Vec<OsString>,
-    ) -> Result<Output, WorkspaceError> {
+    ) -> Result<ManagedCommandOutput, WorkspaceError> {
         self.run_git(Some(&self.path), include_remote_header, command, args)
             .await
     }
@@ -65,7 +65,7 @@ impl Workspace {
         include_remote_header: bool,
         command: String,
         args: Vec<OsString>,
-    ) -> Result<Output, WorkspaceError> {
+    ) -> Result<ManagedCommandOutput, WorkspaceError> {
         let output = self
             .run_git_unchecked(current_dir, include_remote_header, args)
             .await?;
@@ -76,10 +76,11 @@ impl Workspace {
             // remote URL never embeds the token (it is passed via a separate
             // `-c http.extraheader` arg), so neither the command nor git's
             // stderr carries the push token.
+            let stderr = bounded_stderr(&output);
             Err(WorkspaceError::Git {
                 command,
                 status: status_string(output.status),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                stderr,
             })
         }
     }
@@ -88,7 +89,7 @@ impl Workspace {
         &self,
         include_remote_header: bool,
         args: Vec<OsString>,
-    ) -> Result<Output, WorkspaceError> {
+    ) -> Result<ManagedCommandOutput, WorkspaceError> {
         self.run_git_unchecked(Some(&self.path), include_remote_header, args)
             .await
     }
@@ -98,7 +99,7 @@ impl Workspace {
         current_dir: Option<&Path>,
         include_remote_header: bool,
         args: Vec<OsString>,
-    ) -> Result<Output, WorkspaceError> {
+    ) -> Result<ManagedCommandOutput, WorkspaceError> {
         // Each invocation has a dedicated process-tree owner. Dropping this
         // future (the watchdog path) kills git and any credential/remote helper,
         // joins its waiter and output readers, and only then lets the executor
@@ -108,7 +109,11 @@ impl Workspace {
         let mut git = Command::new("git");
         git.env("GIT_TERMINAL_PROMPT", "0").args(&full_args);
         self.cancellation
-            .run(ManagedCommand::spawn(git))
+            .run(ManagedCommand::spawn(
+                git,
+                self.cancellation.clone(),
+                ManagedCommandCapture::git(),
+            ))
             .await
             .ok_or(WorkspaceError::Cancelled)?
             .map_err(WorkspaceError::Io)
@@ -147,6 +152,18 @@ fn git_invocation_args(
     }
     full_args.extend(args);
     full_args
+}
+
+fn bounded_stderr(output: &ManagedCommandOutput) -> String {
+    let tail = String::from_utf8_lossy(&output.stderr);
+    if output.stderr_dropped_bytes == 0 {
+        tail.into_owned()
+    } else {
+        format!(
+            "[dropped {} earlier stderr bytes]\n{tail}",
+            output.stderr_dropped_bytes
+        )
+    }
 }
 
 fn status_string(status: ExitStatus) -> String {

@@ -14,6 +14,17 @@ path = "src/bin/temper-testing-worker.rs"
 name = "temper-testing-daemon-worker"
 path = "src/bin/temper-testing-daemon-worker.rs"
 
+# Compiled process fixture and custom early-main driver for the Linux
+# descendant-containment acceptance matrix. The driver dispatches the private
+# supervisor helper before running production APIs; no test invokes Cargo.
+[[bin]]
+name = "temper-descendant-fixture"
+path = "src/bin/temper-descendant-fixture.rs"
+
+[[bin]]
+name = "temper-containment-acceptance"
+path = "src/bin/temper-containment-acceptance.rs"
+
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
@@ -33,7 +44,11 @@ temper-forge-memory = { path = "../temper-forge-memory" }
 temper-engine = { path = "../temper-engine" }
 temper-daemon-transport = { path = "../temper-daemon-transport" }
 temper-worker = { path = "../temper-worker" }
+temper-worker-io = { path = "../temper-worker-io" }
+temper-process-containment = { path = "../temper-process-containment" }
+temper-agent-core = { path = "../temper-agent-core" }
 temper-agent = { path = "../temper-agent" }
+tongs.workspace = true
 temper-protocol-agent = { path = "../temper-protocol-agent" }
 jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }

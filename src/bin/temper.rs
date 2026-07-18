@@ -15,6 +15,12 @@ use temper_cli::CliEnv;
 use temper_config::{EnvMap, PathResolver};
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "linux")]
+    if let Some(status) = temper_cli::dispatch_linux_supervisor_helper(std::env::args_os().skip(1))
+    {
+        return status;
+    }
+
     temper_cli::run(boot())
 }
 

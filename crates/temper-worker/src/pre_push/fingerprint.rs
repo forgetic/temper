@@ -1,9 +1,9 @@
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Output};
+use std::process::{Command, ExitStatus};
 
 use crate::executor::JobCancellation;
-use crate::managed_effect::ManagedCommand;
+use crate::managed_effect::{ManagedCommand, ManagedCommandCapture, ManagedCommandOutput};
 
 use serde::{Deserialize, Serialize};
 use temper_protocol_agent::WorkspaceContext;
@@ -204,7 +204,7 @@ async fn run_git(
     repo: &Path,
     args: &[&str],
     cancellation: &JobCancellation,
-) -> Result<Output, WorkspaceFingerprintError> {
+) -> Result<ManagedCommandOutput, WorkspaceFingerprintError> {
     let repo = repo.to_path_buf();
     let args = args
         .iter()
@@ -217,7 +217,11 @@ async fn run_git(
         .arg(&repo)
         .args(&args);
     let output = cancellation
-        .run(ManagedCommand::spawn(git))
+        .run(ManagedCommand::spawn(
+            git,
+            cancellation.clone(),
+            ManagedCommandCapture::git(),
+        ))
         .await
         .ok_or(WorkspaceFingerprintError::Cancelled)?
         .map_err(|source| WorkspaceFingerprintError::Io {
@@ -228,12 +232,25 @@ async fn run_git(
     if output.status.success() {
         Ok(output)
     } else {
+        let stderr = bounded_stderr(&output);
         Err(WorkspaceFingerprintError::Git {
             repo,
             command,
             status: status_string(output.status),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stderr,
         })
+    }
+}
+
+fn bounded_stderr(output: &ManagedCommandOutput) -> String {
+    let tail = String::from_utf8_lossy(&output.stderr);
+    if output.stderr_dropped_bytes == 0 {
+        tail.into_owned()
+    } else {
+        format!(
+            "[dropped {} earlier stderr bytes]\n{tail}",
+            output.stderr_dropped_bytes
+        )
     }
 }
 

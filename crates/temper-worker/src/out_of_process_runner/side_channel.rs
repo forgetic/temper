@@ -39,11 +39,11 @@ pub(super) struct LocalServer {
 }
 
 impl LocalServer {
-    pub(super) fn stop(mut self) {
-        self.stop_inner();
+    pub(super) fn stop(mut self) -> bool {
+        self.stop_inner()
     }
 
-    fn stop_inner(&mut self) {
+    fn stop_inner(&mut self) -> bool {
         self.stop.store(true, Ordering::Release);
         if let Some(stream) = self
             .active_stream
@@ -54,15 +54,15 @@ impl LocalServer {
             let _ = stream.shutdown(Shutdown::Both);
         }
         let _ = TcpStream::connect(&self.address);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.thread
+            .take()
+            .is_none_or(|thread| thread.join().is_ok())
     }
 }
 
 impl Drop for LocalServer {
     fn drop(&mut self) {
-        self.stop_inner();
+        let _ = self.stop_inner();
     }
 }
 
@@ -71,7 +71,7 @@ pub(super) fn start_submit_server(
     address: String,
     requests: temper_worker_io::CqSender<SubmitSideChannelRequest>,
     fence: AttemptFence,
-) -> LocalServer {
+) -> std::io::Result<LocalServer> {
     start_server(listener, address, move |stream, stopping| {
         handle_submit_stream(stream, &requests, &fence, stopping);
     })
@@ -82,7 +82,7 @@ pub(super) fn start_forge_server(
     address: String,
     requests: temper_worker_io::CqSender<ForgeSideChannelRequest>,
     fence: AttemptFence,
-) -> LocalServer {
+) -> std::io::Result<LocalServer> {
     start_server(listener, address, move |stream, stopping| {
         handle_forge_stream(stream, &requests, &fence, stopping);
     })
@@ -92,46 +92,48 @@ fn start_server(
     listener: TcpListener,
     address: String,
     mut handle: impl FnMut(TcpStream, &AtomicBool) + Send + 'static,
-) -> LocalServer {
+) -> std::io::Result<LocalServer> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop);
     let active_stream = Arc::new(Mutex::new(None));
     let active_for_thread = Arc::clone(&active_stream);
-    let thread = thread::spawn(move || {
-        if listener.set_nonblocking(true).is_err() {
-            return;
-        }
-        while !stop_for_thread.load(Ordering::Acquire) {
-            match listener.accept() {
-                Ok((stream, _addr)) => {
-                    if stop_for_thread.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if let Ok(shutdown_stream) = stream.try_clone() {
-                        *active_for_thread
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                            Some(shutdown_stream);
-                    }
-                    handle(stream, &stop_for_thread);
-                    active_for_thread
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .take();
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(_) => break,
+    let thread = thread::Builder::new()
+        .name("agent-side-channel".to_string())
+        .spawn(move || {
+            if listener.set_nonblocking(true).is_err() {
+                return;
             }
-        }
-    });
-    LocalServer {
+            while !stop_for_thread.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((stream, _addr)) => {
+                        if stop_for_thread.load(Ordering::Acquire) {
+                            break;
+                        }
+                        if let Ok(shutdown_stream) = stream.try_clone() {
+                            *active_for_thread
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                Some(shutdown_stream);
+                        }
+                        handle(stream, &stop_for_thread);
+                        active_for_thread
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .take();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        })?;
+    Ok(LocalServer {
         stop,
         address,
         active_stream,
         thread: Some(thread),
-    }
+    })
 }
 
 fn handle_forge_stream(

@@ -23,9 +23,10 @@ enum CancellationRestartPhase {
     PostAckPreCompaction,
 }
 
-// The native-agent fixture owns process-like background resources. Keep the
-// six fault-injection worlds independent without multiplying those resources
-// when the integration-test binary runs with its default parallel scheduler.
+// Nextest assigns these six fault-injection worlds to the exclusive
+// `native-process-fixtures` resource class because it launches each test in a
+// separate process. Keep this in-binary lock as equivalent protection for
+// `cargo test`, whose default scheduler runs all six in one process.
 static RESTART_MATRIX_LOCK: Mutex<()> = Mutex::new(());
 
 impl CancellationRestartPhase {
@@ -216,8 +217,20 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
         );
         assert_one_retryable_publication(&stack);
         wait_for_outbox_count(&stack, &cx, 0).await;
+
+        // Reset both process-local components before the successful retry. The
+        // timed-out worker can leave already-queued protocol completions in the
+        // current daemon after its durable result is acknowledged; those belong
+        // to the crashed incarnation and must not race the next dispatch. The
+        // recovery barrier also proves the accepted retryable result left no
+        // durable assignment behind.
         stack.crash_worker().await;
         stack.set_worker_liveness_limits(WorkerLivenessLimits::default());
+        stack.replace_daemon(&handle).await;
+        assert!(
+            stack.open_recovery_barrier().await.is_empty(),
+            "accepted retryable result must leave no assignment to recover"
+        );
 
         // The next attempt must attach to the same coordination-key checkout
         // and session, then commit both interrupted tracked and untracked work.
@@ -302,7 +315,10 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
 
 fn restart_watchdog_limits() -> WorkerLivenessLimits {
     WorkerLivenessLimits {
-        max_no_progress: Duration::from_millis(500),
+        // Real helper-backed containment adds bounded process startup/join work
+        // to checkout preparation. Keep this deadline short while allowing the
+        // retry to reach AgentSessionStarted before testing no-progress cancel.
+        max_no_progress: Duration::from_secs(2),
         graceful_cancellation_grace: Duration::from_secs(1),
         forced_termination_grace: Duration::from_secs(1),
         ..WorkerLivenessLimits::default()
@@ -388,7 +404,7 @@ fn assert_one_retryable_publication(stack: &HermeticRealStack) {
 }
 
 async fn wait_for_outbox_count(stack: &HermeticRealStack, cx: &skein::cx::Cx, expected: usize) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let count = stack.pending_result_count().expect("read result outbox");
         if count == expected {
@@ -408,7 +424,7 @@ async fn wait_for_checkpoint_count(
     point: PausePoint,
     expected: usize,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let count = stack.pause_hooks().reached_count(point);
         if count >= expected {

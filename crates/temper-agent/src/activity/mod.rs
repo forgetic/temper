@@ -6,6 +6,7 @@
 //! operational tracing, and the optional child-to-worker activity channel
 //! consume the normalized activity stream; worker liveness never does.
 
+mod containment;
 mod lifecycle;
 mod normalizer;
 mod transport;
@@ -177,6 +178,24 @@ impl ScopeFactory {
         model: ModelIdentity,
     ) -> ScopedRunObservability {
         self.scoped(None, AgentScopeKindV1::Main, display_name.into(), model)
+    }
+
+    /// Observer for managed bash and MCP owners sharing this run's always-on
+    /// lifecycle carrier. The worker-owned endpoint supplies assignment
+    /// identity after validating each content-free frame.
+    pub fn containment_observer(
+        &self,
+        scope_id: &str,
+    ) -> Option<Arc<dyn temper_agent_core::CleanupObserver>> {
+        self.lifecycle_projection.as_ref().map(|projection| {
+            Arc::new(containment::LifecycleCleanupObserver::new(
+                Arc::clone(projection),
+                temper_protocol_agent::AgentLifecycleScopeV1 {
+                    id: scope_id.to_string(),
+                    parent_id: None,
+                },
+            )) as Arc<dyn temper_agent_core::CleanupObserver>
+        })
     }
 
     /// Mint one nested invocation scope with an explicit parent. Calling this

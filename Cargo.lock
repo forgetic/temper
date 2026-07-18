@@ -1659,6 +1659,7 @@ dependencies = [
  "skein",
  "temper-agent-core",
  "temper-agent-io",
+ "temper-process-containment",
  "temper-protocol-activity",
  "temper-protocol-agent",
  "temper-protocol-interaction",
@@ -1710,6 +1711,7 @@ dependencies = [
  "temper-agent-core",
  "temper-agent-io",
  "temper-log",
+ "temper-process-containment",
  "temper-protocol-activity",
  "temper-protocol-agent",
  "tempfile",
@@ -2020,6 +2022,7 @@ name = "temper-process-containment"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "tempfile",
  "windows-sys 0.61.2",
 ]
 
@@ -2220,6 +2223,7 @@ dependencies = [
  "temper-forge-memory",
  "temper-forge-model",
  "temper-log",
+ "temper-process-containment",
  "temper-protocol-agent",
  "temper-protocol-worker",
  "temper-reference-delivery",
@@ -2227,9 +2231,11 @@ dependencies = [
  "temper-trigger-forgejo",
  "temper-wake",
  "temper-worker",
+ "temper-worker-io",
  "temper-workflow",
  "tempfile",
  "toml",
+ "tongs",
  "tracing",
  "tracing-subscriber",
 ]

@@ -8,7 +8,15 @@
 use temper_protocol_worker::{Assign, FailureClass, JobResult, ResultStatus};
 
 use crate::config::CapabilitySpec;
+mod containment;
 mod liveness;
+pub use containment::{
+    CleanupBlocked, CleanupCompleted, ContainmentEvent, ContainmentEventContext,
+    ContainmentEventIdentity, ContainmentEventObserver, ContainmentFallbackActivated,
+    ContainmentStartupCapability, ContainmentStartupScavenge, TracingContainmentEventObserver,
+    observe_startup_containment_capability,
+};
+pub(crate) use containment::{ContainmentEventThrottle, emit_startup_containment_capability_once};
 pub use liveness::{ObservedOperation, WorkerEvent};
 
 pub fn registered_worker_line(

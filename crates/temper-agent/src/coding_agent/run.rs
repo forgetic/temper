@@ -16,7 +16,7 @@ use super::result::{
     collect_text, parse_result, validate_contract, validate_verdict_contract,
     validate_verdict_vocabulary,
 };
-use super::tools::{add_subagents, tool_registry_for_context};
+use super::tools::{add_subagents_with_containment, tool_registry_for_context_with_containment};
 use super::{
     AgentAbortAuthority, Capability, CodingAgentError, ForgeContextHost, SubmitForPrCallback,
     SubmitForPrHost, bind_submit_for_pr_host, default_submit_for_pr_host,
@@ -301,6 +301,43 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     activity_config: crate::activity::AgentActivityConfig,
     runtime_limits: AgentRuntimeLimitsV1,
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
+    run_coding_agent_native_with_totals_tool_config_hosts_and_containment(
+        handle,
+        provider_config,
+        context,
+        cwd,
+        max_iterations,
+        config_dir,
+        enable_subagents,
+        tool_config,
+        submit_for_pr,
+        forge_context,
+        activity_config,
+        runtime_limits,
+        temper_agent_core::AgentContainmentContext::production(None),
+    )
+    .await
+}
+
+/// Full host-controlled run with an explicit process-containment authority.
+/// Out-of-process and standalone composition roots use this surface so every
+/// managed shell, nested sub-agent, and MCP server belongs to the same context.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containment(
+    handle: skein::runtime::RuntimeHandle,
+    provider_config: &ProviderConfig,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    max_iterations: usize,
+    config_dir: Option<&Path>,
+    enable_subagents: bool,
+    tool_config: Option<&AgentToolConfig>,
+    submit_for_pr: Option<SubmitForPrHost>,
+    forge_context: Option<ForgeContextHost>,
+    activity_config: crate::activity::AgentActivityConfig,
+    runtime_limits: AgentRuntimeLimitsV1,
+    containment: temper_agent_core::AgentContainmentContext,
+) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
     let operation_limits = temper_agent_core::AgentOperationLimits {
         tool_timeout: std::time::Duration::from_secs(runtime_limits.tool_timeout_secs),
         model_connect_timeout: std::time::Duration::from_secs(
@@ -309,12 +346,24 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
         model_idle_timeout: std::time::Duration::from_secs(runtime_limits.model_idle_timeout_secs),
     };
     let capability = Capability::for_role(&context.work_item.role);
+    // Build the always-on lifecycle carrier before codebase-memory MCP startup
+    // so startup failures and later managed-bash cleanup share one attempt-bound
+    // observer. No activity frame is emitted until `main` is minted below.
+    let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
+    let cancellation = activity_config.cancellation.clone();
+    let scope_factory =
+        crate::activity::ScopeFactory::new(activity_config, std::sync::Arc::clone(&totals));
+    let containment = match scope_factory.containment_observer("containment") {
+        Some(observer) => containment.with_observer(observer),
+        None => containment,
+    };
     let codebase_memory = prepare_codebase_memory_tools_with_timeout(
         tool_config,
         &context.work_item.role,
         context,
         cwd,
         operation_limits.tool_timeout,
+        &containment,
     )
     .await?;
     let model_identity = temper_agent_core::ModelIdentity::new(
@@ -335,21 +384,23 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
     // One scope factory feeds the optional activity projections and installs a
     // separate correctness-lifecycle sink. Lifecycle never passes through the
     // capture policy, trace queue, or storage projection.
-    let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
-    let cancellation = activity_config.cancellation.clone();
-    let scope_factory =
-        crate::activity::ScopeFactory::new(activity_config, std::sync::Arc::clone(&totals));
     let main_observability = scope_factory.main(crate::usage::MAIN_SCOPE, model_identity.clone());
     let main_scope_id = main_observability.scope_id.clone();
 
     let submit_for_pr: Option<SubmitForPrCallback> = submit_for_pr
         .filter(|_| super::submit_for_pr_available(context))
         .map(|host| bind_submit_for_pr_host(host, context, cwd));
-    let mut tools =
-        tool_registry_for_context(capability, context, cwd, submit_for_pr, forge_context);
+    let mut tools = tool_registry_for_context_with_containment(
+        capability,
+        context,
+        cwd,
+        submit_for_pr,
+        forge_context,
+        &containment,
+    );
     let codebase_memory_guidance = codebase_memory.append_to_registry(&mut tools);
     if enable_subagents {
-        tools = add_subagents(
+        tools = add_subagents_with_containment(
             handle.clone(),
             tools,
             provider_config,
@@ -358,6 +409,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_and_hosts(
             &scope_factory,
             &main_scope_id,
             operation_limits,
+            &containment,
         );
     }
 

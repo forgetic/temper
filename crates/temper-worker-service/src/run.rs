@@ -5,7 +5,10 @@
 use std::sync::Arc;
 
 use temper_config::Resolved;
-use temper_worker::{CodingExecutor, CodingExecutorConfig, OutOfProcessRunner, run_worker};
+use temper_worker::{
+    CodingExecutor, CodingExecutorConfig, HttpTransport, OutOfProcessRunner,
+    start_worker_with_transport,
+};
 
 use crate::adapt;
 
@@ -48,8 +51,9 @@ async fn run_async(
             adapt::AgentSupervisionKind::FirstParty
         )
     );
+    let transport = Arc::new(HttpTransport::new(&worker_config.daemon_url));
     let forge_context = temper_worker::forge_context_host(
-        Arc::new(temper_worker::HttpTransport::new(&worker_config.daemon_url)),
+        Arc::clone(&transport),
         cx,
         worker_config.worker_id.clone(),
         worker_config.worker_auth.clone(),
@@ -74,10 +78,32 @@ async fn run_async(
     };
 
     let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+    let mut sigint = skein::signal::sigint()
+        .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
+    let mut sigterm = skein::signal::sigterm()
+        .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
+    let worker = start_worker_with_transport(handle, worker_config, executor, transport);
+    let signal = async move {
+        std::future::poll_fn(|task_cx| {
+            if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+        .await;
+    };
 
-    run_worker(handle, worker_config, executor)
-        .await
-        .map_err(|error| error.to_string())
+    // Intentionally has no timeout: if kernel cleanup is blocked, systemd's
+    // service timeout and control-group kill remain the abrupt-death backstop.
+    temper_worker::shutdown_worker_after_signal(
+        signal,
+        std::future::ready(()),
+        worker,
+        std::future::ready(()),
+    )
+    .await;
+    Ok(())
 }
 
 /// The agent invocation prefix `[<current-exe>, <subcommand>]` — used by the

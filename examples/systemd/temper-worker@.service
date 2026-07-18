@@ -15,8 +15,14 @@ LoadCredential=credentials.toml:/etc/temper/credentials.toml
 ExecStart=/usr/local/bin/temper --config /etc/temper/config.toml serve worker --pool %i --id %H-%i
 Restart=on-failure
 RestartSec=5s
-# Backstop for abrupt worker death; ordinary run cancellation is joined by the
-# worker's per-agent process-group supervisor.
+# Delegate a writable cgroup-v2 subtree so Temper can create nested per-job and
+# per-command ownership cgroups before exec.
+Delegate=yes
+# Graceful stop waits for Temper's signal-aware cleanup proof. If cleanup is
+# blocked beyond this bound, systemd sends SIGKILL to the whole service cgroup.
+TimeoutStopSec=5min
+# Abrupt-death backstop; ordinary cleanup uses delegated per-owner cgroups or a
+# descendant-complete supervisor and proves recursive emptiness before exit.
 KillMode=control-group
 
 # Workers need writable workspace state for prepared checkouts and agent runs.

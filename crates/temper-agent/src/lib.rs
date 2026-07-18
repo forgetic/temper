@@ -10,6 +10,8 @@
 pub mod activity;
 pub mod codebase_memory;
 pub mod coding_agent;
+#[cfg(test)]
+mod containment_tests;
 pub mod decision;
 pub mod interaction_profile;
 mod interaction_profile_config;
@@ -22,7 +24,7 @@ pub mod provider;
 mod tool_preview;
 pub mod usage;
 
-pub use activity::{AgentActivityConfig, AgentLifecycleReporter};
+pub use activity::{AgentActivityConfig, AgentCancellationLatch, AgentLifecycleReporter};
 pub use coding_agent::{
     AgentAbortAuthority, AgentSessionState, Capability, CodingAgentError, DEFAULT_MAX_ITERATIONS,
     ForgeContextFuture, ForgeContextHost, SubmitForPrCallback, SubmitForPrFuture, SubmitForPrHost,
@@ -34,7 +36,8 @@ pub use coding_agent::{
     run_coding_agent_native_with_submit_for_pr, run_coding_agent_native_with_tool_config,
     run_coding_agent_native_with_totals, run_coding_agent_native_with_totals_and_submit_for_pr,
     run_coding_agent_native_with_totals_tool_config_and_hosts,
-    run_coding_agent_native_with_totals_tool_config_and_submit_for_pr, submit_for_pr_available,
+    run_coding_agent_native_with_totals_tool_config_and_submit_for_pr,
+    run_coding_agent_native_with_totals_tool_config_hosts_and_containment, submit_for_pr_available,
     system_prompt as coding_agent_system_prompt, user_context as coding_agent_user_context,
 };
 pub use decision::{DecisionError, run_decision};
@@ -58,6 +61,11 @@ pub use provider::{
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_CODEX_MODEL, PROVIDER_BASE_URL_ENV, ProviderConfig,
     ProviderEnv, ProviderError, default_auth_path,
 };
-pub use temper_agent_core::TurnHook;
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use temper_agent_core::dispatch_linux_supervisor_helper;
+pub use temper_agent_core::{
+    AgentContainmentContext, ContainmentFactory, ContainmentScope, TurnHook,
+};
 pub use temper_protocol_interaction::{ConversationReply, ConversationRequest};
 pub use usage::RunTotals;

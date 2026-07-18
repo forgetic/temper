@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use temper_agent_core::{AgentContainmentContext, CleanupTrigger};
+
 use super::connection::{Connection, ProcessControl};
 use super::protocol::{
     McpToolCallResult, McpToolDescriptor, parse_call_tool_result, parse_tool_list,
@@ -24,6 +26,7 @@ pub struct StdioMcpServerConfig {
     pub args: Vec<String>,
     pub startup_timeout: Duration,
     pub call_timeout: Duration,
+    containment_identity: String,
 }
 
 impl StdioMcpServerConfig {
@@ -33,7 +36,20 @@ impl StdioMcpServerConfig {
             args,
             startup_timeout: Duration::from_secs(5),
             call_timeout: Duration::from_secs(30),
+            containment_identity: "mcp-server".to_string(),
         }
+    }
+
+    /// Sets the content-free operator identity for this server containment.
+    /// The executable and argument vector are deliberately not used as event
+    /// identity because they may contain workspace paths or credentials.
+    pub(crate) fn with_containment_identity(mut self, identity: impl Into<String>) -> Self {
+        self.containment_identity = identity.into();
+        self
+    }
+
+    pub(super) fn containment_identity(&self) -> &str {
+        &self.containment_identity
     }
 
     pub fn with_startup_timeout(mut self, timeout: Duration) -> Self {
@@ -77,6 +93,12 @@ pub enum McpError {
         method: String,
         status: Option<String>,
     },
+    ProtocolOverflow {
+        direction: &'static str,
+        resource: &'static str,
+        limit: usize,
+        observed: usize,
+    },
     Protocol(String),
 }
 
@@ -108,6 +130,15 @@ impl std::fmt::Display for McpError {
                 ),
                 None => write!(formatter, "MCP process exited while waiting for `{method}`"),
             },
+            Self::ProtocolOverflow {
+                direction,
+                resource,
+                limit,
+                observed,
+            } => write!(
+                formatter,
+                "MCP protocol overflow: {direction} {resource} exceeded limit {limit} (observed at least {observed})"
+            ),
             Self::Protocol(message) => write!(formatter, "MCP protocol error: {message}"),
         }
     }
@@ -125,7 +156,7 @@ pub struct McpCancellationHandle {
 
 impl McpCancellationHandle {
     pub fn cancel_and_join(&self) {
-        self.control.cancel_and_join();
+        self.control.cancel_and_join(CleanupTrigger::Cancellation);
     }
 }
 
@@ -149,7 +180,16 @@ impl StdioMcpClient {
     /// Spawns the configured command, sends MCP `initialize`, and sends the
     /// standard `notifications/initialized` notification.
     pub async fn connect(config: StdioMcpServerConfig) -> Result<Self, McpError> {
-        let client = Self::spawn(&config)?;
+        Self::connect_with_containment(config, default_containment_context()).await
+    }
+
+    /// Connects with the concrete containment context owned by the surrounding
+    /// agent session.
+    pub async fn connect_with_containment(
+        config: StdioMcpServerConfig,
+        containment: AgentContainmentContext,
+    ) -> Result<Self, McpError> {
+        let client = Self::spawn(&config, &containment)?;
         client.initialize(config.startup_timeout).await?;
         client
             .notify_initialized(config.startup_timeout)
@@ -166,7 +206,14 @@ impl StdioMcpClient {
 
     /// Spawns the configured command and initializes it from synchronous code.
     pub fn connect_blocking(config: StdioMcpServerConfig) -> Result<Self, McpError> {
-        let client = Self::spawn(&config)?;
+        Self::connect_blocking_with_containment(config, default_containment_context())
+    }
+
+    pub fn connect_blocking_with_containment(
+        config: StdioMcpServerConfig,
+        containment: AgentContainmentContext,
+    ) -> Result<Self, McpError> {
+        let client = Self::spawn(&config, &containment)?;
         client.initialize_blocking(config.startup_timeout)?;
         client
             .notify_initialized_blocking(config.startup_timeout)
@@ -180,8 +227,11 @@ impl StdioMcpClient {
         Ok(client)
     }
 
-    fn spawn(config: &StdioMcpServerConfig) -> Result<Self, McpError> {
-        let connection = Connection::spawn(config)?;
+    fn spawn(
+        config: &StdioMcpServerConfig,
+        containment: &AgentContainmentContext,
+    ) -> Result<Self, McpError> {
+        let connection = Connection::spawn(config, containment)?;
         let control = connection.control();
         Ok(Self {
             inner: Arc::new(ClientInner {
@@ -330,6 +380,15 @@ impl StdioMcpClient {
     }
 }
 
+fn default_containment_context() -> AgentContainmentContext {
+    #[cfg(test)]
+    {
+        crate::containment_tests::containment_context()
+    }
+    #[cfg(not(test))]
+    AgentContainmentContext::production(None)
+}
+
 fn normalize_arguments(arguments: Value) -> Value {
     if arguments.is_null() {
         json!({})
@@ -366,7 +425,7 @@ struct ClientInner {
 
 impl Drop for ClientInner {
     fn drop(&mut self) {
-        self.control.cancel_and_join();
+        self.control.cancel_and_join(CleanupTrigger::OwnerDrop);
     }
 }
 

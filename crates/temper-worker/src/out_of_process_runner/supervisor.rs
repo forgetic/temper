@@ -1,17 +1,18 @@
 //! Joined ownership of one agent process and its descendant containment.
 
-use std::process::{Child, Command};
 use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Context, Poll};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use temper_process_containment::{ContainmentKind, ProcessContainment, configure_command};
+use temper_process_containment::{
+    CleanupTrigger, ContainedProcess, PreparedContainment, RecursiveEmptyProof,
+};
 use temper_worker_io::CqReceiver;
 
 use super::ChildOutcome;
 use crate::agent_runner::AgentRunError;
-use crate::executor::{CancellationOutcome, DescendantCleanupStatus};
+use crate::executor::{CancellationOutcome, JobCleanup, ResourceJoinReport, ResourceJoinStatus};
 use crate::out_of_process_runner::stderr::{
     DiagnosticIdentity, emit_reader_unavailable, stream as stream_stderr,
 };
@@ -21,9 +22,13 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// One joined, reaped process-tree result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JobQuiesced {
-    pub cancellation: Option<CancellationOutcome>,
-    pub descendants: DescendantCleanupStatus,
-    pub containment: ContainmentKind,
+    pub cleanup: JobCleanup,
+}
+
+#[derive(Debug)]
+pub(super) struct ManagedAgentSpawnError {
+    pub(super) error: AgentRunError,
+    pub(super) cleanup: JobCleanup,
 }
 
 pub(super) struct SupervisorResult {
@@ -40,8 +45,8 @@ enum SupervisorCommand {
 /// Explicit owner of the child, wait loop, containment and stderr reader.
 ///
 /// The child itself lives on the named supervisor thread. Dropping this handle
-/// requests cancellation and joins that thread; there is no detached blocking
-/// `Child::wait` future.
+/// requests cleanup and joins that thread; there is no detached `Child::wait`
+/// future.
 pub struct ManagedAgentProcess {
     command: mpsc::Sender<SupervisorCommand>,
     wake: CqReceiver<()>,
@@ -52,30 +57,30 @@ pub struct ManagedAgentProcess {
 
 impl ManagedAgentProcess {
     pub fn spawn(
-        mut command: Command,
+        prepared: PreparedContainment,
+        command: temper_process_containment::ContainmentCommand,
         identity: DiagnosticIdentity,
         tracing_dispatch: tracing::Dispatch,
-    ) -> Result<Self, AgentRunError> {
-        configure_command(&mut command);
-        let mut child = command.spawn().map_err(|error| {
-            AgentRunError::transient(format!(
-                "spawn agent command `{}`: {error}",
-                command.get_program().to_string_lossy()
-            ))
-        })?;
-        let containment = match ProcessContainment::attach(&child) {
-            Ok(containment) => containment,
+    ) -> Result<Self, ManagedAgentSpawnError> {
+        let process = prepared
+            .spawn(command)
+            .map_err(|error| ManagedAgentSpawnError {
+                error: AgentRunError::transient(format!("spawn contained agent command: {error}")),
+                cleanup: JobCleanup::no_process(None),
+            })?;
+        let pid = process.id();
+        let stderr = match process.take_stderr() {
+            Ok(stderr) => stderr,
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(AgentRunError::transient(format!(
-                    "attach agent process containment: {error}"
-                )));
+                let cleanup_report = process.cleanup(CleanupTrigger::Shutdown);
+                return Err(ManagedAgentSpawnError {
+                    error: AgentRunError::transient(format!("take agent stderr: {error}")),
+                    cleanup: setup_cleanup(cleanup_report, ResourceJoinStatus::NotApplicable),
+                });
             }
         };
-        let stderr = child.stderr.take();
-        let stderr_thread = thread::Builder::new()
-            .name(format!("agent-stderr-{}", child.id()))
+        let stderr_thread = match thread::Builder::new()
+            .name(format!("agent-stderr-{pid}"))
             .spawn(move || {
                 tracing::dispatcher::with_default(&tracing_dispatch, || match stderr {
                     Some(stderr) => stream_stderr(stderr, &identity),
@@ -84,29 +89,62 @@ impl ManagedAgentProcess {
                         String::new()
                     }
                 })
-            })
-            .map_err(|error| {
-                let _ = containment.hard_kill(&mut child);
-                let _ = child.wait();
-                AgentRunError::transient(format!("start agent stderr reader: {error}"))
-            })?;
+            }) {
+            Ok(thread) => thread,
+            Err(error) => {
+                let cleanup_report = process.cleanup(CleanupTrigger::Shutdown);
+                return Err(ManagedAgentSpawnError {
+                    error: AgentRunError::transient(format!("start agent stderr reader: {error}")),
+                    cleanup: setup_cleanup(cleanup_report, ResourceJoinStatus::NotApplicable),
+                });
+            }
+        };
 
         let (command_tx, command_rx) = mpsc::channel();
         let (wake_tx, wake) = temper_worker_io::channel();
         let shared_result = Arc::new(Mutex::new(None));
         let thread_result = Arc::clone(&shared_result);
-        let thread = thread::Builder::new()
-            .name(format!("agent-supervisor-{}", child.id()))
+
+        // Keep setup resources recoverable if thread creation itself fails.
+        // Moving them directly into the closure would drop the JoinHandle
+        // without joining its reader on that path.
+        let startup = Arc::new(Mutex::new(Some((process, stderr_thread))));
+        let thread_startup = Arc::clone(&startup);
+        let thread = match thread::Builder::new()
+            .name(format!("agent-supervisor-{pid}"))
             .spawn(move || {
-                let result = supervise(child, containment, stderr_thread, command_rx);
+                let (process, stderr_thread) = thread_startup
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                    .expect("supervisor startup payload is present");
+                let result = supervise(process, stderr_thread, command_rx);
                 *thread_result
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(result);
                 let _ = wake_tx.send(());
-            })
-            .map_err(|error| {
-                AgentRunError::transient(format!("start agent process supervisor: {error}"))
-            })?;
+            }) {
+            Ok(thread) => thread,
+            Err(error) => {
+                let (process, stderr_thread) = startup
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                    .expect("failed supervisor startup retained its resources");
+                let process_cleanup = process.cleanup(CleanupTrigger::Shutdown);
+                let stderr_status = if stderr_thread.join().is_ok() {
+                    ResourceJoinStatus::Joined
+                } else {
+                    ResourceJoinStatus::Failed("agent stderr reader panicked".to_string())
+                };
+                return Err(ManagedAgentSpawnError {
+                    error: AgentRunError::transient(format!(
+                        "start agent process supervisor: {error}"
+                    )),
+                    cleanup: setup_cleanup(process_cleanup, stderr_status),
+                });
+            }
+        };
 
         Ok(Self {
             command: command_tx,
@@ -132,11 +170,7 @@ impl ManagedAgentProcess {
                         "agent supervisor ended without an outcome",
                     )),
                     quiesced: JobQuiesced {
-                        cancellation: None,
-                        descendants: DescendantCleanupStatus::Failed(
-                            "supervisor outcome missing".to_string(),
-                        ),
-                        containment: fallback_kind(),
+                        cleanup: missing_supervisor_cleanup(),
                     },
                 });
                 self.completed = true;
@@ -146,10 +180,10 @@ impl ManagedAgentProcess {
         }
     }
 
-    pub fn join_completed(&mut self) {
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+    pub fn join_completed(&mut self) -> bool {
+        self.thread
+            .take()
+            .is_none_or(|thread| thread.join().is_ok())
     }
 
     /// Enqueues cooperative cancellation without waiting for process exit.
@@ -157,12 +191,12 @@ impl ManagedAgentProcess {
         self.command.send(SupervisorCommand::Cancel).is_ok()
     }
 
-    /// Enqueues ordinary process-group termination without waiting for exit.
+    /// Starts the shared TERM/KILL/verify cleanup state machine.
     pub fn force_terminate(&self) -> bool {
         self.command.send(SupervisorCommand::ForceTerminate).is_ok()
     }
 
-    /// Enqueues unconditional process-group kill without waiting for exit.
+    /// Starts unconditional watchdog cleanup.
     pub fn hard_kill(&self) -> bool {
         self.command.send(SupervisorCommand::HardKill).is_ok()
     }
@@ -178,37 +212,54 @@ impl ManagedAgentProcess {
 impl Drop for ManagedAgentProcess {
     fn drop(&mut self) {
         if self.thread.is_some() {
-            // Abrupt component/future loss is the safety fallback, not the
-            // watchdog path. The normal path sends each escalation explicitly
-            // and asynchronously, then polls the supervisor outcome.
             let _ = self.hard_kill();
-            self.join_completed();
+            let _ = self.join_completed();
         }
     }
 }
 
+fn missing_supervisor_cleanup() -> JobCleanup {
+    let mut cleanup = JobCleanup::no_process(None);
+    cleanup.resources.process_supervisor =
+        ResourceJoinStatus::Failed("agent supervisor ended without an outcome".to_string());
+    cleanup.resources.stderr_reader =
+        ResourceJoinStatus::Failed("agent stderr reader join is unknown".to_string());
+    cleanup
+}
+
+fn setup_cleanup(
+    containment: temper_process_containment::CleanupReport,
+    stderr_reader: ResourceJoinStatus,
+) -> JobCleanup {
+    let mut resources = ResourceJoinReport::no_process();
+    resources.stderr_reader = stderr_reader;
+    JobCleanup {
+        cancellation: None,
+        containment,
+        resources,
+    }
+}
+
 fn supervise(
-    mut child: Child,
-    containment: ProcessContainment,
+    process: ContainedProcess,
     stderr_thread: JoinHandle<String>,
     commands: mpsc::Receiver<SupervisorCommand>,
 ) -> SupervisorResult {
-    let containment_kind = containment.kind();
     let mut cancellation = None;
-    let mut descendants = DescendantCleanupStatus::Clean;
-
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
+    let mut observed_status: Option<i32> = None;
+    let mut process_error = None;
+    let trigger = loop {
+        match process.try_wait_root() {
+            Ok(Some(status)) => {
+                observed_status = status.code();
+                break CleanupTrigger::NormalRootExit;
+            }
             Ok(None) => {}
             Err(error) => {
-                let _ = containment.hard_kill(&mut child);
-                let _ = child.wait();
-                descendants =
-                    DescendantCleanupStatus::Failed(format!("poll agent process exit: {error}"));
-                break Err(AgentRunError::transient(format!(
+                process_error = Some(AgentRunError::transient(format!(
                     "poll agent process exit: {error}"
                 )));
+                break CleanupTrigger::Shutdown;
             }
         }
 
@@ -221,72 +272,62 @@ fn supervise(
             Ok(SupervisorCommand::ForceTerminate) => {
                 if !matches!(cancellation, Some(CancellationOutcome::HardKill)) {
                     cancellation = Some(CancellationOutcome::ForcedTermination);
-                    descendants = terminate(&containment, &mut child);
                 }
+                if commands
+                    .try_iter()
+                    .any(|command| matches!(command, SupervisorCommand::HardKill))
+                {
+                    cancellation = Some(CancellationOutcome::HardKill);
+                }
+                break CleanupTrigger::Watchdog;
             }
             Ok(SupervisorCommand::HardKill) => {
                 cancellation = Some(CancellationOutcome::HardKill);
-                descendants = hard_kill(&containment, &mut child);
+                break CleanupTrigger::Watchdog;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 cancellation = Some(CancellationOutcome::HardKill);
-                descendants = hard_kill(&containment, &mut child);
+                break CleanupTrigger::OwnerDrop;
             }
         }
     };
 
-    // Even a cooperative direct-child exit may have left tool grandchildren in
-    // the process group/job. Emptying the group makes the quiesced boundary
-    // descendant-complete before worker capacity can be released. Preserve an
-    // earlier cleanup failure rather than hiding it behind a successful final
-    // kill.
-    let final_cleanup = hard_kill(&containment, &mut child);
-    if !matches!(descendants, DescendantCleanupStatus::Failed(_))
-        && !matches!(final_cleanup, DescendantCleanupStatus::Clean)
-    {
-        descendants = final_cleanup;
-    }
-    let stderr_tail = stderr_thread.join().unwrap_or_default();
-    let outcome = status.map(|status| ChildOutcome {
-        status_code: status.code(),
-        stderr_tail,
-    });
+    // Cleanup is the sole transition to quiescence. It cannot return while an
+    // inspection is blocked, a descendant survives, or the direct child has
+    // not been reaped.
+    let cleanup_report = process.cleanup(trigger);
+    debug_assert!(matches!(
+        cleanup_report.recursive_empty(),
+        RecursiveEmptyProof::Proven { .. }
+    ));
+    let status_code = observed_status.or_else(|| cleanup_report.direct_child_reap().exit_code());
+    let (stderr_tail, stderr_status) = match stderr_thread.join() {
+        Ok(tail) => (tail, ResourceJoinStatus::Joined),
+        Err(_) => (
+            String::new(),
+            ResourceJoinStatus::Failed("agent stderr reader panicked".to_string()),
+        ),
+    };
+    let outcome = match process_error {
+        Some(error) => Err(error),
+        None => Ok(ChildOutcome {
+            status_code,
+            stderr_tail,
+        }),
+    };
+    let mut resources = ResourceJoinReport::no_process();
+    // The owner thread is joined by RunResources after this result is received.
+    resources.process_supervisor = ResourceJoinStatus::Pending;
+    resources.stderr_reader = stderr_status;
     SupervisorResult {
         outcome,
         quiesced: JobQuiesced {
-            cancellation,
-            descendants,
-            containment: containment_kind,
+            cleanup: JobCleanup {
+                cancellation,
+                containment: cleanup_report,
+                resources,
+            },
         },
-    }
-}
-
-fn terminate(containment: &ProcessContainment, child: &mut Child) -> DescendantCleanupStatus {
-    match containment.terminate(child) {
-        Ok(()) => DescendantCleanupStatus::Terminated,
-        Err(error) => DescendantCleanupStatus::Failed(format!("terminate descendants: {error}")),
-    }
-}
-
-fn hard_kill(containment: &ProcessContainment, child: &mut Child) -> DescendantCleanupStatus {
-    match containment.hard_kill(child) {
-        Ok(()) => DescendantCleanupStatus::HardKilled,
-        Err(error) => DescendantCleanupStatus::Failed(format!("hard-kill descendants: {error}")),
-    }
-}
-
-fn fallback_kind() -> ContainmentKind {
-    #[cfg(unix)]
-    {
-        ContainmentKind::UnixProcessGroup
-    }
-    #[cfg(windows)]
-    {
-        ContainmentKind::WindowsJobObject
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        ContainmentKind::DirectChildFallback
     }
 }

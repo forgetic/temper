@@ -26,6 +26,10 @@ crates/temper-engine/tests/forge_apply/support.rs
 # conditional Forge write boundary so recovery CAS semantics remain auditable.
 crates/temper-workflow/src/lease/manager.rs
 
+# Prepared containment runtime keeps spawn validation, exactly-once cleanup
+# coordination, fail-closed retry, and observer delivery in one auditable state machine.
+crates/temper-process-containment/src/runtime.rs
+
 # The wake coordinator is one pure transition owner for bounded lane compaction,
 # apply deferral, timer generations, global admission, and dirty completion semantics.
 crates/temper-engine/src/daemon/wake_coordinator.rs
@@ -128,3 +132,16 @@ crates/temper-config/src/tests.rs
 # Agent trace capstones intentionally keep producer/process fixtures, worker
 # spools, engine query/export, web, and OTel assertions in one leak-detection path.
 crates/temper-worker/src/trace/full_path_tests.rs
+
+# Attempt cleanup proof, cancellation escalation, and durable result admission
+# remain in the worker's single pure transition owner so no alternate terminal path bypasses them.
+crates/temper-worker/src/worker_machine.rs
+crates/temper-worker/src/worker_machine/watchdog.rs
+
+# The out-of-process run owner keeps process cleanup, endpoint joins, side-channel
+# fencing, and result-file acceptance in one auditable quiescence sequence.
+crates/temper-worker/src/out_of_process_runner/managed_run.rs
+
+# The worker shell keeps attempt controls, cleanup observers, task lifetime, and
+# unified completion publication at the one imperative job-dispatch boundary.
+crates/temper-worker/src/worker_shell.rs

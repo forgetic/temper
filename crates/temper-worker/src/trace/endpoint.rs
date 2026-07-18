@@ -80,11 +80,11 @@ impl ActivityEndpoint {
     /// Stops accepting records and joins the endpoint thread. The loopback
     /// wake avoids waiting for the nonblocking accept poll, while an accepted
     /// idle stream observes shutdown within its bounded read-poll duration.
-    pub fn stop(mut self) {
-        self.stop_inner();
+    pub fn stop(mut self) -> bool {
+        self.stop_inner()
     }
 
-    fn stop_inner(&mut self) {
+    fn stop_inner(&mut self) -> bool {
         // A main-scope terminus is the final child record for the run. Give an
         // already-connected producer a short bounded opportunity to make that
         // record durable before closing the endpoint; otherwise the host's
@@ -121,15 +121,15 @@ impl ActivityEndpoint {
         }
         self.state.stopping.store(true, Ordering::Release);
         let _ = TcpStream::connect(&self.address);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.thread
+            .take()
+            .is_none_or(|thread| thread.join().is_ok())
     }
 }
 
 impl Drop for ActivityEndpoint {
     fn drop(&mut self) {
-        self.stop_inner();
+        let _ = self.stop_inner();
     }
 }
 

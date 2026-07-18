@@ -14,6 +14,8 @@ use temper_worker_io::EngineTime;
 
 use crate::agent_runner::JobProgress;
 
+use crate::executor::{CancellationOutcome, ResourceJoinStatus};
+
 use super::{JobCleanup, WorkerMachine, WorkerRequest};
 
 /// Smallest re-arm used at an exact deadline. Timeout is strictly `now >
@@ -25,6 +27,7 @@ const MIN_TIMER_TICK: Duration = Duration::from_nanos(1);
 pub enum JobPhase {
     Running,
     CancelRequested,
+    CleanupPending,
     Quiesced,
     ResultRecorded,
 }
@@ -74,6 +77,7 @@ pub enum CancellationStatus {
     NotRequested,
     Requested,
     Escalated,
+    CleanupBlocked,
     Quiesced,
 }
 
@@ -155,6 +159,7 @@ impl JobWatchState {
             message: match self.phase {
                 JobPhase::Running => "running",
                 JobPhase::CancelRequested => "cancelling",
+                JobPhase::CleanupPending => "cleanup_blocked",
                 JobPhase::Quiesced => "recording_result",
                 JobPhase::ResultRecorded => "result_recorded",
             }
@@ -163,6 +168,7 @@ impl JobWatchState {
                 phase: match self.phase {
                     JobPhase::Running => JobHeartbeatPhase::Running,
                     JobPhase::CancelRequested => JobHeartbeatPhase::CancelRequested,
+                    JobPhase::CleanupPending => JobHeartbeatPhase::CleanupPending,
                     JobPhase::Quiesced => JobHeartbeatPhase::Quiesced,
                     JobPhase::ResultRecorded => JobHeartbeatPhase::ResultRecorded,
                 },
@@ -181,6 +187,7 @@ impl JobWatchState {
                     CancellationStatus::NotRequested => JobCancellationState::NotRequested,
                     CancellationStatus::Requested => JobCancellationState::Requested,
                     CancellationStatus::Escalated => JobCancellationState::Escalated,
+                    CancellationStatus::CleanupBlocked => JobCancellationState::CleanupBlocked,
                     CancellationStatus::Quiesced => JobCancellationState::Quiesced,
                 },
                 result_durability: match self.result_durability {
@@ -237,6 +244,7 @@ impl JobWatchState {
             AgentLifecycleEventV1::AgentFinished { .. } => self.active_operations.clear(),
             AgentLifecycleEventV1::ModelProgress { .. }
             | AgentLifecycleEventV1::ModelRetrying { .. }
+            | AgentLifecycleEventV1::Containment { .. }
             | AgentLifecycleEventV1::SteeringApplied => {}
         }
     }
@@ -536,9 +544,61 @@ impl WorkerMachine {
                 "elapsed_ms": now.as_nanos().saturating_sub(operation.started_at.as_nanos()) / 1_000_000,
             })
         });
-        let cancellation = cleanup.cancellation.as_str();
-        let descendant_cleanup = cleanup.descendants.as_str();
-        let descendant_cleanup_error = cleanup.descendants.failure();
+        let cancellation = cleanup
+            .cancellation
+            .map(CancellationOutcome::as_str)
+            .unwrap_or("not_requested");
+        let containment = &cleanup.containment;
+        let disposition = match containment.disposition() {
+            temper_process_containment::CleanupDisposition::AlreadyEmpty => "already_empty",
+            temper_process_containment::CleanupDisposition::Terminated => "terminated",
+            temper_process_containment::CleanupDisposition::Killed => "killed",
+        };
+        let backend = match containment.backend() {
+            temper_process_containment::ContainmentBackendKind::NoProcess => "no_process",
+            temper_process_containment::ContainmentBackendKind::LinuxCgroupV2 => "linux_cgroup_v2",
+            temper_process_containment::ContainmentBackendKind::LinuxSupervisor => {
+                "linux_supervisor"
+            }
+            temper_process_containment::ContainmentBackendKind::WindowsJob => "windows_job",
+        };
+        let survivors = containment
+            .observed_survivors()
+            .iter()
+            .map(|process| {
+                serde_json::json!({
+                    "pid": process.pid(),
+                    "ppid": process.ppid(),
+                    "pgid": process.process_group_id(),
+                    "session_id": process.session_id(),
+                    "start_time_identity": process.start_time_identity(),
+                    "executable": process.executable(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let direct_child_reap = match containment.direct_child_reap() {
+            temper_process_containment::DirectChildReap::NotSpawned => {
+                serde_json::json!({ "state": "not_spawned" })
+            }
+            temper_process_containment::DirectChildReap::Pending { pid } => {
+                serde_json::json!({ "state": "pending", "pid": pid })
+            }
+            temper_process_containment::DirectChildReap::Reaped { pid, exit_code } => {
+                serde_json::json!({ "state": "reaped", "pid": pid, "exit_code": exit_code })
+            }
+            temper_process_containment::DirectChildReap::AlreadyReaped { pid, exit_code } => {
+                serde_json::json!({ "state": "already_reaped", "pid": pid, "exit_code": exit_code })
+            }
+        };
+        let resources = serde_json::json!({
+            "process_supervisor": resource_join_json(&cleanup.resources.process_supervisor),
+            "stderr_reader": resource_join_json(&cleanup.resources.stderr_reader),
+            "lifecycle_endpoint": resource_join_json(&cleanup.resources.lifecycle_endpoint),
+            "activity_endpoint": resource_join_json(&cleanup.resources.activity_endpoint),
+            "submit_endpoint": resource_join_json(&cleanup.resources.submit_endpoint),
+            "forge_endpoint": resource_join_json(&cleanup.resources.forge_endpoint),
+            "lifecycle_cancellation": resource_join_json(&cleanup.resources.lifecycle_cancellation),
+        });
         let details = serde_json::json!({
             "timeout": {
                 "reason": timeout.reason.as_str(),
@@ -548,10 +608,23 @@ impl WorkerMachine {
                 "operation": operation,
                 "cleanup": {
                     "cancellation": cancellation,
-                    "descendants": descendant_cleanup,
-                    "descendant_error": descendant_cleanup_error,
+                    "backend": backend,
+                    "root": containment.root().value(),
+                    "trigger": format!("{:?}", containment.trigger()),
+                    "disposition": disposition,
+                    "term_attempts": containment.term_attempts().len(),
+                    "kill_attempts": containment.kill_attempts().len(),
+                    "direct_child_reap": direct_child_reap,
+                    "recursive_empty": true,
+                    "survivors": survivors,
+                    "omitted_survivors": containment.omitted_survivors(),
+                    "blocked_diagnostics": containment.blocked_diagnostics().iter().map(|diagnostic| serde_json::json!({
+                        "phase": format!("{:?}", diagnostic.phase()),
+                        "message": diagnostic.message(),
+                    })).collect::<Vec<_>>(),
+                    "resources": resources,
                     "escalated": state.escalation_requested,
-                    "quiesced": true,
+                    "quiesced": cleanup.proves_quiescence(),
                 }
             }
         });
@@ -574,18 +647,25 @@ impl WorkerMachine {
             failure: Some(Failure {
                 class: FailureClass::Transient,
                 message: format!(
-                    "worker watchdog timeout reason={} limit_ms={} operation={} cancellation={} descendants={}",
+                    "worker watchdog timeout reason={} limit_ms={} operation={} cancellation={} cleanup_disposition={}",
                     timeout.reason.as_str(),
                     timeout.limit.as_millis(),
                     operation_name,
                     cancellation,
-                    descendant_cleanup,
+                    disposition,
                 ),
             }),
             summary: None,
             details: Some(details),
         }
     }
+}
+
+fn resource_join_json(status: &ResourceJoinStatus) -> serde_json::Value {
+    serde_json::json!({
+        "status": status.as_str(),
+        "error": status.failure(),
+    })
 }
 
 fn elapsed_ms(now: EngineTime, started: EngineTime) -> u64 {

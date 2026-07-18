@@ -74,8 +74,9 @@ settings are visible in the generated configuration template and in
   tool, steering, and terminal lifecycle boundaries; heartbeats do not count;
 - optional `worker.max_run_secs` independently bounds the whole attempt;
 - `worker.graceful_cancellation_grace_secs` and
-  `worker.forced_termination_grace_secs` bound cooperative cancellation,
-  process-group escalation, descendant cleanup, and join;
+  `worker.forced_termination_grace_secs` bound cooperative cancellation and
+  escalation requests; a worker still fails closed and retains the attempt
+  fence and permit while descendant inspection cannot prove emptiness;
 - first-party operation limits live in `agent.deadlines` (with profile
   overrides) and must remain below the no-progress bound.
 
@@ -87,14 +88,66 @@ content-free active model/tool summaries, timeout/cancellation status, and
 pending-result state. It is a latest-report diagnostic, not lease or watchdog
 authority.
 
-On timeout the worker fences the attempt, cancels and joins all owned resources,
-durably records one transient result, releases its local permit, and polls
-immediately. Result delivery/replay and durable-claim convergence continue after
-permit release. A Forge outage therefore appears as
-`worker.result.delivery` retry warnings and eventually
-`assignment.convergence`, rather than monopolizing capacity. Both graceful and
-forced termination append a synthetic canonical terminal activity with
-`status=cancelled` even if the child cannot send one.
+On timeout the worker fences the attempt, requests escalation, and joins all
+owned resources. It records a transient result and releases its local permit
+only after direct-child reap, recursive descendant emptiness, and endpoint joins
+are proven. A blocked inspection remains in `cleanup_pending`, retaining the
+attempt fence and permit while throttled operator diagnostics continue. Result
+delivery/replay and durable-claim convergence continue after a proven cleanup
+and permit release. A Forge outage therefore appears as `worker.result.delivery`
+retry warnings and eventually `assignment.convergence`, rather than
+monopolizing capacity. Both graceful and forced termination append a synthetic
+canonical terminal activity with `status=cancelled` even if the child cannot
+send one.
+
+## Process-containment capabilities and cleanup evidence
+
+On Linux, the preferred backend uses a systemd-delegated cgroup-v2 subtree. A
+job cgroup is prepared before agent spawn; nested tool, MCP, worker-command, and
+pre-push cgroups are created below it and membership is established before
+`exec`. The production contract requires a unified cgroup-v2 mount, writable
+delegation and nested-subtree controls, and pidfd support. `cgroup.kill` is used
+for hard escalation when available; otherwise Temper repeatedly enumerates and
+signals every nested member. Direct-child reap and independent recursive-empty
+verification gate completion in both cases.
+
+When delegation or pidfd capability is unavailable, Linux activates its
+subreaper/supervisor fallback. The fallback owns re-parented descendants and
+tracks them independently of process groups and sessions. Windows uses nested,
+kill-on-close Job Objects with assignment-before-resume and empty-job
+verification. A host without one of those production backends fails
+containment preparation rather than silently degrading to direct-child or
+process-group-only cleanup.
+
+The worker emits exactly one `worker.containment.startup_capability` diagnostic
+per process. It reports the bounded cgroup-v2 mount identity, delegation,
+nested-subtree writability, `cgroup.kill`, pidfd, selected backend, and fallback
+reason. The same attempt-bound observer is installed in managed bash and MCP
+containment for split-agent and standalone execution, so nested blocked,
+fallback, and completed cleanup carries worker/job/attempt plus bounded
+owner/tool identity instead of appearing only in the final job cleanup.
+Unavailable delegation and `worker.containment.fallback_activated` are
+warnings. `worker.containment.cleanup_completed` is debug for an ordinary
+already-empty owner and warning when cleanup recovered leaked descendants or
+inspection failures. `worker.containment.cleanup_blocked` is warning/error,
+throttled by bounded containment root, and includes bounded survivor
+PID/PPID/PGID/session/start-time/executable evidence without command arguments,
+prompts, output, or credentials.
+
+At startup, stale cgroups are considered owned only below Temper's dedicated
+subtree. Their members are killed, trees that become empty are removed
+deepest-first, and still-populated or uninspectable trees remain for retry.
+`worker.containment.startup_scavenge` reports removed/retained counts, a bounded
+list of retained path diagnostics, and the omitted-diagnostic count; retained or
+omitted evidence is warning level. During `SIGINT` or `SIGTERM`, the worker
+stops intake, fences all attempts, escalates every active owner, and joins the
+active-job registry before returning. With the example systemd unit,
+`Delegate=yes` permits nested
+ownership and `KillMode=control-group` kills the complete service cgroup after
+`TimeoutStopSec` if application cleanup cannot complete. Abrupt `SIGKILL`,
+kernel failure, or power loss cannot produce a terminal cleanup event; the
+service cgroup is the backstop and the next startup performs stale ownership
+inspection.
 
 ## Diagnostics
 

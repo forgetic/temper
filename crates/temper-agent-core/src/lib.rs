@@ -15,6 +15,9 @@
 //! emitted as data, not callbacks), control (steering at turn boundaries +
 //! abort), and testability from the start.
 
+mod containment;
+#[cfg(test)]
+mod containment_tests;
 pub mod machine;
 mod managed_bash;
 mod managed_fs;
@@ -22,6 +25,7 @@ pub mod run;
 pub mod shell;
 pub mod subagent_tool;
 
+pub use containment::AgentContainmentContext;
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,
     BatchGeneration, ModelCallStatus, OperationGeneration, StreamDelta, ToolCallStatus,
@@ -44,4 +48,13 @@ pub use shell::{
     StreamRetryConfig, StreamRetryConfigOverrideGuard, install_stream_retry_config_override,
 };
 pub use subagent_tool::{SubAgentFactory, SubAgentObserverFactory, SubAgentTool};
-pub use temper_process_containment::{ProcessContainment, configure_descendant_command};
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use temper_process_containment::dispatch_linux_supervisor_helper;
+pub use temper_process_containment::{
+    BoundedCapture, CaptureMode, CaptureOverflow, CapturedBytes, CleanupDisposition,
+    CleanupObservation, CleanupObserver, CleanupPhase, CleanupReport, CleanupSnapshot,
+    CleanupTrigger, ContainedProcess, ContainmentBackendKind, ContainmentCommand,
+    ContainmentFactory, ContainmentFallbackObservation, ContainmentScope, ContainmentSignal,
+    DirectChildReap, ProcessIdentity, RecursiveEmptyProof, SignalAttempt, SignalAttemptOutcome,
+};

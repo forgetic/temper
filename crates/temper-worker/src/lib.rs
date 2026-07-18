@@ -23,12 +23,16 @@ pub mod context_client;
 pub mod executor;
 mod lifecycle_hook;
 mod managed_effect;
+#[doc(hidden)]
+pub use managed_effect::run_managed_worker_command_for_acceptance;
 pub mod observability;
 pub mod out_of_process_runner;
 pub mod pr_freshness;
 pub mod pre_push;
+mod process_containment;
 pub mod result_outbox;
 pub mod run;
+pub mod task_registry;
 pub mod trace;
 pub mod transport;
 pub mod worker_machine;
@@ -51,9 +55,9 @@ pub use context_client::{
     ContextClientError, ForgeContextClient, HttpForgeContextClient, forge_context_host,
 };
 pub use executor::{
-    AttemptFence, CancellationOutcome, DescendantCleanupStatus, JobAttempt, JobCancellation,
-    JobCancellationRequest, JobCleanup, JobExecutionContext, JobExecutor, JobOutcome, StubExecutor,
-    job_result, job_result_for_attempt,
+    AttemptFence, CancellationOutcome, JobAttempt, JobCancellation, JobCancellationOwner,
+    JobCancellationRequest, JobCleanup, JobExecutionContext, JobExecutor, JobOutcome,
+    ResourceJoinReport, ResourceJoinStatus, StubExecutor, job_result, job_result_for_attempt,
 };
 pub use lifecycle_hook::{WorkerLifecycleCheckpoint, WorkerLifecycleHook};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
@@ -65,16 +69,24 @@ pub use pr_freshness::{
 pub use pre_push::{
     PrePushCommandResult, PrePushError, PrePushReport, PrePushStatus, WorkspaceFingerprint,
     WorkspaceFingerprintError, final_pre_push_response, fingerprint_writable_repos,
-    fingerprint_writable_repos_blocking, run_pre_push_checks, submit_for_pr_pre_push_response,
+    fingerprint_writable_repos_blocking, run_pre_push_checks, run_pre_push_checks_for_acceptance,
+    submit_for_pr_pre_push_response,
 };
 pub use result_outbox::{
     RESULT_OUTBOX_VERSION, ResultAcknowledgement, ResultAssignmentIdentity, ResultDeliveryState,
     ResultOutbox, ResultOutboxEntry, ResultOutboxError,
 };
 pub use run::{
-    WorkerComponentHandle, run_worker, run_worker_with_transport, start_worker_with_transport,
-    start_worker_with_transport_and_hook,
+    WorkerComponentHandle, run_worker, run_worker_with_transport, shutdown_worker_after_signal,
+    start_worker_with_transport, start_worker_with_transport_and_hook,
 };
+pub use task_registry::{
+    ActiveJobJoinState, ActiveJobTask, WorkerShutdown, WorkerTaskJoinNotification,
+    WorkerTaskRegistry,
+};
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use temper_process_containment::dispatch_linux_supervisor_helper;
 pub use temper_protocol_agent::{
     AGENT_LIFECYCLE_ADDRESS_FLAG, AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleAgentStatusV1,
     AgentLifecycleCancellationAckV1, AgentLifecycleCancellationAcknowledgementV1,
@@ -91,9 +103,9 @@ pub use trace::{
 };
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{
-    ActiveOperation, CancellationStatus, JobPhase, JobWatchState, OperationId, OperationKind,
-    ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState, WatchdogTimerKind,
-    WorkerCompletion, WorkerMachine, WorkerRequest,
+    ActiveOperation, AttemptCompletion, CancellationStatus, JobPhase, JobWatchState, OperationId,
+    OperationKind, ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState,
+    WatchdogTimerKind, WorkerCompletion, WorkerMachine, WorkerRequest,
 };
 pub use workspace::{
     PreparationOutcome, QuarantineManifest, RecoveryContext, RoleGitIdentity,

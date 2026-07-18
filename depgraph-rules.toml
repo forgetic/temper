@@ -230,7 +230,7 @@ temper-web = ["temper-log", "temper-protocol-activity", "temper-workflow", "temp
 # test-only affordances absent from the production Forge trait (see the invariant
 # note at the top of this file). It also links temper-forge-model directly for
 # those concrete types alongside the temper-forge facade.
-temper-testing = ["temper-forge", "temper-forge-model", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-engine", "temper-engine-io", "temper-daemon-transport", "temper-worker", "temper-agent", "temper-protocol-agent", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-protocol-worker", "temper-workflow"]
+temper-testing = ["temper-forge", "temper-forge-model", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-engine", "temper-engine-io", "temper-daemon-transport", "temper-worker", "temper-worker-io", "temper-process-containment", "temper-agent", "temper-agent-core", "temper-protocol-agent", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-protocol-worker", "temper-workflow"]
 
 [options]
 # Every workspace member must be listed above (a new, unlisted crate fails CI).

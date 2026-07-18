@@ -21,6 +21,7 @@ pub enum HeartbeatState {
 pub enum JobHeartbeatPhase {
     Running,
     CancelRequested,
+    CleanupPending,
     Quiesced,
     ResultRecorded,
 }
@@ -62,6 +63,7 @@ pub enum JobCancellationState {
     NotRequested,
     Requested,
     Escalated,
+    CleanupBlocked,
     Quiesced,
 }
 

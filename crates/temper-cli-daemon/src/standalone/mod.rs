@@ -13,6 +13,7 @@
 
 mod agent_runner;
 mod banner;
+mod shutdown_signal;
 mod trace_config;
 mod transport;
 mod workstream_cleanup;
@@ -44,7 +45,7 @@ use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
 use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, RoleGitIdentity,
-    WorkerAgentTraceConfig, WorkerConfig, run_worker_with_transport,
+    WorkerAgentTraceConfig, WorkerConfig, start_worker_with_transport,
 };
 use temper_worker_service::selected_worker_auth;
 use temper_workflow::LeasePolicy;
@@ -366,10 +367,7 @@ async fn run_async(
         .with_pr_freshness_guard(pr_freshness_guard),
     );
 
-    let worker_handle = handle.clone();
-    handle.spawn_with_cx(move |_cx| async move {
-        let _ = run_worker_with_transport(worker_handle, worker_config, executor, transport).await;
-    });
+    let worker = start_worker_with_transport(handle.clone(), worker_config, executor, transport);
 
     // §7 planes-up line (engine + worker + agent all on this loop) and the
     // workflow's global per-role concurrency limits.
@@ -431,23 +429,24 @@ async fn run_async(
     // repos. This is the operator-facing "ready" the boot block closes on.
     emit_engine_status(banner::ready(&repo_paths));
 
-    let mut sigint = skein::signal::sigint()
-        .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
-    let mut sigterm = skein::signal::sigterm()
-        .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
-    std::future::poll_fn(|task_cx| {
-        if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
-            std::task::Poll::Ready(())
-        } else {
-            std::task::Poll::Pending
-        }
-    })
-    .await;
-    if let Some(trace_retention) = trace_retention {
-        trace_retention.stop().await;
-    }
-    daemon.release_assignments_for_shutdown().await;
+    shutdown_signal::wait().await?;
+    // Close dispatch and HTTP after the signal but before worker proof; release
+    // assignments only after the active-attempt registry has joined.
+    daemon.begin_shutdown().await;
     server.begin_drain(std::time::Duration::from_secs(5));
+    temper_worker::shutdown_worker_after_signal(
+        std::future::ready(()),
+        std::future::ready(()),
+        worker,
+        async {
+            if let Some(trace_retention) = trace_retention {
+                trace_retention.stop().await;
+            }
+            daemon.release_assignments_for_shutdown().await;
+            server.finish_drain().await;
+        },
+    )
+    .await;
     Ok(())
 }
 

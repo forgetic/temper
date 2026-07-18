@@ -92,6 +92,11 @@ pub(super) enum DaemonCompletion {
     StartupRecoveryGraceElapsed {
         reply: temper_engine_io::OneshotSender<()>,
     },
+    /// Close dispatch admission and release all outstanding long-poll waiters
+    /// without releasing durable assignments.
+    BeginShutdown {
+        reply: temper_engine_io::OneshotSender<()>,
+    },
     ReleaseAssignmentsForShutdown {
         reply: temper_engine_io::OneshotSender<()>,
     },
@@ -322,6 +327,8 @@ pub(super) struct DaemonMachine {
     /// Closed while durable assignments are inventoried and offered a bounded
     /// heartbeat reattachment grace period.
     pub(super) startup_recovery: bool,
+    /// Closed before standalone HTTP drain to prevent another assignment.
+    pub(super) shutting_down: bool,
     pub(super) deferred_enqueues: Vec<DeferredEnqueue>,
     pub(super) assignment_contexts: BTreeMap<String, crate::applier::ClaimContext>,
     pub(super) artifact_catalog: crate::ConfiguredRepositoryCatalog,
@@ -391,6 +398,7 @@ impl DaemonMachine {
             now: EngineTime::ZERO,
             daemon_boot_id,
             startup_recovery: false,
+            shutting_down: false,
             deferred_enqueues: Vec::new(),
             assignment_contexts: BTreeMap::new(),
             artifact_catalog: crate::ConfiguredRepositoryCatalog::default(),
@@ -452,6 +460,9 @@ impl DaemonMachine {
     }
 
     pub(super) fn schedule_wake(&mut self, request: WakeRequest) -> Vec<DaemonRequest> {
+        if self.shutting_down {
+            return Vec::new();
+        }
         let apply_active = !self.applying.is_empty();
         let decisions =
             if request.lanes.is_empty() && request.scope.broad_mode() == Some(BroadMode::Startup) {
@@ -529,7 +540,7 @@ impl Machine for DaemonMachine {
                 trusted_transport,
             } => self.handle_http(request, responder, trusted_transport),
             DaemonCompletion::PollDeadline { id } => {
-                if self.startup_recovery {
+                if self.startup_recovery || self.shutting_down {
                     return Vec::new();
                 }
                 let Some(waiter) = self.waiters.remove(&id) else {
@@ -567,6 +578,9 @@ impl Machine for DaemonMachine {
                     }];
                 }
                 match outcome {
+                    ClaimOutcome::Claimed if self.shutting_down => {
+                        self.rollback_shutdown_claim(assign, responder, context)
+                    }
                     ClaimOutcome::Claimed => {
                         if self.core.commit_assignment(&assign.job_id).is_ok() {
                             self.assignment_contexts
@@ -687,16 +701,9 @@ impl Machine for DaemonMachine {
                 reply.send(());
                 Vec::new()
             }
+            DaemonCompletion::BeginShutdown { reply } => self.begin_shutdown(reply),
             DaemonCompletion::ReleaseAssignmentsForShutdown { reply } => {
-                let jobs = self.core.in_flight_jobs();
-                let mut assignments = Vec::new();
-                for job in jobs {
-                    if let Some(context) = self.assignment_contexts.remove(&job.job_id) {
-                        self.core.coordinator_mut().complete(&job.job_id).ok();
-                        assignments.push((job, context));
-                    }
-                }
-                vec![DaemonRequest::RunShutdownRelease { assignments, reply }]
+                self.release_assignments_for_shutdown(reply)
             }
             DaemonCompletion::TraceRetentionProtection(reply) => {
                 reply.send(crate::RetentionProtection {

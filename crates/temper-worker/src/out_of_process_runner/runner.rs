@@ -52,6 +52,7 @@ impl OutOfProcessRunner {
         let outcome = self
             .run_agent(
                 job_id,
+                &request.attempt_id,
                 context,
                 cwd,
                 trace.as_ref(),

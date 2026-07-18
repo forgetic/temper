@@ -358,6 +358,9 @@ fn units_use_public_serve_commands_and_the_bundled_credentials() {
         "{}",
         worker_command[0]
     );
+    assert_eq!(worker.values("Service", "Delegate"), vec!["yes"]);
+    assert_eq!(worker.values("Service", "KillMode"), vec!["control-group"]);
+    assert_eq!(worker.values("Service", "TimeoutStopSec"), vec!["5min"]);
 
     for path in [engine_path, worker_path] {
         let unit = read(&path);
@@ -365,6 +368,39 @@ fn units_use_public_serve_commands_and_the_bundled_credentials() {
             assert!(
                 !unit.contains(forbidden),
                 "{} contains legacy trigger/runtime onboarding `{forbidden}`",
+                path.display()
+            );
+        }
+    }
+
+    let deployment_docs = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/how-to/deploy-with-systemd.md"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/reference/production-worker.md"),
+    ];
+    for path in deployment_docs {
+        let documentation = read(&path);
+        for required in [
+            "Delegate=yes",
+            "KillMode=control-group",
+            "cgroup-v2",
+            "pidfd",
+            "subreaper",
+            "recursive-empty",
+        ] {
+            assert!(
+                documentation.contains(required),
+                "{} lacks containment contract `{required}`",
+                path.display()
+            );
+        }
+        for obsolete in [
+            "Process-group cleanup is the normal",
+            "process group supervisor",
+            "process groups are descendant-complete",
+        ] {
+            assert!(
+                !documentation.contains(obsolete),
+                "{} retains obsolete descendant claim `{obsolete}`",
                 path.display()
             );
         }
