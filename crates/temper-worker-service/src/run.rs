@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use temper_config::Resolved;
 use temper_worker::{
-    CodingExecutor, CodingExecutorConfig, HttpTransport, OutOfProcessRunner,
-    start_worker_with_transport,
+    CodingExecutor, CodingExecutorConfig, HttpTransport, OutOfProcessRunner, TraceCollector,
+    start_worker_with_transport_and_trace_collector,
 };
 
 use crate::adapt;
@@ -52,6 +52,7 @@ async fn run_async(
         )
     );
     let transport = Arc::new(HttpTransport::new(&worker_config.daemon_url));
+    let trace_collector = TraceCollector::new(worker_config.agent_traces.clone());
     let forge_context = temper_worker::forge_context_host(
         Arc::clone(&transport),
         cx,
@@ -65,7 +66,7 @@ async fn run_async(
             .with_runtime_limits(invocation.runtime_limits)
             .with_liveness_limits(worker_config.liveness_limits)
             .with_trace_policy(invocation.trace_policy)
-            .with_trace_collector(worker_config.agent_traces.clone())
+            .with_shared_trace_collector(trace_collector.clone())
             .with_forge_context_host(forge_context),
     );
 
@@ -82,7 +83,13 @@ async fn run_async(
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
     let mut sigterm = skein::signal::sigterm()
         .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
-    let worker = start_worker_with_transport(handle, worker_config, executor, transport);
+    let worker = start_worker_with_transport_and_trace_collector(
+        handle,
+        worker_config,
+        executor,
+        transport,
+        trace_collector,
+    );
     let signal = async move {
         std::future::poll_fn(|task_cx| {
             if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {

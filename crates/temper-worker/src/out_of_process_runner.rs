@@ -215,10 +215,19 @@ impl OutOfProcessRunner {
         self
     }
 
-    /// Configures worker-owned run collection and its durable spool.
+    /// Configures worker-owned run collection from configuration.
+    ///
+    /// This compatibility builder creates an independent collector. Product
+    /// composition roots should prefer [`Self::with_shared_trace_collector`].
     #[must_use]
-    pub fn with_trace_collector(mut self, config: WorkerAgentTraceConfig) -> Self {
-        self.trace_collector = TraceCollector::new(config);
+    pub fn with_trace_collector(self, config: WorkerAgentTraceConfig) -> Self {
+        self.with_shared_trace_collector(TraceCollector::new(config))
+    }
+
+    /// Uses a clone-shared worker-owned collector for this producer.
+    #[must_use]
+    pub fn with_shared_trace_collector(mut self, collector: TraceCollector) -> Self {
+        self.trace_collector = collector;
         self
     }
 

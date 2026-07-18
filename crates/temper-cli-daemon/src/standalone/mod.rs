@@ -45,7 +45,8 @@ use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
 use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, RoleGitIdentity,
-    WorkerAgentTraceConfig, WorkerConfig, start_worker_with_transport,
+    TraceCollector, WorkerAgentTraceConfig, WorkerConfig,
+    start_worker_with_transport_and_trace_collector as start_shared_worker,
 };
 use temper_worker_service::selected_worker_auth;
 use temper_workflow::LeasePolicy;
@@ -331,6 +332,7 @@ async fn run_async(
 
     let pr_freshness_guard = Arc::new(InProcessPrFreshnessGuard::new(daemon.clone()));
     let transport = Arc::new(InProcessTransport::new(daemon.clone()));
+    let traces = TraceCollector::new(worker_config.agent_traces.clone());
     let forge_context = temper_worker::forge_context_host(
         Arc::clone(&transport),
         cx,
@@ -350,7 +352,7 @@ async fn run_async(
             resolved,
         )?)
         .with_trace_policy(worker_config.agent_traces.policy.clone())
-        .with_trace_collector(worker_config.agent_traces.clone())
+        .with_shared_trace_collector(traces.clone())
         .with_forge_context_host(forge_context),
     );
     let executor = Arc::new(
@@ -367,7 +369,7 @@ async fn run_async(
         .with_pr_freshness_guard(pr_freshness_guard),
     );
 
-    let worker = start_worker_with_transport(handle.clone(), worker_config, executor, transport);
+    let worker = start_shared_worker(handle.clone(), worker_config, executor, transport, traces);
 
     // §7 planes-up line (engine + worker + agent all on this loop) and the
     // workflow's global per-role concurrency limits.

@@ -23,17 +23,24 @@ use temper_protocol_agent::WorkspaceContext;
 use temper_protocol_worker::FailureClass;
 use thiserror::Error;
 
+#[cfg(test)]
 use crate::config::WorkerAgentTraceConfig;
 
 mod accept;
+mod coordination;
+#[cfg(test)]
+mod coordination_tests;
 mod endpoint;
 #[cfg(test)]
 mod endpoint_tests;
 mod forward;
 mod forwarder;
 mod model;
+mod run_acknowledgement;
 mod scope;
 mod spool;
+use coordination::TraceCoordination;
+pub use coordination::{DirtyTraceRun, DirtyTraceRuns, TraceCollector, TraceCoordinationSnapshot};
 pub use endpoint::ActivityEndpoint;
 pub(crate) use forwarder::spawn_activity_forwarder;
 use model::*;
@@ -108,23 +115,7 @@ pub enum TraceError {
     InvalidAcknowledgement { acknowledged: u64, last_seq: u64 },
 }
 
-/// Factory for new worker-stamped runs and restart recovery.
-#[derive(Clone, Debug)]
-pub struct TraceCollector {
-    config: WorkerAgentTraceConfig,
-}
-
-impl Default for TraceCollector {
-    fn default() -> Self {
-        Self::new(WorkerAgentTraceConfig::default())
-    }
-}
-
 impl TraceCollector {
-    pub fn new(config: WorkerAgentTraceConfig) -> Self {
-        Self { config }
-    }
-
     /// Starts one run. Capture `off` intentionally returns `Ok(None)` and does
     /// not create a spool directory.
     pub fn begin_run(
@@ -141,7 +132,14 @@ impl TraceCollector {
                 "capture is enabled but no durable worker spool root is configured".to_string(),
             )
         })?;
-        TraceRun::create(root, self.config.policy.clone(), job_id, context).map(Some)
+        TraceRun::create(
+            root,
+            self.config.policy.clone(),
+            job_id,
+            context,
+            Arc::clone(&self.coordination),
+        )
+        .map(Some)
     }
 
     /// Recovers every complete JSONL record, blob, and acknowledgement cursor.
@@ -154,7 +152,7 @@ impl TraceCollector {
         if !root.exists() {
             return Ok(Vec::new());
         }
-        set_private_dir(root)?;
+        repair_spool_root_permissions(root)?;
         let mut run_dirs = read_dir(root)?
             .filter_map(Result::ok)
             .filter_map(|entry| match entry.file_type() {
@@ -186,6 +184,7 @@ struct TraceRunInner {
     lock_file: File,
     started: Instant,
     state: Mutex<RunState>,
+    coordination: Arc<TraceCoordination>,
 }
 
 struct RunState {
@@ -194,6 +193,7 @@ struct RunState {
     used_bytes: u64,
     terminal_reserve: u64,
     acknowledged_seq: u64,
+    event_end_offsets: Vec<u64>,
     terminal: bool,
     disabled: bool,
     scopes: BTreeMap<String, AgentScopeV1>,
@@ -219,6 +219,7 @@ impl TraceRun {
         policy: AgentActivityCapturePolicyV1,
         job_id: &str,
         context: &WorkspaceContext,
+        coordination: Arc<TraceCoordination>,
     ) -> Result<Self, TraceError> {
         create_private_dir_all(root)?;
         let (root_lock_path, root_lock_file) = open_spool_root_lock(root)?;
@@ -302,6 +303,7 @@ impl TraceRun {
                         used_bytes,
                         terminal_reserve,
                         acknowledged_seq: 0,
+                        event_end_offsets: Vec::new(),
                         terminal: false,
                         disabled: false,
                         scopes,
@@ -310,6 +312,7 @@ impl TraceRun {
                         accepted_child_records: BTreeMap::new(),
                         accepted_prompts: BTreeMap::new(),
                     }),
+                    coordination,
                 }),
             };
             fs2::FileExt::unlock(&run.inner.lock_file)
@@ -436,41 +439,6 @@ impl TraceRun {
         }))
     }
 
-    /// Atomically advances the durable forwarding cursor. Retransmitted or
-    /// lower acknowledgements are idempotent; a cursor beyond durable data is rejected.
-    pub fn acknowledge(&self, highest_contiguous_seq: u64) -> Result<(), TraceError> {
-        let mut state = self.inner.state.lock().expect("trace run state lock");
-        if state.disabled {
-            return Err(TraceError::Disabled);
-        }
-        let last_seq = state.next_seq.saturating_sub(1);
-        if highest_contiguous_seq > last_seq {
-            return Err(TraceError::InvalidAcknowledgement {
-                acknowledged: highest_contiguous_seq,
-                last_seq,
-            });
-        }
-        if highest_contiguous_seq <= state.acknowledged_seq {
-            return Ok(());
-        }
-        let cursor = TraceAckCursorV1::new(&self.inner.manifest.run_id, highest_contiguous_seq);
-        let bytes = serde_json::to_vec_pretty(&cursor)?;
-        lock_spool(&self.inner)?;
-        if let Err(error) = atomic_write(&self.inner.cursor_path, &bytes, true) {
-            let _ = unlock_spool(&self.inner);
-            state.disabled = true;
-            return Err(error);
-        }
-        unlock_spool(&self.inner)?;
-        state.acknowledged_seq = highest_contiguous_seq;
-        let compact_terminal = state.terminal && highest_contiguous_seq == last_seq;
-        drop(state);
-        if compact_terminal {
-            acknowledge_recovered_run(&self.inner.run_dir, highest_contiguous_seq)?;
-        }
-        Ok(())
-    }
-
     fn finish(&self, event: AgentActivityEventV1) -> Result<u64, TraceError> {
         let mut state = self.inner.state.lock().expect("trace run state lock");
         if state.terminal {
@@ -552,7 +520,7 @@ fn append_event(
     let write_result = state
         .event_file
         .write_all(&bytes)
-        .and_then(|()| state.event_file.sync_data());
+        .and_then(|()| sync_file_data(&state.event_file));
     if let Err(source) = write_result {
         let _ = unlock_spool(inner);
         state.disabled = true;
@@ -563,6 +531,14 @@ fn append_event(
         ));
     }
     unlock_spool(inner)?;
+    state.event_end_offsets.push(
+        state
+            .event_end_offsets
+            .last()
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+    );
     state.used_bytes = state
         .used_bytes
         .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
@@ -571,6 +547,7 @@ fn append_event(
         .scopes
         .entry(event.scope.id.clone())
         .or_insert_with(|| event.scope.clone());
+    inner.coordination.publish_append(&inner.manifest.run_id);
     Ok(())
 }
 
@@ -614,6 +591,9 @@ fn ensure_quota(
 }
 
 #[cfg(test)]
+mod forward_index_tests;
+
+#[cfg(test)]
 mod full_path_fixture;
 
 #[cfg(test)]
@@ -627,6 +607,9 @@ mod full_path_tests;
 
 #[cfg(test)]
 mod prompt_tests;
+
+#[cfg(test)]
+mod spool_idle_tests;
 
 #[cfg(test)]
 mod tests;
