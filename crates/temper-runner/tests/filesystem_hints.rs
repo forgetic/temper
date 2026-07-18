@@ -367,7 +367,12 @@ fn dropped_mechanical_landing_hint_still_converges_by_polling() {
     let mut hints = root.forge().subscribe_hints();
     let workflow = workflow();
     let journal = InMemoryJournal::new();
-    let worker = MechanicalWorker::new(&workflow, &writer, &repo, &journal, lease_policy());
+    let mechanical = MechanicalWorker::new(&workflow, &writer, &repo, &journal, lease_policy());
+    let completed_ticks = Arc::new(AtomicU64::new(0));
+    let worker = TickObservedWorker {
+        inner: mechanical,
+        completed_ticks: completed_ticks.clone(),
+    };
     let observer = root.forge();
     let pr_id = pr.id.clone();
     let loop_ = WakeablePollLoop::new(&worker, WakeTarget::Mechanical, Duration::milliseconds(150));
@@ -381,7 +386,7 @@ fn dropped_mechanical_landing_hint_still_converges_by_polling() {
             ))
         });
 
-        std::thread::sleep(StdDuration::from_millis(50));
+        wait_for_completed_tick(&completed_ticks);
         seed_successful_ci(&writer, &repo, &pr);
 
         let report = handle
