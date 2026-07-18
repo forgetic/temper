@@ -120,25 +120,19 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
     }
 }
 
-/// Owns the per-repo journals and forge/workflow handles, and runs mechanical
-/// passes — either the full backstop (all repos) or a webhook-hinted pass (only
-/// the named repos). Cloneable and `Send + Sync` so the cadence loop and the
-/// webhook scanner share one set of journals.
+/// Owns the per-repository journals and forge/workflow handles used to execute
+/// mechanical work already admitted by the daemon `WakeCoordinator`.
 ///
-/// Passes are **coalesced**: while one pass is running, a concurrently requested
-/// pass is skipped rather than interleaved. The in-flight (or next backstop)
-/// pass re-reads fresh forge state and so subsumes the skipped one — matching the
-/// ADR 0009 "coalesce bursts" guidance and keeping the per-repo journals free of
-/// concurrent mutation on the single-threaded engine.
+/// This type intentionally has no admission or coalescing state. The daemon
+/// coordinator is the sole production owner of pending, in-flight, dirty, and
+/// apply-deferred work, so every admitted call is executed rather than skipped
+/// behind a second boolean guard.
 pub struct MechanicalTrigger<F: Forge + Send + Sync + ?Sized + 'static> {
     forge: Arc<F>,
     workflow: Arc<ValidatedWorkflow>,
     config: MechanicalBackstopConfig,
     journals: Arc<Vec<InMemoryJournal>>,
     clock: crate::WallClock,
-    /// Coalescing guard: `true` while a pass is in flight. A requested pass that
-    /// finds it already set returns immediately (the running pass covers it).
-    running: Arc<std::sync::Mutex<bool>>,
 }
 
 impl<F: Forge + Send + Sync + ?Sized + 'static> Clone for MechanicalTrigger<F> {
@@ -149,7 +143,6 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> Clone for MechanicalTrigger<F> {
             config: self.config.clone(),
             journals: Arc::clone(&self.journals),
             clock: self.clock.clone(),
-            running: Arc::clone(&self.running),
         }
     }
 }
@@ -176,50 +169,18 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
             config,
             journals,
             clock,
-            running: Arc::new(std::sync::Mutex::new(false)),
         }
     }
 
-    /// Runs one pass over `scope`, coalescing against any in-flight pass.
+    /// Runs one pass admitted by the daemon coordinator.
     ///
-    /// Returns `false` without running when a pass is already in flight (the
-    /// running pass subsumes this request); otherwise runs the pass and returns
-    /// `true`. Tick errors are logged inside [`run_mechanical_backstop_tick`].
-    pub async fn run(&self, scope: MechanicalScope) -> bool {
-        // Claim the guard; bail if a pass is already running. The lock is held
-        // only for the flag flip, never across the await.
-        {
-            let mut running = self
-                .running
-                .lock()
-                .expect("mechanical running flag poisoned");
-            if *running {
-                return false;
-            }
-            *running = true;
-        }
-        let now = (self.clock)();
-        let _ = run_mechanical_backstop_tick(
-            self.forge.as_ref(),
-            self.workflow.as_ref(),
-            now,
-            &self.config,
-            &self.journals,
-            &scope,
-        )
-        .await;
-        *self
-            .running
-            .lock()
-            .expect("mechanical running flag poisoned") = false;
-        true
-    }
-
-    /// Runs coordinator-admitted work without the standalone boolean guard.
-    /// The daemon coordinator already owns pending/in-flight/dirty semantics,
-    /// including the mandatory dirty follow-up that a skip-on-busy flag would
-    /// otherwise lose.
-    pub async fn run_coordinated(&self, scope: MechanicalScope) -> Result<Progress, WorkerError> {
+    /// The coordinator already owns pending/in-flight/dirty semantics,
+    /// including the mandatory dirty follow-up for hints received after a
+    /// generation starts.
+    pub(crate) async fn run_coordinated(
+        &self,
+        scope: MechanicalScope,
+    ) -> Result<Progress, WorkerError> {
         let now = (self.clock)();
         run_mechanical_backstop_tick(
             self.forge.as_ref(),
@@ -230,16 +191,6 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
             &scope,
         )
         .await
-    }
-
-    /// Accelerator entry point: run a pass covering only the hinted repositories.
-    /// Called from the webhook path so an event triggers immediate mechanical
-    /// reconciliation for the affected repo (ADR 0009 edge-trigger).
-    pub async fn run_hinted(&self, hints: Vec<ChangeHint>) -> bool {
-        if hints.is_empty() {
-            return false;
-        }
-        self.run(MechanicalScope::Hinted(hints)).await
     }
 }
 
@@ -265,32 +216,6 @@ pub fn spawn_coordinated_mechanical_backstop(
             }
         }
     });
-}
-
-/// Owns the per-repo journals and runs the mechanical backstop until the
-/// runtime shuts down, as a machine-driven cadence loop on the engine. Returns a
-/// [`MechanicalTrigger`] sharing the same journals so a webhook can run an
-/// immediate hinted pass between the (slow) backstop ticks.
-///
-/// Tick errors are logged by [`run_mechanical_backstop_tick`] and skipped so a
-/// transient backend failure does not stop the daemon-owned backstop.
-pub fn spawn_mechanical_backstop<F: Forge + Send + Sync + ?Sized + 'static>(
-    spawner: &std::sync::Arc<dyn temper_engine_io::Spawner>,
-    forge: std::sync::Arc<F>,
-    workflow: std::sync::Arc<ValidatedWorkflow>,
-    config: MechanicalBackstopConfig,
-    clock: crate::WallClock,
-) -> MechanicalTrigger<F> {
-    let cadence = config.cadence;
-    let trigger = MechanicalTrigger::new(forge, workflow, config, clock);
-    let loop_trigger = trigger.clone();
-    temper_engine_io::spawn_cadence_loop(spawner, cadence, move || {
-        let trigger = loop_trigger.clone();
-        async move {
-            trigger.run(MechanicalScope::All).await;
-        }
-    });
-    trigger
 }
 
 fn setup_error(message: String) -> WorkerError {

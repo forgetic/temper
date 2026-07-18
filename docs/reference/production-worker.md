@@ -160,10 +160,31 @@ next_poll_ms=<n> idle_no_action_ticks=<n>
 ```
 
 Use these counters to verify hint narrowing (`wake` for repo A should list repo
-A only for role workers) and to spot unexpected broad scans. Mechanical workers
-also emit `mechanical_reconciliation_summary` with `mode`, `snapshot_count`,
-`finding_count`, and applied/advisory action counts. Normal mechanical ticks emit
-`mechanical_automation_execution` per automated item and
+A only for role workers) and to spot unexpected broad scans. Coordinated engine
+runs additionally distinguish `wake.phase=start` / `wake.outcome=started` from
+`wake.phase=finish` / `wake.outcome=completed`; failed finishes retain their
+error and timing fields.
+
+At worker debug level, every mechanical phase that starts emits one terminal
+`measurement=mechanical.phase` record. Filter on `mechanical.phase` for
+`reconciliation`, `automated_scan`, or `transition_application`, then compare
+numeric `duration_ms` and `provider.request_total`. `mechanical.scope` is
+`broad` or `targeted`, exact work includes `artifact.ref`, and all records inherit
+the enclosing `wake.run_id`. `provider.requests_available=false` means the
+backend has no portable request counter; use Forge HTTP `operation` records with
+the same wake id instead.
+
+`gate.evaluated` is also debug: repeated lines are repeatable read-side
+observations, not merge execution. Actual direct merge execution is paired as
+`measurement=mechanical.landing_attempt`: `landing.outcome=started` followed by
+a duration-bearing terminal `applied`, `gate_not_satisfied`,
+`conflict_routed`, `stale`, or `failed`. If an eligible gate appears without an
+attempt, confirm the compiled transition contains `merge_pull_request`; non-merge
+automation intentionally emits no attempt.
+
+Mechanical workers also emit `mechanical_reconciliation_summary` with `mode`,
+`snapshot_count`, `finding_count`, and applied/advisory action counts. Normal
+mechanical ticks emit `mechanical_automation_execution` per automated item and
 `mechanical_automation_summary` with candidate, applied, unchanged,
 gate-not-satisfied, and error counts. When `TEMPER_FORGEJO_CI_DIAGNOSTICS` is set
 to a non-blank value, Forgejo web-UI CI fallback reads are logged as

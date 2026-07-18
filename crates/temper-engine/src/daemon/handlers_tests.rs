@@ -255,9 +255,9 @@ fn forgejo_action_run_success_webhook_is_accepted() {
         .expect("role lane receives CI target");
     assert_eq!(
         scope.targets(),
-        Some(&BTreeMap::from([(
+        &BTreeMap::from([(
             (HintArtifactKind::PullRequest, ItemNumber::new(23)),
             ChangeKind::Ci,
-        )]))
+        )])
     );
 }

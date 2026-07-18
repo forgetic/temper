@@ -11,163 +11,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use temper_engine_io::EngineTime;
-use temper_forge::{
-    ChangeHint, ChangeKind, HintArtifactKind, HintTarget, ItemNumber, RepositoryPath,
-};
-use temper_workflow::RoleId;
+use temper_forge::{ChangeHint, ChangeKind, HintArtifactKind, ItemNumber, RepositoryPath};
 
-pub(crate) const MAX_TARGETED_ARTIFACTS: usize = 32;
+#[cfg(test)]
+pub(crate) use super::wake_scope::MAX_TARGETED_ARTIFACTS;
+pub(crate) use super::wake_scope::{
+    BroadMode, MergeResult, WakeBatch, WakeLane, WakeScope, WakeTargets, merge_change_kind,
+    prioritized_targets,
+};
+
 pub(crate) const DEFAULT_MAX_IN_FLIGHT_REPOSITORIES: usize = 2;
 pub(crate) const DEFAULT_WAKE_DEBOUNCE: Duration = Duration::from_millis(10);
-
-pub(crate) type WakeArtifactAddress = (HintArtifactKind, ItemNumber);
-
-/// Independently compacted work within one repository run.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum WakeLane {
-    Role(RoleId),
-    Mechanical,
-}
-
-/// Why targeted addresses were subsumed by a repository-wide wake.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum BroadMode {
-    Repository,
-    Unknown,
-    Push,
-    Recovery,
-    Poll,
-    Startup,
-    Overflow,
-}
-
-/// Bounded work scope for one lane.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WakeScope {
-    Targeted(BTreeMap<WakeArtifactAddress, ChangeKind>),
-    Broad(BroadMode),
-}
-
-impl WakeScope {
-    fn from_hint(hint: &ChangeHint) -> Self {
-        match (hint.target, hint.change) {
-            (_, ChangeKind::Push) => Self::Broad(BroadMode::Push),
-            (_, ChangeKind::Unknown) => Self::Broad(BroadMode::Unknown),
-            (HintTarget::Repository, _) => Self::Broad(BroadMode::Repository),
-            (HintTarget::Artifact { kind, number }, change) => {
-                Self::Targeted(BTreeMap::from([((kind, number), change)]))
-            }
-        }
-    }
-
-    pub(crate) fn targeted(kind: HintArtifactKind, number: ItemNumber, change: ChangeKind) -> Self {
-        Self::Targeted(BTreeMap::from([((kind, number), change)]))
-    }
-
-    pub(crate) fn target_count(&self) -> usize {
-        match self {
-            Self::Targeted(targets) => targets.len(),
-            Self::Broad(_) => 0,
-        }
-    }
-
-    pub(crate) fn targets(&self) -> Option<&BTreeMap<WakeArtifactAddress, ChangeKind>> {
-        match self {
-            Self::Targeted(targets) => Some(targets),
-            Self::Broad(_) => None,
-        }
-    }
-
-    pub(crate) fn broad_mode(&self) -> Option<BroadMode> {
-        match self {
-            Self::Targeted(_) => None,
-            Self::Broad(mode) => Some(*mode),
-        }
-    }
-}
-
-/// Lane-specific work compacted into one repository execution.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WakeBatch {
-    lanes: BTreeMap<WakeLane, WakeScope>,
-}
-
-impl WakeBatch {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.lanes.is_empty()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.lanes.len()
-    }
-
-    pub(crate) fn target_count(&self) -> usize {
-        self.lanes.values().map(WakeScope::target_count).sum()
-    }
-
-    pub(crate) fn lanes(&self) -> &BTreeMap<WakeLane, WakeScope> {
-        &self.lanes
-    }
-
-    pub(crate) fn scope(&self, lane: &WakeLane) -> Option<&WakeScope> {
-        self.lanes.get(lane)
-    }
-
-    fn merge_scope(&mut self, lane: WakeLane, incoming: WakeScope) -> MergeResult {
-        let Some(existing) = self.lanes.get_mut(&lane) else {
-            self.lanes.insert(lane, incoming);
-            return MergeResult::Accepted;
-        };
-
-        match existing {
-            WakeScope::Broad(existing_mode) => {
-                if let WakeScope::Broad(incoming_mode) = incoming {
-                    *existing_mode = (*existing_mode).max(incoming_mode);
-                }
-                MergeResult::Coalesced
-            }
-            WakeScope::Targeted(existing_targets) => match incoming {
-                WakeScope::Broad(mode) => {
-                    *existing = WakeScope::Broad(mode);
-                    MergeResult::BroadPromoted(mode)
-                }
-                WakeScope::Targeted(incoming_targets) => {
-                    let mut accepted = false;
-                    for (address, change) in incoming_targets {
-                        if let Some(existing_change) = existing_targets.get_mut(&address) {
-                            *existing_change = (*existing_change).max(change);
-                            continue;
-                        }
-                        if existing_targets.len() == MAX_TARGETED_ARTIFACTS {
-                            *existing = WakeScope::Broad(BroadMode::Overflow);
-                            return MergeResult::BroadPromoted(BroadMode::Overflow);
-                        }
-                        existing_targets.insert(address, change);
-                        accepted = true;
-                    }
-                    if accepted {
-                        MergeResult::Accepted
-                    } else {
-                        MergeResult::Coalesced
-                    }
-                }
-            },
-        }
-    }
-
-    fn merge_batch(&mut self, incoming: WakeBatch) {
-        for (lane, scope) in incoming.lanes {
-            self.merge_scope(lane, scope);
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MergeResult {
-    Accepted,
-    Coalesced,
-    BroadPromoted(BroadMode),
-}
 
 /// One scheduling submission. An empty `lanes` set means all configured lanes
 /// for the repository; explicit lanes are intersected with that configured set.
@@ -192,7 +46,7 @@ impl WakeRequest {
         Self {
             repo,
             lanes: BTreeSet::new(),
-            scope: WakeScope::Broad(mode),
+            scope: WakeScope::broad(mode),
         }
     }
 
@@ -203,7 +57,7 @@ impl WakeRequest {
         Self {
             repo,
             lanes: lanes.into_iter().collect(),
-            scope: WakeScope::Broad(mode),
+            scope: WakeScope::broad(mode),
         }
     }
 
@@ -684,7 +538,7 @@ impl WakeCoordinator {
                     repo: state.repo.clone(),
                 });
             } else {
-                let lanes = dirty.lanes.keys().cloned().collect();
+                let lanes = dirty.lanes().keys().cloned().collect();
                 state.pending.merge_batch(dirty);
                 state.pending_since = earliest(state.pending_since, dirty_since);
                 let generation = state.next_generation();
@@ -763,6 +617,10 @@ fn earliest(left: Option<EngineTime>, right: Option<EngineTime>) -> Option<Engin
         (None, None) => None,
     }
 }
+
+#[cfg(test)]
+#[path = "wake_coordinator_scope_tests.rs"]
+mod scope_tests;
 
 #[cfg(test)]
 #[path = "wake_coordinator_tests.rs"]

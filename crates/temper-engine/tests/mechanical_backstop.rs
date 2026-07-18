@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use temper_engine::{
-    MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger, run_mechanical_backstop_tick,
+    CoordinatedMechanical, MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger,
+    run_mechanical_backstop_tick,
 };
 use temper_forge::{
     ChangeHint, ChangeKind, CreateIssue, CreateRepository, Forge, HintArtifactKind, IssueState,
@@ -307,7 +308,7 @@ fn targeted_mechanical_wake_does_not_mutate_staged_artifact() {
 }
 
 #[test]
-fn mechanical_trigger_run_hinted_accelerates_the_named_repo() {
+fn mechanical_trigger_executes_only_coordinator_admitted_broad_work() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge).await;
@@ -325,12 +326,10 @@ fn mechanical_trigger_run_hinted_accelerates_the_named_repo() {
         let trigger =
             MechanicalTrigger::new(Arc::clone(&forge), Arc::new(workflow()), config, clock);
 
-        // An empty hint set is not a pass (webhooks always carry a repo).
-        assert!(!trigger.run_hinted(Vec::new()).await);
-
-        // A hint for the configured repo runs the pass and applies the unblock —
-        // the same outcome the (slow) backstop would eventually produce, now.
-        assert!(trigger.run_hinted(vec![hint("acme", "service")]).await);
+        trigger
+            .run_coordinated_broad(RepositoryPath::new("acme", "service"))
+            .await
+            .expect("coordinator-admitted broad pass succeeds");
         assert_eq!(
             issue_labels(&forge, &repo.id, blocked).await,
             vec!["code".to_string(), "ready".to_string()]

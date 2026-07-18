@@ -1,12 +1,14 @@
+mod landing_attempt;
+
+use self::landing_attempt::LandingAttempt;
 use super::{Progress, PullRequestMergeObserver, WorkerError, saturating_u64};
 use crate::ExternalToolExecutors;
 use crate::observability::{
     artifact_ref, execution_error_diagnostic_classes, execution_error_failure_class, labels_delta,
     queue_after_transition,
 };
-use crate::scan::{AutomatedWorkItem, scan_automated_queues};
+use crate::scan::AutomatedWorkItem;
 use crate::workspace_automation::{WorkspaceAutomationOutcome, execute_workspace_automation};
-use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use temper_forge::{Forge, ItemNumber, RepositoryId};
 use temper_log::emit::{
@@ -37,6 +39,7 @@ impl AutomationCounts {
     }
 }
 
+#[derive(Clone, Copy)]
 enum ExpectedPreconditionOutcome {
     Unchanged,
     GateNotSatisfied,
@@ -48,41 +51,6 @@ struct AutomationContext<'a> {
     repo: &'a RepositoryId,
     workflow_id: &'a str,
     compiled: &'a CompiledWorkflow,
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
-    worker: &str,
-    repo: &RepositoryId,
-    workflow: &ValidatedWorkflow,
-    compiled: &CompiledWorkflow,
-    executor: &Executor<'_, F>,
-    executors: &ExternalToolExecutors,
-    forge: &F,
-    now: DateTime<Utc>,
-    pull_request_merge_observer: Option<&Arc<dyn PullRequestMergeObserver>>,
-) -> Result<Progress, WorkerError> {
-    if !compiled
-        .queues()
-        .iter()
-        .any(|queue| queue.automation.is_some())
-    {
-        return Ok(Progress::unchanged());
-    }
-
-    let items = scan_automated_queues(forge, repo, workflow, compiled, now).await?;
-    execute_automated_items(
-        worker,
-        repo,
-        workflow,
-        compiled,
-        executor,
-        executors,
-        forge,
-        items,
-        pull_request_merge_observer,
-    )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -124,11 +92,15 @@ pub(crate) async fn execute_automated_items<F: Forge + ?Sized>(
             .await?;
             continue;
         }
+        let landing_attempt = LandingAttempt::start(repo, compiled, &item);
         match executor
             .execute(repo, item.target, &item.transition, &item.actor)
             .await
         {
             Ok(report) => {
+                if let Some(attempt) = &landing_attempt {
+                    attempt.finish("applied");
+                }
                 counts.applied = counts.applied.saturating_add(1);
                 progress.record(true);
                 emit_automation_transition_applied(&context, &item, &report.applied);
@@ -151,7 +123,7 @@ pub(crate) async fn execute_automated_items<F: Forge + ?Sized>(
                 );
             }
             Err(error) => {
-                if route_verdict(
+                let routed = match route_verdict(
                     &context,
                     executor,
                     &item,
@@ -159,17 +131,38 @@ pub(crate) async fn execute_automated_items<F: Forge + ?Sized>(
                     &mut counts,
                     &mut progress,
                 )
-                .await?
+                .await
                 {
+                    Ok(routed) => routed,
+                    Err(route_error) => {
+                        if let Some(attempt) = &landing_attempt {
+                            attempt.finish("failed");
+                        }
+                        return Err(route_error);
+                    }
+                };
+                if routed {
+                    if let Some(attempt) = &landing_attempt {
+                        attempt.finish("conflict_routed");
+                    }
                     continue;
                 }
                 if record_expected_precondition(&context, &item, &error, &mut counts) {
+                    if let Some(attempt) = &landing_attempt {
+                        attempt.finish(landing_precondition_outcome(&error));
+                    }
                     continue;
                 }
                 if record_continuable_item_error(&context, &item, &error, &mut counts) {
+                    if let Some(attempt) = &landing_attempt {
+                        attempt.finish("failed");
+                    }
                     continue;
                 }
 
+                if let Some(attempt) = &landing_attempt {
+                    attempt.finish(landing_precondition_outcome(&error));
+                }
                 counts.errors = counts.errors.saturating_add(1);
                 let failure_class = execution_error_failure_class(&error);
                 let diagnostics = execution_error_diagnostic_classes(&error);
@@ -429,6 +422,15 @@ fn record_expected_precondition(
         }
     }
     true
+}
+
+fn landing_precondition_outcome(error: &ExecutionError) -> &'static str {
+    match expected_precondition_outcome(error) {
+        Some(ExpectedPreconditionOutcome::GateNotSatisfied) => "gate_not_satisfied",
+        Some(ExpectedPreconditionOutcome::Unchanged) => "stale",
+        None if matches!(error, ExecutionError::TargetMissing { .. }) => "stale",
+        None => "failed",
+    }
 }
 
 fn expected_precondition_outcome(error: &ExecutionError) -> Option<ExpectedPreconditionOutcome> {

@@ -190,6 +190,7 @@ fn wake_measurements_carry_stable_run_id_scope_counts_and_latencies() {
         })
         .expect("completion is measured");
     assert_eq!(finish_measurement.run_id.as_deref(), Some("ai/temper:1"));
+    assert_eq!(finish_measurement.outcome, "completed");
     assert_eq!(finish_measurement.execution_duration_ms, 5);
     assert_eq!(finish_measurement.in_flight_repository_count, 0);
 }
