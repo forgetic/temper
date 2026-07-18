@@ -93,19 +93,24 @@ all-of filters: although Forgejo versions may interpret the single
 comma-separated provider filter as OR, the backend applies a final local
 all-label check.
 
-Consolidated candidate reads deliberately use that provider OR behavior. For
-one lifecycle bucket, all normalized interest labels are sent once as one
-comma-separated `labels` value and rows are locally retained when they carry at
-least one requested label. Issue buckets use `/issues?type=issues`; PR buckets
-use `/issues?type=pulls`. Open buckets send `state=open`. Terminal issue buckets
-send `state=closed`, while terminal PR discovery also sends just one
-`state=closed` request and locally separates portable `Closed` and `Merged`
-rows. Terminal workflow planning always supplies labels, and the backend never
-substitutes an unlabelled issue or pull-history read for labelled discovery.
-Every bucket follows the shared `limit`/`page` pagination loop, deduplicates
-rows repeated across pages, and returns deterministic number/ID order. Thus a
-one-page bucket costs one provider list request regardless of interest-label
-count.
+Consolidated candidate reads use Forgejo's provider-side any-label search, with
+one request shape per lifecycle bucket. Forgejo 15's repository-scoped
+`/repos/{owner}/{repo}/issues` endpoint actually applies multiple label names as
+all-of even though its API description says any-of. Consequently, a candidate
+bucket with multiple interest labels uses the owner-scoped
+`/repos/issues/search?owner=...&labels=...` index and locally rejects rows whose
+embedded repository identity is not the requested repository. Single-label and
+unfiltered buckets stay on the repository endpoint. Rows are always locally
+retained only when they carry at least one requested label. Issue buckets send
+`type=issues`; PR buckets send `type=pulls`. Open buckets send `state=open`.
+Terminal issue buckets send `state=closed`, while terminal PR discovery also
+sends just one `state=closed` request and locally separates portable `Closed`
+and `Merged` rows. Terminal workflow planning always supplies labels, and the
+backend never substitutes an unlabelled issue or pull-history read for labelled
+discovery. Every bucket follows the shared `limit`/`page` pagination loop,
+deduplicates rows repeated across pages, and returns deterministic number/ID
+order. Thus a one-page bucket costs one provider list request regardless of
+interest-label count.
 
 Summary list calls (`details.dependencies=false`) skip dependency N+1s;
 labelled PR summary rows may also omit branch refs, head/base SHAs, requested

@@ -11,6 +11,7 @@
 //! [`request`]), the version cache (see [`version`]), configuration, the HTTP
 //! seam, error mapping, backend-owned id encoding, and provider DTO scaffolding.
 
+mod candidate_index;
 mod ci;
 mod ci_cache;
 mod ci_match;

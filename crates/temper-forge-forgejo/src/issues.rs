@@ -75,14 +75,15 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(issues)
     }
 
-    /// Lists one lifecycle bucket of issue candidates through a single
-    /// Forgejo issue-label-index query (plus its pagination pages).
+    /// Lists one lifecycle bucket of issue candidates through Forgejo's issue
+    /// label index.
     ///
-    /// Forgejo interprets a comma-separated `labels` value as any-of on this
-    /// endpoint. The normalized label set is therefore sent once, while the
-    /// backend still verifies the any-label match and rejects PR-as-issue rows
-    /// locally. Rows repeated across provider pages are deterministically
-    /// deduplicated by portable identity.
+    /// The repository-scoped issue endpoint applies multiple label names as an
+    /// all-of filter despite its API documentation describing any-of semantics.
+    /// A multi-label candidate bucket therefore uses the owner-scoped search
+    /// endpoint, whose label filter is genuinely any-of, and rejects rows from
+    /// sibling repositories locally. Single-label and unfiltered buckets stay
+    /// on the repository endpoint. Either shape costs one request per page.
     pub async fn list_issue_candidates(
         &self,
         repo_id: &RepositoryId,
@@ -94,16 +95,8 @@ impl<C: HttpClient> ForgejoForge<C> {
             CandidateLifecycle::Open => "open",
             CandidateLifecycle::Terminal => "closed",
         };
-        let path = format!("/repos/{}/issues", repo.path_segment());
-        let mut base_query = vec![
-            ("state".to_string(), state.to_string()),
-            ("type".to_string(), "issues".to_string()),
-        ];
-        if let Some(labels) = &labels {
-            base_query.push(("labels".to_string(), labels.join(",")));
-        }
-        let rows: Vec<IssueDto> = self
-            .list_all("list issue candidates", &path, base_query)
+        let rows = self
+            .list_candidate_issue_rows(&repo, state, "issues", labels.as_deref())
             .await?;
 
         let expected_state = match query.lifecycle {

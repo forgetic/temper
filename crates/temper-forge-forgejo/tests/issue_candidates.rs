@@ -2,11 +2,22 @@
 
 mod support;
 
-use support::{MockHttpClient, block_on, forge, repo_id};
+use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_forge_model::{CandidateLabelSelection, CandidateLifecycle, IssueCandidateQuery};
 
 fn issue_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
+    issue_json_in_repository(number, state, labels, extra, OWNER, REPO)
+}
+
+fn issue_json_in_repository(
+    number: u64,
+    state: &str,
+    labels: &str,
+    extra: &str,
+    owner: &str,
+    repo: &str,
+) -> String {
     format!(
         r#"{{
             "number": {number},
@@ -16,7 +27,8 @@ fn issue_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
             "user": {{"login": "author"}},
             "labels": {labels},
             "created_at": "2024-03-01T00:00:00Z",
-            "updated_at": "2024-03-02T00:00:00Z"
+            "updated_at": "2024-03-02T00:00:00Z",
+            "repository": {{"name": "{repo}", "full_name": "{owner}/{repo}"}}
             {extra}
         }}"#
     )
@@ -28,7 +40,7 @@ fn terminal_issue_candidates_use_one_any_label_request_and_exclude_pr_rows() {
     client.push_response(
         200,
         format!(
-            "[{},{},{},{}]",
+            "[{},{},{},{},{}]",
             issue_json(2, "closed", r#"[{"id":2,"name":"queued"}]"#, ""),
             issue_json(1, "closed", r#"[{"id":1,"name":"ready"}]"#, ""),
             issue_json(3, "closed", r#"[{"id":3,"name":"other"}]"#, ""),
@@ -37,6 +49,14 @@ fn terminal_issue_candidates_use_one_any_label_request_and_exclude_pr_rows() {
                 "closed",
                 r#"[{"id":1,"name":"ready"}]"#,
                 r#", "pull_request": {"merged": false}"#
+            ),
+            issue_json_in_repository(
+                5,
+                "closed",
+                r#"[{"id":1,"name":"ready"}]"#,
+                "",
+                "acme",
+                "sibling"
             )
         ),
     );
@@ -65,6 +85,8 @@ fn terminal_issue_candidates_use_one_any_label_request_and_exclude_pr_rows() {
     );
     let requests = client.recorded();
     assert_eq!(requests.len(), 1, "label count must not add list requests");
+    assert_eq!(requests[0].path, "/api/v1/repos/issues/search");
+    assert!(requests[0].query.contains(&("owner".into(), OWNER.into())));
     assert!(
         requests[0]
             .query
@@ -124,8 +146,10 @@ fn paginated_issue_candidates_deduplicate_and_keep_any_label_semantics() {
     let requests = client.recorded();
     assert_eq!(requests.len(), 3);
     assert!(requests.iter().all(|request| {
-        request
-            .query
-            .contains(&("labels".into(), "queued,ready".into()))
+        request.path == "/api/v1/repos/issues/search"
+            && request.query.contains(&("owner".into(), OWNER.into()))
+            && request
+                .query
+                .contains(&("labels".into(), "queued,ready".into()))
     }));
 }

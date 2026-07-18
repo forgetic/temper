@@ -47,10 +47,11 @@ impl<C: HttpClient> ForgejoForge<C> {
     }
 
     /// Lists one lifecycle bucket of pull-request candidates through Forgejo's
-    /// issue label index. One normalized comma-separated any-label filter is
-    /// used for the entire bucket; a terminal bucket uses one `state=closed`
-    /// discovery request and separates portable closed and merged states
-    /// locally.
+    /// issue label index. Multi-label buckets use the owner-scoped search index
+    /// because the repository issue endpoint treats multiple labels as all-of;
+    /// foreign-repository rows are discarded before materialization. A terminal
+    /// bucket still uses one `state=closed` discovery request and separates
+    /// portable closed and merged states locally.
     ///
     /// Unambiguous summary rows are materialized directly. A closed row without
     /// a usable merge marker retains the established exact `/pulls/{number}`
@@ -67,16 +68,8 @@ impl<C: HttpClient> ForgejoForge<C> {
             CandidateLifecycle::Open => "open",
             CandidateLifecycle::Terminal => "closed",
         };
-        let path = format!("/repos/{}/issues", repo.path_segment());
-        let mut base_query = vec![
-            ("state".to_string(), state.to_string()),
-            ("type".to_string(), "pulls".to_string()),
-        ];
-        if let Some(labels) = &labels {
-            base_query.push(("labels".to_string(), labels.join(",")));
-        }
-        let rows: Vec<IssueDto> = self
-            .list_all("list pull request candidates", &path, base_query)
+        let rows = self
+            .list_candidate_issue_rows(&repo, state, "pulls", labels.as_deref())
             .await?;
 
         let mut rows_by_number = BTreeMap::new();

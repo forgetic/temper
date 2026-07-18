@@ -19,6 +19,17 @@ fn pr_issue_json_with_merge(
     labels: &str,
     merged: Option<bool>,
 ) -> String {
+    pr_issue_json_with_merge_in_repository(number, state, labels, merged, OWNER, REPO)
+}
+
+fn pr_issue_json_with_merge_in_repository(
+    number: u64,
+    state: &str,
+    labels: &str,
+    merged: Option<bool>,
+    owner: &str,
+    repo: &str,
+) -> String {
     let labels: serde_json::Value = serde_json::from_str(labels).expect("labels are json");
     let marker = match merged {
         Some(true) => serde_json::json!({
@@ -42,6 +53,7 @@ fn pr_issue_json_with_merge(
         "labels": labels,
         "created_at": "2024-03-01T00:00:00Z",
         "updated_at": "2024-03-02T00:00:00Z",
+        "repository": {"name": repo, "full_name": format!("{owner}/{repo}")},
         "pull_request": marker
     })
     .to_string()
@@ -156,10 +168,18 @@ fn terminal_pull_candidates_share_one_labelled_closed_discovery_request() {
     client.push_response(
         200,
         format!(
-            "[{},{},{}]",
+            "[{},{},{},{}]",
             pr_issue_json_with_merge(2, "closed", r#"[{"id":2,"name":"queued"}]"#, Some(true)),
             pr_issue_json_with_merge(1, "closed", r#"[{"id":1,"name":"ready"}]"#, Some(false)),
             pr_issue_json_with_merge(3, "closed", r#"[{"id":3,"name":"other"}]"#, Some(true)),
+            pr_issue_json_with_merge_in_repository(
+                4,
+                "closed",
+                r#"[{"id":1,"name":"ready"}]"#,
+                Some(true),
+                "acme",
+                "sibling"
+            ),
         ),
     );
     let forge = forge(client.clone());
@@ -191,10 +211,8 @@ fn terminal_pull_candidates_share_one_labelled_closed_discovery_request() {
         1,
         "closed and merged share one provider read"
     );
-    assert_eq!(
-        requests[0].path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/issues")
-    );
+    assert_eq!(requests[0].path, "/api/v1/repos/issues/search");
+    assert!(requests[0].query.contains(&("owner".into(), OWNER.into())));
     assert!(
         requests[0]
             .query
@@ -208,8 +226,7 @@ fn terminal_pull_candidates_share_one_labelled_closed_discovery_request() {
     );
     assert!(
         !requests.iter().any(|request| {
-            request.path == format!("/api/v1/repos/{OWNER}/{REPO}/issues")
-                && request.query.contains(&("state".into(), "closed".into()))
+            request.query.contains(&("state".into(), "closed".into()))
                 && !request.query.iter().any(|(key, _)| key == "labels")
         }),
         "terminal discovery must not issue an unlabelled closed list"
@@ -313,9 +330,11 @@ fn paginated_pull_candidates_deduplicate_without_per_label_reads() {
     let requests = client.recorded();
     assert_eq!(requests.len(), 4);
     assert!(requests.iter().all(|request| {
-        request
-            .query
-            .contains(&("labels".into(), "queued,ready".into()))
+        request.path == "/api/v1/repos/issues/search"
+            && request.query.contains(&("owner".into(), OWNER.into()))
+            && request
+                .query
+                .contains(&("labels".into(), "queued,ready".into()))
     }));
 }
 
