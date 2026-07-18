@@ -520,13 +520,16 @@ pub fn emit_queue_entered(ev: QueueEntered<'_>) {
     );
 }
 
-/// Emits `engine` / `gate.evaluated`.
+/// Emits the repeatable read-side `engine` / `gate.evaluated` observation.
+///
+/// Gate scans can evaluate the same state many times; this is deliberately a
+/// debug event rather than an operator-facing workflow-state change.
 pub fn emit_gate_evaluated(ev: GateEvaluated<'_>) {
     let message = prefixed(
         Service::Engine,
         human::gate_evaluated(ev.item, ev.gates, ev.note),
     );
-    tracing::info!(
+    tracing::debug!(
         target: "temper::engine",
         service = Service::Engine.as_str(),
         event = Event::GateEvaluated.as_str(),

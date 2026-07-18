@@ -1,8 +1,7 @@
-//! Executable traceability for issue #316's mechanical wake race evidence.
+//! Executable traceability for all eight issue #316 acceptance criteria.
 //!
-//! The race suite owns only the new paused-Forge scenarios. Existing transport,
-//! recovery, targeting, and staged-artifact regressions remain in their original
-//! focused fixtures and are referenced here instead of being duplicated.
+//! The matrix names focused deterministic evidence rather than duplicating race,
+//! transport, targeting, staged-artifact, convergence, or tracing fixtures.
 
 use std::collections::BTreeSet;
 
@@ -18,7 +17,9 @@ struct Criterion {
 }
 
 const RACES: &str = include_str!("mechanical_wake_races.rs");
+const OBSERVABILITY: &str = include_str!("mechanical_observability.rs");
 const HANDLERS: &str = include_str!("../../temper-engine/src/daemon/handlers_tests.rs");
+const MACHINE: &str = include_str!("../../temper-engine/src/daemon/machine_tests.rs");
 const COORDINATOR: &str = include_str!("../../temper-engine/src/daemon/wake_coordinator_tests.rs");
 const CHANGE_SOURCE: &str = include_str!("../../temper-engine/tests/change_source_wake.rs");
 const MECHANICAL_BACKSTOP: &str = include_str!("../../temper-engine/tests/mechanical_backstop.rs");
@@ -28,7 +29,7 @@ const MECHANICAL_AUTOMATION: &str =
 
 const MATRIX: &[Criterion] = &[
     Criterion {
-        name: "stale active reads cause an immediate fresh exact follow-up",
+        name: "1: stale active reads cause an immediate fresh exact follow-up",
         evidence: &[Evidence {
             crate_path: "temper-testing::mechanical_wake_races",
             source: RACES,
@@ -36,7 +37,42 @@ const MATRIX: &[Criterion] = &[
         }],
     },
     Criterion {
-        name: "heartbeat and broad bursts stay bounded without losing CI priority",
+        name: "2: concurrent hints are bounded and unioned without a delivery queue",
+        evidence: &[
+            Evidence {
+                crate_path: "temper-engine::daemon::wake_coordinator",
+                source: COORDINATOR,
+                test: "duplicate_targets_dedupe_and_the_thirty_third_promotes_to_broad",
+            },
+            Evidence {
+                crate_path: "temper-testing::mechanical_wake_races",
+                source: RACES,
+                test: "heartbeat_burst_keeps_ci_target_bounded_and_ahead_of_broad_work",
+            },
+        ],
+    },
+    Criterion {
+        name: "3: CI and PR hints use exact targeting without staged-child mutation",
+        evidence: &[
+            Evidence {
+                crate_path: "temper-runner::mechanical_automation",
+                source: MECHANICAL_AUTOMATION,
+                test: "targeted_ci_wake_lands_pr_without_terminal_list_queries",
+            },
+            Evidence {
+                crate_path: "temper-runner::scan::targeted_role",
+                source: TARGETED_ROLE,
+                test: "targeted_pr_unions_signal_needs_once_and_emits_subscribers_deterministically",
+            },
+            Evidence {
+                crate_path: "temper-engine::mechanical_backstop",
+                source: MECHANICAL_BACKSTOP,
+                test: "targeted_mechanical_wake_does_not_mutate_staged_artifact",
+            },
+        ],
+    },
+    Criterion {
+        name: "4: heartbeat and broad traffic cannot starve an exact CI reaction",
         evidence: &[
             Evidence {
                 crate_path: "temper-testing::mechanical_wake_races",
@@ -51,31 +87,71 @@ const MATRIX: &[Criterion] = &[
         ],
     },
     Criterion {
-        name: "periodic broad work survives an in-flight targeted pass",
+        name: "5: a periodic broad tick survives an in-flight targeted pass",
+        evidence: &[Evidence {
+            crate_path: "temper-testing::mechanical_wake_races",
+            source: RACES,
+            test: "mechanical_poll_racing_targeted_work_runs_one_immediate_broad_follow_up",
+        }],
+    },
+    Criterion {
+        name: "6: deterministic paused-Forge tests cover stale, burst, and poll races",
         evidence: &[
+            Evidence {
+                crate_path: "temper-testing::mechanical_wake_races",
+                source: RACES,
+                test: "ci_change_after_stale_active_read_lands_in_immediate_exact_follow_up",
+            },
+            Evidence {
+                crate_path: "temper-testing::mechanical_wake_races",
+                source: RACES,
+                test: "heartbeat_burst_keeps_ci_target_bounded_and_ahead_of_broad_work",
+            },
             Evidence {
                 crate_path: "temper-testing::mechanical_wake_races",
                 source: RACES,
                 test: "mechanical_poll_racing_targeted_work_runs_one_immediate_broad_follow_up",
             },
+        ],
+    },
+    Criterion {
+        name: "7: traces distinguish wake lifecycle, phases, gate reads, and landing attempts",
+        evidence: &[
             Evidence {
-                crate_path: "temper-engine::change_source_wake",
-                source: CHANGE_SOURCE,
-                test: "poll_backstop_assigns_work_when_change_hints_are_missing",
+                crate_path: "temper-engine::daemon::machine",
+                source: MACHINE,
+                test: "wake_measurements_carry_stable_run_id_scope_counts_and_latencies",
+            },
+            Evidence {
+                crate_path: "temper-testing::mechanical_observability",
+                source: OBSERVABILITY,
+                test: "broad_phase_measurements_include_provider_deltas_and_non_merge_has_no_attempt",
+            },
+            Evidence {
+                crate_path: "temper-testing::mechanical_observability",
+                source: OBSERVABILITY,
+                test: "targeted_phases_and_repeated_gate_observations_keep_wake_correlation",
+            },
+            Evidence {
+                crate_path: "temper-testing::mechanical_observability",
+                source: OBSERVABILITY,
+                test: "landing_attempt_pairs_started_with_applied_terminal_outcome",
+            },
+            Evidence {
+                crate_path: "temper-testing::mechanical_observability",
+                source: OBSERVABILITY,
+                test: "failed_targeted_scan_emits_terminal_duration_provider_delta_and_wake_id",
             },
         ],
     },
     Criterion {
-        name: "verified webhook acknowledgement is independent of wake execution",
-        evidence: &[Evidence {
-            crate_path: "temper-engine::daemon::handlers",
-            source: HANDLERS,
-            test: "verified_webhook_acks_before_wake_scan_finishes",
-        }],
-    },
-    Criterion {
-        name: "startup and missed-hint recovery retain broad convergence",
+        name: "8: immediate acknowledgement and startup/poll backstops retain convergence",
         evidence: &[
+            Evidence {
+                crate_path: "temper-engine::daemon::handlers",
+                source: HANDLERS,
+                test: "verified_webhook_acks_before_wake_scan_finishes",
+            },
             Evidence {
                 crate_path: "temper-engine::daemon::wake_coordinator",
                 source: COORDINATOR,
@@ -88,34 +164,15 @@ const MATRIX: &[Criterion] = &[
             },
         ],
     },
-    Criterion {
-        name: "targeted reads preserve exact query budgets and role signal unioning",
-        evidence: &[
-            Evidence {
-                crate_path: "temper-runner::mechanical_automation",
-                source: MECHANICAL_AUTOMATION,
-                test: "targeted_ci_wake_lands_pr_without_terminal_list_queries",
-            },
-            Evidence {
-                crate_path: "temper-runner::scan::targeted_role",
-                source: TARGETED_ROLE,
-                test: "targeted_pr_unions_signal_needs_once_and_emits_subscribers_deterministically",
-            },
-        ],
-    },
-    Criterion {
-        name: "targeted and broad mechanical paths exclude staged artifacts",
-        evidence: &[Evidence {
-            crate_path: "temper-engine::mechanical_backstop",
-            source: MECHANICAL_BACKSTOP,
-            test: "targeted_mechanical_wake_does_not_mutate_staged_artifact",
-        }],
-    },
 ];
 
 #[test]
 fn issue_316_acceptance_matrix_names_live_deterministic_regressions() {
-    assert_eq!(MATRIX.len(), 7, "every #316 evidence row stays represented");
+    assert_eq!(
+        MATRIX.len(),
+        8,
+        "every #316 acceptance criterion stays represented"
+    );
     let mut criteria = BTreeSet::new();
     for criterion in MATRIX {
         assert!(

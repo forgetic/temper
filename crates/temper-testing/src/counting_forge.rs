@@ -279,7 +279,9 @@ fn default_synthetic_head(number: ItemNumber) -> String {
 #[async_trait]
 impl<F: Forge> Forge for CountingForge<F> {
     fn provider_request_count(&self) -> Option<u64> {
-        self.inner.provider_request_count()
+        self.inner
+            .provider_request_count()
+            .or_else(|| Some(u64::try_from(self.operations.total_count()).unwrap_or(u64::MAX)))
     }
 
     async fn current_user(&self) -> ForgeResult<User> {

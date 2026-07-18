@@ -288,8 +288,9 @@ async fn push_candidate<F: Forge + ?Sized>(
 /// eligible to land`.
 ///
 /// This fires per scan pass that re-reads a gated PR's signals, so an idle PR
-/// awaiting CI re-emits on each backstop tick; deduping that to state changes is
-/// a debug-level concern left to a later pass.
+/// awaiting CI re-emits on each backstop tick. `emit_gate_evaluated` deliberately
+/// keeps these repeatable read-side observations at debug; actual merge
+/// execution is measured separately as a mechanical landing attempt.
 fn emit_pr_gate_evaluated(
     repo: &RepositoryId,
     classified: &ClassifiedArtifact,

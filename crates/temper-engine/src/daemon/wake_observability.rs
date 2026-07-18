@@ -183,7 +183,7 @@ impl DaemonMachine {
                 }
                 WakeDecision::Finished { work, outcome } => {
                     let (wake_outcome, error) = match &outcome {
-                        WakeOutcome::Succeeded => ("started", None),
+                        WakeOutcome::Succeeded => ("completed", None),
                         WakeOutcome::Failed { reason } => ("failed", Some(reason.clone())),
                     };
                     let queue_latency_ms = elapsed_ms(work.queued_at, work.started_at);

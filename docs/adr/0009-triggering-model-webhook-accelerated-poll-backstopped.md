@@ -105,6 +105,29 @@ continue to do the same level-triggered discovery. **Webhook receipt is never
 required for correctness**: no queue transition, recovery, or dispatch safety
 property may depend on a delivery arriving.
 
+Mechanical scope compaction is deliberately asymmetric. A role-lane broad scan
+subsumes exact role targets, but a mechanical broad scope retains exact artifact
+addresses alongside its broad marker. Execution serializes those retained
+addresses first (PR CI targets, then other PR targets, then issues), performs any
+landing mutation before broad reconciliation, and starts role scans only after
+mechanical work finishes. Thus a repository poll or ambiguous issue hint cannot
+hide a later exact CI/PR reaction even when both are admitted to one mixed
+follow-up generation.
+
+The exact-target set is bounded at 32 addresses per lane. Crossing that limit
+promotes the scope to `target_overflow` broad discovery while retaining the 32
+highest-priority exact mechanical addresses; additional low-priority addresses
+are represented by the broad scan rather than an unbounded delivery queue. The
+ordering and eviction tie-break on artifact kind and item number, so compaction
+is deterministic.
+
+The former `MechanicalTrigger::run`, `run_hinted`, and
+`spawn_mechanical_backstop` compatibility path has been removed. It owned a
+second lossy boolean admission guard and could bypass the daemon coordinator.
+`MechanicalTrigger` now executes only already-admitted work, and production,
+startup, webhook, and cadence callers all enter through the same coordinator
+and mutation serialization path.
+
 ### Portable push, if ever needed
 
 Do not add a notification method to `Forge`. If backend-agnostic push is wanted,
