@@ -83,6 +83,9 @@ Forgejo models pull requests as issues. Consequences:
 - issue reads must exclude rows with a `pull_request` marker;
 - PR comments, labels, assignees, and dependency links use `/issues/{number}`;
 - issue and PR numbers are one repository-scoped namespace on Forgejo;
+- `Forge::item_number_namespace()` therefore reports `Shared`, allowing fresh
+  same-pass PR candidates to resolve dependency target state without a redundant
+  `/issues/{number}` collision probe;
 - labelled PR scans use `/issues?type=pulls&labels=...` as the provider label
   index, not `/pulls`.
 

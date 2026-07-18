@@ -24,8 +24,9 @@ pub use content::{CommitFile, CreateBranch, EnsureRepository, ForgeContent};
 pub use forge::{
     CandidateLabelSelection, CandidateLabels, CandidateLifecycle, CandidateLifecycleBucket,
     CiJobQuery, CiJobSort, CiJobSortField, Forge, ForgeError, ForgeResult, IssueCandidateQuery,
-    IssueQuery, ItemListDetails, ItemSort, ItemSortField, PullRequestCandidateQuery,
-    PullRequestQuery, RepositoryQuery, RepositorySort, RepositorySortField, SortDirection,
+    IssueQuery, ItemListDetails, ItemNumberNamespace, ItemSort, ItemSortField,
+    PullRequestCandidateQuery, PullRequestQuery, RepositoryQuery, RepositorySort,
+    RepositorySortField, SortDirection,
 };
 pub use hint::*;
 pub use ids::*;

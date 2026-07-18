@@ -12,8 +12,8 @@ use crate::plan::DependencyStatus;
 use crate::relation::RelationKind;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_forge::{
-    Forge, ForgeError, Issue, IssueState, ItemListDetails, ItemNumber, PullRequest,
-    PullRequestState, RepositoryId,
+    Forge, ForgeError, Issue, IssueState, ItemListDetails, ItemNumber, ItemNumberNamespace,
+    PullRequest, PullRequestState, RepositoryId,
 };
 
 /// Fresh same-repository lifecycle state collected by the current candidate
@@ -93,13 +93,21 @@ async fn target_landed<F: Forge + ?Sized>(
     let target_repo = target.resolved_repository(repo_id);
     let same_repo_index = target.is_in_repository(repo_id).then_some(index).flatten();
 
-    // Forge providers use a single item-number namespace, but the reference
-    // backends keep issue and pull-request counters independently. Preserve
-    // issue-first collision semantics: a listed issue wins immediately;
-    // otherwise probe the issue summary API before considering any listed PR.
+    // A fresh listed issue always wins. A fresh listed PR can also resolve the
+    // untyped number immediately when the backend guarantees that issue and PR
+    // numbers cannot collide. Independent-number backends retain the exact
+    // issue-first probe before using the listed PR state.
     if let Some(state) = same_repo_index.and_then(|index| index.issues.get(&target.number)) {
         return Ok(*state == IssueState::Closed);
     }
+    let listed_pull_request =
+        same_repo_index.and_then(|index| index.pull_requests.get(&target.number));
+    if forge.item_number_namespace() == ItemNumberNamespace::Shared {
+        if let Some(state) = listed_pull_request {
+            return Ok(*state == PullRequestState::Merged);
+        }
+    }
+
     if let Some(issue) = forge
         .get_issue_by_number_with_details(&target_repo, target.number, ItemListDetails::summary())
         .await?
@@ -107,7 +115,7 @@ async fn target_landed<F: Forge + ?Sized>(
         return Ok(issue.state == IssueState::Closed);
     }
 
-    if let Some(state) = same_repo_index.and_then(|index| index.pull_requests.get(&target.number)) {
+    if let Some(state) = listed_pull_request {
         return Ok(*state == PullRequestState::Merged);
     }
     Ok(forge

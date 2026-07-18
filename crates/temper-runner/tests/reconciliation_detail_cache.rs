@@ -7,8 +7,8 @@ use std::time::Duration;
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, HintArtifactKind,
-    IssueState, ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, RepositoryId,
-    UpdateIssue, UserId,
+    IssueState, ItemListDetails, ItemNumber, ItemNumberNamespace, MergeMethod, MergePullRequest,
+    RepositoryId, UpdateIssue, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Worker};

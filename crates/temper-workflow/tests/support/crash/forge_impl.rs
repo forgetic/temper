@@ -2,6 +2,10 @@ use super::*;
 
 #[async_trait]
 impl<F: Forge> Forge for CrashForge<F> {
+    fn item_number_namespace(&self) -> ItemNumberNamespace {
+        self.inner.item_number_namespace()
+    }
+
     async fn current_user(&self) -> ForgeResult<User> {
         self.inner.current_user().await
     }

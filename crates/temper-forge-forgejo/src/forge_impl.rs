@@ -14,14 +14,18 @@ use crate::{ForgejoForge, HttpClient};
 use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueCandidateQuery,
-    IssueId, IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord,
-    PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview,
-    Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, User, UserId,
+    IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace, Label, MergePullRequest,
+    MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery,
+    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
+    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait::async_trait]
 impl<C: HttpClient> Forge for ForgejoForge<C> {
+    fn item_number_namespace(&self) -> ItemNumberNamespace {
+        ItemNumberNamespace::Shared
+    }
+
     fn provider_request_count(&self) -> Option<u64> {
         Some(ForgejoForge::provider_request_count(self))
     }

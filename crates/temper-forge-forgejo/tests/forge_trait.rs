@@ -1,6 +1,8 @@
 //! Proves [`ForgejoForge`] is a real `temper_forge_model::Forge` backend.
 //!
-//! Three checks, all offline:
+//! Four checks, all offline:
+//! - Forgejo advertises its shared issue/PR item-number namespace through the
+//!   portable capability;
 //! - a read exercised end to end through a `&dyn Forge` handle against canned
 //!   JSON (identity, then an issue lookup by number);
 //! - a compile-time assertion that the production-typed backend implements the
@@ -13,8 +15,16 @@ mod support;
 
 use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
 use temper_forge_forgejo::{EngineHttpClient, ForgejoForge};
-use temper_forge_model::{Forge, IssueState, ItemNumber, UserId};
+use temper_forge_model::{Forge, IssueState, ItemNumber, ItemNumberNamespace, UserId};
 use temper_workflow::{Executor, ValidatedWorkflow};
+
+#[test]
+fn advertises_shared_item_number_namespace() {
+    let backend = forge(MockHttpClient::new());
+    let forge: &dyn Forge = &backend;
+
+    assert_eq!(forge.item_number_namespace(), ItemNumberNamespace::Shared);
+}
 
 #[test]
 fn used_through_dyn_forge_for_a_read_end_to_end() {

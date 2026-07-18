@@ -97,7 +97,10 @@ Required methods:
 A dependency link means the source issue or pull request is blocked by a target
 `ItemNumber` in the same repository. Links are directed: adding A→B does not add
 B→A. Multiple targets are allowed; dependency lists are set-like, sorted by item
-number, and contain no duplicates.
+number, and contain no duplicates. Because the link itself is untyped, target
+state resolution is issue-first on `ItemNumberNamespace::Independent` backends.
+A fresh typed candidate may bypass that probe only when the backend advertises a
+`Shared` issue/PR namespace.
 
 Adds require the source to exist and the target item number to resolve to an
 issue or pull request in the same repository. Missing sources return
