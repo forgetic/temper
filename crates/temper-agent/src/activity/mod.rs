@@ -16,10 +16,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{SecondsFormat, Utc};
-use temper_agent_core::{ModelIdentity, RunObservability};
+use temper_agent_core::{ModelFailureDiagnostic, ModelIdentity, RunObservability};
 use temper_protocol_activity::{
     AgentActivityCapturePolicyV1, AgentActivityChildRecordV1, AgentScopeKindV1, AgentScopeV1,
-    CaptureModeV1,
+    CaptureModeV1, ModelFailureV1,
 };
 
 use crate::usage::{TracingProjection, UsageTotals};
@@ -28,6 +28,12 @@ use transport::ActivityClient;
 
 use lifecycle::CompositeEventSink;
 pub use lifecycle::{AgentCancellationLatch, AgentLifecycleReporter};
+
+/// Converts an agent-core model failure into the canonical, normalized
+/// protocol representation used by durable activity and operator projections.
+pub fn protocol_model_failure(diagnostic: &ModelFailureDiagnostic) -> ModelFailureV1 {
+    normalizer::map_diagnostic(diagnostic)
+}
 
 /// Activity and independent correctness-lifecycle settings for one coding-agent
 /// invocation.

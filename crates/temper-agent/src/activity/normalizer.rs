@@ -22,6 +22,7 @@ use super::{ActivityClock, ProjectionSet};
 
 mod model_failure;
 mod terminal;
+pub(super) use model_failure::map_diagnostic;
 use model_failure::{normalize_finish, retry_code, status as map_model_status};
 use terminal::scope_terminal;
 

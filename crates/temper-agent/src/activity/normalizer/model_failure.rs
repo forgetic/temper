@@ -18,7 +18,7 @@ pub(super) fn normalize_finish(
         status
     };
     let failure = match status {
-        ModelCallStatus::Failed => Some(failure.map_or_else(
+        ModelCallStatus::Failed => Some(failure.as_ref().map_or_else(
             || ModelFailureV1::redacted_unknown(model.provider.clone(), model.model.clone(), false),
             map_diagnostic,
         )),
@@ -48,7 +48,7 @@ pub(super) fn retry_code(category: ModelFailureCategory) -> FailureCodeV1 {
     }
 }
 
-fn map_diagnostic(diagnostic: ModelFailureDiagnostic) -> ModelFailureV1 {
+pub(in crate::activity) fn map_diagnostic(diagnostic: &ModelFailureDiagnostic) -> ModelFailureV1 {
     let mut failure = ModelFailureV1 {
         provider: diagnostic.provider().to_string(),
         model: diagnostic.model().to_string(),

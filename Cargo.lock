@@ -1789,6 +1789,7 @@ dependencies = [
  "temper-worker-service",
  "temper-workflow",
  "tempfile",
+ "tongs",
  "tracing",
  "tracing-subscriber",
 ]

@@ -351,10 +351,11 @@ impl CanonicalActivityProjector {
         self.with_active(event, &span_id, |span| {
             span.attributes.time_to_first_token_ms = model.time_to_first_token_ms;
             span.attributes.stop_reason = model.stop_reason.map(stop_reason);
+            span.attributes.model_failure = model.failure.clone();
             span.pending_finish = Some(PendingFinish {
                 ended_at: event.occurred_at.clone(),
                 duration_ms: model.duration_ms,
-                status: model_status(model.status),
+                status: model_status(model.status, model.stop_reason),
             });
         });
     }
