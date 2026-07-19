@@ -418,7 +418,11 @@ fn agent_terminal_report<T>(
             AgentTerminalStatus::Succeeded,
             Some(AgentTerminalReasonV1::Completed),
         ),
-        Err(CodingAgentError::AgentStopped(_) | CodingAgentError::ModelUnavailable { .. }) => (
+        Err(
+            CodingAgentError::AgentStopped(_)
+            | CodingAgentError::ModelFailure(_)
+            | CodingAgentError::ModelUnavailable { .. },
+        ) => (
             AgentTerminalStatus::Failed,
             Some(AgentTerminalReasonV1::ModelError),
         ),
@@ -577,6 +581,7 @@ fn coding_agent_failure_class(
         }
         CodingAgentError::Provider(_)
         | CodingAgentError::Run(_)
+        | CodingAgentError::ModelFailure(_)
         | CodingAgentError::AgentStopped(_)
         | CodingAgentError::BudgetExhausted { .. }
         | CodingAgentError::ModelUnavailable { .. }

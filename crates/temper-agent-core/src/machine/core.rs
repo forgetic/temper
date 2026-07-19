@@ -21,6 +21,8 @@ use tongs::tools::{ToolEffects, ToolOutput};
 /// agent-log-cleanup plan (pieces B/D).
 pub type ArgPreviewFn = Arc<dyn Fn(&str, &serde_json::Value) -> Option<String> + Send + Sync>;
 
+use crate::model_failure::ModelFailureDiagnostic;
+
 use super::batching::{PendingTool, plan_batches};
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
@@ -67,6 +69,9 @@ pub struct AgentMachine {
     turn_results: Vec<PendingTool>,
     /// The most recent assistant message (the run's product on completion).
     last_assistant: Option<AssistantMessage>,
+    /// Structured terminal provider/model failure, kept independently from
+    /// the compatibility assistant message.
+    model_failure: Option<ModelFailureDiagnostic>,
     /// Steering messages to inject at the next turn boundary.
     queued_steering: Vec<Message>,
     /// Next never-reused shell operation identity.
@@ -114,6 +119,7 @@ impl AgentMachine {
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             last_assistant: None,
+            model_failure: None,
             queued_steering: Vec::new(),
             next_operation_generation: 1,
             next_batch_generation: 1,
@@ -152,6 +158,7 @@ impl AgentMachine {
                 stop,
                 final_message,
                 messages: std::mem::take(&mut self.messages),
+                model_failure: self.model_failure.take(),
             },
         ]
     }
@@ -436,7 +443,7 @@ impl temper_agent_io::Machine for AgentMachine {
             AgentCompletion::LlmFailed {
                 operation_generation,
                 batch_generation,
-                message,
+                diagnostic,
             } => {
                 if !matches!(self.phase, Phase::AwaitingLlm)
                     || batch_generation != 0
@@ -445,7 +452,8 @@ impl temper_agent_io::Machine for AgentMachine {
                     return Vec::new();
                 }
                 self.active_llm = None;
-                self.last_assistant = Some(error_assistant(&message));
+                self.last_assistant = Some(error_assistant(diagnostic.message()));
+                self.model_failure = Some(diagnostic);
                 self.finish(AgentStop::ModelError)
             }
             AgentCompletion::ToolFinished {

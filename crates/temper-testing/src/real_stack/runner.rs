@@ -211,6 +211,7 @@ fn agent_error(error: CodingAgentError, worker_cancellation_requested: bool) -> 
         }
         CodingAgentError::Provider(_)
         | CodingAgentError::Run(_)
+        | CodingAgentError::ModelFailure(_)
         | CodingAgentError::AgentStopped(_)
         | CodingAgentError::BudgetExhausted { .. }
         | CodingAgentError::ModelUnavailable { .. }
@@ -257,6 +258,22 @@ mod tests {
             true,
         );
         assert_eq!(fenced.class, FailureClass::Canceled);
+    }
+
+    #[test]
+    fn native_runner_keeps_model_failures_transient() {
+        let failure = agent_error(
+            CodingAgentError::ModelFailure(Box::new(
+                temper_agent_core::ModelFailureDiagnostic::redacted_unknown(
+                    "provider", "model", true,
+                ),
+            )),
+            false,
+        );
+
+        assert_eq!(failure.class, FailureClass::Transient);
+        assert!(failure.message.contains("redacted_unknown"));
+        assert!(failure.message.contains("retryable=true"));
     }
 
     #[test]
