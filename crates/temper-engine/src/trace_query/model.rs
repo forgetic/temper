@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use serde::{Deserialize, Serialize};
-use temper_protocol_activity::{AgentRunEventV1, BlobAttachmentV1, CaptureModeV1, UsageV1};
+use temper_protocol_activity::{AgentRunEventV1, CaptureModeV1, UsageV1};
 
 use crate::trace_journal::AgentTraceRunStatus;
 
@@ -73,37 +73,4 @@ pub struct TraceEventPage {
     pub events: Vec<AgentRunEventV1>,
     pub next_after_seq: u64,
     pub has_more: bool,
-}
-
-/// One line in a self-contained agent trace export.
-///
-/// The top-level tag and explicit version let offline consumers reject future
-/// incompatible records without guessing from the enclosed DTO shape.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-// Export records are constructed and serialized one at a time; boxing the
-// canonical event would only complicate the public DTO without reducing a collection.
-#[allow(clippy::large_enum_variant)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum TraceExportRecordV1 {
-    AgentRunEventV1 {
-        version: u32,
-        event: AgentRunEventV1,
-    },
-    BlobAttachmentV1 {
-        version: u32,
-        attachment: BlobAttachmentV1,
-    },
-}
-
-impl TraceExportRecordV1 {
-    pub(crate) fn event(event: AgentRunEventV1) -> Self {
-        Self::AgentRunEventV1 { version: 1, event }
-    }
-
-    pub(crate) fn attachment(attachment: BlobAttachmentV1) -> Self {
-        Self::BlobAttachmentV1 {
-            version: 1,
-            attachment,
-        }
-    }
 }

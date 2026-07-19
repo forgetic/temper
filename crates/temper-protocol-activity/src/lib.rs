@@ -12,12 +12,14 @@
 //! * [`AgentRunEventV1`] is stamped by the worker with run ordering and immutable
 //!   assignment identity before it can enter the durable stream.
 
+mod export;
 mod model;
 mod validation;
 
 #[cfg(test)]
 mod tests;
 
+pub use export::*;
 pub use model::*;
 pub use temper_protocol_context::{W3cTraceContext, W3cTraceContextError};
 pub use validation::{

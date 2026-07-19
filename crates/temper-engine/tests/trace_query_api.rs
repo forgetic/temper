@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use secrecy::SecretString;
 use temper_engine::{
-    AgentTraceJournal, AuthenticatedWorkerBinding, Daemon, TraceEventPage, TraceExportRecordV1,
-    TraceJournalConfig, TraceRunPage, TraceRunSummary,
+    AgentTraceJournal, AuthenticatedWorkerBinding, Daemon, TraceEventPage, TraceJournalConfig,
+    TraceRunPage, TraceRunSummary,
 };
 use temper_engine_io::http::{HttpCall, HttpResponseData, build_http_client, http_call};
 use temper_protocol_activity::{
@@ -15,7 +15,7 @@ use temper_protocol_activity::{
     AgentScopeV1, BlobAttachmentV1, BlobMediaTypeV1, CaptureModeV1, CapturedContentV1,
     DroppedEventKindV1, FailureCodeV1, FailureInfoV1, PromptCaptureDispositionV1, PromptPreparedV1,
     PromptSnapshotV1, RunFailedV1, RunFinishedV1, RunStartedV1, RunStatusV1, StopReasonV1,
-    TraceGapV1, UsageV1,
+    TraceExportRecordV1, TraceGapV1, UsageV1,
 };
 
 const TOKEN: &str = "trace-read-super-secret";
@@ -261,6 +261,16 @@ fn bearer() -> String {
 
 fn json<T: serde::de::DeserializeOwned>(response: &HttpResponseData) -> T {
     serde_json::from_slice(&response.body).expect("response is typed JSON")
+}
+
+#[test]
+fn trace_export_protocol_type_retains_engine_compatibility_reexport() {
+    let policy = policy();
+    let binding = binding(&policy, "compatibility", "engineer", None);
+    let protocol_record = TraceExportRecordV1::event(start("compatibility", &binding));
+    let engine_record: temper_engine::TraceExportRecordV1 = protocol_record.clone();
+
+    assert_eq!(engine_record, protocol_record);
 }
 
 #[test]
