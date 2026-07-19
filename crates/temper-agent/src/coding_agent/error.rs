@@ -1,6 +1,7 @@
 //! Coding-workspace run errors.
 
 use crate::provider::ProviderError;
+use temper_agent_core::ModelFailureDiagnostic;
 
 /// Authority associated with an aborted coding-agent run.
 ///
@@ -29,7 +30,10 @@ pub enum CodingAgentError {
     Provider(ProviderError),
     /// The SDK agent run failed (network or provider rejection).
     Run(String),
-    /// The agent stopped with an error stop reason.
+    /// A model call failed with a safe provider-neutral diagnostic.
+    ModelFailure(Box<ModelFailureDiagnostic>),
+    /// The agent stopped with an error stop reason but no typed provider
+    /// diagnostic (legacy/defensive compatibility path).
     AgentStopped(String),
     /// The model requested another tool round after the configured budget.
     BudgetExhausted { max_iterations: usize },
@@ -65,6 +69,9 @@ impl std::fmt::Display for CodingAgentError {
         match self {
             CodingAgentError::Provider(error) => write!(formatter, "{error}"),
             CodingAgentError::Run(message) => write!(formatter, "LLM run failed: {message}"),
+            CodingAgentError::ModelFailure(diagnostic) => {
+                write!(formatter, "model failure: {diagnostic}")
+            }
             CodingAgentError::AgentStopped(reason) => {
                 write!(formatter, "agent stopped abnormally: {reason}")
             }

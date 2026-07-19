@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 use temper_agent::activity::{AgentActivityConfig, ScopeFactory};
 use temper_agent::usage::{MAIN_SCOPE, UsageTotals};
 use temper_agent_core::{
-    AgentEvent, AgentStop, ModelCallStatus, ModelIdentity, ToolCallStatus, ToolResultMetadata,
+    AgentEvent, AgentStop, ModelCallStatus, ModelFailureDiagnostic, ModelIdentity, ToolCallStatus,
+    ToolResultMetadata,
 };
 use tongs::model::Usage;
 use tongs::provider::ToolDef;
@@ -190,14 +191,16 @@ fn capture_representative_run() -> Vec<Captured> {
             time_to_first_token_ms: None,
             stop_reason: None,
             usage: Usage::default(),
-            failure: Some("stream stalled, retrying".to_string()),
+            failure: Some(ModelFailureDiagnostic::redacted_unknown(
+                "provider", "model", true,
+            )),
         });
         logger.emit(AgentEvent::ModelCallRetrying {
             turn: 0,
             call_id: "turn-0".to_string(),
             next_attempt: 1,
             delay_ms: 500,
-            reason: "stream stalled, retrying".to_string(),
+            reason: ModelFailureDiagnostic::redacted_unknown("provider", "model", true),
         });
         logger.emit(AgentEvent::AgentEnd {
             reason: AgentStop::Completed,

@@ -502,6 +502,9 @@ pub(crate) fn ensure_completed_outcome(
     match outcome.stop {
         temper_agent_core::AgentStop::Completed => Ok(()),
         temper_agent_core::AgentStop::ModelError => {
+            if let Some(diagnostic) = outcome.model_failure.clone() {
+                return Err(classify_model_failure(diagnostic));
+            }
             let reason = outcome
                 .final_message
                 .error_message
@@ -522,7 +525,34 @@ pub(crate) fn ensure_completed_outcome(
     }
 }
 
-/// Classifies a run/stop error message, promoting a model-availability
+/// Promotes typed model-unavailability facts without parsing provider display
+/// text. All other model failures retain their complete safe diagnostic.
+pub(crate) fn classify_model_failure(
+    diagnostic: temper_agent_core::ModelFailureDiagnostic,
+) -> CodingAgentError {
+    let unavailable_code = diagnostic.provider_error_code().is_some_and(|code| {
+        matches!(
+            code.to_ascii_lowercase().as_str(),
+            "model_not_found" | "model_unavailable" | "unknown_model"
+        )
+    });
+    let unavailable_status = diagnostic.http_status() == Some(404)
+        && matches!(
+            diagnostic.category(),
+            temper_agent_core::ModelFailureCategory::Provider
+                | temper_agent_core::ModelFailureCategory::Context
+        );
+    if unavailable_code || unavailable_status {
+        CodingAgentError::ModelUnavailable {
+            model: diagnostic.model().to_string(),
+            detail: diagnostic.message().to_string(),
+        }
+    } else {
+        CodingAgentError::ModelFailure(Box::new(diagnostic))
+    }
+}
+
+/// Classifies a legacy run/stop error message, promoting a model-availability
 /// rejection to [`CodingAgentError::ModelUnavailable`] (which names the model
 /// and points at the override env vars) and leaving everything else as a
 /// generic abnormal stop.

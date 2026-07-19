@@ -3,7 +3,9 @@ use std::io::{BufRead as _, BufReader};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
-use temper_agent_core::{AgentEvent, ModelCallStatus, ModelIdentity, StreamDelta, ToolCallStatus};
+use temper_agent_core::{
+    AgentEvent, ModelCallStatus, ModelFailureDiagnostic, ModelIdentity, StreamDelta, ToolCallStatus,
+};
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityChildRecordV1,
     AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1,
@@ -11,6 +13,7 @@ use temper_protocol_activity::{
     ScopeStatusV1, StopReasonV1, TurnStartedV1,
 };
 use tongs::model::{ContentBlock, StopReason};
+use tongs::{FailureCategory, ProviderFailureDiagnostic};
 
 use super::transport::ActivityClient;
 use super::*;
@@ -388,7 +391,16 @@ fn provider_retry_diagnostics_are_fixed_in_every_capture_mode() {
         "ENVIRONMENT-RETRY-SENTINEL-355",
         "PROVIDER-RESPONSE-RETRY-SENTINEL-355",
     ];
-    let diagnostics = SENTINELS.join(" ");
+    let upstream = ProviderFailureDiagnostic::new(
+        FailureCategory::Provider,
+        true,
+        None,
+        None,
+        None,
+        &SENTINELS.join(" "),
+    );
+    let diagnostics =
+        ModelFailureDiagnostic::from_provider(&ModelIdentity::new("provider", "model"), &upstream);
 
     for mode in [
         CaptureModeV1::Off,
@@ -471,14 +483,16 @@ fn retries_keep_attempt_boundaries_inside_one_ordered_turn() {
         time_to_first_token_ms: None,
         stop_reason: None,
         usage: Default::default(),
-        failure: Some("temporary overload".to_string()),
+        failure: Some(ModelFailureDiagnostic::redacted_unknown(
+            "provider", "model", true,
+        )),
     });
     sink.emit(AgentEvent::ModelCallRetrying {
         turn: 0,
         call_id: "turn-0".to_string(),
         next_attempt: 1,
         delay_ms: 500,
-        reason: "temporary overload".to_string(),
+        reason: ModelFailureDiagnostic::redacted_unknown("provider", "model", true),
     });
     sink.emit(AgentEvent::ModelCallStarted {
         turn: 0,

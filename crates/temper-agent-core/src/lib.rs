@@ -21,6 +21,7 @@ mod containment_tests;
 pub mod machine;
 mod managed_bash;
 mod managed_fs;
+mod model_failure;
 pub mod run;
 pub mod shell;
 pub mod subagent_tool;
@@ -33,6 +34,9 @@ pub use machine::{
 };
 pub use managed_bash::ManagedBashTool;
 pub use managed_fs::joined_filesystem_tool;
+pub use model_failure::{
+    ModelFailureCategory, ModelFailureDiagnostic, REDACTED_MODEL_FAILURE_MESSAGE,
+};
 pub use run::{
     AgentOperationLimits, SubAgent, SubAgentControl, SubAgentError, run_sub_agent,
     run_sub_agent_controllable, run_sub_agent_controllable_with_hook,
