@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod model_failure;
 mod prompt;
 
 fn fixture(name: &str) -> Value {

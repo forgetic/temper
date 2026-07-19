@@ -147,6 +147,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
                 duration_ms: 100,
                 time_to_first_token_ms: Some(25),
                 stop_reason: Some(StopReasonV1::ToolUse),
+                failure: None,
             }),
         ),
         event(
