@@ -411,13 +411,29 @@ impl AgentActivityEventV1 {
         }
     }
 
-    /// Applies the shared fail-closed normalization to a finished-call
-    /// diagnostic. This is intended for child/host trust boundaries.
+    /// Applies the shared fail-closed normalization to a finished model call.
+    ///
+    /// Trust boundaries use this before validation or serialization. Besides
+    /// sanitizing supplied detail, it canonicalizes the legacy
+    /// `succeeded + stop_reason=error` shape and supplies explicit redacted
+    /// detail for newly ingested failed calls. Retained records remain readable
+    /// because ordinary deserialization and validation do not call this method.
     pub fn normalize_model_failure(&mut self) {
-        if let Self::ModelCallFinished(finished) = self {
-            if let Some(failure) = &mut finished.failure {
-                failure.normalize();
-            }
+        let Self::ModelCallFinished(finished) = self else {
+            return;
+        };
+        if finished.status == ModelCallStatusV1::Succeeded
+            && finished.stop_reason == Some(StopReasonV1::Error)
+        {
+            finished.status = ModelCallStatusV1::Failed;
+        }
+        if finished.status == ModelCallStatusV1::Failed && finished.failure.is_none() {
+            finished.failure = Some(ModelFailureV1::redacted_unknown(
+                "unknown", "unknown", false,
+            ));
+        }
+        if let Some(failure) = &mut finished.failure {
+            failure.normalize();
         }
     }
 

@@ -15,13 +15,14 @@ use super::{
 
 impl TraceRun {
     pub fn accept_frame(&self, mut frame: AgentActivityFrameV1) -> Result<u64, TraceError> {
+        frame.event.sanitize_retry_failure_message();
+        frame.event.normalize_model_failure();
         let encoded_len = serde_json::to_vec(&frame)?.len();
         if encoded_len > MAX_CHILD_ACTIVITY_FRAME_BYTES {
             return Err(TraceError::InvalidSpool(format!(
                 "child frame exceeds {MAX_CHILD_ACTIVITY_FRAME_BYTES} bytes"
             )));
         }
-        frame.event.sanitize_retry_failure_message();
         frame.validate()?;
         self.accept_validated(frame, &[], false)
     }
@@ -30,13 +31,14 @@ impl TraceRun {
     /// boundary unit. Attachments are validated and preflighted with the event,
     /// durably stored idempotently, and only then may the event be appended.
     pub fn accept_record(&self, mut record: AgentActivityChildRecordV1) -> Result<u64, TraceError> {
+        record.frame.event.sanitize_retry_failure_message();
+        record.frame.event.normalize_model_failure();
         let encoded_len = serde_json::to_vec(&record)?.len();
         if encoded_len > MAX_CHILD_ACTIVITY_RECORD_BYTES {
             return Err(TraceError::InvalidSpool(format!(
                 "child record exceeds {MAX_CHILD_ACTIVITY_RECORD_BYTES} bytes"
             )));
         }
-        record.frame.event.sanitize_retry_failure_message();
         record.validate()?;
         self.accept_validated(record.frame, &record.blobs, true)
     }

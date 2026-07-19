@@ -597,6 +597,9 @@ mod forward_index_tests;
 mod full_path_fixture;
 
 #[cfg(test)]
+mod full_path_model_failure_tests;
+
+#[cfg(test)]
 mod full_path_observation;
 
 #[cfg(test)]

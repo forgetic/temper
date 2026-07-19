@@ -10,11 +10,18 @@ use super::machine::{DaemonMachine, DaemonRequest};
 impl DaemonMachine {
     pub(super) fn handle_activity_batch(
         &self,
-        request: WorkerActivityBatch,
+        mut request: WorkerActivityBatch,
         auth: Option<WorkerAuth>,
         trusted_transport: bool,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
+        // The transport DTO is untrusted even after worker authentication.
+        // Normalize diagnostics before protocol validation so unsafe detail can
+        // never reach dispatch, logging, or the journal representation.
+        for event in &mut request.batch.events {
+            event.event.sanitize_retry_failure_message();
+            event.event.normalize_model_failure();
+        }
         if request.protocol_version != WORKER_PROTOCOL_VERSION
             || request.worker_id.trim().is_empty()
             || request.assignment_id.trim().is_empty()
