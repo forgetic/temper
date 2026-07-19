@@ -7,13 +7,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use skein::cx::Cx;
-use temper_engine::TraceExportRecordV1;
 use temper_log::activity::{
     ActivitySpanKind, CanonicalActivityProjector, InMemoryActivitySpanExporter,
 };
 use temper_protocol_activity::{
     AgentActivityEventV1, AgentRunEventV1, AgentScopeKindV1, BlobAttachmentV1, CaptureModeV1,
-    CapturedContentV1, PromptSnapshotV1, RunFinishedV1, RunStatusV1,
+    CapturedContentV1, PromptSnapshotV1, RunFinishedV1, RunStatusV1, TraceExportRecordV1,
 };
 use temper_web::trace::{TraceEventPage, TraceRunStatus, TraceRunSummary, board_projection};
 

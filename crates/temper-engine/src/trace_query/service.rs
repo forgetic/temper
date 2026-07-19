@@ -5,14 +5,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use secrecy::SecretString;
 use serde::Serialize;
 use temper_engine_io::http::{HttpRequestData, HttpResponseData};
-use temper_protocol_activity::{BlobAttachmentV1, BlobReferenceV1};
+use temper_protocol_activity::{BlobAttachmentV1, BlobReferenceV1, TraceExportRecordV1};
 
 use crate::trace_journal::{AgentTraceJournal, TraceJournalError, content_references};
 
 use super::ApiError;
 use super::auth::authorize;
 use super::cursor::{RunOrderKey, decode_cursor, encode_cursor, run_order_key};
-use super::model::{TraceEventPage, TraceExportRecordV1, TraceRunPage, TraceRunSummary};
+use super::model::{TraceEventPage, TraceRunPage, TraceRunSummary};
 use super::projection::project_summary;
 use super::request::{EventQuery, RunListQuery, TraceRoute, parse_route};
 
