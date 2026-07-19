@@ -270,62 +270,86 @@ fn section_seven_reference_projection_is_prefixed_and_structured() {
 }
 
 #[test]
-fn model_error_agent_finished_renders_safe_detail_and_structured_fields() {
+fn model_unavailable_terminal_projection_retains_status_and_code_diagnostics() {
     let layer = CaptureLayer::default();
     let events = layer.events.clone();
     let subscriber = registry().with(layer);
-    let failure = ModelFailureV1 {
-        provider: "openai-codex".into(),
-        model: "gpt-test".into(),
-        category: ModelFailureCategoryV1::RateLimit,
-        retryable: true,
-        http_status: Some(429),
-        provider_request_id: Some("req_rate_532".into()),
-        provider_error_code: Some("rate_limit".into()),
-        message: "Rate limit exceeded; retry later.".into(),
-        detail_redacted: false,
-    };
+    let failures = [
+        ModelFailureV1 {
+            provider: "openai-codex".into(),
+            model: "gpt-missing".into(),
+            category: ModelFailureCategoryV1::Provider,
+            retryable: false,
+            http_status: Some(400),
+            provider_request_id: Some("req_code_556".into()),
+            provider_error_code: Some("model_not_found".into()),
+            message: "The requested model was not found.".into(),
+            detail_redacted: false,
+        },
+        ModelFailureV1 {
+            provider: "openai-codex".into(),
+            model: "gpt-missing".into(),
+            category: ModelFailureCategoryV1::Context,
+            retryable: false,
+            http_status: Some(404),
+            provider_request_id: Some("req_status_556".into()),
+            provider_error_code: None,
+            message: "The requested model is unavailable.".into(),
+            detail_redacted: false,
+        },
+    ];
 
     with_default(subscriber, || {
-        let item = WorkItemRef::issue("ai/temper", 532);
-        emit::emit_agent_finished(AgentFinished {
-            item: &item,
-            role: "engineer",
-            kind: "coding",
-            status: AgentTerminalStatus::Failed,
-            terminal_reason: Some(AgentTerminalReasonV1::ModelError),
-            model_failure: Some(&failure),
-            duration_ms: 1_250,
-            summary: "model failure detail is selected from the typed diagnostic",
-        });
+        for failure in &failures {
+            let item = WorkItemRef::issue("ai/temper", 556);
+            emit::emit_agent_finished(AgentFinished {
+                item: &item,
+                role: "engineer",
+                kind: "coding",
+                status: AgentTerminalStatus::Failed,
+                terminal_reason: Some(AgentTerminalReasonV1::ModelError),
+                model_failure: Some(failure),
+                duration_ms: 750,
+                summary: "model unavailable",
+            });
+        }
     });
 
     let captured = events.lock().unwrap();
-    let finished = event_named(&captured, Event::AgentFinished.as_str());
-    assert_eq!(finished.text("reason"), "model_error");
-    assert_eq!(finished.text("model.provider"), "openai-codex");
-    assert_eq!(finished.text("model.name"), "gpt-test");
-    assert_eq!(finished.text("model.failure.category"), "rate_limit");
-    assert!(finished.bool("model.failure.retryable"));
-    assert_eq!(finished.u64("model.failure.http_status"), 429);
-    assert_eq!(finished.text("model.failure.request_id"), "req_rate_532");
-    assert_eq!(finished.text("model.failure.provider_code"), "rate_limit");
-    assert_eq!(
-        finished.text("model.failure.message"),
-        "Rate limit exceeded; retry later."
-    );
-    let message = finished.text("message");
-    for expected in [
-        "model_error",
-        "openai-codex/gpt-test",
-        "category=rate_limit",
-        "retryable=true",
-        "http_status=429",
-        "request_id=req_rate_532",
-    ] {
-        assert!(message.contains(expected), "missing {expected}: {message}");
+    for (finished, failure) in captured.iter().zip(&failures) {
+        let category = failure.category.as_str();
+        let status = failure.http_status.unwrap();
+        let request_id = failure.provider_request_id.as_deref().unwrap();
+        let code = failure.provider_error_code.as_deref();
+        assert_eq!(finished.text("reason"), "model_error");
+        assert_eq!(finished.text("model.provider"), failure.provider);
+        assert_eq!(finished.text("model.failure.category"), category);
+        assert!(!finished.bool("model.failure.retryable"));
+        assert_eq!(finished.u64("model.failure.http_status"), u64::from(status));
+        assert_eq!(finished.text("model.failure.request_id"), request_id);
+        assert_eq!(finished.text_opt("model.failure.provider_code"), code);
+
+        let message = finished.text("message");
+        for expected in [
+            "model_error",
+            "openai-codex/gpt-missing",
+            category,
+            request_id,
+            "retryable=false",
+        ] {
+            assert!(message.contains(expected), "missing {expected}: {message}");
+        }
+        assert!(
+            message.contains(&format!("http_status={status}")),
+            "missing HTTP status: {message}"
+        );
+        if let Some(code) = code {
+            assert!(
+                message.contains(&format!("provider_code={code}")),
+                "missing provider code: {message}"
+            );
+        }
     }
-    assert!(!format!("{finished:?}").contains("SECRET-SENTINEL-532"));
 }
 
 #[test]

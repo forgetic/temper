@@ -15,9 +15,17 @@ fn classifies_model_unavailable_from_provider_phrasings() {
         "error: model_not_found",
     ] {
         match classify_run_error("claude-fable-5", message.to_string()) {
-            CodingAgentError::ModelUnavailable { model, detail } => {
+            CodingAgentError::ModelUnavailable {
+                model,
+                detail,
+                diagnostic,
+            } => {
                 assert_eq!(model, "claude-fable-5");
                 assert_eq!(detail, message);
+                assert_eq!(diagnostic.provider(), "unknown");
+                assert_eq!(diagnostic.model(), "claude-fable-5");
+                assert_eq!(diagnostic.category(), ModelFailureCategory::RedactedUnknown);
+                assert!(diagnostic.detail_redacted());
             }
             other => panic!("expected ModelUnavailable for {message:?}, got {other:?}"),
         }
@@ -34,11 +42,8 @@ fn classifies_other_errors_as_abnormal_stop() {
 
 #[test]
 fn model_unavailable_message_points_at_overrides() {
-    let rendered = CodingAgentError::ModelUnavailable {
-        model: "claude-fable-5".to_string(),
-        detail: "404 not available".to_string(),
-    }
-    .to_string();
+    let rendered = classify_run_error("claude-fable-5", "model is not available (404)".to_string())
+        .to_string();
     assert!(rendered.contains("claude-fable-5"));
     assert!(rendered.contains("--model"));
 }
@@ -77,26 +82,54 @@ fn typed_model_failure_survives_outcome_and_coding_error() {
 }
 
 #[test]
-fn typed_model_not_found_is_promoted_without_parsing_message() {
-    let upstream = ProviderFailureDiagnostic::new(
-        FailureCategory::Provider,
-        false,
-        Some(404),
-        Some("req_missing"),
-        Some("model_not_found"),
-        "The requested resource was not found.",
-    );
-    let diagnostic = ModelFailureDiagnostic::from_provider(
-        &ModelIdentity::new("openai", "gpt-missing"),
-        &upstream,
-    );
+fn typed_model_unavailable_classifications_retain_diagnostics() {
+    for (category, expected_category, status, request_id, code) in [
+        (
+            FailureCategory::Provider,
+            ModelFailureCategory::Provider,
+            Some(400),
+            "req_code_556",
+            Some("model_not_found"),
+        ),
+        (
+            FailureCategory::Context,
+            ModelFailureCategory::Context,
+            Some(404),
+            "req_status_556",
+            None,
+        ),
+    ] {
+        let upstream = ProviderFailureDiagnostic::new(
+            category,
+            false,
+            status,
+            Some(request_id),
+            code,
+            "The requested resource was not found.",
+        );
+        let diagnostic = ModelFailureDiagnostic::from_provider(
+            &ModelIdentity::new("openai", "gpt-missing"),
+            &upstream,
+        );
 
-    match classify_model_failure(diagnostic) {
-        CodingAgentError::ModelUnavailable { model, detail } => {
-            assert_eq!(model, "gpt-missing");
-            assert_eq!(detail, "The requested resource was not found.");
+        match classify_model_failure(diagnostic) {
+            CodingAgentError::ModelUnavailable {
+                model,
+                detail,
+                diagnostic,
+            } => {
+                assert_eq!(model, "gpt-missing");
+                assert_eq!(detail, "The requested resource was not found.");
+                assert_eq!(diagnostic.provider(), "openai");
+                assert_eq!(diagnostic.model(), "gpt-missing");
+                assert_eq!(diagnostic.category(), expected_category);
+                assert!(!diagnostic.retryable());
+                assert_eq!(diagnostic.http_status(), status);
+                assert_eq!(diagnostic.provider_request_id(), Some(request_id));
+                assert_eq!(diagnostic.provider_error_code(), code);
+            }
+            other => panic!("expected structured model-unavailable promotion, got {other:?}"),
         }
-        other => panic!("expected structured model-unavailable promotion, got {other:?}"),
     }
 }
 

@@ -88,3 +88,66 @@ fn typed_model_failures_survive_terminal_selection_before_worker_conversion() {
         assert!(!worker_error.message.contains("SECRET-SENTINEL-532"));
     }
 }
+
+#[test]
+fn model_unavailable_diagnostics_survive_terminal_selection_before_worker_conversion() {
+    for (category, expected_category, status, request_id, code) in [
+        (
+            FailureCategory::Provider,
+            ModelFailureCategoryV1::Provider,
+            Some(400),
+            "req_code_556",
+            Some("model_not_found"),
+        ),
+        (
+            FailureCategory::Context,
+            ModelFailureCategoryV1::Context,
+            Some(404),
+            "req_status_556",
+            None,
+        ),
+    ] {
+        let upstream = ProviderFailureDiagnostic::new(
+            category,
+            false,
+            status,
+            Some(request_id),
+            code,
+            "The requested model is unavailable.",
+        );
+        let diagnostic = temper_agent::ModelFailureDiagnostic::from_provider(
+            &temper_agent::ModelIdentity::new("openai-codex", "gpt-missing"),
+            &upstream,
+        );
+        let error = CodingAgentError::ModelUnavailable {
+            model: "gpt-missing".to_string(),
+            detail: "The requested model is unavailable.".to_string(),
+            diagnostic: Box::new(diagnostic),
+        };
+        let outcome = Result::<(), _>::Err(error);
+
+        assert_eq!(
+            agent_terminal_report(&outcome, false),
+            (
+                AgentTerminalStatus::Failed,
+                Some(AgentTerminalReasonV1::ModelError)
+            )
+        );
+        let failure = coding_agent_model_failure(outcome.as_ref().unwrap_err())
+            .expect("model-unavailable diagnostic");
+        assert_eq!(failure.provider, "openai-codex");
+        assert_eq!(failure.model, "gpt-missing");
+        assert_eq!(failure.category, expected_category);
+        assert!(!failure.retryable);
+        assert_eq!(failure.http_status, status);
+        assert_eq!(failure.provider_request_id.as_deref(), Some(request_id));
+        assert_eq!(failure.provider_error_code.as_deref(), code);
+
+        let error = match outcome {
+            Err(error) => error,
+            Ok(()) => unreachable!("model-unavailable outcome is failed"),
+        };
+        let worker_error = classify_coding_agent_error(error, false);
+        assert_eq!(worker_error.class, FailureClass::Transient);
+    }
+}
