@@ -136,14 +136,17 @@ prompts, output, or credentials.
 
 At startup, stale cgroups are considered owned only below Temper's dedicated
 subtree and only when their logical-worker/process-boot fence parses. A fence
-contains the creating PID and kernel start-time identity: an exact live match is
-preserved, while a missing process or PID reuse proves that owner stale. Only
-proven-stale members are killed; trees that independently become empty are
-removed deepest-first. Legacy, malformed, still-populated, or uninspectable
-trees remain without being signaled.
-`worker.containment.startup_scavenge` reports removed/retained counts, a bounded
-list of retained path diagnostics, and the omitted-diagnostic count; retained or
-omitted evidence is warning level. During `SIGINT` or `SIGTERM`, the worker
+contains a non-zero creating PID and kernel start-time identity: an exact live
+match is preserved, while a missing process or PID reuse proves that owner
+stale. If the process-incarnation fence cannot be established, cgroup-v2 Auto
+selection records the capability failure and uses the Linux supervisor
+fallback. Only proven-stale members are killed; trees that independently become
+empty are removed deepest-first. Legacy, malformed, still-populated, or
+uninspectable trees remain without being signaled.
+`worker.containment.startup_scavenge` reports removed/live-protected/retained
+counts, a bounded list of retained path diagnostics, and the omitted-diagnostic
+count; retained or omitted evidence is warning level. During `SIGINT` or
+`SIGTERM`, the worker
 stops intake, fences all attempts, escalates every active owner, and joins the
 active-job registry before returning. With the example systemd unit,
 `Delegate=yes` permits nested

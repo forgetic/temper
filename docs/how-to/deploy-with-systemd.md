@@ -117,15 +117,16 @@ containment preparation rather than claiming a descendant-complete guarantee.
 
 Startup probing owns a dedicated `temper` subtree. Each job tree is nested
 under a logical-worker and process-boot fence containing the owner's PID and
-kernel start-time identity. Startup preserves every fence whose exact owner is
-still live; only a missing owner or a reused PID proves a fence stale enough to
+non-zero kernel start-time identity. If startup cannot establish that fence,
+the cgroup backend is unavailable and normal Auto selection uses the Linux
+supervisor fallback. Startup preserves every fence whose exact owner is still
+live; only a missing owner or a reused PID proves a fence stale enough to
 signal. Proven-stale cgroups are killed and removed deepest-first after an
 independent empty-tree proof. Legacy, malformed, and uninspectable roots are
-retained without signaling.
-`worker.containment.startup_scavenge` reports removed and retained counts,
-bounded retained-path diagnostics, and omitted counts without command or
-credential content. Never manually move unrelated processes into the Temper
-subtree.
+retained without signaling. `worker.containment.startup_scavenge` reports
+removed, live-protected, and retained counts, bounded retained-path diagnostics,
+and omitted counts without command or credential content. Never manually move
+unrelated processes into the Temper subtree.
 
 `SIGINT`/`SIGTERM` closes intake, fences every active attempt, requests cleanup,
 and waits for task and containment quiescence before worker shutdown returns.

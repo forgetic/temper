@@ -34,6 +34,7 @@ struct RetainedScavengeDiagnostic {
 pub(super) fn startup_scavenge_from_parts<'a>(
     worker_id: &str,
     removed_count: usize,
+    protected_count: usize,
     retained: impl IntoIterator<Item = (&'a std::path::Path, &'a str)>,
     omitted: usize,
 ) -> Option<ContainmentEvent> {
@@ -44,7 +45,7 @@ pub(super) fn startup_scavenge_from_parts<'a>(
             diagnostic: bounded_diagnostic(diagnostic, MAX_EVENT_REASON_BYTES),
         })
         .collect::<Vec<_>>();
-    if removed_count == 0 && retained.is_empty() && omitted == 0 {
+    if removed_count == 0 && protected_count == 0 && retained.is_empty() && omitted == 0 {
         return None;
     }
     let retained_count = retained.len();
@@ -61,6 +62,7 @@ pub(super) fn startup_scavenge_from_parts<'a>(
         ContainmentStartupScavenge {
             worker_id: bounded(worker_id, MAX_EVENT_IDENTIFIER_BYTES),
             removed_count,
+            protected_count,
             retained_count,
             retained_diagnostics,
             omitted_diagnostics,
@@ -103,6 +105,7 @@ fn startup_diagnostic(
     let scavenge = startup_scavenge_from_parts(
         worker_id,
         stale_cleanup.removed().len(),
+        stale_cleanup.protected_count(),
         stale_cleanup
             .retained()
             .iter()

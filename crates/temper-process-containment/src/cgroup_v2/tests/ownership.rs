@@ -23,6 +23,7 @@ fn startup_scavenging_reclaims_only_proven_stale_owners() {
 
     let report = factory.scavenge_stale();
     assert!(report.removed().contains(&stale));
+    assert_eq!(report.protected_count(), 1);
     assert!(!stale.exists());
     assert!(active_descendant.exists());
     assert_eq!(
@@ -73,6 +74,7 @@ fn startup_of_second_live_owner_does_not_signal_first_owner() {
 
     let report = factory.scavenge_stale();
     assert!(report.removed().is_empty());
+    assert_eq!(report.protected_count(), 2);
     assert!(report.retained().is_empty());
     assert!(descendant.exists());
     assert!(fs.kills.lock().expect("kills").is_empty());
@@ -88,5 +90,27 @@ fn reused_owner_pid_proves_old_boot_stale() {
 
     let report = factory.scavenge_stale();
     assert_eq!(report.removed(), &[stale]);
+    assert!(fs.kills.lock().expect("kills").is_empty());
+}
+
+#[test]
+fn zero_process_boot_fences_are_retained_without_signaling() {
+    let (fs, _processes, factory) = fake_factory(true);
+    let dedicated = factory.capability().dedicated_subtree().expect("dedicated");
+    let worker = dedicated.join("worker-invalid");
+    fs.create_cgroup(&worker).expect("worker root");
+    let invalid = worker.join("boot-0-0");
+    fs.create_cgroup(&invalid).expect("invalid boot root");
+    fs.set_members(&invalid, &[9_301]);
+
+    let report = factory.scavenge_stale();
+
+    assert!(
+        report
+            .retained()
+            .iter()
+            .any(|entry| entry.path() == invalid)
+    );
+    assert!(invalid.exists());
     assert!(fs.kills.lock().expect("kills").is_empty());
 }

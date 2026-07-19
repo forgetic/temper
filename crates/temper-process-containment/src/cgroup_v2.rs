@@ -14,14 +14,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod config;
 mod containment;
 mod ownership;
 mod platform;
 mod process;
 
+pub use config::CgroupV2FactoryConfig;
 pub use containment::CgroupV2Containment;
 use containment::{CgroupV2PreparedContainment, PreparedControls};
-pub use ownership::{CgroupV2ScavengeReport, RetainedStaleCgroup};
+pub use ownership::{CgroupV2OwnerFence, CgroupV2ScavengeReport, RetainedStaleCgroup};
 use platform::*;
 use process::*;
 
@@ -38,70 +40,10 @@ use crate::{
 /// mutable global environment variable.
 pub const INHERITED_CGROUP_SCOPE_FD: RawFd = 198;
 
-const DEFAULT_SUBTREE: &str = "temper";
 const MAX_SCAVENGE_DIAGNOSTICS: usize = 128;
 const MAX_SCAVENGE_DIAGNOSTIC_BYTES: usize = 2 * 1024;
 const ROLLBACK_RETRIES: usize = 50;
 const ROLLBACK_RETRY: Duration = Duration::from_millis(10);
-
-/// Deterministic path context for cgroups owned by one factory.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CgroupV2FactoryConfig {
-    owner: String,
-    owner_pid: u32,
-    owner_start_time: u64,
-    job: String,
-    attempt: String,
-    subtree: String,
-}
-
-impl CgroupV2FactoryConfig {
-    pub fn new(job: impl AsRef<str>, attempt: impl AsRef<str>) -> io::Result<Self> {
-        Self::for_owner("process", job, attempt)
-    }
-
-    /// Bind every cgroup made by this factory to one logical owner and the
-    /// current process boot. Startup scavenging uses both the PID and its
-    /// kernel start-time identity before deciding that an ownership root is
-    /// stale.
-    pub fn for_owner(
-        owner: impl AsRef<str>,
-        job: impl AsRef<str>,
-        attempt: impl AsRef<str>,
-    ) -> io::Result<Self> {
-        let process = proc_identity(std::process::id())?;
-        Ok(Self {
-            owner: encode_component(owner.as_ref(), "owner")?,
-            owner_pid: process.pid(),
-            owner_start_time: process.start_time_identity(),
-            job: encode_component(job.as_ref(), "job")?,
-            attempt: encode_component(attempt.as_ref(), "attempt")?,
-            subtree: DEFAULT_SUBTREE.to_owned(),
-        })
-    }
-
-    /// Override the dedicated Temper-owned subtree name.
-    pub fn with_subtree(mut self, subtree: impl AsRef<str>) -> io::Result<Self> {
-        self.subtree = encode_component(subtree.as_ref(), "subtree")?;
-        Ok(self)
-    }
-
-    pub fn job(&self) -> &str {
-        &self.job
-    }
-
-    pub fn owner(&self) -> &str {
-        &self.owner
-    }
-
-    pub fn attempt(&self) -> &str {
-        &self.attempt
-    }
-
-    pub fn subtree(&self) -> &str {
-        &self.subtree
-    }
-}
 
 /// Result of probing the host's unified hierarchy and the current delegated
 /// cgroup.  `delegation_available` is the final selection decision; individual
@@ -115,6 +57,7 @@ pub struct CgroupV2Capability {
     writable_subtree: bool,
     cgroup_kill: bool,
     pidfd: bool,
+    ownership_fence: bool,
     probe_rollback_complete: bool,
     diagnostic: Option<String>,
 }
@@ -129,6 +72,7 @@ impl CgroupV2Capability {
             writable_subtree: false,
             cgroup_kill: false,
             pidfd,
+            ownership_fence: false,
             probe_rollback_complete: true,
             diagnostic: Some(diagnostic.into()),
         }
@@ -162,6 +106,10 @@ impl CgroupV2Capability {
         self.pidfd
     }
 
+    pub fn ownership_fence(&self) -> bool {
+        self.ownership_fence
+    }
+
     /// Whether every temporary cgroup made by capability probing was removed.
     /// Auto-selection must not fall back while a partial probe is still owned.
     pub fn probe_rollback_complete(&self) -> bool {
@@ -177,6 +125,7 @@ impl CgroupV2Capability {
             && self.delegation
             && self.writable_subtree
             && self.pidfd
+            && self.ownership_fence
             && self.dedicated_subtree.is_some()
     }
 }
@@ -248,10 +197,10 @@ impl CgroupV2BackendFactory {
     /// Probe the real host.  If a valid inherited scope descriptor is present,
     /// it is preferred over `/proc/self/cgroup`, ensuring nested tool cgroups
     /// are created under their out-of-process job cgroup.
-    pub fn system(config: CgroupV2FactoryConfig) -> Self {
+    pub fn system(mut config: CgroupV2FactoryConfig) -> Self {
         let fs: Arc<dyn CgroupFileSystem> = Arc::new(RealCgroupFileSystem);
         let processes: Arc<dyn LinuxProcessApi> = Arc::new(RealLinuxProcessApi);
-        let capability = probe_system(&config, fs.as_ref(), processes.as_ref());
+        let capability = probe_owned_system(&mut config, fs.as_ref(), processes.as_ref());
         Self::from_parts(config, capability, fs, processes)
     }
 
@@ -311,12 +260,15 @@ impl CgroupV2BackendFactory {
             scope_component(&spec.scope).map_err(CgroupPrepareFailure::before_setup)?;
         let owner_id = encode_component(spec.identity.as_str(), "owner identity")
             .map_err(CgroupPrepareFailure::before_setup)?;
+        let owner_fence = self.config.owner_fence.as_ref().ok_or_else(|| {
+            CgroupPrepareFailure::before_setup(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "cgroup PID/start-time ownership fence is unavailable",
+            ))
+        })?;
         let components = [
             format!("worker-{}", self.config.owner),
-            format!(
-                "boot-{}-{}",
-                self.config.owner_pid, self.config.owner_start_time
-            ),
+            owner_fence.component(),
             format!("job-{}", self.config.job),
             format!("attempt-{}", self.config.attempt),
             format!("owner-kind-{owner_kind}"),
@@ -431,6 +383,31 @@ impl CgroupV2BackendFactory {
             )
         })?;
         fallback.prepare_backend(ContainmentBackendPolicy::ForceLinuxSupervisor, spec)
+    }
+}
+
+fn establish_owner_fence(
+    config: &mut CgroupV2FactoryConfig,
+    processes: &dyn LinuxProcessApi,
+) -> io::Result<()> {
+    if config.owner_fence.is_none() {
+        let process = processes.identity(std::process::id())?;
+        config.owner_fence = Some(CgroupV2OwnerFence::from_process(&process)?);
+    }
+    Ok(())
+}
+
+fn probe_owned_system(
+    config: &mut CgroupV2FactoryConfig,
+    fs: &dyn CgroupFileSystem,
+    processes: &dyn LinuxProcessApi,
+) -> CgroupV2Capability {
+    match establish_owner_fence(config, processes) {
+        Ok(()) => probe_system(config, fs, processes),
+        Err(error) => CgroupV2Capability::unavailable(
+            format!("cannot establish cgroup PID/start-time ownership fence: {error}"),
+            processes.pidfd_supported(),
+        ),
     }
 }
 

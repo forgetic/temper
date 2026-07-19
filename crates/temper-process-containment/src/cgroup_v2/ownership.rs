@@ -3,6 +3,43 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
+/// PID plus kernel start tick identifying one cgroup-owning process
+/// incarnation. The start tick prevents a reused numeric PID from making a
+/// crashed owner's cgroups appear live.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CgroupV2OwnerFence {
+    pid: u32,
+    start_time: u64,
+}
+
+impl CgroupV2OwnerFence {
+    pub fn new(pid: u32, start_time: u64) -> io::Result<Self> {
+        if pid == 0 || start_time == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cgroup owner PID and start time must both be non-zero",
+            ));
+        }
+        Ok(Self { pid, start_time })
+    }
+
+    pub(super) fn from_process(process: &ProcessIdentity) -> io::Result<Self> {
+        Self::new(process.pid(), process.start_time_identity())
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn start_time(&self) -> u64 {
+        self.start_time
+    }
+
+    pub(super) fn component(&self) -> String {
+        format!("boot-{}-{}", self.pid, self.start_time)
+    }
+}
+
 /// One cgroup that could not be proven safe to reclaim and remove.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RetainedStaleCgroup {
@@ -25,6 +62,7 @@ impl RetainedStaleCgroup {
 pub struct CgroupV2ScavengeReport {
     removed: Vec<PathBuf>,
     retained: Vec<RetainedStaleCgroup>,
+    protected_count: usize,
     omitted: usize,
 }
 
@@ -35,6 +73,12 @@ impl CgroupV2ScavengeReport {
 
     pub fn retained(&self) -> &[RetainedStaleCgroup] {
         &self.retained
+    }
+
+    /// Live process-boot roots skipped without inspecting or signaling their
+    /// descendants.
+    pub fn protected_count(&self) -> usize {
+        self.protected_count
     }
 
     pub fn omitted(&self) -> usize {
@@ -58,6 +102,10 @@ impl CgroupV2ScavengeReport {
         } else {
             self.omitted = self.omitted.saturating_add(1);
         }
+    }
+
+    fn remember_protected(&mut self) {
+        self.protected_count = self.protected_count.saturating_add(1);
     }
 }
 
@@ -97,12 +145,15 @@ impl CgroupV2BackendFactory {
     }
 
     fn scavenge_boot(&self, report: &mut CgroupV2ScavengeReport, path: PathBuf) {
-        let Some((pid, start_time)) = parse_boot_fence(&path) else {
+        let Some(owner) = parse_boot_fence(&path) else {
             report.remember_retained(path, "invalid process-boot ownership fence");
             return;
         };
-        match self.processes.identity(pid) {
-            Ok(identity) if identity.start_time_identity() == start_time => return,
+        match self.processes.identity(owner.pid()) {
+            Ok(identity) if identity.start_time_identity() == owner.start_time() => {
+                report.remember_protected();
+                return;
+            }
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -123,7 +174,7 @@ impl CgroupV2BackendFactory {
 }
 
 fn owned_children(fs: &dyn CgroupFileSystem, root: &Path) -> io::Result<Vec<PathBuf>> {
-    let children = fs.child_directories(root)?;
+    let mut children = fs.child_directories(root)?;
     if let Some(escaped) = children.iter().find(|path| !path.starts_with(root)) {
         return Err(io::Error::other(format!(
             "cgroup traversal escaped {} through {}",
@@ -131,6 +182,7 @@ fn owned_children(fs: &dyn CgroupFileSystem, root: &Path) -> io::Result<Vec<Path
             escaped.display()
         )));
     }
+    children.sort();
     Ok(children)
 }
 
@@ -140,11 +192,10 @@ fn is_worker_root(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with("worker-") && name.len() > "worker-".len())
 }
 
-fn parse_boot_fence(path: &Path) -> Option<(u32, u64)> {
+fn parse_boot_fence(path: &Path) -> Option<CgroupV2OwnerFence> {
     let name = path.file_name()?.to_str()?;
     let fields = name.strip_prefix("boot-")?;
     let (pid, start_time) = fields.split_once('-')?;
-    let pid = pid.parse().ok()?;
-    let start_time = start_time.parse().ok()?;
-    (name == format!("boot-{pid}-{start_time}")).then_some((pid, start_time))
+    let owner = CgroupV2OwnerFence::new(pid.parse().ok()?, start_time.parse().ok()?).ok()?;
+    (owner.component() == name).then_some(owner)
 }
