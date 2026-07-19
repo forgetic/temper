@@ -1719,6 +1719,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-benchmark-cli"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "temper-config",
+ "temper-protocol-activity",
+ "temper-protocol-agent",
+ "temper-worker",
+ "temper-worker-service",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "temper-cli"
 version = "0.1.0"
 dependencies = [
