@@ -546,6 +546,7 @@ pub(crate) fn classify_model_failure(
         CodingAgentError::ModelUnavailable {
             model: diagnostic.model().to_string(),
             detail: diagnostic.message().to_string(),
+            diagnostic: Box::new(diagnostic),
         }
     } else {
         CodingAgentError::ModelFailure(Box::new(diagnostic))
@@ -573,6 +574,9 @@ pub(crate) fn classify_run_error(model: &str, message: String) -> CodingAgentErr
         CodingAgentError::ModelUnavailable {
             model: model.to_string(),
             detail: message,
+            diagnostic: Box::new(temper_agent_core::ModelFailureDiagnostic::redacted_unknown(
+                "unknown", model, false,
+            )),
         }
     } else {
         CodingAgentError::AgentStopped(message)

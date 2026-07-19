@@ -137,6 +137,9 @@ fn model_failure_detail(failure: &ModelFailureV1) -> String {
     if let Some(request_id) = &failure.provider_request_id {
         detail.push_str(&format!(" request_id={request_id}"));
     }
+    if let Some(code) = &failure.provider_error_code {
+        detail.push_str(&format!(" provider_code={code}"));
+    }
     detail
 }
 

@@ -44,7 +44,13 @@ pub enum CodingAgentError {
     /// distinct from a generic abnormal stop so the failure names the model and
     /// any provider-suggested fallback, and an operator can fix it by passing a
     /// different `--model` (or setting the provider profile's `models.main`).
-    ModelUnavailable { model: String, detail: String },
+    /// The diagnostic remains authoritative for safe terminal projections;
+    /// legacy text classifications carry an explicit redacted diagnostic.
+    ModelUnavailable {
+        model: String,
+        detail: String,
+        diagnostic: Box<ModelFailureDiagnostic>,
+    },
     /// The configured codebase-memory MCP toolset was required but could not be
     /// started or listed.
     CodebaseMemory(String),
@@ -85,7 +91,7 @@ impl std::fmt::Display for CodingAgentError {
                     "aborted: agent run stopped (authority={authority})"
                 )
             }
-            CodingAgentError::ModelUnavailable { model, detail } => write!(
+            CodingAgentError::ModelUnavailable { model, detail, .. } => write!(
                 formatter,
                 "model `{model}` is unavailable: {detail}. Pass --model (or set the \
                  provider profile's models.main) to a model the credential grants."

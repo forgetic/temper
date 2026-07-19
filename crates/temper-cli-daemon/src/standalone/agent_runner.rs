@@ -413,7 +413,8 @@ impl InProcessAgentRunner {
 
 fn coding_agent_model_failure(error: &CodingAgentError) -> Option<ModelFailureV1> {
     match error {
-        CodingAgentError::ModelFailure(diagnostic) => {
+        CodingAgentError::ModelFailure(diagnostic)
+        | CodingAgentError::ModelUnavailable { diagnostic, .. } => {
             Some(protocol_model_failure(diagnostic.as_ref()))
         }
         _ => None,
