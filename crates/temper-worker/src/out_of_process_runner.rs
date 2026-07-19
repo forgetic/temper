@@ -278,6 +278,18 @@ impl OutOfProcessRunner {
         self
     }
 
+    /// Scope production cgroup ownership to this logical worker. The factory
+    /// also records the current process boot, so concurrent incarnations of the
+    /// same worker id remain independently liveness-fenced.
+    #[must_use]
+    pub fn with_containment_owner(mut self, owner: impl Into<String>) -> Self {
+        let owner = owner.into();
+        self.containment_factory = Arc::new(move |job, attempt| {
+            crate::process_containment::production_factory_for_owner(&owner, job, attempt)
+        });
+        self
+    }
+
     #[cfg(test)]
     fn with_diagnostic_dispatch(mut self, dispatch: tracing::Dispatch) -> Self {
         self.diagnostic_dispatch = Some(dispatch);

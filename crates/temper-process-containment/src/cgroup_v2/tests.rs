@@ -9,6 +9,8 @@ use super::containment::PreparedControls;
 use super::*;
 use crate::{CleanupTrigger, ContainmentFactory, ContainmentIdentity};
 
+mod ownership;
+
 struct FakeCgroupFs {
     root: PathBuf,
     kill: bool,
@@ -17,6 +19,7 @@ struct FakeCgroupFs {
     fail_removes: Mutex<HashSet<PathBuf>>,
     event_reads: Mutex<HashMap<PathBuf, VecDeque<String>>>,
     removals: Mutex<Vec<PathBuf>>,
+    kills: Mutex<Vec<PathBuf>>,
 }
 
 impl FakeCgroupFs {
@@ -35,6 +38,7 @@ impl FakeCgroupFs {
             fail_removes: Mutex::new(HashSet::new()),
             event_reads: Mutex::new(HashMap::new()),
             removals: Mutex::new(Vec::new()),
+            kills: Mutex::new(Vec::new()),
         });
         fake.make_controls(&fake.root);
         fake
@@ -178,6 +182,7 @@ impl CgroupFileSystem for FakeCgroupFs {
         if let Some(control) = control {
             control.write_all(b"1")?;
         }
+        self.kills.lock().expect("kills").push(root.to_path_buf());
         for path in descendant_directories(self, root)? {
             self.set_members(&path, &[]);
         }
@@ -193,10 +198,18 @@ struct FakeProcesses {
 
 impl FakeProcesses {
     fn add(&self, pid: u32) {
+        self.add_with_start(pid, u64::from(pid) * 7);
+    }
+
+    fn add_with_start(&self, pid: u32, start_time: u64) {
         self.identities.lock().expect("identities").insert(
             pid,
-            ProcessIdentity::new(pid, 1, pid, pid, u64::from(pid) * 7, "/fake/process"),
+            ProcessIdentity::new(pid, 1, pid, pid, start_time, "/fake/process"),
         );
+    }
+
+    fn remove(&self, pid: u32) {
+        self.identities.lock().expect("identities").remove(&pid);
     }
 }
 
@@ -272,6 +285,7 @@ fn fake_factory(
     let fs = FakeCgroupFs::new(kill);
     let processes = Arc::new(FakeProcesses::default());
     let config = CgroupV2FactoryConfig::new("job-1", "attempt-2").expect("config");
+    processes.add_with_start(config.owner_pid, config.owner_start_time);
     let capability = probe_delegated(
         &config,
         fs.as_ref(),
@@ -285,6 +299,34 @@ fn fake_factory(
         CgroupV2BackendFactory::from_parts(config, capability, erased_fs, erased_processes);
     factory.nonce_base = 42;
     (fs, processes, factory)
+}
+
+fn factory_owner_root(factory: &CgroupV2BackendFactory) -> PathBuf {
+    factory
+        .capability()
+        .dedicated_subtree()
+        .expect("dedicated")
+        .join(format!("worker-{}", factory.config.owner))
+        .join(format!(
+            "boot-{}-{}",
+            factory.config.owner_pid, factory.config.owner_start_time
+        ))
+}
+
+fn create_owned_tree(
+    fs: &FakeCgroupFs,
+    dedicated: &Path,
+    worker: &str,
+    pid: u32,
+    start_time: u64,
+) -> PathBuf {
+    let worker = dedicated.join(format!("worker-{worker}"));
+    if !worker.exists() {
+        fs.create_cgroup(&worker).expect("worker owner root");
+    }
+    let boot = worker.join(format!("boot-{pid}-{start_time}"));
+    fs.create_cgroup(&boot).expect("process boot root");
+    boot
 }
 
 fn test_spec(name: &str) -> ContainmentSpec {
@@ -384,10 +426,7 @@ fn auto_selection_emits_capabilities_and_uses_the_supplied_fallback() {
 #[test]
 fn partial_prepare_is_rolled_back_before_auto_fallback() {
     let (fs, _processes, factory) = fake_factory(true);
-    let root = factory
-        .capability()
-        .dedicated_subtree()
-        .expect("dedicated")
+    let root = factory_owner_root(&factory)
         .join("job-job-1")
         .join("attempt-attempt-2")
         .join("owner-kind-tool")
@@ -413,10 +452,7 @@ fn partial_prepare_is_rolled_back_before_auto_fallback() {
 #[test]
 fn incomplete_partial_prepare_rollback_blocks_auto_fallback() {
     let (fs, _processes, factory) = fake_factory(true);
-    let root = factory
-        .capability()
-        .dedicated_subtree()
-        .expect("dedicated")
+    let root = factory_owner_root(&factory)
         .join("job-job-1")
         .join("attempt-attempt-2")
         .join("owner-kind-tool")
@@ -447,33 +483,6 @@ fn incomplete_partial_prepare_rollback_blocks_auto_fallback() {
         "failed rollback remains available to scavenging"
     );
     assert!(fallback.policies.lock().expect("policies").is_empty());
-}
-
-#[test]
-fn startup_scavenging_kills_stale_members_and_retains_inspection_errors() {
-    let (fs, processes, factory) = fake_factory(true);
-    let dedicated = factory.capability().dedicated_subtree().expect("dedicated");
-    let stale = dedicated.join("stale");
-    fs.create_cgroup(&stale).expect("stale");
-    processes.add(9001);
-    fs.set_members(&stale, &[9001]);
-    let report = factory.scavenge_stale();
-    assert!(report.removed().contains(&stale));
-
-    let blocked = dedicated.join("blocked");
-    fs.create_cgroup(&blocked).expect("blocked");
-    fs.fail_reads
-        .lock()
-        .expect("fail reads")
-        .insert(blocked.join("cgroup.events"));
-    let report = factory.scavenge_stale();
-    assert!(
-        report
-            .retained()
-            .iter()
-            .any(|entry| entry.path() == blocked)
-    );
-    assert!(blocked.exists());
 }
 
 #[test]

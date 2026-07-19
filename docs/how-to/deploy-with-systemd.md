@@ -115,9 +115,13 @@ process-group-only adapter. Windows workers require nested, kill-on-close Job
 Objects and recursive-empty verification. Unsupported platforms fail
 containment preparation rather than claiming a descendant-complete guarantee.
 
-Startup probing owns a dedicated `temper` subtree. Stale owned cgroups are
-inspected only below that boundary, killed and removed deepest-first when they
-can be proven empty, and retained when inspection or cleanup cannot be proven.
+Startup probing owns a dedicated `temper` subtree. Each job tree is nested
+under a logical-worker and process-boot fence containing the owner's PID and
+kernel start-time identity. Startup preserves every fence whose exact owner is
+still live; only a missing owner or a reused PID proves a fence stale enough to
+signal. Proven-stale cgroups are killed and removed deepest-first after an
+independent empty-tree proof. Legacy, malformed, and uninspectable roots are
+retained without signaling.
 `worker.containment.startup_scavenge` reports removed and retained counts,
 bounded retained-path diagnostics, and omitted counts without command or
 credential content. Never manually move unrelated processes into the Temper

@@ -61,6 +61,7 @@ async fn run_async(
     );
     let runner = Arc::new(
         OutOfProcessRunner::new(invocation.command)
+            .with_containment_owner(worker_config.worker_id.clone())
             .with_env(invocation.env)
             .with_tool_config(invocation.tool_config)
             .with_runtime_limits(invocation.runtime_limits)

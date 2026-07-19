@@ -74,8 +74,8 @@ fn startup_diagnostic(
 ) -> (ContainmentCapabilityDiagnostic, Option<ContainmentEvent>) {
     use temper_process_containment::{CgroupV2BackendFactory, CgroupV2FactoryConfig};
 
-    let config = CgroupV2FactoryConfig::new("startup", "capability")
-        .expect("static startup cgroup identity is valid");
+    let config = CgroupV2FactoryConfig::for_owner(worker_id, "startup", "capability")
+        .expect("worker startup cgroup identity is valid");
     let factory = CgroupV2BackendFactory::system(config);
     let stale_cleanup = factory.scavenge_stale();
     let capability = factory.capability();
