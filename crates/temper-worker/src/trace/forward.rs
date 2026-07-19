@@ -60,6 +60,7 @@ impl RecoveredTraceRun {
     }
 
     fn batch_for_events(&self, events: &[AgentRunEventV1]) -> Option<AgentActivityBatch> {
+        let events = sanitized_forwarding_events(events);
         let first_seq = events.first()?.seq;
         let referenced = events
             .iter()
@@ -76,7 +77,7 @@ impl RecoveredTraceRun {
             version: ACTIVITY_PROTOCOL_VERSION,
             run_id: self.manifest.run_id.clone(),
             first_seq,
-            events: events.to_vec(),
+            events,
             blobs,
         })
     }
@@ -122,6 +123,7 @@ impl RecoveredForwardingRun {
     }
 
     fn batch_for_events(&self, events: &[AgentRunEventV1]) -> Option<AgentActivityBatch> {
+        let events = sanitized_forwarding_events(events);
         let first_seq = events.first()?.seq;
         let referenced = events
             .iter()
@@ -138,10 +140,19 @@ impl RecoveredForwardingRun {
             version: ACTIVITY_PROTOCOL_VERSION,
             run_id: self.manifest.run_id.clone(),
             first_seq,
-            events: events.to_vec(),
+            events,
             blobs,
         })
     }
+}
+
+fn sanitized_forwarding_events(events: &[AgentRunEventV1]) -> Vec<AgentRunEventV1> {
+    let mut events = events.to_vec();
+    for event in &mut events {
+        event.event.sanitize_retry_failure_message();
+        event.event.normalize_model_failure();
+    }
+    events
 }
 
 impl TraceCollector {

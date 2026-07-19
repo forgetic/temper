@@ -139,6 +139,57 @@ fn model_failure_normalization_fails_closed_without_losing_safe_facts() {
 }
 
 #[test]
+fn event_trust_boundary_canonicalizes_new_error_shapes() {
+    let mut unsafe_finish = AgentActivityEventV1::ModelCallFinished(ModelCallFinishedV1 {
+        call_id: "model-unsafe".into(),
+        attempt: 1,
+        status: ModelCallStatusV1::Succeeded,
+        duration_ms: 10,
+        time_to_first_token_ms: None,
+        stop_reason: Some(StopReasonV1::Error),
+        failure: Some(ModelFailureV1 {
+            message: "Authorization: Bearer SECRET-PROVIDER-BODY".into(),
+            provider_request_id: Some("unsafe request id".into()),
+            ..model_failure()
+        }),
+    });
+    unsafe_finish.normalize_model_failure();
+
+    let AgentActivityEventV1::ModelCallFinished(finished) = &unsafe_finish else {
+        unreachable!();
+    };
+    assert_eq!(finished.status, ModelCallStatusV1::Failed);
+    let failure = finished.failure.as_ref().expect("explicit diagnostic");
+    assert_eq!(failure.category, ModelFailureCategoryV1::RedactedUnknown);
+    assert_eq!(failure.message, REDACTED_MODEL_FAILURE_MESSAGE);
+    assert_eq!(failure.provider_request_id, None);
+    assert!(failure.detail_redacted);
+    assert!(
+        !serde_json::to_string(&unsafe_finish)
+            .unwrap()
+            .contains("SECRET-PROVIDER-BODY")
+    );
+
+    let mut missing = AgentActivityEventV1::ModelCallFinished(ModelCallFinishedV1 {
+        call_id: "model-missing".into(),
+        attempt: 0,
+        status: ModelCallStatusV1::Failed,
+        duration_ms: 1,
+        time_to_first_token_ms: None,
+        stop_reason: Some(StopReasonV1::Error),
+        failure: None,
+    });
+    missing.normalize_model_failure();
+    let AgentActivityEventV1::ModelCallFinished(finished) = &missing else {
+        unreachable!();
+    };
+    assert_eq!(
+        finished.failure.as_ref().map(|failure| failure.category),
+        Some(ModelFailureCategoryV1::RedactedUnknown)
+    );
+}
+
+#[test]
 fn model_finish_diagnostics_are_restricted_to_failed_status() {
     let mut canonical = usage_event(1);
     canonical.event = AgentActivityEventV1::ModelCallFinished(ModelCallFinishedV1 {

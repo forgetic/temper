@@ -12,7 +12,8 @@ use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityBatch, AgentActivityCapturePolicyV1,
     AgentActivityEventV1, AgentAssignmentIdentityV1, AgentRunEventV1, AgentScopeKindV1,
     AgentScopeV1, AssistantMessageV1, BlobAttachmentV1, BlobMediaTypeV1, CaptureModeV1,
-    CapturedContentV1, InlineContentV1, RunFinishedV1, RunStartedV1, RunStatusV1, StopReasonV1,
+    CapturedContentV1, InlineContentV1, ModelCallFinishedV1, ModelCallStatusV1,
+    ModelFailureCategoryV1, ModelFailureV1, RunFinishedV1, RunStartedV1, RunStatusV1, StopReasonV1,
     ToolStartedV1,
 };
 use tempfile::TempDir;
@@ -411,6 +412,68 @@ fn policy_and_quota_omit_optional_content_without_blocking_terminal_events() {
     assert_eq!(summary.status, AgentTraceRunStatus::Succeeded);
     assert_eq!(summary.blob_count, 0);
     assert!(summary.stored_bytes <= policy.max_run_bytes);
+}
+
+#[test]
+fn model_diagnostics_survive_quota_content_stripping_as_metadata() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    let policy = AgentActivityCapturePolicyV1 {
+        capture: CaptureModeV1::Transcript,
+        retention_days: 14,
+        max_run_bytes: 512,
+        max_inline_bytes: 128,
+        max_blob_bytes: 512,
+        capture_thinking: false,
+        version: ACTIVITY_PROTOCOL_VERSION,
+    };
+    let journal = open_journal(&temporary, &policy);
+    let binding = binding(&policy);
+    let model_failure = event(
+        3,
+        30,
+        &binding,
+        AgentActivityEventV1::ModelCallFinished(ModelCallFinishedV1 {
+            call_id: "quota-model-failure-531".to_string(),
+            attempt: 1,
+            status: ModelCallStatusV1::Failed,
+            duration_ms: 30,
+            time_to_first_token_ms: None,
+            stop_reason: Some(StopReasonV1::Error),
+            failure: Some(ModelFailureV1 {
+                provider: "openai-codex".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+                category: ModelFailureCategoryV1::RateLimit,
+                retryable: true,
+                http_status: Some(429),
+                provider_request_id: Some("req_quota_531".to_string()),
+                provider_error_code: Some("rate_limit".to_string()),
+                message: "Provider rate limit exceeded.".to_string(),
+                detail_redacted: false,
+            }),
+        }),
+    );
+    let activity = batch(vec![
+        started(1, &binding),
+        message(2, &binding, &"x".repeat(128)),
+        model_failure,
+        finished(4, &binding),
+    ]);
+
+    journal
+        .ingest(&binding, &activity)
+        .expect("quota stripping keeps required metadata");
+    let events = journal.events(RUN_ID).expect("events read");
+    assert!(matches!(events[1].event, AgentActivityEventV1::TraceGap(_)));
+    let AgentActivityEventV1::ModelCallFinished(finished) = &events[2].event else {
+        panic!("model diagnostic boundary survives quota stripping");
+    };
+    let failure = finished.failure.as_ref().expect("safe model diagnostic");
+    assert_eq!(failure.category, ModelFailureCategoryV1::RateLimit);
+    assert_eq!(failure.message, "Provider rate limit exceeded.");
+    assert_eq!(
+        failure.provider_request_id.as_deref(),
+        Some("req_quota_531")
+    );
 }
 
 #[test]

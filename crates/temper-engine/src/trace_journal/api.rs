@@ -235,13 +235,13 @@ impl AgentTraceJournal {
                 "batch blob payload exceeds the {encoded_blob_limit}-byte ingestion bound"
             )));
         }
-        // Sanitize the untrusted representation before canonical validation;
-        // producer and worker validation may both have been bypassed.
-        let mut validation_batch = batch.clone();
-        for event in &mut validation_batch.events {
+        // Canonicalize the direct-ingestion clone before validation and all durable use.
+        let mut batch = batch.clone();
+        for event in &mut batch.events {
             event.event.sanitize_retry_failure_message();
+            event.event.normalize_model_failure();
         }
-        validation_batch.validate()?;
+        batch.validate()?;
         for event in &batch.events {
             if event.assignment != binding.assignment
                 || event.agent_session_id != binding.agent_session_id
