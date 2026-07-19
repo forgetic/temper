@@ -2,24 +2,27 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use temper_agent_core::{
-    AgentEvent, AgentStop, EventSink, ModelCallStatus, StreamDelta, ToolCallStatus,
+    AgentEvent, AgentStop, EventSink, ModelCallStatus, ModelFailureDiagnostic, ModelIdentity,
+    StreamDelta, ToolCallStatus,
 };
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityChildRecordV1,
     AgentActivityEventV1, AgentActivityFrameV1, AgentScopeV1, AssistantMessageV1, BlobAttachmentV1,
-    BlobMediaTypeV1, CaptureModeV1, CapturedContentV1, FailureCodeV1, FailureInfoV1,
-    InlineContentV1, MODEL_CALL_RETRY_FAILURE_MESSAGE, ModelCallFinishedV1, ModelCallRetryingV1,
-    ModelCallStartedV1, ModelCallStatusV1, OutputDeltaV1, PromptCaptureDispositionV1,
-    PromptPreparedV1, PromptSnapshotV1, PromptToolDefinitionV1, ScopeFinishedV1, ScopeStartedV1,
-    SteeringAppliedV1, SteeringSourceV1, StopReasonV1, ToolFinishedV1, ToolStartedV1, ToolStatusV1,
-    TurnFinishedV1, TurnStartedV1, UsageV1,
+    BlobMediaTypeV1, CaptureModeV1, CapturedContentV1, FailureInfoV1, InlineContentV1,
+    MODEL_CALL_RETRY_FAILURE_MESSAGE, ModelCallFinishedV1, ModelCallRetryingV1, ModelCallStartedV1,
+    OutputDeltaV1, PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1,
+    PromptToolDefinitionV1, ScopeFinishedV1, ScopeStartedV1, SteeringAppliedV1, SteeringSourceV1,
+    StopReasonV1, ToolFinishedV1, ToolStartedV1, ToolStatusV1, TurnFinishedV1, TurnStartedV1,
+    UsageV1,
 };
 use tongs::model::{ContentBlock, StopReason};
 use tongs::provider::ToolDef;
 
 use super::{ActivityClock, ProjectionSet};
 
+mod model_failure;
 mod terminal;
+use model_failure::{normalize_finish, retry_code, status as map_model_status};
 use terminal::scope_terminal;
 
 struct NormalizerState {
@@ -31,6 +34,7 @@ struct NormalizerState {
 /// The single machine-event normalizer and synchronous composite sink.
 pub(super) struct NormalizingEventSink {
     scope: AgentScopeV1,
+    model: ModelIdentity,
     policy: AgentActivityCapturePolicyV1,
     clock: Arc<dyn ActivityClock>,
     projections: Arc<ProjectionSet>,
@@ -41,6 +45,7 @@ pub(super) struct NormalizingEventSink {
 impl NormalizingEventSink {
     pub(super) fn new(
         scope: AgentScopeV1,
+        model: ModelIdentity,
         display_name: String,
         policy: AgentActivityCapturePolicyV1,
         clock: Arc<dyn ActivityClock>,
@@ -49,6 +54,7 @@ impl NormalizingEventSink {
         let scope_started_ms = clock.now().elapsed_ms;
         let sink = Self {
             scope,
+            model,
             policy,
             clock,
             projections,
@@ -136,7 +142,7 @@ impl NormalizingEventSink {
                 time_to_first_token_ms,
                 stop_reason,
                 usage: _,
-                failure: _,
+                failure,
             } => self.model_finished(
                 &mut state,
                 turn,
@@ -146,14 +152,15 @@ impl NormalizingEventSink {
                 duration_ms,
                 time_to_first_token_ms,
                 stop_reason,
+                failure,
             ),
             AgentEvent::ModelCallRetrying {
                 turn,
                 call_id,
                 next_attempt,
                 delay_ms,
-                reason: _,
-            } => self.model_retrying(&mut state, turn, call_id, next_attempt, delay_ms),
+                reason,
+            } => self.model_retrying(&mut state, turn, call_id, next_attempt, delay_ms, reason),
             AgentEvent::StreamDelta(delta) => self.stream_delta(&state, delta),
             AgentEvent::AssistantMessage { content } => {
                 self.assistant_message(&mut state, &content)
@@ -318,9 +325,11 @@ impl NormalizingEventSink {
         duration_ms: u64,
         time_to_first_token_ms: Option<u64>,
         stop_reason: Option<StopReason>,
+        failure: Option<ModelFailureDiagnostic>,
     ) {
         let turn = turn_number(turn);
         let stop_reason = stop_reason.map(map_stop_reason);
+        let (status, failure) = normalize_finish(&self.model, status, stop_reason, failure);
         self.project(
             Some(turn),
             AgentActivityEventV1::ModelCallFinished(ModelCallFinishedV1 {
@@ -330,6 +339,7 @@ impl NormalizingEventSink {
                 duration_ms,
                 time_to_first_token_ms,
                 stop_reason,
+                failure,
             }),
         );
         let terminal_reason = match status {
@@ -349,6 +359,7 @@ impl NormalizingEventSink {
         call_id: String,
         next_attempt: u32,
         delay_ms: u64,
+        reason: ModelFailureDiagnostic,
     ) {
         // A failed attempt looked terminal until the shell decided to retry it.
         // Keep the model-attempt boundary, but do not close the enclosing turn.
@@ -360,9 +371,9 @@ impl NormalizingEventSink {
                 next_attempt,
                 delay_ms,
                 failure: FailureInfoV1 {
-                    code: FailureCodeV1::Provider,
+                    code: retry_code(reason.category()),
                     message: MODEL_CALL_RETRY_FAILURE_MESSAGE.to_string(),
-                    retryable: true,
+                    retryable: reason.retryable(),
                 },
             }),
         );
@@ -526,14 +537,6 @@ impl EventSink for NormalizingEventSink {
 
 fn turn_number(turn: usize) -> u32 {
     u32::try_from(turn).unwrap_or(u32::MAX)
-}
-
-fn map_model_status(status: ModelCallStatus) -> ModelCallStatusV1 {
-    match status {
-        ModelCallStatus::Succeeded => ModelCallStatusV1::Succeeded,
-        ModelCallStatus::Failed => ModelCallStatusV1::Failed,
-        ModelCallStatus::Cancelled => ModelCallStatusV1::Cancelled,
-    }
 }
 
 fn map_tool_status(status: ToolCallStatus) -> ToolStatusV1 {

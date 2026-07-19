@@ -75,11 +75,22 @@
     "type": "model.call.finished",
     "data": {
       "call_id": "model-1",
-      "attempt": 1,
-      "status": "succeeded",
+      "attempt": 0,
+      "status": "failed",
       "duration_ms": 700,
       "time_to_first_token_ms": 120,
-      "stop_reason": "end_turn"
+      "stop_reason": "error",
+      "failure": {
+        "provider": "anthropic",
+        "model": "claude-sonnet",
+        "category": "rate_limit",
+        "retryable": true,
+        "http_status": 429,
+        "provider_request_id": "req_01JTEST",
+        "provider_error_code": "rate_limit_exceeded",
+        "message": "Provider rate limit exceeded.",
+        "detail_redacted": false
+      }
     }
   },
   {

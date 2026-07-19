@@ -229,6 +229,7 @@ impl ScopeFactory {
         let scope_id = scope.id.clone();
         let activity = Arc::new(NormalizingEventSink::new(
             scope.clone(),
+            model.clone(),
             display_name,
             self.policy.clone(),
             Arc::clone(&self.clock),
