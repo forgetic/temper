@@ -115,6 +115,7 @@ impl NormalizedTrace {
                 agent_session_id: first.agent_session_id.clone(),
             },
             source: self.source,
+            benchmark: None,
             capture,
             trace: TraceCoverageV1 {
                 events: MetricCoverageV1 {

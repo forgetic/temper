@@ -21,6 +21,8 @@ pub struct RunSummaryV1 {
     pub identity: RunIdentityV1,
     pub source: TraceInputKindV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark: Option<BenchmarkRunV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture: Option<CaptureModeV1>,
     pub trace: TraceCoverageV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,6 +46,8 @@ struct RunSummaryWireV1 {
     version: u32,
     identity: RunIdentityV1,
     source: TraceInputKindV1,
+    #[serde(default)]
+    benchmark: Option<BenchmarkRunV1>,
     #[serde(default)]
     capture: Option<CaptureModeV1>,
     trace: TraceCoverageV1,
@@ -72,10 +76,18 @@ impl TryFrom<RunSummaryWireV1> for RunSummaryV1 {
                 value.version
             ));
         }
+        if let Some(benchmark) = &value.benchmark {
+            if benchmark.name.trim().is_empty() || benchmark.repetition == 0 {
+                return Err(
+                    "benchmark name and repetition must be non-empty and non-zero".to_string(),
+                );
+            }
+        }
         Ok(Self {
             version: value.version,
             identity: value.identity,
             source: value.source,
+            benchmark: value.benchmark,
             capture: value.capture,
             trace: value.trace,
             terminal: value.terminal,
@@ -104,6 +116,23 @@ pub enum TraceInputKindV1 {
     JournalDirectory,
     RawEventsJsonl,
     ExportJsonl,
+}
+
+/// Identity supplied by the direct benchmark runner. Historical trace analysis
+/// leaves this absent rather than guessing a benchmark or execution mode.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkRunV1 {
+    pub name: String,
+    pub mode: BenchmarkModeV1,
+    pub repetition: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkModeV1 {
+    Harness,
+    Live,
 }
 
 /// Counts how many values were observed and, when knowable, how many should
@@ -264,6 +293,9 @@ pub struct DiffStatisticsV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostMetadataV1 {
+    pub temper: TemperBuildMetadataV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed_models: Vec<ObservedModelIdentityV1>,
     pub os: String,
     pub architecture: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -276,6 +308,21 @@ pub struct HostMetadataV1 {
     pub provider_region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_warmth: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemperBuildMetadataV1 {
+    pub package_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObservedModelIdentityV1 {
+    pub provider: String,
+    pub model: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
