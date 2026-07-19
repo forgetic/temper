@@ -8,20 +8,37 @@
 //! and reporting layers can consume that stream without knowing where it came
 //! from.
 
+mod aggregate;
 mod artifacts;
+mod comparison;
 mod ingest;
 mod manifest;
+mod metadata;
 mod summary;
 mod workspace;
 
+pub use aggregate::{
+    ADVISORY_METRICS, AggregateError, AggregateRunV1, BENCHMARK_AGGREGATE_VERSION,
+    BenchmarkAggregateV1, DistributionV1, PRIMARY_METRICS, RunOutcomeCountsV1,
+    aggregate_run_summaries, render_aggregate_markdown,
+};
 pub use artifacts::{
     ArtifactLayoutError, BASELINE_SNAPSHOT_VERSION, BenchmarkArtifactLayout,
     RepetitionArtifactPaths,
+};
+pub use comparison::{
+    BENCHMARK_COMPARISON_VERSION, BenchmarkComparisonV1, ComparisonError, ComparisonInput,
+    ComparisonInputKindV1, ComparisonSubjectV1, MetricComparisonV1, compare_benchmarks,
+    load_comparison_input, render_comparison_markdown, write_comparison_artifacts,
 };
 pub use ingest::{NormalizedTrace, TraceIngestError, ingest_trace, write_canonical_export};
 pub use manifest::{
     BENCHMARK_MANIFEST_SCHEMA, BenchmarkAnnotationsV1, BenchmarkManifestError, BenchmarkManifestV1,
     ResolvedBenchmarkManifest, load_benchmark_manifest,
+};
+pub use metadata::{
+    best_effort_temper_commit, collect_environment_metadata, observed_model_identities,
+    temper_build_metadata,
 };
 pub use summary::*;
 pub use workspace::{
