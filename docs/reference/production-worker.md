@@ -135,8 +135,12 @@ PID/PPID/PGID/session/start-time/executable evidence without command arguments,
 prompts, output, or credentials.
 
 At startup, stale cgroups are considered owned only below Temper's dedicated
-subtree. Their members are killed, trees that become empty are removed
-deepest-first, and still-populated or uninspectable trees remain for retry.
+subtree and only when their logical-worker/process-boot fence parses. A fence
+contains the creating PID and kernel start-time identity: an exact live match is
+preserved, while a missing process or PID reuse proves that owner stale. Only
+proven-stale members are killed; trees that independently become empty are
+removed deepest-first. Legacy, malformed, still-populated, or uninspectable
+trees remain without being signaled.
 `worker.containment.startup_scavenge` reports removed/retained counts, a bounded
 list of retained path diagnostics, and the omitted-diagnostic count; retained or
 omitted evidence is warning level. During `SIGINT` or `SIGTERM`, the worker

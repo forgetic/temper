@@ -81,8 +81,10 @@ fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
             };
             let trace_collector = TraceCollector::new(config.agent_traces.clone());
             let liveness_limits = config.liveness_limits;
+            let containment_owner = config.worker_id.clone();
             let runner = Arc::new(
                 OutOfProcessRunner::new(command)
+                    .with_containment_owner(containment_owner)
                     .with_runtime_limits(runtime_limits)
                     .with_liveness_limits(liveness_limits)
                     .with_shared_trace_collector(trace_collector.clone()),

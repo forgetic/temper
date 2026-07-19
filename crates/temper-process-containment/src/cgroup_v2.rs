@@ -15,11 +15,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod containment;
+mod ownership;
 mod platform;
 mod process;
 
 pub use containment::CgroupV2Containment;
 use containment::{CgroupV2PreparedContainment, PreparedControls};
+pub use ownership::{CgroupV2ScavengeReport, RetainedStaleCgroup};
 use platform::*;
 use process::*;
 
@@ -45,6 +47,9 @@ const ROLLBACK_RETRY: Duration = Duration::from_millis(10);
 /// Deterministic path context for cgroups owned by one factory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CgroupV2FactoryConfig {
+    owner: String,
+    owner_pid: u32,
+    owner_start_time: u64,
     job: String,
     attempt: String,
     subtree: String,
@@ -52,7 +57,23 @@ pub struct CgroupV2FactoryConfig {
 
 impl CgroupV2FactoryConfig {
     pub fn new(job: impl AsRef<str>, attempt: impl AsRef<str>) -> io::Result<Self> {
+        Self::for_owner("process", job, attempt)
+    }
+
+    /// Bind every cgroup made by this factory to one logical owner and the
+    /// current process boot. Startup scavenging uses both the PID and its
+    /// kernel start-time identity before deciding that an ownership root is
+    /// stale.
+    pub fn for_owner(
+        owner: impl AsRef<str>,
+        job: impl AsRef<str>,
+        attempt: impl AsRef<str>,
+    ) -> io::Result<Self> {
+        let process = proc_identity(std::process::id())?;
         Ok(Self {
+            owner: encode_component(owner.as_ref(), "owner")?,
+            owner_pid: process.pid(),
+            owner_start_time: process.start_time_identity(),
             job: encode_component(job.as_ref(), "job")?,
             attempt: encode_component(attempt.as_ref(), "attempt")?,
             subtree: DEFAULT_SUBTREE.to_owned(),
@@ -67,6 +88,10 @@ impl CgroupV2FactoryConfig {
 
     pub fn job(&self) -> &str {
         &self.job
+    }
+
+    pub fn owner(&self) -> &str {
+        &self.owner
     }
 
     pub fn attempt(&self) -> &str {
@@ -166,64 +191,6 @@ struct NoopCapabilityObserver;
 
 impl CgroupV2CapabilityObserver for NoopCapabilityObserver {
     fn observe(&self, _capability: &CgroupV2Capability) {}
-}
-
-/// One stale cgroup that could not be proven empty and removed.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RetainedStaleCgroup {
-    path: PathBuf,
-    diagnostic: String,
-}
-
-impl RetainedStaleCgroup {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn diagnostic(&self) -> &str {
-        &self.diagnostic
-    }
-}
-
-/// Bounded startup-scavenging result.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct CgroupV2ScavengeReport {
-    removed: Vec<PathBuf>,
-    retained: Vec<RetainedStaleCgroup>,
-    omitted: usize,
-}
-
-impl CgroupV2ScavengeReport {
-    pub fn removed(&self) -> &[PathBuf] {
-        &self.removed
-    }
-
-    pub fn retained(&self) -> &[RetainedStaleCgroup] {
-        &self.retained
-    }
-
-    pub fn omitted(&self) -> usize {
-        self.omitted
-    }
-
-    fn remember_removed(&mut self, path: PathBuf) {
-        if self.removed.len() + self.retained.len() < MAX_SCAVENGE_DIAGNOSTICS {
-            self.removed.push(path);
-        } else {
-            self.omitted = self.omitted.saturating_add(1);
-        }
-    }
-
-    fn remember_retained(&mut self, path: PathBuf, error: impl ToString) {
-        if self.removed.len() + self.retained.len() < MAX_SCAVENGE_DIAGNOSTICS {
-            self.retained.push(RetainedStaleCgroup {
-                path,
-                diagnostic: bounded_diagnostic(error.to_string()),
-            });
-        } else {
-            self.omitted = self.omitted.saturating_add(1);
-        }
-    }
 }
 
 /// Production selector and preparer for delegated cgroup v2.
@@ -333,53 +300,6 @@ impl CgroupV2BackendFactory {
         &self.capability
     }
 
-    /// Kill and remove stale descendants of the dedicated Temper subtree,
-    /// deepest-first.  This method never traverses above or through a symlink
-    /// outside that subtree. Populated or uninspectable entries are retained.
-    pub fn scavenge_stale(&self) -> CgroupV2ScavengeReport {
-        let mut report = CgroupV2ScavengeReport::default();
-        let Some(root) = self.capability.dedicated_subtree() else {
-            return report;
-        };
-        let directories = match descendant_directories(self.fs.as_ref(), root) {
-            Ok(directories) => directories,
-            Err(error) => {
-                report.remember_retained(root.to_path_buf(), error);
-                return report;
-            }
-        };
-
-        let mut retained_paths = Vec::new();
-        for path in directories.into_iter().filter(|path| path != root) {
-            if !path.starts_with(root) {
-                retained_paths.push(path.clone());
-                report.remember_retained(path, "refused to scavenge outside Temper subtree");
-                continue;
-            }
-            if retained_paths
-                .iter()
-                .any(|retained: &PathBuf| retained.starts_with(&path))
-            {
-                retained_paths.push(path.clone());
-                report.remember_retained(path, "contains an uninspectable or populated descendant");
-                continue;
-            }
-            match scavenge_one(
-                self.fs.as_ref(),
-                self.processes.as_ref(),
-                &path,
-                ROLLBACK_RETRIES,
-            ) {
-                Ok(()) => report.remember_removed(path),
-                Err(error) => {
-                    retained_paths.push(path.clone());
-                    report.remember_retained(path, error);
-                }
-            }
-        }
-        report
-    }
-
     fn prepare_cgroup(
         &self,
         spec: &ContainmentSpec,
@@ -392,6 +312,11 @@ impl CgroupV2BackendFactory {
         let owner_id = encode_component(spec.identity.as_str(), "owner identity")
             .map_err(CgroupPrepareFailure::before_setup)?;
         let components = [
+            format!("worker-{}", self.config.owner),
+            format!(
+                "boot-{}-{}",
+                self.config.owner_pid, self.config.owner_start_time
+            ),
             format!("job-{}", self.config.job),
             format!("attempt-{}", self.config.attempt),
             format!("owner-kind-{owner_kind}"),

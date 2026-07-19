@@ -50,34 +50,43 @@ pub(crate) fn prepare_with_observer(
 }
 
 pub(crate) fn production_factory(job: &str, attempt: &str) -> io::Result<ContainmentFactory> {
+    production_factory_for_owner("process", job, attempt)
+}
+
+pub(crate) fn production_factory_for_owner(
+    owner: &str,
+    job: &str,
+    attempt: &str,
+) -> io::Result<ContainmentFactory> {
     #[cfg(target_os = "linux")]
     {
         use temper_process_containment::{CgroupV2BackendFactory, CgroupV2FactoryConfig};
 
-        let config = CgroupV2FactoryConfig::new(job, attempt)?;
+        let config = CgroupV2FactoryConfig::for_owner(owner, job, attempt)?;
         let fallback: Arc<dyn ContainmentBackendFactory> =
             Arc::new(linux_supervisor_backend_factory());
         let backend: Arc<dyn ContainmentBackendFactory> =
             Arc::new(CgroupV2BackendFactory::system(config).with_fallback(fallback));
-        return Ok(ContainmentFactory::new(
+        Ok(ContainmentFactory::new(
             ContainmentBackendPolicy::Auto,
             backend,
-        ));
+        ))
     }
 
     #[cfg(windows)]
     {
+        let _ = (owner, job, attempt);
         let backend: Arc<dyn ContainmentBackendFactory> =
             Arc::new(temper_process_containment::WindowsJobBackendFactory);
-        return Ok(ContainmentFactory::new(
+        Ok(ContainmentFactory::new(
             ContainmentBackendPolicy::RequireWindowsJob,
             backend,
-        ));
+        ))
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
     {
-        let _ = (job, attempt);
+        let _ = (owner, job, attempt);
         let backend: Arc<dyn ContainmentBackendFactory> =
             Arc::new(temper_process_containment::UnsupportedPlatformBackendFactory);
         Ok(ContainmentFactory::new(
