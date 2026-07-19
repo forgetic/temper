@@ -40,6 +40,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 temper-worker-registry = { path = "../temper-worker-registry" }
 tracing-subscriber = { workspace = true }
+tongs.workspace = true
 
 [lints]
 workspace = true

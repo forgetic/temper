@@ -165,7 +165,7 @@ function eventDetails(event: AgentRunEvent): string {
     case "turn.started": return turn;
     case "turn.finished": return `${turn} · ${text(data.stop_reason)} · ${duration(data.duration_ms)}`;
     case "model.call.started": return `${text(data.provider)}/${text(data.model)} · attempt ${number(data.attempt)}`;
-    case "model.call.finished": return `${text(data.status)} · ${duration(data.duration_ms)}${optionalDuration(" · first token ", data.time_to_first_token_ms)}`;
+    case "model.call.finished": return modelCallFinished(data);
     case "model.call.retrying": return `${failure(data.failure)} · retry ${number(data.next_attempt)} in ${duration(data.delay_ms)}`;
     case "tool.started": return `${text(data.name)}${contentSuffix(data.arguments)}`;
     case "tool.finished": return `${text(data.name)} · ${text(data.status)} · ${duration(data.duration_ms)}${contentSuffix(data.result)}`;
@@ -177,6 +177,30 @@ function eventDetails(event: AgentRunEvent): string {
     case "trace.gap": return `${number(data.dropped_events)} events / ${number(data.dropped_bytes)} bytes dropped · ${arrayText(data.kinds)}`;
     default: return bounded(JSON.stringify(data));
   }
+}
+
+function modelCallFinished(data: Record<string, unknown>): string {
+  const base = `${text(data.status)} · ${duration(data.duration_ms)}${optionalDuration(" · first token ", data.time_to_first_token_ms)}`;
+  if (!isRecord(data.failure)) return base;
+  const failure = data.failure;
+  const provider = bounded(text(failure.provider), 128);
+  const model = bounded(text(failure.model), 256);
+  const category = text(failure.category);
+  if (!provider || !model || !category) return base;
+  const facts = [
+    `${provider}/${model}`,
+    `category=${category}`,
+    `retryable=${failure.retryable === true}`,
+  ];
+  if (typeof failure.http_status === "number") facts.push(`HTTP ${number(failure.http_status)}`);
+  const requestId = bounded(text(failure.provider_request_id), 128);
+  if (requestId) facts.push(`request ${requestId}`);
+  const providerCode = bounded(text(failure.provider_error_code), 64);
+  if (providerCode) facts.push(`code ${providerCode}`);
+  if (failure.detail_redacted === true) facts.push("detail redacted");
+  const message = bounded(text(failure.message));
+  if (message) facts.push(message);
+  return `${base} · ${facts.join(" · ")}`;
 }
 
 function streamView(card: Card): string {

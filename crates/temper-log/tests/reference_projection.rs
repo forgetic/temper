@@ -15,6 +15,7 @@ use temper_log::emit::{
     PrMerged, PrOpened, PrUpdated, QueueEntered, RoleSaturated, TransitionApplied, WakeReceived,
 };
 use temper_log::{Event, WorkItemRef, work_item_span};
+use temper_protocol_activity::{ModelFailureCategoryV1, ModelFailureV1};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
 use tracing_subscriber::Layer;
@@ -76,6 +77,13 @@ impl Captured {
         self.field(key)
             .as_u64()
             .unwrap_or_else(|| panic!("field {key:?} is not u64 on {self:?}"))
+    }
+
+    fn bool(&self, key: &str) -> bool {
+        match self.field(key) {
+            FieldValue::Bool(value) => *value,
+            _ => panic!("field {key:?} is not bool on {self:?}"),
+        }
     }
 }
 
@@ -262,6 +270,111 @@ fn section_seven_reference_projection_is_prefixed_and_structured() {
 }
 
 #[test]
+fn model_error_agent_finished_renders_safe_detail_and_structured_fields() {
+    let layer = CaptureLayer::default();
+    let events = layer.events.clone();
+    let subscriber = registry().with(layer);
+    let failure = ModelFailureV1 {
+        provider: "openai-codex".into(),
+        model: "gpt-test".into(),
+        category: ModelFailureCategoryV1::RateLimit,
+        retryable: true,
+        http_status: Some(429),
+        provider_request_id: Some("req_rate_532".into()),
+        provider_error_code: Some("rate_limit".into()),
+        message: "Rate limit exceeded; retry later.".into(),
+        detail_redacted: false,
+    };
+
+    with_default(subscriber, || {
+        let item = WorkItemRef::issue("ai/temper", 532);
+        emit::emit_agent_finished(AgentFinished {
+            item: &item,
+            role: "engineer",
+            kind: "coding",
+            status: AgentTerminalStatus::Failed,
+            terminal_reason: Some(AgentTerminalReasonV1::ModelError),
+            model_failure: Some(&failure),
+            duration_ms: 1_250,
+            summary: "model failure detail is selected from the typed diagnostic",
+        });
+    });
+
+    let captured = events.lock().unwrap();
+    let finished = event_named(&captured, Event::AgentFinished.as_str());
+    assert_eq!(finished.text("reason"), "model_error");
+    assert_eq!(finished.text("model.provider"), "openai-codex");
+    assert_eq!(finished.text("model.name"), "gpt-test");
+    assert_eq!(finished.text("model.failure.category"), "rate_limit");
+    assert!(finished.bool("model.failure.retryable"));
+    assert_eq!(finished.u64("model.failure.http_status"), 429);
+    assert_eq!(finished.text("model.failure.request_id"), "req_rate_532");
+    assert_eq!(finished.text("model.failure.provider_code"), "rate_limit");
+    assert_eq!(
+        finished.text("model.failure.message"),
+        "Rate limit exceeded; retry later."
+    );
+    let message = finished.text("message");
+    for expected in [
+        "model_error",
+        "openai-codex/gpt-test",
+        "category=rate_limit",
+        "retryable=true",
+        "http_status=429",
+        "request_id=req_rate_532",
+    ] {
+        assert!(message.contains(expected), "missing {expected}: {message}");
+    }
+    assert!(!format!("{finished:?}").contains("SECRET-SENTINEL-532"));
+}
+
+#[test]
+fn agent_finished_normalizes_unsafe_model_detail_before_logging() {
+    const SECRET: &str = "LOG-SECRET-SENTINEL-532";
+    let layer = CaptureLayer::default();
+    let events = layer.events.clone();
+    let subscriber = registry().with(layer);
+    let forged = ModelFailureV1 {
+        provider: "openai".into(),
+        model: "gpt-test".into(),
+        category: ModelFailureCategoryV1::Provider,
+        retryable: false,
+        http_status: Some(500),
+        provider_request_id: None,
+        provider_error_code: Some("internal_error".into()),
+        message: format!("Authorization: Bearer {SECRET}"),
+        detail_redacted: false,
+    };
+
+    with_default(subscriber, || {
+        let item = WorkItemRef::issue("ai/temper", 532);
+        emit::emit_agent_finished(AgentFinished {
+            item: &item,
+            role: "engineer",
+            kind: "coding",
+            status: AgentTerminalStatus::Failed,
+            terminal_reason: Some(AgentTerminalReasonV1::ModelError),
+            model_failure: Some(&forged),
+            duration_ms: 50,
+            summary: "must not become the model error detail",
+        });
+    });
+
+    let captured = events.lock().unwrap();
+    let finished = event_named(&captured, Event::AgentFinished.as_str());
+    assert_eq!(finished.text("model.failure.category"), "redacted_unknown");
+    assert!(finished.bool("model.failure.detail_redacted"));
+    assert_eq!(
+        finished.text("model.failure.message"),
+        temper_protocol_activity::REDACTED_MODEL_FAILURE_MESSAGE
+    );
+    let rendered = format!("{finished:?}");
+    assert!(!rendered.contains(SECRET));
+    assert!(!rendered.contains("Authorization"));
+    assert!(!rendered.contains("Bearer"));
+}
+
+#[test]
 fn json_fmt_projection_keeps_prefixed_message_and_queryable_fields() {
     let buf = SharedBuf::default();
     let sink = buf.clone();
@@ -283,6 +396,7 @@ fn json_fmt_projection_keeps_prefixed_message_and_queryable_fields() {
             kind: "triage",
             status: AgentTerminalStatus::Failed,
             terminal_reason: Some(AgentTerminalReasonV1::BudgetExhausted),
+            model_failure: None,
             duration_ms: 73_000,
             summary: "agent exceeded its tool budget",
         });
@@ -382,6 +496,7 @@ fn emit_reference_lifecycle() {
         kind: "triage",
         status: AgentTerminalStatus::Succeeded,
         terminal_reason: Some(AgentTerminalReasonV1::Completed),
+        model_failure: None,
         duration_ms: 73_000,
         summary: "verdict=ready_code",
     });

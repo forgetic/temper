@@ -24,7 +24,9 @@ pub mod provider;
 mod tool_preview;
 pub mod usage;
 
-pub use activity::{AgentActivityConfig, AgentCancellationLatch, AgentLifecycleReporter};
+pub use activity::{
+    AgentActivityConfig, AgentCancellationLatch, AgentLifecycleReporter, protocol_model_failure,
+};
 pub use coding_agent::{
     AgentAbortAuthority, AgentSessionState, Capability, CodingAgentError, DEFAULT_MAX_ITERATIONS,
     ForgeContextFuture, ForgeContextHost, SubmitForPrCallback, SubmitForPrFuture, SubmitForPrHost,
@@ -65,7 +67,8 @@ pub use provider::{
 #[doc(hidden)]
 pub use temper_agent_core::dispatch_linux_supervisor_helper;
 pub use temper_agent_core::{
-    AgentContainmentContext, ContainmentFactory, ContainmentScope, TurnHook,
+    AgentContainmentContext, ContainmentFactory, ContainmentScope, ModelFailureDiagnostic,
+    ModelIdentity, TurnHook,
 };
 pub use temper_protocol_interaction::{ConversationReply, ConversationRequest};
 pub use usage::RunTotals;

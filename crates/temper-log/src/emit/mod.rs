@@ -32,7 +32,7 @@ use crate::WorkItemRef;
 use crate::event::Event;
 use crate::service::Service;
 
-pub use temper_protocol_activity::AgentTerminalReasonV1;
+pub use temper_protocol_activity::{AgentTerminalReasonV1, ModelFailureV1};
 
 // ---------------------------------------------------------------------------
 // Input structs — one per event, so call sites name their fields.
@@ -158,6 +158,8 @@ pub struct AgentFinished<'a> {
     pub status: AgentTerminalStatus,
     /// Typed agent-machine terminal reason, when the run reached that boundary.
     pub terminal_reason: Option<AgentTerminalReasonV1>,
+    /// Safe provider-neutral detail for a `model_error` terminal reason.
+    pub model_failure: Option<&'a ModelFailureV1>,
     /// Run duration in milliseconds (numeric field; human-formatted).
     pub duration_ms: u64,
     /// One-line result summary (free text; previewed + redacted).
@@ -458,6 +460,14 @@ pub fn emit_agent_started(ev: AgentStarted<'_>) {
 /// Emits `agent` / `agent.finished`.
 pub fn emit_agent_finished(ev: AgentFinished<'_>) {
     let reason = ev.terminal_reason.map(AgentTerminalReasonV1::as_str);
+    let mut normalized_failure = ev.model_failure.cloned();
+    if ev.terminal_reason != Some(AgentTerminalReasonV1::ModelError) {
+        normalized_failure = None;
+    }
+    normalized_failure
+        .iter_mut()
+        .for_each(ModelFailureV1::normalize);
+    let model_failure = normalized_failure.as_ref();
     let message = prefixed(
         Service::Agent,
         human::agent_finished(
@@ -466,10 +476,14 @@ pub fn emit_agent_finished(ev: AgentFinished<'_>) {
             ev.kind,
             ev.status,
             ev.terminal_reason,
+            model_failure,
             ev.duration_ms,
             ev.summary,
         ),
     );
+    let http_status = model_failure
+        .and_then(|failure| failure.http_status)
+        .map(u64::from);
     tracing::info!(
         target: "temper::agent",
         service = Service::Agent.as_str(),
@@ -481,6 +495,17 @@ pub fn emit_agent_finished(ev: AgentFinished<'_>) {
         status = ev.status.as_str(),
         reason = reason.unwrap_or(""),
         duration_ms = ev.duration_ms,
+        model.provider = model_failure.map(|failure| failure.provider.as_str()),
+        model.name = model_failure.map(|failure| failure.model.as_str()),
+        model.failure.category = model_failure.map(|failure| failure.category.as_str()),
+        model.failure.retryable = model_failure.map(|failure| failure.retryable),
+        model.failure.http_status = http_status,
+        model.failure.request_id = model_failure
+            .and_then(|failure| failure.provider_request_id.as_deref()),
+        model.failure.provider_code = model_failure
+            .and_then(|failure| failure.provider_error_code.as_deref()),
+        model.failure.detail_redacted = model_failure.map(|failure| failure.detail_redacted),
+        model.failure.message = model_failure.map(|failure| failure.message.as_str()),
         "{message}",
     );
 }

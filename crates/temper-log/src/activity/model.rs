@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use temper_protocol_activity::{
-    AgentAssignmentIdentityV1, AgentTerminalReasonV1, UsageV1, W3cTraceContext,
+    AgentAssignmentIdentityV1, AgentTerminalReasonV1, ModelFailureV1, UsageV1, W3cTraceContext,
 };
 
 /// Canonical activity boundaries represented as OpenTelemetry-compatible spans.
@@ -64,6 +64,7 @@ pub struct ActivitySpanAttributes {
     pub tool_name: Option<String>,
     pub time_to_first_token_ms: Option<u64>,
     pub stop_reason: Option<String>,
+    pub model_failure: Option<ModelFailureV1>,
     pub terminal_reason: Option<AgentTerminalReasonV1>,
     pub usage: UsageV1,
     pub retry_count: u64,
@@ -86,6 +87,7 @@ impl Default for ActivitySpanAttributes {
             tool_name: None,
             time_to_first_token_ms: None,
             stop_reason: None,
+            model_failure: None,
             terminal_reason: None,
             usage: UsageV1 {
                 input_tokens: 0,

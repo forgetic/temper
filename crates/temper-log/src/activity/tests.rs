@@ -13,6 +13,8 @@ use temper_protocol_activity::{
 
 use super::*;
 
+mod model_failure;
+
 const PROMPT_SYSTEM_SENTINEL: &str = "LOG-PROMPT-SYSTEM-SENTINEL-364";
 const PROMPT_USER_SENTINEL: &str = "LOG-PROMPT-USER-SENTINEL-364";
 const PROMPT_TOOL_SENTINEL: &str = "LOG-PROMPT-TOOL-SENTINEL-364";

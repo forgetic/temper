@@ -76,6 +76,21 @@ impl ActivitySpanExporter for TracingActivitySpanExporter {
         if let Some(terminal_reason) = finished.attributes.terminal_reason {
             span.record("agent.terminal_reason", terminal_reason.as_str());
         }
+        if let Some(failure) = &finished.attributes.model_failure {
+            span.record("model.failure.category", failure.category.as_str());
+            span.record("model.failure.retryable", failure.retryable);
+            if let Some(status) = failure.http_status {
+                span.record("model.failure.http_status", u64::from(status));
+            }
+            if let Some(request_id) = &failure.provider_request_id {
+                span.record("model.failure.request_id", request_id.as_str());
+            }
+            if let Some(code) = &failure.provider_error_code {
+                span.record("model.failure.provider_code", code.as_str());
+            }
+            span.record("model.failure.detail_redacted", failure.detail_redacted);
+            span.record("model.failure.message", failure.message.as_str());
+        }
         drop(span);
     }
 }
@@ -111,6 +126,13 @@ fn tracing_span(start: &ActivitySpanStart, parent: Option<&Span>) -> Span {
                 otel.status_code = tracing::field::Empty,
                 agent.stop_reason = tracing::field::Empty,
                 agent.terminal_reason = tracing::field::Empty,
+                model.failure.category = tracing::field::Empty,
+                model.failure.retryable = tracing::field::Empty,
+                model.failure.http_status = tracing::field::Empty,
+                model.failure.request_id = tracing::field::Empty,
+                model.failure.provider_code = tracing::field::Empty,
+                model.failure.detail_redacted = tracing::field::Empty,
+                model.failure.message = tracing::field::Empty,
                 llm.time_to_first_token_ms = tracing::field::Empty,
                 usage.input_tokens = tracing::field::Empty,
                 usage.output_tokens = tracing::field::Empty,
@@ -151,6 +173,13 @@ fn tracing_span(start: &ActivitySpanStart, parent: Option<&Span>) -> Span {
                 otel.status_code = tracing::field::Empty,
                 agent.stop_reason = tracing::field::Empty,
                 agent.terminal_reason = tracing::field::Empty,
+                model.failure.category = tracing::field::Empty,
+                model.failure.retryable = tracing::field::Empty,
+                model.failure.http_status = tracing::field::Empty,
+                model.failure.request_id = tracing::field::Empty,
+                model.failure.provider_code = tracing::field::Empty,
+                model.failure.detail_redacted = tracing::field::Empty,
+                model.failure.message = tracing::field::Empty,
                 llm.time_to_first_token_ms = tracing::field::Empty,
                 usage.input_tokens = tracing::field::Empty,
                 usage.output_tokens = tracing::field::Empty,
