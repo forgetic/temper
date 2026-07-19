@@ -9,6 +9,7 @@ use super::containment::PreparedControls;
 use super::*;
 use crate::{CleanupTrigger, ContainmentFactory, ContainmentIdentity};
 
+mod capability;
 mod ownership;
 
 struct FakeCgroupFs {
@@ -284,8 +285,11 @@ fn fake_factory(
 ) {
     let fs = FakeCgroupFs::new(kill);
     let processes = Arc::new(FakeProcesses::default());
-    let config = CgroupV2FactoryConfig::new("job-1", "attempt-2").expect("config");
-    processes.add_with_start(config.owner_pid, config.owner_start_time);
+    let owner_fence = CgroupV2OwnerFence::new(4_001, 28_007).expect("owner fence");
+    processes.add_with_start(owner_fence.pid(), owner_fence.start_time());
+    let config = CgroupV2FactoryConfig::new("job-1", "attempt-2")
+        .expect("config")
+        .with_owner_fence(owner_fence);
     let capability = probe_delegated(
         &config,
         fs.as_ref(),
@@ -307,10 +311,13 @@ fn factory_owner_root(factory: &CgroupV2BackendFactory) -> PathBuf {
         .dedicated_subtree()
         .expect("dedicated")
         .join(format!("worker-{}", factory.config.owner))
-        .join(format!(
-            "boot-{}-{}",
-            factory.config.owner_pid, factory.config.owner_start_time
-        ))
+        .join(
+            factory
+                .config
+                .owner_fence()
+                .expect("owner fence")
+                .component(),
+        )
 }
 
 fn create_owned_tree(
@@ -324,7 +331,11 @@ fn create_owned_tree(
     if !worker.exists() {
         fs.create_cgroup(&worker).expect("worker owner root");
     }
-    let boot = worker.join(format!("boot-{pid}-{start_time}"));
+    let boot = worker.join(
+        CgroupV2OwnerFence::new(pid, start_time)
+            .expect("valid process boot fence")
+            .component(),
+    );
     fs.create_cgroup(&boot).expect("process boot root");
     boot
 }
@@ -393,34 +404,6 @@ fn nested_cleanup_removes_directories_deepest_first() {
         &[grandchild, child, root],
         "recursive cgroups must be removed deepest-first"
     );
-}
-
-#[test]
-fn auto_selection_emits_capabilities_and_uses_the_supplied_fallback() {
-    let (_fs, _processes, mut factory) = fake_factory(true);
-    factory.capability.pidfd = false;
-    factory.capability.diagnostic = Some("pidfd_open/pidfd_send_signal are unavailable".to_owned());
-    let observer = Arc::new(RecordingCapabilityObserver::default());
-    let fallback = Arc::new(RecordingFallback::default());
-    let factory = factory
-        .with_capability_observer(observer.clone())
-        .with_fallback(fallback.clone());
-
-    let result = factory.prepare_backend(ContainmentBackendPolicy::Auto, &test_spec("auto"));
-    assert!(result.is_err(), "recording fallback deliberately fails");
-    assert_eq!(
-        fallback.policies.lock().expect("policies").as_slice(),
-        &[ContainmentBackendPolicy::ForceLinuxSupervisor]
-    );
-    let capabilities = observer.capabilities.lock().expect("capabilities");
-    assert_eq!(capabilities.len(), 1);
-    let capability = &capabilities[0];
-    assert!(capability.unified_mount().is_some());
-    assert!(capability.delegation());
-    assert!(capability.writable_subtree());
-    assert!(capability.cgroup_kill());
-    assert!(!capability.pidfd());
-    assert!(capability.probe_rollback_complete());
 }
 
 #[test]

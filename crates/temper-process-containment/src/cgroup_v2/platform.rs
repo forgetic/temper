@@ -301,6 +301,7 @@ pub(super) fn probe_delegated(
         writable_subtree: writable,
         cgroup_kill: kill,
         pidfd,
+        ownership_fence: config.owner_fence.is_some(),
         probe_rollback_complete,
         diagnostic,
     }
@@ -375,12 +376,13 @@ pub(super) fn unavailable_error(capability: &CgroupV2Capability) -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
         format!(
-            "delegated cgroup v2 is unavailable (mount={:?}, delegation={}, writable={}, cgroup.kill={}, pidfd={}, probe_rollback_complete={}): {}",
+            "delegated cgroup v2 is unavailable (mount={:?}, delegation={}, writable={}, cgroup.kill={}, pidfd={}, ownership_fence={}, probe_rollback_complete={}): {}",
             capability.unified_mount(),
             capability.delegation(),
             capability.writable_subtree(),
             capability.cgroup_kill(),
             capability.pidfd(),
+            capability.ownership_fence(),
             capability.probe_rollback_complete(),
             capability
                 .diagnostic()

@@ -147,6 +147,7 @@ pub struct ContainmentFallbackActivated {
 pub struct ContainmentStartupScavenge {
     pub worker_id: String,
     pub removed_count: usize,
+    pub protected_count: usize,
     pub retained_count: usize,
     pub retained_diagnostics: String,
     pub omitted_diagnostics: usize,

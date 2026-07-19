@@ -294,6 +294,7 @@ fn stale_cgroup_failures_are_bounded_warn_evidence() {
     let event = startup_scavenge_from_parts(
         "worker-stale",
         3,
+        2,
         entries
             .iter()
             .map(|(path, diagnostic)| (path.as_path(), diagnostic.as_str())),
@@ -306,6 +307,7 @@ fn stale_cgroup_failures_are_bounded_warn_evidence() {
     assert_eq!(fields["event"], "worker.containment.startup_scavenge");
     assert_eq!(fields["worker_id"], "worker-stale");
     assert_eq!(fields["removed_count"], 3);
+    assert_eq!(fields["protected_count"], 2);
     assert_eq!(fields["retained_count"], MAX_EVENT_SURVIVORS + 5);
     assert_eq!(fields["omitted_diagnostics"], 14);
     let retained: Vec<Value> =
@@ -315,6 +317,23 @@ fn stale_cgroup_failures_are_bounded_warn_evidence() {
     assert!(!encoded.contains("secret-token-sentinel"));
     assert!(!encoded.contains("authorization:"));
     assert!(!encoded.contains("bearer "));
+}
+
+#[test]
+fn live_cgroup_owners_emit_protected_debug_evidence() {
+    let event = startup_scavenge_from_parts(
+        "worker-concurrent",
+        0,
+        2,
+        std::iter::empty::<(&std::path::Path, &str)>(),
+        0,
+    )
+    .expect("protected owners produce evidence");
+    let captured = capture_events(|| event.emit());
+    assert_eq!(captured[0]["level"], "DEBUG");
+    assert_eq!(captured[0]["fields"]["protected_count"], 2);
+    assert_eq!(captured[0]["fields"]["removed_count"], 0);
+    assert_eq!(captured[0]["fields"]["retained_count"], 0);
 }
 
 #[derive(Clone, Default)]

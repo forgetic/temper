@@ -147,6 +147,7 @@ pub(super) fn emit_startup_scavenge(event: &ContainmentStartupScavenge) {
                 event = "worker.containment.startup_scavenge",
                 worker_id = event.worker_id.as_str(),
                 removed_count = event.removed_count,
+                protected_count = event.protected_count,
                 retained_count = event.retained_count,
                 retained_diagnostics = event.retained_diagnostics.as_str(),
                 omitted_diagnostics = event.omitted_diagnostics,
