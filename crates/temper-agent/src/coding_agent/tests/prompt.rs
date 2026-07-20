@@ -20,8 +20,8 @@ fn system_prompt_is_role_specific() {
     assert!(!engineer.contains("checkpoint(label)"));
     assert!(!engineer.contains("CHECKPOINTS:"));
     assert!(!engineer.contains("CODEBASE MEMORY"));
-    assert!(!engineer.contains("`write`"));
-    assert!(!engineer.contains("`edit`"));
+    assert!(engineer.contains("`write`"));
+    assert!(engineer.contains("`edit`"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(architect.contains("ROLE: architect"));
@@ -46,6 +46,72 @@ fn system_prompt_is_role_specific() {
         assert!(!prompt.contains("publish_plan"));
         assert!(!prompt.contains("\"plan\""));
         assert!(prompt.contains("children"));
+    }
+}
+
+#[test]
+fn system_prompt_uses_role_aware_efficiency_guidance() {
+    let engineer = system_prompt(Capability::CodingWorkspace, &[]);
+    for expected in [
+        "Scale discovery to the task",
+        "For non-local work, batch independent status, architecture, and search calls",
+        "skip ritual discovery when the task is already localized",
+        "complete likely source, test, configuration, and documentation set together",
+        "Form the implementation contract internally",
+        "do not spend a standalone response publishing a plan",
+        "Group related, safe `edit` and `write` calls by cohesive responsibility",
+        "one to four mutation responses instead of one response per file",
+        "Multiple mutation calls in one model response are model-turn batching, not concurrent execution",
+        "Read-safe calls may run concurrently",
+        "mutation, process, network, and unknown-effect calls remain serialized barriers",
+        "Complete the planned source, tests, configuration, and documentation deliverables",
+        "formatter and focused authoritative test suite",
+        "bounded repair and focused revalidation without broad rediscovery",
+        "repeating architecture searches unless an unresolved correctness question requires it",
+        "repository status, the tracked diff, and all untracked deliverables together",
+        "submit the unchanged validated workspace once",
+        "terminal JSON only after acceptance",
+        "8–12 total responses, at most four mutation responses, and zero validation invalidations as goals, not correctness limits",
+        "Task correctness and required validation take priority",
+    ] {
+        assert!(
+            engineer.contains(expected),
+            "engineer efficiency guidance omitted {expected:?}"
+        );
+    }
+
+    let generic_guidance = [
+        "Batch independent read-only calls into a single response",
+        "prefer creating a complete new file in one operation over many incremental changes",
+        "Verify with one focused command",
+        "Avoid re-reading content just produced",
+    ];
+    let engineer_only_guidance = [
+        "Scale discovery to the task",
+        "implementation contract internally",
+        "one to four mutation responses",
+        "model-turn batching",
+        "serialized barriers",
+        "bounded repair",
+        "tracked diff",
+        "8–12 total responses",
+    ];
+    for prompt in [
+        system_prompt(Capability::TriageWorkspace, &[]),
+        system_prompt(Capability::ReviewWorkspace, &[]),
+    ] {
+        for expected in generic_guidance {
+            assert!(
+                prompt.contains(expected),
+                "generic efficiency guidance omitted {expected:?}"
+            );
+        }
+        for forbidden in engineer_only_guidance {
+            assert!(
+                !prompt.contains(forbidden),
+                "engineer-only guidance leaked into another role: {forbidden:?}"
+            );
+        }
     }
 }
 
