@@ -13,7 +13,8 @@ mod adapt;
 mod run;
 
 pub use adapt::{
-    agent_runtime_limits, agent_tool_config, git_base_url, role_identities,
-    selected_agent_runtime_limits, selected_worker_auth, worker_agent_trace_config, worker_config,
+    AgentInvocation, AgentSupervisionKind, agent_invocation, agent_runtime_limits,
+    agent_tool_config, git_base_url, role_identities, selected_agent_runtime_limits,
+    selected_worker_auth, worker_agent_trace_config, worker_config, worker_liveness_limits,
 };
 pub use run::{run, self_subcommand, sibling_program};

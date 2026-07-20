@@ -59,16 +59,23 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
         max_concurrent_jobs: worker.max_concurrent_jobs,
         poll_wait: worker.poll_wait,
         heartbeat_interval: worker.heartbeat_interval,
-        liveness_limits: RuntimeWorkerLivenessLimits {
-            max_no_progress: worker.liveness_limits.max_no_progress,
-            max_run: worker.liveness_limits.max_run,
-            graceful_cancellation_grace: worker.liveness_limits.graceful_cancellation_grace,
-            forced_termination_grace: worker.liveness_limits.forced_termination_grace,
-        },
+        liveness_limits: worker_liveness_limits(resolved),
         result_root: worker.result_root.clone(),
         agent_traces: worker_agent_trace_config(resolved),
         executor: ExecutorSelection::Stub,
     })
+}
+
+/// Projects resolved worker-owned cancellation and escalation bounds into the
+/// runtime shape used by both production workers and direct live benchmarks.
+pub fn worker_liveness_limits(resolved: &Resolved) -> RuntimeWorkerLivenessLimits {
+    let limits = resolved.worker.liveness_limits;
+    RuntimeWorkerLivenessLimits {
+        max_no_progress: limits.max_no_progress,
+        max_run: limits.max_run,
+        graceful_cancellation_grace: limits.graceful_cancellation_grace,
+        forced_termination_grace: limits.forced_termination_grace,
+    }
 }
 
 /// Projects resolved trace policy and the durable spool root into the worker
