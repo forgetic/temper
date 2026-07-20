@@ -153,6 +153,142 @@ printf '%s\n' '{{"title":"Fake live","body":"# Report","summary":"{SECRET_SENTIN
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn failed_live_agent_retains_redacted_trace_summary_and_aggregate() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let fixture = temporary.path().join("fixture/repo");
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(fixture.join("README.md"), "# live failure fixture\n").unwrap();
+    write_context(temporary.path());
+    fs::write(temporary.path().join("jig.json"), "{}\n").unwrap();
+    fs::write(
+        temporary.path().join("benchmark.toml"),
+        r#"schema = "temper.benchmark.v1"
+name = "cli-live-failure"
+fixture = "fixture"
+workspace_context = "context.json"
+capture = "metadata"
+jig_script = "jig.json"
+post_run_commands = [["sh", "-c", "cat repo/provider-output.txt"]]
+repetitions = 1
+"#,
+    )
+    .unwrap();
+    fs::write(
+        temporary.path().join("config.toml"),
+        r#"schema_version = 1
+
+[observability.agent_traces]
+capture = "metadata"
+
+[agent]
+provider = "deepseek"
+max_iterations = 9
+enable_subagents = false
+
+[agent.providers.deepseek]
+models = { main = "deepseek-live-failure-test" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        temporary.path().join("credentials.toml"),
+        format!(
+            "schema_version = 1\n[agent.providers.deepseek]\ntype = \"api-key\"\nkey = \"{SECRET_SENTINEL}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let agent = temporary.path().join("failing-temper-agent");
+    fs::write(
+        &agent,
+        format!(
+            r##"#!/bin/sh
+set -eu
+printf '%s\n' '{SECRET_SENTINEL}' >&2
+printf '%s\n' '{SECRET_SENTINEL}' > repo/provider-output.txt
+printf '%s\n' changed > 'repo/{SECRET_SENTINEL}'
+exit 23
+"##
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output_dir = temporary.path().join("artifacts");
+    let output = Command::new(env!("CARGO_BIN_EXE_temper-benchmark"))
+        .arg("run")
+        .arg("--benchmark")
+        .arg(temporary.path().join("benchmark.toml"))
+        .arg("--mode")
+        .arg("live")
+        .arg("--agent-bin")
+        .arg(&agent)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--config")
+        .arg(temporary.path().join("config.toml"))
+        .arg("--secrets")
+        .arg(temporary.path().join("credentials.toml"))
+        .env("TEMPER_BENCHMARK_LIVE", "1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET_SENTINEL));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET_SENTINEL));
+
+    let aggregate: Value =
+        serde_json::from_slice(&fs::read(output_dir.join("aggregate.json")).unwrap()).unwrap();
+    assert_eq!(aggregate["outcomes"]["total"], 1);
+    assert_eq!(aggregate["outcomes"]["failed"], 1);
+    assert_eq!(
+        aggregate["runs"][0]["summary"]["terminal"]["status"],
+        "failed"
+    );
+    assert!(aggregate["runs"][0]["summary"]["workspace_result"].is_null());
+
+    let repetition = output_dir.join("repetitions/001");
+    for artifact in [
+        "manifest.toml",
+        "workspace-context.json",
+        "baselines.json",
+        "trace.export.jsonl",
+        "validation.json",
+        "diff.json",
+        "run.json",
+        "run.md",
+    ] {
+        assert!(repetition.join(artifact).is_file(), "missing {artifact}");
+    }
+    assert!(!repetition.join("workspace-result.json").exists());
+    let validation: Value =
+        serde_json::from_slice(&fs::read(repetition.join("validation.json")).unwrap()).unwrap();
+    assert_eq!(
+        validation["post_run_commands"][0]["stdout_tail"],
+        "[REDACTED]\n"
+    );
+    let diff: Value =
+        serde_json::from_slice(&fs::read(repetition.join("diff.json")).unwrap()).unwrap();
+    assert!(
+        diff["repositories"][0]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == "[REDACTED]")
+    );
+    for path in files_below(&output_dir) {
+        let bytes = fs::read(&path).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(SECRET_SENTINEL),
+            "secret leaked into {}",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn live_run_rejects_third_party_profile_supervision_before_workspace_preparation() {
     let temporary = tempfile::tempdir().unwrap();

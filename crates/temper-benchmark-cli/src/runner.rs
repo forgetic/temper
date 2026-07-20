@@ -18,7 +18,7 @@ use temper_worker::{
 
 use crate::{
     AggregateError, AnalyzeOptions, ArtifactLayoutError, BenchmarkAggregateV1,
-    BenchmarkArtifactLayout, BenchmarkModeV1, BenchmarkRunV1, NormalizedTrace, ReportWriteError,
+    BenchmarkArtifactLayout, BenchmarkModeV1, BenchmarkRunV1, ReportWriteError,
     ResolvedBenchmarkManifest, TraceIngestError, TraceInputKindV1, WorkspacePreparationError,
     aggregate_run_summaries, analyze_trace, collect_environment_metadata, load_benchmark_manifest,
     prepare_benchmark_workspace, render_aggregate_markdown, write_canonical_export,
@@ -128,8 +128,9 @@ pub enum BenchmarkRunError {
     },
 }
 
-/// Runs every harness repetition in a fresh prepared workspace, writes all
-/// repetition artifacts, and returns the persisted aggregate.
+/// Runs every harness repetition in a fresh prepared workspace and writes all
+/// repetition and aggregate artifacts. Agent-process failures are returned only
+/// after every independent repetition has been attempted and persisted.
 pub fn run_harness(options: &HarnessRunOptions) -> Result<BenchmarkAggregateV1, BenchmarkRunError> {
     let manifest = load_benchmark_manifest(&options.benchmark)?;
     if manifest.manifest().capture == CaptureModeV1::Off {
@@ -150,8 +151,13 @@ pub fn run_harness(options: &HarnessRunOptions) -> Result<BenchmarkAggregateV1, 
 
     let layout = BenchmarkArtifactLayout::create(&options.output_dir, repetitions)?;
     let mut summaries = Vec::with_capacity(repetitions as usize);
+    let mut first_agent_failure = None;
     for repetition in 1..=repetitions {
-        summaries.push(run_repetition(&manifest, &layout, &agent_bin, repetition)?);
+        let completed = run_repetition(&manifest, &layout, &agent_bin, repetition)?;
+        summaries.push(completed.summary);
+        if first_agent_failure.is_none() {
+            first_agent_failure = completed.agent_failure;
+        }
     }
 
     let aggregate = aggregate_run_summaries(summaries)?;
@@ -161,7 +167,10 @@ pub fn run_harness(options: &HarnessRunOptions) -> Result<BenchmarkAggregateV1, 
         render_aggregate_markdown(&aggregate).as_bytes(),
         "write benchmark aggregate Markdown",
     )?;
-    Ok(aggregate)
+    match first_agent_failure {
+        Some(error) => Err(error),
+        None => Ok(aggregate),
+    }
 }
 
 fn reject_output_inside_fixture(
@@ -258,12 +267,17 @@ fn validate_agent_binary(path: &Path) -> Result<PathBuf, BenchmarkRunError> {
     Ok(path)
 }
 
+pub(super) struct CompletedRepetition {
+    pub(super) summary: crate::RunSummaryV1,
+    pub(super) agent_failure: Option<BenchmarkRunError>,
+}
+
 fn run_repetition(
     manifest: &ResolvedBenchmarkManifest,
     layout: &BenchmarkArtifactLayout,
     agent_bin: &Path,
     repetition: u32,
-) -> Result<crate::RunSummaryV1, BenchmarkRunError> {
+) -> Result<CompletedRepetition, BenchmarkRunError> {
     let workspace = prepare_benchmark_workspace(manifest, repetition)?;
     let paths = layout.snapshot_inputs(repetition, manifest, &workspace)?;
 
@@ -308,15 +322,21 @@ fn run_repetition(
     let context = workspace.context().clone();
     let cwd = workspace.root().to_path_buf();
     let job_id = format!("benchmark-repetition-{repetition:03}");
-    let output =
-        temper_worker_io::block_on(async move { runner.run(&job_id, &context, &cwd).await })
-            .map_err(|error| BenchmarkRunError::Agent {
+    let outcome =
+        temper_worker_io::block_on(async move { runner.run(&job_id, &context, &cwd).await });
+    drop(jig);
+    let (output, agent_failure) = match outcome {
+        Ok(output) => (Some(output), None),
+        Err(error) => (
+            None,
+            Some(BenchmarkRunError::Agent {
                 repetition,
                 message: format!("{:?}: {}", error.class, error.message),
-            })?;
-    drop(jig);
+            }),
+        ),
+    };
 
-    finalize_repetition(
+    let summary = finalize_repetition(
         manifest,
         &paths,
         &workspace,
@@ -325,7 +345,11 @@ fn run_repetition(
         BenchmarkModeV1::Harness,
         repetition,
         None,
-    )
+    )?;
+    Ok(CompletedRepetition {
+        summary,
+        agent_failure,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -334,18 +358,23 @@ fn finalize_repetition(
     paths: &crate::RepetitionArtifactPaths,
     workspace: &crate::PreparedBenchmarkWorkspace,
     collector: TraceCollector,
-    mut output: AgentRunOutput,
+    mut output: Option<AgentRunOutput>,
     mode: BenchmarkModeV1,
     repetition: u32,
     redactor: Option<&SecretRedactor>,
 ) -> Result<crate::RunSummaryV1, BenchmarkRunError> {
-    if let Some(redactor) = redactor {
+    if let (Some(redactor), Some(output)) = (redactor, output.as_mut()) {
         output.result = redactor.redacted(&output.result, "workspace result")?;
     }
 
     workspace.verify_context_directories()?;
-    let accepted_submit =
-        accepted_submit_evidence(output.accepted_submit.as_ref(), workspace, repetition)?;
+    let accepted_submit = accepted_submit_evidence(
+        output
+            .as_ref()
+            .and_then(|output| output.accepted_submit.as_ref()),
+        workspace,
+        repetition,
+    )?;
     let post_run_commands = run_post_run_commands(manifest, workspace);
     workspace.verify_context_directories()?;
     let mut diff = collect_diff_artifact(workspace)?;
@@ -369,12 +398,11 @@ fn finalize_repetition(
         });
     }
     let recovered = recovered.pop().expect("one recovered trace");
-    let mut trace = NormalizedTrace {
-        source: TraceInputKindV1::JournalDirectory,
-        events: recovered.events,
-        attachments: recovered.blobs,
-        diagnostics: Vec::new(),
-    };
+    let mut trace = crate::ingest::normalize_worker_trace(
+        TraceInputKindV1::JournalDirectory,
+        recovered.events,
+        recovered.blobs,
+    )?;
     if let Some(redactor) = redactor {
         redactor.ensure_safe_attachments(&trace.attachments)?;
         trace.events = redactor.redacted(&trace.events, "canonical trace events")?;
@@ -402,7 +430,7 @@ fn finalize_repetition(
     ));
     summary.validation = Some(validation_summary(&validation));
     summary.diff = Some(diff.statistics.clone());
-    summary.workspace_result = Some(output.result.clone());
+    summary.workspace_result = output.as_ref().map(|output| output.result.clone());
     if let Some(redactor) = redactor {
         summary = redactor.redacted(&summary, "run summary")?;
     }
@@ -415,7 +443,9 @@ fn finalize_repetition(
             &canonical,
             "write canonical trace export",
         )?;
-        ensure_serialized_safe(redactor, &output.result, "workspace result")?;
+        if let Some(output) = &output {
+            ensure_serialized_safe(redactor, &output.result, "workspace result")?;
+        }
         ensure_serialized_safe(redactor, &validation, "validation evidence")?;
         ensure_serialized_safe(redactor, &diff, "diff evidence")?;
         ensure_serialized_safe(redactor, &summary, "run summary")?;
@@ -424,7 +454,11 @@ fn finalize_repetition(
     } else {
         write_canonical_export(&trace, &paths.canonical_trace)?;
     }
-    write_json(&paths.workspace_result, &output.result, "workspace result")?;
+    if let Some(output) = &output {
+        write_json(&paths.workspace_result, &output.result, "workspace result")?;
+    } else {
+        remove_optional_artifact(&paths.workspace_result)?;
+    }
     write_json(
         &paths.validation_evidence,
         &validation,
@@ -433,6 +467,18 @@ fn finalize_repetition(
     write_json(&paths.diff_statistics, &diff, "diff evidence")?;
     write_run_summary(&summary, &paths.root)?;
     Ok(summary)
+}
+
+fn remove_optional_artifact(path: &Path) -> Result<(), BenchmarkRunError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(BenchmarkRunError::Io {
+            operation: "remove unavailable optional artifact",
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn ensure_serialized_safe<T: Serialize>(
