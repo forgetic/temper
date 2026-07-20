@@ -82,27 +82,13 @@ pub fn run_live(
     if invocation.supervision != AgentSupervisionKind::FirstParty {
         return Err(BenchmarkRunError::ThirdPartySupervision);
     }
-    let policy = invocation.trace_policy.clone().ok_or_else(|| {
+    let mut trace_policy = invocation.trace_policy.clone().ok_or_else(|| {
         BenchmarkRunError::LiveConfiguration(
             "first-party invocation did not provide a trace policy".to_string(),
         )
     })?;
-    if policy.capture == CaptureModeV1::Off {
-        return Err(BenchmarkRunError::LiveConfiguration(
-            "live benchmark artifacts require `[observability.agent_traces] capture` other than `off`"
-                .to_string(),
-        ));
-    }
     let redactor = SecretRedactor::from_invocation_env(&invocation.env);
     redactor.ensure_safe_strings(invocation.command.iter(), "agent command")?;
-    let runtime = LiveInvocation {
-        command: invocation.command,
-        env: invocation.env,
-        tool_config: invocation.tool_config,
-        runtime_limits: invocation.runtime_limits,
-        trace_policy: policy,
-        liveness_limits: worker_liveness_limits(&resolved),
-    };
 
     let manifest = load_benchmark_manifest(&options.benchmark)?;
     if manifest.manifest().capture == CaptureModeV1::Off {
@@ -111,6 +97,29 @@ pub fn run_live(
         ));
     }
     ensure_safe_input_snapshots(&redactor, &manifest)?;
+
+    // The manifest defines what a benchmark measures. Retain the production
+    // policy's storage and size limits, but make its capture semantics agree
+    // with the snapshotted benchmark declaration. Thinking capture is only a
+    // valid diagnostic-mode option, so it cannot follow a diagnostic
+    // production policy into a less permissive benchmark mode.
+    trace_policy.capture = manifest.manifest().capture;
+    if trace_policy.capture != CaptureModeV1::Diagnostic {
+        trace_policy.capture_thinking = false;
+    }
+    trace_policy.validate().map_err(|error| {
+        BenchmarkRunError::LiveConfiguration(format!(
+            "benchmark capture mode produced an invalid trace policy: {error}"
+        ))
+    })?;
+    let runtime = LiveInvocation {
+        command: invocation.command,
+        env: invocation.env,
+        tool_config: invocation.tool_config,
+        runtime_limits: invocation.runtime_limits,
+        trace_policy,
+        liveness_limits: worker_liveness_limits(&resolved),
+    };
 
     let repetitions = options
         .repetitions
