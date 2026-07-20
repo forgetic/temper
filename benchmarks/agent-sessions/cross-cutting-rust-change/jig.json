@@ -1,0 +1,166 @@
+{
+  "sequence": [
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "read_manifest",
+            "name": "read",
+            "args": {
+              "path": "repo/Cargo.toml"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "read_exports",
+            "name": "read",
+            "args": {
+              "path": "repo/src/lib.rs"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "read_implementation",
+            "name": "read",
+            "args": {
+              "path": "repo/src/formatting.rs"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "read_tests",
+            "name": "read",
+            "args": {
+              "path": "repo/tests/normalization.rs"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "write_implementation",
+            "name": "write",
+            "args": {
+              "path": "repo/src/formatting.rs",
+              "content": "/// Options for producing a normalized label.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct NormalizeOptions {\n    pub prefix: &'static str,\n    pub lowercase: bool,\n}\n\nimpl Default for NormalizeOptions {\n    fn default() -> Self {\n        Self {\n            prefix: \"\",\n            lowercase: true,\n        }\n    }\n}\n\n/// Produces the canonical storage form for a label.\npub fn normalize_label(input: &str) -> String {\n    normalize_label_with(input, NormalizeOptions::default())\n}\n\n/// Normalizes a label with an optional prefix and case policy.\npub fn normalize_label_with(input: &str, options: NormalizeOptions) -> String {\n    let trimmed = input.trim();\n    let value = if options.lowercase {\n        trimmed.to_ascii_lowercase()\n    } else {\n        trimmed.to_owned()\n    };\n    format!(\"{}{}\", options.prefix, value)\n}\n"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "write_exports",
+            "name": "write",
+            "args": {
+              "path": "repo/src/lib.rs",
+              "content": "mod formatting;\n\npub use formatting::{NormalizeOptions, normalize_label, normalize_label_with};\n"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "write_tests",
+            "name": "write",
+            "args": {
+              "path": "repo/tests/normalization.rs",
+              "content": "use label_normalizer::{NormalizeOptions, normalize_label, normalize_label_with};\n\n#[test]\nfn normalizes_whitespace_and_case() {\n    assert_eq!(normalize_label(\"  Ready FOR Review \"), \"ready for review\");\n}\n\n#[test]\nfn supports_prefixes_and_preserved_case() {\n    let options = NormalizeOptions {\n        prefix: \"status/\",\n        lowercase: false,\n    };\n    assert_eq!(normalize_label_with(\" Ready \" , options), \"status/Ready\");\n}\n"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "validate_code",
+            "name": "bash",
+            "args": {
+              "command": "cd repo && cargo test -q",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "read_docs",
+            "name": "read",
+            "args": {
+              "path": "repo/README.md"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "write_docs",
+            "name": "write",
+            "args": {
+              "path": "repo/README.md",
+              "content": "# Label normalizer fixture\n\nCall `normalize_label` for the compatible lowercase behavior. Use\n`normalize_label_with` and `NormalizeOptions` to preserve case or add a prefix.\n"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "revalidate_after_docs",
+            "name": "bash",
+            "args": {
+              "command": "cd repo && cargo test -q",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "submit_benchmark",
+            "name": "submit_for_pr",
+            "args": {
+              "summary": "Implemented and revalidated the cross-cutting fixture change"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "text": "{\"title\":\"Add configurable label normalization\",\"body\":\"# Implementation report\\n\\nAdded the options API, exports, integration coverage, and documentation. The fixture tests and host submit gate pass.\",\"summary\":\"Implemented the cross-cutting Rust change and revalidated after the final mutation\"}"
+    }
+  ]
+}
