@@ -10,7 +10,9 @@ use temper_worker::{
     AgentRunner, AgentRuntimeLimitsV1, AgentToolConfig, OutOfProcessRunner, TraceCollector,
     WorkerAgentTraceConfig, WorkerLivenessLimits,
 };
-use temper_worker_service::{AgentSupervisionKind, agent_invocation, worker_liveness_limits};
+use temper_worker_service::{
+    AgentSupervisionKind, agent_invocation_with_first_party_program, worker_liveness_limits,
+};
 
 use super::redaction::SecretRedactor;
 use super::{
@@ -77,8 +79,8 @@ pub fn run_live(
             .expect("validated UTF-8 agent path")
             .to_string(),
     ];
-    let invocation =
-        agent_invocation(&resolved, &program).map_err(BenchmarkRunError::LiveConfiguration)?;
+    let invocation = agent_invocation_with_first_party_program(&resolved, &program)
+        .map_err(BenchmarkRunError::LiveConfiguration)?;
     if invocation.supervision != AgentSupervisionKind::FirstParty {
         return Err(BenchmarkRunError::ThirdPartySupervision);
     }

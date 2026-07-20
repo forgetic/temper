@@ -188,11 +188,38 @@ pub fn agent_invocation(
     resolved: &Resolved,
     program: &[String],
 ) -> Result<AgentInvocation, String> {
+    agent_invocation_with_command_policy(resolved, program, false)
+}
+
+/// Assembles an invocation while keeping a caller-supplied executable for
+/// first-party profiles.
+///
+/// The selected profile still supplies provider/model flags, credentials,
+/// tools, trace policy, and runtime limits. Explicit third-party commands are
+/// deliberately left intact so callers can reject their incompatible
+/// supervision contract instead of silently running them as Temper agents.
+pub fn agent_invocation_with_first_party_program(
+    resolved: &Resolved,
+    program: &[String],
+) -> Result<AgentInvocation, String> {
+    agent_invocation_with_command_policy(resolved, program, true)
+}
+
+fn agent_invocation_with_command_policy(
+    resolved: &Resolved,
+    program: &[String],
+    override_first_party_program: bool,
+) -> Result<AgentInvocation, String> {
     let (command, env, first_party, operation_limits) =
         if let Some((pool, profile)) = selected_agent_profile(resolved)? {
             let first_party =
                 profile.command.is_empty() || is_first_party_agent_command(&profile.command);
-            let (command, env) = profile_agent_command_and_env(pool, profile, program)?;
+            let (command, env) = profile_agent_command_and_env(
+                pool,
+                profile,
+                program,
+                override_first_party_program && first_party,
+            )?;
             (command, env, first_party, profile.operation_limits)
         } else {
             let (command, env) = legacy_agent_command_and_env(resolved, program);
@@ -284,8 +311,9 @@ fn profile_agent_command_and_env(
     pool: &WorkerPoolSettings,
     profile: &AgentProfileSettings,
     program: &[String],
+    override_program: bool,
 ) -> Result<AgentCommandEnv, String> {
-    let mut command = if profile.command.is_empty() {
+    let mut command = if profile.command.is_empty() || override_program {
         program.to_vec()
     } else {
         profile.command.clone()
