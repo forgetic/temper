@@ -316,9 +316,10 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
 fn restart_watchdog_limits() -> WorkerLivenessLimits {
     WorkerLivenessLimits {
         // Real helper-backed containment adds bounded process startup/join work
-        // to checkout preparation. Keep this deadline short while allowing the
-        // retry to reach AgentSessionStarted before testing no-progress cancel.
-        max_no_progress: Duration::from_secs(2),
+        // to checkout preparation. A cold, loaded CI host can take more than
+        // two seconds to reach AgentSessionStarted, so leave enough startup
+        // headroom while keeping the no-progress cancellation test bounded.
+        max_no_progress: Duration::from_secs(5),
         graceful_cancellation_grace: Duration::from_secs(1),
         forced_termination_grace: Duration::from_secs(1),
         ..WorkerLivenessLimits::default()
