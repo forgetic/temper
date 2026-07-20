@@ -52,12 +52,7 @@
               "content": "/// Options for producing a normalized label.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct NormalizeOptions {\n    pub prefix: &'static str,\n    pub lowercase: bool,\n}\n\nimpl Default for NormalizeOptions {\n    fn default() -> Self {\n        Self {\n            prefix: \"\",\n            lowercase: true,\n        }\n    }\n}\n\n/// Produces the canonical storage form for a label.\npub fn normalize_label(input: &str) -> String {\n    normalize_label_with(input, NormalizeOptions::default())\n}\n\n/// Normalizes a label with an optional prefix and case policy.\npub fn normalize_label_with(input: &str, options: NormalizeOptions) -> String {\n    let trimmed = input.trim();\n    let value = if options.lowercase {\n        trimmed.to_ascii_lowercase()\n    } else {\n        trimmed.to_owned()\n    };\n    format!(\"{}{}\", options.prefix, value)\n}\n"
             }
           }
-        }
-      ],
-      "stop": "tool_calls"
-    },
-    {
-      "turns": [
+        },
         {
           "tool_call": {
             "id": "write_exports",
@@ -67,12 +62,7 @@
               "content": "mod formatting;\n\npub use formatting::{NormalizeOptions, normalize_label, normalize_label_with};\n"
             }
           }
-        }
-      ],
-      "stop": "tool_calls"
-    },
-    {
-      "turns": [
+        },
         {
           "tool_call": {
             "id": "write_tests",

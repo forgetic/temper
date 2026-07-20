@@ -31,15 +31,27 @@ Historical traces cannot be enriched with facts they never recorded. Final diff
 statistics, `WorkspaceResult`, and host validation evidence are unavailable for
 an offline trace. Metadata-only capture can omit command arguments needed to
 identify validation boundaries, and older or partial traces can omit timings,
-tokens, or terminal events. The summary marks these values unavailable and emits
-observability diagnostics instead of reporting a misleading zero.
+tokens, or terminal events. In particular, traces without usable tool-call
+scope and model-turn identity report mutation-turn batching metrics unavailable
+with a diagnostic, not as zero. The summary marks unavailable values and emits
+observability diagnostics instead of inventing evidence.
+
+## Interpret model-turn batching
+
+Model-turn batching is multiple cohesive tool calls emitted by one model
+response. The structural metrics count distinct mutation turns, turns with
+exactly one successful mutation, and the maximum successful mutations in any
+one turn. They describe response structure; they do not imply concurrent tool
+execution. Independent reads may execute concurrently, while `write`, `edit`,
+process, network, and other barrier calls remain serialized.
 
 ## Choose harness or live mode
 
 Harness mode runs the real agent process and tools against deterministic Jig
 responses. It proves runner plumbing, trace extraction, artifact generation,
-submit gates, and structural metrics. It is safe for ordinary CI, but its model
-latency, TTFT, tokens, and wall time are **not representative LLM performance**.
+submit gates, serialized barrier handling, and structural metrics. It is safe
+for ordinary CI, but its model latency, TTFT, tokens, and wall time are **not
+representative LLM performance**. Deterministic Jig timing is not a CI gate.
 Run the repository lane with:
 
 ```sh
@@ -77,9 +89,11 @@ fresh fixture copy and baseline commit. The artifact root contains
 the manifest and context snapshots, canonical trace, workspace result,
 validation and diff evidence, and JSON/Markdown run summary.
 
-Use enough live repetitions to expose variance, then interpret min, p25, median,
-p75, and max together. Timing is advisory and never a pass/fail gate. Harness
-repetitions test determinism and structure, not variance in a provider.
+Use repeated live runs with enough repetitions to expose variance before drawing
+behavioral or performance conclusions, then interpret min, p25, median, p75,
+and max together. Timing is advisory and never a pass/fail gate. Harness
+repetitions test deterministic plumbing and structure, not model behavior,
+provider variance, or performance.
 
 Artifact retention is caller-owned. Keep the exact candidate and baseline
 artifact directories together with the Temper revision and relevant run notes.

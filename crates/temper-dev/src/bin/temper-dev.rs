@@ -194,6 +194,12 @@ fn verify_benchmark_artifacts(root: &Path) -> Result<(), String> {
     expect_text(&aggregate, "/mode", "harness")?;
     expect_at_least(&aggregate, "/outcomes/succeeded", 1)?;
     expect_at_least(&aggregate, "/metrics/mutations/median", 4)?;
+    expect_exact(&aggregate, "/metrics/mutation_turns/count", 1)?;
+    expect_exact(&aggregate, "/metrics/mutation_turns/median", 2)?;
+    expect_exact(&aggregate, "/metrics/single_mutation_turns/count", 1)?;
+    expect_exact(&aggregate, "/metrics/single_mutation_turns/median", 1)?;
+    expect_exact(&aggregate, "/metrics/max_mutations_per_turn/count", 1)?;
+    expect_exact(&aggregate, "/metrics/max_mutations_per_turn/median", 3)?;
     expect_at_least(&aggregate, "/metrics/validation_invalidations/median", 1)?;
 
     let repetition = root.join("repetitions/001");
@@ -204,6 +210,9 @@ fn verify_benchmark_artifacts(root: &Path) -> Result<(), String> {
     expect_at_least(&run, "/metrics/tools/by_name/write/calls", 4)?;
     expect_at_least(&run, "/metrics/tools/by_name/bash/calls", 2)?;
     expect_at_least(&run, "/metrics/tools/by_name/submit_for_pr/calls", 1)?;
+    expect_exact(&run, "/metrics/structure/mutation_turns", 2)?;
+    expect_exact(&run, "/metrics/structure/single_mutation_turns", 1)?;
+    expect_exact(&run, "/metrics/structure/max_mutations_per_turn", 3)?;
     expect_at_least(&run, "/metrics/structure/post_validation_mutations", 1)?;
     expect_at_least(&run, "/metrics/structure/revalidations", 1)?;
     expect_at_least(&run, "/validation/succeeded", 2)?;
@@ -229,6 +238,13 @@ fn expect_at_least(value: &Value, pointer: &str, minimum: u64) -> Result<(), Str
         actual => Err(format!(
             "{pointer} was {actual:?}; expected at least {minimum}"
         )),
+    }
+}
+
+fn expect_exact(value: &Value, pointer: &str, expected: u64) -> Result<(), String> {
+    match value.pointer(pointer).and_then(Value::as_u64) {
+        Some(actual) if actual == expected => Ok(()),
+        actual => Err(format!("{pointer} was {actual:?}; expected {expected}")),
     }
 }
 
