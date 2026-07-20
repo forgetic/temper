@@ -64,17 +64,12 @@ jobs:
         # No provider credentials or timing thresholds belong in this lane.
         run: cargo dev-benchmark-harness
       - name: Test (quick)
-        # kache restores ordinary libtest executables with their executable bit,
-        # but its cached custom-harness artifacts currently arrive as 0644.
-        # Let Cargo compile the same default test-target set that nextest uses,
-        # then repair the custom harness artifacts before nextest queries their
-        # libtest-style listings.
+        # Build nextest's exact binary set without enumerating it, repair any
+        # custom harnesses that kache restored as 0644, then run from the
+        # captured metadata so Cargo cannot replace the repaired artifacts.
         run: |
-          cargo test --workspace --no-run
-          find target/debug/deps -maxdepth 1 -type f \
-            \( -name 'linux_supervisor-*' -o -name 'windows_job-*' -o -name 'benchmark_harness-*' \) \
-            ! -name '*.d' -exec chmod +x {} +
-          cargo dev-test-quick
+          scripts/test-repair-custom-harness-permissions.sh
+          scripts/run-nextest-quick.sh
       - name: Test (all e2e)
         # The live e2e lane boots real Forgejo + CI runners and waits for
         # convergence. On a cold CI machine the fixture provisioning alone can

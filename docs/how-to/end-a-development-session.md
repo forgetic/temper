@@ -27,10 +27,12 @@ The script runs these commands in order and stops on the first failure:
 2. `cargo depgraph-check check`
 3. `scripts/check-rust-file-size.sh`
 4. `scripts/check-no-ambient-env.sh`
-5. `cargo dev-test-build`
-6. `cargo dev-test-quick`
-7. Drop linked test binaries from `target/debug` before linting
-8. `cargo dev-clippy`
+5. Exercise the cached custom-harness permission repair against 0644 fixtures
+6. `cargo dev-test-build`
+7. Build nextest's exact quick-test binary set, repair custom-harness execute
+   bits, then enumerate and run the captured build without invoking Cargo again
+8. Drop linked test binaries from `target/debug` before linting
+9. `cargo dev-clippy`
 
 Use `cargo dev-scenario-check` plus the live `cargo dev-scenario-run` when your
 change touches scenario manifests, scenario runners, Forgejo/CI convergence, or
