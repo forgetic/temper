@@ -1,0 +1,378 @@
+// SPDX-License-Identifier: MPL-2.0
+
+//! Direct, deterministic agent-session benchmark execution.
+
+use std::fs;
+use std::io;
+use std::path::{Component, Path, PathBuf};
+
+use jig_core::ScriptFile;
+use jig_server::FakeLlm;
+use serde::Serialize;
+use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
+use temper_protocol_agent::PROVIDER_CREDENTIALS_ENV;
+use temper_worker::{
+    AgentRunner, AgentRuntimeLimitsV1, OutOfProcessRunner, TraceCollector, WorkerAgentTraceConfig,
+};
+
+use crate::{
+    AggregateError, AnalyzeOptions, ArtifactLayoutError, BenchmarkAggregateV1,
+    BenchmarkArtifactLayout, BenchmarkModeV1, BenchmarkRunV1, NormalizedTrace, ReportWriteError,
+    ResolvedBenchmarkManifest, TraceIngestError, TraceInputKindV1, WorkspacePreparationError,
+    aggregate_run_summaries, analyze_trace, collect_environment_metadata, load_benchmark_manifest,
+    prepare_benchmark_workspace, render_aggregate_markdown, write_canonical_export,
+    write_run_summary,
+};
+
+mod diff;
+mod validation;
+
+use diff::collect_diff_artifact;
+pub use diff::{
+    DIFF_ARTIFACT_VERSION, DiffArtifactV1, DiffFileEvidenceV1, RepositoryDiffEvidenceV1,
+};
+pub use validation::{
+    AcceptedSubmitEvidenceV1, VALIDATION_ARTIFACT_VERSION, ValidationArtifactV1,
+    ValidationCommandEvidenceV1,
+};
+use validation::{accepted_submit_evidence, run_post_run_commands, validation_summary};
+
+const DUMMY_PROVIDER_CREDENTIAL: &str =
+    r#"{"type":"api-key","api_key":"temper-benchmark-harness-dummy"}"#;
+const HARNESS_MODEL: &str = "temper-benchmark-harness";
+
+/// Options for the CI-safe direct harness runner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HarnessRunOptions {
+    pub benchmark: PathBuf,
+    pub agent_bin: PathBuf,
+    pub output_dir: PathBuf,
+    /// `None` uses the manifest default.
+    pub repetitions: Option<u32>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BenchmarkRunError {
+    #[error(transparent)]
+    Manifest(#[from] crate::BenchmarkManifestError),
+    #[error(transparent)]
+    Artifacts(#[from] ArtifactLayoutError),
+    #[error(transparent)]
+    Workspace(#[from] WorkspacePreparationError),
+    #[error(transparent)]
+    Trace(#[from] TraceIngestError),
+    #[error("cannot recover worker-owned trace spool: {0}")]
+    WorkerTrace(#[source] temper_worker::TraceError),
+    #[error(transparent)]
+    Report(#[from] ReportWriteError),
+    #[error(transparent)]
+    Aggregate(#[from] AggregateError),
+    #[error("invalid harness configuration: {0}")]
+    Invalid(String),
+    #[error("cannot load Jig script `{path}`: {message}")]
+    JigScript { path: PathBuf, message: String },
+    #[error("cannot start Jig provider: {0}")]
+    JigServer(#[source] io::Error),
+    #[error("agent repetition {repetition} failed: {message}")]
+    Agent { repetition: u32, message: String },
+    #[error("trace collector produced {actual} runs for repetition {repetition}; expected one")]
+    TraceRunCount { repetition: u32, actual: usize },
+    #[error("cannot fingerprint repetition {repetition} after the agent session: {message}")]
+    Fingerprint { repetition: u32, message: String },
+    #[error("git command `{command}` failed in `{cwd}` ({status}): {stderr}")]
+    Git {
+        command: String,
+        cwd: PathBuf,
+        status: String,
+        stderr: String,
+    },
+    #[error("cannot {operation} `{path}`: {source}")]
+    Io {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("cannot serialize {artifact}: {source}")]
+    Json {
+        artifact: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Runs every harness repetition in a fresh prepared workspace, writes all
+/// repetition artifacts, and returns the persisted aggregate.
+pub fn run_harness(options: &HarnessRunOptions) -> Result<BenchmarkAggregateV1, BenchmarkRunError> {
+    let manifest = load_benchmark_manifest(&options.benchmark)?;
+    if manifest.manifest().capture == CaptureModeV1::Off {
+        return Err(BenchmarkRunError::Invalid(
+            "harness mode requires capture other than `off`".to_string(),
+        ));
+    }
+    let agent_bin = validate_agent_binary(&options.agent_bin)?;
+    let repetitions = options
+        .repetitions
+        .unwrap_or(manifest.manifest().repetitions);
+    if repetitions == 0 {
+        return Err(BenchmarkRunError::Invalid(
+            "repetitions must be at least one".to_string(),
+        ));
+    }
+    reject_output_inside_fixture(&options.output_dir, manifest.fixture_dir())?;
+
+    let layout = BenchmarkArtifactLayout::create(&options.output_dir, repetitions)?;
+    let mut summaries = Vec::with_capacity(repetitions as usize);
+    for repetition in 1..=repetitions {
+        summaries.push(run_repetition(&manifest, &layout, &agent_bin, repetition)?);
+    }
+
+    let aggregate = aggregate_run_summaries(summaries)?;
+    write_json(&layout.aggregate_json, &aggregate, "benchmark aggregate")?;
+    write_bytes(
+        &layout.aggregate_markdown,
+        render_aggregate_markdown(&aggregate).as_bytes(),
+        "write benchmark aggregate Markdown",
+    )?;
+    Ok(aggregate)
+}
+
+fn reject_output_inside_fixture(
+    output_dir: &Path,
+    fixture_dir: &Path,
+) -> Result<(), BenchmarkRunError> {
+    let output = projected_absolute_path(output_dir)?;
+    if output.starts_with(fixture_dir) {
+        return Err(BenchmarkRunError::Invalid(format!(
+            "output directory `{}` must not be inside fixture `{}`",
+            output.display(),
+            fixture_dir.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Resolves every existing prefix (including links) while retaining a safe
+/// projection for suffixes which the artifact layout has not created yet.
+fn projected_absolute_path(path: &Path) -> Result<PathBuf, BenchmarkRunError> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        let cwd = std::env::current_dir().map_err(|source| BenchmarkRunError::Io {
+            operation: "resolve current directory",
+            path: PathBuf::from("."),
+            source,
+        })?;
+        fs::canonicalize(&cwd)
+            .map_err(|source| BenchmarkRunError::Io {
+                operation: "resolve current directory",
+                path: cwd,
+                source,
+            })?
+            .join(path)
+    };
+
+    let mut projected = PathBuf::new();
+    let mut unresolved_depth = 0_u64;
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(prefix) => projected.push(prefix.as_os_str()),
+            Component::RootDir => projected.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                projected.pop();
+                unresolved_depth = unresolved_depth.saturating_sub(1);
+            }
+            Component::Normal(value) => {
+                projected.push(value);
+                if unresolved_depth > 0 {
+                    unresolved_depth = unresolved_depth.saturating_add(1);
+                    continue;
+                }
+                match fs::canonicalize(&projected) {
+                    Ok(resolved) => projected = resolved,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => unresolved_depth = 1,
+                    Err(source) => {
+                        return Err(BenchmarkRunError::Io {
+                            operation: "resolve output directory prefix",
+                            path: projected,
+                            source,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(projected)
+}
+
+fn validate_agent_binary(path: &Path) -> Result<PathBuf, BenchmarkRunError> {
+    let metadata = fs::metadata(path).map_err(|source| BenchmarkRunError::Io {
+        operation: "inspect agent binary",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(BenchmarkRunError::Invalid(format!(
+            "agent binary `{}` is not a regular file",
+            path.display()
+        )));
+    }
+    let path = fs::canonicalize(path).map_err(|source| BenchmarkRunError::Io {
+        operation: "resolve agent binary",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if path.to_str().is_none() {
+        return Err(BenchmarkRunError::Invalid(
+            "agent binary path is not valid UTF-8".to_string(),
+        ));
+    }
+    Ok(path)
+}
+
+fn run_repetition(
+    manifest: &ResolvedBenchmarkManifest,
+    layout: &BenchmarkArtifactLayout,
+    agent_bin: &Path,
+    repetition: u32,
+) -> Result<crate::RunSummaryV1, BenchmarkRunError> {
+    let workspace = prepare_benchmark_workspace(manifest, repetition)?;
+    let paths = layout.snapshot_inputs(repetition, manifest, &workspace)?;
+
+    let script = ScriptFile::load(manifest.jig_script_path()).map_err(|error| {
+        BenchmarkRunError::JigScript {
+            path: manifest.jig_script_path().to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+    let jig = FakeLlm::start(script.into_script()).map_err(BenchmarkRunError::JigServer)?;
+
+    let policy = AgentActivityCapturePolicyV1 {
+        capture: manifest.manifest().capture,
+        ..AgentActivityCapturePolicyV1::default()
+    };
+    let collector = TraceCollector::new(WorkerAgentTraceConfig {
+        policy: policy.clone(),
+        spool_root: Some(workspace.temporary_root().join("trace-spool")),
+    });
+    let command = vec![
+        agent_bin
+            .to_str()
+            .expect("validated UTF-8 agent path")
+            .to_string(),
+        "--provider".to_string(),
+        "deepseek".to_string(),
+        "--model".to_string(),
+        HARNESS_MODEL.to_string(),
+        "--provider-url".to_string(),
+        jig.base_url(),
+        "--subagents".to_string(),
+        "off".to_string(),
+    ];
+    let runner = OutOfProcessRunner::new(command)
+        .with_env(vec![(
+            PROVIDER_CREDENTIALS_ENV.to_string(),
+            DUMMY_PROVIDER_CREDENTIAL.to_string(),
+        )])
+        .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()))
+        .with_trace_policy(Some(policy))
+        .with_shared_trace_collector(collector.clone());
+    let context = workspace.context().clone();
+    let cwd = workspace.root().to_path_buf();
+    let job_id = format!("benchmark-repetition-{repetition:03}");
+    let output =
+        temper_worker_io::block_on(async move { runner.run(&job_id, &context, &cwd).await })
+            .map_err(|error| BenchmarkRunError::Agent {
+                repetition,
+                message: format!("{:?}: {}", error.class, error.message),
+            })?;
+    drop(jig);
+
+    workspace.verify_context_directories()?;
+    let accepted_submit =
+        accepted_submit_evidence(output.accepted_submit.as_ref(), &workspace, repetition)?;
+    let post_run_commands = run_post_run_commands(manifest, &workspace);
+    workspace.verify_context_directories()?;
+    let diff = collect_diff_artifact(&workspace)?;
+    let validation = ValidationArtifactV1 {
+        version: VALIDATION_ARTIFACT_VERSION,
+        accepted_submit,
+        post_run_commands,
+    };
+
+    let mut recovered = collector
+        .recover()
+        .map_err(BenchmarkRunError::WorkerTrace)?;
+    if recovered.len() != 1 {
+        return Err(BenchmarkRunError::TraceRunCount {
+            repetition,
+            actual: recovered.len(),
+        });
+    }
+    let recovered = recovered.pop().expect("one recovered trace");
+    let trace = NormalizedTrace {
+        source: TraceInputKindV1::JournalDirectory,
+        events: recovered.events,
+        attachments: recovered.blobs,
+        diagnostics: Vec::new(),
+    };
+    let prefixes = manifest
+        .manifest()
+        .validation_command_prefixes
+        .iter()
+        .map(|argv| argv.join(" "))
+        .collect();
+    let mut summary = analyze_trace(
+        &trace,
+        &AnalyzeOptions {
+            validation_command_prefixes: prefixes,
+        },
+    );
+    summary.benchmark = Some(BenchmarkRunV1 {
+        name: manifest.manifest().name.clone(),
+        mode: BenchmarkModeV1::Harness,
+        repetition,
+    });
+    summary.host = Some(collect_environment_metadata(
+        &trace.events,
+        &manifest.manifest().annotations,
+    ));
+    summary.validation = Some(validation_summary(&validation));
+    summary.diff = Some(diff.statistics.clone());
+    summary.workspace_result = Some(output.result.clone());
+
+    write_canonical_export(&trace, &paths.canonical_trace)?;
+    write_json(&paths.workspace_result, &output.result, "workspace result")?;
+    write_json(
+        &paths.validation_evidence,
+        &validation,
+        "validation evidence",
+    )?;
+    write_json(&paths.diff_statistics, &diff, "diff evidence")?;
+    write_run_summary(&summary, &paths.root)?;
+    Ok(summary)
+}
+
+fn write_json<T: Serialize>(
+    path: &Path,
+    value: &T,
+    artifact: &'static str,
+) -> Result<(), BenchmarkRunError> {
+    let mut bytes = serde_json::to_vec_pretty(value)
+        .map_err(|source| BenchmarkRunError::Json { artifact, source })?;
+    bytes.push(b'\n');
+    write_bytes(path, &bytes, "write JSON artifact")
+}
+
+fn write_bytes(
+    path: &Path,
+    bytes: &[u8],
+    operation: &'static str,
+) -> Result<(), BenchmarkRunError> {
+    fs::write(path, bytes).map_err(|source| BenchmarkRunError::Io {
+        operation,
+        path: path.to_path_buf(),
+        source,
+    })
+}

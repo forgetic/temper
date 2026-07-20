@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use temper_protocol_activity::{
     AgentAssignmentIdentityV1, CaptureModeV1, FailureInfoV1, StopReasonV1,
 };
+use temper_protocol_agent::WorkspaceResult;
 
 /// Current JSON contract version for one benchmark run summary.
 pub const RUN_SUMMARY_VERSION: u32 = 1;
@@ -36,6 +37,10 @@ pub struct RunSummaryV1 {
     pub diff: Option<DiffStatisticsV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<HostMetadataV1>,
+    /// Terminal product emitted by a direct agent-session run. Historical
+    /// trace analysis leaves this absent because traces do not carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_result: Option<WorkspaceResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<TraceDiagnosticV1>,
 }
@@ -62,6 +67,8 @@ struct RunSummaryWireV1 {
     diff: Option<DiffStatisticsV1>,
     #[serde(default)]
     host: Option<HostMetadataV1>,
+    #[serde(default)]
+    workspace_result: Option<WorkspaceResult>,
     #[serde(default)]
     diagnostics: Vec<TraceDiagnosticV1>,
 }
@@ -96,6 +103,7 @@ impl TryFrom<RunSummaryWireV1> for RunSummaryV1 {
             validation: value.validation,
             diff: value.diff,
             host: value.host,
+            workspace_result: value.workspace_result,
             diagnostics: value.diagnostics,
         })
     }
