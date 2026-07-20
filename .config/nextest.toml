@@ -3,12 +3,15 @@
 # Root-package Forgejo e2es are assigned to the global `root-forgejo-e2e` test
 # group with `max-threads = 1`, so nextest queues those heavyweight scenarios at
 # the scheduler instead of starting several Forgejo / runner / daemon topologies
-# in parallel. The advisory file lock in tests/support/e2e_lock.rs intentionally
-# remains as belt-and-suspenders protection for direct `cargo test -- --ignored`
-# invocations and older/manual runners that do not honor this nextest config.
-# Keep the default profile's thread count unset so nextest runs the ordinary
-# quick suite across all available CPUs. Resource-heavy exceptions below reserve
-# the full scheduler explicitly instead of serializing unrelated tests.
+# in parallel. Each profile override also reserves all four e2e threads: daemon
+# boot stretches otherwise compete with unrelated live fixtures and can exhaust
+# their bounded startup window without producing a boot log. The advisory file
+# lock in tests/support/e2e_lock.rs intentionally remains as belt-and-suspenders
+# protection for direct `cargo test -- --ignored` invocations and older/manual
+# runners that do not honor this nextest config. Keep the default profile's
+# thread count unset so nextest runs the ordinary quick suite across all
+# available CPUs. Resource-heavy exceptions below reserve the full scheduler
+# explicitly instead of serializing unrelated tests.
 [test-groups]
 root-forgejo-e2e = { max-threads = 1 }
 # Native-process acceptance starts real agents and worker/daemon worlds. Nextest
@@ -42,6 +45,7 @@ fail-fast = false
 [[profile.e2e.overrides]]
 filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e))'
 test-group = 'root-forgejo-e2e'
+threads-required = 4
 
 # Everyday full runs use this narrower live lane after the non-ignored quick
 # suite. Keep the list exact and readable: adding/removing a default live
@@ -63,3 +67,4 @@ package(temper) & (
 [[profile.e2e-capstones.overrides]]
 filter = 'package(temper) & (binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e))'
 test-group = 'root-forgejo-e2e'
+threads-required = 4
