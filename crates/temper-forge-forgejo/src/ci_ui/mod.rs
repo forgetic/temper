@@ -33,7 +33,7 @@ use crate::config::WebUiCredentials;
 use crate::ids::{CiJobCoord, RepoCoord};
 use crate::{ForgejoForge, HttpClient};
 use map::live_run_to_jobs;
-use session::WebUiClient;
+use session::{LiveViewOutcome, WebUiClient};
 use temper_forge_model::{CiJob, ForgeResult, RepositoryId};
 
 /// Most-recent runs scraped per read. The Actions page lists runs newest-first,
@@ -74,8 +74,15 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
 
     let mut jobs = Vec::new();
     for run in run_ids {
-        let Some(live) = client.run_live_view(repo, run, 0).await? else {
-            continue;
+        let live = match client.run_live_view(repo, run, 0).await? {
+            LiveViewOutcome::Found(live) => live,
+            LiveViewOutcome::Missing => continue,
+            // Partial list aggregation is intentionally deferred: until the
+            // ordering rule is implemented, fail hard rather than risk using
+            // evidence that an unreadable newer run could supersede.
+            LiveViewOutcome::Unreadable(unreadable) => {
+                return Err(unreadable.into_backend_error());
+            }
         };
         // A caller-supplied commit is mandatory: only provider SHA evidence can
         // own that query. A different PR pseudo-ref is conclusive even when the
@@ -152,8 +159,12 @@ pub(crate) async fn read_ci_job<C: HttpClient>(
 ) -> ForgeResult<Option<CiJob>> {
     let mut client = WebUiClient::new(forge, credentials);
     client.login().await?;
-    let Some(live) = client.run_live_view(&coord.repo, coord.run, 0).await? else {
-        return Ok(None);
+    let live = match client.run_live_view(&coord.repo, coord.run, 0).await? {
+        LiveViewOutcome::Found(live) => live,
+        LiveViewOutcome::Missing => return Ok(None),
+        LiveViewOutcome::Unreadable(unreadable) => {
+            return Err(unreadable.into_backend_error());
+        }
     };
     let target = Target::default();
     let jobs = live_run_to_jobs(&coord.repo, repo_id, coord.run, &live, &target);
