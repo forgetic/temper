@@ -284,8 +284,8 @@ mod tests {
         assert_eq!(diagnostic.http_status(), Some(429));
         assert_eq!(diagnostic.provider_request_id(), Some("req_123"));
         assert_eq!(diagnostic.provider_error_code(), Some("rate_limit"));
-        assert_eq!(diagnostic.message(), "Please retry later.");
-        assert!(!diagnostic.detail_redacted());
+        assert_eq!(diagnostic.message(), REDACTED_MODEL_FAILURE_MESSAGE);
+        assert!(diagnostic.detail_redacted());
     }
 
     #[test]

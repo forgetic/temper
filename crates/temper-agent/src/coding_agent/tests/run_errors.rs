@@ -119,7 +119,7 @@ fn typed_model_unavailable_classifications_retain_diagnostics() {
                 diagnostic,
             } => {
                 assert_eq!(model, "gpt-missing");
-                assert_eq!(detail, "The requested resource was not found.");
+                assert_eq!(detail, temper_agent_core::REDACTED_MODEL_FAILURE_MESSAGE);
                 assert_eq!(diagnostic.provider(), "openai");
                 assert_eq!(diagnostic.model(), "gpt-missing");
                 assert_eq!(diagnostic.category(), expected_category);
@@ -127,6 +127,7 @@ fn typed_model_unavailable_classifications_retain_diagnostics() {
                 assert_eq!(diagnostic.http_status(), status);
                 assert_eq!(diagnostic.provider_request_id(), Some(request_id));
                 assert_eq!(diagnostic.provider_error_code(), code);
+                assert!(diagnostic.detail_redacted());
             }
             other => panic!("expected structured model-unavailable promotion, got {other:?}"),
         }
