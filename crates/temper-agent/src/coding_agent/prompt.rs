@@ -84,18 +84,7 @@ pub fn system_prompt_with_contracts(
         render_workflow_outcomes(&mut prompt, capability, allowed_verdicts, verdict_contracts);
     }
 
-    prompt.push_str(
-        "\nEFFICIENCY:\n\
-         - Batch independent read-only calls into a single response when the \
-         available tools support parallel execution.\n\
-         - When mutation tools are available, prefer creating a complete new file \
-         in one operation over many incremental changes.\n\
-         - Verify with one focused command (for example, run the relevant test \
-         suite once after implementation) rather than re-checking after every \
-         small step; do not re-run checks when nothing has changed.\n\
-         - Avoid re-reading content just produced, and prefer a specialized \
-         available tool over a general shell command for the same operation.\n",
-    );
+    render_efficiency(&mut prompt, capability);
 
     prompt.push_str(
         "\n---\n\
@@ -117,6 +106,56 @@ pub fn system_prompt_with_contracts(
     );
 
     prompt
+}
+
+fn render_efficiency(prompt: &mut String, capability: Capability) {
+    match capability {
+        Capability::CodingWorkspace => prompt.push_str(
+            "\nEFFICIENCY:\n\
+             - Scale discovery to the task. For non-local work, batch independent \
+             status, architecture, and search calls into one response; skip ritual \
+             discovery when the task is already localized.\n\
+             - Read the complete likely source, test, configuration, and \
+             documentation set together before editing. Form the implementation \
+             contract internally, but do not spend a standalone response \
+             publishing a plan.\n\
+             - Group related, safe `edit` and `write` calls by cohesive \
+             responsibility, normally completing the work in one to four mutation \
+             responses instead of one response per file. Prefer writing a complete \
+             new file in one operation over incremental fragments.\n\
+             - Multiple mutation calls in one model response are model-turn \
+             batching, not concurrent execution. Read-safe calls may run \
+             concurrently; mutation, process, network, and unknown-effect calls \
+             remain serialized barriers.\n\
+             - Complete the planned source, tests, configuration, and documentation \
+             deliverables before running the formatter and focused authoritative \
+             test suite. Do not repeatedly check partial work.\n\
+             - If validation fails, perform bounded repair and focused revalidation \
+             without broad rediscovery. Avoid re-reading content just produced or \
+             repeating architecture searches unless an unresolved correctness \
+             question requires it; prefer specialized tools over general shell \
+             commands.\n\
+             - Inspect repository status, the tracked diff, and all untracked \
+             deliverables together. When a submission gate is available, submit \
+             the unchanged validated workspace once and emit the terminal JSON \
+             only after acceptance.\n\
+             - Treat 8–12 total responses, at most four mutation responses, and \
+             zero validation invalidations as goals, not correctness limits. Task \
+             correctness and required validation take priority.\n",
+        ),
+        Capability::TriageWorkspace | Capability::ReviewWorkspace => prompt.push_str(
+            "\nEFFICIENCY:\n\
+             - Batch independent read-only calls into a single response when the \
+             available tools support parallel execution.\n\
+             - When mutation tools are available, prefer creating a complete new file \
+             in one operation over many incremental changes.\n\
+             - Verify with one focused command (for example, run the relevant test \
+             suite once after implementation) rather than re-checking after every \
+             small step; do not re-run checks when nothing has changed.\n\
+             - Avoid re-reading content just produced, and prefer a specialized \
+             available tool over a general shell command for the same operation.\n",
+        ),
+    }
 }
 
 /// Builds the role prompt plus guidance for exactly the tools in the finalized

@@ -18,10 +18,14 @@ The no-verdict success path above remains preferred after a successful implement
 - `needs_human` only when implementation requires non-agent judgment.
 
 EFFICIENCY:
-- Batch independent read-only calls into a single response when the available tools support parallel execution.
-- When mutation tools are available, prefer creating a complete new file in one operation over many incremental changes.
-- Verify with one focused command (for example, run the relevant test suite once after implementation) rather than re-checking after every small step; do not re-run checks when nothing has changed.
-- Avoid re-reading content just produced, and prefer a specialized available tool over a general shell command for the same operation.
+- Scale discovery to the task. For non-local work, batch independent status, architecture, and search calls into one response; skip ritual discovery when the task is already localized.
+- Read the complete likely source, test, configuration, and documentation set together before editing. Form the implementation contract internally, but do not spend a standalone response publishing a plan.
+- Group related, safe `edit` and `write` calls by cohesive responsibility, normally completing the work in one to four mutation responses instead of one response per file. Prefer writing a complete new file in one operation over incremental fragments.
+- Multiple mutation calls in one model response are model-turn batching, not concurrent execution. Read-safe calls may run concurrently; mutation, process, network, and unknown-effect calls remain serialized barriers.
+- Complete the planned source, tests, configuration, and documentation deliverables before running the formatter and focused authoritative test suite. Do not repeatedly check partial work.
+- If validation fails, perform bounded repair and focused revalidation without broad rediscovery. Avoid re-reading content just produced or repeating architecture searches unless an unresolved correctness question requires it; prefer specialized tools over general shell commands.
+- Inspect repository status, the tracked diff, and all untracked deliverables together. When a submission gate is available, submit the unchanged validated workspace once and emit the terminal JSON only after acceptance.
+- Treat 8–12 total responses, at most four mutation responses, and zero validation invalidations as goals, not correctness limits. Task correctness and required validation take priority.
 
 ---
 FINAL MESSAGE FORMAT (mandatory):
