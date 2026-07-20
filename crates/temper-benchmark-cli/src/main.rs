@@ -1,23 +1,29 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_benchmark_cli::{
-    compare_benchmarks, ingest_trace, load_comparison_input, render_comparison_markdown,
-    write_canonical_export, write_comparison_artifacts,
+    AnalyzeOptions, analyze_trace, compare_benchmarks, ingest_trace, load_comparison_input,
+    render_comparison_markdown, render_run_summary_markdown, write_canonical_export,
+    write_comparison_artifacts, write_run_summary,
 };
+
+const ANALYSIS_TRACE_FILE: &str = "trace.export.jsonl";
 
 const USAGE: &str = "\
 temper-benchmark: agent-session benchmark trace tooling
 
 Usage:
+  temper-benchmark analyze --trace <PATH> --output-dir <DIR>
   temper-benchmark normalize --trace <PATH> --output <FILE>
   temper-benchmark compare --base <ARTIFACT-OR-SUMMARY> --head <ARTIFACT-OR-SUMMARY> [--output-dir <DIR>]
   temper-benchmark --help
 
 Commands:
+  analyze    Derive metrics and write run.json, run.md, and a canonical trace export
   normalize  Validate journal/events/export input and write canonical export JSONL
   compare    Render a report-only comparison without rerunning either benchmark
 ";
@@ -29,6 +35,10 @@ fn main() -> ExitCode {
             print!("{USAGE}");
             ExitCode::SUCCESS
         }
+        [command, rest @ ..] if command == "analyze" => match parse_analyze_args(rest) {
+            Ok(args) => analyze(args),
+            Err(message) => usage_error(message),
+        },
         [command, trace_flag, trace, output_flag, output]
             if command == "normalize" && trace_flag == "--trace" && output_flag == "--output" =>
         {
@@ -36,20 +46,36 @@ fn main() -> ExitCode {
         }
         [command, rest @ ..] if command == "compare" => match parse_compare_args(rest) {
             Ok(args) => compare(args),
-            Err(message) => {
-                eprintln!("{message}\n\n{USAGE}");
-                ExitCode::from(64)
-            }
+            Err(message) => usage_error(message),
         },
         [] => {
             print!("{USAGE}");
             ExitCode::from(64)
         }
-        _ => {
-            eprintln!("invalid arguments\n\n{USAGE}");
-            ExitCode::from(64)
-        }
+        _ => usage_error("invalid arguments"),
     }
+}
+
+fn usage_error(message: impl std::fmt::Display) -> ExitCode {
+    eprintln!("{message}\n\n{USAGE}");
+    ExitCode::from(64)
+}
+
+struct AnalyzeArgs {
+    trace: PathBuf,
+    output_dir: PathBuf,
+}
+
+fn parse_analyze_args(args: &[String]) -> Result<AnalyzeArgs, String> {
+    let mut values = parse_path_flags(args, &["--trace", "--output-dir"], "analyze")?;
+    Ok(AnalyzeArgs {
+        trace: values
+            .remove("--trace")
+            .ok_or_else(|| "analyze requires `--trace`".to_string())?,
+        output_dir: values
+            .remove("--output-dir")
+            .ok_or_else(|| "analyze requires `--output-dir`".to_string())?,
+    })
 }
 
 struct CompareArgs {
@@ -59,31 +85,51 @@ struct CompareArgs {
 }
 
 fn parse_compare_args(args: &[String]) -> Result<CompareArgs, String> {
-    let mut base = None;
-    let mut head = None;
-    let mut output_dir = None;
+    let mut values = parse_path_flags(args, &["--base", "--head", "--output-dir"], "compare")?;
+    Ok(CompareArgs {
+        base: values
+            .remove("--base")
+            .ok_or_else(|| "compare requires `--base`".to_string())?,
+        head: values
+            .remove("--head")
+            .ok_or_else(|| "compare requires `--head`".to_string())?,
+        output_dir: values.remove("--output-dir"),
+    })
+}
+
+fn parse_path_flags(
+    args: &[String],
+    allowed: &[&str],
+    command: &str,
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    let mut values = BTreeMap::new();
     let mut index = 0;
     while index < args.len() {
         let flag = &args[index];
+        if !allowed.contains(&flag.as_str()) {
+            return Err(format!("unknown {command} argument `{flag}`"));
+        }
         let value = args
             .get(index + 1)
             .ok_or_else(|| format!("missing value for `{flag}`"))?;
-        let destination = match flag.as_str() {
-            "--base" => &mut base,
-            "--head" => &mut head,
-            "--output-dir" => &mut output_dir,
-            _ => return Err(format!("unknown compare argument `{flag}`")),
-        };
-        if destination.replace(PathBuf::from(value)).is_some() {
-            return Err(format!("duplicate compare argument `{flag}`"));
+        if values.insert(flag.clone(), PathBuf::from(value)).is_some() {
+            return Err(format!("duplicate argument `{flag}`"));
         }
         index += 2;
     }
-    Ok(CompareArgs {
-        base: base.ok_or_else(|| "compare requires `--base`".to_string())?,
-        head: head.ok_or_else(|| "compare requires `--head`".to_string())?,
-        output_dir,
-    })
+    Ok(values)
+}
+
+fn analyze(args: AnalyzeArgs) -> ExitCode {
+    let result = (|| {
+        let trace = ingest_trace(&args.trace)?;
+        let summary = analyze_trace(&trace, &AnalyzeOptions::default());
+        write_run_summary(&summary, &args.output_dir)?;
+        write_canonical_export(&trace, args.output_dir.join(ANALYSIS_TRACE_FILE))?;
+        print!("{}", render_run_summary_markdown(&summary));
+        Ok::<_, Box<dyn std::error::Error>>(())
+    })();
+    report_result(result)
 }
 
 fn compare(args: CompareArgs) -> ExitCode {
