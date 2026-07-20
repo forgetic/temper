@@ -31,10 +31,11 @@ Historical traces cannot be enriched with facts they never recorded. Final diff
 statistics, `WorkspaceResult`, and host validation evidence are unavailable for
 an offline trace. Metadata-only capture can omit command arguments needed to
 identify validation boundaries, and older or partial traces can omit timings,
-tokens, or terminal events. In particular, traces without usable tool-call
-scope and model-turn identity report mutation-turn batching metrics unavailable
-with a diagnostic, not as zero. The summary marks unavailable values and emits
-observability diagnostics instead of inventing evidence.
+tokens, or terminal events. Scope ancestry is different: malformed or missing
+ancestry remains an ingestion error rather than becoming unavailable summary
+evidence. For an ingested trace, if any successful mutation lacks usable
+model-turn identity, all three mutation-turn metrics are unavailable and the
+summary emits `StructureEvidenceUnavailable` instead of reporting zero.
 
 ## Interpret model-turn batching
 
