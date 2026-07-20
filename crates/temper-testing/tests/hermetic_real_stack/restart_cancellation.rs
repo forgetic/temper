@@ -384,12 +384,12 @@ async fn await_result_ack(
     pause: PausePermit,
     description: &str,
 ) -> ReachedPause {
-    // Result delivery retries use 2s, 4s, 8s, then 16s backoffs. Bound the
-    // synchronization beyond that complete replay window while retaining an
-    // actionable acknowledgement-specific failure.
+    // Result delivery retries use bounded exponential backoff. Allow the replay
+    // to pass the 32-second slot (2s + 4s + 8s + 16s + 32s) while retaining an
+    // actionable acknowledgement-specific failure for a genuinely stuck run.
     skein::time::timeout(
         temper_engine_io::runtime::timer_now(cx),
-        Duration::from_secs(40),
+        Duration::from_secs(90),
         Box::pin(pause.arrived()),
     )
     .await
