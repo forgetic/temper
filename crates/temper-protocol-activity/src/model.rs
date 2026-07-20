@@ -411,13 +411,17 @@ impl AgentActivityEventV1 {
         }
     }
 
-    /// Applies the shared fail-closed normalization to a finished model call.
+    /// Applies conservative normalization to a finished model call received
+    /// from an untrusted source.
     ///
-    /// Trust boundaries use this before validation or serialization. Besides
-    /// sanitizing supplied detail, it canonicalizes the legacy
-    /// `succeeded + stop_reason=error` shape and supplies explicit redacted
-    /// detail for newly ingested failed calls. Retained records remain readable
-    /// because ordinary deserialization and validation do not call this method.
+    /// A syntactically valid diagnostic is not evidence that its strings came
+    /// from a hardened provider adapter: a child or direct batch can forge the
+    /// same shape. This therefore removes message and identifier fields while
+    /// retaining only independently safe typed facts. It also canonicalizes
+    /// the legacy `succeeded + stop_reason=error` shape and supplies an explicit
+    /// `redacted_unknown` diagnostic for newly ingested failed calls. Retained
+    /// records remain readable because deserialization and validation do not
+    /// call this method.
     pub fn normalize_model_failure(&mut self) {
         let Self::ModelCallFinished(finished) = self else {
             return;
@@ -429,11 +433,13 @@ impl AgentActivityEventV1 {
         }
         if finished.status == ModelCallStatusV1::Failed && finished.failure.is_none() {
             finished.failure = Some(ModelFailureV1::redacted_unknown(
-                "unknown", "unknown", false,
+                UNKNOWN_MODEL_FAILURE_IDENTITY,
+                UNKNOWN_MODEL_FAILURE_IDENTITY,
+                false,
             ));
         }
         if let Some(failure) = &mut finished.failure {
-            failure.normalize();
+            failure.redact_untrusted();
         }
     }
 

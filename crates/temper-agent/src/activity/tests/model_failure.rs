@@ -76,8 +76,11 @@ fn failed_finish_retains_safe_diagnostics_and_retry_summary_in_every_capture_mod
             failure.provider_error_code.as_deref(),
             Some("rate_limit_exceeded")
         );
-        assert_eq!(failure.message, "Please retry later.");
-        assert!(!failure.detail_redacted);
+        assert_eq!(
+            failure.message,
+            temper_protocol_activity::REDACTED_MODEL_FAILURE_MESSAGE
+        );
+        assert!(failure.detail_redacted);
 
         let retry = frames
             .iter()

@@ -96,4 +96,21 @@ impl ModelFailureV1 {
     pub fn normalize(&mut self) {
         normalize_model_failure(self);
     }
+
+    /// Removes every child-controlled string before crossing a trust boundary.
+    ///
+    /// Character and length validation cannot establish the provenance of an
+    /// otherwise valid identifier or message. Only non-textual facts that
+    /// cannot carry provider content survive this conservative rewrite.
+    pub fn redact_untrusted(&mut self) {
+        let http_status = self
+            .http_status
+            .filter(|status| (100..=599).contains(status));
+        *self = Self::redacted_unknown(
+            UNKNOWN_MODEL_FAILURE_IDENTITY,
+            UNKNOWN_MODEL_FAILURE_IDENTITY,
+            self.retryable,
+        );
+        self.http_status = http_status;
+    }
 }

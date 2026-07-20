@@ -95,6 +95,13 @@ fn model_failure_validation_enforces_bounds_and_strict_identifiers() {
     }
 
     let mut failure = model_failure();
+    failure.detail_redacted = true;
+    failure.message = "OpenAI-compatible provider request was rate limited.".into();
+    failure.validate().expect(
+        "redacted provider prose may retain a source-owned template and validated provider code",
+    );
+
+    let mut failure = model_failure();
     failure.provider.push('!');
     assert_code(failure.validate(), ActivityValidationCode::InvalidEvent);
     let mut failure = model_failure();
@@ -187,6 +194,59 @@ fn event_trust_boundary_canonicalizes_new_error_shapes() {
         finished.failure.as_ref().map(|failure| failure.category),
         Some(ModelFailureCategoryV1::RedactedUnknown)
     );
+}
+
+#[test]
+fn untrusted_valid_looking_diagnostics_do_not_retain_strings() {
+    const SENTINELS: [&str; 5] = [
+        "PromptSentinel555",
+        "RawBodySentinel555",
+        "EnvironmentSentinel555",
+        "CredentialSentinel555",
+        "ProviderResponseSentinel555",
+    ];
+
+    for (index, sentinel) in SENTINELS.into_iter().enumerate() {
+        let mut failure = model_failure();
+        match index {
+            0 => failure.message = sentinel.into(),
+            1 => failure.provider_error_code = Some(sentinel.into()),
+            2 => failure.provider_request_id = Some(sentinel.into()),
+            3 => failure.provider = sentinel.into(),
+            4 => failure.model = sentinel.into(),
+            _ => unreachable!(),
+        }
+        failure
+            .validate()
+            .expect("the standalone sentinel is syntactically valid");
+        let mut event = AgentActivityEventV1::ModelCallFinished(ModelCallFinishedV1 {
+            call_id: format!("forged-{index}"),
+            attempt: 0,
+            status: ModelCallStatusV1::Failed,
+            duration_ms: 1,
+            time_to_first_token_ms: None,
+            stop_reason: Some(StopReasonV1::Error),
+            failure: Some(failure),
+        });
+
+        event.normalize_model_failure();
+
+        let AgentActivityEventV1::ModelCallFinished(finished) = event else {
+            unreachable!();
+        };
+        let failure = finished.failure.expect("explicit redacted diagnostic");
+        failure.validate().expect("redacted diagnostic validates");
+        assert_eq!(failure.provider, UNKNOWN_MODEL_FAILURE_IDENTITY);
+        assert_eq!(failure.model, UNKNOWN_MODEL_FAILURE_IDENTITY);
+        assert_eq!(failure.category, ModelFailureCategoryV1::RedactedUnknown);
+        assert!(failure.retryable);
+        assert_eq!(failure.http_status, Some(429));
+        assert_eq!(failure.provider_request_id, None);
+        assert_eq!(failure.provider_error_code, None);
+        assert_eq!(failure.message, REDACTED_MODEL_FAILURE_MESSAGE);
+        assert!(failure.detail_redacted);
+        assert!(!serde_json::to_string(&failure).unwrap().contains(sentinel));
+    }
 }
 
 #[test]

@@ -13,8 +13,8 @@ use temper_protocol_activity::{
     AgentActivityEventV1, AgentAssignmentIdentityV1, AgentRunEventV1, AgentScopeKindV1,
     AgentScopeV1, AssistantMessageV1, BlobAttachmentV1, BlobMediaTypeV1, CaptureModeV1,
     CapturedContentV1, InlineContentV1, ModelCallFinishedV1, ModelCallStatusV1,
-    ModelFailureCategoryV1, ModelFailureV1, RunFinishedV1, RunStartedV1, RunStatusV1, StopReasonV1,
-    ToolStartedV1,
+    ModelFailureCategoryV1, ModelFailureV1, REDACTED_MODEL_FAILURE_MESSAGE, RunFinishedV1,
+    RunStartedV1, RunStatusV1, StopReasonV1, ToolStartedV1, UNKNOWN_MODEL_FAILURE_IDENTITY,
 };
 use tempfile::TempDir;
 
@@ -415,7 +415,7 @@ fn policy_and_quota_omit_optional_content_without_blocking_terminal_events() {
 }
 
 #[test]
-fn model_diagnostics_survive_quota_content_stripping_as_metadata() {
+fn redacted_model_diagnostics_survive_quota_content_stripping_as_metadata() {
     let temporary = tempfile::tempdir().expect("tempdir");
     let policy = AgentActivityCapturePolicyV1 {
         capture: CaptureModeV1::Transcript,
@@ -468,12 +468,15 @@ fn model_diagnostics_survive_quota_content_stripping_as_metadata() {
         panic!("model diagnostic boundary survives quota stripping");
     };
     let failure = finished.failure.as_ref().expect("safe model diagnostic");
-    assert_eq!(failure.category, ModelFailureCategoryV1::RateLimit);
-    assert_eq!(failure.message, "Provider rate limit exceeded.");
-    assert_eq!(
-        failure.provider_request_id.as_deref(),
-        Some("req_quota_531")
-    );
+    assert_eq!(failure.provider, UNKNOWN_MODEL_FAILURE_IDENTITY);
+    assert_eq!(failure.model, UNKNOWN_MODEL_FAILURE_IDENTITY);
+    assert_eq!(failure.category, ModelFailureCategoryV1::RedactedUnknown);
+    assert!(failure.retryable);
+    assert_eq!(failure.http_status, Some(429));
+    assert_eq!(failure.provider_request_id, None);
+    assert_eq!(failure.provider_error_code, None);
+    assert_eq!(failure.message, REDACTED_MODEL_FAILURE_MESSAGE);
+    assert!(failure.detail_redacted);
 }
 
 #[test]

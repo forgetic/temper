@@ -54,14 +54,6 @@ pub(crate) fn validate_model_failure_at(
     }
     safe_message(&value.message, &format!("{path}.message"))?;
 
-    if value.detail_redacted
-        && (value.message != REDACTED_MODEL_FAILURE_MESSAGE || value.provider_error_code.is_some())
-    {
-        return Err(invalid(
-            format!("{path}.detail_redacted"),
-            "redacted detail must use the fixed message and omit the provider code",
-        ));
-    }
     if value.category == ModelFailureCategoryV1::RedactedUnknown
         && (!value.detail_redacted || value.message != REDACTED_MODEL_FAILURE_MESSAGE)
     {
@@ -73,11 +65,13 @@ pub(crate) fn validate_model_failure_at(
     Ok(())
 }
 
-/// Normalizes untrusted model failure fields without retaining malformed detail.
+/// Canonicalizes a model failure whose provenance has already been established.
 ///
 /// Valid values are preserved (with harmless outer message whitespace removed).
-/// Any invalid field rewrites the value to `redacted_unknown`. Independently
-/// valid status and request-ID facts survive that rewrite.
+/// Any malformed field rewrites the value to `redacted_unknown`. Independently
+/// valid status and request-ID facts survive that rewrite. Untrusted activity
+/// must additionally call [`ModelFailureV1::redact_untrusted`]; syntax alone
+/// never establishes that diagnostic text is safe.
 pub fn normalize_model_failure(value: &mut ModelFailureV1) {
     value.message = value.message.trim().to_string();
     if validate_model_failure(value).is_ok() {

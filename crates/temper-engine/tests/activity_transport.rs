@@ -5,7 +5,7 @@ use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityBatch, AgentActivityCapturePolicyV1,
     AgentActivityEventV1, AgentAssignmentIdentityV1, AgentRunEventV1, AgentScopeKindV1,
     AgentScopeV1, ModelCallFinishedV1, ModelCallStatusV1, ModelFailureCategoryV1, ModelFailureV1,
-    REDACTED_MODEL_FAILURE_MESSAGE, RunStartedV1, StopReasonV1,
+    REDACTED_MODEL_FAILURE_MESSAGE, RunStartedV1, StopReasonV1, UNKNOWN_MODEL_FAILURE_IDENTITY,
 };
 use temper_protocol_worker::{
     Capability, Capacity, Register, WORKER_AUTHORIZATION_HEADER, WORKER_PROTOCOL_VERSION,
@@ -184,6 +184,8 @@ fn activity_transport_sanitizes_model_failures_before_validation_and_dispatch() 
         assert_eq!(finished.status, ModelCallStatusV1::Failed);
         let failure = finished.failure.as_ref().expect("explicit diagnostic");
         assert_eq!(failure.category, ModelFailureCategoryV1::RedactedUnknown);
+        assert_eq!(failure.provider, UNKNOWN_MODEL_FAILURE_IDENTITY);
+        assert_eq!(failure.model, UNKNOWN_MODEL_FAILURE_IDENTITY);
         assert_eq!(failure.message, REDACTED_MODEL_FAILURE_MESSAGE);
         assert_eq!(failure.provider_request_id, None);
         assert_eq!(failure.provider_error_code, None);

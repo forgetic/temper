@@ -171,7 +171,7 @@ serde_yaml = "0.9"
 toml = "0.8"
 thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
-tongs = { git = "https://git.ekanayaka.io/ai/tongs.git", rev = "d50a73eaed5037d66102edc5918684c9a66faf2c" }
+tongs = { git = "https://git.ekanayaka.io/ai/tongs.git", rev = "0803f0c7a5165bf367b084fdfbf36b33cdc9643d" }
 # Structured logging stack (see crates/temper-log). `tracing` is the facade;
 # `tracing-subscriber` provides the registry + EnvFilter (RUST_LOG) + fmt layer
 # + the `json` fmt layer behind the `TEMPER_LOG_FORMAT=json` toggle;
