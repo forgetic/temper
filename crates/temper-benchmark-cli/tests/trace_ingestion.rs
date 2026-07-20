@@ -7,11 +7,33 @@ use temper_benchmark_cli::{
     RUN_SUMMARY_VERSION, RunSummaryV1, TraceDiagnosticCodeV1, TraceIngestError, TraceInputKindV1,
     ingest_trace,
 };
+use temper_protocol_activity::{AgentActivityEventV1, AgentRunEventV1};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures")
         .join(name)
+}
+
+fn write_events(path: &Path, events: &[AgentRunEventV1]) {
+    let mut jsonl = events
+        .iter()
+        .map(|event| serde_json::to_string(event).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    jsonl.push('\n');
+    fs::write(path, jsonl).unwrap();
+}
+
+fn insert_duplicate(events: &mut Vec<AgentRunEventV1>, index: usize) {
+    let mut duplicate = events[index].clone();
+    duplicate.seq += 1;
+    duplicate.elapsed_ms += 1;
+    for event in &mut events[index + 1..] {
+        event.seq += 1;
+        event.elapsed_ms += 1;
+    }
+    events.insert(index + 1, duplicate);
 }
 
 #[test]
@@ -101,6 +123,137 @@ fn malformed_identity_sequence_scope_and_export_version_are_rejected() {
             "{name}: expected {expected:?}, got {error}"
         );
     }
+}
+
+#[test]
+fn parallel_child_scopes_may_reuse_model_and_tool_call_ids() {
+    let trace =
+        ingest_trace(fixture("parallel-child-scopes.jsonl")).expect("parallel scoped calls ingest");
+    assert!(!trace.diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic.code,
+        TraceDiagnosticCodeV1::IncompleteModelCall | TraceDiagnosticCodeV1::IncompleteToolCall
+    )));
+
+    let summary = trace.run_summary();
+    assert_eq!(summary.metrics.turns, Some(2));
+    let model = summary.metrics.model.as_ref().unwrap();
+    assert_eq!(
+        (model.calls, model.attempts, model.succeeded_attempts),
+        (2, 2, 2)
+    );
+    let tools = summary.metrics.tools.as_ref().unwrap();
+    assert_eq!((tools.calls, tools.succeeded), (2, 2));
+    assert_eq!(tools.by_name["read"].calls, 1);
+    assert_eq!(tools.by_name["write"].calls, 1);
+}
+
+#[test]
+fn incomplete_parallel_calls_are_reported_only_for_their_scope() {
+    let trace = ingest_trace(fixture("parallel-child-scopes-incomplete.jsonl"))
+        .expect("incomplete scoped calls remain analyzable");
+    let incomplete = trace
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            matches!(
+                diagnostic.code,
+                TraceDiagnosticCodeV1::IncompleteModelCall
+                    | TraceDiagnosticCodeV1::IncompleteToolCall
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(incomplete.len(), 2);
+    assert!(
+        incomplete
+            .iter()
+            .all(|diagnostic| diagnostic.message.contains("scope child-b"))
+    );
+    assert!(
+        incomplete
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("child-a"))
+    );
+    assert!(incomplete.iter().any(|diagnostic| {
+        diagnostic.code == TraceDiagnosticCodeV1::IncompleteModelCall && diagnostic.seq == Some(5)
+    }));
+    assert!(incomplete.iter().any(|diagnostic| {
+        diagnostic.code == TraceDiagnosticCodeV1::IncompleteToolCall && diagnostic.seq == Some(7)
+    }));
+
+    let summary = trace.run_summary();
+    assert_eq!(summary.metrics.turns, Some(2));
+    let model = summary.metrics.model.as_ref().unwrap();
+    assert_eq!((model.calls, model.attempts), (2, 2));
+    assert_eq!(
+        (
+            model.duration_coverage.observed,
+            model.duration_coverage.expected
+        ),
+        (1, Some(2))
+    );
+    let tools = summary.metrics.tools.as_ref().unwrap();
+    assert_eq!(tools.calls, 2);
+    assert_eq!(
+        (
+            tools.duration_coverage.observed,
+            tools.duration_coverage.expected
+        ),
+        (1, Some(2))
+    );
+}
+
+#[test]
+fn duplicate_and_mismatched_calls_within_one_scope_are_rejected() {
+    let base = ingest_trace(fixture("parallel-child-scopes.jsonl")).unwrap();
+
+    for (is_target, expected) in [
+        (
+            (|event: &AgentRunEventV1| {
+                event.scope.id == "child-a"
+                    && matches!(event.event, AgentActivityEventV1::ModelCallStarted(_))
+            }) as fn(&AgentRunEventV1) -> bool,
+            "model call turn-0 attempt 0 in scope child-a starts more than once",
+        ),
+        (
+            (|event: &AgentRunEventV1| {
+                event.scope.id == "child-a"
+                    && matches!(event.event, AgentActivityEventV1::ToolStarted(_))
+            }) as fn(&AgentRunEventV1) -> bool,
+            "tool call tool-0 in scope child-a starts more than once",
+        ),
+    ] {
+        let mut events = base.events.clone();
+        let index = events.iter().position(is_target).unwrap();
+        insert_duplicate(&mut events, index);
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("events.jsonl");
+        write_events(&path, &events);
+        let error = ingest_trace(path).expect_err("same-scope duplicate must fail");
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+
+    let mut events = base.events;
+    let finish = events
+        .iter_mut()
+        .find(|event| {
+            event.scope.id == "child-a"
+                && matches!(event.event, AgentActivityEventV1::ToolFinished(_))
+        })
+        .unwrap();
+    let AgentActivityEventV1::ToolFinished(call) = &mut finish.event else {
+        unreachable!();
+    };
+    call.name = "write".to_string();
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("events.jsonl");
+    write_events(&path, &events);
+    let error = ingest_trace(path).expect_err("same-scope mismatch must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("tool call tool-0 in scope child-a changes name from read to write")
+    );
 }
 
 #[test]
