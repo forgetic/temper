@@ -40,6 +40,44 @@ impl CookieJar {
     }
 }
 
+/// Typed result of reading one Actions live view.
+#[derive(Debug)]
+pub(super) enum LiveViewOutcome {
+    /// The provider returned and decoded the requested run.
+    Found(LiveRunDto),
+    /// Both supported route shapes reported the run/job absent.
+    Missing,
+    /// The provider returned a final non-success response that was not an
+    /// authentication failure. Response bodies are deliberately discarded.
+    Unreadable(LiveViewUnreadable),
+}
+
+/// Safe coordinates for a live view that could not be read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct LiveViewUnreadable {
+    pub(super) repository: RepoCoord,
+    pub(super) run: u64,
+    pub(super) job: u64,
+    pub(super) final_http_status: u16,
+    pub(super) retry_count: u8,
+}
+
+impl LiveViewUnreadable {
+    /// Converts a per-run outcome back into the portable hard error used until
+    /// list aggregation learns how to continue safely past unreadable runs.
+    pub(super) fn into_backend_error(self) -> ForgeError {
+        ForgeError::Backend(format!(
+            "forgejo web-ui: unreadable live view for repository {}, run {}, job {}: \
+             final HTTP status {}, retry count {}",
+            self.repository.path_segment(),
+            self.run,
+            self.job,
+            self.final_http_status,
+            self.retry_count
+        ))
+    }
+}
+
 /// Web-UI session bound to a [`ForgejoForge`] backend and its credentials.
 pub(super) struct WebUiClient<'a, C: HttpClient> {
     forge: &'a ForgejoForge<C>,
@@ -202,23 +240,87 @@ impl<'a, C: HttpClient> WebUiClient<'a, C> {
 
     /// Reads one run's live-view JSON (`POST …/jobs/{job}/attempt/1`).
     ///
-    /// Forgejo 15 requires the attempt-qualified route; the formerly canonical
-    /// unqualified route resolves to attempt zero and returns `500`. Forgejo
-    /// 7.0.x used the unqualified route, so a `404` from the qualified route is
-    /// retried once against the legacy shape. Returns `None` only when both
-    /// route shapes report the run/job absent; other non-success statuses are
-    /// hard errors so a missing verdict never reads as a pass/fail.
+    /// Forgejo 15 requires the attempt-qualified route; Forgejo 7.0.x used the
+    /// unqualified route, so a `404` from the qualified route falls back once to
+    /// the legacy shape. A `500` on either shape clears the session through a
+    /// fresh login and retries that same request exactly once for the entire
+    /// live-view read. The retry rebuilds both cookie and CSRF headers. A final
+    /// non-success response becomes [`LiveViewOutcome::Unreadable`], except for
+    /// persistent authentication failures, which remain hard errors.
     pub(super) async fn run_live_view(
         &mut self,
         repo: &RepoCoord,
         run: u64,
         job: u64,
-    ) -> ForgeResult<Option<LiveRunDto>> {
+    ) -> ForgeResult<LiveViewOutcome> {
         let legacy_path = format!(
             "/{}/{}/actions/runs/{run}/jobs/{job}",
             repo.owner, repo.name
         );
         let attempt_path = format!("{legacy_path}/attempt/1");
+        let mut retry_count = 0;
+        let mut response = self
+            .fetch_live_view_path(&attempt_path, &mut retry_count)
+            .await?;
+        self.reject_persistent_authentication(&response, repo, run, job)?;
+
+        if response.status == 404 {
+            response = self
+                .fetch_live_view_path(&legacy_path, &mut retry_count)
+                .await?;
+            self.reject_persistent_authentication(&response, repo, run, job)?;
+        }
+        if response.status == 404 {
+            return Ok(LiveViewOutcome::Missing);
+        }
+        if !response.is_success() {
+            return Ok(LiveViewOutcome::Unreadable(LiveViewUnreadable {
+                repository: repo.clone(),
+                run,
+                job,
+                final_http_status: response.status,
+                retry_count,
+            }));
+        }
+        let dto: LiveViewDto = serde_json::from_str(&response.body).map_err(|error| {
+            ForgeError::Backend(format!(
+                "forgejo web-ui: failed to decode live view: {error}"
+            ))
+        })?;
+        Ok(LiveViewOutcome::Found(dto.state.run))
+    }
+
+    /// Posts one live-view route and spends the operation's sole `500` retry.
+    async fn fetch_live_view_path(
+        &mut self,
+        path: &str,
+        retry_count: &mut u8,
+    ) -> ForgeResult<HttpResponse> {
+        let mut response = self
+            .fetch(
+                HttpMethod::Post,
+                path,
+                self.live_view_headers(),
+                Some("{\"logCursors\":[]}".to_string()),
+            )
+            .await?;
+        if response.status == 500 && *retry_count == 0 {
+            *retry_count = 1;
+            self.login().await?;
+            response = self
+                .fetch(
+                    HttpMethod::Post,
+                    path,
+                    self.live_view_headers(),
+                    Some("{\"logCursors\":[]}".to_string()),
+                )
+                .await?;
+        }
+        Ok(response)
+    }
+
+    /// Rebuilds live-view headers from the current (possibly refreshed) jar.
+    fn live_view_headers(&self) -> Vec<(String, String)> {
         let mut headers = vec![
             ("Accept".to_string(), "application/json".to_string()),
             ("Content-Type".to_string(), "application/json".to_string()),
@@ -226,35 +328,27 @@ impl<'a, C: HttpClient> WebUiClient<'a, C> {
         if let Some(csrf) = self.jar.csrf() {
             headers.push(("X-Csrf-Token".to_string(), csrf.to_string()));
         }
-        let body = Some("{\"logCursors\":[]}".to_string());
-        let mut response = self
-            .fetch(
-                HttpMethod::Post,
-                &attempt_path,
-                headers.clone(),
-                body.clone(),
-            )
-            .await?;
-        if response.status == 404 {
-            response = self
-                .fetch(HttpMethod::Post, &legacy_path, headers, body)
-                .await?;
+        headers
+    }
+
+    /// A second login bounce/401/403 after [`Self::fetch`] has already retried
+    /// authentication is not a per-run readability failure.
+    fn reject_persistent_authentication(
+        &self,
+        response: &HttpResponse,
+        repo: &RepoCoord,
+        run: u64,
+        job: u64,
+    ) -> ForgeResult<()> {
+        if !is_login_bounce(response) {
+            return Ok(());
         }
-        if response.status == 404 {
-            return Ok(None);
-        }
-        if !response.is_success() {
-            return Err(ForgeError::Backend(format!(
-                "forgejo web-ui: live view for run {run} returned status {}",
-                response.status
-            )));
-        }
-        let dto: LiveViewDto = serde_json::from_str(&response.body).map_err(|error| {
-            ForgeError::Backend(format!(
-                "forgejo web-ui: failed to decode live view: {error}"
-            ))
-        })?;
-        Ok(Some(dto.state.run))
+        Err(ForgeError::Backend(format!(
+            "forgejo web-ui: persistent authentication failure for repository {}, run {run}, \
+             job {job} (status {})",
+            repo.path_segment(),
+            response.status
+        )))
     }
 }
 
