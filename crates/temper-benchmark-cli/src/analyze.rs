@@ -325,6 +325,8 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
         .collect::<BTreeSet<_>>();
     let mut failed_edits = 0_u64;
     let mut mutation_sequences = BTreeSet::new();
+    let mut mutations_by_turn = BTreeMap::<(String, u32), u64>::new();
+    let mut mutation_turns_observable = true;
     let mut boundary_sequences = BTreeSet::new();
     let mut boundary_observable = true;
     let mut diagnostics = Vec::new();
@@ -339,6 +341,20 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
         if matches!(tool.name.as_str(), "write" | "edit") && tool.status == ToolStatusV1::Succeeded
         {
             mutation_sequences.insert(event.seq);
+            match event.turn {
+                Some(turn) => {
+                    let count = mutations_by_turn
+                        .entry((event.scope.id.clone(), turn))
+                        .or_default();
+                    *count = count.saturating_add(1);
+                }
+                None => record_unavailable_structure(
+                    event,
+                    "successful write/edit completion lacks turn identity; mutation-turn metrics are unavailable",
+                    &mut mutation_turns_observable,
+                    &mut diagnostics,
+                ),
+            }
         }
         if tool.status != ToolStatusV1::Succeeded {
             continue;
@@ -355,14 +371,14 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
                         boundary_sequences.insert(event.seq);
                     }
                     Some(false) => {}
-                    None => record_unavailable_boundary(
+                    None => record_unavailable_structure(
                         event,
                         "submit_for_pr result does not expose a recognizable accepted result",
                         &mut boundary_observable,
                         &mut diagnostics,
                     ),
                 },
-                None => record_unavailable_boundary(
+                None => record_unavailable_structure(
                     event,
                     "submit_for_pr result content was omitted or truncated",
                     &mut boundary_observable,
@@ -388,7 +404,7 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
                     boundary_sequences.insert(event.seq);
                 }
                 Some(_) => {}
-                None => record_unavailable_boundary(
+                None => record_unavailable_structure(
                     event,
                     "bash arguments do not expose a complete validation command",
                     &mut boundary_observable,
@@ -408,7 +424,7 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
         if tool.name == "submit_for_pr"
             || (tool.name == "bash" && !options.validation_command_prefixes.is_empty())
         {
-            record_unavailable_boundary(
+            record_unavailable_structure(
                 event,
                 "validation-capable tool call has no observed finish event",
                 &mut boundary_observable,
@@ -442,15 +458,25 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
         }
     }
 
-    let known = |value| boundary_observable.then_some(value);
+    let known_boundary = |value| boundary_observable.then_some(value);
+    let known_mutation_turn = |value| mutation_turns_observable.then_some(value);
+    let mutation_turns = mutations_by_turn.len() as u64;
+    let single_mutation_turns = mutations_by_turn
+        .values()
+        .filter(|count| **count == 1)
+        .count() as u64;
+    let max_mutations_per_turn = mutations_by_turn.values().copied().max().unwrap_or(0);
     StructureAnalysis {
         metrics: StructureMetricsV1 {
             failed_edit_attempts: Some(failed_edits),
             mutations: Some(mutation_sequences.len() as u64),
-            validation_boundaries: known(boundary_sequences.len() as u64),
-            post_validation_mutations: known(post_validation_mutations),
-            validation_invalidations: known(invalidations),
-            revalidations: known(revalidations),
+            mutation_turns: known_mutation_turn(mutation_turns),
+            single_mutation_turns: known_mutation_turn(single_mutation_turns),
+            max_mutations_per_turn: known_mutation_turn(max_mutations_per_turn),
+            validation_boundaries: known_boundary(boundary_sequences.len() as u64),
+            post_validation_mutations: known_boundary(post_validation_mutations),
+            validation_invalidations: known_boundary(invalidations),
+            revalidations: known_boundary(revalidations),
         },
         diagnostics,
     }
@@ -556,7 +582,7 @@ fn nonempty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
 
-fn record_unavailable_boundary(
+fn record_unavailable_structure(
     event: &AgentRunEventV1,
     message: &str,
     observable: &mut bool,

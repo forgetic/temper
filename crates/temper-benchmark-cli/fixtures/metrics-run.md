@@ -76,6 +76,9 @@
 | --- | ---: |
 | Failed edit attempts | 1 |
 | Write/edit mutations | 3 |
+| Mutation turns | 1 |
+| Single-mutation turns | 0 |
+| Maximum mutations per turn | 3 |
 | Validation boundaries | 2 |
 | Post-validation mutations | 1 |
 | Validation invalidations | 1 |

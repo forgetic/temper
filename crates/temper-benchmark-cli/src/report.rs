@@ -285,6 +285,21 @@ fn render_structure(structure: Option<&StructureMetricsV1>, out: &mut String) {
         );
         row(
             out,
+            "Mutation turns",
+            optional_count(structure.mutation_turns),
+        );
+        row(
+            out,
+            "Single-mutation turns",
+            optional_count(structure.single_mutation_turns),
+        );
+        row(
+            out,
+            "Maximum mutations per turn",
+            optional_count(structure.max_mutations_per_turn),
+        );
+        row(
+            out,
             "Validation boundaries",
             optional_count(structure.validation_boundaries),
         );
