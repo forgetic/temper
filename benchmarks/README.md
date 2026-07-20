@@ -38,10 +38,12 @@ cargo dev-benchmark-harness
 
 The `temper-dev` driver builds `temper-agent`, runs the checked-in manifest, and
 verifies both run and aggregate summaries, including mutation turns,
-single-mutation turns, and maximum mutations per turn. Historical traces that
-lack usable scope or turn evidence report these batching metrics unavailable
-with a diagnostic rather than as zero. Artifacts are written below
-`target/benchmark-harness/cross-cutting-rust-change/`.
+single-mutation turns, and maximum mutations per turn. Malformed or missing
+scope ancestry is an ingestion error, not unavailable historical evidence. If
+an ingested trace contains a successful mutation without usable model-turn
+identity, all three mutation-turn metrics are unavailable and the summary emits
+`StructureEvidenceUnavailable` rather than reporting zero. Artifacts are
+written below `target/benchmark-harness/cross-cutting-rust-change/`.
 
 Every deterministic harness report is plumbing and structure evidence only, not
 representative LLM performance. Use repeated live runs to draw behavioral or
