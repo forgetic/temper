@@ -12,7 +12,8 @@ use serde::Serialize;
 use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
 use temper_protocol_agent::PROVIDER_CREDENTIALS_ENV;
 use temper_worker::{
-    AgentRunner, AgentRuntimeLimitsV1, OutOfProcessRunner, TraceCollector, WorkerAgentTraceConfig,
+    AgentRunOutput, AgentRunner, AgentRuntimeLimitsV1, OutOfProcessRunner, TraceCollector,
+    WorkerAgentTraceConfig,
 };
 
 use crate::{
@@ -25,12 +26,16 @@ use crate::{
 };
 
 mod diff;
+mod live;
+mod redaction;
 mod validation;
 
 use diff::collect_diff_artifact;
 pub use diff::{
     DIFF_ARTIFACT_VERSION, DiffArtifactV1, DiffFileEvidenceV1, RepositoryDiffEvidenceV1,
 };
+pub use live::{LIVE_OPT_IN_ENV, LiveRunOptions, run_live};
+use redaction::SecretRedactor;
 pub use validation::{
     AcceptedSubmitEvidenceV1, VALIDATION_ARTIFACT_VERSION, ValidationArtifactV1,
     ValidationCommandEvidenceV1,
@@ -54,6 +59,8 @@ pub struct HarnessRunOptions {
 #[derive(Debug, thiserror::Error)]
 pub enum BenchmarkRunError {
     #[error(transparent)]
+    Config(#[from] temper_config::ConfigError),
+    #[error(transparent)]
     Manifest(#[from] crate::BenchmarkManifestError),
     #[error(transparent)]
     Artifacts(#[from] ArtifactLayoutError),
@@ -67,8 +74,28 @@ pub enum BenchmarkRunError {
     Report(#[from] ReportWriteError),
     #[error(transparent)]
     Aggregate(#[from] AggregateError),
-    #[error("invalid harness configuration: {0}")]
+    #[error("invalid benchmark run configuration: {0}")]
     Invalid(String),
+    #[error(
+        "live benchmark execution requires `{LIVE_OPT_IN_ENV}=1`; no config, credentials, workspace, or provider was accessed"
+    )]
+    LiveOptInRequired,
+    #[error("live benchmark configuration is incompatible: {0}")]
+    LiveConfiguration(String),
+    #[error(
+        "live benchmarks require first-party Temper supervision; selected agent invocation is third-party"
+    )]
+    ThirdPartySupervision,
+    #[error(
+        "refusing to write {artifact}: resolved provider credentials appeared in artifact content"
+    )]
+    SecretArtifact { artifact: &'static str },
+    #[error("cannot deserialize redacted {artifact}: {source}")]
+    RedactedJson {
+        artifact: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("cannot load Jig script `{path}`: {message}")]
     JigScript { path: PathBuf, message: String },
     #[error("cannot start Jig provider: {0}")]
@@ -289,17 +316,48 @@ fn run_repetition(
             })?;
     drop(jig);
 
+    finalize_repetition(
+        manifest,
+        &paths,
+        &workspace,
+        collector,
+        output,
+        BenchmarkModeV1::Harness,
+        repetition,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalize_repetition(
+    manifest: &ResolvedBenchmarkManifest,
+    paths: &crate::RepetitionArtifactPaths,
+    workspace: &crate::PreparedBenchmarkWorkspace,
+    collector: TraceCollector,
+    mut output: AgentRunOutput,
+    mode: BenchmarkModeV1,
+    repetition: u32,
+    redactor: Option<&SecretRedactor>,
+) -> Result<crate::RunSummaryV1, BenchmarkRunError> {
+    if let Some(redactor) = redactor {
+        output.result = redactor.redacted(&output.result, "workspace result")?;
+    }
+
     workspace.verify_context_directories()?;
     let accepted_submit =
-        accepted_submit_evidence(output.accepted_submit.as_ref(), &workspace, repetition)?;
-    let post_run_commands = run_post_run_commands(manifest, &workspace);
+        accepted_submit_evidence(output.accepted_submit.as_ref(), workspace, repetition)?;
+    let post_run_commands = run_post_run_commands(manifest, workspace);
     workspace.verify_context_directories()?;
-    let diff = collect_diff_artifact(&workspace)?;
-    let validation = ValidationArtifactV1 {
+    let mut diff = collect_diff_artifact(workspace)?;
+    let mut validation = ValidationArtifactV1 {
         version: VALIDATION_ARTIFACT_VERSION,
         accepted_submit,
         post_run_commands,
     };
+    if let Some(redactor) = redactor {
+        validation = redactor.redacted(&validation, "validation evidence")?;
+        diff = redactor.redacted(&diff, "diff evidence")?;
+    }
 
     let mut recovered = collector
         .recover()
@@ -311,12 +369,16 @@ fn run_repetition(
         });
     }
     let recovered = recovered.pop().expect("one recovered trace");
-    let trace = NormalizedTrace {
+    let mut trace = NormalizedTrace {
         source: TraceInputKindV1::JournalDirectory,
         events: recovered.events,
         attachments: recovered.blobs,
         diagnostics: Vec::new(),
     };
+    if let Some(redactor) = redactor {
+        redactor.ensure_safe_attachments(&trace.attachments)?;
+        trace.events = redactor.redacted(&trace.events, "canonical trace events")?;
+    }
     let prefixes = manifest
         .manifest()
         .validation_command_prefixes
@@ -331,7 +393,7 @@ fn run_repetition(
     );
     summary.benchmark = Some(BenchmarkRunV1 {
         name: manifest.manifest().name.clone(),
-        mode: BenchmarkModeV1::Harness,
+        mode,
         repetition,
     });
     summary.host = Some(collect_environment_metadata(
@@ -341,8 +403,27 @@ fn run_repetition(
     summary.validation = Some(validation_summary(&validation));
     summary.diff = Some(diff.statistics.clone());
     summary.workspace_result = Some(output.result.clone());
+    if let Some(redactor) = redactor {
+        summary = redactor.redacted(&summary, "run summary")?;
+    }
 
-    write_canonical_export(&trace, &paths.canonical_trace)?;
+    if let Some(redactor) = redactor {
+        let canonical = trace.canonical_export()?;
+        redactor.ensure_safe_bytes(&canonical, "canonical trace export")?;
+        write_bytes(
+            &paths.canonical_trace,
+            &canonical,
+            "write canonical trace export",
+        )?;
+        ensure_serialized_safe(redactor, &output.result, "workspace result")?;
+        ensure_serialized_safe(redactor, &validation, "validation evidence")?;
+        ensure_serialized_safe(redactor, &diff, "diff evidence")?;
+        ensure_serialized_safe(redactor, &summary, "run summary")?;
+        let markdown = crate::render_run_summary_markdown(&summary);
+        redactor.ensure_safe_bytes(markdown.as_bytes(), "run summary Markdown")?;
+    } else {
+        write_canonical_export(&trace, &paths.canonical_trace)?;
+    }
     write_json(&paths.workspace_result, &output.result, "workspace result")?;
     write_json(
         &paths.validation_evidence,
@@ -352,6 +433,16 @@ fn run_repetition(
     write_json(&paths.diff_statistics, &diff, "diff evidence")?;
     write_run_summary(&summary, &paths.root)?;
     Ok(summary)
+}
+
+fn ensure_serialized_safe<T: Serialize>(
+    redactor: &SecretRedactor,
+    value: &T,
+    artifact: &'static str,
+) -> Result<(), BenchmarkRunError> {
+    let bytes =
+        serde_json::to_vec(value).map_err(|source| BenchmarkRunError::Json { artifact, source })?;
+    redactor.ensure_safe_bytes(&bytes, artifact)
 }
 
 fn write_json<T: Serialize>(

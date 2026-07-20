@@ -6,11 +6,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_benchmark_cli::{
-    AnalyzeOptions, HarnessRunOptions, analyze_trace, compare_benchmarks, ingest_trace,
-    load_comparison_input, render_aggregate_markdown, render_comparison_markdown,
-    render_run_summary_markdown, run_harness, write_canonical_export, write_comparison_artifacts,
-    write_run_summary,
+    AnalyzeOptions, HarnessRunOptions, LiveRunOptions, analyze_trace, compare_benchmarks,
+    ingest_trace, load_comparison_input, render_aggregate_markdown, render_comparison_markdown,
+    render_run_summary_markdown, run_harness, run_live, write_canonical_export,
+    write_comparison_artifacts, write_run_summary,
 };
+use temper_config::EnvMap;
 
 const ANALYSIS_TRACE_FILE: &str = "trace.export.jsonl";
 
@@ -20,13 +21,14 @@ temper-benchmark: agent-session benchmark trace tooling
 Usage:
   temper-benchmark analyze --trace <PATH> --output-dir <DIR>
   temper-benchmark run --benchmark <MANIFEST> --mode harness --agent-bin <PATH> --output-dir <DIR> [--repetitions <N>]
+  TEMPER_BENCHMARK_LIVE=1 temper-benchmark run --benchmark <MANIFEST> --mode live --agent-bin <PATH> --output-dir <DIR> [--config <PATH>] [--secrets <PATH>] [--pool <NAME>] [--repetitions <N>]
   temper-benchmark normalize --trace <PATH> --output <FILE>
   temper-benchmark compare --base <ARTIFACT-OR-SUMMARY> --head <ARTIFACT-OR-SUMMARY> [--output-dir <DIR>]
   temper-benchmark --help
 
 Commands:
   analyze    Derive metrics and write run.json, run.md, and a canonical trace export
-  run        Execute fresh direct agent sessions against a deterministic Jig provider
+  run        Execute fresh direct agent sessions in CI-safe harness or credential-gated live mode
   normalize  Validate journal/events/export input and write canonical export JSONL
   compare    Render a report-only comparison without rerunning either benchmark
 ";
@@ -38,6 +40,9 @@ fn main() -> ExitCode {
     }
 
     let args = env::args().skip(1).collect::<Vec<_>>();
+    // Composition root: snapshot the process environment once, then pass plain
+    // data through live opt-in and normal Temper config/credential resolution.
+    let environment = EnvMap::from_system();
     match args.as_slice() {
         [flag] if flag == "--help" || flag == "-h" || flag == "help" => {
             print!("{USAGE}");
@@ -48,7 +53,7 @@ fn main() -> ExitCode {
             Err(message) => usage_error(message),
         },
         [command, rest @ ..] if command == "run" => match parse_run_args(rest) {
-            Ok(args) => run(args),
+            Ok(args) => run(args, &environment),
             Err(message) => usage_error(message),
         },
         [command, trace_flag, trace, output_flag, output]
@@ -90,11 +95,21 @@ fn parse_analyze_args(args: &[String]) -> Result<AnalyzeArgs, String> {
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunMode {
+    Harness,
+    Live,
+}
+
 struct RunArgs {
+    mode: RunMode,
     benchmark: PathBuf,
     agent_bin: PathBuf,
     output_dir: PathBuf,
     repetitions: Option<u32>,
+    config: Option<PathBuf>,
+    credentials: Option<PathBuf>,
+    worker_pool: Option<String>,
 }
 
 fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
@@ -108,6 +123,9 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
             "--agent-bin",
             "--output-dir",
             "--repetitions",
+            "--config",
+            "--secrets",
+            "--pool",
         ]
         .contains(&flag)
         {
@@ -121,14 +139,19 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
         }
         index += 2;
     }
-    let mode = values
+    let mode = match values
         .remove("--mode")
-        .ok_or_else(|| "run requires `--mode harness`".to_string())?;
-    if mode != "harness" {
-        return Err(format!(
-            "unsupported benchmark mode `{mode}`; this command currently supports `harness`"
-        ));
-    }
+        .ok_or_else(|| "run requires `--mode <harness|live>`".to_string())?
+        .as_str()
+    {
+        "harness" => RunMode::Harness,
+        "live" => RunMode::Live,
+        mode => {
+            return Err(format!(
+                "unsupported benchmark mode `{mode}`; expected `harness` or `live`"
+            ));
+        }
+    };
     let repetitions = values
         .remove("--repetitions")
         .map(|value| {
@@ -142,7 +165,19 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
                 })
         })
         .transpose()?;
+    let config = values.remove("--config").map(PathBuf::from);
+    let credentials = values.remove("--secrets").map(PathBuf::from);
+    let worker_pool = values.remove("--pool");
+    if mode == RunMode::Harness
+        && (config.is_some() || credentials.is_some() || worker_pool.is_some())
+    {
+        return Err(
+            "`--config`, `--secrets`, and `--pool` are live-mode options and cannot be used with harness mode"
+                .to_string(),
+        );
+    }
     Ok(RunArgs {
+        mode,
         benchmark: PathBuf::from(
             values
                 .remove("--benchmark")
@@ -159,6 +194,9 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
                 .ok_or_else(|| "run requires `--output-dir`".to_string())?,
         ),
         repetitions,
+        config,
+        credentials,
+        worker_pool,
     })
 }
 
@@ -216,14 +254,28 @@ fn analyze(args: AnalyzeArgs) -> ExitCode {
     report_result(result)
 }
 
-fn run(args: RunArgs) -> ExitCode {
+fn run(args: RunArgs, env: &EnvMap) -> ExitCode {
     let result = (|| {
-        let aggregate = run_harness(&HarnessRunOptions {
-            benchmark: args.benchmark,
-            agent_bin: args.agent_bin,
-            output_dir: args.output_dir,
-            repetitions: args.repetitions,
-        })?;
+        let aggregate = match args.mode {
+            RunMode::Harness => run_harness(&HarnessRunOptions {
+                benchmark: args.benchmark,
+                agent_bin: args.agent_bin,
+                output_dir: args.output_dir,
+                repetitions: args.repetitions,
+            })?,
+            RunMode::Live => run_live(
+                &LiveRunOptions {
+                    benchmark: args.benchmark,
+                    agent_bin: args.agent_bin,
+                    output_dir: args.output_dir,
+                    repetitions: args.repetitions,
+                    config: args.config,
+                    credentials: args.credentials,
+                    worker_pool: args.worker_pool,
+                },
+                env,
+            )?,
+        };
         print!("{}", render_aggregate_markdown(&aggregate));
         Ok::<_, Box<dyn std::error::Error>>(())
     })();

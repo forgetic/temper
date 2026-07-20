@@ -50,8 +50,9 @@ pub use report::{
 };
 pub use runner::{
     AcceptedSubmitEvidenceV1, BenchmarkRunError, DIFF_ARTIFACT_VERSION, DiffArtifactV1,
-    DiffFileEvidenceV1, HarnessRunOptions, RepositoryDiffEvidenceV1, VALIDATION_ARTIFACT_VERSION,
-    ValidationArtifactV1, ValidationCommandEvidenceV1, run_harness,
+    DiffFileEvidenceV1, HarnessRunOptions, LIVE_OPT_IN_ENV, LiveRunOptions,
+    RepositoryDiffEvidenceV1, VALIDATION_ARTIFACT_VERSION, ValidationArtifactV1,
+    ValidationCommandEvidenceV1, run_harness, run_live,
 };
 pub use summary::*;
 pub use workspace::{

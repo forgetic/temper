@@ -114,7 +114,9 @@ printf '%s\n' '{"title":"Fake harness","body":"# Report","summary":"fake complet
 }
 
 #[test]
-fn run_cli_rejects_non_harness_mode_before_touching_inputs() {
+fn run_cli_rejects_live_mode_before_touching_config_credentials_or_inputs() {
+    let temporary = tempfile::tempdir().unwrap();
+    let output_dir = temporary.path().join("unused");
     let output = Command::new(env!("CARGO_BIN_EXE_temper-benchmark"))
         .args([
             "run",
@@ -125,12 +127,24 @@ fn run_cli_rejects_non_harness_mode_before_touching_inputs() {
             "--agent-bin",
             "missing-agent",
             "--output-dir",
-            "unused",
         ])
+        .arg(&output_dir)
+        .args([
+            "--config",
+            "missing-config.toml",
+            "--secrets",
+            "missing-credentials.toml",
+        ])
+        .env_remove("TEMPER_BENCHMARK_LIVE")
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(64));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("currently supports `harness`"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("TEMPER_BENCHMARK_LIVE=1"), "{stderr}");
+    assert!(stderr.contains("no config, credentials, workspace, or provider was accessed"));
+    assert!(!stderr.contains("missing-config.toml"), "{stderr}");
+    assert!(!stderr.contains("missing-credentials.toml"), "{stderr}");
+    assert!(!output_dir.exists());
 }
 
 fn write_context(root: &Path) {
