@@ -9,51 +9,55 @@ use temper_protocol_activity::{
 use super::TraceIngestError;
 use crate::{DiagnosticSeverityV1, TraceDiagnosticCodeV1, TraceDiagnosticV1};
 
+type ModelCallKey = (String, String, u32);
+type ToolCallKey = (String, String);
+
 pub(super) fn record_call_diagnostics(
     events: &[AgentRunEventV1],
     diagnostics: &mut Vec<TraceDiagnosticV1>,
 ) -> Result<(), TraceIngestError> {
-    let mut model = BTreeMap::<(String, u32), u64>::new();
-    let mut tools = BTreeMap::<String, (String, u64)>::new();
+    let mut model = BTreeMap::<ModelCallKey, u64>::new();
+    let mut tools = BTreeMap::<ToolCallKey, (String, u64)>::new();
     for event in events {
         match &event.event {
             AgentActivityEventV1::ModelCallStarted(call) => {
-                let key = (call.call_id.clone(), call.attempt);
+                let key = (event.scope.id.clone(), call.call_id.clone(), call.attempt);
                 if model.insert(key.clone(), event.seq).is_some() {
                     return Err(TraceIngestError::InvalidStream(format!(
-                        "model call {} attempt {} starts more than once",
-                        key.0, key.1
+                        "model call {} attempt {} in scope {} starts more than once",
+                        key.1, key.2, key.0
                     )));
                 }
             }
             AgentActivityEventV1::ModelCallFinished(call) => {
                 if model
-                    .remove(&(call.call_id.clone(), call.attempt))
+                    .remove(&(event.scope.id.clone(), call.call_id.clone(), call.attempt))
                     .is_none()
                 {
                     diagnostics.push(warning(
                         TraceDiagnosticCodeV1::IncompleteModelCall,
                         format!(
-                            "model call {} attempt {} finished without an observed start",
-                            call.call_id, call.attempt
+                            "model call {} attempt {} in scope {} finished without an observed start",
+                            call.call_id, call.attempt, event.scope.id
                         ),
                         Some(event.seq),
                     ));
                 }
             }
             AgentActivityEventV1::ToolStarted(call) => {
+                let key = (event.scope.id.clone(), call.call_id.clone());
                 if tools
-                    .insert(call.call_id.clone(), (call.name.clone(), event.seq))
+                    .insert(key.clone(), (call.name.clone(), event.seq))
                     .is_some()
                 {
                     return Err(TraceIngestError::InvalidStream(format!(
-                        "tool call {} starts more than once",
-                        call.call_id
+                        "tool call {} in scope {} starts more than once",
+                        key.1, key.0
                     )));
                 }
             }
             AgentActivityEventV1::ToolFinished(call) => {
-                finish_tool_call(call, event.seq, &mut tools, diagnostics)?;
+                finish_tool_call(call, &event.scope.id, event.seq, &mut tools, diagnostics)?;
             }
             _ => {}
         }
@@ -64,21 +68,22 @@ pub(super) fn record_call_diagnostics(
 
 fn finish_tool_call(
     call: &temper_protocol_activity::ToolFinishedV1,
+    scope_id: &str,
     seq: u64,
-    tools: &mut BTreeMap<String, (String, u64)>,
+    tools: &mut BTreeMap<ToolCallKey, (String, u64)>,
     diagnostics: &mut Vec<TraceDiagnosticV1>,
 ) -> Result<(), TraceIngestError> {
-    match tools.remove(&call.call_id) {
+    match tools.remove(&(scope_id.to_string(), call.call_id.clone())) {
         Some((name, _)) if name == call.name => Ok(()),
         Some((name, _)) => Err(TraceIngestError::InvalidStream(format!(
-            "tool call {} changes name from {name} to {}",
+            "tool call {} in scope {scope_id} changes name from {name} to {}",
             call.call_id, call.name
         ))),
         None => {
             diagnostics.push(warning(
                 TraceDiagnosticCodeV1::IncompleteToolCall,
                 format!(
-                    "tool call {} ({}) finished without an observed start",
+                    "tool call {} ({}) in scope {scope_id} finished without an observed start",
                     call.call_id, call.name
                 ),
                 Some(seq),
@@ -89,21 +94,23 @@ fn finish_tool_call(
 }
 
 fn record_unfinished_calls(
-    model: BTreeMap<(String, u32), u64>,
-    tools: BTreeMap<String, (String, u64)>,
+    model: BTreeMap<ModelCallKey, u64>,
+    tools: BTreeMap<ToolCallKey, (String, u64)>,
     diagnostics: &mut Vec<TraceDiagnosticV1>,
 ) {
-    for ((call_id, attempt), seq) in model {
+    for ((scope_id, call_id, attempt), seq) in model {
         diagnostics.push(warning(
             TraceDiagnosticCodeV1::IncompleteModelCall,
-            format!("model call {call_id} attempt {attempt} has no finish event"),
+            format!(
+                "model call {call_id} attempt {attempt} in scope {scope_id} has no finish event"
+            ),
             Some(seq),
         ));
     }
-    for (call_id, (name, seq)) in tools {
+    for ((scope_id, call_id), (name, seq)) in tools {
         diagnostics.push(warning(
             TraceDiagnosticCodeV1::IncompleteToolCall,
-            format!("tool call {call_id} ({name}) has no finish event"),
+            format!("tool call {call_id} ({name}) in scope {scope_id} has no finish event"),
             Some(seq),
         ));
     }
