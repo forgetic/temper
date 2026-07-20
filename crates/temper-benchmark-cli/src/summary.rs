@@ -273,6 +273,12 @@ pub struct StructureMetricsV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mutations: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutation_turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub single_mutation_turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mutations_per_turn: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_boundaries: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_validation_mutations: Option<u64>,

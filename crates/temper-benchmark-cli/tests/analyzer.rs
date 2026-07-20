@@ -9,7 +9,7 @@ use temper_benchmark_cli::{
     ingest_trace, render_run_summary_json, render_run_summary_markdown,
 };
 use temper_protocol_activity::{
-    AgentActivityEventV1, CaptureModeV1, FailureCodeV1, FailureInfoV1, RunFailedV1,
+    AgentActivityEventV1, CaptureModeV1, FailureCodeV1, FailureInfoV1, RunFailedV1, ToolStatusV1,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -91,10 +91,94 @@ fn analyzer_derives_retries_ttft_tokens_tools_and_structure() {
     let structure = summary.metrics.structure.as_ref().unwrap();
     assert_eq!(structure.failed_edit_attempts, Some(1));
     assert_eq!(structure.mutations, Some(3));
+    assert_eq!(structure.mutation_turns, Some(1));
+    assert_eq!(structure.single_mutation_turns, Some(0));
+    assert_eq!(structure.max_mutations_per_turn, Some(3));
     assert_eq!(structure.validation_boundaries, Some(3));
     assert_eq!(structure.post_validation_mutations, Some(2));
     assert_eq!(structure.validation_invalidations, Some(2));
     assert_eq!(structure.revalidations, Some(2));
+}
+
+#[test]
+fn mutation_turn_metrics_count_one_mutation_per_turn() {
+    let mut trace = ingest_trace(fixture("metrics-events.jsonl")).unwrap();
+    let mut next_turn = 0;
+    for event in &mut trace.events {
+        if matches!(
+            &event.event,
+            AgentActivityEventV1::ToolFinished(tool)
+                if matches!(tool.name.as_str(), "write" | "edit")
+                    && tool.status == ToolStatusV1::Succeeded
+        ) {
+            event.turn = Some(next_turn);
+            next_turn += 1;
+        }
+    }
+
+    let summary = analyze_trace(&trace, &AnalyzeOptions::default());
+    let structure = summary.metrics.structure.as_ref().unwrap();
+    assert_eq!(structure.mutations, Some(3));
+    assert_eq!(structure.mutation_turns, Some(3));
+    assert_eq!(structure.single_mutation_turns, Some(3));
+    assert_eq!(structure.max_mutations_per_turn, Some(1));
+}
+
+#[test]
+fn mutation_turn_metrics_keep_equal_turn_numbers_in_separate_scopes() {
+    let mut trace = ingest_trace(fixture("parallel-child-scopes.jsonl")).unwrap();
+    for event in &mut trace.events {
+        if event.scope.id != "child-a" {
+            continue;
+        }
+        match &mut event.event {
+            AgentActivityEventV1::ToolStarted(tool) if tool.name == "read" => {
+                tool.name = "write".to_string();
+            }
+            AgentActivityEventV1::ToolFinished(tool) if tool.name == "read" => {
+                tool.name = "write".to_string();
+            }
+            _ => {}
+        }
+    }
+
+    let summary = analyze_trace(&trace, &AnalyzeOptions::default());
+    let structure = summary.metrics.structure.as_ref().unwrap();
+    assert_eq!(structure.mutations, Some(2));
+    assert_eq!(structure.mutation_turns, Some(2));
+    assert_eq!(structure.single_mutation_turns, Some(2));
+    assert_eq!(structure.max_mutations_per_turn, Some(1));
+}
+
+#[test]
+fn missing_historical_mutation_turn_makes_batching_metrics_unavailable() {
+    let mut trace = ingest_trace(fixture("metrics-events.jsonl")).unwrap();
+    let mutation = trace
+        .events
+        .iter_mut()
+        .find(|event| {
+            matches!(
+                &event.event,
+                AgentActivityEventV1::ToolFinished(tool)
+                    if matches!(tool.name.as_str(), "write" | "edit")
+                        && tool.status == ToolStatusV1::Succeeded
+            )
+        })
+        .unwrap();
+    mutation.turn = None;
+    let missing_seq = mutation.seq;
+
+    let summary = analyze_trace(&trace, &AnalyzeOptions::default());
+    let structure = summary.metrics.structure.as_ref().unwrap();
+    assert_eq!(structure.mutations, Some(3));
+    assert_eq!(structure.mutation_turns, None);
+    assert_eq!(structure.single_mutation_turns, None);
+    assert_eq!(structure.max_mutations_per_turn, None);
+    assert!(summary.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == TraceDiagnosticCodeV1::StructureEvidenceUnavailable
+            && diagnostic.seq == Some(missing_seq)
+            && diagnostic.message.contains("lacks turn identity")
+    }));
 }
 
 #[test]
@@ -122,6 +206,9 @@ fn omitted_validation_content_makes_ordering_metrics_unavailable() {
     let structure = summary.metrics.structure.as_ref().unwrap();
     assert_eq!(structure.failed_edit_attempts, Some(1));
     assert_eq!(structure.mutations, Some(3));
+    assert_eq!(structure.mutation_turns, Some(1));
+    assert_eq!(structure.single_mutation_turns, Some(0));
+    assert_eq!(structure.max_mutations_per_turn, Some(3));
     assert_eq!(structure.validation_boundaries, None);
     assert_eq!(structure.post_validation_mutations, None);
     assert_eq!(structure.validation_invalidations, None);

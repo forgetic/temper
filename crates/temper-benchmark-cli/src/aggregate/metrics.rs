@@ -19,6 +19,9 @@ pub const PRIMARY_METRICS: &[&str] = &[
     "failed_tool_calls",
     "failed_edit_attempts",
     "mutations",
+    "mutation_turns",
+    "single_mutation_turns",
+    "max_mutations_per_turn",
     "validation_invalidations",
     "diff_files_changed",
     "diff_insertions",
@@ -70,6 +73,15 @@ pub(crate) fn metric_values(summary: &RunSummaryV1) -> BTreeMap<&'static str, u6
         }
         if let Some(value) = structure.mutations {
             values.insert("mutations", value);
+        }
+        if let Some(value) = structure.mutation_turns {
+            values.insert("mutation_turns", value);
+        }
+        if let Some(value) = structure.single_mutation_turns {
+            values.insert("single_mutation_turns", value);
+        }
+        if let Some(value) = structure.max_mutations_per_turn {
+            values.insert("max_mutations_per_turn", value);
         }
         if let Some(value) = structure.validation_invalidations {
             values.insert("validation_invalidations", value);

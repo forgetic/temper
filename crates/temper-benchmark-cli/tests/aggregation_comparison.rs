@@ -35,6 +35,18 @@ fn summary(run_id: &str, turns: u64, wall_time_ms: u64) -> RunSummaryV1 {
     summary
 }
 
+fn set_mutation_turn_metrics(
+    summary: &mut RunSummaryV1,
+    mutations: u64,
+    values: Option<(u64, u64, u64)>,
+) {
+    let structure = summary.metrics.structure.as_mut().unwrap();
+    structure.mutations = Some(mutations);
+    structure.mutation_turns = values.map(|values| values.0);
+    structure.single_mutation_turns = values.map(|values| values.1);
+    structure.max_mutations_per_turn = values.map(|values| values.2);
+}
+
 #[test]
 fn aggregation_uses_deterministic_nearest_rank_quartiles_and_keeps_every_run() {
     let runs = [40, 10, 30, 20]
@@ -63,6 +75,90 @@ fn aggregation_uses_deterministic_nearest_rank_quartiles_and_keeps_every_run() {
     let markdown = render_aggregate_markdown(&aggregate);
     assert!(markdown.contains("| turns | 4 | 10 | 10 | 20 | 30 | 40 |"));
     assert!(markdown.contains("## Advisory timings"));
+}
+
+#[test]
+fn mutation_turn_metrics_flow_through_aggregate_and_comparison_artifacts() {
+    let mut base_available = summary("base-available", 4, 40);
+    set_mutation_turn_metrics(&mut base_available, 3, Some((2, 1, 2)));
+    let mut base_unavailable = summary("base-unavailable", 5, 50);
+    set_mutation_turn_metrics(&mut base_unavailable, 3, None);
+    let base = aggregate_run_summaries([base_available, base_unavailable]).unwrap();
+
+    for (name, expected) in [
+        ("mutation_turns", 2),
+        ("single_mutation_turns", 1),
+        ("max_mutations_per_turn", 2),
+    ] {
+        assert_eq!(
+            base.metrics[name],
+            DistributionV1 {
+                count: 1,
+                min: expected,
+                p25: expected,
+                median: expected,
+                p75: expected,
+                max: expected,
+            }
+        );
+    }
+    let aggregate_json = serde_json::to_value(&base).unwrap();
+    assert_eq!(
+        aggregate_json["metrics"]["mutation_turns"]["count"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        aggregate_json["metrics"]["mutation_turns"]["median"],
+        serde_json::json!(2)
+    );
+    let aggregate_markdown = render_aggregate_markdown(&base);
+    assert!(aggregate_markdown.contains("| mutation turns | 1 | 2 | 2 | 2 | 2 | 2 |"));
+    assert!(aggregate_markdown.contains("| single mutation turns | 1 | 1 | 1 | 1 | 1 | 1 |"));
+    assert!(aggregate_markdown.contains("| max mutations per turn | 1 | 2 | 2 | 2 | 2 | 2 |"));
+
+    let mut head_available = summary("head-available", 4, 40);
+    set_mutation_turn_metrics(&mut head_available, 6, Some((4, 3, 3)));
+    let mut head_unavailable = summary("head-unavailable", 5, 50);
+    set_mutation_turn_metrics(&mut head_unavailable, 6, None);
+    let head = aggregate_run_summaries([head_available, head_unavailable]).unwrap();
+    let comparison = compare_benchmarks(
+        &ComparisonInput::Aggregate(base),
+        &ComparisonInput::Aggregate(head),
+    )
+    .unwrap();
+
+    for (name, expected_delta) in [
+        ("mutation_turns", 2),
+        ("single_mutation_turns", 2),
+        ("max_mutations_per_turn", 1),
+    ] {
+        let metric = comparison
+            .primary
+            .iter()
+            .find(|metric| metric.metric == name)
+            .unwrap();
+        assert_eq!(metric.base.as_ref().unwrap().count, 1);
+        assert_eq!(metric.head.as_ref().unwrap().count, 1);
+        assert_eq!(metric.median_delta, Some(expected_delta));
+    }
+    let comparison_json = serde_json::to_value(&comparison).unwrap();
+    let primary = comparison_json["primary"].as_array().unwrap();
+    for name in [
+        "mutation_turns",
+        "single_mutation_turns",
+        "max_mutations_per_turn",
+    ] {
+        let metric = primary
+            .iter()
+            .find(|metric| metric["metric"] == name)
+            .unwrap();
+        assert_eq!(metric["base"]["count"], serde_json::json!(1));
+        assert_eq!(metric["head"]["count"], serde_json::json!(1));
+    }
+    let comparison_markdown = render_comparison_markdown(&comparison);
+    assert!(comparison_markdown.contains("| mutation turns | 2 | 4 | +2 |"));
+    assert!(comparison_markdown.contains("| single mutation turns | 1 | 3 | +2 |"));
+    assert!(comparison_markdown.contains("| max mutations per turn | 2 | 3 | +1 |"));
 }
 
 #[test]

@@ -198,6 +198,9 @@
     "structure": {
       "failed_edit_attempts": 1,
       "mutations": 3,
+      "mutation_turns": 1,
+      "single_mutation_turns": 0,
+      "max_mutations_per_turn": 3,
       "validation_boundaries": 2,
       "post_validation_mutations": 1,
       "validation_invalidations": 1,
