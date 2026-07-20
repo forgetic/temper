@@ -1710,6 +1710,7 @@ dependencies = [
  "temper-agent",
  "temper-agent-core",
  "temper-agent-io",
+ "temper-benchmark-cli",
  "temper-log",
  "temper-process-containment",
  "temper-protocol-activity",
@@ -1722,12 +1723,15 @@ dependencies = [
 name = "temper-benchmark-cli"
 version = "0.1.0"
 dependencies = [
+ "jig-core",
+ "jig-server",
  "serde",
  "serde_json",
  "temper-config",
  "temper-protocol-activity",
  "temper-protocol-agent",
  "temper-worker",
+ "temper-worker-io",
  "temper-worker-service",
  "tempfile",
  "thiserror",

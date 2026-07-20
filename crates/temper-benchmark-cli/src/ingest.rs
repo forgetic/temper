@@ -148,6 +148,7 @@ impl NormalizedTrace {
             validation: None,
             diff: None,
             host: None,
+            workspace_result: None,
             diagnostics: self.diagnostics.clone(),
         }
     }

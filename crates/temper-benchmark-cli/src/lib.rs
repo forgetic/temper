@@ -16,6 +16,7 @@ mod ingest;
 mod manifest;
 mod metadata;
 mod report;
+mod runner;
 mod summary;
 mod workspace;
 
@@ -46,6 +47,11 @@ pub use metadata::{
 pub use report::{
     RUN_SUMMARY_JSON_FILE, RUN_SUMMARY_MARKDOWN_FILE, ReportWriteError, render_run_summary_json,
     render_run_summary_markdown, write_run_summary,
+};
+pub use runner::{
+    AcceptedSubmitEvidenceV1, BenchmarkRunError, DIFF_ARTIFACT_VERSION, DiffArtifactV1,
+    DiffFileEvidenceV1, HarnessRunOptions, RepositoryDiffEvidenceV1, VALIDATION_ARTIFACT_VERSION,
+    ValidationArtifactV1, ValidationCommandEvidenceV1, run_harness,
 };
 pub use summary::*;
 pub use workspace::{

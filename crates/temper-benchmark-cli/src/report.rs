@@ -11,7 +11,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
-    MetricCoverageV1, RunSummaryV1, RunTerminalStatusV1, StructureMetricsV1, ToolMetricsV1,
+    BenchmarkModeV1, MetricCoverageV1, RunSummaryV1, RunTerminalStatusV1, StructureMetricsV1,
+    ToolMetricsV1,
 };
 
 pub const RUN_SUMMARY_JSON_FILE: &str = "run.json";
@@ -71,6 +72,17 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ReportWriteError> {
 pub fn render_run_summary_markdown(summary: &RunSummaryV1) -> String {
     let mut out = String::new();
     writeln!(out, "# Agent session benchmark\n").unwrap();
+    if summary
+        .benchmark
+        .as_ref()
+        .is_some_and(|benchmark| benchmark.mode == BenchmarkModeV1::Harness)
+    {
+        writeln!(
+            out,
+            "> **Harness result:** plumbing and structural evidence only; not representative LLM performance.\n"
+        )
+        .unwrap();
+    }
     writeln!(out, "## Run\n").unwrap();
     writeln!(out, "| Field | Value |").unwrap();
     writeln!(out, "| --- | --- |").unwrap();

@@ -201,7 +201,7 @@ temper-scenario-cli = ["temper-scenario-core", "temper-runner", "temper-testing"
 # activity protocol directly; direct benchmark runs deliberately reuse the
 # normal config resolver, agent process contract, worker-owned trace/runtime,
 # and worker-service invocation adapter rather than introducing parallel seams.
-temper-benchmark-cli = ["temper-config", "temper-protocol-activity", "temper-protocol-agent", "temper-worker", "temper-worker-service"]
+temper-benchmark-cli = ["temper-config", "temper-protocol-activity", "temper-protocol-agent", "temper-worker", "temper-worker-io", "temper-worker-service"]
 
 # The unified `temper` binary's composition root (`src/bin/temper.rs`'s `boot()`)
 # snapshots the real environment into a CliEnv via temper-config's env shims, so
