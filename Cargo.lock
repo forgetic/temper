@@ -1961,6 +1961,7 @@ dependencies = [
  "temper-workflow",
  "thiserror",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

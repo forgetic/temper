@@ -160,7 +160,8 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
                 .pause_hooks()
                 .arm(PausePoint::WorkerResultAcknowledged);
             stack.start_worker(&handle);
-            let replay_ack = await_pause(&cx, replay_ack, "replayed result acknowledgement").await;
+            let replay_ack =
+                await_result_ack(&cx, replay_ack, "replayed result acknowledgement").await;
             let transient = await_retryable_result(&mut stack, &cx).await;
             replay_ack.release();
             wait_for_outbox_count(&stack, &cx, 0).await;
@@ -186,6 +187,13 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
                 stack.set_worker_liveness_limits(restart_watchdog_limits());
             }
             let retry_running = stack.pause_hooks().arm(PausePoint::AgentSessionStarted);
+            // Observe the exact acknowledgement boundary instead of racing
+            // durable outbox compaction with a wall-clock polling deadline.
+            // Several retryable daemon replies may precede this event, so keep
+            // the hook armed before the first publication.
+            let retry_ack = stack
+                .pause_hooks()
+                .arm(PausePoint::WorkerResultAcknowledged);
             assert_eq!(
                 stack
                     .enqueue_scanned_role_work(stack.clock().now())
@@ -198,6 +206,9 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
             assert_restart_dirty_state(&stack);
             let transient = await_retryable_result(&mut stack, &cx).await;
             drop(retry_running);
+            let retry_ack =
+                await_result_ack(&cx, retry_ack, "retryable result acknowledgement").await;
+            retry_ack.release();
             transient
         };
         assert_eq!(transient.status, ResultStatus::Failure);
@@ -316,9 +327,10 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
 fn restart_watchdog_limits() -> WorkerLivenessLimits {
     WorkerLivenessLimits {
         // Real helper-backed containment adds bounded process startup/join work
-        // to checkout preparation. Keep this deadline short while allowing the
-        // retry to reach AgentSessionStarted before testing no-progress cancel.
-        max_no_progress: Duration::from_secs(2),
+        // to checkout preparation. A cold, loaded CI host can take more than
+        // two seconds to reach AgentSessionStarted, so leave enough startup
+        // headroom while keeping the no-progress cancellation test bounded.
+        max_no_progress: Duration::from_secs(5),
         graceful_cancellation_grace: Duration::from_secs(1),
         forced_termination_grace: Duration::from_secs(1),
         ..WorkerLivenessLimits::default()
@@ -367,6 +379,23 @@ async fn await_pause(cx: &skein::cx::Cx, pause: PausePermit, description: &str) 
     .unwrap_or_else(|_| panic!("timed out waiting for {description}"))
 }
 
+async fn await_result_ack(
+    cx: &skein::cx::Cx,
+    pause: PausePermit,
+    description: &str,
+) -> ReachedPause {
+    // Result delivery retries use bounded exponential backoff. Allow the replay
+    // to pass the 32-second slot (2s + 4s + 8s + 16s + 32s) while retaining an
+    // actionable acknowledgement-specific failure for a genuinely stuck run.
+    skein::time::timeout(
+        temper_engine_io::runtime::timer_now(cx),
+        Duration::from_secs(90),
+        Box::pin(pause.arrived()),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {description}"))
+}
+
 async fn await_retryable_result(stack: &mut HermeticRealStack, cx: &skein::cx::Cx) -> JobResult {
     loop {
         let result = stack
@@ -404,6 +433,8 @@ fn assert_one_retryable_publication(stack: &HermeticRealStack) {
 }
 
 async fn wait_for_outbox_count(stack: &HermeticRealStack, cx: &skein::cx::Cx, expected: usize) {
+    // Acknowledgement is synchronized explicitly above; this shorter bound now
+    // verifies only the asynchronous filesystem compaction that follows it.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let count = stack.pending_result_count().expect("read result outbox");
