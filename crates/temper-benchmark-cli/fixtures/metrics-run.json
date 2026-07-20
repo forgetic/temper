@@ -1,0 +1,224 @@
+{
+  "version": 1,
+  "identity": {
+    "run_id": "run-metrics",
+    "assignment": {
+      "job_id": "job-metrics",
+      "repository": "ai/temper",
+      "artifact_ref": "ai/temper#546",
+      "role": "engineer",
+      "action": "open_pr",
+      "correlation_key": "metrics-fixture"
+    },
+    "agent_session_id": "session-metrics"
+  },
+  "source": "raw_events_jsonl",
+  "capture": "diagnostic",
+  "trace": {
+    "events": {
+      "observed": 33,
+      "expected": 33
+    },
+    "attachments": {
+      "observed": 0,
+      "expected": 0
+    },
+    "first_seq": 1,
+    "last_seq": 33,
+    "terminal_event_observed": true
+  },
+  "terminal": {
+    "status": "cancelled",
+    "duration_ms": 1000,
+    "stop_reason": "cancelled"
+  },
+  "wall_time_ms": 1000,
+  "metrics": {
+    "turns": 2,
+    "model": {
+      "calls": 2,
+      "attempts": 3,
+      "succeeded_attempts": 1,
+      "failed_attempts": 1,
+      "cancelled_attempts": 1,
+      "retries": 1,
+      "provider_failures": 1,
+      "cumulative_duration_ms": 370,
+      "duration_coverage": {
+        "observed": 3,
+        "expected": 3
+      },
+      "cumulative_time_to_first_token_ms": 50,
+      "time_to_first_token_coverage": {
+        "observed": 1,
+        "expected": 3
+      }
+    },
+    "tokens": {
+      "input_tokens": 100,
+      "output_tokens": 20,
+      "cache_read_tokens": 30,
+      "cache_write_tokens": 4,
+      "coverage": {
+        "observed": 1,
+        "expected": 1
+      }
+    },
+    "tools": {
+      "calls": 10,
+      "succeeded": 8,
+      "failed": 1,
+      "cancelled": 1,
+      "cumulative_duration_ms": 323,
+      "duration_coverage": {
+        "observed": 10,
+        "expected": 10
+      },
+      "by_name": {
+        "bash": {
+          "calls": 1,
+          "succeeded": 1,
+          "failed": 0,
+          "cancelled": 0,
+          "cumulative_duration_ms": 150,
+          "duration_coverage": {
+            "observed": 1,
+            "expected": 1
+          }
+        },
+        "edit": {
+          "calls": 2,
+          "succeeded": 1,
+          "failed": 1,
+          "cancelled": 0,
+          "cumulative_duration_ms": 18,
+          "duration_coverage": {
+            "observed": 2,
+            "expected": 2
+          }
+        },
+        "grep": {
+          "calls": 1,
+          "succeeded": 0,
+          "failed": 0,
+          "cancelled": 1,
+          "cumulative_duration_ms": 40,
+          "duration_coverage": {
+            "observed": 1,
+            "expected": 1
+          }
+        },
+        "read": {
+          "calls": 1,
+          "succeeded": 1,
+          "failed": 0,
+          "cancelled": 0,
+          "cumulative_duration_ms": 40,
+          "duration_coverage": {
+            "observed": 1,
+            "expected": 1
+          }
+        },
+        "submit_for_pr": {
+          "calls": 3,
+          "succeeded": 3,
+          "failed": 0,
+          "cancelled": 0,
+          "cumulative_duration_ms": 15,
+          "duration_coverage": {
+            "observed": 3,
+            "expected": 3
+          }
+        },
+        "write": {
+          "calls": 2,
+          "succeeded": 2,
+          "failed": 0,
+          "cancelled": 0,
+          "cumulative_duration_ms": 60,
+          "duration_coverage": {
+            "observed": 2,
+            "expected": 2
+          }
+        }
+      },
+      "slowest": [
+        {
+          "call_id": "validate-1",
+          "name": "bash",
+          "duration_ms": 150
+        },
+        {
+          "call_id": "grep-1",
+          "name": "grep",
+          "duration_ms": 40
+        },
+        {
+          "call_id": "read-1",
+          "name": "read",
+          "duration_ms": 40
+        },
+        {
+          "call_id": "write-1",
+          "name": "write",
+          "duration_ms": 40
+        },
+        {
+          "call_id": "write-2",
+          "name": "write",
+          "duration_ms": 20
+        },
+        {
+          "call_id": "edit-2",
+          "name": "edit",
+          "duration_ms": 10
+        },
+        {
+          "call_id": "edit-failed",
+          "name": "edit",
+          "duration_ms": 8
+        },
+        {
+          "call_id": "submit-accepted-1",
+          "name": "submit_for_pr",
+          "duration_ms": 5
+        },
+        {
+          "call_id": "submit-accepted-2",
+          "name": "submit_for_pr",
+          "duration_ms": 5
+        },
+        {
+          "call_id": "submit-rejected",
+          "name": "submit_for_pr",
+          "duration_ms": 5
+        }
+      ]
+    },
+    "structure": {
+      "failed_edit_attempts": 1,
+      "mutations": 3,
+      "validation_boundaries": 2,
+      "post_validation_mutations": 1,
+      "validation_invalidations": 1,
+      "revalidations": 1
+    }
+  },
+  "diagnostics": [
+    {
+      "code": "host_evidence_unavailable",
+      "severity": "info",
+      "message": "offline traces do not contain host metadata"
+    },
+    {
+      "code": "diff_evidence_unavailable",
+      "severity": "info",
+      "message": "offline traces do not contain final workspace diff evidence"
+    },
+    {
+      "code": "validation_evidence_unavailable",
+      "severity": "info",
+      "message": "offline traces do not contain host-side validation evidence"
+    }
+  ]
+}

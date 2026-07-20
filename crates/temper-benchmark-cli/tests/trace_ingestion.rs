@@ -69,7 +69,14 @@ fn partial_stream_records_gaps_truncation_incomplete_calls_and_missing_terminal(
     assert!(!summary.trace.terminal_event_observed);
     assert!(summary.terminal.is_none());
     assert!(summary.wall_time_ms.is_none());
-    assert!(summary.metrics.model.is_none());
+    let model = summary.metrics.model.as_ref().unwrap();
+    assert_eq!(summary.metrics.turns, Some(1));
+    assert_eq!(model.calls, 1);
+    assert_eq!(model.attempts, 1);
+    assert_eq!(model.cumulative_duration_ms, None);
+    assert_eq!(model.duration_coverage.observed, 0);
+    assert_eq!(model.duration_coverage.expected, Some(1));
+    assert_eq!(summary.metrics.tools.as_ref().unwrap().calls, 0);
     assert!(summary.diff.is_none());
     assert!(summary.host.is_none());
 }
@@ -131,7 +138,11 @@ fn run_summary_rejects_unknown_fields_and_unsupported_versions() {
 
     assert!(rendered.get("host").is_none());
     assert!(rendered.get("diff").is_none());
-    assert!(rendered["metrics"].as_object().unwrap().is_empty());
+    let metrics = rendered["metrics"].as_object().unwrap();
+    assert_eq!(metrics["turns"], serde_json::json!(1));
+    assert_eq!(metrics["model"]["calls"], serde_json::json!(0));
+    assert_eq!(metrics["tools"]["calls"], serde_json::json!(1));
+    assert_eq!(metrics["structure"]["mutations"], serde_json::json!(0));
     assert_eq!(
         serde_json::from_value::<RunSummaryV1>(rendered.clone()).unwrap(),
         summary

@@ -9,11 +9,13 @@
 //! from.
 
 mod aggregate;
+mod analyze;
 mod artifacts;
 mod comparison;
 mod ingest;
 mod manifest;
 mod metadata;
+mod report;
 mod summary;
 mod workspace;
 
@@ -22,6 +24,7 @@ pub use aggregate::{
     BenchmarkAggregateV1, DistributionV1, PRIMARY_METRICS, RunOutcomeCountsV1,
     aggregate_run_summaries, render_aggregate_markdown,
 };
+pub use analyze::{AnalyzeOptions, analyze_trace};
 pub use artifacts::{
     ArtifactLayoutError, BASELINE_SNAPSHOT_VERSION, BenchmarkArtifactLayout,
     RepetitionArtifactPaths,
@@ -39,6 +42,10 @@ pub use manifest::{
 pub use metadata::{
     best_effort_temper_commit, collect_environment_metadata, observed_model_identities,
     temper_build_metadata,
+};
+pub use report::{
+    RUN_SUMMARY_JSON_FILE, RUN_SUMMARY_MARKDOWN_FILE, ReportWriteError, render_run_summary_json,
+    render_run_summary_markdown, write_run_summary,
 };
 pub use summary::*;
 pub use workspace::{

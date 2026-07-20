@@ -270,6 +270,8 @@ pub struct StructureMetricsV1 {
     pub post_validation_mutations: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_invalidations: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revalidations: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -339,6 +341,7 @@ pub enum TraceDiagnosticCodeV1 {
     HostEvidenceUnavailable,
     DiffEvidenceUnavailable,
     ValidationEvidenceUnavailable,
+    StructureEvidenceUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

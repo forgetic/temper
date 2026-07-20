@@ -69,9 +69,16 @@ impl NormalizedTrace {
         Ok(bytes)
     }
 
-    /// Builds the stable base run-summary contract. Metric extraction augments
-    /// the optional groups without converting unavailable observations to zero.
+    /// Builds the complete typed run summary using no declared validation
+    /// command prefixes. Call [`crate::analyze_trace`] when benchmark-specific
+    /// prefixes are available.
     pub fn run_summary(&self) -> RunSummaryV1 {
+        crate::analyze_trace(self, &crate::AnalyzeOptions::default())
+    }
+
+    /// Builds the source/terminal/coverage portion consumed by the metric
+    /// analyzer.
+    pub(crate) fn base_run_summary(&self) -> RunSummaryV1 {
         let first = self
             .events
             .first()
@@ -92,7 +99,7 @@ impl NormalizedTrace {
             }),
             AgentActivityEventV1::RunFailed(failed) => Some(RunTerminalV1 {
                 status: RunTerminalStatusV1::Failed,
-                duration_ms: None,
+                duration_ms: Some(event.elapsed_ms),
                 stop_reason: None,
                 failure: Some(failed.failure.clone()),
             }),
@@ -100,6 +107,11 @@ impl NormalizedTrace {
         });
         let capture = self.events.iter().find_map(|event| match event.event {
             AgentActivityEventV1::RunStarted(ref started) => Some(started.capture),
+            _ => None,
+        });
+        let wall_time_ms = self.events.iter().find_map(|event| match &event.event {
+            AgentActivityEventV1::RunFinished(finished) => Some(finished.duration_ms),
+            AgentActivityEventV1::RunFailed(_) => Some(event.elapsed_ms),
             _ => None,
         });
         let first_seq = self.events.first().map(|event| event.seq);
@@ -130,7 +142,7 @@ impl NormalizedTrace {
                 last_seq,
                 terminal_event_observed: terminal.is_some(),
             },
-            wall_time_ms: terminal.as_ref().and_then(|value| value.duration_ms),
+            wall_time_ms,
             terminal,
             metrics: RunMetricsV1::default(),
             validation: None,

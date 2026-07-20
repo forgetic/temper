@@ -69,14 +69,16 @@ fn process_exists(pid: &str) -> bool {
 
 #[cfg(unix)]
 fn wait_for_path(path: &Path) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    // The quick suite runs hundreds of binaries concurrently, so the spawned
+    // attempt's git setup can be CPU-starved before its hook creates the marker.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !path.exists() {
         assert!(
             std::time::Instant::now() < deadline,
             "timed out waiting for {}",
             path.display()
         );
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
