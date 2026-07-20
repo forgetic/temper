@@ -139,6 +139,30 @@ fn selected_pool_agent_profile_controls_command_and_env() {
 }
 
 #[test]
+fn first_party_program_override_preserves_profile_invocation_settings() {
+    let mut resolved = resolved_with_profile_pool();
+    resolved.worker.selected_pool = Some("engineers".to_string());
+
+    let configured =
+        agent_invocation(&resolved, &["default-agent".to_string()]).expect("configured invocation");
+    let supplied_program = vec!["/tmp/benchmark-agent".to_string()];
+    let overridden = agent_invocation_with_first_party_program(&resolved, &supplied_program)
+        .expect("overridden invocation");
+
+    let expected_command: Vec<_> = supplied_program
+        .iter()
+        .cloned()
+        .chain(configured.command[2..].iter().cloned())
+        .collect();
+    assert_eq!(overridden.command, expected_command);
+    assert_eq!(overridden.env, configured.env);
+    assert_eq!(overridden.tool_config, configured.tool_config);
+    assert_eq!(overridden.supervision, configured.supervision);
+    assert_eq!(overridden.runtime_limits, configured.runtime_limits);
+    assert_eq!(overridden.trace_policy, configured.trace_policy);
+}
+
+#[test]
 fn explicit_third_party_profile_command_omits_first_party_trace_flag() {
     let mut resolved = resolved_with_profile_pool();
     resolved.worker.selected_pool = Some("engineers".to_string());
@@ -159,6 +183,15 @@ fn explicit_third_party_profile_command_omits_first_party_trace_flag() {
     assert!(invocation.trace_policy.is_none());
     assert_eq!(invocation.supervision, AgentSupervisionKind::ThirdParty);
     assert!(invocation.runtime_limits.is_none());
+
+    let overridden =
+        agent_invocation_with_first_party_program(&resolved, &["benchmark-agent".to_string()])
+            .expect("third-party invocation remains classifiable");
+    assert_eq!(
+        overridden.command.first().map(String::as_str),
+        Some("vendor-agent")
+    );
+    assert_eq!(overridden.supervision, AgentSupervisionKind::ThirdParty);
 }
 
 #[test]

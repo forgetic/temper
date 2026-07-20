@@ -1,0 +1,24 @@
+{
+  "repos": [
+    {
+      "id": "cross-cutting-rust-fixture",
+      "owner": "temper-benchmark",
+      "name": "cross-cutting-rust-change",
+      "default_branch": "main",
+      "dir": "repo",
+      "access": "writable",
+      "base_branch": "main",
+      "branch_hint": "benchmark/cross-cutting-rust-change"
+    }
+  ],
+  "work_item": {
+    "role": "engineer",
+    "queue": "code_ready",
+    "kind": "code",
+    "target": "Issue { number: ItemNumber(1) }",
+    "context": "{\"title\":\"Add configurable label normalization\",\"body\":\"Add a public NormalizeOptions API while preserving normalize_label compatibility. Update the implementation, crate exports, integration tests, and README. Run tests after the code change and again after the documentation edit, then submit through the host gate.\"}"
+  },
+  "action": "open_pr",
+  "correlation_key": "benchmark-cross-cutting-rust-change",
+  "checkout": "writable"
+}

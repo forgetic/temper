@@ -1,0 +1,30 @@
+[package]
+name = "temper-benchmark-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Standalone trace analysis and agent-session benchmark command for Temper."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+temper-config = { path = "../temper-config" }
+temper-protocol-activity = { path = "../temper-protocol-activity" }
+temper-protocol-agent = { path = "../temper-protocol-agent" }
+temper-worker = { path = "../temper-worker" }
+temper-worker-io = { path = "../temper-worker-io" }
+temper-worker-service = { path = "../temper-worker-service" }
+
+[[bin]]
+name = "temper-benchmark"
+path = "src/main.rs"
+
+[lints]
+workspace = true

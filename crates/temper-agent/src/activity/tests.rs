@@ -308,6 +308,19 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 truncated: false,
             },
         });
+        sink.emit(AgentEvent::ToolEnd {
+            id: "submit".to_string(),
+            name: "submit_for_pr".to_string(),
+            status: ToolCallStatus::Succeeded,
+            duration_ms: 3,
+            result: temper_agent_core::ToolResultMetadata {
+                preview: Some(
+                    "submit_for_pr accepted by host: password=hunter2 gate output".to_string(),
+                ),
+                bytes: 66,
+                truncated: true,
+            },
+        });
         sink.emit(AgentEvent::ToolStart {
             id: "tool-2".to_string(),
             name: "read".to_string(),
@@ -334,6 +347,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
             assert!(!json.contains("output.thinking.delta"));
             assert!(!json.contains("\"result\""));
         } else {
+            assert!(json.contains("submit_for_pr accepted by host:"));
             assert!(json.len() < 5_000);
         }
         if mode == CaptureModeV1::Transcript {

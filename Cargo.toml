@@ -41,6 +41,9 @@ members = [
     "crates/temper-sim",
     "crates/temper-scenario-core",
     "crates/temper-scenario-cli",
+    # Standalone agent-session benchmark trace analyzer and runner composition
+    # root. Benchmark manifests remain independent from scenarios.
+    "crates/temper-benchmark-cli",
     # Tiny repo-local driver for developer aliases that need to sequence cargo
     # commands.
     "crates/temper-dev",

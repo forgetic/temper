@@ -11,6 +11,13 @@ operator-facing demos with launch scripts and runtime instructions. Scenarios ar
 portable inputs for validation and post-merge regression; adding a scenario does
 not migrate, deduplicate, or replace an example.
 
+Agent-session performance inputs live separately in
+[`benchmarks/`](../benchmarks/README.md). Use `temper-benchmark` for trace
+analysis, repetitions, structural metrics, and caller-owned baseline
+comparisons; do not add benchmark or timing semantics to scenario manifests.
+See [Benchmark agent sessions](../docs/how-to/benchmark-agent-sessions.md) for
+the operator workflow.
+
 ## Runnable scenarios
 
 `temper-scenario run` exposes one public runner:

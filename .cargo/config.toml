@@ -8,6 +8,9 @@
 # path use `--all-targets` deliberately. Cargo unifies features across the build
 # graph, and `--all-targets` pulls in dev-dependencies (e.g. temper-testing) that
 # enable extra features on shared deps — notably skein's `tls-webpki-roots`.
+# `dev-benchmark-harness` is a separate deterministic lane: the `temper-dev`
+# driver builds `temper-agent`, runs the checked-in benchmark corpus entry, and
+# verifies the generated run and aggregate reports.
 # Narrowing one of those aliases to `--lib --bins` resolves a DIFFERENT unified
 # feature set, so skein and its entire downstream tree (tokio, hyper-util, …)
 # compile under a feature combo no other build shares and miss the cache
@@ -34,6 +37,7 @@ dev-check = "check --workspace --all-targets"
 dev-scenario-check = "run -p temper-scenario-cli -- check scenarios"
 dev-scenario-run = "run --quiet -p temper-dev --bin temper-dev -- dev-scenario-run-live"
 dev-scenario-run-live = "run --quiet -p temper-dev --bin temper-dev -- dev-scenario-run-live"
+dev-benchmark-harness = "run --quiet -p temper-dev --bin temper-dev -- dev-benchmark-harness"
 dev-fmt = "fmt --all"
 dev-clippy = "clippy --workspace --all-targets"
 dev-test-build = "test --workspace --all-targets --no-run"

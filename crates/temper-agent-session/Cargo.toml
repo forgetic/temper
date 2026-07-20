@@ -26,11 +26,17 @@ temper-protocol-activity = { path = "../temper-protocol-activity" }
 [dev-dependencies]
 jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
+temper-benchmark-cli = { path = "../temper-benchmark-cli" }
 temper-process-containment = { path = "../temper-process-containment" }
 
 [[bin]]
 name = "temper-agent"
 path = "src/bin/temper-agent.rs"
+
+[[test]]
+name = "benchmark_harness"
+path = "tests/benchmark_harness.rs"
+harness = false
 
 [lints]
 workspace = true

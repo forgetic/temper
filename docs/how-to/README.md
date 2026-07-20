@@ -15,6 +15,7 @@ Current guides:
 - [Configure Smith LLM responders from Temper](use-chatgpt-oauth-auth.md)
 - [Configure a coding workspace external tool](configure-coding-workspace.md)
 - [Operate durable agent traces and OpenTelemetry](operate-agent-traces.md)
+- [Benchmark coding-agent sessions](benchmark-agent-sessions.md)
 - [Deploy Temper with systemd](deploy-with-systemd.md)
 - Run the operator demo: `examples/reference-delivery/` (`./run.sh`) —
   deterministic jig-backed agents against a real throwaway Forgejo plus real

@@ -25,10 +25,11 @@ on:
 #      artifacts key-match across steps (see the comment in .cargo/config.toml).
 #      clippy/check still recompile their own zero-byte `.rmeta` leaves, which
 #      kache cannot cache, but that leaf cost is small. The scenario manifest
-#      check below is a tiny checked-in CLI run after the build step, so it does
-#      not change that cache choreography. The validation-grade live scenario
-#      lane is `cargo dev-scenario-run`; PR CI already exercises live coverage
-#      in the ignored e2e lane.
+#      check and deterministic benchmark harness below are checked-in CLI lanes
+#      after the build step, so they do not change that cache choreography. The
+#      validation-grade live scenario lane is `cargo dev-scenario-run`; PR CI
+#      already exercises live coverage in the ignored e2e lane. Benchmark live
+#      mode remains explicit and credential-gated, never part of PR CI.
 jobs:
   validate:
     runs-on: host
@@ -57,16 +58,21 @@ jobs:
         # Validate checked-in manifests and local fixture references without
         # running either scenario execution tier.
         run: cargo dev-scenario-check
+      - name: Agent-session benchmark harness
+        # Runs the real agent loop against deterministic Jig responses, then
+        # verifies structural run/aggregate summaries and the harness disclaimer.
+        # No provider credentials or timing thresholds belong in this lane.
+        run: cargo dev-benchmark-harness
       - name: Test (quick)
         # kache restores ordinary libtest executables with their executable bit,
         # but its cached custom-harness artifacts currently arrive as 0644.
         # Let Cargo compile the same default test-target set that nextest uses,
-        # then repair those two artifacts before nextest queries their
+        # then repair the custom harness artifacts before nextest queries their
         # libtest-style listings.
         run: |
           cargo test --workspace --no-run
           find target/debug/deps -maxdepth 1 -type f \
-            \( -name 'linux_supervisor-*' -o -name 'windows_job-*' \) \
+            \( -name 'linux_supervisor-*' -o -name 'windows_job-*' -o -name 'benchmark_harness-*' \) \
             ! -name '*.d' -exec chmod +x {} +
           cargo dev-test-quick
       - name: Test (all e2e)

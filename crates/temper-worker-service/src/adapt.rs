@@ -59,16 +59,23 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
         max_concurrent_jobs: worker.max_concurrent_jobs,
         poll_wait: worker.poll_wait,
         heartbeat_interval: worker.heartbeat_interval,
-        liveness_limits: RuntimeWorkerLivenessLimits {
-            max_no_progress: worker.liveness_limits.max_no_progress,
-            max_run: worker.liveness_limits.max_run,
-            graceful_cancellation_grace: worker.liveness_limits.graceful_cancellation_grace,
-            forced_termination_grace: worker.liveness_limits.forced_termination_grace,
-        },
+        liveness_limits: worker_liveness_limits(resolved),
         result_root: worker.result_root.clone(),
         agent_traces: worker_agent_trace_config(resolved),
         executor: ExecutorSelection::Stub,
     })
+}
+
+/// Projects resolved worker-owned cancellation and escalation bounds into the
+/// runtime shape used by both production workers and direct live benchmarks.
+pub fn worker_liveness_limits(resolved: &Resolved) -> RuntimeWorkerLivenessLimits {
+    let limits = resolved.worker.liveness_limits;
+    RuntimeWorkerLivenessLimits {
+        max_no_progress: limits.max_no_progress,
+        max_run: limits.max_run,
+        graceful_cancellation_grace: limits.graceful_cancellation_grace,
+        forced_termination_grace: limits.forced_termination_grace,
+    }
 }
 
 /// Projects resolved trace policy and the durable spool root into the worker
@@ -181,11 +188,38 @@ pub fn agent_invocation(
     resolved: &Resolved,
     program: &[String],
 ) -> Result<AgentInvocation, String> {
+    agent_invocation_with_command_policy(resolved, program, false)
+}
+
+/// Assembles an invocation while keeping a caller-supplied executable for
+/// first-party profiles.
+///
+/// The selected profile still supplies provider/model flags, credentials,
+/// tools, trace policy, and runtime limits. Explicit third-party commands are
+/// deliberately left intact so callers can reject their incompatible
+/// supervision contract instead of silently running them as Temper agents.
+pub fn agent_invocation_with_first_party_program(
+    resolved: &Resolved,
+    program: &[String],
+) -> Result<AgentInvocation, String> {
+    agent_invocation_with_command_policy(resolved, program, true)
+}
+
+fn agent_invocation_with_command_policy(
+    resolved: &Resolved,
+    program: &[String],
+    override_first_party_program: bool,
+) -> Result<AgentInvocation, String> {
     let (command, env, first_party, operation_limits) =
         if let Some((pool, profile)) = selected_agent_profile(resolved)? {
             let first_party =
                 profile.command.is_empty() || is_first_party_agent_command(&profile.command);
-            let (command, env) = profile_agent_command_and_env(pool, profile, program)?;
+            let (command, env) = profile_agent_command_and_env(
+                pool,
+                profile,
+                program,
+                override_first_party_program && first_party,
+            )?;
             (command, env, first_party, profile.operation_limits)
         } else {
             let (command, env) = legacy_agent_command_and_env(resolved, program);
@@ -277,8 +311,9 @@ fn profile_agent_command_and_env(
     pool: &WorkerPoolSettings,
     profile: &AgentProfileSettings,
     program: &[String],
+    override_program: bool,
 ) -> Result<AgentCommandEnv, String> {
-    let mut command = if profile.command.is_empty() {
+    let mut command = if profile.command.is_empty() || override_program {
         program.to_vec()
     } else {
         profile.command.clone()

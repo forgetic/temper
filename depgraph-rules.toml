@@ -197,6 +197,12 @@ temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-c
 # path when the scenario contract is specifically about worker-result materialization.
 temper-scenario-cli = ["temper-scenario-core", "temper-runner", "temper-testing", "temper-forge-model", "temper-forge-memory", "temper-engine", "temper-protocol-worker", "temper-workflow"]
 
+# Standalone benchmark composition root. Offline analysis currently consumes the
+# activity protocol directly; direct benchmark runs deliberately reuse the
+# normal config resolver, agent process contract, worker-owned trace/runtime,
+# and worker-service invocation adapter rather than introducing parallel seams.
+temper-benchmark-cli = ["temper-config", "temper-protocol-activity", "temper-protocol-agent", "temper-worker", "temper-worker-io", "temper-worker-service"]
+
 # The unified `temper` binary's composition root (`src/bin/temper.rs`'s `boot()`)
 # snapshots the real environment into a CliEnv via temper-config's env shims, so
 # it depends on temper-config in addition to the temper-cli dispatcher.
