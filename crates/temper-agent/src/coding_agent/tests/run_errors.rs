@@ -1,8 +1,11 @@
 //! Classification of provider run errors and the `ModelUnavailable` message.
 
 use crate::coding_agent::*;
-use temper_agent_core::{AgentOutcome, AgentStop};
+use temper_agent_core::{
+    AgentOutcome, AgentStop, ModelFailureCategory, ModelFailureDiagnostic, ModelIdentity,
+};
 use tongs::model::{AssistantMessage, ContentBlock, StopReason, TextContent, Usage};
+use tongs::{FailureCategory, ProviderFailureDiagnostic};
 
 #[test]
 fn classifies_model_unavailable_from_provider_phrasings() {
@@ -12,9 +15,17 @@ fn classifies_model_unavailable_from_provider_phrasings() {
         "error: model_not_found",
     ] {
         match classify_run_error("claude-fable-5", message.to_string()) {
-            CodingAgentError::ModelUnavailable { model, detail } => {
+            CodingAgentError::ModelUnavailable {
+                model,
+                detail,
+                diagnostic,
+            } => {
                 assert_eq!(model, "claude-fable-5");
                 assert_eq!(detail, message);
+                assert_eq!(diagnostic.provider(), "unknown");
+                assert_eq!(diagnostic.model(), "claude-fable-5");
+                assert_eq!(diagnostic.category(), ModelFailureCategory::RedactedUnknown);
+                assert!(diagnostic.detail_redacted());
             }
             other => panic!("expected ModelUnavailable for {message:?}, got {other:?}"),
         }
@@ -31,13 +42,96 @@ fn classifies_other_errors_as_abnormal_stop() {
 
 #[test]
 fn model_unavailable_message_points_at_overrides() {
-    let rendered = CodingAgentError::ModelUnavailable {
-        model: "claude-fable-5".to_string(),
-        detail: "404 not available".to_string(),
-    }
-    .to_string();
+    let rendered = classify_run_error("claude-fable-5", "model is not available (404)".to_string())
+        .to_string();
     assert!(rendered.contains("claude-fable-5"));
     assert!(rendered.contains("--model"));
+}
+
+#[test]
+fn typed_model_failure_survives_outcome_and_coding_error() {
+    let upstream = ProviderFailureDiagnostic::new(
+        FailureCategory::Context,
+        false,
+        Some(400),
+        Some("req_context"),
+        Some("context_length_exceeded"),
+        "Context window exceeded.",
+    );
+    let diagnostic =
+        ModelFailureDiagnostic::from_provider(&ModelIdentity::new("openai", "gpt-test"), &upstream);
+    let mut outcome = outcome_with_result_text(AgentStop::ModelError);
+    outcome.model_failure = Some(diagnostic);
+
+    match ensure_completed_outcome(&outcome, "ignored-legacy-model", 7, false)
+        .expect_err("typed model failure must stop the run")
+    {
+        CodingAgentError::ModelFailure(diagnostic) => {
+            assert_eq!(diagnostic.provider(), "openai");
+            assert_eq!(diagnostic.model(), "gpt-test");
+            assert_eq!(diagnostic.category(), ModelFailureCategory::Context);
+            assert_eq!(diagnostic.http_status(), Some(400));
+            assert_eq!(diagnostic.provider_request_id(), Some("req_context"));
+            assert_eq!(
+                diagnostic.provider_error_code(),
+                Some("context_length_exceeded")
+            );
+        }
+        other => panic!("expected typed model failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn typed_model_unavailable_classifications_retain_diagnostics() {
+    for (category, expected_category, status, request_id, code) in [
+        (
+            FailureCategory::Provider,
+            ModelFailureCategory::Provider,
+            Some(400),
+            "req_code_556",
+            Some("model_not_found"),
+        ),
+        (
+            FailureCategory::Context,
+            ModelFailureCategory::Context,
+            Some(404),
+            "req_status_556",
+            None,
+        ),
+    ] {
+        let upstream = ProviderFailureDiagnostic::new(
+            category,
+            false,
+            status,
+            Some(request_id),
+            code,
+            "The requested resource was not found.",
+        );
+        let diagnostic = ModelFailureDiagnostic::from_provider(
+            &ModelIdentity::new("openai", "gpt-missing"),
+            &upstream,
+        );
+
+        match classify_model_failure(diagnostic) {
+            CodingAgentError::ModelUnavailable {
+                model,
+                detail,
+                diagnostic,
+            } => {
+                assert_eq!(model, "gpt-missing");
+                assert_eq!(detail, temper_agent_core::REDACTED_MODEL_FAILURE_MESSAGE);
+                assert_eq!(diagnostic.provider(), "openai");
+                assert_eq!(diagnostic.model(), "gpt-missing");
+                assert_eq!(diagnostic.category(), expected_category);
+                assert!(!diagnostic.retryable());
+                assert_eq!(diagnostic.http_status(), status);
+                assert_eq!(diagnostic.provider_request_id(), Some(request_id));
+                assert_eq!(diagnostic.provider_error_code(), code);
+                assert!(diagnostic.detail_redacted());
+            }
+            other => panic!("expected structured model-unavailable promotion, got {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -90,5 +184,6 @@ fn outcome_with_result_text(stop: AgentStop) -> AgentOutcome {
             timestamp: 0,
         },
         messages: Vec::new(),
+        model_failure: None,
     }
 }

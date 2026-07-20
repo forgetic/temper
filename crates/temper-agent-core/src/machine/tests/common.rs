@@ -13,6 +13,7 @@ use tongs::model::{
 };
 use tongs::tools::{ToolEffects, ToolOutput};
 
+use crate::ModelFailureDiagnostic;
 use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop};
 
 /// A machine whose named tools are all read-only (parallel-safe), so adjacent
@@ -130,7 +131,7 @@ pub(super) fn machine() -> AgentMachine {
 
 pub(super) enum TestCompletion {
     LlmResponded(AssistantMessage),
-    LlmFailed(String),
+    LlmFailed(ModelFailureDiagnostic),
     ToolFinished { id: String, output: ToolOutput },
 }
 
@@ -138,8 +139,12 @@ pub(super) fn llm_responded(message: AssistantMessage) -> TestCompletion {
     TestCompletion::LlmResponded(message)
 }
 
-pub(super) fn llm_failed(message: impl Into<String>) -> TestCompletion {
-    TestCompletion::LlmFailed(message.into())
+pub(super) fn llm_failed(_message: impl Into<String>) -> TestCompletion {
+    TestCompletion::LlmFailed(ModelFailureDiagnostic::redacted_unknown(
+        "test-provider",
+        "test-model",
+        false,
+    ))
 }
 
 pub(super) fn tool_finished(id: impl Into<String>, output: ToolOutput) -> TestCompletion {
@@ -162,13 +167,13 @@ pub(super) fn complete(m: &mut AgentMachine, completion: TestCompletion) -> Vec<
                 message,
             }
         }
-        TestCompletion::LlmFailed(message) => {
+        TestCompletion::LlmFailed(diagnostic) => {
             let (operation_generation, batch_generation) =
                 m.active_generations().expect("active model operation");
             AgentCompletion::LlmFailed {
                 operation_generation,
                 batch_generation,
-                message,
+                diagnostic,
             }
         }
         TestCompletion::ToolFinished { id, output } => {

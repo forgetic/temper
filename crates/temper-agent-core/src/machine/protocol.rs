@@ -11,6 +11,8 @@ use tongs::model::{AssistantMessage, ContentBlock, Message, ToolCall};
 use tongs::provider::ToolDef;
 use tongs::tools::ToolOutput;
 
+use crate::model_failure::ModelFailureDiagnostic;
+
 /// An observability event the machine emits as data (the shell renders/records
 /// it). Keeping events as machine output — rather than callbacks fired from
 /// inside the loop, as pi does — preserves purity and makes the event stream
@@ -46,9 +48,9 @@ pub enum AgentEvent {
         time_to_first_token_ms: Option<u64>,
         stop_reason: Option<tongs::model::StopReason>,
         usage: tongs::model::Usage,
-        /// Present only for a failed attempt. Consumers must redact it before
-        /// projecting it to logs or transport.
-        failure: Option<String>,
+        /// Present only for a failed attempt. The provider boundary has
+        /// already bounded and sanitized every retained field.
+        failure: Option<ModelFailureDiagnostic>,
     },
     /// A failed provider attempt will be retried after a bounded delay.
     ModelCallRetrying {
@@ -56,7 +58,7 @@ pub enum AgentEvent {
         call_id: String,
         next_attempt: u32,
         delay_ms: u64,
-        reason: String,
+        reason: ModelFailureDiagnostic,
     },
     /// A live streaming delta from the model, emitted by the shell as the
     /// response streams in (before the turn's full [`AgentEvent::AssistantMessage`]).
@@ -170,7 +172,7 @@ pub enum AgentCompletion {
     LlmFailed {
         operation_generation: OperationGeneration,
         batch_generation: BatchGeneration,
-        message: String,
+        diagnostic: ModelFailureDiagnostic,
     },
     /// A tool the machine requested finished.
     ToolFinished {
@@ -223,6 +225,9 @@ pub enum AgentRequest {
         stop: AgentStop,
         final_message: AssistantMessage,
         messages: Vec<Message>,
+        /// Authoritative typed failure for a terminal model error. The
+        /// synthetic assistant message remains compatibility-only.
+        model_failure: Option<ModelFailureDiagnostic>,
     },
 }
 

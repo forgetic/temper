@@ -2,11 +2,11 @@
 //! single model task outcome, with liveness timeouts and transient-fault retry.
 //!
 //! A model turn streams deltas (forwarded to the [`EventSink`] for live
-//! observers) and ends with a terminal `Done`/`Error` event carrying the
-//! assembled assistant message. Transport faults (dropped connection, 429/5xx,
-//! a stalled socket) are retried with capped exponential backoff before the
-//! turn is given up on; a model-chosen error stop is surfaced as-is, not
-//! retried.
+//! observers) and ends with a terminal `Done`/`Error` event. `Done` yields the
+//! assembled assistant response; `Error` yields a typed provider diagnostic and
+//! is always a failed attempt. Retryable transport/provider faults (dropped
+//! connection, 429/5xx, a stalled socket) use the existing capped exponential
+//! backoff before the turn is given up on.
 
 use std::future::Future;
 use std::time::Duration;
@@ -17,6 +17,7 @@ use tongs::model::{AssistantMessage, Message, StopReason, StreamEvent};
 use tongs::provider::{Context, Provider, StreamOptions, ToolDef};
 
 use crate::machine::{AgentEvent, ModelCallStatus, StreamDelta};
+use crate::model_failure::ModelFailureDiagnostic;
 use crate::shell::task_group::CancellationToken;
 use crate::shell::{EventClock, EventSink, ModelIdentity};
 
@@ -43,7 +44,7 @@ pub(super) struct ModelOperationContext<'a> {
 /// later generation.
 pub(super) enum ModelTaskOutcome {
     Responded(AssistantMessage),
-    Failed(String),
+    Failed(ModelFailureDiagnostic),
     Cancelled,
 }
 
@@ -137,10 +138,10 @@ fn stream_retry_config() -> StreamRetryConfig {
     StreamRetryConfig::default()
 }
 
-/// Streams one model response and collapses it into a completion. The terminal
-/// `Done` / `Error` stream event carries the final assistant message; a
-/// transport-layer failure (the provider call itself erroring, or the stream
-/// ending without a terminal event) becomes [`ModelTaskOutcome::Failed`].
+/// Streams one model response and collapses it into a completion. A successful
+/// terminal `Done` carries the final assistant message. A terminal `Error`, a
+/// defensive `Done + Error`, provider-call failure, timeout, or premature EOF
+/// becomes [`ModelTaskOutcome::Failed`] with a typed diagnostic.
 pub(super) async fn stream_to_completion(
     provider: &dyn Provider,
     system_prompt: Option<&str>,
@@ -150,12 +151,10 @@ pub(super) async fn stream_to_completion(
     operation: ModelOperationContext<'_>,
     observability: ModelCallObservability<'_>,
 ) -> ModelTaskOutcome {
-    let ModelCallObservability {
-        turn,
-        model,
-        clock,
-        events,
-    } = observability;
+    let turn = observability.turn;
+    let model = observability.model;
+    let clock = observability.clock;
+    let events = observability.events;
     let context = Context {
         system_prompt: system_prompt.map(std::borrow::Cow::Borrowed),
         messages: std::borrow::Cow::Borrowed(messages),
@@ -166,9 +165,9 @@ pub(super) async fn stream_to_completion(
     // provider) are retried with backoff rather than killing the turn — and, in
     // a parallel sub-agent fan-out, a whole run. One flaky socket should not be
     // fatal; this mirrors the resilience the Claude Code CLI gets for free.
-    // Retry only happens before any terminal message is assembled, so a model
-    // turn never double-emits. A terminal provider error message (the model
-    // chose to stop with an error) is NOT a transport fault and is surfaced as-is.
+    // Retry only happens before any successful terminal message is accepted,
+    // so a model turn never double-emits. Terminal provider errors are failed
+    // attempts and follow the structured diagnostic's retryability decision.
     let mut attempt = 0u32;
     let retry_config = stream_retry_config();
     let call_id = format!("turn-{turn}");
@@ -185,9 +184,8 @@ pub(super) async fn stream_to_completion(
             provider,
             &context,
             stream_options,
-            clock,
+            &observability,
             started_ms,
-            events,
             operation,
         )
         .await
@@ -228,8 +226,9 @@ pub(super) async fn stream_to_completion(
                 return ModelTaskOutcome::Cancelled;
             }
             StreamAttempt::Failed {
-                reason,
-                retryable,
+                diagnostic,
+                stop_reason,
+                usage,
                 time_to_first_token_ms,
             } => {
                 let duration_ms = clock.now_millis().saturating_sub(started_ms);
@@ -240,11 +239,12 @@ pub(super) async fn stream_to_completion(
                     status: ModelCallStatus::Failed,
                     duration_ms,
                     time_to_first_token_ms,
-                    stop_reason: None,
-                    usage: tongs::model::Usage::default(),
-                    failure: Some(reason.clone()),
+                    stop_reason,
+                    usage,
+                    failure: Some(diagnostic.clone()),
                 });
-                let will_retry = retryable && (attempt as usize) < retry_config.max_retries;
+                let will_retry =
+                    diagnostic.retryable() && (attempt as usize) < retry_config.max_retries;
                 if will_retry {
                     let delay = retry_config.backoff(attempt as usize);
                     events.emit(AgentEvent::ModelCallRetrying {
@@ -252,7 +252,7 @@ pub(super) async fn stream_to_completion(
                         call_id: call_id.clone(),
                         next_attempt: attempt.saturating_add(1),
                         delay_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
-                        reason: reason.clone(),
+                        reason: diagnostic.clone(),
                     });
                     if cancel_or(operation.cancellation, temper_agent_io::sleep_for(delay))
                         .await
@@ -263,7 +263,7 @@ pub(super) async fn stream_to_completion(
                     attempt = attempt.saturating_add(1);
                     continue;
                 }
-                return ModelTaskOutcome::Failed(reason);
+                return ModelTaskOutcome::Failed(diagnostic);
             }
         }
     }
@@ -273,32 +273,37 @@ pub(super) async fn stream_to_completion(
 enum StreamAttempt {
     /// External run cancellation won an in-flight provider wait.
     Cancelled { time_to_first_token_ms: Option<u64> },
-    /// The turn produced a terminal assistant message (normal or model-chosen error).
+    /// The turn produced a successful terminal assistant message.
     Responded {
         message: AssistantMessage,
         time_to_first_token_ms: Option<u64>,
     },
-    /// The attempt failed before a terminal message; `retryable` says whether a
-    /// fresh attempt could plausibly succeed (transport / overload faults).
+    /// The attempt failed. The diagnostic owns retryability and contains only
+    /// typed, bounded facts; terminal stream errors may also retain usage and
+    /// stop reason for observability.
     Failed {
-        reason: String,
-        retryable: bool,
+        diagnostic: ModelFailureDiagnostic,
+        stop_reason: Option<StopReason>,
+        usage: tongs::model::Usage,
         time_to_first_token_ms: Option<u64>,
     },
 }
 
 /// Runs one streaming attempt with liveness timeouts. Live deltas are forwarded
 /// to `events` so observers see tokens/tool-calls in real time; the terminal
-/// `Done`/`Error` event carries the assembled message the machine acts on.
+/// `Done` carries the assembled message the machine acts on; `Error` carries a
+/// sanitized diagnostic and is never treated as a successful response.
 async fn stream_one_attempt(
     provider: &dyn Provider,
     context: &Context<'_>,
     stream_options: &StreamOptions,
-    clock: &dyn EventClock,
+    observability: &ModelCallObservability<'_>,
     started_ms: u64,
-    events: &dyn EventSink,
     operation: ModelOperationContext<'_>,
 ) -> StreamAttempt {
+    let model = observability.model;
+    let clock = observability.clock;
+    let events = observability.events;
     let mut time_to_first_token_ms = None;
     // The connect limit covers the complete time to the first provider event,
     // not merely creation of the pull stream. Providers may return an HTTP body
@@ -323,26 +328,32 @@ async fn stream_one_attempt(
         Ok(Ok((stream, Some(event)))) => (stream, Some(event)),
         Ok(Ok((_stream, None))) => {
             return StreamAttempt::Failed {
-                reason: "model stream ended without a terminal Done/Error event".to_string(),
-                retryable: true,
+                diagnostic: ModelFailureDiagnostic::response(
+                    model,
+                    true,
+                    "Model stream ended before a terminal event.",
+                ),
+                stop_reason: None,
+                usage: tongs::model::Usage::default(),
                 time_to_first_token_ms,
             };
         }
         Ok(Err(error)) => {
-            let retryable = is_retryable(&error);
             return StreamAttempt::Failed {
-                reason: error.to_string(),
-                retryable,
+                diagnostic: ModelFailureDiagnostic::from_tongs_error(model, &error),
+                stop_reason: None,
+                usage: tongs::model::Usage::default(),
                 time_to_first_token_ms,
             };
         }
         Err(_) => {
             return StreamAttempt::Failed {
-                reason: format!(
-                    "model request stalled: no first event within {}",
-                    format_duration(operation.connect_timeout)
+                diagnostic: ModelFailureDiagnostic::timeout(
+                    model,
+                    "Model connect deadline elapsed.",
                 ),
-                retryable: true,
+                stop_reason: None,
+                usage: tongs::model::Usage::default(),
                 time_to_first_token_ms,
             };
         }
@@ -365,43 +376,68 @@ async fn stream_one_attempt(
             match next_result {
                 Ok(Some(event)) => event,
                 Ok(None) => {
+                    // A clean EOF with no terminal event is usually a dropped
+                    // connection mid-stream and retains the existing retry.
                     return StreamAttempt::Failed {
-                        reason: "model stream ended without a terminal Done/Error event"
-                            .to_string(),
-                        // A clean EOF with no terminal event is usually a dropped
-                        // connection mid-stream — worth one more try.
-                        retryable: true,
+                        diagnostic: ModelFailureDiagnostic::response(
+                            model,
+                            true,
+                            "Model stream ended before a terminal event.",
+                        ),
+                        stop_reason: None,
+                        usage: tongs::model::Usage::default(),
                         time_to_first_token_ms,
                     };
                 }
                 Err(_) => {
                     return StreamAttempt::Failed {
-                        reason: format!(
-                            "model stream stalled: no event for {}",
-                            format_duration(operation.idle_timeout)
+                        diagnostic: ModelFailureDiagnostic::timeout(
+                            model,
+                            "Model stream idle deadline elapsed.",
                         ),
-                        retryable: true,
+                        stop_reason: None,
+                        usage: tongs::model::Usage::default(),
                         time_to_first_token_ms,
                     };
                 }
             }
         };
         match event {
-            Ok(StreamEvent::Done { message, .. }) => {
+            Ok(StreamEvent::Done {
+                reason,
+                mut message,
+            }) => {
+                // A provider should use StreamEvent::Error for this condition,
+                // but fail closed if an adapter emits Done + Error.
+                if matches!(reason, StopReason::Error)
+                    || matches!(message.stop_reason, StopReason::Error)
+                {
+                    message.stop_reason = StopReason::Error;
+                    return StreamAttempt::Failed {
+                        diagnostic: ModelFailureDiagnostic::response(
+                            model,
+                            false,
+                            "Model stream returned an error completion.",
+                        ),
+                        stop_reason: Some(StopReason::Error),
+                        usage: message.usage,
+                        time_to_first_token_ms,
+                    };
+                }
                 return StreamAttempt::Responded {
                     message,
                     time_to_first_token_ms,
                 };
             }
-            Ok(StreamEvent::Error { error, .. }) => {
-                // The provider produced a terminal error message; surface it as
-                // an assistant message with an error stop reason so the machine
-                // records it and stops cleanly. This is the model's decision, not
-                // a transport fault, so it is not retried.
-                let mut message = error;
-                message.stop_reason = StopReason::Error;
-                return StreamAttempt::Responded {
-                    message,
+            Ok(StreamEvent::Error {
+                reason,
+                error,
+                diagnostic,
+            }) => {
+                return StreamAttempt::Failed {
+                    diagnostic: ModelFailureDiagnostic::from_provider(model, &diagnostic),
+                    stop_reason: Some(reason),
+                    usage: error.usage,
                     time_to_first_token_ms,
                 };
             }
@@ -422,10 +458,10 @@ async fn stream_one_attempt(
             }
             Ok(_) => {}
             Err(error) => {
-                let retryable = is_retryable(&error);
                 return StreamAttempt::Failed {
-                    reason: error.to_string(),
-                    retryable,
+                    diagnostic: ModelFailureDiagnostic::from_tongs_error(model, &error),
+                    stop_reason: None,
+                    usage: tongs::model::Usage::default(),
                     time_to_first_token_ms,
                 };
             }
@@ -440,16 +476,6 @@ async fn cancel_or<F: Future>(cancellation: &CancellationToken, future: F) -> Op
     }
 }
 
-fn format_duration(duration: Duration) -> String {
-    if duration.subsec_nanos() == 0 {
-        format!("{}s", duration.as_secs())
-    } else if duration.subsec_nanos() % 1_000_000 == 0 {
-        format!("{}ms", duration.as_millis())
-    } else {
-        format!("{}ns", duration.as_nanos())
-    }
-}
-
 fn mark_first_token(
     time_to_first_token_ms: &mut Option<u64>,
     clock: &dyn EventClock,
@@ -460,24 +486,9 @@ fn mark_first_token(
     }
 }
 
-/// Whether a provider error is a transient transport/overload fault worth
-/// retrying, versus a deterministic failure (bad request, auth, decode) that a
-/// retry cannot fix.
-fn is_retryable(error: &tongs::error::Error) -> bool {
-    use tongs::error::Error;
-    match error {
-        // Transport faults: DNS/TCP/TLS/malformed HTTP — typically transient.
-        Error::Http(_) => true,
-        // Retry rate-limit and server-side faults; never retry 4xx the client
-        // must fix (400 invalid_request, 401/403 auth, 404 model-unavailable).
-        Error::Api { status, .. } => *status == 429 || (500..=599).contains(status),
-        // Deterministic: a retry would fail identically.
-        Error::Auth(_) | Error::Decode(_) | Error::Tool(_) | Error::Aborted | Error::Other(_) => {
-            false
-        }
-    }
-}
-
+#[cfg(test)]
+#[path = "streaming_failure_tests.rs"]
+mod failure_tests;
 #[cfg(test)]
 #[path = "streaming_tests.rs"]
 mod tests;

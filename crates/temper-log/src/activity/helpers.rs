@@ -105,7 +105,13 @@ pub(super) fn scope_status(status: ScopeStatusV1) -> ActivitySpanStatus {
     }
 }
 
-pub(super) fn model_status(status: ModelCallStatusV1) -> ActivitySpanStatus {
+pub(super) fn model_status(
+    status: ModelCallStatusV1,
+    stop_reason: Option<StopReasonV1>,
+) -> ActivitySpanStatus {
+    if stop_reason == Some(StopReasonV1::Error) {
+        return ActivitySpanStatus::Error;
+    }
     match status {
         ModelCallStatusV1::Succeeded => ActivitySpanStatus::Ok,
         ModelCallStatusV1::Failed => ActivitySpanStatus::Error,

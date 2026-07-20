@@ -69,6 +69,36 @@ beforeEach(() => {
       result: { storage: "inline", text: "failed <script>alert(1)</script>", truncated: false },
     }, "investigate-1"),
     traceEvent(3, "trace.gap", { dropped_events: 4, dropped_bytes: 100, kinds: ["text_delta"] }),
+    traceEvent(4, "model.call.finished", {
+      call_id: "model-timeout", attempt: 0, status: "failed", duration_ms: 5000,
+      failure: {
+        provider: "openai", model: "gpt-test", category: "timeout", retryable: true,
+        message: "Model request timed out.", detail_redacted: false,
+      },
+    }),
+    traceEvent(5, "model.call.finished", {
+      call_id: "model-rate", attempt: 1, status: "failed", duration_ms: 250,
+      failure: {
+        provider: "openai", model: "gpt-test", category: "rate_limit", retryable: true,
+        http_status: 429, provider_request_id: "req_rate_532", provider_error_code: "rate_limit",
+        message: "Rate limit exceeded; retry later.", detail_redacted: false,
+      },
+    }),
+    traceEvent(6, "model.call.finished", {
+      call_id: "model-response", attempt: 0, status: "failed", duration_ms: 90,
+      failure: {
+        provider: "anthropic", model: "claude-test", category: "response", retryable: false,
+        http_status: 502, message: "Provider returned a malformed stream.", detail_redacted: false,
+      },
+    }),
+    traceEvent(7, "model.call.finished", {
+      call_id: "model-redacted", attempt: 0, status: "failed", duration_ms: 10,
+      failure: {
+        provider: "unknown", model: "unknown", category: "redacted_unknown", retryable: false,
+        message: "Provider failure details were redacted.", detail_redacted: true,
+        raw_response: "WEB-SECRET-SENTINEL-532",
+      },
+    }),
   ];
   const fetchJson = async (url: string): Promise<unknown> => {
     requests.push(url);
@@ -82,7 +112,7 @@ beforeEach(() => {
       return { runs: [summary] };
     }
     if (url.includes("/events?")) {
-      return { run_id: "run-312", events, next_after_seq: 3, has_more: false };
+      return { run_id: "run-312", events, next_after_seq: 7, has_more: false };
     }
     throw new Error(`unexpected request ${url}`);
   };
@@ -99,7 +129,7 @@ describe("durable run drawer", () => {
     expect(requests[0]).toContain("artifact_ref=ai%2Ftemper%23312");
     expect(requests[1]).toContain("cursor=newer-runs");
     expect(requests[2]).toContain("after_seq=0");
-    expect(sources[1]!.url).toBe("/api/agent-runs/run-312/stream?after_seq=3");
+    expect(sources[1]!.url).toBe("/api/agent-runs/run-312/stream?after_seq=7");
 
     const drawer = screen.getByLabelText("agent activity");
     expect(within(drawer).getByLabelText("run summary").textContent).toContain("1 tools");
@@ -109,6 +139,11 @@ describe("durable run drawer", () => {
     const timeline = within(drawer).getByLabelText("run timeline");
     expect(timeline.textContent).toContain("bash · failed · 1.3 s");
     expect(timeline.textContent).toContain("4 events / 100 bytes dropped");
+    expect(timeline.textContent).toContain("openai/gpt-test · category=timeout · retryable=true");
+    expect(timeline.textContent).toContain("category=rate_limit · retryable=true · HTTP 429 · request req_rate_532 · code rate_limit");
+    expect(timeline.textContent).toContain("anthropic/claude-test · category=response · retryable=false · HTTP 502");
+    expect(timeline.textContent).toContain("category=redacted_unknown · retryable=false · detail redacted · Provider failure details were redacted.");
+    expect(timeline.textContent).not.toContain("WEB-SECRET-SENTINEL-532");
     expect(timeline.textContent).toContain("<script>alert(1)</script>");
     expect(timeline.querySelector("script")).toBeNull();
     expect(timeline.querySelector("img")).toBeNull();
@@ -118,10 +153,10 @@ describe("durable run drawer", () => {
     await userEvent.click(screen.getByLabelText("ai/temper#312: traces"));
     await waitFor(() => expect(sources).toHaveLength(2));
     const detail = sources[1]!;
-    const live = traceEvent(4, "turn.finished", { duration_ms: 50, stop_reason: "end_turn" });
+    const live = traceEvent(8, "turn.finished", { duration_ms: 50, stop_reason: "end_turn" });
     detail.onmessage?.({ data: JSON.stringify(live) });
     detail.onmessage?.({ data: JSON.stringify(live) });
-    expect(app.state.runView!.events.filter((event) => event.seq === 4)).toHaveLength(1);
+    expect(app.state.runView!.events.filter((event) => event.seq === 8)).toHaveLength(1);
 
     await userEvent.click(within(screen.getByLabelText("agent activity")).getByLabelText("close"));
     expect(detail.closed).toBe(true);

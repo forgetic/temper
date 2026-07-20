@@ -19,7 +19,7 @@ use skein::runtime::RuntimeHandle;
 use temper_agent::{
     AgentAbortAuthority, AgentActivityConfig, AgentCancellationLatch, AgentContainmentContext,
     CodingAgentError, ForgeContextHost, ProviderConfig, RunTotals, SubmitForPrHost,
-    run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
+    protocol_model_failure, run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
 };
 use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
@@ -27,7 +27,7 @@ use temper_log::emit::{
     AgentFinished, AgentStarted, AgentTerminalReasonV1, AgentTerminalStatus, emit_agent_finished,
     emit_agent_started,
 };
-use temper_protocol_activity::FailureCodeV1;
+use temper_protocol_activity::{FailureCodeV1, ModelFailureV1};
 use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext};
 use temper_protocol_worker::FailureClass;
 use temper_worker::{
@@ -384,12 +384,14 @@ impl InProcessAgentRunner {
                     }
                     Err(error) => error.to_string(),
                 };
+                let model_failure = outcome.as_ref().err().and_then(coding_agent_model_failure);
                 emit_agent_finished(AgentFinished {
                     item,
                     role: &role,
                     kind,
                     status: terminal_status,
                     terminal_reason,
+                    model_failure: model_failure.as_ref(),
                     duration_ms,
                     summary: &summary,
                 });
@@ -409,6 +411,16 @@ impl InProcessAgentRunner {
     }
 }
 
+fn coding_agent_model_failure(error: &CodingAgentError) -> Option<ModelFailureV1> {
+    match error {
+        CodingAgentError::ModelFailure(diagnostic)
+        | CodingAgentError::ModelUnavailable { diagnostic, .. } => {
+            Some(protocol_model_failure(diagnostic.as_ref()))
+        }
+        _ => None,
+    }
+}
+
 fn agent_terminal_report<T>(
     outcome: &Result<T, CodingAgentError>,
     worker_cancellation_requested: bool,
@@ -418,7 +430,11 @@ fn agent_terminal_report<T>(
             AgentTerminalStatus::Succeeded,
             Some(AgentTerminalReasonV1::Completed),
         ),
-        Err(CodingAgentError::AgentStopped(_) | CodingAgentError::ModelUnavailable { .. }) => (
+        Err(
+            CodingAgentError::AgentStopped(_)
+            | CodingAgentError::ModelFailure(_)
+            | CodingAgentError::ModelUnavailable { .. },
+        ) => (
             AgentTerminalStatus::Failed,
             Some(AgentTerminalReasonV1::ModelError),
         ),
@@ -577,6 +593,7 @@ fn coding_agent_failure_class(
         }
         CodingAgentError::Provider(_)
         | CodingAgentError::Run(_)
+        | CodingAgentError::ModelFailure(_)
         | CodingAgentError::AgentStopped(_)
         | CodingAgentError::BudgetExhausted { .. }
         | CodingAgentError::ModelUnavailable { .. }
@@ -587,6 +604,10 @@ fn coding_agent_failure_class(
         | CodingAgentError::InvalidVerdictResult(_) => FailureClass::Permanent,
     }
 }
+
+#[cfg(test)]
+#[path = "agent_runner/model_failure_tests.rs"]
+mod model_failure_tests;
 
 #[cfg(test)]
 mod tests;

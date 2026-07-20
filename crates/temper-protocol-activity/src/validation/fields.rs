@@ -2,7 +2,8 @@ use crate::{
     AgentActivityEventV1, AgentAssignmentIdentityV1, AgentScopeKindV1, AgentScopeV1,
     AgentTerminalReasonV1, BlobMediaTypeV1, CapturedContentV1, FailureInfoV1, InlineContentV1,
     MAX_IDENTIFIER_BYTES, MAX_INLINE_CONTENT_BYTES, MODEL_CALL_RETRY_FAILURE_MESSAGE,
-    PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1, ScopeFinishedV1, ScopeStatusV1,
+    ModelCallStatusV1, PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1,
+    ScopeFinishedV1, ScopeStatusV1,
 };
 
 use super::{ActivityValidationCode, ActivityValidationError, error, validate_blob_reference};
@@ -101,6 +102,18 @@ pub(super) fn event(
                     "cannot exceed model-call duration",
                 ));
             }
+            if let Some(failure) = &value.failure {
+                super::validate_model_failure_at(failure, &format!("{path}.data.failure"))?;
+                if value.status != ModelCallStatusV1::Failed {
+                    return Err(invalid_event(
+                        &format!("{path}.data.failure"),
+                        "is permitted only when model-call status is failed",
+                    ));
+                }
+            }
+            // A missing diagnostic and the old succeeded + error combination
+            // remain readable for retained V1 records. First-party producers
+            // enforce the stronger current contract before validation.
             Ok(())
         }
         Event::AssistantMessage(value) => {

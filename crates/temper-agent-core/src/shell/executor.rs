@@ -18,6 +18,7 @@ use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
     OperationGeneration, ToolCallStatus, ToolResultMetadata,
 };
+use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
 use crate::shell::streaming::{
     ModelCallObservability, ModelOperationContext, ModelTaskOutcome, stream_to_completion,
@@ -30,6 +31,9 @@ pub struct AgentOutcome {
     pub stop: AgentStop,
     pub final_message: AssistantMessage,
     pub messages: Vec<Message>,
+    /// Authoritative terminal model failure. A synthetic final message may
+    /// duplicate its safe message for compatibility, but is not authoritative.
+    pub model_failure: Option<ModelFailureDiagnostic>,
 }
 
 /// A sink for observability events. The default just drops them; callers that
@@ -241,10 +245,10 @@ impl AgentShell {
                         message,
                     }
                 }
-                ModelTaskOutcome::Failed(message) => AgentCompletion::LlmFailed {
+                ModelTaskOutcome::Failed(diagnostic) => AgentCompletion::LlmFailed {
                     operation_generation,
                     batch_generation,
-                    message,
+                    diagnostic,
                 },
                 ModelTaskOutcome::Cancelled => return,
             };
@@ -295,12 +299,14 @@ impl AgentShell {
         stop: AgentStop,
         final_message: AssistantMessage,
         messages: Vec<Message>,
+        model_failure: Option<ModelFailureDiagnostic>,
     ) {
         if let Some(sender) = self.outcome.lock().expect("outcome lock").take() {
             sender.send(AgentOutcome {
                 stop,
                 final_message,
                 messages,
+                model_failure,
             });
         }
     }
@@ -330,7 +336,8 @@ impl Executor<AgentMachine> for AgentShell {
                 stop,
                 final_message,
                 messages,
-            } => self.execute_finished(stop, final_message, messages),
+                model_failure,
+            } => self.execute_finished(stop, final_message, messages, model_failure),
         }
     }
 }

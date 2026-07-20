@@ -28,7 +28,7 @@ use crate::WorkItemRef;
 use crate::duration::format_duration_ms;
 use crate::redact::redacted_preview;
 
-use super::{AgentTerminalReasonV1, AgentTerminalStatus};
+use super::{AgentTerminalReasonV1, AgentTerminalStatus, ModelFailureV1};
 
 /// Character bound applied to free-text previews (issue titles, summaries).
 ///
@@ -91,28 +91,56 @@ pub(crate) fn agent_started(item: &WorkItemRef, role: &str, kind: &str, detail: 
 }
 
 /// `[acme/widgets#42] architect/triage done in 1m13s | verdict=ready_code`
+#[allow(clippy::too_many_arguments)] // Mirrors the typed lifecycle event fields.
 pub(crate) fn agent_finished(
     item: &WorkItemRef,
     role: &str,
     kind: &str,
     status: AgentTerminalStatus,
     terminal_reason: Option<AgentTerminalReasonV1>,
+    model_failure: Option<&ModelFailureV1>,
     duration_ms: u64,
     summary: &str,
 ) -> String {
-    let detail = match status {
-        AgentTerminalStatus::Succeeded => summary,
-        AgentTerminalStatus::Failed | AgentTerminalStatus::Cancelled => terminal_reason
+    let detail = match (status, terminal_reason, model_failure) {
+        (AgentTerminalStatus::Succeeded, _, _) => summary.to_string(),
+        (
+            AgentTerminalStatus::Failed | AgentTerminalStatus::Cancelled,
+            Some(AgentTerminalReasonV1::ModelError),
+            Some(failure),
+        ) => model_failure_detail(failure),
+        (AgentTerminalStatus::Failed | AgentTerminalStatus::Cancelled, reason, _) => reason
             .map(AgentTerminalReasonV1::as_str)
-            .unwrap_or(summary),
+            .unwrap_or(summary)
+            .to_string(),
     };
     format!(
         "{} {role}/{kind} {} in {} | {}",
         item.human_tag(),
         status.human_verb(),
         format_duration_ms(duration_ms),
-        redacted_preview(detail, PREVIEW_LIMIT)
+        redacted_preview(&detail, PREVIEW_LIMIT)
     )
+}
+
+fn model_failure_detail(failure: &ModelFailureV1) -> String {
+    let mut detail = format!(
+        "model_error | {}/{} category={} retryable={}",
+        failure.provider,
+        failure.model,
+        failure.category.as_str(),
+        failure.retryable
+    );
+    if let Some(status) = failure.http_status {
+        detail.push_str(&format!(" http_status={status}"));
+    }
+    if let Some(request_id) = &failure.provider_request_id {
+        detail.push_str(&format!(" request_id={request_id}"));
+    }
+    if let Some(code) = &failure.provider_error_code {
+        detail.push_str(&format!(" provider_code={code}"));
+    }
+    detail
 }
 
 /// `[acme/widgets#42] triage_intake_to_code applied | body rewritten as code spec | -untriaged +code +ready`
@@ -314,6 +342,7 @@ mod tests {
                 "triage",
                 AgentTerminalStatus::Succeeded,
                 Some(AgentTerminalReasonV1::Completed),
+                None,
                 73_000,
                 "verdict=ready_code"
             ),
@@ -326,6 +355,7 @@ mod tests {
                 "coding",
                 AgentTerminalStatus::Failed,
                 Some(AgentTerminalReasonV1::BudgetExhausted),
+                None,
                 73_000,
                 "agent exceeded its tool budget"
             ),
@@ -338,6 +368,7 @@ mod tests {
                 "review",
                 AgentTerminalStatus::Cancelled,
                 Some(AgentTerminalReasonV1::Aborted),
+                None,
                 73_000,
                 "worker cancelled the run"
             ),

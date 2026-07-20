@@ -1,6 +1,7 @@
 //! Coding-workspace run errors.
 
 use crate::provider::ProviderError;
+use temper_agent_core::ModelFailureDiagnostic;
 
 /// Authority associated with an aborted coding-agent run.
 ///
@@ -29,7 +30,10 @@ pub enum CodingAgentError {
     Provider(ProviderError),
     /// The SDK agent run failed (network or provider rejection).
     Run(String),
-    /// The agent stopped with an error stop reason.
+    /// A model call failed with a safe provider-neutral diagnostic.
+    ModelFailure(Box<ModelFailureDiagnostic>),
+    /// The agent stopped with an error stop reason but no typed provider
+    /// diagnostic (legacy/defensive compatibility path).
     AgentStopped(String),
     /// The model requested another tool round after the configured budget.
     BudgetExhausted { max_iterations: usize },
@@ -40,7 +44,13 @@ pub enum CodingAgentError {
     /// distinct from a generic abnormal stop so the failure names the model and
     /// any provider-suggested fallback, and an operator can fix it by passing a
     /// different `--model` (or setting the provider profile's `models.main`).
-    ModelUnavailable { model: String, detail: String },
+    /// The diagnostic remains authoritative for safe terminal projections;
+    /// legacy text classifications carry an explicit redacted diagnostic.
+    ModelUnavailable {
+        model: String,
+        detail: String,
+        diagnostic: Box<ModelFailureDiagnostic>,
+    },
     /// The configured codebase-memory MCP toolset was required but could not be
     /// started or listed.
     CodebaseMemory(String),
@@ -65,6 +75,9 @@ impl std::fmt::Display for CodingAgentError {
         match self {
             CodingAgentError::Provider(error) => write!(formatter, "{error}"),
             CodingAgentError::Run(message) => write!(formatter, "LLM run failed: {message}"),
+            CodingAgentError::ModelFailure(diagnostic) => {
+                write!(formatter, "model failure: {diagnostic}")
+            }
             CodingAgentError::AgentStopped(reason) => {
                 write!(formatter, "agent stopped abnormally: {reason}")
             }
@@ -78,7 +91,7 @@ impl std::fmt::Display for CodingAgentError {
                     "aborted: agent run stopped (authority={authority})"
                 )
             }
-            CodingAgentError::ModelUnavailable { model, detail } => write!(
+            CodingAgentError::ModelUnavailable { model, detail, .. } => write!(
                 formatter,
                 "model `{model}` is unavailable: {detail}. Pass --model (or set the \
                  provider profile's models.main) to a model the credential grants."
