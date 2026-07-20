@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[dependencies]
+serde_json = { workspace = true }
+
 [[bin]]
 name = "temper-dev"
 path = "src/bin/temper-dev.rs"

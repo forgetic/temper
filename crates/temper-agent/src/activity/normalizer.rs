@@ -20,7 +20,9 @@ use tongs::provider::ToolDef;
 use super::{ActivityClock, ProjectionSet};
 
 mod terminal;
+mod tool_result;
 use terminal::scope_terminal;
+use tool_result::captured_tool_result;
 
 struct NormalizerState {
     current_turn: Option<u32>,
@@ -460,20 +462,19 @@ impl NormalizingEventSink {
         duration_ms: u64,
         metadata: temper_agent_core::ToolResultMetadata,
     ) {
-        // Never transport generic process output. Only explicitly read-only,
-        // bounded text tools are eligible in transcript modes.
+        // Never transport generic process output. Read-only bounded text tools
+        // are eligible in transcript modes. `submit_for_pr` exposes only a
+        // fixed acceptance marker, never the host message or gate output.
         let result = if matches!(
             self.policy.capture,
             CaptureModeV1::Transcript | CaptureModeV1::Diagnostic
-        ) && tool_result_is_allowlisted(&name)
-        {
-            metadata.preview.and_then(|value| {
-                nonempty(value).map(|value| {
-                    let mut inline = sanitized_text(&value, self.policy.max_inline_bytes as usize);
-                    inline.truncated |= metadata.truncated;
-                    CapturedContentV1::Inline(inline)
-                })
-            })
+        ) {
+            captured_tool_result(
+                &name,
+                metadata.preview,
+                metadata.truncated,
+                self.policy.max_inline_bytes as usize,
+            )
         } else {
             None
         };
@@ -590,10 +591,6 @@ fn looks_like_workspace_result(value: &str) -> bool {
         "children",
     ];
     !object.is_empty() && object.keys().all(|key| RESULT_KEYS.contains(&key.as_str()))
-}
-
-fn tool_result_is_allowlisted(name: &str) -> bool {
-    matches!(name, "read" | "ls" | "grep" | "find")
 }
 
 fn sanitized_text(value: &str, maximum_bytes: usize) -> InlineContentV1 {

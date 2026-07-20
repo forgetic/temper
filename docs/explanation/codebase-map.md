@@ -26,6 +26,7 @@ support.
 | `crates/temper-interaction-service/` | Deployable REPL/HTTP interaction service, args, bindings, DTOs, and transport glue for interactive profiles. |
 | `crates/temper-trigger-forgejo/` | Legacy/internal Forgejo webhook receiver that verifies payloads and emits authenticated wake hints for wake-socket fixtures/older topologies; not a `temper serve` process. Supported operator webhook intake is the engine/standalone `/forgejo/webhook` route. |
 | `crates/temper-scenario-cli/` | Standalone `temper-scenario` facade for listing, checking, running, validation-report bridging, and promotion-draft scaffolding for executable scenario manifests. |
+| `crates/temper-benchmark-cli/` | Standalone `temper-benchmark` facade for trace analysis, direct harness/live agent sessions, repetition aggregation, and report-only artifact comparison. See the [benchmark guide](../how-to/benchmark-agent-sessions.md). |
 
 ## Configuration, provisioning, and reference delivery
 
@@ -93,7 +94,8 @@ support.
 | `examples/basic-delivery/` | Operator-facing basic-delivery demo config, workflow, CI file, observability notes, and launch script. |
 | `examples/reference-delivery/` | Operator-facing reference-delivery demo config, workflow, CI file, observability notes, and launch script. |
 | `scenarios/` | Checked-in declarative validation corpus: scenario manifests, fixture inputs, minimal repo seeds, and authoring guidance for promoted post-merge validation cases. |
-| `.cargo/config.toml` | Developer Cargo aliases (`dev-check`, `dev-test-quick`, `dev-test-full`, `dev-doc`) and local sibling-repo patch guidance. |
+| `benchmarks/` | Separate [agent-session benchmark corpus](../../benchmarks/README.md): fixed direct-agent fixtures and manifests for repetition, structural measurement, and performance reporting. |
+| `.cargo/config.toml` | Developer Cargo aliases (`dev-check`, `dev-test-quick`, `dev-test-full`, `dev-benchmark-harness`, `dev-doc`) and local sibling-repo patch guidance. |
 | `.forgejo/workflows/ci.yml` | Forgejo CI workflow for Rust validation and the web UI lane. |
 | `docs/adr/` | Architecture decision records. Start here for historical rationale behind backend boundaries, workflow semantics, triggering, native Forge state, and multi-repo work. |
 | `docs/explanation/` | Conceptual explanations like this map, the domain model, agentic workflows, process split, Forgejo topology, logging/observability, and IO engine architecture. |
