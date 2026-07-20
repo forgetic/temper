@@ -20,11 +20,38 @@ pub(super) fn finish_normalization(
     supplied_attachments: Vec<BlobAttachmentV1>,
     diagnostics: &mut Vec<TraceDiagnosticV1>,
 ) -> Result<NormalizedTrace, TraceIngestError> {
+    finish_normalization_with_evidence(source, events, supplied_attachments, diagnostics, true)
+}
+
+pub(super) fn finish_worker_normalization(
+    source: TraceInputKindV1,
+    events: Vec<AgentRunEventV1>,
+    supplied_attachments: Vec<BlobAttachmentV1>,
+) -> Result<NormalizedTrace, TraceIngestError> {
+    let mut diagnostics = Vec::new();
+    finish_normalization_with_evidence(
+        source,
+        events,
+        supplied_attachments,
+        &mut diagnostics,
+        false,
+    )
+}
+
+fn finish_normalization_with_evidence(
+    source: TraceInputKindV1,
+    events: Vec<AgentRunEventV1>,
+    supplied_attachments: Vec<BlobAttachmentV1>,
+    diagnostics: &mut Vec<TraceDiagnosticV1>,
+    record_unavailable_enrichments: bool,
+) -> Result<NormalizedTrace, TraceIngestError> {
     validate_events(&events, diagnostics)?;
     let references = reference_map(&events)?;
     let attachments = validate_attachments(&references, supplied_attachments)?;
     record_call_diagnostics(&events, diagnostics)?;
-    record_evidence_diagnostics(diagnostics);
+    if record_unavailable_enrichments {
+        record_evidence_diagnostics(diagnostics);
+    }
 
     Ok(NormalizedTrace {
         source,

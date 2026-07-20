@@ -14,8 +14,8 @@ use temper_worker_service::{AgentSupervisionKind, agent_invocation, worker_liven
 
 use super::redaction::SecretRedactor;
 use super::{
-    BenchmarkRunError, finalize_repetition, reject_output_inside_fixture, validate_agent_binary,
-    write_bytes, write_json,
+    BenchmarkRunError, CompletedRepetition, finalize_repetition, reject_output_inside_fixture,
+    validate_agent_binary, write_bytes, write_json,
 };
 use crate::{
     BenchmarkAggregateV1, BenchmarkArtifactLayout, BenchmarkModeV1, ResolvedBenchmarkManifest,
@@ -42,6 +42,8 @@ pub struct LiveRunOptions {
 }
 
 /// Executes credential-backed live repetitions after an explicit opt-in gate.
+/// Agent-process failures are returned only after every independent repetition
+/// has been attempted and its redacted artifacts have been persisted.
 ///
 /// The gate is intentionally the first operation: callers can inject an
 /// in-memory environment and prove that a rejected request never reads config,
@@ -122,10 +124,13 @@ pub fn run_live(
 
     let layout = BenchmarkArtifactLayout::create(&options.output_dir, repetitions)?;
     let mut summaries = Vec::with_capacity(repetitions as usize);
+    let mut first_agent_failure = None;
     for repetition in 1..=repetitions {
-        summaries.push(run_live_repetition(
-            &manifest, &layout, &runtime, &redactor, repetition,
-        )?);
+        let completed = run_live_repetition(&manifest, &layout, &runtime, &redactor, repetition)?;
+        summaries.push(completed.summary);
+        if first_agent_failure.is_none() {
+            first_agent_failure = completed.agent_failure;
+        }
     }
 
     let aggregate = aggregate_run_summaries(summaries)?;
@@ -138,7 +143,10 @@ pub fn run_live(
         markdown.as_bytes(),
         "write benchmark aggregate Markdown",
     )?;
-    Ok(aggregate)
+    match first_agent_failure {
+        Some(error) => Err(error),
+        None => Ok(aggregate),
+    }
 }
 
 fn select_live_worker_pool(
@@ -200,7 +208,7 @@ fn run_live_repetition(
     runtime: &LiveInvocation,
     redactor: &SecretRedactor,
     repetition: u32,
-) -> Result<crate::RunSummaryV1, BenchmarkRunError> {
+) -> Result<CompletedRepetition, BenchmarkRunError> {
     let workspace = prepare_benchmark_workspace(manifest, repetition)?;
     let paths = layout.snapshot_inputs(repetition, manifest, &workspace)?;
     let collector = TraceCollector::new(WorkerAgentTraceConfig {
@@ -217,14 +225,20 @@ fn run_live_repetition(
     let context = workspace.context().clone();
     let cwd = workspace.root().to_path_buf();
     let job_id = format!("benchmark-live-repetition-{repetition:03}");
-    let output =
-        temper_worker_io::block_on(async move { runner.run(&job_id, &context, &cwd).await })
-            .map_err(|error| BenchmarkRunError::Agent {
+    let outcome =
+        temper_worker_io::block_on(async move { runner.run(&job_id, &context, &cwd).await });
+    let (output, agent_failure) = match outcome {
+        Ok(output) => (Some(output), None),
+        Err(error) => (
+            None,
+            Some(BenchmarkRunError::Agent {
                 repetition,
                 message: redactor.redact_text(&format!("{:?}: {}", error.class, error.message)),
-            })?;
+            }),
+        ),
+    };
 
-    finalize_repetition(
+    let summary = finalize_repetition(
         manifest,
         &paths,
         &workspace,
@@ -233,5 +247,9 @@ fn run_live_repetition(
         BenchmarkModeV1::Live,
         repetition,
         Some(redactor),
-    )
+    )?;
+    Ok(CompletedRepetition {
+        summary,
+        agent_failure,
+    })
 }

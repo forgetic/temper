@@ -218,6 +218,17 @@ pub fn ingest_trace(path: impl AsRef<Path>) -> Result<NormalizedTrace, TraceInge
     }
 }
 
+/// Normalizes events recovered directly from the worker-owned spool. Unlike an
+/// offline trace, a direct run receives host/diff/validation enrichments during
+/// finalization, so only trace-derived diagnostics are added here.
+pub(crate) fn normalize_worker_trace(
+    source: TraceInputKindV1,
+    events: Vec<AgentRunEventV1>,
+    attachments: Vec<BlobAttachmentV1>,
+) -> Result<NormalizedTrace, TraceIngestError> {
+    validation::finish_worker_normalization(source, events, attachments)
+}
+
 /// Writes a normalized deterministic export without retaining source-specific
 /// journal metadata.
 pub fn write_canonical_export(
