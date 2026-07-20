@@ -23,6 +23,13 @@ benchmark. It contains:
   reads and writes, validation, a later mutation, revalidation, and terminal
   `submit_for_pr`.
 
+Model-turn batching means that one model response emits multiple cohesive tool
+calls. The fixture's initial implementation, export, and integration-test
+writes share one model response; the later documentation write is a second
+mutation turn. This batching does not make tool execution concurrent.
+Independent reads may run concurrently, but `write`, `edit`, process, network,
+and other barrier calls remain serialized.
+
 Run the complete CI-safe lane from the repository root:
 
 ```sh
@@ -30,10 +37,15 @@ cargo dev-benchmark-harness
 ```
 
 The `temper-dev` driver builds `temper-agent`, runs the checked-in manifest, and
-verifies both run and aggregate summaries. Artifacts are written below
-`target/benchmark-harness/cross-cutting-rust-change/`. Every harness report says
-that it is plumbing and structural evidence, not representative LLM
-performance.
+verifies both run and aggregate summaries, including mutation turns,
+single-mutation turns, and maximum mutations per turn. Historical traces that
+lack usable scope or turn evidence report these batching metrics unavailable
+with a diagnostic rather than as zero. Artifacts are written below
+`target/benchmark-harness/cross-cutting-rust-change/`.
+
+Every deterministic harness report is plumbing and structure evidence only, not
+representative LLM performance. Use repeated live runs to draw behavioral or
+performance conclusions. Jig timing must not become a CI timing gate.
 
 Do not add credentials, generated artifacts, live timing baselines, databases,
 or dashboard state to this directory. Fixture changes should remain small,
