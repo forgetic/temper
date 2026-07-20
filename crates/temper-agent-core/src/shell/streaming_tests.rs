@@ -2,8 +2,9 @@
 
 use super::{
     MAX_STREAM_RETRIES, ModelCallObservability, ModelOperationContext, ModelTaskOutcome,
-    is_retryable, stream_to_completion,
+    stream_to_completion,
 };
+use crate::ModelFailureCategory;
 use crate::machine::{AgentEvent, ModelCallStatus};
 use crate::shell::task_group::CancellationToken;
 use crate::shell::{EventClock, EventSink, ModelIdentity, SystemEventClock};
@@ -15,7 +16,6 @@ use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tongs::error::Error;
 use tongs::model::{AssistantMessage, StopReason, StreamEvent, Usage};
 use tongs::provider::{Context, EventStream, Provider, StreamOptions};
 
@@ -135,8 +135,10 @@ fn stalled_provider_connect_retries_on_virtual_time() {
     );
     assert!(matches!(
         outcome,
-        ModelTaskOutcome::Failed(ref reason)
-            if reason == "model request stalled: no first event within 2s"
+        ModelTaskOutcome::Failed(ref diagnostic)
+            if diagnostic.category() == ModelFailureCategory::Timeout
+                && diagnostic.message() == "Model connect deadline elapsed."
+                && diagnostic.retryable()
     ));
     assert_eq!(calls, MAX_STREAM_RETRIES + 1);
     assert_eq!(
@@ -171,8 +173,9 @@ fn first_and_idle_stream_events_use_distinct_resolved_limits() {
     );
     assert!(matches!(
         first,
-        ModelTaskOutcome::Failed(ref reason)
-            if reason == "model request stalled: no first event within 3s"
+        ModelTaskOutcome::Failed(ref diagnostic)
+            if diagnostic.category() == ModelFailureCategory::Timeout
+                && diagnostic.message() == "Model connect deadline elapsed."
     ));
     assert_eq!(first_calls, MAX_STREAM_RETRIES + 1);
 
@@ -183,8 +186,9 @@ fn first_and_idle_stream_events_use_distinct_resolved_limits() {
     );
     assert!(matches!(
         idle,
-        ModelTaskOutcome::Failed(ref reason)
-            if reason == "model stream stalled: no event for 5s"
+        ModelTaskOutcome::Failed(ref diagnostic)
+            if diagnostic.category() == ModelFailureCategory::Timeout
+                && diagnostic.message() == "Model stream idle deadline elapsed."
     ));
     assert_eq!(idle_calls, MAX_STREAM_RETRIES + 1);
 }
@@ -249,25 +253,6 @@ fn external_model_cancellation_emits_terminal_boundary_without_time_advance() {
             }
         ]
     ));
-}
-
-#[test]
-fn transport_and_overload_errors_are_retryable() {
-    assert!(is_retryable(&Error::Http(
-        "connection reset by peer".into()
-    )));
-    assert!(is_retryable(&Error::Api {
-        status: 429,
-        message: "rate_limit".into()
-    }));
-    assert!(is_retryable(&Error::Api {
-        status: 503,
-        message: "overloaded".into()
-    }));
-    assert!(is_retryable(&Error::Api {
-        status: 529,
-        message: "overloaded".into()
-    }));
 }
 
 #[test]
@@ -386,25 +371,4 @@ fn model_attempt_timing_and_usage_use_the_injected_clock() {
     assert_eq!(*stop_reason, Some(StopReason::Stop));
     assert_eq!(usage.cache_read, 5);
     assert_eq!(usage.cache_write, 3);
-}
-
-#[test]
-fn client_and_deterministic_errors_are_not_retryable() {
-    // 400 invalid_request (e.g. max_tokens over a model's cap) — a retry
-    // fails identically; the request itself must change.
-    assert!(!is_retryable(&Error::Api {
-        status: 400,
-        message: "max_tokens too large".into()
-    }));
-    assert!(!is_retryable(&Error::Api {
-        status: 401,
-        message: "unauthorized".into()
-    }));
-    assert!(!is_retryable(&Error::Api {
-        status: 404,
-        message: "model not available".into()
-    }));
-    assert!(!is_retryable(&Error::Auth("expired".into())));
-    assert!(!is_retryable(&Error::Decode("bad json".into())));
-    assert!(!is_retryable(&Error::Aborted));
 }

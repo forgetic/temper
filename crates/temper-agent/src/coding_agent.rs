@@ -87,7 +87,7 @@ pub(crate) use prompt::{system_prompt_with_registry, user_context_with_registry}
 #[cfg(test)]
 pub(crate) use result::{parse_result, validate_contract, validate_verdict_vocabulary};
 #[cfg(test)]
-pub(crate) use run::{classify_run_error, ensure_completed_outcome};
+pub(crate) use run::{classify_model_failure, classify_run_error, ensure_completed_outcome};
 #[cfg(test)]
 pub(crate) use tools::{SubAgentTier, add_subagents, subagent_specs, tool_registry_for_context};
 

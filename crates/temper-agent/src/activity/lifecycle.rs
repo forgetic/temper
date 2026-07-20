@@ -7,6 +7,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+#[cfg(test)]
+use temper_agent_core::ModelFailureDiagnostic;
 use temper_agent_core::{
     AgentEvent, AgentStop, EventSink, ModelCallStatus, StreamDelta, ToolCallStatus,
 };
@@ -487,14 +489,22 @@ mod tests {
             time_to_first_token_ms: None,
             stop_reason: None,
             usage: Default::default(),
-            failure: Some("not-forwarded".to_string()),
+            failure: Some(ModelFailureDiagnostic::redacted_unknown(
+                "not-forwarded",
+                "not-forwarded",
+                true,
+            )),
         });
         sink.emit(AgentEvent::ModelCallRetrying {
             turn: 0,
             call_id: "model-1".to_string(),
             next_attempt: 1,
             delay_ms: 999,
-            reason: "not-forwarded".to_string(),
+            reason: ModelFailureDiagnostic::redacted_unknown(
+                "not-forwarded",
+                "not-forwarded",
+                true,
+            ),
         });
         sink.emit(AgentEvent::ToolStart {
             id: "tool-1".to_string(),

@@ -11,7 +11,10 @@ use crate::{
 };
 
 mod fields;
+mod model_failure;
 use fields::{assignment, event, identifier, scope, timestamp, version};
+pub(crate) use model_failure::validate_model_failure_at;
+pub use model_failure::{normalize_model_failure, validate_model_failure};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityValidationCode {

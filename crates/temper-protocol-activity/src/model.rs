@@ -6,8 +6,12 @@ use temper_protocol_context::W3cTraceContext;
 
 use crate::{ACTIVITY_PROTOCOL_VERSION, ActivityValidationError};
 
+mod failure;
+mod model_call;
 mod prompt;
 mod terminal;
+pub use failure::*;
+pub use model_call::*;
 pub use prompt::*;
 pub use terminal::*;
 
@@ -407,6 +411,38 @@ impl AgentActivityEventV1 {
         }
     }
 
+    /// Applies conservative normalization to a finished model call received
+    /// from an untrusted source.
+    ///
+    /// A syntactically valid diagnostic is not evidence that its strings came
+    /// from a hardened provider adapter: a child or direct batch can forge the
+    /// same shape. This therefore removes message and identifier fields while
+    /// retaining only independently safe typed facts. It also canonicalizes
+    /// the legacy `succeeded + stop_reason=error` shape and supplies an explicit
+    /// `redacted_unknown` diagnostic for newly ingested failed calls. Retained
+    /// records remain readable because deserialization and validation do not
+    /// call this method.
+    pub fn normalize_model_failure(&mut self) {
+        let Self::ModelCallFinished(finished) = self else {
+            return;
+        };
+        if finished.status == ModelCallStatusV1::Succeeded
+            && finished.stop_reason == Some(StopReasonV1::Error)
+        {
+            finished.status = ModelCallStatusV1::Failed;
+        }
+        if finished.status == ModelCallStatusV1::Failed && finished.failure.is_none() {
+            finished.failure = Some(ModelFailureV1::redacted_unknown(
+                UNKNOWN_MODEL_FAILURE_IDENTITY,
+                UNKNOWN_MODEL_FAILURE_IDENTITY,
+                false,
+            ));
+        }
+        if let Some(failure) = &mut finished.failure {
+            failure.redact_untrusted();
+        }
+    }
+
     pub(crate) const fn is_host_only(&self) -> bool {
         matches!(
             self,
@@ -522,45 +558,6 @@ pub enum StopReasonV1 {
     MaxTokens,
     Cancelled,
     Error,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelCallStartedV1 {
-    pub call_id: String,
-    pub provider: String,
-    pub model: String,
-    pub attempt: u32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelCallRetryingV1 {
-    pub call_id: String,
-    pub next_attempt: u32,
-    pub delay_ms: u64,
-    pub failure: FailureInfoV1,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelCallFinishedV1 {
-    pub call_id: String,
-    pub attempt: u32,
-    pub status: ModelCallStatusV1,
-    pub duration_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub time_to_first_token_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<StopReasonV1>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelCallStatusV1 {
-    Succeeded,
-    Failed,
-    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

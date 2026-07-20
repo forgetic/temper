@@ -1809,6 +1809,7 @@ dependencies = [
  "temper-worker-service",
  "temper-workflow",
  "tempfile",
+ "tongs",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2501,7 +2502,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 [[package]]
 name = "tongs"
 version = "0.1.0"
-source = "git+https://git.ekanayaka.io/ai/tongs.git?rev=9dcda27#9dcda272082b822bc3a8852465da921e97eff0f5"
+source = "git+https://git.ekanayaka.io/ai/tongs.git?rev=0803f0c7a5165bf367b084fdfbf36b33cdc9643d#0803f0c7a5165bf367b084fdfbf36b33cdc9643d"
 dependencies = [
  "async-trait",
  "futures-core",

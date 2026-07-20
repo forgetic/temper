@@ -13,6 +13,8 @@ use temper_protocol_activity::{
 
 use super::*;
 
+mod model_failure;
+
 const PROMPT_SYSTEM_SENTINEL: &str = "LOG-PROMPT-SYSTEM-SENTINEL-364";
 const PROMPT_USER_SENTINEL: &str = "LOG-PROMPT-USER-SENTINEL-364";
 const PROMPT_TOOL_SENTINEL: &str = "LOG-PROMPT-TOOL-SENTINEL-364";
@@ -147,6 +149,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
                 duration_ms: 100,
                 time_to_first_token_ms: Some(25),
                 stop_reason: Some(StopReasonV1::ToolUse),
+                failure: None,
             }),
         ),
         event(

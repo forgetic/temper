@@ -23,10 +23,10 @@ pub use export::*;
 pub use model::*;
 pub use temper_protocol_context::{W3cTraceContext, W3cTraceContextError};
 pub use validation::{
-    ActivityValidationCode, ActivityValidationError, validate_acknowledgement, validate_batch,
-    validate_blob_attachment, validate_blob_reference, validate_capture_policy,
-    validate_child_record, validate_frame, validate_run_event, validate_run_stream,
-    validate_scope_ancestry,
+    ActivityValidationCode, ActivityValidationError, normalize_model_failure,
+    validate_acknowledgement, validate_batch, validate_blob_attachment, validate_blob_reference,
+    validate_capture_policy, validate_child_record, validate_frame, validate_model_failure,
+    validate_run_event, validate_run_stream, validate_scope_ancestry,
 };
 
 /// CLI flag carrying a worker-written, non-secret capture policy JSON file to

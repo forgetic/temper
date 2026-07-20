@@ -1,0 +1,22 @@
+[
+  {
+    "type": "model.call.finished",
+    "data": {
+      "call_id": "legacy-failed",
+      "attempt": 0,
+      "status": "failed",
+      "duration_ms": 50,
+      "stop_reason": "error"
+    }
+  },
+  {
+    "type": "model.call.finished",
+    "data": {
+      "call_id": "legacy-contradiction",
+      "attempt": 0,
+      "status": "succeeded",
+      "duration_ms": 75,
+      "stop_reason": "error"
+    }
+  }
+]

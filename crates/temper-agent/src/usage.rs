@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use temper_agent_core::ArgPreviewFn;
 use temper_protocol_activity::{
     AgentActivityChildRecordV1, AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1,
-    CapturedContentV1, ModelCallStatusV1, ToolStatusV1,
+    CapturedContentV1, ModelCallStatusV1, ModelFailureV1, ToolStatusV1,
 };
 
 use crate::activity::ActivityProjection;
@@ -113,10 +113,11 @@ pub(crate) struct TracingProjection {
     pending_model_failures: Mutex<HashMap<(String, String), PendingModelFailure>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PendingModelFailure {
     attempt: u32,
     duration_ms: u64,
+    diagnostic: ModelFailureV1,
 }
 
 impl TracingProjection {
@@ -153,6 +154,68 @@ impl TracingProjection {
             Some(preview) if !preview.is_empty() => format!(" {preview}"),
             _ => String::new(),
         }
+    }
+
+    fn failure_detail(failure: &ModelFailureV1) -> String {
+        let mut detail = format!(
+            "{}/{} category={} retryable={}",
+            failure.provider,
+            failure.model,
+            failure.category.as_str(),
+            failure.retryable
+        );
+        if let Some(status) = failure.http_status {
+            detail.push_str(&format!(" http_status={status}"));
+        }
+        if let Some(request_id) = &failure.provider_request_id {
+            detail.push_str(&format!(" request_id={request_id}"));
+        }
+        if let Some(code) = &failure.provider_error_code {
+            detail.push_str(&format!(" provider_code={code}"));
+        }
+        if failure.detail_redacted {
+            detail.push_str(" detail_redacted=true");
+        }
+        detail.push_str(": ");
+        detail.push_str(&failure.message);
+        detail
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_model_failure(
+        scope: &str,
+        scope_id: &str,
+        will_retry: bool,
+        attempt: u32,
+        duration_ms: u64,
+        next_attempt: Option<u32>,
+        delay_ms: u64,
+        failure: &ModelFailureV1,
+    ) {
+        let detail = Self::failure_detail(failure);
+        let http_status = failure.http_status.map(u64::from);
+        tracing::debug!(
+            target: AGENT_TARGET,
+            event = "model.call_failed",
+            scope,
+            scope_id,
+            will_retry,
+            attempt,
+            duration_ms,
+            next_attempt,
+            delay_ms,
+            model.provider = %failure.provider,
+            model.name = %failure.model,
+            model.failure.category = failure.category.as_str(),
+            model.failure.retryable = failure.retryable,
+            model.failure.http_status = http_status,
+            model.failure.request_id = failure.provider_request_id.as_deref().unwrap_or(""),
+            model.failure.provider_code = failure.provider_error_code.as_deref().unwrap_or(""),
+            model.failure.detail_redacted = failure.detail_redacted,
+            model.failure.message = %failure.message,
+            reason = %failure.message,
+            "agent: model call failed (will_retry={will_retry}): {detail}",
+        );
     }
 }
 
@@ -277,21 +340,25 @@ impl ActivityProjection for TracingProjection {
                 }
             }
             AgentActivityEventV1::ModelCallRetrying(retry) => {
-                self.pending_model_failures
+                let pending = self
+                    .pending_model_failures
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .remove(&(frame.scope.id.clone(), retry.call_id.clone()));
-                let reason = &retry.failure.message;
-                tracing::debug!(
-                    target: AGENT_TARGET,
-                    event = "model.call_failed",
-                    scope = %scope,
-                    scope_id = %frame.scope.id,
-                    will_retry = true,
-                    reason = %reason,
-                    next_attempt = retry.next_attempt,
-                    delay_ms = retry.delay_ms,
-                    "agent: model call failed (will_retry=true): {reason}",
+                    .remove(&(frame.scope.id.clone(), retry.call_id.clone()))
+                    .unwrap_or_else(|| PendingModelFailure {
+                        attempt: retry.next_attempt.saturating_sub(1),
+                        duration_ms: 0,
+                        diagnostic: ModelFailureV1::redacted_unknown("unknown", "unknown", false),
+                    });
+                Self::emit_model_failure(
+                    &scope,
+                    &frame.scope.id,
+                    true,
+                    pending.attempt,
+                    pending.duration_ms,
+                    Some(retry.next_attempt),
+                    retry.delay_ms,
+                    &pending.diagnostic,
                 );
             }
             AgentActivityEventV1::ModelCallFinished(finished)
@@ -305,6 +372,9 @@ impl ActivityProjection for TracingProjection {
                         PendingModelFailure {
                             attempt: finished.attempt,
                             duration_ms: finished.duration_ms,
+                            diagnostic: finished.failure.clone().unwrap_or_else(|| {
+                                ModelFailureV1::redacted_unknown("unknown", "unknown", false)
+                            }),
                         },
                     );
             }
@@ -322,19 +392,19 @@ impl ActivityProjection for TracingProjection {
                 let pending = failures
                     .iter()
                     .filter(|((scope_id, _), _)| scope_id == &frame.scope.id)
-                    .map(|(key, failure)| (key.clone(), *failure))
+                    .map(|(key, failure)| (key.clone(), failure.clone()))
                     .collect::<Vec<_>>();
                 for (key, failure) in pending {
                     failures.remove(&key);
-                    tracing::debug!(
-                        target: AGENT_TARGET,
-                        event = "model.call_failed",
-                        scope = %scope,
-                        scope_id = %frame.scope.id,
-                        will_retry = false,
-                        attempt = failure.attempt,
-                        duration_ms = failure.duration_ms,
-                        "agent: model call failed (will_retry=false)",
+                    Self::emit_model_failure(
+                        &scope,
+                        &frame.scope.id,
+                        false,
+                        failure.attempt,
+                        failure.duration_ms,
+                        None,
+                        0,
+                        &failure.diagnostic,
                     );
                 }
                 drop(failures);
@@ -406,3 +476,7 @@ mod tests {
         assert_eq!(preview.as_deref(), Some("a/b.rs"));
     }
 }
+
+#[cfg(test)]
+#[path = "usage_projection_tests.rs"]
+mod projection_tests;

@@ -12,6 +12,7 @@ use super::common::{
     tool_finished, tool_output, tool_start_previews, user,
 };
 use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop};
+use crate::{ModelFailureCategory, ModelFailureDiagnostic};
 
 #[test]
 fn on_start_calls_the_model_once() {
@@ -69,6 +70,33 @@ fn model_error_stops_immediately() {
 fn transport_failure_stops_with_model_error() {
     let mut m = machine();
     let requests = run(&mut m, vec![llm_failed("connection reset")]);
+    assert_eq!(final_stop(&requests), Some(AgentStop::ModelError));
+}
+
+#[test]
+fn typed_model_failure_is_authoritative_on_finished_request() {
+    let mut m = machine();
+    m.on_start(EngineTime::ZERO);
+    let (operation_generation, batch_generation) =
+        m.active_generations().expect("active model call");
+    let diagnostic = ModelFailureDiagnostic::redacted_unknown("test-provider", "test-model", false);
+    let requests = m.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::LlmFailed {
+            operation_generation,
+            batch_generation,
+            diagnostic,
+        },
+    );
+
+    let retained = requests.iter().find_map(|request| match request {
+        AgentRequest::Finished { model_failure, .. } => model_failure.as_ref(),
+        _ => None,
+    });
+    assert_eq!(
+        retained.map(ModelFailureDiagnostic::category),
+        Some(ModelFailureCategory::RedactedUnknown)
+    );
     assert_eq!(final_stop(&requests), Some(AgentStop::ModelError));
 }
 
