@@ -3,11 +3,13 @@
 //!
 //! Forgejo 7.0.x does not serve Actions runs/tasks over REST, so CI status is
 //! read through the **password-authenticated web UI**, mirroring the production
-//! pi tool (`forgejo-tools.ts`): a CSRF login establishes a cookie jar, the
-//! `/{owner}/{repo}/actions` page is scraped for run ids, and each run's status
-//! is read from the **live-view JSON** (`POST .../runs/{run}/jobs/{job}` with an
-//! `X-Csrf-Token` header and a `{"logCursors":[]}` body). The session re-logs in
-//! on a bounce back to `/user/login` or a `401`/`403`.
+//! pi tool (`forgejo-tools.ts`): a version-dependent login establishes a cookie
+//! jar (with form/header CSRF on Forgejo 7), the `/{owner}/{repo}/actions` page
+//! is scraped for run ids, and each run's status is read from the **live-view
+//! JSON** (`POST .../runs/{run}/jobs/{job}/attempt/1` on Forgejo 15, with a
+//! Forgejo 7 fallback) using the cookie jar, an optional `X-Csrf-Token` header,
+//! and a `{"logCursors":[]}` body. The session re-logs in on a bounce back to
+//! `/user/login` or a `401`/`403`.
 //!
 //! This module and its [`crate::ci_ui_parse`] sibling are the **only** code that
 //! knows the web-UI HTML/JSON shapes. They are version-sensitive and best-effort

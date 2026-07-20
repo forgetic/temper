@@ -158,8 +158,8 @@ fn falls_back_to_web_ui_when_rest_returns_404() {
 
     let live = recorded
         .iter()
-        .find(|r| r.path == "/acme/widgets/actions/runs/1/jobs/0")
-        .expect("live-view POST recorded");
+        .find(|r| r.path == "/acme/widgets/actions/runs/1/jobs/0/attempt/1")
+        .expect("attempt-qualified live-view POST recorded");
     assert_eq!(live.method, HttpMethod::Post);
     assert_eq!(live.body.as_deref(), Some("{\"logCursors\":[]}"));
     let cookie = live
@@ -182,6 +182,51 @@ fn falls_back_to_web_ui_when_rest_returns_404() {
             .headers
             .iter()
             .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+    );
+}
+
+#[test]
+fn web_ui_retains_forgejo_7_unqualified_live_view_route() {
+    let client = MockHttpClient::new();
+    client.push_result(Ok(pr_detail("c456eec18b00")));
+    client.push_response(404, json!({ "message": "Not Found" }).to_string());
+    client.push_result(Ok(login_page()));
+    client.push_result(Ok(login_success()));
+    client.push_result(Ok(actions_page(1)));
+    // Forgejo 7.0.x does not expose the attempt-qualified route. The adapter
+    // retries its formerly canonical route before declaring the job absent.
+    client.push_response(404, "page not found");
+    client.push_result(Ok(live_view(
+        "success",
+        &[("build", "success")],
+        "c456eec18b",
+    )));
+
+    let jobs = block_on(forge_with_web_ui(client.clone()).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].conclusion, Some(CiJobConclusion::Success));
+    let live_paths: Vec<_> = client
+        .recorded()
+        .into_iter()
+        .filter(|request| {
+            request.method == HttpMethod::Post && request.path.contains("/actions/runs/1/jobs/0")
+        })
+        .map(|request| request.path)
+        .collect();
+    assert_eq!(
+        live_paths,
+        vec![
+            "/acme/widgets/actions/runs/1/jobs/0/attempt/1",
+            "/acme/widgets/actions/runs/1/jobs/0",
+        ]
     );
 }
 

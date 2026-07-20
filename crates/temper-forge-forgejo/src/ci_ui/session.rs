@@ -1,5 +1,6 @@
-//! The password-authenticated web-UI session: cookie jar, CSRF login, redirect
-//! and login-bounce handling, run discovery, and the live-view read.
+//! The password-authenticated web-UI session: cookie jar, version-dependent
+//! login/CSRF handling, redirects and login bounces, run discovery, and the
+//! live-view read.
 
 use super::dto::{LiveRunDto, LiveViewDto};
 use crate::ci_ui_parse::{
@@ -32,7 +33,8 @@ impl CookieJar {
         cookie_header(&self.cookies)
     }
 
-    /// Returns the value of the `_csrf` cookie, used as the `X-Csrf-Token`.
+    /// Returns the value of Forgejo 7's `_csrf` cookie for `X-Csrf-Token`.
+    /// Forgejo 15 omits both the cookie and header.
     fn csrf(&self) -> Option<&str> {
         self.cookies.get("_csrf").map(String::as_str)
     }
@@ -68,12 +70,13 @@ impl<'a, C: HttpClient> WebUiClient<'a, C> {
         Ok(response)
     }
 
-    /// Performs the CSRF login handshake, populating the cookie jar.
+    /// Performs the version-dependent web-UI login handshake, populating the
+    /// cookie jar.
     ///
-    /// GET `/user/login` to capture the CSRF token and initial cookies, then POST
-    /// the form-encoded credentials. A `200`, a redirect back to `/user/login`,
-    /// or a non-redirect error is treated as a failed login (the password is
-    /// never echoed into the error).
+    /// GET `/user/login` to capture initial cookies and the optional Forgejo 7
+    /// CSRF input, then POST the form-encoded credentials. A `200`, a redirect
+    /// back to `/user/login`, or a non-redirect error is treated as a failed
+    /// login (the password is never echoed into the error).
     pub(super) async fn login(&mut self) -> ForgeResult<()> {
         self.jar = CookieJar::default();
         let page = self
@@ -197,20 +200,25 @@ impl<'a, C: HttpClient> WebUiClient<'a, C> {
         Ok(extract_run_ids(&response.body))
     }
 
-    /// Reads one run's live-view JSON (`POST …/runs/{run}/jobs/{job}`).
+    /// Reads one run's live-view JSON (`POST …/jobs/{job}/attempt/1`).
     ///
-    /// Returns `None` when the run/job page is absent (`404`); other non-success
-    /// statuses are hard errors so a missing verdict never reads as a pass/fail.
+    /// Forgejo 15 requires the attempt-qualified route; the formerly canonical
+    /// unqualified route resolves to attempt zero and returns `500`. Forgejo
+    /// 7.0.x used the unqualified route, so a `404` from the qualified route is
+    /// retried once against the legacy shape. Returns `None` only when both
+    /// route shapes report the run/job absent; other non-success statuses are
+    /// hard errors so a missing verdict never reads as a pass/fail.
     pub(super) async fn run_live_view(
         &mut self,
         repo: &RepoCoord,
         run: u64,
         job: u64,
     ) -> ForgeResult<Option<LiveRunDto>> {
-        let path = format!(
+        let legacy_path = format!(
             "/{}/{}/actions/runs/{run}/jobs/{job}",
             repo.owner, repo.name
         );
+        let attempt_path = format!("{legacy_path}/attempt/1");
         let mut headers = vec![
             ("Accept".to_string(), "application/json".to_string()),
             ("Content-Type".to_string(), "application/json".to_string()),
@@ -218,14 +226,20 @@ impl<'a, C: HttpClient> WebUiClient<'a, C> {
         if let Some(csrf) = self.jar.csrf() {
             headers.push(("X-Csrf-Token".to_string(), csrf.to_string()));
         }
-        let response = self
+        let body = Some("{\"logCursors\":[]}".to_string());
+        let mut response = self
             .fetch(
                 HttpMethod::Post,
-                &path,
-                headers,
-                Some("{\"logCursors\":[]}".to_string()),
+                &attempt_path,
+                headers.clone(),
+                body.clone(),
             )
             .await?;
+        if response.status == 404 {
+            response = self
+                .fetch(HttpMethod::Post, &legacy_path, headers, body)
+                .await?;
+        }
         if response.status == 404 {
             return Ok(None);
         }
