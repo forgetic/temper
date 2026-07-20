@@ -101,13 +101,61 @@ formatted into errors or logs, matching the existing token-redaction guarantee.
    `ForgeError::Backend` stands — CI status that cannot be read is never
    fabricated as passed or failed.
 
+### Session recovery and per-run outcomes
+
+Login and Actions-page discovery remain hard operations: if either fails, there
+is no authenticated, ordered run sequence on which to base a result. Login-page
+redirects and `401`/`403` responses retain the existing bounded authentication
+recovery. In addition, a live-view HTTP `500` clears the cookie jar by performing
+a fresh login, rebuilds the cookie and optional CSRF headers, and retries that
+same route exactly once. This is deliberately not a general `5xx` retry loop.
+
+Each live-view request then has one of three typed outcomes: `found`, `missing`,
+or `unreadable`. `unreadable` contains only the repository coordinate, run and
+job coordinates, final HTTP status, and retry count; response bodies, cookies,
+CSRF values, and credentials are discarded. A transport or persistent
+authentication failure remains a hard error rather than a per-run outcome.
+
+### Newest-first trust boundary and pending behavior
+
+List reads inspect at most 20 run ids in Actions-page order, newest first, and
+continue to the end of that window after an unreadable run. The ordering is also
+the trust rule:
+
+- readable target jobs observed before the first unreadable run are retained;
+  therefore a newer matching success remains valid when only older history is
+  unreadable;
+- after the first unreadable run, matching jobs from older runs are inspected
+  but omitted, because the unknown newer run could supersede them;
+- if the unreadable boundary precedes the first readable target match, or every
+  recent run is unreadable, the list returns `Ok([])` rather than stale evidence
+  or a repository-wide error.
+
+An empty result means pending to the workflow gate. The existing CI read cache
+never reuses empty or otherwise non-terminal results, so a degraded empty result
+is fetched again on the next call. A returned terminal result for the explicit
+head keeps the existing terminal cache behavior. Explicit SHA ownership, PR
+filtering, cancelled-run exclusion, query filtering/sorting, and the portable
+`Forge` interface are unchanged.
+
+Each degraded list read emits exactly one warning. It represents the newest
+unreadable run and includes repository, run, job, final status, retry count,
+total unreadable count, the number of additional unreadable diagnostics omitted,
+and an outcome of `continued` or `pending` in both structured fields and the
+human message. No response body or authentication material is logged.
+
+An exact `get_ci_job` read has no ordered sequence from which to select safer
+evidence. Its persistent unreadable outcome is therefore converted back to a
+detailed, secret-free `ForgeError::Backend` after the same one-shot recovery.
+
 ### Best-effort, version-sensitive
 
 The web-UI HTML/JSON shapes are not a stable contract. The read path tolerates
 missing fields (an unknown/absent status maps to `Queued`), exposes no per-job
 timestamps (jobs share the unix epoch), and reuses the run id as the encoded
-`task_id` because the UI exposes no stable task id. Any hard failure surfaces a
-portable `ForgeError`; the path never guesses a pass/fail verdict.
+`task_id` because the UI exposes no stable task id. Infrastructure-wide
+failures remain portable `ForgeError`s. Per-run HTTP failures follow the
+newest-first trust boundary above and never guess a pass/fail verdict.
 
 ## Consequences
 
@@ -122,13 +170,14 @@ portable `ForgeError`; the path never guesses a pass/fail verdict.
   password; everything else needs only the token. This is documented in
   `docs/reference/forgejo-backend.md`.
 - Offline contract tests cover the login handshake (CSRF extraction, cookie
-  storage, re-login on bounce), both live-view route shapes, the live-view JSON
-  → `CiJob` mapping, and the REST-first/UI-fallback decision. An ignored
-  local-Forgejo test uses a delegating client to force only REST run discovery
-  to `404`, then locks the 15.0.3 login, redirect, Actions page,
-  attempt-qualified POST, cookie/CSRF, JSON, healthy attempt-page, job
-  coordinate, and terminal real-runner verdict contracts without rendering
-  credentials.
+  storage, re-login on bounce), one-shot `500` reauthentication, newest-first
+  unreadable-run boundaries, retryable degraded empty reads, bounded secret-free
+  warnings, both live-view route shapes, the live-view JSON → `CiJob` mapping,
+  and the REST-first/UI-fallback decision. An ignored local-Forgejo test uses a
+  delegating client to force only REST run discovery to `404`, then locks the
+  15.0.3 login, redirect, Actions page, attempt-qualified POST, cookie/CSRF,
+  JSON, healthy attempt-page, job coordinate, and terminal real-runner verdict
+  contracts without rendering credentials.
 
 ## Alternatives considered
 

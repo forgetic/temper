@@ -335,17 +335,44 @@ queued or running tasks with its provider commit SHA; a registered run with no
 tasks contributes no jobs and therefore remains pending.
 
 Forgejo 7.0.x lacks those REST run/task endpoints. If web-UI credentials are
-configured, the backend logs in with CSRF, scrapes run ids from the Actions page,
-and reads live-view JSON from `POST /{owner}/{repo}/actions/runs/{run}/jobs/{job}`.
-This path bypasses `/api/v1`, uses cookies instead of the token, observes raw
-redirects, and is isolated in `ci_ui.rs` / `ci_ui_parse.rs` because the HTML/JSON
-shape is version-sensitive.
+configured, the backend logs in with the version-appropriate cookie/CSRF
+handshake, scrapes at most 20 newest-first run ids from
+`/{owner}/{repo}/actions`, and reads live-view JSON from
+`POST /{owner}/{repo}/actions/runs/{run}/jobs/{job}/attempt/1` with
+`{"logCursors":[]}`. Forgejo 15.0.3 uses that attempt-qualified route and
+password cookies without CSRF; a `404` falls back to Forgejo 7's unqualified
+`…/jobs/{job}` route, whose cookie jar includes `_csrf` and whose request sends
+`X-Csrf-Token`. This path bypasses `/api/v1`, never sends the REST token, and is
+isolated in `ci_ui` / `ci_ui_parse` because the HTML/JSON shapes are
+version-sensitive.
 
-The fallback never fabricates a verdict: missing/unreadable CI is a `Backend`
-error unless REST or the web UI can read it. It applies the same strict explicit
-commit ownership rule as REST; PR branch and pseudo-ref widening is used only
-when no commit filter was supplied, preserving PR-only fail-then-pass history
-across different heads. Empty and queued/running reads are never eligible for
-terminal cache reuse, and cached ownership uses the same safe SHA comparison.
-Cancelled superseded runs are dropped. See
+A live-view `500` triggers one fresh login and one retry of the same route with
+rebuilt cookies and CSRF headers. Persistent non-authentication HTTP failures
+become typed per-run unreadable outcomes; login, Actions-page discovery,
+transport, and persistent authentication failures remain hard. An exact
+`get_ci_job` has no alternate ordered evidence, so an unreadable result remains
+a detailed, secret-free `Backend` error after that retry.
+
+List aggregation continues across the full bounded window but treats the first
+unreadable run as a newest-first trust boundary. Matching jobs already read on
+the newer side remain usable (including a newer success followed only by broken
+older history). Matching evidence on the older side is omitted because the
+unreadable run could supersede it. If the boundary appears before the first
+readable target match, or every recent run is unreadable, the result is
+`Ok([])`: the gate stays pending rather than accepting potentially stale green
+CI. Empty degraded reads are non-terminal in the existing CI cache and are
+therefore fetched again.
+
+Each degraded list read emits one bounded warning with a safe representative
+repository/run/job/status/retry count, total unreadable and omitted diagnostic
+counts, and `continued` or `pending` outcome in structured fields and the
+operator message. Cookies, CSRF values, credentials, and response bodies are
+never retained in that diagnostic.
+
+The fallback otherwise preserves strict explicit commit ownership: PR branch
+and pseudo-ref widening is used only when no commit filter was supplied,
+preserving PR-only fail-then-pass history across different heads. Query status
+filtering and sorting remain in the common list path, and cancelled superseded
+runs are dropped. Empty and queued/running reads are never eligible for terminal
+cache reuse; cached ownership uses the same safe SHA comparison. See
 [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).

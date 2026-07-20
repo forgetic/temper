@@ -13,8 +13,9 @@
 //!
 //! This module and its [`crate::ci_ui_parse`] sibling are the **only** code that
 //! knows the web-UI HTML/JSON shapes. They are version-sensitive and best-effort
-//! (ADR 0019): missing fields tolerate to `Queued`, and any hard failure
-//! surfaces a portable [`ForgeError`] rather than guessing a pass/fail verdict.
+//! (ADR 0019): missing fields tolerate to `Queued`; list reads continue past
+//! per-run HTTP failures while refusing older evidence behind an unreadable
+//! boundary, and infrastructure-wide failures surface a portable [`ForgeError`].
 //! Requests bypass [`crate::client::build_request`] (no `/api/v1` prefix, cookie
 //! auth instead of the token, form-encoded bodies), so they are issued through
 //! the raw [`HttpClient`] seam directly.
@@ -33,7 +34,7 @@ use crate::config::WebUiCredentials;
 use crate::ids::{CiJobCoord, RepoCoord};
 use crate::{ForgejoForge, HttpClient};
 use map::live_run_to_jobs;
-use session::{LiveViewOutcome, WebUiClient};
+use session::{LiveViewOutcome, LiveViewUnreadable, WebUiClient};
 use temper_forge_model::{CiJob, ForgeResult, RepositoryId};
 
 /// Most-recent runs scraped per read. The Actions page lists runs newest-first,
@@ -73,15 +74,16 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
     }
 
     let mut jobs = Vec::new();
+    let mut first_unreadable = None;
+    let mut unreadable_count = 0usize;
     for run in run_ids {
         let live = match client.run_live_view(repo, run, 0).await? {
             LiveViewOutcome::Found(live) => live,
             LiveViewOutcome::Missing => continue,
-            // Partial list aggregation is intentionally deferred: until the
-            // ordering rule is implemented, fail hard rather than risk using
-            // evidence that an unreadable newer run could supersede.
             LiveViewOutcome::Unreadable(unreadable) => {
-                return Err(unreadable.into_backend_error());
+                unreadable_count += 1;
+                first_unreadable.get_or_insert(unreadable);
+                continue;
             }
         };
         // A caller-supplied commit is mandatory: only provider SHA evidence can
@@ -98,6 +100,13 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
         if !matches {
             continue;
         }
+        // Runs are discovered newest-first. Once one cannot be read, an older
+        // matching run may have been superseded by that unknown run and cannot
+        // establish a verdict. Keep evidence already established on the newer
+        // side of the boundary, but only inspect (never collect) older matches.
+        if first_unreadable.is_some() {
+            continue;
+        }
         // Drop superseded (cancelled) runs: when several commits are pushed to a
         // head in quick succession Forgejo cancels the in-flight runs, but a
         // cancelled run carries no verdict — it is neither a pass nor a fail. The
@@ -112,7 +121,49 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
             jobs.push(job);
         }
     }
+    if let Some(representative) = first_unreadable.as_ref() {
+        warn_degraded_list_read(
+            representative,
+            unreadable_count,
+            if jobs.is_empty() {
+                "pending"
+            } else {
+                "continued"
+            },
+        );
+    }
     Ok(jobs)
+}
+
+/// Emits one bounded, secret-free summary for a list read containing one or
+/// more unreadable runs. Only the newest unreadable run is represented;
+/// `omitted_count` tells operators how many additional per-run diagnostics were
+/// folded into this event.
+fn warn_degraded_list_read(
+    representative: &LiveViewUnreadable,
+    unreadable_count: usize,
+    outcome: &'static str,
+) {
+    let repository = representative.repository.path_segment();
+    let omitted_count = unreadable_count.saturating_sub(1);
+    tracing::warn!(
+        target: "temper_forge_forgejo",
+        repository = %repository,
+        run = representative.run,
+        job = representative.job,
+        status = u64::from(representative.final_http_status),
+        retry_count = u64::from(representative.retry_count),
+        unreadable_count,
+        omitted_count,
+        outcome,
+        "forgejo web-ui degraded CI list read: repository {repository}, representative run {}, \
+         job {}, status {}, retry count {}, unreadable count {unreadable_count}, omitted count \
+         {omitted_count}, outcome {outcome}",
+        representative.run,
+        representative.job,
+        representative.final_http_status,
+        representative.retry_count,
+    );
 }
 
 /// Whether a run explicitly identifies a different pull request.

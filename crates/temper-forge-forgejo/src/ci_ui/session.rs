@@ -63,8 +63,8 @@ pub(super) struct LiveViewUnreadable {
 }
 
 impl LiveViewUnreadable {
-    /// Converts a per-run outcome back into the portable hard error used until
-    /// list aggregation learns how to continue safely past unreadable runs.
+    /// Converts a per-run outcome back into the portable hard error required by
+    /// exact-job reads, where no ordered history can provide an alternative.
     pub(super) fn into_backend_error(self) -> ForgeError {
         ForgeError::Backend(format!(
             "forgejo web-ui: unreadable live view for repository {}, run {}, job {}: \

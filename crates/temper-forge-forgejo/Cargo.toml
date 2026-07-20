@@ -23,6 +23,7 @@ thiserror.workspace = true
 [dev-dependencies]
 bench-forgejo = { git = "https://git.ekanayaka.io/ai/bench.git", rev = "1ca9f7a" }
 temper-workflow = { path = "../temper-workflow" }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
