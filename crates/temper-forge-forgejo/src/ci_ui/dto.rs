@@ -1,11 +1,12 @@
-//! Live-view JSON DTOs returned by `POST …/runs/{run}/jobs/{job}`.
+//! Live-view JSON DTOs returned by the attempt-qualified Forgejo 15 route
+//! (`POST …/runs/{run}/jobs/{job}/attempt/1`) and Forgejo 7's unqualified route.
 //!
 //! These are version-sensitive web-UI shapes (ADR 0019): every field defaults,
 //! so a missing field tolerates rather than failing the read.
 
 use serde::Deserialize;
 
-/// Live-view JSON returned by `POST …/runs/{run}/jobs/{job}`.
+/// Live-view JSON returned by either supported web-UI route shape.
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct LiveViewDto {
     #[serde(default)]

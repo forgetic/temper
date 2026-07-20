@@ -23,6 +23,14 @@ production pi tool already uses (`forgejo-tools.ts`): the
 **live-view JSON** that carries per-run and per-job status. The same technique
 works on 7.0.12 where the REST endpoints 404.
 
+The pinned live fixture now runs Forgejo **15.0.3**. That release serves the
+Actions REST endpoints, but the web-UI adapter remains the compatibility path
+when REST discovery is unavailable. Its live-view route is not identical to
+7.0.12: the old unqualified POST resolves to attempt zero and returns `500`,
+while the attempt-qualified route and its HTML page are healthy. The ignored
+contract test forces only REST run discovery to `404` so this otherwise dormant
+adapter is verified against a real runner-produced job.
+
 ## Decision
 
 When the Actions REST endpoints are unavailable, the Forgejo backend reads CI
@@ -30,21 +38,40 @@ status through the **password/cookie web UI**, isolated in `src/ci_ui.rs` (plus
 `src/ci_ui_parse.rs` for the version-sensitive HTML/header parsing). This mirrors
 `forgejo-tools.ts` and is the only code that knows the web-UI shapes.
 
-### Endpoint contract (verified on Forgejo 7.0.12)
+### Endpoint contract (verified on Forgejo 7.0.12 and 15.0.3)
 
-- **Login.** `GET /user/login` → extract the hidden `<input name="_csrf">`.
-  `POST /user/login` form-encoded (`user_name`, `password`, `remember=on`,
-  `_csrf`) with the cookie jar from the GET → on success redirects **off**
-  `/user/login`; the jar then holds `i_like_gitea`, `gitea_incredible`, `_csrf`.
-  A `200` (form re-rendered), a redirect back to `/user/login`, or a `401`/`403`
-  is a failed/expired session; the client re-logs in once on a login bounce.
+- **Login.** On 7.0.12, `GET /user/login` supplies both the `_csrf` cookie and a
+  hidden `<input name="_csrf">`; the form POST includes that field. On 15.0.3,
+  the GET supplies neither, so `POST /user/login` sends only form-encoded
+  `user_name`, `password`, and `remember=on`. Success redirects **off**
+  `/user/login`; 15.0.3 returns `303 Location: /` and establishes `persistent`
+  and `session` cookies (plus the `lang` cookie established during login).
+  Unlike 7.0.12's `i_like_gitea`, `gitea_incredible`, and `_csrf` jar, 15.0.3
+  sends neither an `_csrf` cookie nor `X-Csrf-Token`. A `200` (form re-rendered),
+  a redirect back to `/user/login`, or a `401`/`403` is a failed/expired
+  session; the client re-logs in once on a login bounce. The adapter keeps both
+  the form CSRF field and header optional, preserving both versions.
 - **Run discovery.** `GET /{owner}/{repo}/actions` (HTML, cookie auth) lists
   `…/actions/runs/{id}` links; the ids are scraped from the page.
-- **Run/job status.** `POST /{owner}/{repo}/actions/runs/{run}/jobs/{job}` with
-  the cookie jar, an `X-Csrf-Token: <_csrf cookie>` header, and a
-  `{"logCursors":[]}` body returns JSON whose `state.run.status` and
-  `state.run.jobs[].status` (∈ `success|failure|running|waiting|…`) map to the
-  portable `CiJob` status/conclusion the same way the REST mapper does.
+- **Run/job status on 15.0.3.**
+  `POST /{owner}/{repo}/actions/runs/{run}/jobs/{job}/attempt/1` with the cookie
+  jar and, on 7.0.12, an `X-Csrf-Token: <_csrf cookie>` header, plus a
+  `{"logCursors":[]}` body, returns `200` JSON. Forgejo 15.0.3 authenticates
+  this request with its `persistent` and `session` cookies and has no CSRF
+  header. The route's `{job}` remains the zero-based page coordinate (`0` for
+  the fixture's `build` job), even though `state.run.jobs[0].id` is `1`. The
+  JSON retains the 7.0.x shape:
+  `state.run.status`, `state.run.jobs[].{name,status}`,
+  `state.run.commit.{shortSHA,branch.name}`, and `logs`. The statuses (∈
+  `success|failure|running|waiting|…`) map to portable `CiJob`
+  status/conclusion the same way as REST.
+- **Attempt page and compatibility boundary.** A cookie-authenticated
+  `GET` of that same `/jobs/{job}/attempt/1` route returns healthy `200` HTML
+  and embeds the same initial state. On 15.0.3 the old unqualified
+  `POST …/jobs/{job}` returns `500` because it selects nonexistent attempt zero.
+  The adapter therefore tries the qualified route first and falls back to the
+  7.0.x unqualified route only when the qualified route returns `404`. The DTO
+  remains shared because the successful JSON shape did not change.
 - Logs (`…/jobs/{job}/logs`, `text/plain`) are diagnostics only and out of scope
   for the portable `Forge` trait.
 
@@ -61,8 +88,10 @@ formatted into errors or logs, matching the existing token-redaction guarantee.
 
 `list_ci_jobs`/`get_ci_job` prefer REST so a newer server keeps the richer path:
 
-1. Try `GET …/actions/runs`. A `403`/`404` (REST absent, as on 7.0.x) → fall
-   back to the web UI.
+1. Try `GET …/actions/runs`. A `403`/`404` (REST absent, as on 7.0.x, or
+   otherwise unavailable) → fall back to the web UI. Forgejo 15.0.3 normally
+   serves this endpoint; its live contract injects only this `404` to exercise
+   the adapter without replacing any web-UI response.
 2. REST works but lists **no** matching run for the target → also fall back (a
    real run may exist that REST does not surface).
 3. With web-UI credentials, the fallback logs in, discovers run ids, reads each
@@ -93,9 +122,13 @@ portable `ForgeError`; the path never guesses a pass/fail verdict.
   password; everything else needs only the token. This is documented in
   `docs/reference/forgejo-backend.md`.
 - Offline contract tests cover the login handshake (CSRF extraction, cookie
-  storage, re-login on bounce), the live-view JSON → `CiJob` mapping, and the
-  REST-first/UI-fallback decision. An ignored local-Forgejo e2e test reads a
-  real runner-produced `Failure` verdict through the web UI.
+  storage, re-login on bounce), both live-view route shapes, the live-view JSON
+  → `CiJob` mapping, and the REST-first/UI-fallback decision. An ignored
+  local-Forgejo test uses a delegating client to force only REST run discovery
+  to `404`, then locks the 15.0.3 login, redirect, Actions page,
+  attempt-qualified POST, cookie/CSRF, JSON, healthy attempt-page, job
+  coordinate, and terminal real-runner verdict contracts without rendering
+  credentials.
 
 ## Alternatives considered
 
