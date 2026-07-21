@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 /// An idempotent audit comment that must exist before a transition completes.
 ///
 /// The marker is a stable, caller-supplied substring (normally an HTML comment
-/// such as `<!-- temper:comment-key=plan-validation:job-42 -->`). The executor
+/// such as `<!-- temper:comment-key=plan-validation:assignment-sha256:… -->`).
+/// The executor
 /// lists ordinary Forge comments and creates the body only when no comment
 /// contains that exact marker. Runtime-generated child references are appended
 /// to `body` after every `create_issues` child has its final number.

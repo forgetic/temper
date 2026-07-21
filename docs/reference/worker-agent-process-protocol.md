@@ -238,8 +238,11 @@ expose Forgejo label changes, provider activity/timeline records, or hidden
 comment rows because the portable Forge abstraction has no such read operation.
 To investigate a plan-validation result, agents should request the coordinating
 plan with comments and locate its stable
-`temper:comment-key=plan-validation:<job-id>` audit, not infer history from
-Temper journals, Forgejo SQLite, or timeline internals.
+`temper:comment-key=plan-validation:<assignment-key>` audit. The assignment key
+is a SHA-256 digest of the exact job/attempt identity; use the separately
+rendered Job ID and Attempt ID fields when selecting among repeated validation
+rounds. Do not infer history from Temper journals, Forgejo SQLite, or timeline
+internals.
 
 The host enforces maximum request size (1 MiB), a 30-second I/O/response timeout,
 configured repository authorization, operation depth/count limits, item

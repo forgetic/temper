@@ -73,8 +73,8 @@ point, while retries can still finish the state projection.
 A successful `validate_plan` result binds a transition-completion audit to that
 specific runtime execution. This is not a static workflow `CreateComment`
 effect: the verdict applier resolves the authenticated Forge actor before
-mutation and builds the comment from the routed outcome, workflow role, job ID,
-routed transition, workspace coordination key, and the body-omitted,
+mutation and builds the comment from the routed outcome, workflow role, exact
+job/attempt identity, routed transition, workspace coordination key, and the body-omitted,
 already-bounded validation scope. It publishes only the normalized,
 secret-redacted, character-bounded `JobResult.summary`; result `body`, `details`,
 reasoning, tool output, credentials, and artifact bodies are not audit inputs.
@@ -92,11 +92,16 @@ The ordering is part of the completion contract:
   completed create intent commit only after that comment exists.
 
 Each audit carries
-`<!-- temper:comment-key=plan-validation:<job-id> -->`. The job-bound key gives
-one record per validation round rather than conflating repeated rounds under a
-static transition key. Before append, the runtime lists ordinary comments and
-skips creation when the exact marker is already present. This lookup also
-converges an uncertain create response without requiring comment edits.
+`<!-- temper:comment-key=plan-validation:<assignment-key> -->`, where the
+assignment key is `assignment-sha256:<digest>`. The digest is derived from a
+length-delimited job ID and its optional exact attempt fence. Modern repeated
+validation rounds therefore receive distinct records even though their
+deterministic job IDs match, while replaying the same exact assignment derives
+the same marker and reuses its comment. Legacy unfenced assignments also derive
+a deterministic key. The human-facing comment renders the job and attempt IDs
+separately. Before append, the runtime lists ordinary comments and skips
+creation when the exact marker is already present. This lookup also converges
+an uncertain create response without requiring comment edits.
 
 Actor lookup, comment-list, or comment-create failures are reported as
 `ConvergencePending`. The lease/result path retains the exact assignment and
@@ -119,7 +124,8 @@ behind the startup barrier. Recovery therefore does not rerun the tester.
 - Comments declared by static effects include a hidden marker
   (`<!-- temper:comment-key=<transition>:<comment-index> -->`) and are skipped
   when an existing comment carries the marker. Runtime plan-validation audits
-  instead use the job-bound `plan-validation:<job-id>` marker described above.
+  instead use the exact-assignment-derived `plan-validation:<assignment-key>`
+  marker described above.
 - `ensure_issue`, `ensure_issue_with_parent`, and `ensure_pull_request` stamp a
   correlation key into workflow metadata before creating, search explicit states
   with bounded summary queries, and parse exact metadata before returning an
