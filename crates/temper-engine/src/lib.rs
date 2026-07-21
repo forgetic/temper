@@ -31,6 +31,7 @@ use std::time::Duration;
 
 pub mod applier;
 pub mod artifact_context;
+pub mod ci_status_monitor;
 pub mod config;
 pub mod daemon;
 pub mod engine_config;
@@ -64,6 +65,9 @@ pub use artifact_context::{
     resolve_initial_artifact_context, resolve_initial_artifact_context_for_action_with_policy,
     resolve_initial_artifact_context_for_action_with_primary,
     resolve_initial_artifact_context_with_policy,
+};
+pub use ci_status_monitor::{
+    CiStatusMonitor, CiTerminalTransition, CiTerminalVerdict, run_ci_status_monitor_tick,
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{CoordinatedMechanical, Daemon, h1_handler, serve};
