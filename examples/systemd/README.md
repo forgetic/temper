@@ -70,12 +70,17 @@ There is no trigger unit. Forgejo webhooks post to the engine at
 polling; it is never authoritative data. Keep all three backstops configured:
 
 - `ci_poll_cadence_secs` controls the dedicated scan for terminal CI changes
-  when Actions-completion webhooks are unavailable. It defaults to 60 seconds;
-  set it to `0` only to disable this dedicated scan.
+  when Actions-completion webhooks are unavailable. It bounds both red engineer
+  repair and green landing detection, defaults to 60 seconds, and may be set to
+  `0` to disable only this dedicated scan.
 - `poll_cadence_secs` remains the positive, full role-feed correctness backstop
   and defaults to 300 seconds.
 - `mechanical_cadence_secs` controls automated queue reconciliation; it does not
-  replace the CI poll for red-CI repair discovery.
+  replace the CI poll or discover red `pr_ci_failed` engineer work.
+
+`ci_failed` is current-head and latest-per-job-name: it matches only after every
+latest job is terminal and at least one did not succeed. A visible failed job
+alongside queued or running latest work remains pending.
 
 ## Install and start
 

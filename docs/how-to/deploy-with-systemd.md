@@ -63,7 +63,8 @@ temper --config /etc/temper/config.toml \
 ```
 
 The engine owns queue scheduling, the worker protocol, the Forgejo webhook
-endpoint at `/forgejo/webhook`, and poll/mechanical backstops.
+endpoint at `/forgejo/webhook`, and three distinct cadences: dedicated CI-status,
+full role-feed, and mechanical automation backstops.
 
 ## 4. Run worker pools
 
@@ -149,8 +150,12 @@ http://<engine-host>:<engine-port>/forgejo/webhook
 Use the same HMAC value as the config's named `webhook-secret` credential and
 enable issue, pull-request, review/status/CI, label, and push events. Webhooks
 are edge-triggered wake hints only: the engine always reloads Forge state before
-acting, and periodic polling remains the liveness/correctness backstop. Do not
-run a separate trigger service.
+acting. `ci_poll_cadence_secs` bounds webhook-less terminal red-repair and green-
+landing detection; `poll_cadence_secs` remains the full liveness/correctness
+backstop. `mechanical_cadence_secs` alone does not discover red engineer repair
+work. A `ci_failed` condition is eligible only after every latest-per-name job
+for the current head is terminal, so a failure mixed with queued/running work
+remains pending. Do not run a separate trigger service.
 
 See `examples/systemd/` for the checked-in config, workflow, credentials, and
 unit contract.

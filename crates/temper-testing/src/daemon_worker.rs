@@ -12,10 +12,12 @@
 //!
 //! - The worker never calls the Forge API. Its only outputs are the pushed
 //!   branch and the structured `result` message; the daemon owns PR creation.
-//! - Issue-targeted jobs with the enriched standard payload succeed; payloads
-//!   missing the enrichment (or non-issue artifacts, which the daemon's
-//!   `pr_ci_failed` feed can produce) fail with `protocol` class, mirroring
-//!   `smith-worker`'s `CodingExecutor`.
+//! - Issue-targeted jobs with the enriched standard payload succeed. The one
+//!   supported PR-targeted shape is an enriched `pull_request_writable`
+//!   `pr_ci_failed` assignment: it checks out the existing PR head and pushes a
+//!   marker-bearing repair commit. Other missing enrichment or artifact/action
+//!   shapes fail with `protocol` class, mirroring `smith-worker`'s
+//!   `CodingExecutor`.
 //! - Git failures are reported as `transient` failures so the daemon can
 //!   re-enqueue.
 //!
@@ -29,8 +31,8 @@
 //! - With `--ci-sentinel present` the subject line includes
 //!   [`CI_PASS_MARKER`], so the provisioned e2e CI workflow (which gates on the
 //!   head commit's message) passes immediately. With `deferred` the marker is
-//!   omitted and CI fails until something else (the red->green e2e variant)
-//!   pushes a marker-bearing commit.
+//!   omitted; a `pr_ci_failed` assignment then pushes the marker-bearing repair
+//!   commit that turns the next real CI run green.
 //! - A `Closes #<issue>` trailer referencing the source issue, so merging the
 //!   implementation PR closes the issue through the real provider's native
 //!   close-on-merge keyword handling - the daemon topology has no role that

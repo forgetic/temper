@@ -65,6 +65,14 @@ pub async fn run(
         };
         match response {
             Some(WorkerProtocolMessage::Assign(assign)) => {
+                // This fixture binary does not install a global tracing
+                // subscriber. Keep one stable, non-secret assignment line on
+                // stderr so live-capstone diagnostics can prove exactly-once
+                // `pr_ci_failed` dispatch without depending on sink setup.
+                eprintln!(
+                    "temper-testing-daemon-worker assigned job job_id={} repo={} role={} artifact_kind={}",
+                    assign.job_id, assign.repo, assign.role, assign.artifact.kind
+                );
                 tracing::info!(
                     target: "temper_testing_daemon_worker",
                     job_id = %assign.job_id,

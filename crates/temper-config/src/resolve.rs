@@ -39,9 +39,10 @@ use crate::target::{resolve_agent_profiles, resolve_worker_pools};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
 const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
-/// Dedicated CI-status polling bounds webhook-less CI convergence without
-/// increasing the frequency of full role-feed scans. Set
-/// `ci_poll_cadence_secs = 0` to disable only this dedicated poll.
+/// Dedicated CI-status polling bounds webhook-less terminal red-repair and
+/// green-landing detection without increasing the frequency of full role-feed
+/// scans. Set `ci_poll_cadence_secs = 0` to disable only this dedicated poll;
+/// the general role poll remains the full correctness/liveness backstop.
 const DEFAULT_CI_POLL_CADENCE_SECS: u64 = 60;
 /// Mechanical backstop runs by default. It is the level-triggered safety net
 /// (webhooks accelerate it), so the cadence is conservative rather than
