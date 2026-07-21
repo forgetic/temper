@@ -183,6 +183,7 @@ pub struct EngineSettings {
     pub roles: Vec<String>,
     pub workflow_file: Option<PathBuf>,
     pub poll_cadence: Duration,
+    pub ci_poll_cadence: Option<Duration>,
     pub mechanical_cadence: Option<Duration>,
     pub lease_ttl: Duration,
     /// Configured `engine.forge_token` secret-name reference, if any.

@@ -61,6 +61,7 @@ pub fn daemon_run_config(resolved: &Resolved) -> Result<DaemonRunConfig, String>
         roles,
         workflow_file: engine.workflow_file.clone(),
         poll_cadence: engine.poll_cadence,
+        ci_poll_cadence: engine.ci_poll_cadence,
         mechanical_cadence: engine.mechanical_cadence,
         lease_ttl: engine.lease_ttl,
         webhook_secret_file: engine.webhook_secret_file.clone(),
@@ -188,6 +189,7 @@ mod tests {
             roles: vec![RoleId::new("coder")],
             workflow_file: None,
             poll_cadence: Duration::from_secs(30),
+            ci_poll_cadence: Some(Duration::from_secs(60)),
             mechanical_cadence: Some(Duration::from_secs(120)),
             lease_ttl: Duration::from_secs(300),
             webhook_secret_file: None,
@@ -198,6 +200,31 @@ mod tests {
         let mut role_tokens = BTreeMap::new();
         role_tokens.insert("coder".to_string(), Secret::from("coder-token"));
         EngineConfig::new(daemon, forge, role_tokens)
+    }
+
+    #[test]
+    fn daemon_adapter_preserves_the_resolved_ci_poll_cadence() {
+        let config = temper_config::Config {
+            engine: temper_config::EngineConfig {
+                repos: Some(vec!["acme/widgets".to_string()]),
+                roles: Some(vec!["engineer".to_string()]),
+                ci_poll_cadence_secs: Some(19),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = temper_config::resolve(
+            &config,
+            &temper_config::Credentials::default(),
+            &temper_config::NoEnv,
+        )
+        .expect("config resolves");
+
+        let daemon = daemon_run_config(&resolved).expect("daemon config adapts");
+
+        assert_eq!(daemon.ci_poll_cadence, Some(Duration::from_secs(19)));
+        assert_eq!(daemon.poll_cadence, Duration::from_secs(300));
+        assert_eq!(daemon.mechanical_cadence, Some(Duration::from_secs(120)));
     }
 
     /// The result-applier factory accepts an in-memory [`EngineConfig`]: a

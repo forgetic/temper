@@ -67,8 +67,15 @@ For shell preflight, pass `--secrets /etc/temper/credentials.toml` explicitly.
 
 There is no trigger unit. Forgejo webhooks post to the engine at
 `/forgejo/webhook`. The payload only wakes the same scan/reconcile path used by
-polling; it is never authoritative data. Keep `poll_cadence_secs` and
-`mechanical_cadence_secs` configured as the backstop.
+polling; it is never authoritative data. Keep all three backstops configured:
+
+- `ci_poll_cadence_secs` controls the dedicated scan for terminal CI changes
+  when Actions-completion webhooks are unavailable. It defaults to 60 seconds;
+  set it to `0` only to disable this dedicated scan.
+- `poll_cadence_secs` remains the positive, full role-feed correctness backstop
+  and defaults to 300 seconds.
+- `mechanical_cadence_secs` controls automated queue reconciliation; it does not
+  replace the CI poll for red-CI repair discovery.
 
 ## Install and start
 

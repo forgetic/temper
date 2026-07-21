@@ -39,6 +39,10 @@ use crate::target::{resolve_agent_profiles, resolve_worker_pools};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
 const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
+/// Dedicated CI-status polling bounds webhook-less CI convergence without
+/// increasing the frequency of full role-feed scans. Set
+/// `ci_poll_cadence_secs = 0` to disable only this dedicated poll.
+const DEFAULT_CI_POLL_CADENCE_SECS: u64 = 60;
 /// Mechanical backstop runs by default. It is the level-triggered safety net
 /// (webhooks accelerate it), so the cadence is conservative rather than
 /// aggressive: a slow idle backstop. Set `mechanical_cadence_secs = 0` to
@@ -315,6 +319,14 @@ fn resolve_engine(
             .unwrap_or(DEFAULT_POLL_CADENCE_SECS),
         "engine.poll_cadence_secs",
     )?;
+    let ci_poll_cadence = match config
+        .engine
+        .ci_poll_cadence_secs
+        .unwrap_or(DEFAULT_CI_POLL_CADENCE_SECS)
+    {
+        0 => None,
+        secs => Some(positive_duration_secs(secs, "engine.ci_poll_cadence_secs")?),
+    };
     let mechanical_cadence = match config
         .engine
         .mechanical_cadence_secs
@@ -349,6 +361,7 @@ fn resolve_engine(
         roles,
         workflow_file,
         poll_cadence,
+        ci_poll_cadence,
         mechanical_cadence,
         lease_ttl,
         forge_token: secrets.forge_token.clone(),

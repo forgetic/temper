@@ -214,6 +214,11 @@ pub struct EngineConfig {
     /// Poll-backstop cadence in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_cadence_secs: Option<u64>,
+    /// Dedicated CI-status poll cadence in seconds. Omit for the default;
+    /// set `0` to disable CI-status polling while retaining the role poll
+    /// correctness backstop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_poll_cadence_secs: Option<u64>,
     /// Mechanical-backstop cadence in seconds. The mechanical backstop (label
     /// transitions / lease-gated PR landing) runs by default; webhooks are the
     /// primary reaction path and this is the level-triggered safety net. Omit
@@ -251,6 +256,7 @@ impl EngineConfig {
             && self.repos.is_none()
             && self.roles.is_none()
             && self.poll_cadence_secs.is_none()
+            && self.ci_poll_cadence_secs.is_none()
             && self.mechanical_cadence_secs.is_none()
             && self.lease_ttl_secs.is_none()
             && self.daemon_id.is_none()

@@ -292,6 +292,10 @@ async fn run_async(
         &role_names,
         repo_ids.len(),
     ));
+    emit_engine_status(banner::ci_poll_backstop(
+        daemon_config.ci_poll_cadence,
+        repo_ids.len(),
+    ));
 
     // --- In-process worker + agent on the same loop ---
     let provider = crate::provider::build_provider(
