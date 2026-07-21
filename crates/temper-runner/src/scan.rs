@@ -6,6 +6,7 @@
 //! are left to the workflow reconciler and do not fail the scan.
 
 mod candidate;
+mod ci;
 mod query;
 
 use chrono::{DateTime, Utc};
@@ -24,6 +25,7 @@ use temper_workflow::{
 pub use candidate::{
     CandidateQueryPlan, ScanMode, candidate_query_plan, candidate_query_plan_for_roles,
 };
+pub use ci::{CiStatusObservation, read_ci_status_observations};
 
 /// Explicit issue-or-pull-request address used by item-scoped scans.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
