@@ -2249,6 +2249,7 @@ dependencies = [
  "temper-forge-model",
  "temper-log",
  "temper-process-containment",
+ "temper-protocol-activity",
  "temper-protocol-agent",
  "temper-protocol-worker",
  "temper-reference-delivery",

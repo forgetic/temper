@@ -186,6 +186,8 @@ mod basic_delivery;
 mod budget_retry;
 #[path = "hermetic_real_stack/multi_repo.rs"]
 mod multi_repo;
+#[path = "hermetic_real_stack/ownership_loss.rs"]
+mod ownership_loss;
 #[path = "hermetic_real_stack/restart_acceptance.rs"]
 mod restart_acceptance;
 #[path = "hermetic_real_stack/restart_cancellation.rs"]

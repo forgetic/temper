@@ -12,9 +12,12 @@ use temper_forge_model::{
 };
 use temper_protocol_agent::AgentSessionState;
 use temper_runner::{Progress, RepositorySet, RepositoryTarget};
-use temper_worker::{WorkerLivenessLimits, start_worker_with_transport_and_hook};
+use temper_worker::{
+    WorkerLivenessLimits, start_worker_with_transport_and_hook_and_trace_collector,
+};
 
 use super::git::{git_output_raw, git_output_trim, path_str};
+use super::runner::HermeticActivitySnapshot;
 use super::stack::HermeticRealStack;
 
 impl HermeticRealStack {
@@ -24,12 +27,13 @@ impl HermeticRealStack {
             return;
         }
         let transport = self.transport();
-        self.components.worker = Some(start_worker_with_transport_and_hook(
+        self.components.worker = Some(start_worker_with_transport_and_hook_and_trace_collector(
             handle.clone(),
             self.worker_config.clone(),
             self.components.executor.clone(),
             transport,
             Arc::new(self.hooks.clone()),
+            self.trace_collector.clone(),
         ));
     }
 
@@ -60,6 +64,44 @@ impl HermeticRealStack {
             .values()
             .cloned()
             .collect()
+    }
+
+    /// Daemon release acknowledgements observed by the result transport.
+    pub fn published_releases(&self) -> Vec<temper_protocol_worker::Release> {
+        self.published_releases
+            .lock()
+            .expect("published release lock")
+            .clone()
+    }
+
+    /// Content-free model, tool, Forge-context, and submit activity counts.
+    pub fn agent_activity_snapshot(&self) -> HermeticActivitySnapshot {
+        self.runner.activity_snapshot()
+    }
+
+    /// Active worker registry entries, including exact fences and join state.
+    pub fn active_worker_tasks(&self) -> Vec<temper_worker::ActiveJobTask> {
+        self.components
+            .worker
+            .as_ref()
+            .map(|worker| worker.task_registry().active_jobs())
+            .unwrap_or_default()
+    }
+
+    /// Fully validated engine-journal traces for trace-enabled fixtures.
+    pub fn trace_runs(&self) -> Result<Vec<temper_engine::AgentTraceRun>, String> {
+        self.trace_journal
+            .as_ref()
+            .ok_or_else(|| "agent traces are not enabled for this fixture".to_string())?
+            .runs()
+            .map_err(|error| format!("read hermetic trace journal: {error}"))
+    }
+
+    /// Restart-readable worker trace spools, including their durable cursor.
+    pub fn local_trace_runs(&self) -> Result<Vec<temper_worker::RecoveredTraceRun>, String> {
+        self.trace_collector
+            .recover()
+            .map_err(|error| format!("read hermetic trace spool: {error}"))
     }
 
     /// Number of exact terminal payloads still awaiting durable compaction.

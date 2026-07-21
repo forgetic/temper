@@ -30,6 +30,10 @@ impl HermeticRealStack {
         let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier)
             .with_artifact_context_service(artifact_context)
             .with_forge_context_reader(self.forge.clone(), self.workflow.clone());
+        let daemon = match self.trace_journal.as_ref() {
+            Some(journal) => daemon.with_trace_journal(journal.clone()),
+            None => daemon,
+        };
         match self.apply_grace {
             Some(grace) => daemon.with_apply_grace(grace),
             None => daemon,

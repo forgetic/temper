@@ -1,7 +1,9 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
@@ -9,11 +11,12 @@ use temper_agent::{
     run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
 use temper_engine::Daemon;
-use temper_protocol_agent::{AgentSessionState, PullRequestFreshness};
+use temper_protocol_activity::FailureCodeV1;
+use temper_protocol_agent::{AgentLifecycleEventV1, AgentSessionState, PullRequestFreshness};
 use temper_worker::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput,
-    AgentRunRequest, AgentRunner, AttemptFence, JobCancellation, PrFreshnessFailure,
-    PrFreshnessGuard,
+    AgentRunRequest, AgentRunner, AttemptFence, JobCancellation, JobProgressReporter,
+    PrFreshnessFailure, PrFreshnessGuard, TraceCollector,
 };
 
 use super::pause::{PauseHooks, PausePoint};
@@ -31,7 +34,81 @@ pub struct NativeJigAgentRunner {
     pub(crate) submit_for_pr: temper_agent::SubmitForPrHost,
     pub(crate) forge_context: AgentForgeContextHost,
     pub(crate) hooks: PauseHooks,
+    pub(crate) trace_policy: temper_protocol_activity::AgentActivityCapturePolicyV1,
+    pub(crate) trace_collector: TraceCollector,
+    pub(crate) activity: Arc<HermeticActivityCounters>,
     pub(crate) observed_agent_sessions: Arc<Mutex<Vec<Option<AgentSessionState>>>>,
+}
+
+/// Content-free operation counts observed at the native-agent boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HermeticActivitySnapshot {
+    pub model_started: usize,
+    pub model_finished: usize,
+    pub tool_started: usize,
+    pub tool_finished: usize,
+    pub forge_context_started: usize,
+    pub forge_context_finished: usize,
+    pub submit_started: usize,
+    pub submit_finished: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct HermeticActivityCounters {
+    model_started: AtomicUsize,
+    model_finished: AtomicUsize,
+    tool_started: AtomicUsize,
+    tool_finished: AtomicUsize,
+    forge_context_started: AtomicUsize,
+    forge_context_finished: AtomicUsize,
+    submit_started: AtomicUsize,
+    submit_finished: AtomicUsize,
+}
+
+impl HermeticActivityCounters {
+    pub(crate) fn forge_context_started(&self) {
+        self.forge_context_started.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn forge_context_finished(&self) {
+        self.forge_context_finished.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn submit_started(&self) {
+        self.submit_started.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn submit_finished(&self) {
+        self.submit_finished.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn record_lifecycle(&self, event: &AgentLifecycleEventV1) {
+        let counter = match event {
+            AgentLifecycleEventV1::ModelStarted { .. } => &self.model_started,
+            AgentLifecycleEventV1::ModelFinished { .. } => &self.model_finished,
+            AgentLifecycleEventV1::ToolStarted { .. } => &self.tool_started,
+            AgentLifecycleEventV1::ToolFinished { .. } => &self.tool_finished,
+            AgentLifecycleEventV1::ModelProgress { .. }
+            | AgentLifecycleEventV1::ModelRetrying { .. }
+            | AgentLifecycleEventV1::AgentFinished { .. }
+            | AgentLifecycleEventV1::Containment { .. }
+            | AgentLifecycleEventV1::SteeringApplied => return,
+        };
+        counter.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn snapshot(&self) -> HermeticActivitySnapshot {
+        HermeticActivitySnapshot {
+            model_started: self.model_started.load(Ordering::SeqCst),
+            model_finished: self.model_finished.load(Ordering::SeqCst),
+            tool_started: self.tool_started.load(Ordering::SeqCst),
+            tool_finished: self.tool_finished.load(Ordering::SeqCst),
+            forge_context_started: self.forge_context_started.load(Ordering::SeqCst),
+            forge_context_finished: self.forge_context_finished.load(Ordering::SeqCst),
+            submit_started: self.submit_started.load(Ordering::SeqCst),
+            submit_finished: self.submit_finished.load(Ordering::SeqCst),
+        }
+    }
 }
 
 impl AgentRunner for NativeJigAgentRunner {
@@ -41,7 +118,16 @@ impl AgentRunner for NativeJigAgentRunner {
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {
-        self.run_attempt(job_id, job_id, context, cwd, None).await
+        self.run_attempt(
+            job_id,
+            job_id,
+            context,
+            cwd,
+            AttemptFence::open(),
+            JobCancellation::default(),
+            JobProgressReporter::noop(job_id),
+        )
+        .await
     }
 
     async fn run_request(
@@ -53,32 +139,61 @@ impl AgentRunner for NativeJigAgentRunner {
             &request.attempt_id,
             request.context,
             request.cwd,
-            Some((request.fence, request.cancellation)),
+            request.fence,
+            request.cancellation,
+            request.progress,
         )
         .await
     }
 }
 
 impl NativeJigAgentRunner {
+    #[allow(clippy::too_many_arguments)]
     async fn run_attempt(
         &self,
         job_id: &str,
         attempt_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
-        attempt_control: Option<(AttemptFence, JobCancellation)>,
+        fence: AttemptFence,
+        cancellation: JobCancellation,
+        progress: JobProgressReporter,
     ) -> Result<AgentRunOutput, AgentRunError> {
         self.observed_agent_sessions
             .lock()
             .expect("observed agent sessions lock")
             .push(context.agent_session.clone());
+        let trace = self
+            .trace_collector
+            .begin_run(job_id, context)
+            .ok()
+            .flatten();
+        let activity_endpoint = trace.as_ref().and_then(|trace| trace.bind_endpoint().ok());
+        let activity_address = activity_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.address().to_string());
+        // Register cancellation ownership before the pause. Ownership-loss
+        // acceptance parks here and requires the runner to persist and forward
+        // its cancelled trace boundary before reporting quiescence.
+        let _cancellation_owner = cancellation.register_async_owner();
         // CodingExecutor invokes the runner only after checkout recovery and
         // durable agent-session attachment. This is therefore the stable seam
         // for restart tests that must mutate or inspect a prepared workspace
-        // without racing the model or relying on a sleep.
-        self.hooks.reach(PausePoint::AgentSessionStarted).await;
-        let (fence, cancellation) =
-            attempt_control.unwrap_or_else(|| (AttemptFence::open(), JobCancellation::default()));
+        // without racing the model or relying on a sleep. Component crash may
+        // cancel while a test holds this pause, so cancellation also releases
+        // the runner's async owner without requiring the test permit.
+        let mut session_pause = std::pin::pin!(self.hooks.reach(PausePoint::AgentSessionStarted));
+        let mut pause_cancellation = std::pin::pin!(cancellation.cancelled());
+        std::future::poll_fn(|cx| {
+            if pause_cancellation.as_mut().poll(cx).is_ready()
+                || session_pause.as_mut().poll(cx).is_ready()
+            {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+        .await;
         let accepted_submit = AcceptedSubmitProofStore::new();
         let submit_for_pr = self.submit_for_pr.clone();
         let accepted_submit_for_host = accepted_submit.clone();
@@ -125,7 +240,12 @@ impl NativeJigAgentRunner {
             })
         });
         let agent_cancellation = temper_agent::AgentCancellationLatch::default();
-        let _cancellation_owner = cancellation.register_async_owner();
+        let activity = Arc::clone(&self.activity);
+        let lifecycle_reporter: temper_agent::AgentLifecycleReporter =
+            Arc::new(move |scope, event| {
+                activity.record_lifecycle(&event);
+                let _ = progress.report(scope, event);
+            });
         let run = run_coding_agent_native_with_totals_tool_config_and_hosts(
             self.handle.clone(),
             &self.provider,
@@ -138,8 +258,11 @@ impl NativeJigAgentRunner {
             Some(submit_for_pr),
             Some(forge_context),
             temper_agent::AgentActivityConfig {
+                policy: self.trace_policy.clone(),
+                address: activity_address,
+                lifecycle_address: None,
+                lifecycle_reporter: Some(lifecycle_reporter),
                 cancellation: agent_cancellation.clone(),
-                ..Default::default()
             },
             temper_protocol_agent::AgentRuntimeLimitsV1::default(),
         );
@@ -170,6 +293,26 @@ impl NativeJigAgentRunner {
         if worker_cancellation_requested {
             accepted_submit.clear();
         }
+        if let Some(endpoint) = activity_endpoint {
+            endpoint.stop();
+        }
+        if let Some(trace) = trace {
+            let terminal = if worker_cancellation_requested {
+                trace.finish_cancelled()
+            } else {
+                match &outcome {
+                    Ok(_) => trace.finish_success(None),
+                    Err(error) => trace
+                        .finish_failure(FailureCodeV1::Internal, agent_error_class(error, false)),
+                }
+            };
+            if let Ok(sequence) = terminal {
+                let _ = self
+                    .trace_collector
+                    .await_acknowledged(trace.run_id(), sequence, Duration::from_secs(1))
+                    .await;
+            }
+        }
         let (result, _totals) =
             outcome.map_err(|error| agent_error(error, worker_cancellation_requested))?;
         if !fence.is_open() || cancellation.is_cancelled() {
@@ -190,6 +333,10 @@ impl NativeJigAgentRunner {
             .lock()
             .expect("observed agent sessions lock")
             .clone()
+    }
+
+    pub(crate) fn activity_snapshot(&self) -> HermeticActivitySnapshot {
+        self.activity.snapshot()
     }
 }
 
@@ -230,7 +377,15 @@ impl PrFreshnessGuard for DaemonPrFreshnessGuard {
 }
 
 fn agent_error(error: CodingAgentError, worker_cancellation_requested: bool) -> AgentRunError {
-    let class = match &error {
+    let class = agent_error_class(&error, worker_cancellation_requested);
+    AgentRunError::new(class, error.to_string())
+}
+
+fn agent_error_class(
+    error: &CodingAgentError,
+    worker_cancellation_requested: bool,
+) -> temper_protocol_worker::FailureClass {
+    match error {
         CodingAgentError::Aborted { authority } => {
             if *authority == AgentAbortAuthority::WorkerRequested || worker_cancellation_requested {
                 temper_protocol_worker::FailureClass::Canceled
@@ -251,8 +406,7 @@ fn agent_error(error: CodingAgentError, worker_cancellation_requested: bool) -> 
         | CodingAgentError::ModelUnavailable { .. }
         | CodingAgentError::CodebaseMemory(_)
         | CodingAgentError::Parse { .. } => temper_protocol_worker::FailureClass::Transient,
-    };
-    AgentRunError::new(class, error.to_string())
+    }
 }
 
 #[cfg(test)]

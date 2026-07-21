@@ -61,7 +61,7 @@ pub use jig_core::{Reply, Script, StopReason, Turn};
 pub use builder::HermeticRealStackBuilder;
 pub use clock::MutableWallClock;
 pub use pause::{PauseHooks, PausePermit, PausePoint, ReachedPause};
-pub use runner::NativeJigAgentRunner;
+pub use runner::{HermeticActivitySnapshot, NativeJigAgentRunner};
 pub use stack::{
     HermeticComponentHandles, HermeticDurableWorld, HermeticRealStack, HermeticRunResult,
     ResultTappingTransport,

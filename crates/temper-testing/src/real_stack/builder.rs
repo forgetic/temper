@@ -10,7 +10,7 @@ use temper_forge_memory::MemoryForge;
 use temper_forge_model::{CreateIssue, CreateRepository, Forge, UserId};
 use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, RoleGitIdentity,
-    WorkerConfig,
+    TraceCollector, WorkerAgentTraceConfig, WorkerConfig,
 };
 use temper_workflow::{LeasePolicy, ValidatedWorkflow};
 
@@ -18,7 +18,7 @@ use super::DEFAULT_MAX_ITERATIONS;
 use super::clock::MutableWallClock;
 use super::git::{path_str, seed_origin};
 use super::pause::PauseHooks;
-use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
+use super::runner::{DaemonPrFreshnessGuard, HermeticActivityCounters, NativeJigAgentRunner};
 use super::stack::{
     DaemonRouter, HermeticComponentHandles, HermeticDurableWorld, HermeticRealStack,
 };
@@ -39,6 +39,7 @@ pub struct HermeticRealStackBuilder {
     apply_grace: Option<Duration>,
     worker_heartbeat_interval: Duration,
     worker_liveness_limits: temper_worker::WorkerLivenessLimits,
+    enable_agent_traces: bool,
 }
 
 impl Default for HermeticRealStackBuilder {
@@ -67,6 +68,7 @@ impl HermeticRealStackBuilder {
             apply_grace: None,
             worker_heartbeat_interval: Duration::from_millis(50),
             worker_liveness_limits: Default::default(),
+            enable_agent_traces: false,
         }
     }
 
@@ -180,6 +182,13 @@ impl HermeticRealStackBuilder {
         self
     }
 
+    /// Enables the worker trace spool and engine journal with metadata capture.
+    #[must_use]
+    pub fn enable_agent_traces(mut self) -> Self {
+        self.enable_agent_traces = true;
+        self
+    }
+
     /// Builds the hermetic world on the provided skein runtime handle.
     pub async fn build(self, handle: &RuntimeHandle) -> Result<HermeticRealStack, String> {
         let primary = self
@@ -197,6 +206,26 @@ impl HermeticRealStackBuilder {
         let git_root = temp.path().join("git");
         let seed_root = temp.path().join("seed");
         let workspace_root = temp.path().join("workspaces");
+        let trace_config = if self.enable_agent_traces {
+            WorkerAgentTraceConfig {
+                policy: temper_protocol_activity::AgentActivityCapturePolicyV1::default(),
+                spool_root: Some(temp.path().join("agent-traces/spool")),
+            }
+        } else {
+            WorkerAgentTraceConfig::default()
+        };
+        let trace_collector = TraceCollector::new(trace_config.clone());
+        let trace_journal = if self.enable_agent_traces {
+            Some(
+                temper_engine::AgentTraceJournal::open(temper_engine::TraceJournalConfig {
+                    root: temp.path().join("agent-traces/journal"),
+                    policy: trace_config.policy.clone(),
+                })
+                .map_err(|error| format!("open hermetic trace journal: {error}"))?,
+            )
+        } else {
+            None
+        };
 
         let forge = Arc::new(MemoryForge::new());
         let mut repo_ids = BTreeMap::new();
@@ -259,17 +288,24 @@ impl HermeticRealStackBuilder {
         let daemon_handle = Daemon::with_applier(Arc::new(handle.clone()), applier)
             .with_artifact_context_service(artifact_context)
             .with_forge_context_reader(forge.clone(), workflow.clone());
+        let daemon_handle = match trace_journal.as_ref() {
+            Some(journal) => daemon_handle.with_trace_journal(journal.clone()),
+            None => daemon_handle,
+        };
         let daemon_handle = match self.apply_grace {
             Some(apply_grace) => daemon_handle.with_apply_grace(apply_grace),
             None => daemon_handle,
         };
         let daemon = Arc::new(daemon_handle);
         let router = Arc::new(DaemonRouter::new(daemon.clone()));
+        let activity = Arc::new(HermeticActivityCounters::default());
         let router_for_context = Arc::clone(&router);
+        let activity_for_context = Arc::clone(&activity);
         let context_worker_id = primary_worker_role.worker_id.clone();
         let forge_context: temper_worker::AgentForgeContextHost =
             Arc::new(move |job_id, attempt_id, fence, operation| {
                 let router = Arc::clone(&router_for_context);
+                let activity = Arc::clone(&activity_for_context);
                 let worker_id = context_worker_id.clone();
                 Box::pin(async move {
                     if !fence.is_open() {
@@ -277,42 +313,60 @@ impl HermeticRealStackBuilder {
                             temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable,
                         );
                     }
-                    let request = temper_protocol_worker::FetchContext::new(
-                        &worker_id,
-                        &job_id,
-                        &attempt_id,
-                        operation,
-                    );
-                    let response = router
-                        .current()
-                        .deliver_protocol_message(
-                            temper_protocol_worker::WorkerProtocolMessage::FetchContext(request),
-                        )
-                        .await
-                        .map_err(|_| {
-                            temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable
-                        })?
-                        .ok_or(temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable)?;
-                    if !fence.is_open() {
-                        return Err(
-                            temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable,
+                    activity.forge_context_started();
+                    let outcome = async {
+                        let request = temper_protocol_worker::FetchContext::new(
+                            &worker_id,
+                            &job_id,
+                            &attempt_id,
+                            operation,
                         );
+                        let response = router
+                            .current()
+                            .deliver_protocol_message(
+                                temper_protocol_worker::WorkerProtocolMessage::FetchContext(
+                                    request,
+                                ),
+                            )
+                            .await
+                            .map_err(|_| {
+                                temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable
+                            })?
+                            .ok_or(
+                                temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable,
+                            )?;
+                        if !fence.is_open() {
+                            return Err(
+                                temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable,
+                            );
+                        }
+                        let temper_protocol_worker::WorkerProtocolMessage::ContextResponse(
+                            response,
+                        ) = response
+                        else {
+                            return Err(
+                                temper_protocol_worker::ForgeContextErrorCode::InvalidRequest,
+                            );
+                        };
+                        if response.protocol_version
+                            != temper_protocol_worker::WORKER_PROTOCOL_VERSION
+                            || response.worker_id != worker_id
+                            || response.job_id != job_id
+                        {
+                            return Err(
+                                temper_protocol_worker::ForgeContextErrorCode::InvalidRequest,
+                            );
+                        }
+                        match response.outcome {
+                            temper_protocol_worker::ContextOutcome::Success { result } => {
+                                Ok(result)
+                            }
+                            temper_protocol_worker::ContextOutcome::Error { code } => Err(code),
+                        }
                     }
-                    let temper_protocol_worker::WorkerProtocolMessage::ContextResponse(response) =
-                        response
-                    else {
-                        return Err(temper_protocol_worker::ForgeContextErrorCode::InvalidRequest);
-                    };
-                    if response.protocol_version != temper_protocol_worker::WORKER_PROTOCOL_VERSION
-                        || response.worker_id != worker_id
-                        || response.job_id != job_id
-                    {
-                        return Err(temper_protocol_worker::ForgeContextErrorCode::InvalidRequest);
-                    }
-                    match response.outcome {
-                        temper_protocol_worker::ContextOutcome::Success { result } => Ok(result),
-                        temper_protocol_worker::ContextOutcome::Error { code } => Err(code),
-                    }
+                    .await;
+                    activity.forge_context_finished();
+                    outcome
                 })
             });
         let (result_tx, result_rx) = temper_engine_io::channel();
@@ -336,15 +390,30 @@ impl HermeticRealStackBuilder {
             "sk-jig-test",
         )
         .with_base_url_override(fake_llm.base_url());
+        let submit_host = self.submit_for_pr;
+        let activity_for_submit = Arc::clone(&activity);
+        let submit_for_pr: SubmitForPrHost = Arc::new(move |request, context, cwd| {
+            let submit_host = submit_host.clone();
+            let activity = Arc::clone(&activity_for_submit);
+            Box::pin(async move {
+                activity.submit_started();
+                let response = submit_host(request, context, cwd).await;
+                activity.submit_finished();
+                response
+            })
+        });
         let runner = Arc::new(NativeJigAgentRunner {
             handle: handle.clone(),
             provider,
             max_iterations: self.max_iterations,
             config_dir: None,
             enable_subagents: self.enable_subagents,
-            submit_for_pr: self.submit_for_pr,
+            submit_for_pr,
             forge_context,
             hooks: hooks.clone(),
+            trace_policy: trace_config.policy.clone(),
+            trace_collector: trace_collector.clone(),
+            activity,
             observed_agent_sessions: Default::default(),
         });
 
@@ -375,7 +444,7 @@ impl HermeticRealStackBuilder {
             heartbeat_interval: self.worker_heartbeat_interval,
             liveness_limits: self.worker_liveness_limits,
             result_root: workspace_root.join(".temper/worker-results"),
-            agent_traces: Default::default(),
+            agent_traces: trace_config,
             executor: ExecutorSelection::Stub,
         };
         let coding_config = CodingExecutorConfig {
@@ -398,6 +467,7 @@ impl HermeticRealStackBuilder {
                 result_tx,
                 result_rx,
                 published_results: Default::default(),
+                published_releases: Default::default(),
                 origins,
                 repo_ids,
                 workspace_root,
@@ -411,6 +481,8 @@ impl HermeticRealStackBuilder {
                 clock,
                 hooks,
                 router,
+                trace_collector,
+                trace_journal,
                 apply_grace: self.apply_grace,
                 mechanical_journal: temper_workflow::InMemoryJournal::new(),
             },

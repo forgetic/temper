@@ -29,6 +29,11 @@ test-group = 'native-process-fixtures'
 threads-required = "num-cpus"
 
 [[profile.default.overrides]]
+filter = 'package(temper-testing) & binary(hermetic_real_stack) & test(/^ownership_loss::/)'
+test-group = 'native-process-fixtures'
+threads-required = "num-cpus"
+
+[[profile.default.overrides]]
 filter = 'package(temper-testing) & binary(descendant_containment_acceptance)'
 test-group = 'native-process-fixtures'
 threads-required = "num-cpus"
