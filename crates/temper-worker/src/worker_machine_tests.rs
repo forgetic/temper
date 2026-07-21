@@ -9,12 +9,15 @@ use std::time::Duration;
 
 use serde_json::json;
 use temper_protocol_worker::{
-    Artifact, Assign, ErrorCode, ProtocolError, ResultStatus, WORKER_PROTOCOL_VERSION,
-    WorkerProtocolMessage,
+    Artifact, Assign, AttemptCancellation, CancelAttempts, ErrorCode, ProtocolError, ResultStatus,
+    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_worker_io::{EngineTime, Machine, drive_sync};
 
-use super::{AttemptCompletion, JobCleanup, WorkerCompletion, WorkerMachine, WorkerRequest};
+use super::{
+    AttemptCompletion, CancellationCause, JobCleanup, JobPhase, WorkerCompletion, WorkerMachine,
+    WorkerRequest,
+};
 use crate::config::{CapabilitySpec, WorkerParams};
 use crate::executor::{JobOutcome, job_result_for_attempt};
 use crate::result_outbox::ResultOutboxEntry;
@@ -50,6 +53,20 @@ pub(super) fn assign(job_id: &str) -> Assign {
         },
         job_payload: json!({}),
     }
+}
+
+fn ownership_loss(worker_id: &str, entries: &[(&str, &str, &str)]) -> CancelAttempts {
+    CancelAttempts::new(
+        worker_id,
+        entries
+            .iter()
+            .map(|(job_id, attempt_id, reason)| {
+                AttemptCancellation::ownership_lost(worker_id, *job_id, *attempt_id, *reason)
+                    .unwrap()
+            })
+            .collect(),
+    )
+    .unwrap()
 }
 
 fn poll_timeout() -> WorkerProtocolMessage {
@@ -468,6 +485,76 @@ fn rejected_heartbeat_reregisters_without_losing_the_in_flight_job() {
         heartbeat
             .iter()
             .any(|request| matches!(request, WorkerRequest::SendHeartbeat(_)))
+    );
+}
+
+#[test]
+fn heartbeat_cancels_every_exact_attempt_and_ignores_duplicates_and_stale_entries() {
+    let mut machine = WorkerMachine::new(WorkerParams {
+        max_concurrent_jobs: 2,
+        ..params()
+    });
+    run(
+        &mut machine,
+        vec![
+            WorkerCompletion::PollReply(Ok(Some(WorkerProtocolMessage::Assign(assign("job-a"))))),
+            WorkerCompletion::PollReply(Ok(Some(WorkerProtocolMessage::Assign(assign("job-b"))))),
+        ],
+    );
+
+    let directive = ownership_loss(
+        "worker-1",
+        &[
+            ("job-a", "attempt-job-a", "claim removed"),
+            ("job-a", "stale-attempt", "old claim removed"),
+            ("job-b", "attempt-job-b", "claim replaced"),
+        ],
+    );
+    let requests = machine.on_completion(
+        EngineTime::ZERO,
+        WorkerCompletion::HeartbeatDelivered(Ok(Some(directive.clone()))),
+    );
+
+    assert!(
+        matches!(requests.first(), Some(WorkerRequest::CancelJob { .. })),
+        "all exact controls precede effects: {requests:?}"
+    );
+    assert!(matches!(
+        requests.get(1),
+        Some(WorkerRequest::CancelJob { .. })
+    ));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| matches!(request, WorkerRequest::CancelJob { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| matches!(request, WorkerRequest::ArmWatchdogTimer { .. }))
+            .count(),
+        2,
+        "one escalation chain is armed per newly cancelled attempt"
+    );
+    for (job_id, reason) in [("job-a", "claim removed"), ("job-b", "claim replaced")] {
+        let state = machine.job_state(job_id).unwrap();
+        assert_eq!(state.phase, JobPhase::CancelRequested);
+        assert!(matches!(
+            &state.cancellation_cause,
+            Some(CancellationCause::OwnershipLost { reason: observed }) if observed == reason
+        ));
+    }
+
+    assert!(
+        machine
+            .on_completion(
+                EngineTime::ZERO,
+                WorkerCompletion::HeartbeatDelivered(Ok(Some(directive))),
+            )
+            .is_empty(),
+        "duplicate directives must not cancel or arm timers twice"
     );
 }
 

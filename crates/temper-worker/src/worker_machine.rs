@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use temper_process_containment::CleanupSnapshot;
-use temper_protocol_worker::{Assign, ErrorCode, JobResult, WorkerProtocolMessage};
+use temper_protocol_worker::{Assign, CancelAttempts, ErrorCode, JobResult, WorkerProtocolMessage};
 use temper_worker_io::{EngineTime, Machine};
 
 use crate::agent_runner::JobProgress;
@@ -21,8 +21,9 @@ mod delivery;
 mod watchdog;
 pub use crate::executor::JobCleanup;
 pub use watchdog::{
-    ActiveOperation, CancellationStatus, JobPhase, JobWatchState, OperationId, OperationKind,
-    ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState, WatchdogTimerKind,
+    ActiveOperation, CancellationCause, CancellationStatus, JobPhase, JobWatchState, OperationId,
+    OperationKind, ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState,
+    WatchdogTimerKind,
 };
 
 /// Read-only compatibility view over occupied job IDs.
@@ -103,7 +104,9 @@ pub enum WorkerCompletion {
     ResultReplayTimer {
         entry_id: String,
     },
-    HeartbeatDelivered(Result<(), String>),
+    /// Parsed response to one heartbeat. `None` is the normal empty
+    /// acknowledgement; `Some` carries exact-attempt cancellation directives.
+    HeartbeatDelivered(Result<Option<CancelAttempts>, String>),
     PollTimer,
     HeartbeatTimer,
     /// Close assignment intake while keeping the drive loop alive for attempt
@@ -239,6 +242,39 @@ impl WorkerMachine {
         }
     }
 
+    fn on_heartbeat_delivery(
+        &mut self,
+        now: EngineTime,
+        outcome: Result<Option<CancelAttempts>, String>,
+    ) -> Vec<WorkerRequest> {
+        match outcome {
+            Ok(None) => Vec::new(),
+            Ok(Some(directive)) if directive.worker_id() == self.params.worker_id => {
+                self.on_ownership_loss_directives(now, &directive)
+            }
+            Ok(Some(directive)) => self.on_heartbeat_error(format!(
+                "daemon returned cancellation response for worker_id={} to worker_id={}",
+                directive.worker_id(),
+                self.params.worker_id
+            )),
+            Err(error) => self.on_heartbeat_error(error),
+        }
+    }
+
+    fn on_heartbeat_error(&mut self, error: String) -> Vec<WorkerRequest> {
+        self.registered = false;
+        if self.shutting_down {
+            vec![WorkerRequest::Log(format!(
+                "worker: heartbeat failed during shutdown: {error}"
+            ))]
+        } else {
+            vec![
+                WorkerRequest::Log(format!("worker: heartbeat failed: {error}")),
+                WorkerRequest::SendRegister(crate::client::register_message_params(&self.params)),
+            ]
+        }
+    }
+
     fn on_poll_reply(
         &mut self,
         now: EngineTime,
@@ -282,7 +318,7 @@ impl WorkerMachine {
                             last_agent_progress: now,
                             timer_generation: 1,
                             active_operations: BTreeMap::new(),
-                            timeout: None,
+                            cancellation_cause: None,
                             cancellation: CancellationStatus::NotRequested,
                             escalation_requested: false,
                             result_durability: ResultDurabilityStatus::None,
@@ -457,20 +493,31 @@ impl Machine for WorkerMachine {
                 }
 
                 let state_before_quiescence = state.clone();
-                let result = if state.timeout.is_some() {
-                    self.timeout_result(&job_id, &state_before_quiescence, now, &completion.cleanup)
-                } else {
-                    let Some(result) = completion.result else {
-                        return vec![WorkerRequest::Warn(format!(
-                            "worker: rejected result-free non-cancelled completion job_id={job_id} attempt_id={attempt_id}"
-                        ))];
-                    };
-                    if result.attempt_id.as_deref() != Some(attempt_id.as_str())
-                        || completion.cleanup.cancellation.is_some()
-                    {
-                        return Vec::new();
+                let result = match &state_before_quiescence.cancellation_cause {
+                    Some(CancellationCause::WatchdogTimeout(_)) => self.timeout_result(
+                        &job_id,
+                        &state_before_quiescence,
+                        now,
+                        &completion.cleanup,
+                    ),
+                    Some(CancellationCause::OwnershipLost { .. }) => self.ownership_lost_result(
+                        &job_id,
+                        &state_before_quiescence,
+                        &completion.cleanup,
+                    ),
+                    None => {
+                        let Some(result) = completion.result else {
+                            return vec![WorkerRequest::Warn(format!(
+                                "worker: rejected result-free non-cancelled completion job_id={job_id} attempt_id={attempt_id}"
+                            ))];
+                        };
+                        if result.attempt_id.as_deref() != Some(attempt_id.as_str())
+                            || completion.cleanup.cancellation.is_some()
+                        {
+                            return Vec::new();
+                        }
+                        result
                     }
-                    result
                 };
 
                 let state = self.jobs.get_mut(&job_id).expect("checked job exists");
@@ -633,22 +680,9 @@ impl Machine for WorkerMachine {
                 ));
                 requests
             }
-            WorkerCompletion::HeartbeatDelivered(Err(error)) => {
-                self.registered = false;
-                if self.shutting_down {
-                    vec![WorkerRequest::Log(format!(
-                        "worker: heartbeat failed during shutdown: {error}"
-                    ))]
-                } else {
-                    vec![
-                        WorkerRequest::Log(format!("worker: heartbeat failed: {error}")),
-                        WorkerRequest::SendRegister(crate::client::register_message_params(
-                            &self.params,
-                        )),
-                    ]
-                }
+            WorkerCompletion::HeartbeatDelivered(outcome) => {
+                self.on_heartbeat_delivery(now, outcome)
             }
-            WorkerCompletion::HeartbeatDelivered(Ok(())) => Vec::new(),
             WorkerCompletion::BeginShutdown => {
                 self.shutting_down = true;
                 Vec::new()

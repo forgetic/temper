@@ -108,6 +108,43 @@ fn crash_immediately_hard_escalates_and_preserves_publication_fence() {
 }
 
 #[test]
+fn exact_cancellation_closes_fence_and_updates_join_state_monotonically() {
+    let registry = WorkerTaskRegistry::new();
+    let active = task("owned", 9);
+    let fence = active.fence().clone();
+    let cancellation = active.cancellation().clone();
+    assert!(registry.register(active.clone()));
+    registry.mark_running(&active);
+
+    assert!(!registry.cancel_attempt("owned", "stale-attempt", 9));
+    assert!(fence.is_open());
+    assert_eq!(cancellation.requested(), None);
+
+    assert!(registry.cancel_attempt("owned", "attempt-9", 9));
+    assert!(!fence.is_open(), "the exact fence closes synchronously");
+    assert_eq!(
+        cancellation.requested(),
+        Some(JobCancellationRequest::Graceful)
+    );
+    assert_eq!(
+        registry.active_jobs()[0].join_state(),
+        ActiveJobJoinState::CancellationRequested
+    );
+
+    assert!(registry.request_attempt("owned", "attempt-9", 9, JobCancellationRequest::HardKill,));
+    assert!(registry.cancel_attempt("owned", "attempt-9", 9));
+    assert_eq!(
+        registry.active_jobs()[0].join_state(),
+        ActiveJobJoinState::HardKillRequested,
+        "duplicate cooperative cancellation must not regress escalation"
+    );
+    assert_eq!(
+        cancellation.requested(),
+        Some(JobCancellationRequest::HardKill)
+    );
+}
+
+#[test]
 fn shutdown_suppresses_active_attempt_terminal_publication() {
     let registry = WorkerTaskRegistry::new();
     let active = task("restart", 12);

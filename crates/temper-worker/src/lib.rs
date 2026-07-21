@@ -106,9 +106,9 @@ pub use trace::{
 };
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{
-    ActiveOperation, AttemptCompletion, CancellationStatus, JobPhase, JobWatchState, OperationId,
-    OperationKind, ResultDeliveryStatus, ResultDurabilityStatus, TimeoutReason, TimeoutState,
-    WatchdogTimerKind, WorkerCompletion, WorkerMachine, WorkerRequest,
+    ActiveOperation, AttemptCompletion, CancellationCause, CancellationStatus, JobPhase,
+    JobWatchState, OperationId, OperationKind, ResultDeliveryStatus, ResultDurabilityStatus,
+    TimeoutReason, TimeoutState, WatchdogTimerKind, WorkerCompletion, WorkerMachine, WorkerRequest,
 };
 pub use workspace::{
     PreparationOutcome, QuarantineManifest, RecoveryContext, RoleGitIdentity,

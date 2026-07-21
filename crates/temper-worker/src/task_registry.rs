@@ -17,7 +17,7 @@ pub enum WorkerShutdown {
 }
 
 /// Worker-owned join state for one active attempt task.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ActiveJobJoinState {
     Registered,
     Running,
@@ -152,7 +152,7 @@ impl WorkerTaskRegistry {
                 .jobs
                 .values_mut()
                 .map(|task| {
-                    task.join_state = join_state;
+                    task.join_state = task.join_state.max(join_state);
                     task.clone()
                 })
                 .collect::<Vec<_>>();
@@ -179,7 +179,7 @@ impl WorkerTaskRegistry {
                 .jobs
                 .values_mut()
                 .map(|task| {
-                    task.join_state = join_state;
+                    task.join_state = task.join_state.max(join_state);
                     task.clone()
                 })
                 .collect::<Vec<_>>()
@@ -201,7 +201,7 @@ impl WorkerTaskRegistry {
             .get_mut(job_id)
             .filter(|task| task.matches(attempt_id, generation))
         {
-            task.join_state = ActiveJobJoinState::CleanupPending;
+            task.join_state = task.join_state.max(ActiveJobJoinState::CleanupPending);
         }
     }
 
@@ -218,16 +218,45 @@ impl WorkerTaskRegistry {
             .cloned()
     }
 
+    /// Exact-attempt cancellation linearization boundary. Identity lookup,
+    /// fence closure, cooperative publication, and the monotonic join-state
+    /// update happen under one registry lock, in that order.
     pub(crate) fn cancel_attempt(&self, job_id: &str, attempt_id: &str, generation: u64) -> bool {
-        let task = self.task(job_id, attempt_id, generation);
-        if let Some(task) = task {
-            task.fence.close();
-            task.cancellation.cancel();
-            self.update(&task, ActiveJobJoinState::CancellationRequested);
-            true
-        } else {
-            false
-        }
+        let mut state = self.lock();
+        let Some(task) = state
+            .jobs
+            .get_mut(job_id)
+            .filter(|task| task.matches(attempt_id, generation))
+        else {
+            return false;
+        };
+        task.fence.close();
+        task.cancellation.cancel();
+        task.join_state = task
+            .join_state
+            .max(ActiveJobJoinState::CancellationRequested);
+        true
+    }
+
+    pub(crate) fn request_attempt(
+        &self,
+        job_id: &str,
+        attempt_id: &str,
+        generation: u64,
+        request: JobCancellationRequest,
+    ) -> bool {
+        let mut state = self.lock();
+        let Some(task) = state
+            .jobs
+            .get_mut(job_id)
+            .filter(|task| task.matches(attempt_id, generation))
+        else {
+            return false;
+        };
+        task.fence.close();
+        task.cancellation.request(request);
+        task.join_state = task.join_state.max(join_state_for_request(request));
+        true
     }
 
     /// Linearizes terminal publication with component shutdown, then removes
@@ -272,7 +301,7 @@ impl WorkerTaskRegistry {
             .get_mut(task.job_id())
             .filter(|current| current.matches(task.attempt_id(), task.generation()))
         {
-            current.join_state = join_state;
+            current.join_state = current.join_state.max(join_state);
         }
     }
 

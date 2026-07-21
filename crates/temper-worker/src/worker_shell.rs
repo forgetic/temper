@@ -525,29 +525,24 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 generation,
                 reason: _,
             } => {
+                // This call is deliberately synchronous: the exact registry
+                // entry closes its publication fence before this request can
+                // return or any lifecycle observation can run.
+                cancel_job_control(
+                    self.task_registry.clone(),
+                    self.cq.clone(),
+                    job_id,
+                    attempt_id,
+                    generation,
+                );
                 if self.lifecycle_hook.enabled() {
                     let lifecycle_hook = Arc::clone(&self.lifecycle_hook);
                     let component_cancellation = self.cancellation.clone();
-                    let registry = self.task_registry.clone();
-                    let cq = self.cq.clone();
                     self.spawn_component_task(async move {
-                        if component_cancellation
+                        let _ = component_cancellation
                             .run(lifecycle_hook.reached(WorkerLifecycleCheckpoint::CancelRequested))
-                            .await
-                            .is_none()
-                        {
-                            return;
-                        }
-                        cancel_job_control(registry, cq, job_id, attempt_id, generation);
+                            .await;
                     });
-                } else {
-                    cancel_job_control(
-                        self.task_registry.clone(),
-                        self.cq.clone(),
-                        job_id,
-                        attempt_id,
-                        generation,
-                    );
                 }
             }
             WorkerRequest::EscalateJob {
@@ -556,13 +551,13 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 generation,
                 hard,
             } => {
-                if let Some(task) = self.task_registry.task(&job_id, &attempt_id, generation) {
-                    if hard {
-                        task.cancellation().hard_kill();
-                    } else {
-                        task.cancellation().force_terminate();
-                    }
-                }
+                let request = if hard {
+                    crate::executor::JobCancellationRequest::HardKill
+                } else {
+                    crate::executor::JobCancellationRequest::ForcedTermination
+                };
+                self.task_registry
+                    .request_attempt(&job_id, &attempt_id, generation, request);
             }
             WorkerRequest::ArmWatchdogTimer {
                 job_id,
@@ -669,9 +664,12 @@ fn cancel_job_control(
     }
 }
 
-fn heartbeat_outcome(reply: Result<Option<WorkerProtocolMessage>, String>) -> Result<(), String> {
+fn heartbeat_outcome(
+    reply: Result<Option<WorkerProtocolMessage>, String>,
+) -> Result<Option<temper_protocol_worker::CancelAttempts>, String> {
     match reply {
-        Ok(None) => Ok(()),
+        Ok(None) => Ok(None),
+        Ok(Some(WorkerProtocolMessage::CancelAttempts(directive))) => Ok(Some(directive)),
         Ok(Some(WorkerProtocolMessage::Error(error))) => {
             Err(format!("daemon rejected heartbeat: {error:?}"))
         }
@@ -681,3 +679,7 @@ fn heartbeat_outcome(reply: Result<Option<WorkerProtocolMessage>, String>) -> Re
         Err(error) => Err(error),
     }
 }
+
+#[cfg(test)]
+#[path = "worker_shell_tests.rs"]
+mod tests;
