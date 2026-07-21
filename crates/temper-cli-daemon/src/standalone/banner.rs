@@ -82,6 +82,19 @@ pub(crate) fn poll_backstop(cadence: Duration, roles: &[String], repo_count: usi
     )
 }
 
+/// Renders the dedicated CI-status poll cadence, including the explicit
+/// disabled state, so operators can distinguish it from both the full role
+/// poll and the mechanical backstop.
+pub(crate) fn ci_poll_backstop(cadence: Option<Duration>, repo_count: usize) -> String {
+    match cadence {
+        Some(cadence) => format!(
+            "CI-status poll backstop every {} (CI-gated pull requests across {repo_count} repos)",
+            humanize_secs(cadence)
+        ),
+        None => "CI-status poll backstop disabled".to_string(),
+    }
+}
+
 /// Renders the `mechanical backstop every <Ns> (raw_intake, landing across <N>
 /// repos)` line.
 pub(crate) fn mechanical_backstop(cadence: Duration, repo_count: usize) -> String {
@@ -229,6 +242,18 @@ mod tests {
                 2
             ),
             "poll backstop every 60s (architect, engineer feeds across 2 repos)"
+        );
+    }
+
+    #[test]
+    fn ci_poll_backstop_reports_effective_cadence_or_disabled() {
+        assert_eq!(
+            ci_poll_backstop(Some(Duration::from_secs(60)), 2),
+            "CI-status poll backstop every 60s (CI-gated pull requests across 2 repos)"
+        );
+        assert_eq!(
+            ci_poll_backstop(None, 2),
+            "CI-status poll backstop disabled"
         );
     }
 

@@ -75,6 +75,7 @@ fn build_config_populates_only_provided_fields() {
     assert_eq!(config.agent.provider.as_deref(), Some("anthropic"));
     // Unset optionals stay None.
     assert!(config.engine.daemon_id.is_none());
+    assert!(config.engine.ci_poll_cadence_secs.is_none());
     assert!(config.worker.worker_id.is_none());
 }
 

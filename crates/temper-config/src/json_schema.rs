@@ -227,7 +227,14 @@ fn engine_config_schema() -> Value {
             ("roles", string_array_schema("Workflow roles to drive.")),
             (
                 "poll_cadence_secs",
-                integer_schema("Poll-backstop cadence in seconds.", None),
+                positive_integer_schema("Poll-backstop cadence in seconds."),
+            ),
+            (
+                "ci_poll_cadence_secs",
+                integer_schema(
+                    "Dedicated CI-status poll cadence in seconds; 0 disables it.",
+                    None,
+                ),
             ),
             (
                 "mechanical_cadence_secs",

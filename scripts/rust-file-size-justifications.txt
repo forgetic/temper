@@ -125,6 +125,14 @@ crates/temper-cli-config/src/lib.rs
 crates/temper-config/src/schema.rs
 crates/temper-config/src/resolve.rs
 
+# The canonical closed JSON Schema mirrors every on-disk section in one
+# reviewable tree so runtime and operator schema changes cannot drift apart.
+crates/temper-config/src/json_schema.rs
+
+# Standalone assembly keeps engine, in-process worker, startup ordering, and
+# operator readiness output at the single composition root.
+crates/temper-cli-daemon/src/standalone/mod.rs
+
 # Config resolution tests cover cross-section defaults and validation matrices;
 # split when the next config test fixture cleanup lands.
 crates/temper-config/src/tests.rs

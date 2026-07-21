@@ -44,6 +44,10 @@ port = 4000
 repos = [\"acme/widgets\"]
 roles = [\"architect\", \"engineer\", \"code-reviewer\"]
 poll_cadence_secs = 300
+# Dedicated CI-status backstop for webhook-less CI convergence. Omit for the
+# 60-second default; set 0 to disable. The general poll above remains the
+# correctness backstop.
+ci_poll_cadence_secs = 60
 # Mechanical backstop (label transitions / PR landing). On by default;
 # webhooks are the primary reaction path and this is the level-triggered
 # safety net. Omit for the default cadence; set 0 to disable.
