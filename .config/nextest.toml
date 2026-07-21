@@ -47,11 +47,14 @@ threads-required = "num-cpus"
 test-threads = 4
 fail-fast = false
 
-# This test starts a host-mode runner whose embedded cache server uses a
-# host-global Bolt database. Run it without concurrent live fixtures so cache
-# lock contention cannot leave its queued workflow unclaimed until timeout.
+# These suites start host-mode runners whose embedded cache server uses a
+# host-global Bolt database. Run them without concurrent live fixtures so cache
+# lock contention cannot leave their queued workflows unclaimed until timeout.
 [[profile.e2e.overrides]]
-filter = 'package(temper-testing) & binary(forgejo_ci_web_ui)'
+filter = '''
+(package(temper-testing) & (binary(forgejo_ci_web_ui) | binary(forgejo_runner))) |
+(package(temper-forge-forgejo) & binary(live))
+'''
 threads-required = 4
 
 [[profile.e2e.overrides]]

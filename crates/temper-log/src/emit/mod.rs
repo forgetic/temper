@@ -25,18 +25,17 @@
 //! [`Service`]: crate::Service
 
 pub mod human;
+mod validation_outcome;
+
+pub use validation_outcome::{ValidationOutcome, ValidationOutcomeKind, emit_validation_outcome};
 
 use std::borrow::Cow;
 
-use crate::WorkItemRef;
-use crate::event::Event;
-use crate::service::Service;
+use crate::{WorkItemRef, event::Event, service::Service};
 
 pub use temper_protocol_activity::{AgentTerminalReasonV1, ModelFailureV1};
 
-// ---------------------------------------------------------------------------
 // Input structs — one per event, so call sites name their fields.
-// ---------------------------------------------------------------------------
 
 /// Inputs for [`emit_issue_opened`] (`trigger` / `issue.opened`).
 #[derive(Clone, Debug)]
@@ -833,6 +832,7 @@ mod tests {
             (Event::McpToolResult, Service::Agent),
             (Event::WorkspaceDiffProduced, Service::Worker),
             (Event::TransitionApplied, Service::Engine),
+            (Event::ValidationOutcome, Service::Engine),
             (Event::QueueEntered, Service::Engine),
             (Event::GateEvaluated, Service::Engine),
             (Event::PrOpened, Service::Engine),

@@ -27,8 +27,9 @@
 use crate::WorkItemRef;
 use crate::duration::format_duration_ms;
 use crate::redact::redacted_preview;
+use crate::validation::validation_summary_preview;
 
-use super::{AgentTerminalReasonV1, AgentTerminalStatus, ModelFailureV1};
+use super::{AgentTerminalReasonV1, AgentTerminalStatus, ModelFailureV1, ValidationOutcomeKind};
 
 /// Character bound applied to free-text previews (issue titles, summaries).
 ///
@@ -163,6 +164,33 @@ pub(crate) fn transition_applied(
         line.push_str(labels_delta);
     }
     line
+}
+
+/// `[acme/widgets#42] validation outcome=needs_followup | role=tester actor=architect (user-9) | job=job-42 transition=plan_validation_needs_followup correlation=validate-plan-42 | scope=3 follow-ups=2 | checks pass`
+#[allow(clippy::too_many_arguments)] // Mirrors the typed event contract.
+pub(crate) fn validation_outcome(
+    item: &WorkItemRef,
+    outcome: ValidationOutcomeKind,
+    workflow_role: &str,
+    forge_actor_handle: &str,
+    forge_actor_id: &str,
+    job_id: &str,
+    transition: &str,
+    correlation_key: &str,
+    validation_scope_count: usize,
+    follow_up_count: usize,
+    summary_preview: &str,
+) -> String {
+    debug_assert_eq!(
+        summary_preview,
+        validation_summary_preview(summary_preview),
+        "validation summary must be projected before human rendering"
+    );
+    format!(
+        "{} validation outcome={} | role={workflow_role} actor={forge_actor_handle} ({forge_actor_id}) | job={job_id} transition={transition} correlation={correlation_key} | scope={validation_scope_count} follow-ups={follow_up_count} | {summary_preview}",
+        item.human_tag(),
+        outcome.as_str(),
+    )
 }
 
 /// `[acme/widgets#42] -> queue 'triage' | awaiting architect`
@@ -431,6 +459,26 @@ mod tests {
                 559_000
             ),
             "[acme/widgets#42] resolved -- implemented by PR#44 | intake -> landed in 9m19s"
+        );
+    }
+
+    #[test]
+    fn validation_outcome_line_distinguishes_role_and_actor() {
+        assert_eq!(
+            validation_outcome(
+                &issue42(),
+                ValidationOutcomeKind::NeedsFollowup,
+                "tester",
+                "architect",
+                "forge-user-9",
+                "job-42",
+                "plan_validation_needs_followup",
+                "validate-plan-42",
+                3,
+                2,
+                "checks pass",
+            ),
+            "[acme/widgets#42] validation outcome=needs_followup | role=tester actor=architect (forge-user-9) | job=job-42 transition=plan_validation_needs_followup correlation=validate-plan-42 | scope=3 follow-ups=2 | checks pass"
         );
     }
 
