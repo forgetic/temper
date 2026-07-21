@@ -105,12 +105,14 @@ pub mod otel;
 pub mod redact;
 pub mod service;
 pub mod span;
+pub mod validation;
 pub mod work_item;
 
 pub use duration::{format_duration, format_duration_ms};
 pub use event::Event;
 pub use service::Service;
 pub use span::{agent_run_span, work_item_span};
+pub use validation::{VALIDATION_SUMMARY_PREVIEW_LIMIT, validation_summary_preview};
 pub use work_item::{ArtifactKind, WorkItemRef, strip_provider_scheme};
 
 use std::io::IsTerminal;
