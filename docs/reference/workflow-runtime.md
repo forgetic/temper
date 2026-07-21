@@ -68,6 +68,46 @@ requests and review submissions, PR merge, then labels and assignees together in
 one backend update. Creates and merges therefore happen before the label commit
 point, while retries can still finish the state projection.
 
+## Runtime-bound plan-validation audits
+
+A successful `validate_plan` result binds a transition-completion audit to that
+specific runtime execution. This is not a static workflow `CreateComment`
+effect: the verdict applier resolves the authenticated Forge actor before
+mutation and builds the comment from the routed outcome, workflow role, job ID,
+routed transition, workspace coordination key, and the body-omitted,
+already-bounded validation scope. It publishes only the normalized,
+secret-redacted, character-bounded `JobResult.summary`; result `body`, `details`,
+reasoning, tool output, credentials, and artifact bodies are not audit inputs.
+The configured role and authenticated actor are rendered separately, so an
+alias such as `tester` running as Forge user `architect` remains explicit.
+
+The ordering is part of the completion contract:
+
+- for `validated`, the landing pull request is ensured first, then the ordinary
+  plan comment is ensured, and only then does the plan's final label/assignee
+  update commit;
+- for `needs_followup`, every child is ensured, numbered, dependency-wired,
+  aggregated on the parent, and activated before the comment is rendered with
+  final same- or cross-repository child references. The source transition and
+  completed create intent commit only after that comment exists.
+
+Each audit carries
+`<!-- temper:comment-key=plan-validation:<job-id> -->`. The job-bound key gives
+one record per validation round rather than conflating repeated rounds under a
+static transition key. Before append, the runtime lists ordinary comments and
+skips creation when the exact marker is already present. This lookup also
+converges an uncertain create response without requiring comment edits.
+
+Actor lookup, comment-list, or comment-create failures are reported as
+`ConvergencePending`. The lease/result path retains the exact assignment and
+worker result, leaves delivery unacknowledged, and retries with backoff; it does
+not release the source for a new agent run or recreate already-ensured PRs,
+children, dependencies, or comments. For negative validation, the audit
+descriptor is persisted in `CreateIssuesCompletion`. Startup recovery completes
+the durable child intent through wiring and activation, ensures the marked
+ordinary comment, and then commits the source completion while dispatch remains
+behind the startup barrier. Recovery therefore does not rerun the tester.
+
 ## Idempotency rules
 
 - Re-running a completed label transition fails its label preconditions, so it
@@ -76,9 +116,10 @@ point, while retries can still finish the state projection.
   absent after application but does not require the label to be present before
   planning.
 - Assignee set/remove operations are set-like and cleanly idempotent.
-- Comments include a hidden marker
+- Comments declared by static effects include a hidden marker
   (`<!-- temper:comment-key=<transition>:<comment-index> -->`) and are skipped
-  when an existing comment carries the marker.
+  when an existing comment carries the marker. Runtime plan-validation audits
+  instead use the job-bound `plan-validation:<job-id>` marker described above.
 - `ensure_issue`, `ensure_issue_with_parent`, and `ensure_pull_request` stamp a
   correlation key into workflow metadata before creating, search explicit states
   with bounded summary queries, and parse exact metadata before returning an

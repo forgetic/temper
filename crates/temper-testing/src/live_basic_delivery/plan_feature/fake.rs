@@ -5,6 +5,7 @@ use temper_workflow::{ArtifactKindId, WorkflowMetadata, render_metadata_block};
 
 use super::{
     FEATURE_BRANCH, FEATURE_TITLE, FIRST_CODE_TITLE, LANDING_TITLE, PLAN_TITLE, SECOND_CODE_TITLE,
+    VALIDATION_SUMMARY,
 };
 
 pub(super) struct PlanFeatureFake {
@@ -155,7 +156,7 @@ fn architect_reply(view: &RequestView) -> Reply {
 }
 
 fn engineer_reply(view: &RequestView) -> Reply {
-    let second = messages_contain(view, SECOND_CODE_TITLE);
+    let second = primary_artifact_contains(view, SECOND_CODE_TITLE);
     assert_lineage_context(
         view,
         if second {
@@ -210,7 +211,8 @@ fn tester_reply(view: &RequestView) -> Reply {
         json!({
             "verdict": "validated",
             "title": LANDING_TITLE,
-            "body": "Validation passed for the current feature branch head. Both sequential implementation PRs landed into the feature branch, the downstream child unblocked after its prerequisite closed, and the aggregate branch is ready for main."
+            "body": "Validation passed for the current feature branch head. Both sequential implementation PRs landed into the feature branch, the downstream child unblocked after its prerequisite closed, and the aggregate branch is ready for main.",
+            "summary": VALIDATION_SUMMARY
         })
         .to_string(),
     )
@@ -247,6 +249,18 @@ fn messages_contain(view: &RequestView, needle: &str) -> bool {
     view.messages
         .iter()
         .any(|message| message.content.contains(needle))
+}
+
+fn primary_artifact_contains(view: &RequestView, needle: &str) -> bool {
+    view.messages.iter().any(|message| {
+        let Some((_, primary_and_rest)) = message.content.split_once("Primary artifact:") else {
+            return false;
+        };
+        let primary = primary_and_rest
+            .split_once("\n\nMandatory lineage:")
+            .map_or(primary_and_rest, |(primary, _)| primary);
+        primary.contains(needle)
+    })
 }
 
 fn request_role_is(view: &RequestView, role: &str) -> bool {

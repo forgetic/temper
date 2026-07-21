@@ -190,7 +190,15 @@ the same authorization and retrieval implementation.
 | `operation` | object | yes | Exactly one closed-vocabulary operation described below. |
 
 `forge_get_item` accepts `repo`, positive `number`, optional `type`
-(`issue`/`pull_request`), and `include_comments` (default `false`).
+(`issue`/`pull_request`), and `include_comments` (default `false`). Setting it to
+`true` returns bounded ordinary issue/PR conversation comments. This includes a
+coordinating plan's durable validation-audit comment, but excludes Forgejo label
+changes and provider timeline/activity records: the portable Forge abstraction
+does not expose those records. Operators and agents should use the stable
+`temper:comment-key=plan-validation:<job-id>` ordinary comment rather than
+Temper journals, Forgejo SQLite, or hidden timeline rows when reconstructing a
+validation outcome.
+
 `forge_list_related` accepts `repo`, positive `number`, optional `type`, a
 non-empty unique subset of `parent`, `child`, `dependency`, `dependent`,
 `produced_pr`, `body_reference`, and `referenced_by`, plus optional bounded

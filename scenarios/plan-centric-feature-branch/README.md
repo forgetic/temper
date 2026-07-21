@@ -14,7 +14,10 @@ It exercises:
 5. implementation PRs landing into the feature branch;
 6. tester validation creating an aggregate `feature_landing_pr` from the feature
    branch to `main`;
-7. final landing closing both plan and feature issues.
+7. one validated audit record visible through the coordinating plan's ordinary
+   Forgejo comments API, including the safe tester summary, role/actor identities,
+   and job/transition/coordination identifiers;
+8. final landing closing both plan and feature issues.
 
 Run with:
 
