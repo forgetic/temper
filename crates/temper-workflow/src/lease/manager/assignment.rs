@@ -337,47 +337,65 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
 
     /// Conditionally refreshes the lease for an exact durable assignment.
     ///
-    /// This is the restart-reattachment path. The job, worker, and prior daemon
-    /// boot identity must still match fresh Forge metadata; a heartbeat for an
-    /// unknown, superseded, or mismatched job therefore cannot extend a claim.
+    /// This is the restart-reattachment path. The complete core attempt fence
+    /// and all recovered optional identity fields must still match fresh Forge
+    /// metadata, as must the lease role and owner. Definitive durable-state
+    /// changes are distinguished from temporary backend failures. A lost CAS
+    /// is verified with one fresh read and never revokes ownership by itself.
     pub async fn heartbeat_assignment(
         &self,
         repo_id: &RepositoryId,
         target: ArtifactSource,
         expected: &DurableAssignment,
         now: DateTime<Utc>,
-    ) -> Result<DurableAssignment, LeaseError> {
-        let loaded = self.load(repo_id, target).await?;
-        let Some(current) = loaded.metadata().assignment.as_ref() else {
-            return Err(LeaseError::AssignmentConflict {
-                job_id: expected.job_id.clone().unwrap_or_default(),
-            });
+    ) -> RecoveredHeartbeatOutcome {
+        let loaded = match self.load(repo_id, target).await {
+            Ok(loaded) => loaded,
+            Err(error) => return ownership_loss_from_error(error),
         };
-        if !assignment_identity_matches(current, expected) {
-            return Err(LeaseError::AssignmentConflict {
-                job_id: current.job_id.clone().unwrap_or_default(),
-            });
+        if let Err(reason) = assignment_ownership(&loaded, expected) {
+            return RecoveredHeartbeatOutcome::OwnershipLost { reason };
         }
-        let lease =
-            loaded
-                .metadata()
-                .lease
-                .as_ref()
-                .ok_or_else(|| LeaseError::MalformedMetadata {
-                    reason: "durable assignment is missing its lease".to_string(),
-                })?;
-        let refreshed = self.planner.heartbeat(Some(lease), &lease.worker, now)?;
-        let mut assignment = current.clone();
+
+        let lease = loaded
+            .metadata()
+            .lease
+            .as_ref()
+            .expect("ownership validation requires a lease");
+        let refreshed = match self.planner.heartbeat(Some(lease), &lease.worker, now) {
+            Ok(refreshed) => refreshed,
+            Err(error) => return ownership_loss_from_error(error.into()),
+        };
+        let mut assignment = loaded
+            .metadata()
+            .assignment
+            .as_ref()
+            .expect("ownership validation requires an assignment")
+            .clone();
         assignment.expires_at = Some(refreshed.expires_at);
-        self.write_assignment(
-            &loaded,
-            Some(assignment.clone()),
-            Some(refreshed),
-            AssignmentMutation::default(),
-            target,
-        )
-        .await?;
-        Ok(assignment)
+        match self
+            .write_assignment(
+                &loaded,
+                Some(assignment),
+                Some(refreshed),
+                AssignmentMutation::default(),
+                target,
+            )
+            .await
+        {
+            Ok(()) => RecoveredHeartbeatOutcome::Owned,
+            Err(LeaseError::Contended { .. }) => match self.load(repo_id, target).await {
+                Ok(fresh) => match assignment_ownership(&fresh, expected) {
+                    Ok(()) => RecoveredHeartbeatOutcome::TransientlyUnavailable {
+                        reason: "lease heartbeat lost a compare-and-swap race, but fresh durable ownership still matches"
+                            .to_string(),
+                    },
+                    Err(reason) => RecoveredHeartbeatOutcome::OwnershipLost { reason },
+                },
+                Err(error) => ownership_loss_from_error(error),
+            },
+            Err(error) => ownership_loss_from_error(error),
+        }
     }
 
     /// Clears an impossible durable claim and leaves one idempotent attention

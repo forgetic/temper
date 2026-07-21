@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
 use temper_forge_memory::FaultOp;
-use temper_workflow::WorkflowMetadata;
+use temper_workflow::{RecoveredHeartbeatOutcome, RecoveredOwnershipLossReason, WorkflowMetadata};
 use tracing::Level;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
@@ -282,7 +282,12 @@ fn heartbeat_lookup_failure_retains_context_and_later_advances_the_lease() {
             FaultOp::GetRepositoryByPath,
             "simulated heartbeat repository lookup failure",
         );
-        applier.heartbeat(job.clone(), context.clone()).await;
+        let failed = applier.heartbeat(job.clone(), context.clone()).await;
+        assert!(matches!(
+            failed,
+            RecoveredHeartbeatOutcome::TransientlyUnavailable { reason }
+                if reason.contains("simulated heartbeat repository lookup failure")
+        ));
         let failed_metadata = issue_metadata(&forge, &repo, issue).await;
         assert_eq!(failed_metadata.assignment, initial_metadata.assignment);
         assert_eq!(failed_metadata.lease, initial_metadata.lease);
@@ -299,7 +304,10 @@ fn heartbeat_lookup_failure_retains_context_and_later_advances_the_lease() {
         assert!(rx.try_recv().is_none());
 
         *now.lock().expect("clock lock") = initial + chrono::Duration::seconds(120);
-        applier.heartbeat(job, context).await;
+        assert_eq!(
+            applier.heartbeat(job, context).await,
+            RecoveredHeartbeatOutcome::Owned
+        );
         let refreshed = issue_metadata(&forge, &repo, issue).await;
         assert!(
             refreshed
@@ -519,12 +527,21 @@ fn heartbeat_missing_repository_preserves_durable_metadata() {
                 FaultOp::GetRepositoryByPath,
                 "diagnostic heartbeat repository lookup failure",
             );
-            applier.heartbeat(job.clone(), context.clone()).await;
+            assert!(matches!(
+                applier.heartbeat(job.clone(), context.clone()).await,
+                RecoveredHeartbeatOutcome::TransientlyUnavailable { reason }
+                    if reason.contains("diagnostic heartbeat repository lookup failure")
+            ));
 
             *now.lock().expect("clock lock") = initial + chrono::Duration::seconds(120);
             let mut missing = job;
             missing.repo = "acme/missing".to_string();
-            applier.heartbeat(missing, context).await;
+            assert_eq!(
+                applier.heartbeat(missing, context).await,
+                RecoveredHeartbeatOutcome::OwnershipLost {
+                    reason: RecoveredOwnershipLossReason::TargetRemoved,
+                }
+            );
 
             let after_heartbeats = issue_metadata(&forge, &repo, issue).await;
             assert_eq!(after_heartbeats.assignment, claimed.assignment);

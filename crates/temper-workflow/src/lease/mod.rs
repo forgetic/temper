@@ -39,6 +39,53 @@ use std::error::Error;
 use std::fmt;
 use temper_forge::ForgeError;
 
+/// Definitive evidence that a recovered attempt no longer owns its durable claim.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RecoveredOwnershipLossReason {
+    /// The repository or artifact supplied by the recovered job no longer exists.
+    TargetRemoved,
+    /// Fresh metadata contains no durable assignment.
+    AssignmentAbsent,
+    /// Fresh metadata names a different exact assignment.
+    AssignmentReplaced,
+    /// The exact assignment remains, but its lease is absent.
+    LeaseAbsent,
+    /// The exact assignment remains, but its lease belongs to another identity.
+    LeaseReplaced,
+    /// Fresh metadata cannot represent a valid assignment/lease claim.
+    MalformedClaim { reason: String },
+}
+
+impl fmt::Display for RecoveredOwnershipLossReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TargetRemoved => formatter.write_str("assignment target was removed"),
+            Self::AssignmentAbsent => formatter.write_str("durable assignment is absent"),
+            Self::AssignmentReplaced => {
+                formatter.write_str("durable assignment identity was replaced")
+            }
+            Self::LeaseAbsent => formatter.write_str("durable assignment lease is absent"),
+            Self::LeaseReplaced => formatter.write_str("durable assignment lease was replaced"),
+            Self::MalformedClaim { reason } => {
+                write!(formatter, "malformed durable claim: {reason}")
+            }
+        }
+    }
+}
+
+/// Typed ownership decision returned by a recovered-assignment heartbeat.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RecoveredHeartbeatOutcome {
+    /// The exact assignment and lease were refreshed successfully.
+    Owned,
+    /// Ownership could not be checked or refreshed due to a temporary failure.
+    TransientlyUnavailable { reason: String },
+    /// Fresh durable state proves that this attempt no longer owns the claim.
+    OwnershipLost {
+        reason: RecoveredOwnershipLossReason,
+    },
+}
+
 /// Why a lease operation against a [`Forge`](temper_forge::Forge) failed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LeaseError {

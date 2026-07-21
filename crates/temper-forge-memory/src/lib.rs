@@ -10,9 +10,9 @@
 //! expectations.
 //!
 //! Because there is no durable store to corrupt, a small one-shot
-//! [`fault hook`](MemoryForge::fail_next) lets tests force a chosen operation to
-//! return [`ForgeError::Backend`](temper_forge_model::ForgeError::Backend) so backend
-//! error paths stay exercisable. CI jobs have no create operation in the Forge
+//! [`fault hooks`](MemoryForge::fail_next) let tests force a chosen operation to
+//! return a backend error or optimistic-concurrency conflict so failure paths
+//! stay exercisable. CI jobs have no create operation in the Forge
 //! interface, so [`MemoryForge::seed_ci_jobs`] seeds them directly, mirroring how
 //! the filesystem backend seeds its `ci_jobs.json` fixture. [`MemoryForge::as_user`]
 //! creates another handle over the same store with a different current-user
@@ -99,6 +99,14 @@ impl MemoryForge {
     /// op again queues another fault.
     pub fn fail_next(&self, op: FaultOp, message: impl Into<String>) {
         self.lock().faults.arm(op, message.into());
+    }
+
+    /// Arms a one-shot optimistic-concurrency conflict for the next call.
+    ///
+    /// This test seam models a provider rejecting a stale conditional write;
+    /// no in-memory state is changed by the rejected operation.
+    pub fn conflict_next(&self, op: FaultOp, message: impl Into<String>) {
+        self.lock().faults.arm_conflict(op, message.into());
     }
 
     /// Clears every armed fault.

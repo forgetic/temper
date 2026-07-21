@@ -53,7 +53,8 @@ pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
 pub(crate) const APPLY_GRACE: Duration = Duration::from_secs(10);
 
 pub use applier::{
-    ApplyOutcome, ClaimContext, ClaimOutcome, NoopApplier, ResultApplier, RoleRoutingApplier,
+    ApplyOutcome, ClaimContext, ClaimOutcome, NoopApplier, RecoveredHeartbeatOutcome,
+    RecoveredOwnershipLossReason, ResultApplier, RoleRoutingApplier,
 };
 pub use artifact_context::{
     ArtifactContextBundleService, ArtifactContextError, ArtifactContextForge,

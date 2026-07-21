@@ -138,7 +138,8 @@ pub use journal::{
 };
 pub use lease::{
     AssignmentClaimRequest, AssignmentMutation, LeaseConflict, LeaseError, LeaseManager,
-    LeasePlanner, LeasePolicy, PreparedAcquire,
+    LeasePlanner, LeasePolicy, PreparedAcquire, RecoveredHeartbeatOutcome,
+    RecoveredOwnershipLossReason,
 };
 pub use load::{
     WorkflowDocument, WorkflowLoadError, load_workflow, load_workflow_document, load_workflow_spec,

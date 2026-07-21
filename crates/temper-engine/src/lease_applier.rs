@@ -2,7 +2,7 @@
 
 //! Lease-gated [`ResultApplier`] decorator and the daemon wall-clock seam.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
@@ -15,7 +15,7 @@ use temper_protocol_worker::{
 };
 use temper_workflow::{
     ArtifactSource, AssignmentClaimRequest, DurableAssignment, LeaseError, LeaseManager,
-    LeasePolicy, RoleId,
+    LeasePolicy, RecoveredHeartbeatOutcome, RecoveredOwnershipLossReason, RoleId,
 };
 use tracing::Instrument;
 
@@ -33,6 +33,16 @@ pub fn system_clock() -> WallClock {
     Arc::new(Utc::now)
 }
 
+type AttemptKey = (String, Option<String>);
+
+#[derive(Default)]
+struct LocalAuthority {
+    claims: BTreeMap<AttemptKey, ClaimContext>,
+    /// Monotonic within this process: a definitively lost exact attempt can
+    /// never be restored by a delayed heartbeat.
+    revoked: BTreeSet<AttemptKey>,
+}
+
 /// Lease-gated [`ResultApplier`] decorator for daemon-owned result application.
 ///
 /// The decorator resolves the job's Forge artifact and persists the exact
@@ -46,7 +56,7 @@ pub struct LeaseApplier<F: Forge + ?Sized> {
     _owner: String,
     inner: Arc<dyn ResultApplier>,
     clock: WallClock,
-    claims: Mutex<BTreeMap<String, ClaimContext>>,
+    authority: Mutex<LocalAuthority>,
 }
 
 impl<F: Forge + ?Sized> LeaseApplier<F> {
@@ -63,7 +73,7 @@ impl<F: Forge + ?Sized> LeaseApplier<F> {
             _owner: owner.into(),
             inner,
             clock,
-            claims: Mutex::new(BTreeMap::new()),
+            authority: Mutex::new(LocalAuthority::default()),
         }
     }
 }
@@ -71,6 +81,11 @@ impl<F: Forge + ?Sized> LeaseApplier<F> {
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     async fn claim(&self, job: InFlightJob, context: ClaimContext) -> ClaimOutcome {
+        if self.is_revoked(&job) {
+            return ClaimOutcome::Stale {
+                reason: "exact assignment attempt was already revoked in this process".to_string(),
+            };
+        }
         if let Some(outcome) = self.validate_claim_freshness(&job).await {
             return outcome;
         }
@@ -104,11 +119,23 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
             .await
         {
             Ok(_) => {
-                self.claims
-                    .lock()
-                    .expect("assignment claim lock")
-                    .insert(job.job_id.clone(), context.clone());
-                self.inner.claim(job, context).await
+                let key = attempt_key(&job);
+                let authorized = {
+                    let mut authority = self.authority.lock().expect("assignment authority lock");
+                    if authority.revoked.contains(&key) {
+                        false
+                    } else {
+                        authority.claims.insert(key, context.clone());
+                        true
+                    }
+                };
+                if authorized {
+                    self.inner.claim(job, context).await
+                } else {
+                    ClaimOutcome::Stale {
+                        reason: "exact assignment attempt was revoked while claiming".to_string(),
+                    }
+                }
             }
             Err(
                 LeaseError::Conflict(_)
@@ -127,10 +154,11 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     }
 
     async fn release_claim(&self, job: InFlightJob, context: ClaimContext) {
-        self.claims
+        self.authority
             .lock()
-            .expect("assignment claim lock")
-            .remove(&job.job_id);
+            .expect("assignment authority lock")
+            .claims
+            .remove(&attempt_key(&job));
         let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
             Ok(Some(target)) => target,
             Ok(None) => {
@@ -181,7 +209,16 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         self.inner.check_pull_request_freshness(check).await
     }
 
-    async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
+    async fn heartbeat(
+        &self,
+        job: InFlightJob,
+        context: ClaimContext,
+    ) -> RecoveredHeartbeatOutcome {
+        if self.is_revoked(&job) {
+            return RecoveredHeartbeatOutcome::OwnershipLost {
+                reason: RecoveredOwnershipLossReason::AssignmentReplaced,
+            };
+        }
         let (repo_id, target) = match resolve_target(self.forge.as_ref(), &job).await {
             Ok(Some(target)) => target,
             Ok(None) => {
@@ -194,25 +231,44 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                     artifact_item = %job.artifact.item,
                     "recovered assignment heartbeat target no longer exists"
                 );
-                return;
+                let outcome = RecoveredHeartbeatOutcome::OwnershipLost {
+                    reason: RecoveredOwnershipLossReason::TargetRemoved,
+                };
+                self.revoke(&job);
+                return outcome;
             }
             Err(error) => {
                 report_target_lookup_failure(&job, "heartbeat", &error);
-                return;
+                return RecoveredHeartbeatOutcome::TransientlyUnavailable {
+                    reason: format!("could not resolve recovered assignment target: {error}"),
+                };
             }
         };
-        if let Err(error) = self
+        let outcome = self
             .reattach_recovered_claim(&job, &context, &repo_id, target)
-            .await
-        {
-            tracing::warn!(
-                target: "temper_daemon",
-                operation = "heartbeat",
-                job_id = %job.job_id,
-                %error,
-                "recovered assignment heartbeat did not match durable claim"
-            );
+            .await;
+        match &outcome {
+            RecoveredHeartbeatOutcome::Owned => {}
+            RecoveredHeartbeatOutcome::TransientlyUnavailable { reason } => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    operation = "heartbeat",
+                    job_id = %job.job_id,
+                    reason,
+                    "recovered assignment heartbeat is transiently unavailable"
+                );
+            }
+            RecoveredHeartbeatOutcome::OwnershipLost { reason } => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    operation = "heartbeat",
+                    job_id = %job.job_id,
+                    %reason,
+                    "recovered assignment heartbeat lost durable ownership"
+                );
+            }
         }
+        outcome
     }
 
     async fn apply_recovered(
@@ -233,6 +289,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                     artifact_item = %job.artifact.item,
                     "lease applier assignment target no longer exists"
                 );
+                self.revoke(&job);
                 return ApplyOutcome::Stale;
             }
             Err(error) => {
@@ -242,30 +299,44 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                 };
             }
         };
-        if let Err(error) = self
+        match self
             .reattach_recovered_claim(&job, &context, &repo_id, target)
             .await
         {
-            tracing::error!(
-                target: "temper_daemon",
-                operation = "apply",
-                job_id = %job.job_id,
-                %error,
-                "lease applier could not reattach recovered result claim"
-            );
-            return ApplyOutcome::Retryable {
-                reason: format!("could not reattach recovered result claim: {error}"),
-            };
+            RecoveredHeartbeatOutcome::Owned => {}
+            RecoveredHeartbeatOutcome::TransientlyUnavailable { reason } => {
+                tracing::error!(
+                    target: "temper_daemon",
+                    operation = "apply",
+                    job_id = %job.job_id,
+                    reason,
+                    "lease applier could not verify recovered result claim"
+                );
+                return ApplyOutcome::Retryable {
+                    reason: format!("could not verify recovered result claim: {reason}"),
+                };
+            }
+            RecoveredHeartbeatOutcome::OwnershipLost { reason } => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    operation = "apply",
+                    job_id = %job.job_id,
+                    %reason,
+                    "lease applier recovered result no longer owns durable claim"
+                );
+                return ApplyOutcome::Stale;
+            }
         }
         self.apply(job, result).await
     }
 
     async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
         let Some(claim_context) = self
-            .claims
+            .authority
             .lock()
-            .expect("assignment claim lock")
-            .get(&job.job_id)
+            .expect("assignment authority lock")
+            .claims
+            .get(&attempt_key(&job))
             .cloned()
         else {
             return ApplyOutcome::Stale;
@@ -285,6 +356,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                     artifact_item = %job.artifact.item,
                     "lease applier assignment target no longer exists"
                 );
+                self.revoke(&job);
                 return ApplyOutcome::Stale;
             }
             Err(error) => {
@@ -316,6 +388,16 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                         role: &job.role,
                         reason: "durable assignment did not match result",
                     });
+                    self.revoke(&job);
+                    return ApplyOutcome::Stale;
+                }
+                Err(LeaseError::TargetMissing { .. } | LeaseError::MalformedMetadata { .. }) => {
+                    emit_lease_lost(LeaseLost {
+                        item: &item,
+                        role: &job.role,
+                        reason: "durable assignment state was removed or malformed",
+                    });
+                    self.revoke(&job);
                     return ApplyOutcome::Stale;
                 }
                 Err(error) => {
@@ -355,10 +437,11 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                     role: &job.role,
                 });
             }
-            self.claims
+            self.authority
                 .lock()
-                .expect("assignment claim lock")
-                .remove(&job.job_id);
+                .expect("assignment authority lock")
+                .claims
+                .remove(&attempt_key(&job));
             outcome
         }
         .instrument(span)
@@ -373,18 +456,51 @@ impl<F: Forge + ?Sized> LeaseApplier<F> {
         context: &ClaimContext,
         repo_id: &RepositoryId,
         target: ArtifactSource,
-    ) -> Result<(), String> {
+    ) -> RecoveredHeartbeatOutcome {
+        if self.is_revoked(job) {
+            return RecoveredHeartbeatOutcome::OwnershipLost {
+                reason: RecoveredOwnershipLossReason::AssignmentReplaced,
+            };
+        }
         let expected = durable_assignment(job, context);
         let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
-        manager
+        let outcome = manager
             .heartbeat_assignment(repo_id, target, &expected, (self.clock)())
-            .await
-            .map_err(|error| error.to_string())?;
-        self.claims
+            .await;
+        match outcome {
+            RecoveredHeartbeatOutcome::Owned => {
+                let key = attempt_key(job);
+                let mut authority = self.authority.lock().expect("assignment authority lock");
+                if authority.revoked.contains(&key) {
+                    RecoveredHeartbeatOutcome::OwnershipLost {
+                        reason: RecoveredOwnershipLossReason::AssignmentReplaced,
+                    }
+                } else {
+                    authority.claims.insert(key, context.clone());
+                    RecoveredHeartbeatOutcome::Owned
+                }
+            }
+            RecoveredHeartbeatOutcome::OwnershipLost { reason } => {
+                self.revoke(job);
+                RecoveredHeartbeatOutcome::OwnershipLost { reason }
+            }
+            transient => transient,
+        }
+    }
+
+    fn is_revoked(&self, job: &InFlightJob) -> bool {
+        self.authority
             .lock()
-            .expect("assignment claim lock")
-            .insert(job.job_id.clone(), context.clone());
-        Ok(())
+            .expect("assignment authority lock")
+            .revoked
+            .contains(&attempt_key(job))
+    }
+
+    fn revoke(&self, job: &InFlightJob) {
+        let key = attempt_key(job);
+        let mut authority = self.authority.lock().expect("assignment authority lock");
+        authority.revoked.insert(key.clone());
+        authority.claims.remove(&key);
     }
 
     async fn validate_claim_freshness(&self, job: &InFlightJob) -> Option<ClaimOutcome> {
@@ -401,6 +517,10 @@ impl<F: Forge + ?Sized> LeaseApplier<F> {
             PullRequestFreshnessStatus::Unavailable => Some(ClaimOutcome::Retryable { reason }),
         }
     }
+}
+
+fn attempt_key(job: &InFlightJob) -> AttemptKey {
+    (job.job_id.clone(), job.attempt_id.clone())
 }
 
 fn durable_assignment(job: &InFlightJob, context: &ClaimContext) -> DurableAssignment {

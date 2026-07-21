@@ -7,7 +7,9 @@
 //! is conditional on the version captured at load time (ADR 0013), so a racing
 //! mutation surfaces as [`LeaseError::Contended`] rather than clobbering.
 
-use super::{LeaseError, LeasePlanner, LeasePolicy};
+use super::{
+    LeaseError, LeasePlanner, LeasePolicy, RecoveredHeartbeatOutcome, RecoveredOwnershipLossReason,
+};
 use crate::ArtifactSource;
 use crate::ids::RoleId;
 use crate::metadata::{
@@ -294,7 +296,8 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
                 let issue = self
                     .forge
                     .get_issue_by_number(repo_id, number)
-                    .await?
+                    .await
+                    .map_err(|error| target_read_error(error, target))?
                     .ok_or(LeaseError::TargetMissing { target })?;
                 let metadata = parse_metadata(&issue.body)?;
                 Ok(LoadedLease::Issue {
@@ -310,7 +313,8 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
                 let pull_request = self
                     .forge
                     .get_pull_request_by_number(repo_id, number)
-                    .await?
+                    .await
+                    .map_err(|error| target_read_error(error, target))?
                     .ok_or(LeaseError::TargetMissing { target })?;
                 let metadata = parse_metadata(&pull_request.body)?;
                 Ok(LoadedLease::PullRequest {
@@ -381,6 +385,7 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         };
         result.map_err(|error| match error {
             ForgeError::Conflict(_) => LeaseError::Contended { target },
+            ForgeError::NotFound(_) => LeaseError::TargetMissing { target },
             other => LeaseError::Backend {
                 message: other.to_string(),
             },
@@ -439,6 +444,7 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         };
         result.map_err(|error| match error {
             ForgeError::Conflict(_) => LeaseError::Contended { target },
+            ForgeError::NotFound(_) => LeaseError::TargetMissing { target },
             other => LeaseError::Backend {
                 message: other.to_string(),
             },
@@ -447,16 +453,103 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
 }
 
 fn assignment_identity_matches(current: &DurableAssignment, expected: &DurableAssignment) -> bool {
-    optional_match(&current.job_id, &expected.job_id)
-        && optional_match(&current.role, &expected.role)
-        && optional_match(&current.worker_id, &expected.worker_id)
-        && optional_match(&current.daemon_boot_id, &expected.daemon_boot_id)
+    // These fields are the core attempt fence. In particular, a legacy
+    // `attempt_id: None` only matches another `None`; it is not a wildcard for
+    // a newer fenced attempt.
+    current.job_id == expected.job_id
+        && current.attempt_id == expected.attempt_id
+        && current.role == expected.role
+        && current.worker_id == expected.worker_id
+        && current.daemon_boot_id == expected.daemon_boot_id
+        // The remaining identity fields were added incrementally. A recovered
+        // record that predates one of them omits that comparison, while any
+        // value present in the expected record must match fresh metadata.
+        && optional_match(&current.queue, &expected.queue)
+        && optional_match(&current.action, &expected.action)
+        && optional_match(&current.coordination_key, &expected.coordination_key)
+        && optional_match(
+            &current.assignment_pr_head,
+            &expected.assignment_pr_head,
+        )
+}
+
+fn assignment_ownership(
+    loaded: &LoadedLease,
+    expected: &DurableAssignment,
+) -> Result<(), RecoveredOwnershipLossReason> {
+    let Some(current) = loaded.metadata().assignment.as_ref() else {
+        return Err(RecoveredOwnershipLossReason::AssignmentAbsent);
+    };
+    if !assignment_identity_matches(current, expected) {
+        return Err(RecoveredOwnershipLossReason::AssignmentReplaced);
+    }
+
+    let Some(lease) = loaded.metadata().lease.as_ref() else {
+        return Err(RecoveredOwnershipLossReason::LeaseAbsent);
+    };
+    let expected_role =
+        expected
+            .role
+            .as_ref()
+            .ok_or_else(|| RecoveredOwnershipLossReason::MalformedClaim {
+                reason: "assignment role is absent".to_string(),
+            })?;
+    let expected_owner = expected
+        .daemon_boot_id
+        .as_ref()
+        .or(expected.worker_id.as_ref())
+        .ok_or_else(|| RecoveredOwnershipLossReason::MalformedClaim {
+            reason: "assignment daemon_boot_id and worker_id are absent".to_string(),
+        })?;
+    if &lease.role != expected_role || &lease.worker != expected_owner {
+        return Err(RecoveredOwnershipLossReason::LeaseReplaced);
+    }
+    Ok(())
+}
+
+fn ownership_loss_from_error(error: LeaseError) -> RecoveredHeartbeatOutcome {
+    match error {
+        LeaseError::TargetMissing { .. } => RecoveredHeartbeatOutcome::OwnershipLost {
+            reason: RecoveredOwnershipLossReason::TargetRemoved,
+        },
+        LeaseError::MalformedMetadata { reason } => RecoveredHeartbeatOutcome::OwnershipLost {
+            reason: RecoveredOwnershipLossReason::MalformedClaim { reason },
+        },
+        LeaseError::Conflict(super::LeaseConflict::NotHeld { .. }) => {
+            RecoveredHeartbeatOutcome::OwnershipLost {
+                reason: RecoveredOwnershipLossReason::LeaseAbsent,
+            }
+        }
+        LeaseError::Conflict(super::LeaseConflict::HeldByOther { .. }) => {
+            RecoveredHeartbeatOutcome::OwnershipLost {
+                reason: RecoveredOwnershipLossReason::LeaseReplaced,
+            }
+        }
+        LeaseError::AssignmentConflict { .. } => RecoveredHeartbeatOutcome::OwnershipLost {
+            reason: RecoveredOwnershipLossReason::AssignmentReplaced,
+        },
+        LeaseError::Backend { message } => RecoveredHeartbeatOutcome::TransientlyUnavailable {
+            reason: format!("backend error: {message}"),
+        },
+        LeaseError::Contended { target } => RecoveredHeartbeatOutcome::TransientlyUnavailable {
+            reason: format!("lease write for {target:?} lost a compare-and-swap race"),
+        },
+    }
 }
 
 fn optional_match<T: PartialEq>(current: &Option<T>, expected: &Option<T>) -> bool {
     expected
         .as_ref()
         .is_none_or(|expected| current.as_ref() == Some(expected))
+}
+
+fn target_read_error(error: ForgeError, target: ArtifactSource) -> LeaseError {
+    match error {
+        ForgeError::NotFound(_) => LeaseError::TargetMissing { target },
+        other => LeaseError::Backend {
+            message: other.to_string(),
+        },
+    }
 }
 
 /// Parses metadata from a body, mapping a malformed block to a lease error.
