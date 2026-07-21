@@ -23,3 +23,4 @@ Current ADRs:
 - [ADR 0022: Generalize role work into a sandboxed workspace with verdict routing](0022-workspace-executor-and-verdict-routing.md)
 - [ADR 0023: Multi-repo co-development jobs](0023-multi-repo-co-development-jobs.md)
 - [ADR 0024: Own agent activity in a shared versioned contract](0024-versioned-agent-activity-contract.md)
+- [ADR 0025: Fence recovered work with typed durable-ownership decisions](0025-recovered-assignment-ownership-loss-fencing.md)

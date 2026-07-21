@@ -1,10 +1,9 @@
 //! A small, deterministic fault-injection hook for the in-memory backend.
 //!
 //! The hook lets a test force a chosen operation to fail with
-//! [`ForgeError::Backend`](temper_forge_model::ForgeError::Backend) *before* it
-//! touches in-memory state, modelling a backend that is momentarily unreachable
-//! or whose stored data could not be read. Faults are one-shot and queued
-//! per-operation: arming a fault adds one message; the next call to that
+//! failure before it touches in-memory state, modelling either a transient
+//! backend outage or an optimistic-concurrency race. Faults are one-shot and
+//! queued per operation: arming a fault adds one error; the next call to that
 //! operation pops and returns it, then proceeds normally on later calls.
 //!
 //! Only the operations the workflow runtime exercises are fault-aware, mirroring
@@ -49,13 +48,24 @@ pub enum FaultOp {
 /// Queued one-shot faults, keyed by operation.
 #[derive(Debug, Default)]
 pub(crate) struct FaultStore {
-    queued: HashMap<FaultOp, VecDeque<String>>,
+    queued: HashMap<FaultOp, VecDeque<ForgeError>>,
 }
 
 impl FaultStore {
-    /// Arms a one-shot fault: the next call to `op` fails with `message`.
+    /// Arms a one-shot backend fault.
     pub(crate) fn arm(&mut self, op: FaultOp, message: String) {
-        self.queued.entry(op).or_default().push_back(message);
+        self.queued
+            .entry(op)
+            .or_default()
+            .push_back(ForgeError::Backend(message));
+    }
+
+    /// Arms a one-shot optimistic-concurrency conflict.
+    pub(crate) fn arm_conflict(&mut self, op: FaultOp, message: String) {
+        self.queued
+            .entry(op)
+            .or_default()
+            .push_back(ForgeError::Conflict(message));
     }
 
     /// Clears every armed fault.
@@ -63,10 +73,10 @@ impl FaultStore {
         self.queued.clear();
     }
 
-    /// Consumes one armed fault for `op`, returning an error when present.
+    /// Consumes one armed fault for `op`, returning it when present.
     pub(crate) fn take(&mut self, op: FaultOp) -> ForgeResult<()> {
         match self.queued.get_mut(&op).and_then(VecDeque::pop_front) {
-            Some(message) => Err(ForgeError::Backend(message)),
+            Some(error) => Err(error),
             None => Ok(()),
         }
     }

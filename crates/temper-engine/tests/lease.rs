@@ -199,6 +199,8 @@ fn job_result(job_id: &str) -> JobResult {
 
 #[path = "lease/lookup_failures.rs"]
 mod lookup_failures;
+#[path = "lease/recovered_ownership.rs"]
+mod recovered_ownership;
 
 #[test]
 fn claim_revalidates_pr_freshness_before_persisting_assignment() {

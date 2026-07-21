@@ -14,6 +14,7 @@ use temper_protocol_worker::{
 };
 
 use temper_workflow::AssignmentMutation;
+pub use temper_workflow::{RecoveredHeartbeatOutcome, RecoveredOwnershipLossReason};
 
 use crate::InFlightJob;
 
@@ -79,22 +80,32 @@ pub trait ResultApplier: Send + Sync {
 
     /// Reattaches and refreshes a recovered assignment after the recorded worker
     /// proves ownership by reporting the exact job id in a heartbeat.
-    async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
+    async fn heartbeat(
+        &self,
+        job: InFlightJob,
+        context: ClaimContext,
+    ) -> RecoveredHeartbeatOutcome {
         let _ = (job, context);
+        RecoveredHeartbeatOutcome::Owned
     }
 
     /// Applies a matching result for an assignment reconstructed during daemon
     /// startup. Lease-backed implementations override this to reattach the
     /// exact durable claim before performing any result mutation. The default
-    /// keeps non-durable appliers source compatible.
+    /// propagates the typed heartbeat decision before applying.
     async fn apply_recovered(
         &self,
         job: InFlightJob,
         result: JobResult,
         context: ClaimContext,
     ) -> ApplyOutcome {
-        self.heartbeat(job.clone(), context).await;
-        self.apply(job, result).await
+        match self.heartbeat(job.clone(), context).await {
+            RecoveredHeartbeatOutcome::Owned => self.apply(job, result).await,
+            RecoveredHeartbeatOutcome::TransientlyUnavailable { reason } => {
+                ApplyOutcome::Retryable { reason }
+            }
+            RecoveredHeartbeatOutcome::OwnershipLost { .. } => ApplyOutcome::Stale,
+        }
     }
 
     async fn apply(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome;
@@ -164,7 +175,11 @@ impl ResultApplier for RoleRoutingApplier {
         }
     }
 
-    async fn heartbeat(&self, job: InFlightJob, context: ClaimContext) {
+    async fn heartbeat(
+        &self,
+        job: InFlightJob,
+        context: ClaimContext,
+    ) -> RecoveredHeartbeatOutcome {
         match self.routes.get(&job.role) {
             Some(applier) => applier.heartbeat(job, context).await,
             None => self.default.heartbeat(job, context).await,

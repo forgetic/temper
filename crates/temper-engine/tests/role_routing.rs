@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use temper_engine::{ResultApplier, RoleRoutingApplier};
+use temper_engine::{
+    RecoveredHeartbeatOutcome, RecoveredOwnershipLossReason, ResultApplier, RoleRoutingApplier,
+};
 use temper_protocol_worker::{Artifact, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION};
 use temper_worker_registry::InFlightJob;
 
@@ -28,6 +30,32 @@ impl ResultApplier for RecordingApplier {
             .send((self.name, job.role, result.job_id))
             .expect("recording receiver is open");
         temper_engine::ApplyOutcome::Applied
+    }
+}
+
+struct HeartbeatApplier {
+    outcome: RecoveredHeartbeatOutcome,
+}
+
+#[async_trait::async_trait]
+impl ResultApplier for HeartbeatApplier {
+    async fn heartbeat(
+        &self,
+        _job: InFlightJob,
+        _context: temper_engine::ClaimContext,
+    ) -> RecoveredHeartbeatOutcome {
+        self.outcome.clone()
+    }
+
+    async fn apply(&self, _job: InFlightJob, _result: JobResult) -> temper_engine::ApplyOutcome {
+        temper_engine::ApplyOutcome::Applied
+    }
+}
+
+fn claim_context() -> temper_engine::ClaimContext {
+    temper_engine::ClaimContext {
+        worker_id: "worker-a".to_string(),
+        daemon_boot_id: "boot-a".to_string(),
     }
 }
 
@@ -61,6 +89,46 @@ fn success_result(job_id: &str) -> JobResult {
         summary: None,
         details: None,
     }
+}
+
+#[test]
+fn role_routing_preserves_typed_heartbeat_outcomes_for_routes_and_default() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let transient = RecoveredHeartbeatOutcome::TransientlyUnavailable {
+            reason: "Forge unavailable".to_string(),
+        };
+        let lost = RecoveredHeartbeatOutcome::OwnershipLost {
+            reason: RecoveredOwnershipLossReason::LeaseReplaced,
+        };
+        let routing = RoleRoutingApplier::new(Arc::new(HeartbeatApplier {
+            outcome: transient.clone(),
+        }))
+        .with_route(
+            "engineer",
+            Arc::new(HeartbeatApplier {
+                outcome: lost.clone(),
+            }),
+        );
+
+        assert_eq!(
+            routing
+                .heartbeat(in_flight_job("engineer"), claim_context())
+                .await,
+            lost
+        );
+        assert_eq!(
+            routing
+                .heartbeat(in_flight_job("reviewer"), claim_context())
+                .await,
+            transient
+        );
+        assert_eq!(
+            temper_engine::NoopApplier
+                .heartbeat(in_flight_job("architect"), claim_context())
+                .await,
+            RecoveredHeartbeatOutcome::Owned
+        );
+    })
 }
 
 #[test]
