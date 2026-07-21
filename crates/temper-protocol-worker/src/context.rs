@@ -14,6 +14,10 @@ pub struct FetchContext {
     pub protocol_version: u32,
     pub worker_id: String,
     pub job_id: String,
+    /// Exact assignment fence. Optional only when reading legacy requests;
+    /// current workers always send the id copied from `Assign`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     pub operation: ForgeContextOperation,
 }
 
@@ -21,12 +25,14 @@ impl FetchContext {
     pub fn new(
         worker_id: impl Into<String>,
         job_id: impl Into<String>,
+        attempt_id: impl Into<String>,
         operation: ForgeContextOperation,
     ) -> Self {
         Self {
             protocol_version: WORKER_PROTOCOL_VERSION,
             worker_id: worker_id.into(),
             job_id: job_id.into(),
+            attempt_id: Some(attempt_id.into()),
             operation,
         }
     }

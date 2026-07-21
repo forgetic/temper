@@ -1,0 +1,21 @@
+{
+  "protocol_version": 1,
+  "type": "cancel-attempts",
+  "worker_id": "worker-1",
+  "cancellations": [
+    {
+      "worker_id": "worker-1",
+      "job_id": "job-123",
+      "attempt_id": "attempt-01JEXAMPLE",
+      "cause": "ownership_lost",
+      "reason": "durable assignment no longer belongs to this attempt"
+    },
+    {
+      "worker_id": "worker-1",
+      "job_id": "job-456",
+      "attempt_id": "attempt-02JEXAMPLE",
+      "cause": "ownership_lost",
+      "reason": "durable assignment was replaced by a newer attempt"
+    }
+  ]
+}

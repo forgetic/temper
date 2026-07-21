@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 use temper_protocol_worker::{
-    Assign, ErrorCode, Heartbeat, HeartbeatState, JobHeartbeat, Release, ReleaseDisposition,
-    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
+    Assign, AttemptCancellation, CancelAttempts, ErrorCode, Heartbeat, HeartbeatState,
+    JobHeartbeat, Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
 use crate::WorkerPoolPolicy;
@@ -705,7 +705,7 @@ fn version_mismatch_returns_protocol_version_mismatch_error() {
 }
 
 #[test]
-fn inbound_assign_or_release_is_malformed_message() {
+fn inbound_daemon_messages_are_malformed() {
     let mut core = DaemonCore::new();
     let assign = WorkerProtocolMessage::Assign(Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,
@@ -717,6 +717,21 @@ fn inbound_assign_or_release_is_malformed_message() {
         artifact: artifact(),
         job_payload: json!({}),
     });
+    let cancel = WorkerProtocolMessage::CancelAttempts(
+        CancelAttempts::new(
+            "worker-a",
+            vec![
+                AttemptCancellation::ownership_lost(
+                    "worker-a",
+                    "job-1",
+                    "attempt-1",
+                    "durable assignment was removed",
+                )
+                .expect("valid cancellation"),
+            ],
+        )
+        .expect("valid directive"),
+    );
     let release = WorkerProtocolMessage::Release(Release {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: "worker-a".to_string(),
@@ -728,6 +743,11 @@ fn inbound_assign_or_release_is_malformed_message() {
 
     assert_error(
         core.handle(assign),
+        ErrorCode::MalformedMessage,
+        "daemon-to-worker message received inbound",
+    );
+    assert_error(
+        core.handle(cancel),
         ErrorCode::MalformedMessage,
         "daemon-to-worker message received inbound",
     );

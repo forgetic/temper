@@ -47,8 +47,19 @@ fn poll(worker_id: &str) -> WorkerProtocolMessage {
     })
 }
 
-fn fetch(worker_id: &str, job_id: &str, operation: ForgeContextOperation) -> WorkerProtocolMessage {
-    WorkerProtocolMessage::FetchContext(FetchContext::new(worker_id, job_id, operation))
+fn fetch_with_attempt(
+    worker_id: &str,
+    job_id: &str,
+    attempt_id: Option<&str>,
+    operation: ForgeContextOperation,
+) -> WorkerProtocolMessage {
+    WorkerProtocolMessage::FetchContext(FetchContext {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: worker_id.to_string(),
+        job_id: job_id.to_string(),
+        attempt_id: attempt_id.map(str::to_string),
+        operation,
+    })
 }
 
 fn get_item(repo: &str, number: u64) -> ForgeContextOperation {
@@ -193,7 +204,47 @@ fn context_reads_are_assignment_scoped_bounded_and_available_over_both_carriers(
             )
             .await;
 
+        let attempt_id = assignment
+            .attempt_id
+            .as_deref()
+            .expect("current assignment is fenced");
+        let fetch = |worker_id: &str, job_id: &str, operation: ForgeContextOperation| {
+            fetch_with_attempt(worker_id, job_id, Some(attempt_id), operation)
+        };
+
         forge.fail_next(FaultOp::GetIssueByNumber, "backend secret must not escape");
+        assert_context_error(
+            decode(
+                post(
+                    &url,
+                    &fetch_with_attempt(
+                        "worker-a",
+                        "job-1",
+                        Some("another-attempt"),
+                        get_item("acme/service", issue.number.get()),
+                    ),
+                    Some("pool-secret"),
+                )
+                .await,
+            ),
+            ForgeContextErrorCode::NotAuthorized,
+        );
+        assert_context_error(
+            decode(
+                post(
+                    &url,
+                    &fetch_with_attempt(
+                        "worker-a",
+                        "job-1",
+                        None,
+                        get_item("acme/service", issue.number.get()),
+                    ),
+                    Some("pool-secret"),
+                )
+                .await,
+            ),
+            ForgeContextErrorCode::NotAuthorized,
+        );
         assert_context_error(
             decode(
                 post(

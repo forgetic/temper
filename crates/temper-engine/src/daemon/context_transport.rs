@@ -20,10 +20,13 @@ impl DaemonMachine {
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
         if fetch.protocol_version != WORKER_PROTOCOL_VERSION
-            || fetch.worker_id.is_empty()
+            || fetch.worker_id.trim().is_empty()
             || fetch.worker_id.len() > MAX_CONTEXT_ID_BYTES
-            || fetch.job_id.is_empty()
+            || fetch.job_id.trim().is_empty()
             || fetch.job_id.len() > MAX_CONTEXT_ID_BYTES
+            || fetch.attempt_id.as_deref().is_some_and(|attempt_id| {
+                attempt_id.trim().is_empty() || attempt_id.len() > MAX_CONTEXT_ID_BYTES
+            })
         {
             return self.context_error_requests(
                 fetch,
@@ -32,21 +35,22 @@ impl DaemonMachine {
                 responder,
             );
         }
-        let job =
-            match self
-                .core
-                .authorize_context_read(&fetch.worker_id, &fetch.job_id, auth.as_ref())
-            {
-                Ok(Some(job)) => job,
-                Ok(None) | Err(_) => {
-                    return self.context_error_requests(
-                        fetch,
-                        "unknown",
-                        ForgeContextErrorCode::NotAuthorized,
-                        responder,
-                    );
-                }
-            };
+        let job = match self.core.authorize_context_read(
+            &fetch.worker_id,
+            &fetch.job_id,
+            fetch.attempt_id.as_deref(),
+            auth.as_ref(),
+        ) {
+            Ok(Some(job)) => job,
+            Ok(None) | Err(_) => {
+                return self.context_error_requests(
+                    fetch,
+                    "unknown",
+                    ForgeContextErrorCode::NotAuthorized,
+                    responder,
+                );
+            }
+        };
         if let Err(code) = crate::artifact_context::validate_context_operation(
             &fetch.operation,
             &self.artifact_catalog,

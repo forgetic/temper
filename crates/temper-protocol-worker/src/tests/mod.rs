@@ -3,6 +3,7 @@
 use crate::{RepoAccess, WorkspaceManifest, WorkspaceRepo};
 
 mod activity;
+mod cancellation;
 mod context;
 mod fixtures;
 mod job_context;

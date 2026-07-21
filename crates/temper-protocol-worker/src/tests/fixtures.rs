@@ -16,6 +16,7 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::Poll(msg) => msg.protocol_version,
         WorkerProtocolMessage::Assign(msg) => msg.protocol_version,
         WorkerProtocolMessage::Heartbeat(msg) => msg.protocol_version,
+        WorkerProtocolMessage::CancelAttempts(msg) => msg.protocol_version(),
         WorkerProtocolMessage::Result(msg) => msg.protocol_version,
         WorkerProtocolMessage::Release(msg) => msg.protocol_version,
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
@@ -68,6 +69,7 @@ fn fixtures_round_trip_and_match_variants() {
             | ("poll", WorkerProtocolMessage::Poll(_))
             | ("assign", WorkerProtocolMessage::Assign(_))
             | ("heartbeat", WorkerProtocolMessage::Heartbeat(_))
+            | ("cancel-attempts", WorkerProtocolMessage::CancelAttempts(_))
             | ("result", WorkerProtocolMessage::Result(_))
             | ("result-verdict", WorkerProtocolMessage::Result(_))
             | ("result-verdict-children", WorkerProtocolMessage::Result(_))

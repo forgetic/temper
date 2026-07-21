@@ -22,6 +22,7 @@
 mod activity;
 mod assignment;
 mod auth;
+mod cancellation;
 mod context;
 mod job;
 mod lifecycle;
@@ -32,6 +33,10 @@ mod workspace;
 pub use activity::{WorkerActivityAcknowledgement, WorkerActivityBatch};
 pub use assignment::{Artifact, Assign, Capability, Capacity, Poll, Register};
 pub use auth::{WORKER_AUTHORIZATION_HEADER, WORKER_AUTHORIZATION_SCHEME, WorkerAuth};
+pub use cancellation::{
+    AttemptCancellation, AttemptCancellationCause, CancelAttempts, CancelAttemptsError,
+    MAX_ATTEMPT_CANCELLATION_REASON_BYTES,
+};
 pub use context::{ContextOutcome, ContextResponse, FetchContext};
 pub use job::{
     JobArtifactSnapshot, JobContext, PullRequestFreshness, PullRequestFreshnessResponse,

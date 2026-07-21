@@ -3,6 +3,7 @@
   "type": "fetch-context",
   "worker_id": "worker-a",
   "job_id": "job-285",
+  "attempt_id": "attempt-01JEXAMPLE",
   "operation": {
     "operation": "forge_list_related",
     "repo": "ai/temper",

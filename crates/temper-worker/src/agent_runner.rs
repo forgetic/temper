@@ -37,12 +37,12 @@ use crate::pre_push::{WorkspaceFingerprint, fingerprint_writable_repos_blocking}
 pub use temper_protocol_agent::WorkspaceResult;
 use temper_worker_io::EngineTime;
 
-/// Async worker-owned Forge reader. The job id is supplied by the executor,
-/// never by the model or child process.
+/// Async worker-owned Forge reader. The exact job and attempt ids are supplied
+/// by the executor, never by the model or child process.
 pub type AgentForgeContextFuture =
     Pin<Box<dyn Future<Output = Result<ForgeContextResult, ForgeContextErrorCode>> + Send>>;
 pub type AgentForgeContextHost =
-    Arc<dyn Fn(String, ForgeContextOperation) -> AgentForgeContextFuture + Send + Sync>;
+    Arc<dyn Fn(String, String, ForgeContextOperation) -> AgentForgeContextFuture + Send + Sync>;
 
 /// An attempt-tagged lifecycle observation delivered at the worker boundary.
 ///

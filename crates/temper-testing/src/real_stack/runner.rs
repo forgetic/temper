@@ -41,7 +41,7 @@ impl AgentRunner for NativeJigAgentRunner {
         context: &WorkspaceContext,
         cwd: &Path,
     ) -> Result<AgentRunOutput, AgentRunError> {
-        self.run_attempt(job_id, context, cwd, None).await
+        self.run_attempt(job_id, job_id, context, cwd, None).await
     }
 
     async fn run_request(
@@ -50,6 +50,7 @@ impl AgentRunner for NativeJigAgentRunner {
     ) -> Result<AgentRunOutput, AgentRunError> {
         self.run_attempt(
             request.job_id,
+            &request.attempt_id,
             request.context,
             request.cwd,
             Some((request.fence, request.cancellation)),
@@ -62,6 +63,7 @@ impl NativeJigAgentRunner {
     async fn run_attempt(
         &self,
         job_id: &str,
+        attempt_id: &str,
         context: &WorkspaceContext,
         cwd: &Path,
         attempt_control: Option<(AttemptFence, JobCancellation)>,
@@ -95,8 +97,9 @@ impl NativeJigAgentRunner {
             });
         let forge_host = self.forge_context.clone();
         let job_id = job_id.to_string();
+        let attempt_id = attempt_id.to_string();
         let forge_context: ForgeContextHost =
-            Arc::new(move |operation| forge_host(job_id.clone(), operation));
+            Arc::new(move |operation| forge_host(job_id.clone(), attempt_id.clone(), operation));
         let agent_cancellation = temper_agent::AgentCancellationLatch::default();
         let worker_cancellation = attempt_control
             .as_ref()
