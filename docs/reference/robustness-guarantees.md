@@ -43,6 +43,7 @@ is supplied explicitly, so the suite is reproducible.
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Assignment identity and lifecycle projection are committed before publication; startup admits only exact worker/job heartbeat reattachment and rolls back unmatched orphans before dispatch opens | `claim_is_committed_before_assignment_publication`, `matching_heartbeat_reattaches_staged_assignment_and_rejects_other_ids`, `startup_recovery_barrier_defers_enqueue_until_orphans_are_collected` |
+| A recovered attempt that loses its exact durable assignment is fenced, recursively quiesced, and represented by one durable canceled result before capacity reopens; blocked/closed removal and newer-attempt replacement are definitive, while a one-shot backend failure remains attached and retries | `hermetic_real_stack/ownership_loss.rs` (`ownership_loss_*`) |
 | Dirty reusable workspaces replay local commits plus tracked/untracked edits over an advanced target, or produce one stable actionable quarantine | `existing_dirty_workspace_replays_local_work_over_advanced_remote`, `conflicting_recovery_is_quarantined_once_with_actionable_manifest` |
 | Multi-child creation is durable and staged: restart resumes create/wire/activate without duplicate children or premature dispatch, while a later legitimate execution of the same transition gets a distinct durable round and child correlation identity | `create_intent_recovery.rs`, `repeated_create_rounds.rs`, `staged_children_are_excluded_from_role_scans` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
@@ -170,6 +171,17 @@ publication.
 Capacity is released only after the transient timeout result is durably recorded
 in the restart-readable outbox. Delivery and exact release acknowledgement then
 replay independently, so a daemon/Forge outage does not retain the local permit.
+A recovered attempt has the same ordering with a stricter authority rule: every
+heartbeat must reattach to the exact durable job and attempt. Assignment/lease
+removal, a blocked or closed source, and replacement by a newer attempt close the
+attempt fence and request cancellation; backend lookup failure remains transient.
+Recursive cleanup and endpoint joins precede the sole `Canceled` result and local
+capacity release. The daemon keeps its workstream occupied until stale delivery
+is acknowledged as `Reclaimed` or `Superseded`, after which the worker compacts
+the outbox. Model, tool, submit, Forge-context, workspace, git, push, and ordinary
+result effects are rejected after the fence, while the trace forwarder is still
+allowed to persist the terminal `cancelled` boundary.
+
 Expired durable assignments are converged from fresh Forge state by the shared
 startup/live `AssignmentConverger`; a newer claim is a stale no-op and an outage
 leaves the exact assignment available for a later pass. Structured
@@ -186,9 +198,12 @@ completion-versus-timeout, one durable record, one capacity release, heartbeat
 membership, and capacity greater than one
 (`temper-worker::worker_machine_watchdog_tests`). Unix supervisor tests prove
 that graceful and forced cancellation join owned resources and synthesize a
-terminal `run.finished(status=cancelled)` record. Live convergence tests cover
-Forge outage, retry, idempotence, and newer-claim fencing
-(`temper-runner/tests/assignment_convergence.rs`).
+terminal `run.finished(status=cancelled)` record. Live convergence tests cover Forge outage, retry, idempotence, and newer-claim
+fencing (`temper-runner/tests/assignment_convergence.rs`). The hermetic
+real-stack ownership-loss matrix additionally runs the real daemon, worker
+machine/shell, native agent, MemoryForge, local git, trace spool/journal, and
+result outbox through blocked/closed/replaced/transient and restart boundaries
+(`temper-testing/tests/hermetic_real_stack/ownership_loss.rs`).
 
 ## Limitations discovered by the tests
 

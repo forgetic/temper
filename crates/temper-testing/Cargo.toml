@@ -50,6 +50,7 @@ temper-agent-core = { path = "../temper-agent-core" }
 temper-agent = { path = "../temper-agent" }
 tongs.workspace = true
 temper-protocol-agent = { path = "../temper-protocol-agent" }
+temper-protocol-activity = { path = "../temper-protocol-activity" }
 jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 tempfile.workspace = true

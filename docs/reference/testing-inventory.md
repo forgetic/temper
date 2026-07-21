@@ -78,6 +78,11 @@ Total: 1,982 test cases across 383 files; 17 are ignored live tests.
 - Engine/runner/worker: `crates/temper-engine/tests/`,
   `crates/temper-runner/tests/`, and `crates/temper-worker/tests/` exercise
   role feeds, appliers, worker protocol, local git workspaces, and fake agents.
+  `crates/temper-testing/tests/hermetic_real_stack/ownership_loss.rs` owns the
+  recovered exact-assignment acceptance contract: blocked/closed removal,
+  newer-attempt replacement, transient backend recovery, cancellation joins,
+  stale outbox compaction, terminal traces, and restart non-resumption over the
+  production daemon/worker/native-agent composition.
 - Simulation: `crates/temper-sim/tests/` and the machine-sim tests run real
   production machines under deterministic scheduling and virtual time. The sim
   crate keeps hand-rolled worker clients for cheap HTTP/misbehavior coverage and
@@ -116,10 +121,11 @@ snapshot.
   hermetic coverage, or useful mainly when debugging the live fixture stack.
 - **Default hermetic real-stack tests** should absorb assertions about workflow
   logic, retry/idempotency, role routing, CLI artifact validation, worker/daemon
-  protocol behavior, implementation-PR handoff, and provider request shaping
-  whenever those assertions can be proven with memory/filesystem forges, fake
-  HTTP, local git, in-process transports, jig fake LLMs, or simulation without
-  live Forgejo/provider state.
+  protocol behavior, implementation-PR handoff, recovered-assignment ownership
+  fencing/restart, trace forwarding, and provider request shaping whenever those
+  assertions can be proven with memory/filesystem forges, fake HTTP, local git,
+  in-process transports, jig fake LLMs, or simulation without live
+  Forgejo/provider state.
 
 ### Current ignored live files
 

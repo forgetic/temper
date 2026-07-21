@@ -12,9 +12,10 @@ use skein::runtime::RuntimeHandle;
 use temper_engine::{Daemon, RoleFeedMode};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId};
-use temper_protocol_worker::{JobResult, ResultStatus, WorkerAuth, WorkerProtocolMessage};
+use temper_protocol_worker::{JobResult, Release, ResultStatus, WorkerAuth, WorkerProtocolMessage};
 use temper_worker::{
-    CodingExecutor, CodingExecutorConfig, Transport, WorkerComponentHandle, WorkerConfig,
+    CodingExecutor, CodingExecutorConfig, TraceCollector, Transport, WorkerComponentHandle,
+    WorkerConfig,
 };
 use temper_workflow::InMemoryJournal;
 use temper_workflow::{
@@ -30,6 +31,7 @@ use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
 
 pub(crate) type PublishedResultKey = (String, Option<String>);
 pub(crate) type PublishedResults = Arc<Mutex<BTreeMap<PublishedResultKey, JobResult>>>;
+pub(crate) type PublishedReleases = Arc<Mutex<Vec<Release>>>;
 
 /// Built hermetic stack. Durable state and replaceable process handles are
 /// intentionally different values so tests cannot accidentally rebuild the
@@ -50,6 +52,8 @@ pub struct HermeticDurableWorld {
     pub(crate) result_rx: temper_engine_io::CqReceiver<JobResult>,
     /// Exact results already observed at the worker publication boundary.
     pub(crate) published_results: PublishedResults,
+    /// Daemon acknowledgements observed for exact durable result delivery.
+    pub(crate) published_releases: PublishedReleases,
     pub(crate) origins: BTreeMap<String, PathBuf>,
     pub(crate) repo_ids: BTreeMap<String, RepositoryId>,
     pub(crate) workspace_root: PathBuf,
@@ -63,6 +67,8 @@ pub struct HermeticDurableWorld {
     pub(crate) clock: MutableWallClock,
     pub(crate) hooks: PauseHooks,
     pub(crate) router: Arc<DaemonRouter>,
+    pub(crate) trace_collector: TraceCollector,
+    pub(crate) trace_journal: Option<temper_engine::AgentTraceJournal>,
     pub(crate) apply_grace: Option<Duration>,
     pub(crate) mechanical_journal: InMemoryJournal,
 }
@@ -505,6 +511,7 @@ impl HermeticRealStack {
             router: self.router.clone(),
             result_tx: self.result_tx.clone(),
             published_results: Arc::clone(&self.published_results),
+            published_releases: Arc::clone(&self.published_releases),
             hooks: self.hooks.clone(),
         })
     }
@@ -518,9 +525,7 @@ pub struct HermeticRunResult {
     pub pull_requests: Vec<PullRequest>,
 }
 
-/// Replaceable in-process endpoint. Existing workers resolve the current daemon
-/// on every protocol message, matching an external worker reconnecting to a
-/// restarted daemon at a stable URL.
+/// Replaceable endpoint resolved on every message, like an external reconnect.
 pub struct DaemonRouter {
     daemon: Mutex<Arc<Daemon>>,
 }
@@ -541,12 +546,12 @@ impl DaemonRouter {
     }
 }
 
-/// In-process transport wrapper that delegates through the replaceable daemon
-/// endpoint and records every worker `Result` message for assertions.
+/// Replaceable-daemon transport that records worker results for assertions.
 pub struct ResultTappingTransport {
     router: Arc<DaemonRouter>,
     result_tx: temper_engine_io::CqSender<JobResult>,
     published_results: PublishedResults,
+    published_releases: PublishedReleases,
     hooks: PauseHooks,
 }
 
@@ -559,6 +564,7 @@ impl Transport for ResultTappingTransport {
     ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
         let result_tx = self.result_tx.clone();
         let published_results = Arc::clone(&self.published_results);
+        let published_releases = Arc::clone(&self.published_releases);
         let hooks = self.hooks.clone();
         async move {
             let reports_jobs = matches!(
@@ -568,9 +574,7 @@ impl Transport for ResultTappingTransport {
             if reports_jobs {
                 hooks.reach(PausePoint::WorkerHeartbeatReportingJob).await;
             }
-            // Resolve the replaceable endpoint after the pre-delivery pause so
-            // a test can park an already-created request, replace the daemon,
-            // and prove that the reconnect reaches the new incarnation.
+            // Resolve after the pause so parked requests reconnect to a new daemon.
             let recorded = match &message {
                 WorkerProtocolMessage::Result(result) => Some(result.clone()),
                 _ => None,
@@ -593,10 +597,12 @@ impl Transport for ResultTappingTransport {
                     }
                 }
             });
-            if first_publication {
-                // A first publication follows the coding executor's commit and
-                // push. Durable replay of the same exact result must not
-                // masquerade as another workspace push in crash tests.
+            let first_product_publication = first_publication
+                && recorded.as_ref().is_some_and(|result| {
+                    result.status == ResultStatus::Success && !result.repos.is_empty()
+                });
+            if first_product_publication {
+                // Durable replay must not masquerade as a second workspace push.
                 hooks.reach(PausePoint::WorkerPushCompleted).await;
             }
             if recorded.is_some() {
@@ -606,6 +612,12 @@ impl Transport for ResultTappingTransport {
             let reply = daemon
                 .deliver_protocol_message_with_auth(message, auth)
                 .await;
+            if let Ok(Some(WorkerProtocolMessage::Release(release))) = &reply {
+                published_releases
+                    .lock()
+                    .expect("published release lock")
+                    .push(release.clone());
+            }
             if reports_jobs && matches!(&reply, Ok(None)) {
                 hooks.reach(PausePoint::WorkerHeartbeatCompleted).await;
             }
