@@ -78,7 +78,9 @@ const REPO_NAME: &str = "service";
 /// credentials verbatim and makes no LLM call.
 const DUMMY_DEEPSEEK_KEY: &str = "sk-init-e2e-dummy";
 
-const DAEMON_BOOT_TIMEOUT: Duration = Duration::from_secs(60);
+// Engine startup performs live Forge authentication and workflow initialization
+// before binding. Leave bounded headroom for a loaded shared CI host.
+const DAEMON_BOOT_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[test]
 #[ignore = "boots a real Forgejo fixture and provisions it via `temper init --apply`; run with --ignored"]
