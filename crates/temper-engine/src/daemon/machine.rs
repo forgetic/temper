@@ -14,9 +14,8 @@ use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{EngineTime, Machine};
 use temper_forge::RepositoryPath;
 use temper_protocol_worker::{
-    Artifact, Assign, ContextResponse, ErrorCode, FetchContext, JobResult, Poll, ProtocolError,
-    PullRequestFreshness, WORKER_PROTOCOL_VERSION, WorkerActivityBatch, WorkerAuth,
-    WorkerProtocolMessage,
+    Artifact, Assign, ContextResponse, FetchContext, JobResult, Poll, PullRequestFreshness,
+    WorkerActivityBatch, WorkerAuth, WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -26,9 +25,13 @@ use temper_worker_registry::{
 
 use crate::DEFAULT_MAX_POLL_WAIT_MS;
 use crate::InFlightJob;
-use crate::applier::{ApplyOutcome, ClaimOutcome};
+use crate::applier::{ApplyOutcome, ClaimOutcome, RecoveredHeartbeatOutcome};
 use crate::webhook::WebhookConfig;
 
+use super::assignment_support::{
+    claim_failure_response, in_flight_job_from_assignment, new_daemon_boot_id,
+};
+pub(super) use super::attempt_fencing::{AttemptKey, FencedAttempt, RecoveredHeartbeatCheck};
 use super::wake_coordinator::{
     BroadMode, WakeCoordinator, WakeLane, WakeOutcome, WakeRequest, WakeWork,
 };
@@ -67,6 +70,15 @@ pub(super) enum DaemonCompletion {
         result: JobResult,
         responder: HttpResponder,
         outcome: ApplyOutcome,
+    },
+    /// Typed recovered-heartbeat checks finished off-loop. The responder stays
+    /// with the completion so only the machine can apply fencing and reply.
+    RecoveredHeartbeatsFinished {
+        worker_id: String,
+        reports: Vec<AttemptKey>,
+        outcomes: Vec<(AttemptKey, RecoveredHeartbeatOutcome)>,
+        responder: HttpResponder,
+        response: HttpResponseData,
     },
     /// Close the dispatch barrier before startup inventory begins.
     BeginStartupRecovery,
@@ -217,9 +229,12 @@ pub(super) enum DaemonRequest {
         job: InFlightJob,
         context: crate::applier::ClaimContext,
     },
-    /// Refresh exact recovered assignments before acknowledging their heartbeat.
-    RunHeartbeatsAndRespond {
-        assignments: Vec<(InFlightJob, crate::applier::ClaimContext)>,
+    /// Refresh exact recovered assignments off-loop. Completion is routed back
+    /// through the machine before any heartbeat response is sent.
+    RunRecoveredHeartbeats {
+        checks: Vec<RecoveredHeartbeatCheck>,
+        worker_id: String,
+        reports: Vec<AttemptKey>,
         responder: HttpResponder,
         response: HttpResponseData,
     },
@@ -313,9 +328,13 @@ pub(super) struct DaemonMachine {
     pub(super) webhook: Option<WebhookConfig>,
     pub(super) waiters: BTreeMap<u64, PollWaiter>,
     pub(super) applying: BTreeSet<String>,
-    pub(super) pending_results: BTreeMap<(String, Option<String>), JobResult>,
-    pub(super) completed_results:
-        BTreeMap<(String, Option<String>), (JobResult, WorkerProtocolMessage)>,
+    pub(super) pending_results: BTreeMap<AttemptKey, JobResult>,
+    pub(super) completed_results: BTreeMap<AttemptKey, (JobResult, WorkerProtocolMessage)>,
+    /// Monotonic exact-attempt tombstones. Unlike completed successful-result
+    /// replay, these acknowledgements intentionally ignore payload equality.
+    pub(super) fenced_attempts: BTreeMap<AttemptKey, FencedAttempt>,
+    /// Number of unresolved async ownership checks for each exact attempt.
+    pub(super) pending_ownership_checks: BTreeMap<AttemptKey, usize>,
     pub(super) recently_applied: BTreeMap<String, EngineTime>,
     pub(super) retry_attempts: BTreeMap<String, u32>,
     pub(super) retry_backoff_until: BTreeMap<String, EngineTime>,
@@ -391,6 +410,8 @@ impl DaemonMachine {
             applying: BTreeSet::new(),
             pending_results: BTreeMap::new(),
             completed_results: BTreeMap::new(),
+            fenced_attempts: BTreeMap::new(),
+            pending_ownership_checks: BTreeMap::new(),
             recently_applied: BTreeMap::new(),
             retry_attempts: BTreeMap::new(),
             retry_backoff_until: BTreeMap::new(),
@@ -474,47 +495,6 @@ impl DaemonMachine {
             };
         self.wake_decision_requests(decisions)
     }
-}
-
-fn in_flight_job_from_assignment(assign: &Assign) -> InFlightJob {
-    InFlightJob {
-        job_id: assign.job_id.clone(),
-        attempt_id: assign.attempt_id.clone(),
-        role: assign.role.clone(),
-        repo: assign.repo.clone(),
-        artifact: assign.artifact.clone(),
-        job_payload: assign.job_payload.clone(),
-    }
-}
-
-fn claim_failure_response(
-    responder: HttpResponder,
-    job_id: String,
-    reason: String,
-) -> DaemonRequest {
-    DaemonRequest::Respond {
-        responder,
-        response: super::protocol::protocol_response(Some(WorkerProtocolMessage::Error(
-            ProtocolError {
-                protocol_version: WORKER_PROTOCOL_VERSION,
-                code: ErrorCode::PollTimeout,
-                message: format!("durable assignment claim failed: {reason}"),
-                retry_after_ms: Some(100),
-                job_id: Some(job_id),
-            },
-        ))),
-    }
-}
-
-fn new_daemon_boot_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT_BOOT: AtomicU64 = AtomicU64::new(1);
-    let sequence = NEXT_BOOT.fetch_add(1, Ordering::Relaxed);
-    let epoch_nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("daemon-boot-{epoch_nanos:x}-{sequence:x}")
 }
 
 pub(super) fn retry_delay(attempt: u32) -> Duration {
@@ -631,6 +611,15 @@ impl Machine for DaemonMachine {
                 responder,
                 outcome,
             } => self.handle_apply_and_respond_finished(result, responder, outcome),
+            DaemonCompletion::RecoveredHeartbeatsFinished {
+                worker_id,
+                reports,
+                outcomes,
+                responder,
+                response,
+            } => {
+                self.finish_recovered_heartbeats(worker_id, reports, outcomes, responder, response)
+            }
             DaemonCompletion::BeginStartupRecovery => {
                 self.startup_recovery = true;
                 Vec::new()

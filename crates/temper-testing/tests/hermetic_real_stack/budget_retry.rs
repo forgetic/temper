@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jig_core::{Reply, Script, StopReason, Turn};
 use temper_forge_model::{Forge, Issue};
@@ -104,7 +104,7 @@ fn budget_exhaustion_preserves_dirty_work_and_session_for_redispatch() {
             "the exhausted attempt must not create a PR"
         );
 
-        let released_issue = current_issue(&stack).await;
+        let released_issue = wait_for_released_issue(&stack, &cx).await;
         assert!(released_issue.labels.iter().any(|label| label == "ready"));
         assert!(
             !released_issue
@@ -190,10 +190,15 @@ fn budget_exhaustion_preserves_dirty_work_and_session_for_redispatch() {
         );
         retry_started.release();
 
-        let success = stack
-            .await_worker_result(&cx, Duration::from_secs(20))
-            .await
-            .expect("redispatched attempt succeeds");
+        let success = loop {
+            let result = stack
+                .await_worker_result(&cx, Duration::from_secs(20))
+                .await
+                .expect("redispatched attempt succeeds");
+            if result.status == ResultStatus::Success {
+                break result;
+            }
+        };
         assert_eq!(success.status, ResultStatus::Success);
         assert_eq!(success.repos.len(), 1);
         assert_eq!(success.repos[0].branch.name, work_branch);
@@ -389,6 +394,24 @@ fn sorted_branches(stack: &HermeticRealStack) -> Vec<String> {
         .expect("origin branch inventory");
     branches.sort();
     branches
+}
+
+async fn wait_for_released_issue(stack: &HermeticRealStack, cx: &skein::cx::Cx) -> Issue {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let issue = current_issue(stack).await;
+        if issue.labels.iter().any(|label| label == "ready")
+            && !issue.labels.iter().any(|label| label == "in-progress")
+        {
+            return issue;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for retryable result application: {:?}",
+            issue.labels
+        );
+        temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
+    }
 }
 
 async fn current_issue(stack: &HermeticRealStack) -> Issue {

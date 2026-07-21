@@ -96,10 +96,15 @@ fn hermetic_real_stack_basic_delivery_architect_triages_then_engineer_opens_pr()
                 .expect("engineer code_ready scan enqueues"),
             1
         );
-        let engineer_result = stack
-            .await_worker_result(&cx, Duration::from_secs(10))
-            .await
-            .expect("engineer native-agent turn reports a pushed product diff");
+        let engineer_result = loop {
+            let result = stack
+                .await_worker_result(&cx, Duration::from_secs(10))
+                .await
+                .expect("engineer native-agent turn reports a pushed product diff");
+            if result.verdict.is_none() && !result.repos.is_empty() {
+                break result;
+            }
+        };
         assert_eq!(engineer_result.status, ResultStatus::Success);
         assert_eq!(engineer_result.verdict.as_deref(), None);
         assert_eq!(engineer_result.repos.len(), 1);

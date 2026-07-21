@@ -4,6 +4,8 @@
 mod apply_window;
 #[path = "apply/failure.rs"]
 mod failure;
+#[path = "apply/ownership_fencing.rs"]
+mod ownership_fencing;
 #[path = "apply/result_delivery.rs"]
 mod result_delivery;
 #[path = "apply/support.rs"]

@@ -52,19 +52,19 @@ impl DaemonCore {
                 let _ = self
                     .coordinator
                     .registry_mut()
-                    .report_job(&heartbeat.worker_id, reported);
-                recovery.matched_job_ids.push(job_id);
+                    .report_job(&heartbeat.worker_id, reported.clone());
+                recovery.matched_reports.push(reported);
                 continue;
             }
 
             let Some(staged) = self.staged_recovery.get(&job_id).cloned() else {
-                recovery.rejected_job_ids.push(job_id);
+                recovery.rejected_reports.push(reported);
                 continue;
             };
             if staged.worker_id != heartbeat.worker_id
                 || staged.attempt_id.as_deref() != reported.attempt_id.as_deref()
             {
-                recovery.rejected_job_ids.push(job_id);
+                recovery.rejected_reports.push(reported);
                 continue;
             }
             match self
@@ -74,15 +74,15 @@ impl DaemonCore {
                 Ok(_) => {
                     self.staged_recovery.remove(&job_id);
                     if let Some(attempt_id) = staged.attempt_id {
-                        self.assignment_attempts.insert(job_id.clone(), attempt_id);
+                        self.assignment_attempts.insert(job_id, attempt_id);
                     }
                     let _ = self
                         .coordinator
                         .registry_mut()
-                        .report_job(&heartbeat.worker_id, reported);
-                    recovery.matched_job_ids.push(job_id);
+                        .report_job(&heartbeat.worker_id, reported.clone());
+                    recovery.matched_reports.push(reported);
                 }
-                Err(_) => recovery.rejected_job_ids.push(job_id),
+                Err(_) => recovery.rejected_reports.push(reported),
             }
         }
         (None, recovery)

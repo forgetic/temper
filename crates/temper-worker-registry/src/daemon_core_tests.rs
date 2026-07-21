@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 use temper_protocol_worker::{
-    Assign, AttemptCancellation, CancelAttempts, ErrorCode, Heartbeat, HeartbeatState,
-    JobHeartbeat, Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
+    Assign, AttemptCancellation, CancelAttempts, ErrorCode, Release, ReleaseDisposition,
+    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
 use crate::WorkerPoolPolicy;
@@ -591,71 +591,6 @@ fn poll_only_returns_capability_matching_work() {
         Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-1"),
         other => panic!("expected assign, got {other:?}"),
     }
-}
-
-#[test]
-fn matching_heartbeat_reattaches_staged_assignment_and_rejects_other_ids() {
-    let mut core = DaemonCore::new();
-    core.stage_recovered_job(RecoveredJob {
-        job_id: "job-old".to_string(),
-        attempt_id: None,
-        worker_id: "worker-a".to_string(),
-        role: "engineer".to_string(),
-        repo: "ai/temper".to_string(),
-        artifact: artifact(),
-        job_payload: coordinated_payload("stream-1", &["ai/temper"]),
-    })
-    .unwrap();
-    core.coordinator_mut()
-        .register(&register("worker-a", "engineer", "ai/temper", 1));
-    core.coordinator_mut()
-        .register(&register("worker-b", "engineer", "ai/temper", 1));
-
-    let heartbeat = |worker: &str, jobs: &[&str]| Heartbeat {
-        protocol_version: WORKER_PROTOCOL_VERSION,
-        worker_id: worker.to_string(),
-        jobs: jobs
-            .iter()
-            .map(|job_id| JobHeartbeat {
-                job_id: (*job_id).to_string(),
-                attempt_id: None,
-                state: HeartbeatState::Running,
-                message: String::new(),
-                liveness: None,
-            })
-            .collect(),
-        free_capacity: Some(0),
-        worker_pool: None,
-        max_concurrent_jobs: None,
-        capabilities: Vec::new(),
-    };
-
-    let (_, mismatch) = core
-        .handle_authenticated_heartbeat(heartbeat("worker-b", &["job-old"]), None)
-        .unwrap();
-    assert!(mismatch.matched_job_ids.is_empty());
-    assert_eq!(mismatch.rejected_job_ids, ["job-old"]);
-    assert_eq!(core.staged_recovery_len(), 1);
-
-    let (_, matched) = core
-        .handle_authenticated_heartbeat(heartbeat("worker-a", &["unknown", "job-old"]), None)
-        .unwrap();
-    assert_eq!(matched.matched_job_ids, ["job-old"]);
-    assert_eq!(matched.rejected_job_ids, ["unknown"]);
-    assert_eq!(core.staged_recovery_len(), 0);
-    assert_eq!(
-        core.coordinator().assigned_worker("job-old"),
-        Some("worker-a")
-    );
-
-    let (_, repeated) = core
-        .handle_authenticated_heartbeat(heartbeat("worker-a", &["job-old"]), None)
-        .unwrap();
-    assert_eq!(repeated.matched_job_ids, ["job-old"]);
-    assert_eq!(
-        core.coordinator().registry().free_capacity("worker-a"),
-        Some(0)
-    );
 }
 
 #[test]

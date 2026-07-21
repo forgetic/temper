@@ -152,11 +152,11 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
                 1,
                 "result-recorded and delivery phases must survive in the outbox"
             );
-            let delivery_already_converged = matches!(
-                phase,
-                CancellationRestartPhase::UncertainDelivery
-                    | CancellationRestartPhase::PostAckPreCompaction
-            );
+            // An uncertain response may now be the specified retryable 503
+            // while an ownership check is unresolved. Only a matching release
+            // acknowledgement proves pre-crash convergence.
+            let delivery_already_converged =
+                phase == CancellationRestartPhase::PostAckPreCompaction;
             if delivery_already_converged {
                 assert!(
                     stack.open_recovery_barrier().await.is_empty(),

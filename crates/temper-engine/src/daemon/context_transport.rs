@@ -8,7 +8,7 @@ use temper_protocol_worker::{
     WORKER_PROTOCOL_VERSION, WorkerAuth,
 };
 
-use super::machine::{ContextReadAudit, DaemonMachine, DaemonRequest};
+use super::machine::{AttemptKey, ContextReadAudit, DaemonMachine, DaemonRequest};
 
 const MAX_CONTEXT_ID_BYTES: usize = 256;
 
@@ -32,6 +32,19 @@ impl DaemonMachine {
                 fetch,
                 "unknown",
                 ForgeContextErrorCode::InvalidRequest,
+                responder,
+            );
+        }
+        let key = AttemptKey {
+            worker_id: fetch.worker_id.clone(),
+            job_id: fetch.job_id.clone(),
+            attempt_id: fetch.attempt_id.clone(),
+        };
+        if !self.attempt_can_read_context(&key) {
+            return self.context_error_requests(
+                fetch,
+                "unknown",
+                ForgeContextErrorCode::NotAuthorized,
                 responder,
             );
         }

@@ -10,17 +10,15 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_protocol_worker::{
-    Artifact, Assign, ErrorCode, ForgeContextErrorCode, Heartbeat, JobResult, Poll, ProtocolError,
-    PullRequestFreshness, Register, WORKER_AUTHORIZATION_HEADER, WORKER_PROTOCOL_VERSION,
-    WorkerAuth, WorkerProtocolMessage,
+    Artifact, Assign, ForgeContextErrorCode, Heartbeat, Poll, PullRequestFreshness, Register,
+    WORKER_AUTHORIZATION_HEADER, WorkerAuth, WorkerProtocolMessage,
 };
 
 use super::context_transport::malformed_context_response;
-use super::machine::{DaemonMachine, DaemonRequest, DeferredEnqueue, PollWaiter};
-use super::protocol::{
-    is_poll_timeout, protocol_response, register_log_line, result_disposition,
-    result_disposition_log_value, result_received_log_line,
+use super::machine::{
+    AttemptKey, DaemonMachine, DaemonRequest, DeferredEnqueue, PollWaiter, RecoveredHeartbeatCheck,
 };
+use super::protocol::{is_poll_timeout, protocol_response, register_log_line};
 use super::state_dto::{DaemonStateSnapshot, JobDto};
 use crate::InFlightJob;
 
@@ -202,6 +200,7 @@ impl DaemonMachine {
         auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
+        let worker_id = heartbeat.worker_id.clone();
         let (response, recovery) = match self
             .core
             .handle_authenticated_heartbeat(heartbeat, auth.as_ref())
@@ -215,20 +214,42 @@ impl DaemonMachine {
             }
         };
 
-        let mut assignments = Vec::new();
-        for job_id in recovery.matched_job_ids {
-            let Some(job) = self.core.in_flight_job(&job_id) else {
-                continue;
-            };
-            let Some(context) = self.assignment_contexts.get(&job_id).cloned() else {
-                continue;
-            };
-            assignments.push((job, context));
+        let mut reports = Vec::new();
+        for report in recovery.rejected_reports {
+            let key = AttemptKey::from_report(&worker_id, &report);
+            reports.push(key.clone());
+            self.fence_rejected_report(key);
         }
-        vec![DaemonRequest::RunHeartbeatsAndRespond {
-            assignments,
+
+        let mut checks = Vec::new();
+        for report in recovery.matched_reports {
+            let key = AttemptKey::from_report(&worker_id, &report);
+            reports.push(key.clone());
+            if self.attempt_is_fenced(&key) || self.pending_results.contains_key(&key) {
+                continue;
+            }
+            let Some(job) = self.core.in_flight_job(&report.job_id) else {
+                self.fence_rejected_report(key);
+                continue;
+            };
+            let Some(context) = self.assignment_contexts.get(&report.job_id).cloned() else {
+                self.fence_rejected_report(key);
+                continue;
+            };
+            self.begin_ownership_check(&key);
+            checks.push(RecoveredHeartbeatCheck { key, job, context });
+        }
+
+        let response = protocol_response(response);
+        if checks.is_empty() {
+            return self.immediate_heartbeat_response(&worker_id, &reports, responder, response);
+        }
+        vec![DaemonRequest::RunRecoveredHeartbeats {
+            checks,
+            worker_id,
+            reports,
             responder,
-            response: protocol_response(response),
+            response,
         }]
     }
 
@@ -312,101 +333,6 @@ impl DaemonMachine {
                 response: protocol_response(Some(response)),
             }],
         }
-    }
-
-    fn handle_result(
-        &mut self,
-        result: JobResult,
-        auth: Option<WorkerAuth>,
-        responder: HttpResponder,
-    ) -> Vec<DaemonRequest> {
-        match self.core.authenticate_result(&result, auth.as_ref()) {
-            Err(_) => {
-                return vec![DaemonRequest::Respond {
-                    responder,
-                    response: HttpResponseData::status_only(401),
-                }];
-            }
-            Ok(Some(response)) => {
-                return vec![DaemonRequest::Respond {
-                    responder,
-                    response: protocol_response(Some(response)),
-                }];
-            }
-            Ok(None) => {}
-        }
-
-        let key = (result.job_id.clone(), result.attempt_id.clone());
-
-        // A lost acknowledgement may replay after the exact apply completed.
-        // Retain the applied payload so only a byte-for-byte equivalent result
-        // receives the prior release and no Forge work runs twice.
-        if let Some((applied, response)) = self.completed_results.get(&key) {
-            let response = if applied == &result {
-                protocol_response(Some(response.clone()))
-            } else {
-                protocol_response(Some(WorkerProtocolMessage::Error(ProtocolError {
-                    protocol_version: WORKER_PROTOCOL_VERSION,
-                    code: ErrorCode::MalformedMessage,
-                    message: "different result reused a completed assignment attempt".to_string(),
-                    retry_after_ms: None,
-                    job_id: Some(result.job_id.clone()),
-                })))
-            };
-            return vec![DaemonRequest::Respond {
-                responder,
-                response,
-            }];
-        }
-        if let Some(pending) = self.pending_results.get(&key) {
-            let response = if pending == &result {
-                HttpResponseData::status_only(503)
-            } else {
-                HttpResponseData::status_only(422)
-            };
-            return vec![DaemonRequest::Respond {
-                responder,
-                response,
-            }];
-        }
-
-        let job = match self.core.result_job(&result) {
-            Err(response) => {
-                return vec![DaemonRequest::Respond {
-                    responder,
-                    response: protocol_response(Some(response)),
-                }];
-            }
-            Ok(job) => job,
-        };
-
-        // A recovered claim keeps its prior daemon boot identity until exact
-        // release. Retry every delivery through `apply_recovered`, not merely
-        // the first one: a transient failure may happen before the lease
-        // decorator has reattached the claim to its process-local state.
-        let recovered_context = self
-            .assignment_contexts
-            .get(&job.job_id)
-            .filter(|context| context.daemon_boot_id != self.daemon_boot_id)
-            .cloned();
-        let disposition = result_disposition(&result);
-        let mut requests = vec![DaemonRequest::Log(result_received_log_line(
-            &result,
-            result_disposition_log_value(disposition),
-        ))];
-        if self.applying.is_empty() {
-            let decisions = self.wake_coordinator.begin_apply();
-            requests.extend(self.wake_decision_requests(decisions));
-        }
-        self.applying.insert(job.job_id.clone());
-        self.pending_results.insert(key, result.clone());
-        requests.push(DaemonRequest::RunApplyAndRespond {
-            job,
-            result,
-            recovered_context,
-            responder,
-        });
-        requests
     }
 
     pub(super) fn handle_enqueue(
