@@ -35,11 +35,23 @@ jobs:
     runs-on: host
     # The shared runner has no swap. An all-targets cold build can otherwise
     # launch enough rustc/linker processes to OOM the runner and strand the job.
+    # Its system /tmp is also a small tmpfs shared with other workspaces, so the
+    # first post-checkout step moves scratch data to disk-backed /var/tmp.
     env:
       CARGO_BUILD_JOBS: "4"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Prepare scratch directory
+        # This Forgejo Actions runner does not provide the `runner.temp`
+        # context. Use a short path outside the checkout so temporary git probes
+        # and Unix-domain sockets retain their expected semantics.
+        run: |
+          scratch_dir="$(mktemp -d /var/tmp/t.XXXXXX)"
+          {
+            echo "TMPDIR=$scratch_dir"
+            echo "TEMPER_CI_SCRATCH_DIR=$scratch_dir"
+          } >> "$GITHUB_ENV"
       - name: Format
         run: cargo fmt --all -- --check
       - name: Dependency graph
@@ -97,6 +109,12 @@ jobs:
         run: find target/debug target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
       - name: Lint
         run: cargo dev-clippy
+      - name: Cleanup scratch directory
+        if: ${{ always() }}
+        run: |
+          if [ -n "${TEMPER_CI_SCRATCH_DIR:-}" ]; then
+            rm -rf -- "$TEMPER_CI_SCRATCH_DIR"
+          fi
 
   # The temper-web TypeScript UI (crates/temper-web/ui). Kept a separate job from
   # the Rust `validate` job above so a TS failure is legible on its own and does

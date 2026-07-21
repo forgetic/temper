@@ -214,15 +214,17 @@ pub struct EngineConfig {
     /// Poll-backstop cadence in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_cadence_secs: Option<u64>,
-    /// Dedicated CI-status poll cadence in seconds. Omit for the default;
-    /// set `0` to disable CI-status polling while retaining the role poll
-    /// correctness backstop.
+    /// Dedicated CI-status poll cadence in seconds. This bounds webhook-less
+    /// terminal red-repair and green-landing detection. Omit for the default;
+    /// set `0` to disable CI-status polling while retaining the full role poll
+    /// correctness/liveness backstop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_poll_cadence_secs: Option<u64>,
     /// Mechanical-backstop cadence in seconds. The mechanical backstop (label
-    /// transitions / lease-gated PR landing) runs by default; webhooks are the
-    /// primary reaction path and this is the level-triggered safety net. Omit
-    /// for the default cadence; set `0` to disable the mechanical worker.
+    /// transitions / lease-gated PR landing) runs by default; it does not scan
+    /// role feeds or discover red-CI engineer repair work. Webhooks are the
+    /// primary reaction path. Omit for the default cadence; set `0` to disable
+    /// the mechanical worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mechanical_cadence_secs: Option<u64>,
     /// Lease TTL in seconds.

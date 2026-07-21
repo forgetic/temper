@@ -232,7 +232,7 @@ fn engine_config_schema() -> Value {
             (
                 "ci_poll_cadence_secs",
                 integer_schema(
-                    "Dedicated CI-status poll cadence in seconds; 0 disables it.",
+                    "Dedicated CI-status poll cadence in seconds; bounds webhook-less red repair and green landing detection; 0 disables it.",
                     None,
                 ),
             ),

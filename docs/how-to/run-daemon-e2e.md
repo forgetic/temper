@@ -2,10 +2,10 @@
 
 The daemon e2e suite proves the consolidated daemon topology against a real
 backend: the real `temper-daemon` binary (env→config→composition, webhook
-route, role-token routing, poll + mechanical backstops) plus a deterministic
-wire-protocol worker (`temper-testing-daemon-worker`, the `smith-worker`
-stand-in) against a throwaway Forgejo server with a real host-mode
-`forgejo-runner` producing CI.
+route, role-token routing, full role poll, dedicated CI-status poll, and
+mechanical backstops) plus a deterministic wire-protocol worker
+(`temper-testing-daemon-worker`, the `smith-worker` stand-in) against a
+throwaway Forgejo server with a real host-mode `forgejo-runner` producing CI.
 
 Everything here is `#[ignore]`d, so default `cargo test` stays hermetic. The
 fixture starts real OS processes and executes CI directly on the host; run it
@@ -73,12 +73,25 @@ The test target lives in the root package (it spawns the root
   and the source issue closes through the provider's native close-on-merge
   keyword.
 - `daemon_forgejo_ci_fails_then_passes_converges` — the worker's first head
-  omits the CI sentinel so real CI fails; the PR must stay unmerged while red;
-  a sentinel fix commit turns CI green and the mechanical backstop lands it.
+  omits the CI sentinel so real CI fails; the dedicated CI-status poll detects
+  that terminal red head and starts exactly one `pr_ci_failed` engineer repair.
+  The repair pushes a marker-bearing new head, real CI turns green, and the
+  targeted mechanical handling from the next CI-status wake lands it.
 
-Both assert convergence before the daemon's deliberately long poll-backstop
-cadence, so progress is webhook-driven (with the short mechanical cadence as
-the CI-status backstop — Forgejo 7.0.x emits no Actions-completion webhooks).
+The fixture sets `ci_poll_cadence_secs = 1` and keeps both
+`poll_cadence_secs` and `mechanical_cadence_secs` at 600 seconds, beyond the
+300-second convergence budget. Forgejo 7.0.x emits no Actions-completion
+repository webhooks, so completing before those broad fallback deadlines proves
+that the dedicated CI cadence found both red repair and green landing work.
+
+For operators, `ci_poll_cadence_secs` bounds webhook-less red-repair and
+green-landing detection. `poll_cadence_secs` remains the full
+correctness/liveness backstop, including work outside CI-gated PRs.
+`mechanical_cadence_secs` runs automated queues but, by itself, does **not**
+discover red `pr_ci_failed` engineer work. A PR matches `ci_failed` only when
+every latest-per-name job for its current head is terminal and at least one is
+non-success; a visible failed job mixed with queued or running latest jobs is
+still pending.
 
 First use may download pinned Forgejo and `forgejo-runner` binaries into
 `.cache/forgejo/` and publish scenario state caches. Warmed runs copy state
@@ -166,8 +179,9 @@ The `forgejo_runner` smoke test is a cheaper preflight for host compatibility.
 ## Reading failures
 
 Successful runs print world timing, the seeded issue number, and convergence
-timing. Timeout panics include the stalled assertion text, the runner log
-tail, the daemon log tail, the worker log tail, and per-PR CI diagnostics.
+timing. Timeout panics include the stalled assertion text, the runner log tail,
+the daemon log tail (including the dedicated CI-status cadence and `ci_poll`
+trigger provenance), the worker log tail, and per-PR CI diagnostics.
 
 When debugging slow or stuck runs: check the daemon log for webhook wake scans
 (`enqueue_scanned_role_work` errors), the worker log for assignment and git
