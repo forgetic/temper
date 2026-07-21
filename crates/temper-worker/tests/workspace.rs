@@ -7,6 +7,9 @@ use temper_worker::{
 };
 use tempfile::tempdir;
 
+#[path = "workspace/recovery_plan.rs"]
+mod recovery_plan;
+
 #[test]
 fn workspace_prepares_commits_pushes_and_reuses_local_git_checkout() {
     temper_worker_io::block_on(async {
@@ -666,6 +669,26 @@ fn git_output<const N: usize>(args: [&str; N]) -> String {
         .expect("git stdout is utf-8")
         .trim()
         .to_string()
+}
+
+fn shell_output(command: &str) -> std::process::Output {
+    Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .expect("run recovery shell command")
+}
+
+fn assert_shell_success(command: &str) {
+    let output = shell_output(command);
+    assert!(
+        output.status.success(),
+        "shell command failed with status {}\ncommand:\n{}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        command,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn path_str(path: &Path) -> &str {
