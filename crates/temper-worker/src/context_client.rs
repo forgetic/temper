@@ -11,6 +11,8 @@ use temper_protocol_worker::{
 };
 
 use crate::agent_runner::AgentForgeContextHost;
+#[cfg(test)]
+use crate::executor::AttemptFence;
 use crate::transport::{HttpTransport, Transport};
 
 /// A context client bound to one worker's currently active job.
@@ -89,18 +91,24 @@ pub fn forge_context_host<T: Transport>(
     auth: Option<WorkerAuth>,
 ) -> AgentForgeContextHost {
     let worker_id = worker_id.into();
-    Arc::new(move |job_id, attempt_id, operation| {
+    Arc::new(move |job_id, attempt_id, fence, operation| {
         let transport = Arc::clone(&transport);
         let worker_id = worker_id.clone();
         let auth = auth.clone();
         let cx = cx.clone();
         Box::pin(async move {
+            if !fence.is_open() {
+                return Err(ForgeContextErrorCode::ForgeUnavailable);
+            }
             let request = FetchContext::new(&worker_id, &job_id, &attempt_id, operation);
             let response = transport
                 .send(cx, WorkerProtocolMessage::FetchContext(request), auth)
                 .await
                 .map_err(|_| ForgeContextErrorCode::ForgeUnavailable)?
                 .ok_or(ForgeContextErrorCode::ForgeUnavailable)?;
+            if !fence.is_open() {
+                return Err(ForgeContextErrorCode::ForgeUnavailable);
+            }
             let WorkerProtocolMessage::ContextResponse(response) = response else {
                 return Err(ForgeContextErrorCode::InvalidRequest);
             };
@@ -134,7 +142,9 @@ pub enum ContextClientError {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll, Waker};
 
     use super::*;
     use temper_protocol_worker::{ContextResponse, ForgeGetItemOperation};
@@ -163,6 +173,76 @@ mod tests {
                 )))
             }
         }
+    }
+
+    #[test]
+    fn host_discards_forge_completion_after_attempt_fence_closes() {
+        #[derive(Clone, Default)]
+        struct DelayedTransport {
+            released: Arc<AtomicBool>,
+            sent: Arc<Mutex<Option<FetchContext>>>,
+        }
+
+        impl Transport for DelayedTransport {
+            fn send(
+                &self,
+                _cx: Cx,
+                message: WorkerProtocolMessage,
+                _auth: Option<WorkerAuth>,
+            ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send
+            {
+                let WorkerProtocolMessage::FetchContext(request) = message else {
+                    panic!("expected FetchContext")
+                };
+                *self.sent.lock().expect("sent request") = Some(request.clone());
+                let released = Arc::clone(&self.released);
+                std::future::poll_fn(move |_cx| {
+                    if released.load(Ordering::Acquire) {
+                        Poll::Ready(Ok(Some(WorkerProtocolMessage::ContextResponse(
+                            ContextResponse::error(&request, ForgeContextErrorCode::NotFound),
+                        ))))
+                    } else {
+                        Poll::Pending
+                    }
+                })
+            }
+        }
+
+        temper_engine_io::block_on_with(move |cx, _handle| async move {
+            let transport = Arc::new(DelayedTransport::default());
+            let released = Arc::clone(&transport.released);
+            let sent = Arc::clone(&transport.sent);
+            let host = forge_context_host(transport, cx, "worker-a", None);
+            let fence = AttemptFence::open();
+            let operation = ForgeContextOperation::ForgeGetItem(ForgeGetItemOperation {
+                repo: "ai/temper".to_string(),
+                number: 605,
+                artifact_type: None,
+                include_comments: false,
+            });
+            let mut call = Box::pin(host(
+                "job-605".to_string(),
+                "attempt-605".to_string(),
+                fence.clone(),
+                operation,
+            ));
+            let mut task_context = Context::from_waker(Waker::noop());
+            assert!(call.as_mut().poll(&mut task_context).is_pending());
+            assert_eq!(
+                sent.lock()
+                    .expect("sent request")
+                    .as_ref()
+                    .and_then(|request| request.attempt_id.as_deref()),
+                Some("attempt-605")
+            );
+
+            fence.close();
+            released.store(true, Ordering::Release);
+            assert_eq!(
+                call.as_mut().poll(&mut task_context),
+                Poll::Ready(Err(ForgeContextErrorCode::ForgeUnavailable))
+            );
+        });
     }
 
     #[test]
@@ -211,13 +291,20 @@ mod tests {
                 host(
                     "job-a".to_string(),
                     "attempt-a".to_string(),
+                    AttemptFence::open(),
                     operation.clone(),
                 )
                 .await,
                 Err(ForgeContextErrorCode::NotFound)
             );
             assert_eq!(
-                host("job-b".to_string(), "attempt-b".to_string(), operation).await,
+                host(
+                    "job-b".to_string(),
+                    "attempt-b".to_string(),
+                    AttemptFence::open(),
+                    operation,
+                )
+                .await,
                 Err(ForgeContextErrorCode::NotFound)
             );
             assert_eq!(&*jobs.lock().expect("jobs"), &["job-a", "job-b"]);

@@ -37,12 +37,18 @@ use crate::pre_push::{WorkspaceFingerprint, fingerprint_writable_repos_blocking}
 pub use temper_protocol_agent::WorkspaceResult;
 use temper_worker_io::EngineTime;
 
-/// Async worker-owned Forge reader. The exact job and attempt ids are supplied
-/// by the executor, never by the model or child process.
+/// Async worker-owned Forge reader. The exact job and attempt ids plus the
+/// attempt's irreversible publication fence are supplied by the executor,
+/// never by the model or child process.
 pub type AgentForgeContextFuture =
     Pin<Box<dyn Future<Output = Result<ForgeContextResult, ForgeContextErrorCode>> + Send>>;
-pub type AgentForgeContextHost =
-    Arc<dyn Fn(String, String, ForgeContextOperation) -> AgentForgeContextFuture + Send + Sync>;
+pub type AgentForgeContextHost = Arc<
+    dyn Fn(String, String, AttemptFence, ForgeContextOperation) -> AgentForgeContextFuture
+        + Send
+        + Sync,
+>;
+
+const ATTEMPT_UNAVAILABLE_MESSAGE: &str = "agent attempt is no longer available";
 
 /// An attempt-tagged lifecycle observation delivered at the worker boundary.
 ///
@@ -277,7 +283,7 @@ impl AcceptedSubmitProofStore {
     /// Removes proof when its attempt fence closes. Side-channel handlers call
     /// this both before and after joining so a late gate completion cannot be
     /// accepted by a cancelled run.
-    pub(crate) fn clear(&self) {
+    pub fn clear(&self) {
         *self.inner.lock().expect("accepted submit proof lock") = None;
     }
 
@@ -317,20 +323,39 @@ impl AcceptedSubmitProofStore {
         response: SubmitForPrResponse,
         context: &WorkspaceContext,
         cwd: &Path,
+        fence: &AttemptFence,
         cancellation: &JobCancellation,
     ) -> SubmitForPrResponse {
+        if attempt_unavailable(fence, cancellation) {
+            self.clear();
+            return unavailable_submit_response();
+        }
         if !response.accepted {
             return response;
         }
-        let fingerprint =
-            match fingerprint_writable_repos_controlled(context, cwd, cancellation).await {
-                Ok(fingerprint) => fingerprint,
-                Err(error) => {
-                    return SubmitForPrResponse::rejected(format!(
-                        "submit_for_pr accepted but workspace proof could not be recorded: {error}"
-                    ));
-                }
-            };
+        let fingerprint = match run_fenced(
+            self,
+            fence,
+            cancellation,
+            fingerprint_writable_repos_controlled(context, cwd, cancellation),
+        )
+        .await
+        {
+            Some(Ok(fingerprint)) => fingerprint,
+            Some(Err(error)) => {
+                return SubmitForPrResponse::rejected(format!(
+                    "submit_for_pr accepted but workspace proof could not be recorded: {error}"
+                ));
+            }
+            None => {
+                self.clear();
+                return unavailable_submit_response();
+            }
+        };
+        if attempt_unavailable(fence, cancellation) {
+            self.clear();
+            return unavailable_submit_response();
+        }
         *self.inner.lock().expect("accepted submit proof lock") = Some(AcceptedSubmitProof {
             response: response.clone(),
             fingerprint,
@@ -339,8 +364,13 @@ impl AcceptedSubmitProofStore {
     }
 }
 
+/// Runs one in-process submit gate under the exact attempt's publication and
+/// cancellation controls. Dropping a gate or fingerprint future joins its
+/// managed process owners before this function returns the stable rejection.
 pub async fn handle_submit_for_pr_with_proof<F, Fut>(
     store: &AcceptedSubmitProofStore,
+    fence: &AttemptFence,
+    cancellation: &JobCancellation,
     handler: F,
     request: SubmitForPrRequest,
     context: WorkspaceContext,
@@ -350,10 +380,79 @@ where
     F: FnOnce(SubmitForPrRequest, WorkspaceContext, PathBuf) -> Fut,
     Fut: Future<Output = SubmitForPrResponse>,
 {
-    let response = handler(request, context.clone(), cwd.clone()).await;
-    store
-        .record_response_controlled(response, &context, &cwd, &JobCancellation::default())
-        .await
+    if attempt_unavailable(fence, cancellation) {
+        store.clear();
+        return unavailable_submit_response();
+    }
+    let response = match run_fenced(
+        store,
+        fence,
+        cancellation,
+        handler(request, context.clone(), cwd.clone()),
+    )
+    .await
+    {
+        Some(response) => response,
+        None => return unavailable_submit_response(),
+    };
+    let response = store
+        .record_response_controlled(response, &context, &cwd, fence, cancellation)
+        .await;
+    if attempt_unavailable(fence, cancellation) {
+        // This second clear follows any joined gate/fingerprint owner, so a
+        // completion that raced fence closure cannot retain accepted proof.
+        store.clear();
+        unavailable_submit_response()
+    } else {
+        response
+    }
+}
+
+fn attempt_unavailable(fence: &AttemptFence, cancellation: &JobCancellation) -> bool {
+    !fence.is_open() || cancellation.is_cancelled()
+}
+
+fn unavailable_submit_response() -> SubmitForPrResponse {
+    SubmitForPrResponse::rejected(ATTEMPT_UNAVAILABLE_MESSAGE)
+}
+
+/// Polls one attempt-owned future until it completes or cancellation wins.
+/// Proof is cleared before dropping the future (which synchronously joins
+/// managed owners) and again after that drop.
+async fn run_fenced<F: Future>(
+    store: &AcceptedSubmitProofStore,
+    fence: &AttemptFence,
+    cancellation: &JobCancellation,
+    future: F,
+) -> Option<F::Output> {
+    let mut future = Box::pin(future);
+    let mut cancelled = Box::pin(cancellation.cancelled());
+    let output = std::future::poll_fn(|cx| {
+        if attempt_unavailable(fence, cancellation) {
+            store.clear();
+            return std::task::Poll::Ready(None);
+        }
+        if cancelled.as_mut().poll(cx).is_ready() {
+            store.clear();
+            return std::task::Poll::Ready(None);
+        }
+        match future.as_mut().poll(cx) {
+            std::task::Poll::Ready(output) if !attempt_unavailable(fence, cancellation) => {
+                std::task::Poll::Ready(Some(output))
+            }
+            std::task::Poll::Ready(_) => {
+                store.clear();
+                std::task::Poll::Ready(None)
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    })
+    .await;
+    drop(future);
+    if output.is_none() {
+        store.clear();
+    }
+    output
 }
 
 /// Why an agent turn could not produce a [`WorkspaceResult`].
@@ -425,7 +524,81 @@ pub trait AgentRunner: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll, Waker};
+
+    use temper_protocol_agent::{PROTOCOL_VERSION, WorkspaceContext, WorkspaceWorkItem};
+
     use super::*;
+
+    #[test]
+    fn submit_completion_after_fence_is_rejected_and_proof_is_cleared() {
+        let store = AcceptedSubmitProofStore::new();
+        *store.inner.lock().expect("proof store") = Some(AcceptedSubmitProof {
+            response: SubmitForPrResponse::accepted("old proof"),
+            fingerprint: WorkspaceFingerprint { repos: Vec::new() },
+        });
+        let fence = AttemptFence::open();
+        let cancellation = JobCancellation::default();
+        let released = Arc::new(AtomicBool::new(false));
+        let released_for_gate = Arc::clone(&released);
+        let request = SubmitForPrRequest {
+            protocol_version: PROTOCOL_VERSION,
+            correlation_key: "attempt-fence-test".to_string(),
+            role: "engineer".to_string(),
+            action: "open_pr".to_string(),
+            summary: None,
+        };
+        let context = WorkspaceContext {
+            trace_context: None,
+            artifact_context: None,
+            repos: Vec::new(),
+            work_item: WorkspaceWorkItem {
+                role: "engineer".to_string(),
+                queue: "code_ready".to_string(),
+                kind: "code".to_string(),
+                target: "Issue { number: 605 }".to_string(),
+                context: "{}".to_string(),
+            },
+            action: "open_pr".to_string(),
+            correlation_key: "attempt-fence-test".to_string(),
+            checkout: Some("writable".to_string()),
+            allowed_verdicts: Vec::new(),
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
+            guidance: Default::default(),
+            pull_request_freshness: None,
+            agent_session: None,
+        };
+        let temporary = tempfile::tempdir().expect("submit test workspace");
+        let mut call = Box::pin(handle_submit_for_pr_with_proof(
+            &store,
+            &fence,
+            &cancellation,
+            move |_request, _context, _cwd| {
+                std::future::poll_fn(move |_cx| {
+                    released_for_gate
+                        .load(Ordering::Acquire)
+                        .then(|| SubmitForPrResponse::accepted("late acceptance"))
+                        .map_or(Poll::Pending, Poll::Ready)
+                })
+            },
+            request,
+            context,
+            temporary.path().to_path_buf(),
+        ));
+        let mut task_context = Context::from_waker(Waker::noop());
+        assert!(call.as_mut().poll(&mut task_context).is_pending());
+
+        fence.close();
+        released.store(true, Ordering::Release);
+        let Poll::Ready(response) = call.as_mut().poll(&mut task_context) else {
+            panic!("released submit gate did not settle")
+        };
+        assert!(!response.accepted);
+        assert_eq!(response.message, ATTEMPT_UNAVAILABLE_MESSAGE);
+        assert_eq!(store.latest(), None);
+    }
 
     #[test]
     fn direct_progress_is_attempt_bound_sequenced_and_runtime_stamped() {

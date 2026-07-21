@@ -279,32 +279,34 @@ fn forge_side_channel_binds_job_and_supports_repeated_indirect_reads() {
     let responses_path = temp.path().join("forge-responses.json");
     let observed = Arc::new(Mutex::new(Vec::new()));
     let observed_for_host = Arc::clone(&observed);
-    let host: crate::AgentForgeContextHost = Arc::new(move |job_id, attempt_id, operation| {
-        observed_for_host
-            .lock()
-            .expect("observed Forge calls")
-            .push((job_id, attempt_id, operation.clone()));
-        Box::pin(async move {
-            let value = match operation {
-                ForgeContextOperation::ForgeGetItem(_) => serde_json::json!({
-                    "result":"item",
-                    "item": {
-                        "artifact":{"repository":{"id":"repo-1","path":"acme/svc"},"artifact_type":"issue","number":7},
-                        "title":"Root", "body":"root body", "state":"open"
-                    },
-                    "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":false}
-                }),
-                ForgeContextOperation::ForgeListRelated(_) => serde_json::json!({
-                    "result":"related",
-                    "root":{"repository":{"id":"repo-1","path":"acme/svc"},"artifact_type":"issue","number":7},
-                    "items":[{"artifact":{"repository":{"id":"repo-1","path":"acme/svc"},"artifact_type":"issue","number":3},"title":"Parent","state":"open"}],
-                    "edges":[],
-                    "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":false}
-                }),
-            };
-            Ok(serde_json::from_value::<ForgeContextResult>(value).expect("test Forge result"))
-        })
-    });
+    let host: crate::AgentForgeContextHost = Arc::new(
+        move |job_id, attempt_id, _fence, operation| {
+            observed_for_host
+                .lock()
+                .expect("observed Forge calls")
+                .push((job_id, attempt_id, operation.clone()));
+            Box::pin(async move {
+                let value = match operation {
+                    ForgeContextOperation::ForgeGetItem(_) => serde_json::json!({
+                        "result":"item",
+                        "item": {
+                            "artifact":{"repository":{"id":"repo-1","path":"acme/svc"},"artifact_type":"issue","number":7},
+                            "title":"Root", "body":"root body", "state":"open"
+                        },
+                        "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":false}
+                    }),
+                    ForgeContextOperation::ForgeListRelated(_) => serde_json::json!({
+                        "result":"related",
+                        "root":{"repository":{"id":"repo-1","path":"acme/svc"},"artifact_type":"issue","number":7},
+                        "items":[{"artifact":{"repository":{"id":"repo-1","path":"acme/svc"},"artifact_type":"issue","number":3},"title":"Parent","state":"open"}],
+                        "edges":[],
+                        "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":false}
+                    }),
+                };
+                Ok(serde_json::from_value::<ForgeContextResult>(value).expect("test Forge result"))
+            })
+        },
+    );
     let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
         .with_env(vec![(
             "TEMPER_FORGE_RESPONSES_OUT".to_string(),

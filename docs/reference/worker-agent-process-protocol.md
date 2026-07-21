@@ -31,7 +31,13 @@ supervision. Profile deadline overrides inherit field-by-field from
 
 The side-channel listeners exist only for that run, accept bounded JSON, and
 are stopped when the child exits. Standalone calls the same host callbacks
-in-process rather than opening sockets.
+in-process rather than opening sockets. Every carrier binds the callbacks to
+the exact assignment attempt ID and its shared `AttemptFence`. Ownership loss
+closes that fence before cancellation starts. From that point onward, the only
+permitted work is joined cleanup, durable cancellation tracing/result recording,
+and forwarding those terminal records; late model, tool, Forge, submission,
+workspace, validation, commit, push, and ordinary-result completions are
+discarded.
 
 The worker writes per-run protocol files in a private temporary directory. Its
 durable result root is created with owner-only permissions below
@@ -68,7 +74,12 @@ termination and descendant cleanup, the worker appends one synthetic canonical
 `run.finished` activity with `status=cancelled` and
 `stop_reason=cancelled`. The host-only record is durable even when the child
 never connected, stopped responding, or was killed; terminal insertion is
-idempotent if a terminal host record already exists.
+idempotent if a terminal host record already exists. The in-process runner uses
+the same ordering: it requests native model/tool cancellation, waits for the
+native task group and managed effects to join, persists `RunFinished(Cancelled)`,
+waits for trace forwarding to acknowledge that sequence, and only then returns
+attempt quiescence. Thus neither carrier can expose a quiescent canceled run
+whose journal query still reports `active`.
 
 The producer maps model attempt boundaries, tool boundaries, steering, and
 agent termination directly from `AgentEvent`. Non-empty text deltas and
@@ -192,11 +203,16 @@ The child sends a `ForgeContextRequest` to the loopback address:
 {"protocol_version":1,"operation":{"operation":"forge_get_item","repo":"ai/temper","number":285,"type":"issue","include_comments":false}}
 ```
 
-The request intentionally has **no** `worker_id`, `job_id`, credential, URL, or
-generic method field. Unknown fields are rejected. The worker binds the current
-job id and its own identity/authentication, forwards a worker-protocol
-`FetchContext` through the configured carrier, validates the echoed response
-identity, and returns only a bounded result or stable error:
+The request intentionally has **no** `worker_id`, `job_id`, assignment attempt
+ID, credential, URL, or generic method field. Unknown fields are rejected. The
+worker binds the current job ID, exact attempt ID, and its own
+identity/authentication, populates `FetchContext.attempt_id`, and forwards the
+request through the configured carrier. The host checks the shared attempt
+fence both before transport starts and after it completes. A call that begins
+while owned but completes after ownership loss returns stable
+`forge_unavailable`; its late successful payload is never accepted. Only then
+does the worker validate the echoed response identity and return a bounded
+result or stable error:
 
 ```json
 {"protocol_version":1,"status":"error","code":"not_authorized"}
@@ -231,7 +247,13 @@ The agent writes one `WorkspaceResult` to `--result`. A writable head result may
 carry `title`, `body`, and `summary`; verdict actions carry a declared `verdict`
 and any contract-required authored content. The worker validates the result,
 workspace diff, accepted `submit_for_pr` proof, and PR-head freshness before it
-publishes the daemon `Result` message.
+publishes the daemon `Result` message. In-process `submit_for_pr` uses the same
+attempt fence and cancellation handle as the model run: the gate and controlled
+fingerprint are checked at entry and completion, managed commands are joined on
+cancellation, and a fenced call clears accepted proof and returns
+`accepted=false` with `agent attempt is no longer available`. Commit, push,
+validation, result conversion, and publication recheck the same fence so a late
+successful future cannot restore authority.
 
 See also the [Worker/Daemon wire protocol](worker-daemon-wire-protocol.md) for
 `FetchContext`/`ContextResponse` and
