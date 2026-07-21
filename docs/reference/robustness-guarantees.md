@@ -209,7 +209,11 @@ newer-claim fencing (`temper-runner/tests/assignment_convergence.rs`). The
 hermetic real-stack ownership-loss matrix additionally runs the real daemon,
 worker machine/shell, native agent, MemoryForge, local git, trace spool/journal,
 and result outbox through blocked/closed/replaced/transient and restart
-boundaries (`temper-testing/tests/hermetic_real_stack/ownership_loss.rs`).
+boundaries (`temper-testing/tests/hermetic_real_stack/ownership_loss.rs`). On
+Linux that focused target explicitly builds an early-main supervisor helper and
+injects a forced-supervisor factory into worker-owned fixture commands, retaining
+descendant-complete cleanup on clean hosts without delegated cgroup access while
+production workers continue to use automatic cgroup/supervisor selection.
 
 ## Limitations discovered by the tests
 

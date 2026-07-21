@@ -82,7 +82,11 @@ Total: 1,982 test cases across 383 files; 17 are ignored live tests.
   recovered exact-assignment acceptance contract: blocked/closed removal,
   newer-attempt replacement, transient backend recovery, cancellation joins,
   stale outbox compaction, terminal traces, and restart non-resumption over the
-  production daemon/worker/native-agent composition.
+  production daemon/worker/native-agent composition. The focused
+  `cargo nextest run -p temper-testing --test hermetic_real_stack ownership_loss`
+  target explicitly builds and injects its early-main Linux supervisor helper,
+  so it is self-contained in a fresh target directory and does not require a
+  delegated cgroup.
 - Simulation: `crates/temper-sim/tests/` and the machine-sim tests run real
   production machines under deterministic scheduling and virtual time. The sim
   crate keeps hand-rolled worker clients for cheap HTTP/misbehavior coverage and

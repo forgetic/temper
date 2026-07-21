@@ -7,6 +7,8 @@ use std::time::Duration;
 use temper_forge_memory::FaultOp;
 use temper_protocol_activity::{AgentActivityEventV1, RunFinishedV1, RunStatusV1};
 use temper_protocol_worker::{FailureClass, ReleaseDisposition, ResultStatus};
+#[cfg(target_os = "linux")]
+use temper_testing::real_stack::HermeticRealStackBuilder;
 use temper_testing::real_stack::{PausePoint, ReachedPause};
 use temper_workflow::{DurableAssignment, parse_metadata_block};
 
@@ -34,6 +36,28 @@ struct RecoveredAttempt {
     session: ReachedPause,
     reattached_heartbeat: ReachedPause,
     assignment: DurableAssignment,
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ownership_loss_missing_supervisor_helper_fails_before_world_setup() {
+    temper_engine_io::block_on_with(|_cx, handle| async move {
+        let temporary = tempfile::tempdir().expect("missing-helper tempdir");
+        let missing = temporary.path().join("not-built-supervisor-helper");
+        let error = match HermeticRealStackBuilder::new()
+            .linux_supervisor_helper(&missing)
+            .build(&handle)
+            .await
+        {
+            Ok(_) => panic!("a missing required supervisor helper must fail fixture setup"),
+            Err(error) => error,
+        };
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+        assert!(
+            error.contains("CARGO_BIN_EXE_temper-real-stack-supervisor-helper"),
+            "the diagnostic should name the self-contained Cargo target: {error}"
+        );
+    });
 }
 
 #[test]

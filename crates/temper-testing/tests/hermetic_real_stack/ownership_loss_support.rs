@@ -13,7 +13,12 @@ use temper_workflow::{parse_metadata_block, replace_metadata_block};
 use super::{OwnershipLoss, RecoveredAttempt};
 
 pub(super) async fn ownership_world(handle: &skein::runtime::RuntimeHandle) -> HermeticRealStack {
-    HermeticRealStackBuilder::new()
+    let builder = HermeticRealStackBuilder::new();
+    #[cfg(target_os = "linux")]
+    let builder =
+        builder.linux_supervisor_helper(env!("CARGO_BIN_EXE_temper-real-stack-supervisor-helper"));
+
+    builder
         .issue(HermeticIssueSpec::ready_code(
             "Recovered ownership acceptance",
             "The recovered attempt must stop if its exact durable authority disappears.\n\n<!-- temper:workflow\n{\"kind\":\"code\"}\n-->",
