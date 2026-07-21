@@ -14,7 +14,8 @@ use std::pin::Pin;
 /// injected.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum WorkerLifecycleCheckpoint {
-    /// The machine selected cancellation, before the shell notifies the attempt.
+    /// The exact attempt fence is closed and cancellation has been published;
+    /// lifecycle observers may pause before subsequent effects are processed.
     CancelRequested,
     /// All attempt-owned work quiesced, before the terminal result is recorded.
     Quiesced,

@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use temper_protocol_agent::AgentLifecycleEventV1;
 use temper_protocol_worker::{
-    Failure, FailureClass, HeartbeatState, JobCancellationState, JobHeartbeat, JobHeartbeatPhase,
-    JobLiveness, JobOperationKind, JobOperationSummary, JobResult, JobResultDeliveryState,
-    JobResultDurabilityState, JobTimeoutReason, JobTimeoutSummary, MAX_ACTIVE_OPERATION_SUMMARIES,
-    ResultStatus, WORKER_PROTOCOL_VERSION,
+    CancelAttempts, Failure, FailureClass, HeartbeatState, JobCancellationState, JobHeartbeat,
+    JobHeartbeatPhase, JobLiveness, JobOperationKind, JobOperationSummary, JobResult,
+    JobResultDeliveryState, JobResultDurabilityState, JobTimeoutReason, JobTimeoutSummary,
+    MAX_ACTIVE_OPERATION_SUMMARIES, ResultStatus, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_io::EngineTime;
 
@@ -72,6 +72,22 @@ pub struct TimeoutState {
     pub operation: Option<ActiveOperation>,
 }
 
+/// Why an attempt entered the shared cancellation lifecycle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CancellationCause {
+    WatchdogTimeout(TimeoutState),
+    OwnershipLost { reason: String },
+}
+
+impl CancellationCause {
+    fn timeout(&self) -> Option<&TimeoutState> {
+        match self {
+            Self::WatchdogTimeout(timeout) => Some(timeout),
+            Self::OwnershipLost { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CancellationStatus {
     NotRequested,
@@ -104,7 +120,7 @@ pub struct JobWatchState {
     pub last_agent_progress: EngineTime,
     pub timer_generation: u64,
     pub active_operations: BTreeMap<OperationId, ActiveOperation>,
-    pub timeout: Option<TimeoutState>,
+    pub cancellation_cause: Option<CancellationCause>,
     pub cancellation: CancellationStatus,
     pub escalation_requested: bool,
     pub result_durability: ResultDurabilityStatus,
@@ -176,13 +192,17 @@ impl JobWatchState {
                 no_progress_elapsed_ms: elapsed_ms(now, self.last_agent_progress),
                 active_operation_count,
                 active_operations,
-                timeout: self.timeout.as_ref().map(|timeout| JobTimeoutSummary {
-                    reason: match timeout.reason {
-                        TimeoutReason::NoProgress => JobTimeoutReason::NoProgress,
-                        TimeoutReason::MaxRun => JobTimeoutReason::MaxRun,
-                    },
-                    limit_ms: duration_ms(timeout.limit),
-                }),
+                timeout: self
+                    .cancellation_cause
+                    .as_ref()
+                    .and_then(CancellationCause::timeout)
+                    .map(|timeout| JobTimeoutSummary {
+                        reason: match timeout.reason {
+                            TimeoutReason::NoProgress => JobTimeoutReason::NoProgress,
+                            TimeoutReason::MaxRun => JobTimeoutReason::MaxRun,
+                        },
+                        limit_ms: duration_ms(timeout.limit),
+                    }),
                 cancellation: match self.cancellation {
                     CancellationStatus::NotRequested => JobCancellationState::NotRequested,
                     CancellationStatus::Requested => JobCancellationState::Requested,
@@ -299,11 +319,11 @@ impl WorkerMachine {
         state.phase = JobPhase::CancelRequested;
         state.cancellation = CancellationStatus::Requested;
         let operation = state.current_operation();
-        state.timeout = Some(TimeoutState {
+        state.cancellation_cause = Some(CancellationCause::WatchdogTimeout(TimeoutState {
             reason,
             limit,
             operation: operation.clone(),
-        });
+        }));
         let attempt_id = state.attempt_id.clone();
         let generation = state.generation;
         let run_elapsed_ms = elapsed_ms(now, state.run_started_at);
@@ -316,6 +336,15 @@ impl WorkerMachine {
             limit.as_millis()
         );
         vec![
+            // The shell executes requests in order. Fence closure and
+            // cooperative cancellation must linearize before observations,
+            // heartbeats, or timers can race the attempt.
+            WorkerRequest::CancelJob {
+                job_id: job_id.clone(),
+                attempt_id: attempt_id.clone(),
+                generation,
+                reason: reason_text,
+            },
             WorkerRequest::Observe(crate::observability::WorkerEvent::JobTimeout {
                 worker_id: self.params.worker_id.clone(),
                 job_id: job_id.clone(),
@@ -339,12 +368,6 @@ impl WorkerMachine {
                 limit_ms: duration_ms(limit),
             }),
             self.heartbeat_request(now),
-            WorkerRequest::CancelJob {
-                job_id: job_id.clone(),
-                attempt_id: attempt_id.clone(),
-                generation,
-                reason: reason_text,
-            },
             WorkerRequest::ArmWatchdogTimer {
                 job_id,
                 attempt_id,
@@ -354,6 +377,74 @@ impl WorkerMachine {
                 delay: self.params.liveness_limits.graceful_cancellation_grace,
             },
         ]
+    }
+
+    pub(super) fn on_ownership_loss_directives(
+        &mut self,
+        now: EngineTime,
+        directive: &CancelAttempts,
+    ) -> Vec<WorkerRequest> {
+        let mut controls = Vec::new();
+        let mut effects = Vec::new();
+
+        for cancellation in directive.cancellations() {
+            let Some(attempt_id) = cancellation.attempt_id() else {
+                // Legacy omission is never a wildcard for a fenced attempt.
+                continue;
+            };
+            let Some(state) = self.jobs.get_mut(cancellation.job_id()) else {
+                continue;
+            };
+            if state.phase != JobPhase::Running || state.attempt_id != attempt_id {
+                continue;
+            }
+
+            state.phase = JobPhase::CancelRequested;
+            state.cancellation = CancellationStatus::Requested;
+            state.cancellation_cause = Some(CancellationCause::OwnershipLost {
+                reason: cancellation.reason().to_string(),
+            });
+            let generation = state.generation;
+            let job_id = cancellation.job_id().to_string();
+            let attempt_id = attempt_id.to_string();
+
+            controls.push(WorkerRequest::CancelJob {
+                job_id: job_id.clone(),
+                attempt_id: attempt_id.clone(),
+                generation,
+                reason: format!("worker ownership lost: {}", cancellation.reason()),
+            });
+            effects.push(WorkerRequest::Observe(
+                crate::observability::WorkerEvent::CancellationRequested {
+                    worker_id: self.params.worker_id.clone(),
+                    job_id: job_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    reason: "ownership_lost",
+                    limit_ms: 0,
+                },
+            ));
+            effects.push(WorkerRequest::Warn(format!(
+                "worker: cancelling attempt after ownership loss job_id={job_id} attempt_id={attempt_id} reason={}",
+                cancellation.reason()
+            )));
+            effects.push(WorkerRequest::ArmWatchdogTimer {
+                job_id,
+                attempt_id,
+                generation,
+                timer_generation: 0,
+                kind: WatchdogTimerKind::CancellationGrace,
+                delay: self.params.liveness_limits.graceful_cancellation_grace,
+            });
+        }
+
+        if controls.is_empty() {
+            return Vec::new();
+        }
+        // Close every exact attempt fence before publishing any observation or
+        // arming the shared escalation chain.
+        controls.extend(effects);
+        controls.push(self.heartbeat_request(now));
+        controls
     }
 
     pub(super) fn on_progress(
@@ -523,6 +614,48 @@ impl WorkerMachine {
         }]
     }
 
+    pub(super) fn ownership_lost_result(
+        &self,
+        job_id: &str,
+        state: &JobWatchState,
+        cleanup: &JobCleanup,
+    ) -> JobResult {
+        let reason = match state
+            .cancellation_cause
+            .as_ref()
+            .expect("cancelled quiescence carries cancellation metadata")
+        {
+            CancellationCause::OwnershipLost { reason } => reason,
+            CancellationCause::WatchdogTimeout(_) => {
+                unreachable!("watchdog timeout uses the transient timeout projection")
+            }
+        };
+        JobResult {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: self.params.worker_id.clone(),
+            job_id: job_id.to_string(),
+            attempt_id: Some(state.attempt_id.clone()),
+            status: ResultStatus::Failure,
+            repos: Vec::new(),
+            verdict: None,
+            title: None,
+            body: None,
+            children: Vec::new(),
+            failure: Some(Failure {
+                class: FailureClass::Canceled,
+                message: format!("worker canceled attempt after ownership loss: {reason}"),
+            }),
+            summary: None,
+            details: Some(serde_json::json!({
+                "cancellation": {
+                    "cause": "ownership_lost",
+                    "reason": reason,
+                    "cleanup": cancellation_cleanup_evidence(state, cleanup),
+                }
+            })),
+        }
+    }
+
     pub(super) fn timeout_result(
         &self,
         job_id: &str,
@@ -530,10 +663,16 @@ impl WorkerMachine {
         now: EngineTime,
         cleanup: &JobCleanup,
     ) -> JobResult {
-        let timeout = state
-            .timeout
+        let timeout = match state
+            .cancellation_cause
             .as_ref()
-            .expect("cancelled quiescence carries timeout metadata");
+            .expect("cancelled quiescence carries cancellation metadata")
+        {
+            CancellationCause::WatchdogTimeout(timeout) => timeout,
+            CancellationCause::OwnershipLost { .. } => {
+                unreachable!("ownership loss uses the canceled result projection")
+            }
+        };
         let operation = timeout.operation.as_ref().map(|operation| {
             serde_json::json!({
                 "scope": operation.scope,
@@ -544,61 +683,15 @@ impl WorkerMachine {
                 "elapsed_ms": now.as_nanos().saturating_sub(operation.started_at.as_nanos()) / 1_000_000,
             })
         });
-        let cancellation = cleanup
-            .cancellation
-            .map(CancellationOutcome::as_str)
-            .unwrap_or("not_requested");
-        let containment = &cleanup.containment;
-        let disposition = match containment.disposition() {
-            temper_process_containment::CleanupDisposition::AlreadyEmpty => "already_empty",
-            temper_process_containment::CleanupDisposition::Terminated => "terminated",
-            temper_process_containment::CleanupDisposition::Killed => "killed",
-        };
-        let backend = match containment.backend() {
-            temper_process_containment::ContainmentBackendKind::NoProcess => "no_process",
-            temper_process_containment::ContainmentBackendKind::LinuxCgroupV2 => "linux_cgroup_v2",
-            temper_process_containment::ContainmentBackendKind::LinuxSupervisor => {
-                "linux_supervisor"
-            }
-            temper_process_containment::ContainmentBackendKind::WindowsJob => "windows_job",
-        };
-        let survivors = containment
-            .observed_survivors()
-            .iter()
-            .map(|process| {
-                serde_json::json!({
-                    "pid": process.pid(),
-                    "ppid": process.ppid(),
-                    "pgid": process.process_group_id(),
-                    "session_id": process.session_id(),
-                    "start_time_identity": process.start_time_identity(),
-                    "executable": process.executable(),
-                })
-            })
-            .collect::<Vec<_>>();
-        let direct_child_reap = match containment.direct_child_reap() {
-            temper_process_containment::DirectChildReap::NotSpawned => {
-                serde_json::json!({ "state": "not_spawned" })
-            }
-            temper_process_containment::DirectChildReap::Pending { pid } => {
-                serde_json::json!({ "state": "pending", "pid": pid })
-            }
-            temper_process_containment::DirectChildReap::Reaped { pid, exit_code } => {
-                serde_json::json!({ "state": "reaped", "pid": pid, "exit_code": exit_code })
-            }
-            temper_process_containment::DirectChildReap::AlreadyReaped { pid, exit_code } => {
-                serde_json::json!({ "state": "already_reaped", "pid": pid, "exit_code": exit_code })
-            }
-        };
-        let resources = serde_json::json!({
-            "process_supervisor": resource_join_json(&cleanup.resources.process_supervisor),
-            "stderr_reader": resource_join_json(&cleanup.resources.stderr_reader),
-            "lifecycle_endpoint": resource_join_json(&cleanup.resources.lifecycle_endpoint),
-            "activity_endpoint": resource_join_json(&cleanup.resources.activity_endpoint),
-            "submit_endpoint": resource_join_json(&cleanup.resources.submit_endpoint),
-            "forge_endpoint": resource_join_json(&cleanup.resources.forge_endpoint),
-            "lifecycle_cancellation": resource_join_json(&cleanup.resources.lifecycle_cancellation),
-        });
+        let cleanup_evidence = cancellation_cleanup_evidence(state, cleanup);
+        let cancellation = cleanup_evidence["cancellation"]
+            .as_str()
+            .expect("cleanup cancellation evidence is a string")
+            .to_string();
+        let disposition = cleanup_evidence["disposition"]
+            .as_str()
+            .expect("cleanup disposition evidence is a string")
+            .to_string();
         let details = serde_json::json!({
             "timeout": {
                 "reason": timeout.reason.as_str(),
@@ -606,26 +699,7 @@ impl WorkerMachine {
                 "run_started_at_ms": state.run_started_at.as_millis(),
                 "last_agent_progress_ms": state.last_agent_progress.as_millis(),
                 "operation": operation,
-                "cleanup": {
-                    "cancellation": cancellation,
-                    "backend": backend,
-                    "root": containment.root().value(),
-                    "trigger": format!("{:?}", containment.trigger()),
-                    "disposition": disposition,
-                    "term_attempts": containment.term_attempts().len(),
-                    "kill_attempts": containment.kill_attempts().len(),
-                    "direct_child_reap": direct_child_reap,
-                    "recursive_empty": true,
-                    "survivors": survivors,
-                    "omitted_survivors": containment.omitted_survivors(),
-                    "blocked_diagnostics": containment.blocked_diagnostics().iter().map(|diagnostic| serde_json::json!({
-                        "phase": format!("{:?}", diagnostic.phase()),
-                        "message": diagnostic.message(),
-                    })).collect::<Vec<_>>(),
-                    "resources": resources,
-                    "escalated": state.escalation_requested,
-                    "quiesced": cleanup.proves_quiescence(),
-                }
+                "cleanup": cleanup_evidence,
             }
         });
         let operation_name = timeout
@@ -659,6 +733,82 @@ impl WorkerMachine {
             details: Some(details),
         }
     }
+}
+
+fn cancellation_cleanup_evidence(state: &JobWatchState, cleanup: &JobCleanup) -> serde_json::Value {
+    let cancellation = cleanup
+        .cancellation
+        .map(CancellationOutcome::as_str)
+        .unwrap_or("not_requested");
+    let containment = &cleanup.containment;
+    let disposition = match containment.disposition() {
+        temper_process_containment::CleanupDisposition::AlreadyEmpty => "already_empty",
+        temper_process_containment::CleanupDisposition::Terminated => "terminated",
+        temper_process_containment::CleanupDisposition::Killed => "killed",
+    };
+    let backend = match containment.backend() {
+        temper_process_containment::ContainmentBackendKind::NoProcess => "no_process",
+        temper_process_containment::ContainmentBackendKind::LinuxCgroupV2 => "linux_cgroup_v2",
+        temper_process_containment::ContainmentBackendKind::LinuxSupervisor => "linux_supervisor",
+        temper_process_containment::ContainmentBackendKind::WindowsJob => "windows_job",
+    };
+    let survivors = containment
+        .observed_survivors()
+        .iter()
+        .map(|process| {
+            serde_json::json!({
+                "pid": process.pid(),
+                "ppid": process.ppid(),
+                "pgid": process.process_group_id(),
+                "session_id": process.session_id(),
+                "start_time_identity": process.start_time_identity(),
+                "executable": process.executable(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let direct_child_reap = match containment.direct_child_reap() {
+        temper_process_containment::DirectChildReap::NotSpawned => {
+            serde_json::json!({ "state": "not_spawned" })
+        }
+        temper_process_containment::DirectChildReap::Pending { pid } => {
+            serde_json::json!({ "state": "pending", "pid": pid })
+        }
+        temper_process_containment::DirectChildReap::Reaped { pid, exit_code } => {
+            serde_json::json!({ "state": "reaped", "pid": pid, "exit_code": exit_code })
+        }
+        temper_process_containment::DirectChildReap::AlreadyReaped { pid, exit_code } => {
+            serde_json::json!({ "state": "already_reaped", "pid": pid, "exit_code": exit_code })
+        }
+    };
+    let resources = serde_json::json!({
+        "process_supervisor": resource_join_json(&cleanup.resources.process_supervisor),
+        "stderr_reader": resource_join_json(&cleanup.resources.stderr_reader),
+        "lifecycle_endpoint": resource_join_json(&cleanup.resources.lifecycle_endpoint),
+        "activity_endpoint": resource_join_json(&cleanup.resources.activity_endpoint),
+        "submit_endpoint": resource_join_json(&cleanup.resources.submit_endpoint),
+        "forge_endpoint": resource_join_json(&cleanup.resources.forge_endpoint),
+        "lifecycle_cancellation": resource_join_json(&cleanup.resources.lifecycle_cancellation),
+    });
+    serde_json::json!({
+        "cancellation": cancellation,
+        "backend": backend,
+        "root": containment.root().value(),
+        "trigger": format!("{:?}", containment.trigger()),
+        "disposition": disposition,
+        "term_attempts": containment.term_attempts().len(),
+        "kill_attempts": containment.kill_attempts().len(),
+        "direct_child_reap": direct_child_reap,
+        "recursive_empty": true,
+        "survivors": survivors,
+        "omitted_survivors": containment.omitted_survivors(),
+        "blocked_diagnostics": containment.blocked_diagnostics().iter().map(|diagnostic| serde_json::json!({
+            "phase": format!("{:?}", diagnostic.phase()),
+            "message": diagnostic.message(),
+        })).collect::<Vec<_>>(),
+        "resources": resources,
+        "escalated": state.escalation_requested,
+        "quiesced": cleanup.proves_quiescence(),
+    })
 }
 
 fn resource_join_json(status: &ResourceJoinStatus) -> serde_json::Value {

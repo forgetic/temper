@@ -6,13 +6,13 @@ use temper_protocol_agent::{
     AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleEventV1, AgentLifecycleFrameV1,
     AgentLifecycleScopeV1,
 };
-use temper_protocol_worker::WorkerProtocolMessage;
+use temper_protocol_worker::{AttemptCancellation, CancelAttempts, WorkerProtocolMessage};
 use temper_worker_io::{EngineTime, Machine};
 
 use super::tests::{assign, params};
 use super::{
-    AttemptCompletion, JobCleanup, JobPhase, TimeoutReason, WatchdogTimerKind, WorkerCompletion,
-    WorkerMachine, WorkerRequest,
+    AttemptCompletion, CancellationCause, JobCleanup, JobPhase, TimeoutReason, WatchdogTimerKind,
+    WorkerCompletion, WorkerMachine, WorkerRequest,
 };
 use crate::agent_runner::JobProgress;
 use crate::executor::{CancellationOutcome, JobOutcome, job_result_for_attempt};
@@ -193,16 +193,14 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
         machine.job_state("job-timeout").unwrap().phase,
         JobPhase::CancelRequested
     );
-    assert_eq!(
-        machine
+    assert!(matches!(
+        &machine
             .job_state("job-timeout")
             .unwrap()
-            .timeout
-            .as_ref()
-            .unwrap()
-            .reason,
-        TimeoutReason::NoProgress
-    );
+            .cancellation_cause,
+        Some(CancellationCause::WatchdogTimeout(timeout))
+            if timeout.reason == TimeoutReason::NoProgress
+    ));
     assert_eq!(
         timeout
             .iter()
@@ -334,6 +332,85 @@ fn no_progress_timeout_quiesces_records_once_then_releases_capacity() {
         released
             .iter()
             .any(|request| matches!(request, WorkerRequest::SendPoll(_)))
+    );
+}
+
+#[test]
+fn ownership_loss_reuses_both_watchdog_escalation_stages() {
+    let mut config = params();
+    config.liveness_limits.graceful_cancellation_grace = Duration::from_nanos(2);
+    config.liveness_limits.forced_termination_grace = Duration::from_nanos(3);
+    let mut machine = WorkerMachine::new(config);
+    dispatch_at(&mut machine, "job-owned", EngineTime::ZERO);
+    let generation = machine.job_state("job-owned").unwrap().generation;
+    let directive = CancelAttempts::new(
+        "worker-1",
+        vec![
+            AttemptCancellation::ownership_lost(
+                "worker-1",
+                "job-owned",
+                "attempt-job-owned",
+                "durable claim was replaced",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+
+    let cancellation = machine.on_completion(
+        EngineTime::from_nanos(1),
+        WorkerCompletion::HeartbeatDelivered(Ok(Some(directive.clone()))),
+    );
+    assert!(matches!(
+        cancellation.first(),
+        Some(WorkerRequest::CancelJob { .. })
+    ));
+    assert!(
+        machine
+            .on_completion(
+                EngineTime::from_nanos(1),
+                WorkerCompletion::HeartbeatDelivered(Ok(Some(directive))),
+            )
+            .is_empty(),
+        "duplicate ownership loss must not install another timer chain"
+    );
+
+    let term = machine.on_completion(
+        EngineTime::from_nanos(3),
+        WorkerCompletion::WatchdogTimer {
+            job_id: "job-owned".to_string(),
+            attempt_id: "attempt-job-owned".to_string(),
+            generation,
+            timer_generation: 0,
+            kind: WatchdogTimerKind::CancellationGrace,
+        },
+    );
+    assert!(
+        term.iter()
+            .any(|request| matches!(request, WorkerRequest::EscalateJob { hard: false, .. }))
+    );
+    assert!(term.iter().any(|request| matches!(
+        request,
+        WorkerRequest::ArmWatchdogTimer {
+            kind: WatchdogTimerKind::ForcedTerminationGrace,
+            delay,
+            ..
+        } if *delay == Duration::from_nanos(3)
+    )));
+
+    let kill = machine.on_completion(
+        EngineTime::from_nanos(6),
+        WorkerCompletion::WatchdogTimer {
+            job_id: "job-owned".to_string(),
+            attempt_id: "attempt-job-owned".to_string(),
+            generation,
+            timer_generation: 0,
+            kind: WatchdogTimerKind::ForcedTerminationGrace,
+        },
+    );
+    assert!(
+        kill.iter()
+            .any(|request| matches!(request, WorkerRequest::EscalateJob { hard: true, .. }))
     );
 }
 

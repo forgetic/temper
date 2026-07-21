@@ -229,7 +229,7 @@ impl Sim {
                     .expect("running dispatched job exists");
                 finished(&job, generation)
             }
-            3 => WorkerCompletion::HeartbeatDelivered(Ok(())),
+            3 => WorkerCompletion::HeartbeatDelivered(Ok(None)),
             4 => WorkerCompletion::PollTimer,
             6 => {
                 let job_id = self.pending_records.keys().next().cloned().unwrap();
