@@ -10,8 +10,8 @@ use crate::agent_runner::{
 use crate::executor::{JobExecutionContext, JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{
-    PreparationOutcome, RecoveryContext, RoleGitIdentity, Workspace, WorkspaceError,
-    forgejo_remote_url, scoped_workspace_root,
+    PreparationOutcome, QuarantineManifest, RecoveryContext, RoleGitIdentity, Workspace,
+    WorkspaceError, forgejo_remote_url, scoped_workspace_root,
 };
 
 mod context;
@@ -492,16 +492,7 @@ async fn prepare_workspace(
         JobMode::Writable => workspace.prepare_read_only().await,
     };
     match result {
-        Ok(PreparationOutcome::Quarantined(manifest)) => Err(failure(
-            FailureClass::Permanent,
-            format!(
-                "workspace {} quarantined during {} at {}; recovery commands: {}",
-                manifest.repository,
-                manifest.failure_phase,
-                manifest.quarantine_path,
-                manifest.recovery_commands.join("; ")
-            ),
-        )),
+        Ok(PreparationOutcome::Quarantined(manifest)) => Err(quarantine_failure(&manifest)),
         Ok(PreparationOutcome::CleanReuse { .. })
         | Ok(PreparationOutcome::RecoveredLocalWork { .. }) => Ok(()),
         Err(error) => Err(workspace_failure("prepare workspace", error)),
@@ -532,16 +523,7 @@ async fn prepare_writable(
     };
     match outcome {
         Ok(PreparationOutcome::Quarantined(manifest)) => {
-            return Err(failure(
-                FailureClass::Permanent,
-                format!(
-                    "workspace {} quarantined during {} at {}; recovery commands: {}",
-                    manifest.repository,
-                    manifest.failure_phase,
-                    manifest.quarantine_path,
-                    manifest.recovery_commands.join("; ")
-                ),
-            ));
+            return Err(quarantine_failure(&manifest));
         }
         Ok(PreparationOutcome::CleanReuse { .. })
         | Ok(PreparationOutcome::RecoveredLocalWork { .. }) => {}
@@ -554,6 +536,35 @@ async fn prepare_writable(
         .configure_local_identity()
         .await
         .map_err(|error| workspace_failure("configure workspace git identity", error))
+}
+
+fn quarantine_failure(manifest: &QuarantineManifest) -> JobOutcome {
+    const COMMANDS_BEGIN: &str = "--- BEGIN RUNNABLE RECOVERY COMMANDS ---";
+    const COMMANDS_END: &str = "--- END RUNNABLE RECOVERY COMMANDS ---";
+
+    let mut message = format!(
+        "workspace {} quarantined during {} at {}\nunderlying failure: {}\nrecovery notes:",
+        manifest.repository, manifest.failure_phase, manifest.quarantine_path, manifest.failure
+    );
+    if manifest.recovery_notes.is_empty() {
+        message.push_str(" (none recorded in manifest)");
+    } else {
+        for note in &manifest.recovery_notes {
+            message.push_str("\n- ");
+            message.push_str(note);
+        }
+    }
+
+    message.push('\n');
+    message.push_str(COMMANDS_BEGIN);
+    message.push('\n');
+    if !manifest.recovery_commands.is_empty() {
+        message.push_str(&manifest.recovery_commands.join("\n"));
+        message.push('\n');
+    }
+    message.push_str(COMMANDS_END);
+
+    failure(FailureClass::Permanent, message)
 }
 
 fn require_enriched_field<T>(field: Option<T>, name: &str) -> Result<T, JobOutcome> {
