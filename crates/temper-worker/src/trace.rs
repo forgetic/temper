@@ -16,11 +16,9 @@ use serde::{Deserialize, Serialize};
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityCapturePolicyV1, AgentActivityEventV1,
     AgentActivityFrameV1, AgentAssignmentIdentityV1, AgentRunEventV1, AgentScopeKindV1,
-    AgentScopeV1, BlobAttachmentV1, BlobReferenceV1, CaptureModeV1, FailureCodeV1, FailureInfoV1,
-    RunFailedV1, RunFinishedV1, RunStartedV1, RunStatusV1, StopReasonV1,
+    AgentScopeV1, BlobAttachmentV1, BlobReferenceV1, CaptureModeV1, RunStartedV1,
 };
 use temper_protocol_agent::WorkspaceContext;
-use temper_protocol_worker::FailureClass;
 use thiserror::Error;
 
 #[cfg(test)]
@@ -39,6 +37,7 @@ mod model;
 mod run_acknowledgement;
 mod scope;
 mod spool;
+mod terminal;
 use coordination::TraceCoordination;
 pub use coordination::{DirtyTraceRun, DirtyTraceRuns, TraceCollector, TraceCoordinationSnapshot};
 pub use endpoint::ActivityEndpoint;
@@ -194,7 +193,7 @@ struct RunState {
     terminal_reserve: u64,
     acknowledged_seq: u64,
     event_end_offsets: Vec<u64>,
-    terminal: bool,
+    terminal: Option<TraceTerminal>,
     disabled: bool,
     scopes: BTreeMap<String, AgentScopeV1>,
     /// Source root identity supplied by the first-party child. The worker maps
@@ -211,6 +210,18 @@ struct RunState {
     /// canonicalized source frame so both inline and blob retransmissions are
     /// idempotent while conflicting second prompts are rejected.
     accepted_prompts: BTreeMap<String, (AgentActivityFrameV1, u64)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TraceTerminal {
+    sequence: u64,
+    kind: TraceTerminalKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TraceTerminalKind {
+    Cancelled,
+    Other,
 }
 
 impl TraceRun {
@@ -304,7 +315,7 @@ impl TraceRun {
                         terminal_reserve,
                         acknowledged_seq: 0,
                         event_end_offsets: Vec::new(),
-                        terminal: false,
+                        terminal: None,
                         disabled: false,
                         scopes,
                         source_main_scope_id: None,
@@ -400,69 +411,6 @@ impl TraceRun {
             .blobs
             .insert(attachment.blob.digest.clone(), attachment.blob.clone());
         Ok(())
-    }
-
-    /// Writes the sole successful terminal event for the run.
-    pub fn finish_success(&self, stop_reason: Option<StopReasonV1>) -> Result<u64, TraceError> {
-        let duration_ms = elapsed_ms(self.inner.started);
-        self.finish(AgentActivityEventV1::RunFinished(RunFinishedV1 {
-            status: RunStatusV1::Succeeded,
-            duration_ms,
-            stop_reason,
-        }))
-    }
-
-    /// Writes the sole synthetic cancelled terminal event. The worker uses this
-    /// after graceful or forced process termination when the child cannot emit
-    /// its own terminal frame.
-    pub fn finish_cancelled(&self) -> Result<u64, TraceError> {
-        let duration_ms = elapsed_ms(self.inner.started);
-        self.finish(AgentActivityEventV1::RunFinished(RunFinishedV1 {
-            status: RunStatusV1::Cancelled,
-            duration_ms,
-            stop_reason: Some(StopReasonV1::Cancelled),
-        }))
-    }
-
-    /// Writes the sole failed/crashed terminal event from trusted host classifications.
-    pub fn finish_failure(
-        &self,
-        code: FailureCodeV1,
-        class: FailureClass,
-    ) -> Result<u64, TraceError> {
-        self.finish(AgentActivityEventV1::RunFailed(RunFailedV1 {
-            failure: FailureInfoV1 {
-                code,
-                message: host_failure_summary(class).to_string(),
-                retryable: class == FailureClass::Transient,
-            },
-        }))
-    }
-
-    fn finish(&self, event: AgentActivityEventV1) -> Result<u64, TraceError> {
-        let mut state = self.inner.state.lock().expect("trace run state lock");
-        if state.terminal {
-            return Err(TraceError::AlreadyTerminal);
-        }
-        if state.disabled {
-            return Err(TraceError::Disabled);
-        }
-        let seq = state.next_seq;
-        let canonical = AgentRunEventV1 {
-            version: ACTIVITY_PROTOCOL_VERSION,
-            run_id: self.inner.manifest.run_id.clone(),
-            seq,
-            occurred_at: now_rfc3339(),
-            elapsed_ms: elapsed_ms(self.inner.started),
-            assignment: self.inner.manifest.assignment.clone(),
-            agent_session_id: self.inner.manifest.agent_session_id.clone(),
-            scope: self.inner.manifest.main_scope.clone(),
-            turn: None,
-            event,
-        };
-        append_event(&self.inner, &mut state, &canonical, false)?;
-        state.terminal = true;
-        Ok(seq)
     }
 
     fn append_host_event(
@@ -566,7 +514,7 @@ fn unlock_spool(inner: &TraceRunInner) -> Result<(), TraceError> {
 fn ensure_accepting(state: &RunState) -> Result<(), TraceError> {
     if state.disabled {
         Err(TraceError::Disabled)
-    } else if state.terminal {
+    } else if state.terminal.is_some() {
         Err(TraceError::AlreadyTerminal)
     } else {
         Ok(())

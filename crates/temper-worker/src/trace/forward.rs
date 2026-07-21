@@ -255,9 +255,49 @@ impl TraceCollector {
         Ok(())
     }
 
+    /// Waits without a fail-open deadline for one cancellation terminal cursor.
+    ///
+    /// Durable cancellation callers retain their attempt fence, registry entry,
+    /// heartbeat membership, and permit while this future is pending. Cursor
+    /// reads are periodically retried so a clone with independent in-memory
+    /// coordination, a temporary storage fault, or a restarted forwarder can
+    /// still make progress. Forwarding failures remain the forwarder's retry
+    /// responsibility and can never be converted into quiescence by elapsed
+    /// time.
+    pub async fn await_terminal_acknowledged(&self, run_id: &str, sequence: u64) {
+        const CURSOR_RECHECK: Duration = Duration::from_millis(50);
+
+        let Some(root) = self.config.spool_root.as_deref() else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        let run_dir = root.join(run_id);
+        loop {
+            // Snapshot before reading for the same lost-wakeup protection used
+            // by the bounded ordinary-terminal path.
+            let generation = self.coordination_snapshot().acknowledgement_generation;
+            if read_acknowledged_sequence(&run_dir, run_id)
+                .is_ok_and(|acknowledged| acknowledged >= sequence)
+            {
+                return;
+            }
+
+            let mut changed = std::pin::pin!(self.wait_for_acknowledgement(generation));
+            let mut recheck = std::pin::pin!(temper_worker_io::sleep_for(CURSOR_RECHECK));
+            std::future::poll_fn(|cx| {
+                if changed.as_mut().poll(cx).is_ready() || recheck.as_mut().poll(cx).is_ready() {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+        }
+    }
+
     /// Gives the independent forwarder a bounded opportunity to durably flush
-    /// a terminal cursor. Timeout/storage failures return `false`; callers must
-    /// always preserve the original agent/job outcome.
+    /// an ordinary (non-cancellation) terminal cursor. Timeout/storage failures
+    /// return `false`; callers preserve the original agent/job outcome.
     pub async fn await_acknowledged(&self, run_id: &str, sequence: u64, timeout: Duration) -> bool {
         let Some(root) = self.config.spool_root.as_deref() else {
             return false;

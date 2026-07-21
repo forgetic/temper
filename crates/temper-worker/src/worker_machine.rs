@@ -82,6 +82,12 @@ pub enum WorkerCompletion {
         generation: u64,
         snapshot: CleanupSnapshot,
     },
+    AttemptCleanupPending {
+        job_id: String,
+        attempt_id: String,
+        generation: u64,
+        reason: String,
+    },
     ResultRecorded {
         job_id: String,
         attempt_id: String,
@@ -435,6 +441,29 @@ impl Machine for WorkerMachine {
                 kind,
             } => {
                 self.on_watchdog_timer(now, job_id, attempt_id, generation, timer_generation, kind)
+            }
+            WorkerCompletion::AttemptCleanupPending {
+                job_id,
+                attempt_id,
+                generation,
+                reason,
+            } => {
+                let Some(state) = self.jobs.get_mut(&job_id) else {
+                    return Vec::new();
+                };
+                if !state.accepts(&attempt_id, generation)
+                    || matches!(state.phase, JobPhase::Quiesced | JobPhase::ResultRecorded)
+                {
+                    return Vec::new();
+                }
+                state.phase = JobPhase::CleanupPending;
+                state.cancellation = CancellationStatus::CleanupBlocked;
+                vec![
+                    WorkerRequest::Warn(format!(
+                        "worker: attempt quiescence pending job_id={job_id} attempt_id={attempt_id} reason={reason}"
+                    )),
+                    self.heartbeat_request(now),
+                ]
             }
             WorkerCompletion::AttemptCleanupBlocked {
                 job_id,

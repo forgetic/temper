@@ -163,6 +163,7 @@ impl NativeJigAgentRunner {
             .lock()
             .expect("observed agent sessions lock")
             .push(context.agent_session.clone());
+        let tracing_required = self.trace_collector.tracing_enabled();
         let trace = self
             .trace_collector
             .begin_run(job_id, context)
@@ -306,12 +307,35 @@ impl NativeJigAgentRunner {
                         .finish_failure(FailureCodeV1::Internal, agent_error_class(error, false)),
                 }
             };
-            if let Ok(sequence) = terminal {
-                let _ = self
-                    .trace_collector
-                    .await_acknowledged(trace.run_id(), sequence, Duration::from_secs(1))
-                    .await;
+            match terminal {
+                Ok(sequence) if worker_cancellation_requested => {
+                    cancellation.quiescence_pending(format!(
+                        "terminal trace {} sequence {sequence} is awaiting durable acknowledgement",
+                        trace.run_id()
+                    ));
+                    self.trace_collector
+                        .await_terminal_acknowledged(trace.run_id(), sequence)
+                        .await;
+                }
+                Ok(sequence) => {
+                    let _ = self
+                        .trace_collector
+                        .await_acknowledged(trace.run_id(), sequence, Duration::from_secs(1))
+                        .await;
+                }
+                Err(error) if worker_cancellation_requested => {
+                    cancellation.quiescence_pending(format!(
+                        "cancelled terminal trace {} could not be persisted: {error}",
+                        trace.run_id()
+                    ));
+                    std::future::pending::<()>().await;
+                }
+                Err(_) => {}
             }
+        } else if tracing_required && worker_cancellation_requested {
+            cancellation
+                .quiescence_pending("enabled durable tracing did not create a cancellation run");
+            std::future::pending::<()>().await;
         }
         let (result, _totals) =
             outcome.map_err(|error| agent_error(error, worker_cancellation_requested))?;

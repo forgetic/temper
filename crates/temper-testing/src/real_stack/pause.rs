@@ -18,7 +18,15 @@ pub enum PausePoint {
     WorkerPushCompleted,
     /// WorkerMachine has selected timeout cancellation, before the attempt is notified.
     WorkerCancelRequested,
-    /// Attempt resources have joined, before the retryable result is recorded.
+    /// A cancellation terminal is durable locally but has not yet been sent to
+    /// the currently resolved daemon. Restart tests hold this boundary across
+    /// daemon replacement.
+    WorkerTerminalTraceForwarding,
+    /// The daemon journal accepted a cancellation terminal, but the durable
+    /// acknowledgement has not yet returned to the waiting attempt.
+    WorkerTerminalTraceAcknowledgement,
+    /// Attempt resources and terminal trace acknowledgement have completed,
+    /// before the retryable result is recorded.
     WorkerQuiesced,
     /// The retryable result is durable, before transport delivery.
     WorkerResultRecorded,

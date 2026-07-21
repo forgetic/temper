@@ -55,8 +55,11 @@ fn authoritative_in_process_cancellation_discards_forge_and_finishes_trace_cance
         let context = cancellation_context();
         let fence = temper_worker::AttemptFence::open();
         let cancellation = temper_worker::JobCancellation::default();
+        let completed = Arc::new(AtomicBool::new(false));
         let cancel_fence = fence.clone();
         let cancel_handle = cancellation.clone();
+        let completed_for_ack = Arc::clone(&completed);
+        let acknowledgement_root = spool_root.clone();
         let canceller = std::thread::spawn(move || {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while !host_started.load(Ordering::Acquire) {
@@ -68,6 +71,43 @@ fn authoritative_in_process_cancellation_discards_forge_and_finishes_trace_cance
             }
             cancel_fence.close();
             cancel_handle.cancel();
+
+            let collector = TraceCollector::new(WorkerAgentTraceConfig {
+                policy: AgentActivityCapturePolicyV1::default(),
+                spool_root: Some(acknowledgement_root),
+            });
+            let (run_id, sequence) = loop {
+                let runs = collector
+                    .recover()
+                    .expect("recover pending cancellation trace");
+                if let Some((run_id, sequence)) = runs.first().and_then(|run| {
+                    run.events.last().and_then(|terminal| {
+                        matches!(
+                            &terminal.event,
+                            AgentActivityEventV1::RunFinished(RunFinishedV1 {
+                                status: RunStatusV1::Cancelled,
+                                ..
+                            })
+                        )
+                        .then(|| (run.manifest.run_id.clone(), terminal.seq))
+                    })
+                }) {
+                    break (run_id, sequence);
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "cancelled terminal was not persisted"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            };
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(
+                !completed_for_ack.load(Ordering::Acquire),
+                "the historical 250 ms timeout must not release cancellation"
+            );
+            collector
+                .acknowledge(&run_id, sequence)
+                .expect("acknowledge cancelled terminal");
         });
         let error = runner
             .run_request(AgentRunRequest::new_controlled(
@@ -81,6 +121,7 @@ fn authoritative_in_process_cancellation_discards_forge_and_finishes_trace_cance
             ))
             .await
             .expect_err("fenced native result must be discarded");
+        completed.store(true, Ordering::Release);
         canceller.join().expect("join cancellation trigger");
         let recovered = TraceCollector::new(WorkerAgentTraceConfig {
             policy: AgentActivityCapturePolicyV1::default(),
@@ -93,13 +134,19 @@ fn authoritative_in_process_cancellation_discards_forge_and_finishes_trace_cance
 
     assert_eq!(error.class, FailureClass::Canceled);
     assert_eq!(recovered.len(), 1);
-    assert!(matches!(
-        recovered[0].events.last().map(|event| &event.event),
-        Some(AgentActivityEventV1::RunFinished(RunFinishedV1 {
-            status: RunStatusV1::Cancelled,
-            ..
-        }))
-    ));
+    assert!(
+        recovered[0].acknowledged_seq > 0,
+        "cancelled terminal sequence was durably acknowledged"
+    );
+    if let Some(terminal) = recovered[0].events.last() {
+        assert!(matches!(
+            &terminal.event,
+            AgentActivityEventV1::RunFinished(RunFinishedV1 {
+                status: RunStatusV1::Cancelled,
+                ..
+            })
+        ));
+    }
 }
 
 fn cancellation_context() -> WorkspaceContext {

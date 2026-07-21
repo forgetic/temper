@@ -3,7 +3,9 @@ use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use temper_protocol_activity::{AgentActivityEventV1, CaptureModeV1, RunFailedV1, ScopeStatusV1};
+use temper_protocol_activity::{
+    AgentActivityEventV1, CaptureModeV1, FailureCodeV1, RunFailedV1, ScopeStatusV1,
+};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt};

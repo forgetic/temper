@@ -253,6 +253,56 @@ fn ownership_loss_records_canceled_cleanup_evidence_before_releasing_capacity() 
 }
 
 #[test]
+fn terminal_forwarding_pending_retains_ownership_until_acknowledged_quiescence() {
+    let job_id = "job-terminal-trace-pending";
+    let attempt_id = format!("attempt-{job_id}");
+    let mut machine = WorkerMachine::new(params());
+    dispatch_at(&mut machine, job_id, EngineTime::ZERO);
+    let generation = machine.job_state(job_id).unwrap().generation;
+    request_ownership_loss(
+        &mut machine,
+        job_id,
+        "durable assignment disappeared while tracing",
+    );
+
+    let pending = machine.on_completion(
+        EngineTime::from_nanos(2),
+        WorkerCompletion::AttemptCleanupPending {
+            job_id: job_id.to_string(),
+            attempt_id: attempt_id.clone(),
+            generation,
+            reason: "terminal sequence 4 is awaiting acknowledgement".to_string(),
+        },
+    );
+    let state = machine
+        .job_state(job_id)
+        .expect("attempt remains installed");
+    assert_eq!(state.phase, super::JobPhase::CleanupPending);
+    assert_eq!(machine.free_capacity(), 0);
+    assert_no_terminal_or_release(&pending);
+
+    let acknowledged = machine.on_completion(
+        EngineTime::from_nanos(3),
+        WorkerCompletion::AttemptQuiesced {
+            job_id: job_id.to_string(),
+            attempt_id,
+            generation,
+            completion: AttemptCompletion {
+                result: None,
+                cleanup: JobCleanup::no_process(Some(CancellationOutcome::Graceful)),
+            },
+        },
+    );
+    assert!(
+        acknowledged
+            .iter()
+            .any(|request| matches!(request, WorkerRequest::RecordResult { .. }))
+    );
+    assert_eq!(machine.free_capacity(), 0);
+    assert!(machine.in_flight().contains(job_id));
+}
+
+#[test]
 fn cleanup_blocked_retains_fence_permit_and_rejects_unproven_completion() {
     let job_id = "job-cleanup-blocked";
     let attempt_id = format!("attempt-{job_id}");

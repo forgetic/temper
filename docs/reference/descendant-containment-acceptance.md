@@ -54,8 +54,14 @@ out-of-process Forge, submit, managed workspace/git, validation, commit, push,
 and result paths all reject completions after that boundary. Capacity remains
 occupied while descendants, side channels, managed commands, and trace
 forwarding join. The terminal `RunFinished(Cancelled)` record is persisted and
-forwarded before durable canceled-result recording can prove quiescence and
-release capacity; accepted submit proof is cleared both before and after joins.
+its exact sequence is acknowledged by the engine journal before
+`AttemptQuiesced`, durable canceled-result recording, heartbeat removal, or
+capacity release. The ordinary 250 ms terminal flush allowance is not a
+cancellation quiescence proof: an unavailable daemon or failed forward leaves
+the attempt in `CleanupPending` with its fence, registry entry, heartbeat
+membership, and permit retained while the forwarder retries. Trace capture
+`off` remains the explicit no-trace compatibility path. Accepted submit proof is
+cleared both before and after joins.
 
 ## Production regression matrix
 

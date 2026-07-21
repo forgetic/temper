@@ -196,14 +196,20 @@ assignment/lease metadata.
 Deterministic machine tests cover exact-boundary progress, stale timers,
 completion-versus-timeout, one durable record, one capacity release, heartbeat
 membership, and capacity greater than one
-(`temper-worker::worker_machine_watchdog_tests`). Unix supervisor tests prove
-that graceful and forced cancellation join owned resources and synthesize a
-terminal `run.finished(status=cancelled)` record. Live convergence tests cover Forge outage, retry, idempotence, and newer-claim
-fencing (`temper-runner/tests/assignment_convergence.rs`). The hermetic
-real-stack ownership-loss matrix additionally runs the real daemon, worker
-machine/shell, native agent, MemoryForge, local git, trace spool/journal, and
-result outbox through blocked/closed/replaced/transient and restart boundaries
-(`temper-testing/tests/hermetic_real_stack/ownership_loss.rs`).
+(`temper-worker::worker_machine_watchdog_tests`). Unix supervisor and standalone
+runner tests hold cancellation terminal acknowledgement beyond 250 ms and prove
+that both carriers preserve the exact `run.finished(status=cancelled)` sequence
+without publishing quiescence. The hermetic ownership-loss matrix pauses after
+the engine journal becomes terminal but before its acknowledgement reaches the
+worker, proving that `AttemptQuiesced`, canceled-result durability, heartbeat
+removal, and permit release remain blocked; its restart case replaces the daemon
+while terminal forwarding is pending and drains the same spool through the
+replacement. Live convergence tests cover Forge outage, retry, idempotence, and
+newer-claim fencing (`temper-runner/tests/assignment_convergence.rs`). The
+hermetic real-stack ownership-loss matrix additionally runs the real daemon,
+worker machine/shell, native agent, MemoryForge, local git, trace spool/journal,
+and result outbox through blocked/closed/replaced/transient and restart
+boundaries (`temper-testing/tests/hermetic_real_stack/ownership_loss.rs`).
 
 ## Limitations discovered by the tests
 

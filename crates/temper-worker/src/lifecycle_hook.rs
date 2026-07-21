@@ -17,7 +17,8 @@ pub enum WorkerLifecycleCheckpoint {
     /// The exact attempt fence is closed and cancellation has been published;
     /// lifecycle observers may pause before subsequent effects are processed.
     CancelRequested,
-    /// All attempt-owned work quiesced, before the terminal result is recorded.
+    /// All attempt-owned work and any required cancellation-terminal trace
+    /// acknowledgement completed, before the terminal result is recorded.
     Quiesced,
     /// The exact result is durable, before its first delivery attempt.
     ResultRecorded,

@@ -6,9 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use temper_protocol_activity::{
-    AgentActivityCapturePolicyV1, AgentActivityEventV1, RunFinishedV1, RunStatusV1,
-};
+use temper_protocol_activity::AgentActivityCapturePolicyV1;
 use temper_protocol_agent::{AgentRuntimeLimitsV1, SubmitForPrResponse};
 
 use super::supervisor::{ManagedAgentProcess, SupervisorResult};
@@ -18,7 +16,10 @@ use crate::agent_runner::{
 };
 use crate::config::{WorkerAgentTraceConfig, WorkerLivenessLimits};
 use crate::executor::{AttemptFence, CancellationOutcome, JobCancellation};
-use crate::trace::TraceCollector;
+
+#[path = "out_of_process_runner_supervisor_trace_ack.rs"]
+mod trace_ack;
+use trace_ack::{assert_cancelled_terminal, finish_cancelled_after_delayed_ack};
 
 fn executable_script(directory: &Path, name: &str, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
@@ -382,7 +383,7 @@ PY
     let started = Instant::now();
     fence.close();
     cancellation.cancel();
-    let _ = poll_until_ready(future.as_mut());
+    let _ = finish_cancelled_after_delayed_ack(future.as_mut(), &trace_config);
     assert!(cancelled.exists(), "child did not receive lifecycle Cancel");
     assert_eq!(
         cancellation.cleanup().unwrap().cancellation,
@@ -436,7 +437,7 @@ fn hard_kill_writes_synthetic_cancelled_terminal_activity_and_reports_cleanup() 
     cancellation.cancel();
     cancellation.force_terminate();
     cancellation.hard_kill();
-    let _ = poll_until_ready(future.as_mut());
+    let _ = finish_cancelled_after_delayed_ack(future.as_mut(), &trace_config);
     let cleanup = cancellation.cleanup().expect("supervisor cleanup report");
     assert_eq!(cleanup.cancellation, Some(CancellationOutcome::HardKill));
     assert_eq!(
@@ -542,18 +543,6 @@ fn wait_for_supervisor(process: &mut ManagedAgentProcess) -> SupervisorResult {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
-}
-
-fn assert_cancelled_terminal(config: &WorkerAgentTraceConfig) {
-    let recovered = TraceCollector::new(config.clone()).recover().unwrap();
-    assert_eq!(recovered.len(), 1);
-    assert!(matches!(
-        recovered[0].events.last().map(|event| &event.event),
-        Some(AgentActivityEventV1::RunFinished(RunFinishedV1 {
-            status: RunStatusV1::Cancelled,
-            ..
-        }))
-    ));
 }
 
 fn short_limits() -> WorkerLivenessLimits {

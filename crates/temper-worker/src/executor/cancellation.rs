@@ -163,6 +163,8 @@ pub(crate) enum JobContainmentObservation {
     Snapshot(CleanupSnapshot),
     Capability(ContainmentCapabilityDiagnostic),
     Fallback(ContainmentFallbackObservation),
+    /// Non-process attempt work still required before quiescence can publish.
+    QuiescencePending(String),
 }
 
 type CleanupSnapshotObserver = Arc<dyn Fn(JobContainmentObservation) + Send + Sync>;
@@ -412,6 +414,14 @@ impl JobCancellation {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .cleanup
             .clone()
+    }
+
+    /// Reports durable non-process cleanup that must finish before the attempt
+    /// may publish quiescence. Terminal trace forwarding uses this boundary to
+    /// retain the fence, heartbeat membership, registry entry, and permit while
+    /// its exact cancellation sequence remains unacknowledged.
+    pub fn quiescence_pending(&self, reason: impl Into<String>) {
+        self.observe_containment(JobContainmentObservation::QuiescencePending(reason.into()));
     }
 
     /// Registers an owner that must receive escalation requests and report

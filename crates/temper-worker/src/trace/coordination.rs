@@ -219,8 +219,14 @@ impl TraceCollector {
         }
     }
 
+    /// Whether this collector is configured to require durable run traces.
+    /// Capture `off` is the sole explicit no-trace compatibility case.
+    pub fn tracing_enabled(&self) -> bool {
+        self.config.policy.capture != CaptureModeV1::Off
+    }
+
     pub(crate) fn forwarding_enabled(&self) -> bool {
-        self.config.policy.capture != CaptureModeV1::Off && self.config.spool_root.is_some()
+        self.tracing_enabled() && self.config.spool_root.is_some()
     }
 
     /// Atomically snapshots append and acknowledgement generations.

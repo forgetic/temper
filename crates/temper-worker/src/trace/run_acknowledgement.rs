@@ -28,7 +28,7 @@ impl TraceRun {
                     self.inner.manifest.run_id, highest_contiguous_seq
                 ))
             })?;
-        let compact_terminal = state.terminal && highest_contiguous_seq == last_seq;
+        let compact_terminal = state.terminal.is_some() && highest_contiguous_seq == last_seq;
         let cursor = TraceAckCursorV1::new(&self.inner.manifest.run_id, highest_contiguous_seq);
         let bytes = serde_json::to_vec_pretty(&cursor)?;
         lock_spool(&self.inner)?;

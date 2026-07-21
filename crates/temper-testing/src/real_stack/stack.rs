@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,10 +11,9 @@ use skein::runtime::RuntimeHandle;
 use temper_engine::{Daemon, RoleFeedMode};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId};
-use temper_protocol_worker::{JobResult, Release, ResultStatus, WorkerAuth, WorkerProtocolMessage};
+use temper_protocol_worker::{JobResult, Release, ResultStatus};
 use temper_worker::{
-    CodingExecutor, CodingExecutorConfig, TraceCollector, Transport, WorkerComponentHandle,
-    WorkerConfig,
+    CodingExecutor, CodingExecutorConfig, TraceCollector, WorkerComponentHandle, WorkerConfig,
 };
 use temper_workflow::InMemoryJournal;
 use temper_workflow::{
@@ -28,6 +26,9 @@ use super::clock::MutableWallClock;
 use super::git::{git_output_raw, git_output_trim, path_str};
 use super::pause::{PauseHooks, PausePoint};
 use super::runner::{DaemonPrFreshnessGuard, NativeJigAgentRunner};
+
+mod transport;
+pub use transport::{DaemonRouter, ResultTappingTransport};
 
 pub(crate) type PublishedResultKey = (String, Option<String>);
 pub(crate) type PublishedResults = Arc<Mutex<BTreeMap<PublishedResultKey, JobResult>>>;
@@ -507,13 +508,13 @@ impl HermeticRealStack {
     }
 
     pub(super) fn transport(&self) -> Arc<ResultTappingTransport> {
-        Arc::new(ResultTappingTransport {
-            router: self.router.clone(),
-            result_tx: self.result_tx.clone(),
-            published_results: Arc::clone(&self.published_results),
-            published_releases: Arc::clone(&self.published_releases),
-            hooks: self.hooks.clone(),
-        })
+        Arc::new(ResultTappingTransport::new(
+            self.router.clone(),
+            self.result_tx.clone(),
+            Arc::clone(&self.published_results),
+            Arc::clone(&self.published_releases),
+            self.hooks.clone(),
+        ))
     }
 }
 
@@ -523,117 +524,6 @@ pub struct HermeticRunResult {
     pub enqueued_jobs: usize,
     pub job_result: JobResult,
     pub pull_requests: Vec<PullRequest>,
-}
-
-/// Replaceable endpoint resolved on every message, like an external reconnect.
-pub struct DaemonRouter {
-    daemon: Mutex<Arc<Daemon>>,
-}
-
-impl DaemonRouter {
-    pub(crate) fn new(daemon: Arc<Daemon>) -> Self {
-        Self {
-            daemon: Mutex::new(daemon),
-        }
-    }
-
-    pub(crate) fn replace(&self, daemon: Arc<Daemon>) {
-        *self.daemon.lock().expect("daemon router lock") = daemon;
-    }
-
-    pub(crate) fn current(&self) -> Arc<Daemon> {
-        self.daemon.lock().expect("daemon router lock").clone()
-    }
-}
-
-/// Replaceable-daemon transport that records worker results for assertions.
-pub struct ResultTappingTransport {
-    router: Arc<DaemonRouter>,
-    result_tx: temper_engine_io::CqSender<JobResult>,
-    published_results: PublishedResults,
-    published_releases: PublishedReleases,
-    hooks: PauseHooks,
-}
-
-impl Transport for ResultTappingTransport {
-    fn send(
-        &self,
-        _cx: Cx,
-        message: WorkerProtocolMessage,
-        auth: Option<WorkerAuth>,
-    ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
-        let result_tx = self.result_tx.clone();
-        let published_results = Arc::clone(&self.published_results);
-        let published_releases = Arc::clone(&self.published_releases);
-        let hooks = self.hooks.clone();
-        async move {
-            let reports_jobs = matches!(
-                &message,
-                WorkerProtocolMessage::Heartbeat(heartbeat) if !heartbeat.jobs.is_empty()
-            );
-            if reports_jobs {
-                hooks.reach(PausePoint::WorkerHeartbeatReportingJob).await;
-            }
-            // Resolve after the pause so parked requests reconnect to a new daemon.
-            let recorded = match &message {
-                WorkerProtocolMessage::Result(result) => Some(result.clone()),
-                _ => None,
-            };
-            let first_publication = recorded.as_ref().is_some_and(|result| {
-                let key = (result.job_id.clone(), result.attempt_id.clone());
-                let mut published = published_results.lock().expect("published result lock");
-                match published.entry(key) {
-                    std::collections::btree_map::Entry::Vacant(slot) => {
-                        slot.insert(result.clone());
-                        true
-                    }
-                    std::collections::btree_map::Entry::Occupied(slot) => {
-                        assert_eq!(
-                            slot.get(),
-                            result,
-                            "one assignment attempt published conflicting terminal payloads"
-                        );
-                        false
-                    }
-                }
-            });
-            let first_product_publication = first_publication
-                && recorded.as_ref().is_some_and(|result| {
-                    result.status == ResultStatus::Success && !result.repos.is_empty()
-                });
-            if first_product_publication {
-                // Durable replay must not masquerade as a second workspace push.
-                hooks.reach(PausePoint::WorkerPushCompleted).await;
-            }
-            if recorded.is_some() {
-                hooks.reach(PausePoint::ResultApplicationStarted).await;
-            }
-            let daemon = self.router.current();
-            let reply = daemon
-                .deliver_protocol_message_with_auth(message, auth)
-                .await;
-            if let Ok(Some(WorkerProtocolMessage::Release(release))) = &reply {
-                published_releases
-                    .lock()
-                    .expect("published release lock")
-                    .push(release.clone());
-            }
-            if reports_jobs && matches!(&reply, Ok(None)) {
-                hooks.reach(PausePoint::WorkerHeartbeatCompleted).await;
-            }
-            if matches!(&reply, Ok(Some(WorkerProtocolMessage::Assign(_)))) {
-                // The daemon only emits Assign after the durable claim CAS.
-                hooks.reach(PausePoint::AssignmentClaimCommitted).await;
-            }
-            if let Some(result) = recorded {
-                if reply.is_ok() {
-                    hooks.reach(PausePoint::ResultApplicationCompleted).await;
-                }
-                let _ = result_tx.send(result);
-            }
-            reply
-        }
-    }
 }
 
 fn default_now() -> Result<DateTime<Utc>, String> {
