@@ -32,8 +32,8 @@ use skein::runtime::RuntimeHandle;
 use temper_config::{ExposeSecret, Resolved, WorkerSettings};
 use temper_engine::{
     CoordinatedMechanical, Daemon, EngineConfig, MechanicalBackstopConfig, MechanicalTrigger,
-    PollBackstopConfig, RoleFeedMode, WebhookConfig, spawn_coordinated_mechanical_backstop,
-    spawn_coordinated_poll_backstop,
+    PollBackstopConfig, RoleFeedMode, WebhookConfig, spawn_ci_status_monitor,
+    spawn_coordinated_mechanical_backstop, spawn_coordinated_poll_backstop,
 };
 use temper_engine_service::{
     AGENT_TRACE_RETENTION_INTERVAL, attach_trace_query, converge_startup_orphans, engine_config,
@@ -264,6 +264,17 @@ async fn run_async(
     );
 
     daemon.complete_startup_recovery().await;
+    if let Some(cadence) = daemon_config.ci_poll_cadence {
+        spawn_ci_status_monitor(
+            &spawner,
+            daemon.clone(),
+            forge.clone(),
+            repositories.clone(),
+            workflow.clone(),
+            compiled.clone(),
+            cadence,
+        );
+    }
     if let Some(cadence) = daemon_config.mechanical_cadence {
         spawn_coordinated_mechanical_backstop(
             &spawner,

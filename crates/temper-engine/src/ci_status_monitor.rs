@@ -8,8 +8,11 @@
 //! the durable liveness backstop.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use temper_engine_io::Spawner;
 use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryId};
 use temper_runner::{CiStatusObservation, RepositorySet, RepositoryTarget};
 use temper_workflow::{CiState, CompiledWorkflow, ValidatedWorkflow};
@@ -161,6 +164,51 @@ pub async fn run_ci_status_monitor_tick<F: Forge + ?Sized>(
         }
     }
     transitions
+}
+
+/// Spawns the fixed-delay CI monitor. Each terminal edge is submitted as an
+/// exact daemon wake; the cadence task performs no mechanical or role work
+/// itself and therefore cannot bypass bounded coordinator admission.
+pub fn spawn_ci_status_monitor<F: Forge + Send + Sync + ?Sized + 'static>(
+    spawner: &Arc<dyn Spawner>,
+    daemon: crate::Daemon,
+    forge: Arc<F>,
+    repositories: RepositorySet,
+    workflow: Arc<ValidatedWorkflow>,
+    compiled: Arc<CompiledWorkflow>,
+    cadence: Duration,
+) {
+    // Cadence ticks are fixed-delay and never overlap. Taking the monitor out of
+    // the mutex before awaiting keeps the spawned future Send without holding a
+    // synchronous guard across Forge I/O.
+    let monitor = Arc::new(Mutex::new(Some(CiStatusMonitor::new())));
+    temper_engine_io::spawn_cadence_loop(spawner, cadence, move || {
+        let daemon = daemon.clone();
+        let forge = Arc::clone(&forge);
+        let repositories = repositories.clone();
+        let workflow = Arc::clone(&workflow);
+        let compiled = Arc::clone(&compiled);
+        let monitor = Arc::clone(&monitor);
+        async move {
+            let mut state = monitor
+                .lock()
+                .expect("CI status monitor state")
+                .take()
+                .expect("CI status monitor ticks do not overlap");
+            let transitions = run_ci_status_monitor_tick(
+                &mut state,
+                forge.as_ref(),
+                &repositories,
+                workflow.as_ref(),
+                compiled.as_ref(),
+            )
+            .await;
+            *monitor.lock().expect("CI status monitor state") = Some(state);
+            for transition in transitions {
+                daemon.submit_ci_poll_transition(transition);
+            }
+        }
+    });
 }
 
 fn terminal_verdict(state: CiState) -> Option<CiTerminalVerdict> {

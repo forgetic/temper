@@ -342,6 +342,15 @@ fn create_pull_request(
     repository: &RepositoryTarget,
     head_sha: &str,
 ) -> PullRequest {
+    create_pull_request_with_labels(forge, repository, head_sha, &["implementation", "watch"])
+}
+
+fn create_pull_request_with_labels(
+    forge: &MemoryForge,
+    repository: &RepositoryTarget,
+    head_sha: &str,
+    labels: &[&str],
+) -> PullRequest {
     let pull_request = block_on(forge.create_pull_request(
         &repository.id,
         CreatePullRequest {
@@ -355,7 +364,7 @@ fn create_pull_request(
                 repository_id: repository.id.clone(),
                 branch: "main".into(),
             },
-            labels: vec!["implementation".into(), "watch".into()],
+            labels: labels.iter().map(|label| (*label).to_string()).collect(),
             assignees: Vec::<UserId>::new(),
         },
     ))
@@ -387,6 +396,8 @@ fn terminal_job(
         updated_at: completed_at,
     }
 }
+
+mod cadence;
 
 #[test]
 fn failed_repository_read_preserves_state_and_does_not_stop_other_repositories() {

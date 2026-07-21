@@ -570,11 +570,7 @@ fn emit_reference_lifecycle() {
         gates: "ci_gate=pending dependency_gate=ok",
         note: "waiting on CI",
     });
-    emit::emit_ci_completed(CiCompleted {
-        item: &pr,
-        conclusion: "success",
-        duration_ms: 280_000,
-    });
+    emit::emit_ci_completed(CiCompleted::new(&pr, "success", 280_000));
     emit::emit_gate_evaluated(GateEvaluated {
         item: &pr,
         gates: "ci_gate=ok dependency_gate=ok",

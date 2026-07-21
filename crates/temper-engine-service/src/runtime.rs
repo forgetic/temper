@@ -9,7 +9,7 @@ use temper_config::{ExposeSecret, Resolved};
 use temper_engine::{
     AgentTraceJournal, CoordinatedMechanical, Daemon, DaemonRunConfig, EngineAgentTraceConfig,
     EngineConfig, MechanicalBackstopConfig, MechanicalTrigger, PollBackstopConfig, RepositorySet,
-    RetentionProtection, RoleFeedMode, RoleFeedTarget, WebhookConfig,
+    RetentionProtection, RoleFeedMode, RoleFeedTarget, WebhookConfig, spawn_ci_status_monitor,
     spawn_coordinated_mechanical_backstop, spawn_coordinated_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath};
@@ -151,7 +151,7 @@ pub async fn run_async(
         forge.clone(),
         workflow.clone(),
         compiled.clone(),
-        repositories,
+        repositories.clone(),
         wake_targets.clone(),
         config.mechanical_cadence,
         lease_ttl,
@@ -159,6 +159,17 @@ pub async fn run_async(
     .await?;
 
     daemon.complete_startup_recovery().await;
+    if let Some(cadence) = config.ci_poll_cadence {
+        spawn_ci_status_monitor(
+            &spawner,
+            daemon.clone(),
+            forge,
+            repositories,
+            workflow,
+            compiled,
+            cadence,
+        );
+    }
     spawn_poll(
         &spawner,
         daemon.clone(),
