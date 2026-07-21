@@ -296,7 +296,7 @@ fn wake_scope_reason(scope: &WakeScope) -> &'static str {
         WakeScope::Targeted(targets) => targets
             .values()
             .next()
-            .map(change_reason)
+            .map(|target| change_reason(&target.change))
             .unwrap_or("targeted"),
         WakeScope::Broad { mode, .. } => broad_reason(*mode),
     }

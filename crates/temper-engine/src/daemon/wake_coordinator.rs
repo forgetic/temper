@@ -16,8 +16,8 @@ use temper_forge::{ChangeHint, ChangeKind, HintArtifactKind, ItemNumber, Reposit
 #[cfg(test)]
 pub(crate) use super::wake_scope::MAX_TARGETED_ARTIFACTS;
 pub(crate) use super::wake_scope::{
-    BroadMode, MergeResult, WakeBatch, WakeLane, WakeScope, WakeTargets, merge_change_kind,
-    prioritized_targets,
+    BroadMode, CiTriggerSource, CiWakeFacts, MergeResult, WakeBatch, WakeLane, WakeScope,
+    WakeTargets, merge_change_kind, prioritized_targets,
 };
 
 pub(crate) const DEFAULT_MAX_IN_FLIGHT_REPOSITORIES: usize = 2;
@@ -34,7 +34,37 @@ pub(crate) struct WakeRequest {
 
 impl WakeRequest {
     pub(crate) fn from_hint(hint: ChangeHint) -> Self {
-        let scope = WakeScope::from_hint(&hint);
+        Self::from_hint_with_ci(hint, None)
+    }
+
+    pub(crate) fn from_webhook_hint(
+        hint: ChangeHint,
+        verdict: Option<crate::CiTerminalVerdict>,
+        completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Self {
+        Self::from_hint_with_ci(
+            hint,
+            Some(CiWakeFacts {
+                source: CiTriggerSource::Webhook,
+                verdict,
+                completed_at,
+            }),
+        )
+    }
+
+    pub(crate) fn from_ci_poll_transition(transition: crate::CiTerminalTransition) -> Self {
+        Self::from_hint_with_ci(
+            transition.hint,
+            Some(CiWakeFacts {
+                source: CiTriggerSource::CiPoll,
+                verdict: Some(transition.verdict),
+                completed_at: transition.completed_at,
+            }),
+        )
+    }
+
+    fn from_hint_with_ci(hint: ChangeHint, ci: Option<CiWakeFacts>) -> Self {
+        let scope = WakeScope::from_hint(&hint, ci);
         Self {
             repo: hint.repo,
             lanes: BTreeSet::new(),

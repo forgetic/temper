@@ -27,11 +27,11 @@ use super::{ChangeHint, payload::ci_pr_number, payload::json_u64};
 /// Best-effort: a field the provider omits collapses to a neutral default rather
 /// than dropping the whole line.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct WebhookTriggerFacts {
+pub(crate) struct WebhookTriggerFacts {
     /// `issue.opened`: present when the delivery is an issue `opened` action.
     pub(super) issue_opened: Option<IssueOpenedFacts>,
     /// `ci.completed`: present when the delivery is a CI status event for a PR.
-    pub(super) ci_completed: Option<CiCompletedFacts>,
+    pub(crate) ci_completed: Option<CiCompletedFacts>,
 }
 
 /// The fields the §7 `issue.opened` trigger line carries.
@@ -51,10 +51,23 @@ pub(super) struct IssueOpenedFacts {
 /// all of Forgejo's CI event shapes; a precise figure would require a follow-up
 /// forge read, which the trigger plane deliberately avoids.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct CiCompletedFacts {
-    pub(super) pr_number: u64,
-    pub(super) conclusion: String,
-    pub(super) duration_ms: u64,
+pub(crate) struct CiCompletedFacts {
+    pub(crate) pr_number: u64,
+    pub(crate) conclusion: String,
+    pub(crate) duration_ms: u64,
+    pub(crate) completed_at: Option<DateTime<Utc>>,
+}
+
+impl CiCompletedFacts {
+    pub(crate) fn terminal_verdict(&self) -> Option<crate::CiTerminalVerdict> {
+        match self.conclusion.as_str() {
+            "success" | "passed" => Some(crate::CiTerminalVerdict::Passed),
+            "failure" | "failed" | "cancelled" | "timed_out" | "action_required" => {
+                Some(crate::CiTerminalVerdict::Failed)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Parses the §7 trigger facts from a verified webhook body for one event.
@@ -63,7 +76,7 @@ pub(super) struct CiCompletedFacts {
 /// `event` is the provider event header (`super::webhook_event`); the `hint`
 /// supplies the already-parsed repository, typed target, and change kind so this
 /// only adds the human-facing extras.
-pub(super) fn parse_trigger_facts(
+pub(crate) fn parse_trigger_facts(
     body: &[u8],
     event: &str,
     hint: &ChangeHint,
@@ -102,10 +115,20 @@ pub(super) fn parse_trigger_facts(
         if let Some(pr_number) = ci_pr_number(&value) {
             let conclusion = ci_conclusion(&value).unwrap_or("unknown").to_string();
             let duration_ms = ci_duration_ms(&value).unwrap_or(0);
+            let completed_at = ci_timestamp(
+                &value,
+                &[
+                    "/completed_at",
+                    "/updated_at",
+                    "/workflow_run/updated_at",
+                    "/run/stopped",
+                ],
+            );
             facts.ci_completed = Some(CiCompletedFacts {
                 pr_number,
                 conclusion,
                 duration_ms,
+                completed_at,
             });
         }
     }
@@ -287,6 +310,7 @@ mod tests {
                 conclusion: "success".to_string(),
                 // 4m40s == 280_000 ms.
                 duration_ms: 280_000,
+                completed_at: Some("2026-06-16T10:23:50Z".parse().unwrap()),
             })
         );
         assert_eq!(facts.issue_opened, None);
@@ -321,6 +345,7 @@ mod tests {
                 pr_number: 23,
                 conclusion: "success".to_string(),
                 duration_ms: 131_000,
+                completed_at: Some("2026-06-29T15:51:00Z".parse().unwrap()),
             })
         );
         assert_eq!(facts.issue_opened, None);
@@ -360,6 +385,7 @@ mod tests {
                 pr_number: 19,
                 conclusion: "failure".to_string(),
                 duration_ms: 0,
+                completed_at: None,
             })
         );
     }

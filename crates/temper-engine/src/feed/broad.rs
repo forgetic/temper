@@ -4,15 +4,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_forge::{Forge, Repository};
-use temper_runner::{ScanError, scan_roles_wake};
-use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
+use temper_forge::{Forge, HintArtifactKind, Repository};
+use temper_runner::{ArtifactAddress, ScanError, scan_roles_wake};
+use temper_workflow::{CompiledWorkflow, QueueId, RoleId, ValidatedWorkflow};
 
 use super::recovery::recover_advanced_pull_request_assignments_for_roles;
 use super::{
     EnrichOutcome, enrich_work_item_job_inner, enrichment_failure_log_line, job_from_work_item,
     skip_log_line,
 };
+
+/// Enqueued selections from one broad wake, retained so an exact CI hint that
+/// coalesced into the broad lane can still report its selected queue and role.
+pub(crate) struct BroadRoleFeedResult {
+    pub(crate) enqueued_work: Vec<(ArtifactAddress, QueueId, RoleId)>,
+}
 
 /// Runs one recovery-inclusive candidate pass for the union of `roles`, then
 /// groups enrichment and broad pending reconciliation by subscriber.
@@ -28,7 +34,7 @@ pub(crate) async fn enqueue_scanned_roles_wake<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
     now: chrono::DateTime<chrono::Utc>,
     roles: &[RoleId],
-) -> Result<usize, ScanError> {
+) -> Result<BroadRoleFeedResult, ScanError> {
     let repo = &repository.id;
     recover_advanced_pull_request_assignments_for_roles(daemon, forge, repo, workflow, roles)
         .await?;
@@ -40,7 +46,7 @@ pub(crate) async fn enqueue_scanned_roles_wake<F: Forge + ?Sized>(
         .cloned()
         .map(|role| (role, BTreeSet::new()))
         .collect::<BTreeMap<_, _>>();
-    let mut enqueued = 0;
+    let mut enqueued_work = Vec::new();
 
     for item in &items {
         let mut job = job_from_work_item(&repo_label, item);
@@ -72,7 +78,18 @@ pub(crate) async fn enqueue_scanned_roles_wake<F: Forge + ?Sized>(
                         job.job_payload,
                     )
                     .await;
-                enqueued += 1;
+                enqueued_work.push((
+                    match item.target {
+                        temper_workflow::ArtifactSource::Issue { number } => {
+                            ArtifactAddress::new(HintArtifactKind::Issue, number)
+                        }
+                        temper_workflow::ArtifactSource::PullRequest { number } => {
+                            ArtifactAddress::new(HintArtifactKind::PullRequest, number)
+                        }
+                    },
+                    item.queue.clone(),
+                    item.role.clone(),
+                ));
             }
             Ok(
                 outcome @ (EnrichOutcome::SkipTerminalArtifact
@@ -95,5 +112,5 @@ pub(crate) async fn enqueue_scanned_roles_wake<F: Forge + ?Sized>(
             )
             .await;
     }
-    Ok(enqueued)
+    Ok(BroadRoleFeedResult { enqueued_work })
 }

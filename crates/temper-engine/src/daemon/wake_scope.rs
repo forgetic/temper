@@ -4,13 +4,94 @@
 
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use temper_forge::{ChangeHint, ChangeKind, HintArtifactKind, HintTarget, ItemNumber};
 use temper_workflow::RoleId;
+
+use crate::CiTerminalVerdict;
 
 pub(crate) const MAX_TARGETED_ARTIFACTS: usize = 32;
 
 pub(crate) type WakeArtifactAddress = (HintArtifactKind, ItemNumber);
-pub(crate) type WakeTargets = BTreeMap<WakeArtifactAddress, ChangeKind>;
+pub(crate) type WakeTargets = BTreeMap<WakeArtifactAddress, WakeTarget>;
+
+/// Origin of an exact CI wake. The order is an explicit coalescing priority:
+/// the dedicated poll carries the monitor's terminal snapshot and therefore
+/// wins over a concurrent provider edge, independent of arrival order.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum CiTriggerSource {
+    Webhook,
+    CiPoll,
+}
+
+impl CiTriggerSource {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Webhook => "webhook",
+            Self::CiPoll => "ci_poll",
+        }
+    }
+}
+
+/// Provenance and best-known terminal facts carried with an exact CI target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CiWakeFacts {
+    pub(crate) source: CiTriggerSource,
+    pub(crate) verdict: Option<CiTerminalVerdict>,
+    pub(crate) completed_at: Option<DateTime<Utc>>,
+}
+
+impl CiWakeFacts {
+    pub(crate) fn merge(self, incoming: Self) -> Self {
+        match self.source.cmp(&incoming.source) {
+            std::cmp::Ordering::Less => incoming,
+            std::cmp::Ordering::Greater => self,
+            std::cmp::Ordering::Equal => {
+                let self_key = (self.completed_at, verdict_priority(self.verdict));
+                let incoming_key = (incoming.completed_at, verdict_priority(incoming.verdict));
+                if incoming_key > self_key {
+                    incoming
+                } else {
+                    self
+                }
+            }
+        }
+    }
+}
+
+fn verdict_priority(verdict: Option<CiTerminalVerdict>) -> u8 {
+    match verdict {
+        None => 0,
+        Some(CiTerminalVerdict::Failed) => 1,
+        Some(CiTerminalVerdict::Passed) => 2,
+    }
+}
+
+/// One bounded exact target plus optional CI trigger metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WakeTarget {
+    pub(crate) change: ChangeKind,
+    pub(crate) ci: Option<CiWakeFacts>,
+}
+
+impl WakeTarget {
+    pub(crate) fn new(change: ChangeKind, ci: Option<CiWakeFacts>) -> Self {
+        Self {
+            change,
+            ci: if change == ChangeKind::Ci { ci } else { None },
+        }
+    }
+
+    pub(crate) fn merge(&mut self, incoming: Self) {
+        self.change = merge_change_kind(self.change, incoming.change);
+        self.ci = match (self.ci, incoming.ci) {
+            (Some(existing), Some(incoming)) => Some(existing.merge(incoming)),
+            (Some(existing), None) => Some(existing),
+            (None, Some(incoming)) => Some(incoming),
+            (None, None) => None,
+        };
+    }
+}
 
 /// Independently compacted work within one repository run.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -31,9 +112,10 @@ pub(crate) enum BroadMode {
     Overflow,
 }
 
-/// Bounded work scope for one lane. Mechanical broad scopes may retain exact
-/// targets that must be serviced before broad reconciliation; role broad scopes
-/// intentionally retain no targets because role scans subsume their lane.
+/// Bounded work scope for one lane. Mechanical broad scopes retain exact
+/// targets that must be serviced before broad reconciliation. Role broad scopes
+/// retain only bounded CI trigger metadata for observability; their broad scan
+/// still subsumes exact role execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WakeScope {
     Targeted(WakeTargets),
@@ -44,19 +126,32 @@ pub(crate) enum WakeScope {
 }
 
 impl WakeScope {
-    pub(crate) fn from_hint(hint: &ChangeHint) -> Self {
+    pub(crate) fn from_hint(hint: &ChangeHint, ci: Option<CiWakeFacts>) -> Self {
         match (hint.target, hint.change) {
             (_, ChangeKind::Push) => Self::broad(BroadMode::Push),
             (_, ChangeKind::Unknown) => Self::broad(BroadMode::Unknown),
             (HintTarget::Repository, _) => Self::broad(BroadMode::Repository),
-            (HintTarget::Artifact { kind, number }, change) => {
-                Self::Targeted(BTreeMap::from([((kind, number), change)]))
-            }
+            (HintTarget::Artifact { kind, number }, change) => Self::Targeted(BTreeMap::from([(
+                (kind, number),
+                WakeTarget::new(change, ci),
+            )])),
         }
     }
 
     pub(crate) fn targeted(kind: HintArtifactKind, number: ItemNumber, change: ChangeKind) -> Self {
-        Self::Targeted(BTreeMap::from([((kind, number), change)]))
+        Self::targeted_with_ci(kind, number, change, None)
+    }
+
+    pub(crate) fn targeted_with_ci(
+        kind: HintArtifactKind,
+        number: ItemNumber,
+        change: ChangeKind,
+        ci: Option<CiWakeFacts>,
+    ) -> Self {
+        Self::Targeted(BTreeMap::from([(
+            (kind, number),
+            WakeTarget::new(change, ci),
+        )]))
     }
 
     pub(crate) fn broad(mode: BroadMode) -> Self {
@@ -139,19 +234,34 @@ pub(crate) enum MergeResult {
 
 fn merge_role_scope(existing: &mut WakeScope, incoming: WakeScope) -> MergeResult {
     match existing {
-        WakeScope::Broad { mode, .. } => {
-            if let WakeScope::Broad {
+        WakeScope::Broad { mode, targets } => match incoming {
+            WakeScope::Broad {
                 mode: incoming_mode,
-                ..
-            } = incoming
-            {
+                targets: incoming_targets,
+            } => {
                 *mode = merge_broad_mode(*mode, incoming_mode);
+                merge_result_for_targets(targets, ci_provenance_targets(incoming_targets), mode)
             }
-            MergeResult::Coalesced
-        }
+            WakeScope::Targeted(incoming_targets) => {
+                merge_result_for_targets(targets, ci_provenance_targets(incoming_targets), mode)
+            }
+        },
         WakeScope::Targeted(existing_targets) => match incoming {
-            WakeScope::Broad { mode, .. } => {
-                *existing = WakeScope::broad(mode);
+            WakeScope::Broad {
+                mode,
+                targets: incoming_targets,
+            } => {
+                let target_merge = merge_targets(existing_targets, incoming_targets);
+                let retained = ci_provenance_targets(std::mem::take(existing_targets));
+                let mode = if target_merge == TargetMerge::Overflowed {
+                    BroadMode::Overflow
+                } else {
+                    mode
+                };
+                *existing = WakeScope::Broad {
+                    mode,
+                    targets: retained,
+                };
                 MergeResult::BroadPromoted(mode)
             }
             WakeScope::Targeted(incoming_targets) => {
@@ -159,12 +269,36 @@ fn merge_role_scope(existing: &mut WakeScope, incoming: WakeScope) -> MergeResul
                     TargetMerge::Accepted => MergeResult::Accepted,
                     TargetMerge::Coalesced => MergeResult::Coalesced,
                     TargetMerge::Overflowed => {
-                        *existing = WakeScope::broad(BroadMode::Overflow);
+                        let retained = ci_provenance_targets(std::mem::take(existing_targets));
+                        *existing = WakeScope::Broad {
+                            mode: BroadMode::Overflow,
+                            targets: retained,
+                        };
                         MergeResult::BroadPromoted(BroadMode::Overflow)
                     }
                 }
             }
         },
+    }
+}
+
+fn ci_provenance_targets(mut targets: WakeTargets) -> WakeTargets {
+    targets.retain(|_, target| target.ci.is_some());
+    targets
+}
+
+fn merge_result_for_targets(
+    existing: &mut WakeTargets,
+    incoming: WakeTargets,
+    mode: &mut BroadMode,
+) -> MergeResult {
+    match merge_targets(existing, incoming) {
+        TargetMerge::Overflowed => {
+            *mode = BroadMode::Overflow;
+            MergeResult::BroadPromoted(BroadMode::Overflow)
+        }
+        TargetMerge::Accepted => MergeResult::Accepted,
+        TargetMerge::Coalesced => MergeResult::Coalesced,
     }
 }
 
@@ -242,13 +376,13 @@ enum TargetMerge {
 fn merge_targets(existing: &mut WakeTargets, incoming: WakeTargets) -> TargetMerge {
     let mut accepted = false;
     let mut overflowed = false;
-    for (address, change) in incoming {
-        if let Some(existing_change) = existing.get_mut(&address) {
-            *existing_change = merge_change_kind(*existing_change, change);
+    for (address, target) in incoming {
+        if let Some(existing_target) = existing.get_mut(&address) {
+            existing_target.merge(target);
             continue;
         }
 
-        existing.insert(address, change);
+        existing.insert(address, target);
         accepted = true;
         if existing.len() > MAX_TARGETED_ARTIFACTS {
             overflowed = true;
@@ -302,13 +436,13 @@ fn change_priority(change: ChangeKind) -> u8 {
 /// Compares exact targets in service order: PR CI, other PR, then issues.
 /// Explicit artifact-kind and item-number keys make ties deterministic.
 fn compare_target_priority(
-    left: &(&WakeArtifactAddress, &ChangeKind),
-    right: &(&WakeArtifactAddress, &ChangeKind),
+    left: &(&WakeArtifactAddress, &WakeTarget),
+    right: &(&WakeArtifactAddress, &WakeTarget),
 ) -> std::cmp::Ordering {
-    target_priority_key(left.0, left.1).cmp(&target_priority_key(right.0, right.1))
+    target_priority_key(left.0, left.1.change).cmp(&target_priority_key(right.0, right.1.change))
 }
 
-fn target_priority_key(address: &WakeArtifactAddress, change: &ChangeKind) -> (u8, u8, u64) {
+fn target_priority_key(address: &WakeArtifactAddress, change: ChangeKind) -> (u8, u8, u64) {
     let service_class = match (address.0, change) {
         (HintArtifactKind::PullRequest, ChangeKind::Ci) => 0,
         (HintArtifactKind::PullRequest, _) => 1,
@@ -324,10 +458,10 @@ fn target_priority_key(address: &WakeArtifactAddress, change: &ChangeKind) -> (u
 pub(crate) fn prioritized_targets(targets: &WakeTargets) -> Vec<(WakeArtifactAddress, ChangeKind)> {
     let mut prioritized = targets
         .iter()
-        .map(|(address, change)| (*address, *change))
+        .map(|(address, target)| (*address, target.change))
         .collect::<Vec<_>>();
     prioritized.sort_by(|left, right| {
-        target_priority_key(&left.0, &left.1).cmp(&target_priority_key(&right.0, &right.1))
+        target_priority_key(&left.0, left.1).cmp(&target_priority_key(&right.0, right.1))
     });
     prioritized
 }
