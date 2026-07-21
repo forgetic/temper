@@ -81,12 +81,14 @@ jobs:
         # not so much that a genuinely-stuck e2e burns ten minutes before
         # failing. The convergence timer starts after provisioning, so keep a
         # full five-minute convergence window while still failing stuck runs
-        # promptly.
+        # promptly. Reuse the captured-binary runner from the quick lane: a new
+        # uncaptured Cargo invocation can restore custom harnesses from kache as
+        # 0644 after the earlier permission repair.
         env:
           TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "300"
         run: |
           export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
-          cargo dev-test-e2e-all
+          scripts/run-nextest-quick.sh --run-ignored only -P e2e
       - name: Free linked test binaries
         # Reclaim the large linked test set even when the live e2e lane fails;
         # otherwise a resource-related test failure can exhaust the shared host
