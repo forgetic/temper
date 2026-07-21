@@ -97,11 +97,148 @@ fn reused_dirty_read_only_target_is_still_quarantined() {
 
         assert!(message.contains("quarantined during inspect-read-only"));
         let quarantine = checkout.with_file_name("service.temper-quarantine");
-        let manifest = fs::read_to_string(quarantine.join("temper-recovery.json"))
-            .expect("read quarantine recovery manifest");
-        assert!(manifest.contains("architect-note.txt"));
+        let manifest_path = quarantine.join("temper-recovery.json");
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&manifest_path).expect("read quarantine recovery manifest"),
+        )
+        .expect("parse quarantine recovery manifest");
+        assert!(
+            !manifest["recovery_notes"]
+                .as_array()
+                .expect("recovery notes array")
+                .is_empty(),
+            "new quarantine manifest should carry phase-aware operator notes"
+        );
+        assert_quarantine_failure_guidance(&message, &manifest);
+        assert!(
+            message.contains("read-only checkout contains staged, tracked, or untracked edits"),
+            "failure should include the underlying preparation failure: {message}"
+        );
+        assert!(
+            manifest.to_string().contains("architect-note.txt"),
+            "manifest should preserve the dirty path"
+        );
         assert!(!checkout.exists());
     });
+}
+
+#[test]
+fn reused_writable_target_reports_the_same_delimited_quarantine_guidance() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let branch = "agent/quarantine-guidance";
+        fixture.seed_pr_head_branch(branch);
+        let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
+        let assignment = || pr_fix_assign(branch, "quarantine-guidance");
+
+        expect_failure_class(
+            executor.execute(assignment()).await,
+            FailureClass::Permanent,
+        );
+        let checkout = fixture
+            .workspace_root
+            .join("engineer/quarantine-guidance/service");
+        git([
+            "-C",
+            path_str(&checkout),
+            "checkout",
+            "-b",
+            "unexpected-operator-branch",
+        ]);
+        fs::write(checkout.join("operator-note.txt"), "preserve this too\n")
+            .expect("write local edit on unexpected branch");
+
+        let message = expect_failure_class(
+            executor.execute(assignment()).await,
+            FailureClass::Permanent,
+        );
+        assert!(message.contains("quarantined during inspect-branch"));
+        assert!(message.contains(
+            "expected branch `agent/quarantine-guidance`, found `unexpected-operator-branch`"
+        ));
+
+        let quarantine = checkout.with_file_name("service.temper-quarantine");
+        let manifest_path = quarantine.join("temper-recovery.json");
+        let mut manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&manifest_path).expect("read quarantine recovery manifest"),
+        )
+        .expect("parse quarantine recovery manifest");
+        assert!(
+            !manifest["recovery_notes"]
+                .as_array()
+                .expect("recovery notes array")
+                .is_empty(),
+            "new quarantine manifest should carry phase-aware operator notes"
+        );
+        assert_quarantine_failure_guidance(&message, &manifest);
+
+        manifest
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("recovery_notes");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize legacy manifest"),
+        )
+        .expect("rewrite manifest without recovery notes");
+        let legacy_message = expect_failure_class(
+            executor.execute(assignment()).await,
+            FailureClass::Permanent,
+        );
+        assert_quarantine_failure_guidance(&legacy_message, &manifest);
+        assert!(legacy_message.contains("recovery notes: (none recorded in manifest)"));
+    });
+}
+
+fn assert_quarantine_failure_guidance(message: &str, manifest: &Value) {
+    const COMMANDS_BEGIN: &str = "--- BEGIN RUNNABLE RECOVERY COMMANDS ---";
+    const COMMANDS_END: &str = "--- END RUNNABLE RECOVERY COMMANDS ---";
+
+    let field = |name: &str| {
+        manifest[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("manifest field {name} should be a string"))
+    };
+    assert!(
+        message.contains(&format!(
+            "workspace {} quarantined during {} at {}",
+            field("repository"),
+            field("failure_phase"),
+            field("quarantine_path")
+        )),
+        "failure did not publish manifest identity and location:\n{message}\nmanifest: {manifest}"
+    );
+    assert!(message.contains(&format!("underlying failure: {}", field("failure"))));
+
+    let begin = message.find(COMMANDS_BEGIN).expect("commands begin marker");
+    let end = message.find(COMMANDS_END).expect("commands end marker");
+    assert!(begin < end, "recovery command markers are out of order");
+    let before_commands = &message[..begin];
+    let command_block = message[begin + COMMANDS_BEGIN.len()..end].trim_matches('\n');
+    let expected_commands = manifest["recovery_commands"]
+        .as_array()
+        .expect("recovery commands array")
+        .iter()
+        .map(|command| command.as_str().expect("recovery command string"))
+        .collect::<Vec<_>>();
+    assert_eq!(command_block.lines().collect::<Vec<_>>(), expected_commands);
+
+    let notes = manifest
+        .get("recovery_notes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|note| note.as_str().expect("recovery note string"));
+    for note in notes {
+        assert!(
+            before_commands.contains(note),
+            "recovery note should be rendered before the command section: {note}"
+        );
+        assert!(
+            !command_block.contains(note),
+            "recovery prose must not be mixed into runnable commands: {note}"
+        );
+    }
 }
 
 #[test]
