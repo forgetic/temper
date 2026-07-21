@@ -34,6 +34,17 @@ pub(super) fn evidence_lines(plan: &LivePlanFeatureEvidence) -> Vec<String> {
             plan.landing_pr.state,
             plan.landing_pr.merged_sha
         ),
+        format!(
+            "plan validation audit: ordinary comment {} author={} outcome={} role={} actor={} job={} transition={} coordination={}",
+            plan.validation_audit.comment_id,
+            plan.validation_audit.author_id,
+            plan.validation_audit.outcome,
+            plan.validation_audit.workflow_role,
+            plan.validation_audit.forge_actor,
+            plan.validation_audit.job_id,
+            plan.validation_audit.routed_transition,
+            plan.validation_audit.coordination_key
+        ),
     ]
 }
 

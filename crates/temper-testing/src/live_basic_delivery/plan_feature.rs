@@ -5,9 +5,13 @@ use temper_forge_model::{
     CreateIssue, Forge, Issue, IssueQuery, ItemNumber, PullRequest, PullRequestQuery,
     PullRequestState, RepositoryId,
 };
+#[path = "plan_feature/audit.rs"]
+mod audit;
 #[path = "plan_feature/fake.rs"]
 mod fake;
 
+pub use audit::ValidationAuditEvidence;
+use audit::validation_audit_evidence;
 use fake::PlanFeatureFake;
 
 use super::convergence::{
@@ -31,6 +35,8 @@ const PLAN_TITLE: &str = "Plan plan-centric dogfood delivery";
 const FIRST_CODE_TITLE: &str = "Implement plan foundation slice";
 const SECOND_CODE_TITLE: &str = "Implement validation and landing slice";
 const LANDING_TITLE: &str = "Land plan-centric dogfood feature branch";
+const VALIDATION_SUMMARY: &str =
+    "Validated the sequential feature-branch implementation and aggregate landing readiness.";
 const ASSERT_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,6 +50,7 @@ pub struct LivePlanFeatureEvidence {
     pub second_pr: PullRequestStateEvidence,
     pub landing_pr: PullRequestStateEvidence,
     pub ci_jobs: Vec<PullRequestCiJobEvidence>,
+    pub validation_audit: ValidationAuditEvidence,
     pub observed_second_blocked: bool,
     pub observed_second_unblocked: bool,
 }
@@ -450,6 +457,7 @@ async fn verify_plan_feature(
     if !issue_closed(feature) || !issue_closed(plan) {
         return Err("feature and plan issues are not both closed yet".to_string());
     }
+    let validation_audit = validation_audit_evidence(forge, plan, VALIDATION_SUMMARY).await?;
 
     Ok(LivePlanFeatureEvidence {
         feature_branch: FEATURE_BRANCH.to_string(),
@@ -461,6 +469,7 @@ async fn verify_plan_feature(
         second_pr: pr_state(second_pr),
         landing_pr: pr_state(landing_pr),
         ci_jobs,
+        validation_audit,
         observed_second_blocked: observations.second_blocked,
         observed_second_unblocked: observations.second_unblocked_after_first_closed,
     })

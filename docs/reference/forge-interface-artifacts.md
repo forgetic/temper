@@ -128,6 +128,14 @@ deterministic results, preferably chronological with stable ID tie-breaks.
 Supported comment operations return `ForgeError::NotFound` when the target issue
 or pull request is missing.
 
+These methods model ordinary issue and pull-request conversation comments only.
+They do not expose provider label changes, activity feeds, or hidden timeline
+records. Forgejo's internal representation may use comment-like timeline rows
+for label events, but those rows are not portable `Comment` values. The durable
+plan-validation audit is deliberately an ordinary coordinating-plan comment, so
+operators and agents can retrieve it through this contract without consulting
+Temper journals, Forgejo SQLite, or provider timeline internals.
+
 ## Pull requests, reviews, merges, and CI
 
 Pull-request-adjacent methods have their own focused page:

@@ -229,12 +229,23 @@ result or stable error:
 {"protocol_version":1,"status":"error","code":"not_authorized"}
 ```
 
-Calls may be repeated to follow an indirect relation. The host enforces maximum
-request size (1 MiB), a 30-second I/O/response timeout, configured repository
-authorization, operation depth/count limits, item body/comment limits, and a
-hard response bound. Stable errors are `invalid_request`, `not_authorized`,
-`not_found`, `forge_unavailable`, and `limit_exceeded`. Backend diagnostics and
-secrets are never included.
+Calls may be repeated to follow an indirect relation. With
+`include_comments=false` (the default), `forge_get_item` omits comments. With
+`include_comments=true`, it exposes a bounded projection of ordinary issue or
+pull-request conversation comments, including durable plan-validation audits;
+comment content and counts remain subject to the host limits below. It does not
+expose Forgejo label changes, provider activity/timeline records, or hidden
+comment rows because the portable Forge abstraction has no such read operation.
+To investigate a plan-validation result, agents should request the coordinating
+plan with comments and locate its stable
+`temper:comment-key=plan-validation:<job-id>` audit, not infer history from
+Temper journals, Forgejo SQLite, or timeline internals.
+
+The host enforces maximum request size (1 MiB), a 30-second I/O/response timeout,
+configured repository authorization, operation depth/count limits, item
+body/comment limits, and a hard response bound. Stable errors are
+`invalid_request`, `not_authorized`, `not_found`, `forge_unavailable`, and
+`limit_exceeded`. Backend diagnostics and secrets are never included.
 
 If no Forge context host was configured, the tools are absent rather than
 present-but-broken. Initial `artifact_context` delivery is independent of tool
