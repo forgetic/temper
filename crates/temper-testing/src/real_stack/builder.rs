@@ -268,10 +268,15 @@ impl HermeticRealStackBuilder {
         let router_for_context = Arc::clone(&router);
         let context_worker_id = primary_worker_role.worker_id.clone();
         let forge_context: temper_worker::AgentForgeContextHost =
-            Arc::new(move |job_id, attempt_id, operation| {
+            Arc::new(move |job_id, attempt_id, fence, operation| {
                 let router = Arc::clone(&router_for_context);
                 let worker_id = context_worker_id.clone();
                 Box::pin(async move {
+                    if !fence.is_open() {
+                        return Err(
+                            temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable,
+                        );
+                    }
                     let request = temper_protocol_worker::FetchContext::new(
                         &worker_id,
                         &job_id,
@@ -288,6 +293,11 @@ impl HermeticRealStackBuilder {
                             temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable
                         })?
                         .ok_or(temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable)?;
+                    if !fence.is_open() {
+                        return Err(
+                            temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable,
+                        );
+                    }
                     let temper_protocol_worker::WorkerProtocolMessage::ContextResponse(response) =
                         response
                     else {

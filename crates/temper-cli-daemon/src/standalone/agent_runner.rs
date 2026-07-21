@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
     AgentAbortAuthority, AgentActivityConfig, AgentCancellationLatch, AgentContainmentContext,
-    CodingAgentError, ForgeContextHost, ProviderConfig, RunTotals, SubmitForPrHost,
-    protocol_model_failure, run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
+    CodingAgentError, ProviderConfig, RunTotals, SubmitForPrHost, protocol_model_failure,
+    run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
 };
 use temper_config::AgentActivityCapturePolicyV1;
 use temper_log::WorkItemRef;
@@ -36,6 +36,8 @@ use temper_worker::{
 };
 
 const TERMINAL_ACTIVITY_FLUSH_TIMEOUT: Duration = Duration::from_millis(250);
+
+mod attempt_fencing;
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {
@@ -252,30 +254,16 @@ impl InProcessAgentRunner {
         let runtime_limits = self.runtime_limits;
         let trace_policy = self.trace_policy.clone();
         let trace_collector = self.trace_collector.clone();
-        let submit_for_pr = self.submit_for_pr.clone();
         let accepted_submit = AcceptedSubmitProofStore::new();
-        let accepted_submit_for_host = accepted_submit.clone();
-        let submit_for_pr: SubmitForPrHost = std::sync::Arc::new(move |request, context, cwd| {
-            let accepted_submit = accepted_submit_for_host.clone();
-            let submit_for_pr = submit_for_pr.clone();
-            Box::pin(async move {
-                temper_worker::handle_submit_for_pr_with_proof(
-                    &accepted_submit,
-                    move |request, context, cwd| submit_for_pr(request, context, cwd),
-                    request,
-                    context,
-                    cwd,
-                )
-                .await
-            })
-        });
+        let submit_for_pr = attempt_fencing::submit_host(
+            accepted_submit.clone(),
+            self.submit_for_pr.clone(),
+            fence.clone(),
+            cancellation.clone(),
+        );
         let submit_for_pr = Some(submit_for_pr);
-        let forge_context: Option<ForgeContextHost> = self.forge_context.clone().map(|host| {
-            let job_id = job_id.to_string();
-            let attempt_id = attempt_id.clone();
-            std::sync::Arc::new(move |operation| {
-                host(job_id.clone(), attempt_id.clone(), operation)
-            }) as ForgeContextHost
+        let forge_context = self.forge_context.clone().map(|host| {
+            attempt_fencing::forge_host(host, job_id.to_string(), attempt_id.clone(), fence.clone())
         });
         let containment = self.containment.clone();
         let agent_cancellation = AgentCancellationLatch::default();
@@ -289,43 +277,57 @@ impl InProcessAgentRunner {
 
         Box::pin(async move {
             let _cancellation_owner = cancellation_owner;
-            let run = run_coding_agent_native_with_totals_tool_config_hosts_and_containment(
-                handle,
-                &provider,
-                &context,
-                &cwd,
-                max_iterations,
-                config_dir.as_deref(),
-                enable_subagents,
-                tool_config.as_ref(),
-                submit_for_pr,
-                forge_context,
-                AgentActivityConfig {
-                    policy: trace_policy,
-                    address: activity_address,
-                    lifecycle_address: None,
-                    lifecycle_reporter: Some(lifecycle_reporter),
-                    cancellation: agent_cancellation.clone(),
-                },
-                runtime_limits,
-                containment,
-            );
-            let mut run = std::pin::pin!(run);
-            let mut cancellation_requested = std::pin::pin!(cancellation.cancelled());
-            let mut forwarded_cancellation = false;
-            let outcome = std::future::poll_fn(|cx| {
-                if !forwarded_cancellation && cancellation_requested.as_mut().poll(cx).is_ready() {
-                    forwarded_cancellation = true;
-                    agent_cancellation.request_cancel();
-                }
-                run.as_mut().poll(cx)
-            })
-            .await;
-            // The typed coding-agent error remains intact through both outer
-            // terminal projections. A closed attempt fence/watchdog request is
-            // stronger cancellation authority than an unrequested provider
-            // abort, but it must not reclassify unrelated failures.
+            let mut outcome = if !fence.is_open() || cancellation.is_cancelled() {
+                Err(CodingAgentError::Aborted {
+                    authority: AgentAbortAuthority::WorkerRequested,
+                })
+            } else {
+                let run = run_coding_agent_native_with_totals_tool_config_hosts_and_containment(
+                    handle,
+                    &provider,
+                    &context,
+                    &cwd,
+                    max_iterations,
+                    config_dir.as_deref(),
+                    enable_subagents,
+                    tool_config.as_ref(),
+                    submit_for_pr,
+                    forge_context,
+                    AgentActivityConfig {
+                        policy: trace_policy,
+                        address: activity_address,
+                        lifecycle_address: None,
+                        lifecycle_reporter: Some(lifecycle_reporter),
+                        cancellation: agent_cancellation.clone(),
+                    },
+                    runtime_limits,
+                    containment,
+                );
+                let mut run = std::pin::pin!(run);
+                let mut cancellation_requested = std::pin::pin!(cancellation.cancelled());
+                let mut forwarded_cancellation = false;
+                std::future::poll_fn(|cx| {
+                    if !forwarded_cancellation
+                        && cancellation_requested.as_mut().poll(cx).is_ready()
+                    {
+                        forwarded_cancellation = true;
+                        agent_cancellation.request_cancel();
+                    }
+                    run.as_mut().poll(cx)
+                })
+                .await
+            };
+            // A completion that races authoritative cancellation is never a
+            // successful model/result completion at the worker boundary.
             let worker_cancellation_requested = cancellation.is_cancelled() || !fence.is_open();
+            if worker_cancellation_requested && outcome.is_ok() {
+                outcome = Err(CodingAgentError::Aborted {
+                    authority: AgentAbortAuthority::WorkerRequested,
+                });
+            }
+            if worker_cancellation_requested {
+                accepted_submit.clear();
+            }
             let (terminal_status, terminal_reason) =
                 agent_terminal_report(&outcome, worker_cancellation_requested);
 
@@ -333,15 +335,18 @@ impl InProcessAgentRunner {
                 endpoint.stop();
             }
             if let Some(trace) = trace {
-                // Every non-completed agent path is a failed outer run. The
-                // failure class still distinguishes authoritative cancellation
-                // from retryable provider/budget failures.
-                let terminal = match &outcome {
-                    Ok(_) => trace.finish_success(None),
-                    Err(error) => trace.finish_failure(
-                        FailureCodeV1::Internal,
-                        coding_agent_failure_class(error, worker_cancellation_requested),
-                    ),
+                // Authoritative cancellation has one canonical terminal
+                // boundary even when the native future returned a late success.
+                let terminal = if worker_cancellation_requested {
+                    trace.finish_cancelled()
+                } else {
+                    match &outcome {
+                        Ok(_) => trace.finish_success(None),
+                        Err(error) => trace.finish_failure(
+                            FailureCodeV1::Internal,
+                            coding_agent_failure_class(error, false),
+                        ),
+                    }
                 };
                 match terminal {
                     Ok(sequence) => {
@@ -402,6 +407,13 @@ impl InProcessAgentRunner {
 
             // Conversion to the generic worker boundary happens only after the
             // trace and operator event have selected their typed terminal data.
+            if !fence.is_open() || cancellation.is_cancelled() {
+                accepted_submit.clear();
+                return Err(AgentRunError::new(
+                    FailureClass::Canceled,
+                    "agent attempt is no longer available",
+                ));
+            }
             let (result, _totals) = outcome.map_err(|error| {
                 classify_coding_agent_error(error, worker_cancellation_requested)
             })?;
@@ -607,6 +619,10 @@ fn coding_agent_failure_class(
         | CodingAgentError::InvalidVerdictResult(_) => FailureClass::Permanent,
     }
 }
+
+#[cfg(test)]
+#[path = "agent_runner/cancellation_tests.rs"]
+mod cancellation_tests;
 
 #[cfg(test)]
 #[path = "agent_runner/model_failure_tests.rs"]

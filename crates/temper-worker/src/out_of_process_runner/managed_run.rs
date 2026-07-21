@@ -500,6 +500,7 @@ impl OutOfProcessRunner {
                                 host(
                                     bound_job_id.clone(),
                                     bound_attempt_id.clone(),
+                                    fence.clone(),
                                     request.operation,
                                 ),
                                 operation_timeout,
@@ -557,7 +558,13 @@ impl OutOfProcessRunner {
                         .expect("completed submit task remains attempt-bound");
                     let response = if fence.is_open() {
                         accepted_submit
-                            .record_response_controlled(response, context, cwd, &cancellation)
+                            .record_response_controlled(
+                                response,
+                                context,
+                                cwd,
+                                &fence,
+                                &cancellation,
+                            )
                             .await
                     } else {
                         accepted_submit.clear();

@@ -47,13 +47,23 @@ KILL-attempt reporting non-racy. Ordinary empty cleanup
 is debug evidence. Recovered descendants and fallback activation are warnings.
 Blocked cleanup is throttled operator evidence and remains non-terminal.
 
+Ownership-loss cancellation uses the same descendant owner rather than a
+parallel cleanup mechanism. The worker first closes the exact attempt's shared
+fence, then requests model/tool and process cancellation. In-process and
+out-of-process Forge, submit, managed workspace/git, validation, commit, push,
+and result paths all reject completions after that boundary. Capacity remains
+occupied while descendants, side channels, managed commands, and trace
+forwarding join. The terminal `RunFinished(Cancelled)` record is persisted and
+forwarded before durable canceled-result recording can prove quiescence and
+release capacity; accepted submit proof is cleared both before and after joins.
+
 ## Production regression matrix
 
 | Requirement | Deterministic test | Backend coverage | Completion boundary | Operator-visible evidence |
 | --- | --- | --- | --- | --- |
 | Managed bash direct success | `compiled_fixture_crosses_every_production_completion_boundary` → `managed_bash_success`; focused `normal_exit_waits_for_detached_session_cleanup_and_reader_join` | Auto cgroup when delegated; forced supervisor always | `Tool::execute` cannot return output until exact absence, output-reader join, and one cleanup report | `worker.containment.cleanup_completed`; recovered cleanup is warning |
 | Managed bash tool deadline | Capstone `managed_bash_deadline`; focused `explicit_tool_timeout_waits_for_cleanup_and_reader_join` | Auto cgroup when delegated; forced supervisor always | Timeout output follows TERM, KILL, recursive-empty proof, and reader join | completed event includes timeout trigger and signal identities |
-| Capacity-one no-progress watchdog | Capstone `capacity-one-watchdog` starts the production worker machine/shell with a queued second assignment and held nested fixture | Auto cgroup when delegated; forced supervisor always | The transport records exactly one initial poll while cancellation/cleanup is active; no later poll, permit, or second executor dispatch is observed until exact descendant absence and the durable timeout-result path release capacity | `worker.job.timeout`, `worker.job.cancellation_completed`, then `worker.capacity.released` |
+| Capacity-one no-progress or ownership-loss cancellation | Capstone `capacity-one-watchdog` starts the production worker machine/shell with a queued second assignment and held nested fixture; exact-attempt ownership loss enters the same cancellation path | Auto cgroup when delegated; forced supervisor always | The transport records exactly one initial poll while cancellation/cleanup is active; no later poll, permit, or second executor dispatch is observed until exact descendant absence, canceled trace forwarding, and the durable canceled-result path release capacity | `worker.job.timeout` or ownership-loss reason, `worker.job.cancellation_completed`, then `worker.capacity.released` |
 | Out-of-process agent normal completion and failure | Capstone `out_of_process_agent` with exit 0 and 17; focused `worker_descendant_containment_contract` | Auto cgroup when delegated; forced supervisor always | Result-file acceptance and error return follow nested removal, stderr join, endpoint stops, and `JobQuiesced` | `worker.job.quiesced` and cleanup-completed evidence |
 | Split worker and standalone signal shutdown | Capstone `split-signal-shutdown` and `standalone-signal-shutdown` start held compiled fixtures and enter `shutdown_worker_after_signal`, the helper called by both service composition roots | Auto cgroup when delegated; forced supervisor always | Signal intake closes, the active attempt fence and containment join, and only then may standalone assignment release run; split shutdown publishes no cancellation result and preserves the durable claim | cancellation/cleanup events; blocked cleanup retains shutdown wait |
 | Submit/pre-push and worker-managed commands | Capstone `worker-managed-command` invokes the exact bounded owner used by git/fingerprint effects; `pre-push` invokes the controlled production gate owner with the same compiled fixture | Auto cgroup when delegated; forced supervisor always through instance-scoped worker-command selection | Gate/command result follows recursive cleanup and bounded stdout/stderr joins; complete git overflow remains an explicit error | cleanup-completed or cleanup-blocked with owner scope |

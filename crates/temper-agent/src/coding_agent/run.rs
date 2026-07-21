@@ -357,15 +357,21 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
         Some(observer) => containment.with_observer(observer),
         None => containment,
     };
-    let codebase_memory = prepare_codebase_memory_tools_with_timeout(
-        tool_config,
-        &context.work_item.role,
-        context,
-        cwd,
-        operation_limits.tool_timeout,
-        &containment,
+    let codebase_memory = run_until_agent_cancellation(
+        &cancellation,
+        prepare_codebase_memory_tools_with_timeout(
+            tool_config,
+            &context.work_item.role,
+            context,
+            cwd,
+            operation_limits.tool_timeout,
+            &containment,
+        ),
     )
-    .await?;
+    .await
+    .ok_or(CodingAgentError::Aborted {
+        authority: AgentAbortAuthority::WorkerRequested,
+    })??;
     let model_identity = temper_agent_core::ModelIdentity::new(
         provider_config.provider_id(),
         provider_config.model_id(),
@@ -374,7 +380,13 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
 
     // Same per-request stream options the pi path sets.
     let stream_options = tongs::provider::StreamOptions {
-        api_key: Some(provider_config.resolve_bearer().await?),
+        api_key: Some(
+            run_until_agent_cancellation(&cancellation, provider_config.resolve_bearer())
+                .await
+                .ok_or(CodingAgentError::Aborted {
+                    authority: AgentAbortAuthority::WorkerRequested,
+                })??,
+        ),
         temperature: provider_config.temperature(),
         thinking_level: provider_config.coding_thinking_level(),
         headers: provider_config.request_headers_for_session(context.agent_session.as_ref()),
@@ -487,6 +499,35 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
     )?;
     validate_contract(capability, &result, cwd, context)?;
     Ok((result, run_totals))
+}
+
+/// Races native startup work with worker cancellation. Dropping the boxed
+/// future is deliberate: MCP and managed blocking owners synchronously cancel
+/// descendants and join their threads from `Drop` before this helper returns.
+async fn run_until_agent_cancellation<F: std::future::Future>(
+    cancellation: &crate::activity::AgentCancellationLatch,
+    future: F,
+) -> Option<F::Output> {
+    let mut future = Box::pin(future);
+    let mut cancelled = Box::pin(cancellation.cancelled());
+    let output = std::future::poll_fn(|cx| {
+        if cancellation.worker_cancellation_requested() {
+            return std::task::Poll::Ready(None);
+        }
+        if cancelled.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(None);
+        }
+        match future.as_mut().poll(cx) {
+            std::task::Poll::Ready(output) if !cancellation.worker_cancellation_requested() => {
+                std::task::Poll::Ready(Some(output))
+            }
+            std::task::Poll::Ready(_) => std::task::Poll::Ready(None),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    })
+    .await;
+    drop(future);
+    output
 }
 
 /// Reject every non-completed core outcome before final-message text can reach

@@ -77,16 +77,24 @@ impl NativeJigAgentRunner {
         // for restart tests that must mutate or inspect a prepared workspace
         // without racing the model or relying on a sleep.
         self.hooks.reach(PausePoint::AgentSessionStarted).await;
+        let (fence, cancellation) =
+            attempt_control.unwrap_or_else(|| (AttemptFence::open(), JobCancellation::default()));
         let accepted_submit = AcceptedSubmitProofStore::new();
         let submit_for_pr = self.submit_for_pr.clone();
         let accepted_submit_for_host = accepted_submit.clone();
+        let submit_fence = fence.clone();
+        let submit_cancellation = cancellation.clone();
         let submit_for_pr: temper_agent::SubmitForPrHost =
             std::sync::Arc::new(move |request, context, cwd| {
                 let accepted_submit = accepted_submit_for_host.clone();
                 let submit_for_pr = submit_for_pr.clone();
+                let fence = submit_fence.clone();
+                let cancellation = submit_cancellation.clone();
                 Box::pin(async move {
                     temper_worker::handle_submit_for_pr_with_proof(
                         &accepted_submit,
+                        &fence,
+                        &cancellation,
                         move |request, context, cwd| submit_for_pr(request, context, cwd),
                         request,
                         context,
@@ -98,15 +106,26 @@ impl NativeJigAgentRunner {
         let forge_host = self.forge_context.clone();
         let job_id = job_id.to_string();
         let attempt_id = attempt_id.to_string();
-        let forge_context: ForgeContextHost =
-            Arc::new(move |operation| forge_host(job_id.clone(), attempt_id.clone(), operation));
+        let forge_fence = fence.clone();
+        let forge_context: ForgeContextHost = Arc::new(move |operation| {
+            let forge_host = forge_host.clone();
+            let job_id = job_id.clone();
+            let attempt_id = attempt_id.clone();
+            let fence = forge_fence.clone();
+            Box::pin(async move {
+                if !fence.is_open() {
+                    return Err(temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable);
+                }
+                let result = forge_host(job_id, attempt_id, fence.clone(), operation).await;
+                if fence.is_open() {
+                    result
+                } else {
+                    Err(temper_protocol_worker::ForgeContextErrorCode::ForgeUnavailable)
+                }
+            })
+        });
         let agent_cancellation = temper_agent::AgentCancellationLatch::default();
-        let worker_cancellation = attempt_control
-            .as_ref()
-            .map(|(_, cancellation)| cancellation.clone());
-        let _cancellation_owner = worker_cancellation
-            .as_ref()
-            .map(JobCancellation::register_async_owner);
+        let _cancellation_owner = cancellation.register_async_owner();
         let run = run_coding_agent_native_with_totals_tool_config_and_hosts(
             self.handle.clone(),
             &self.provider,
@@ -124,9 +143,13 @@ impl NativeJigAgentRunner {
             },
             temper_protocol_agent::AgentRuntimeLimitsV1::default(),
         );
-        let outcome = if let Some(worker_cancellation) = worker_cancellation {
+        let outcome = if !fence.is_open() || cancellation.is_cancelled() {
+            Err(CodingAgentError::Aborted {
+                authority: AgentAbortAuthority::WorkerRequested,
+            })
+        } else {
             let mut run = std::pin::pin!(run);
-            let mut cancelled = std::pin::pin!(worker_cancellation.cancelled());
+            let mut cancelled = std::pin::pin!(cancellation.cancelled());
             let mut forwarded = false;
             std::future::poll_fn(|cx| {
                 if !forwarded && cancelled.as_mut().poll(cx).is_ready() {
@@ -136,18 +159,26 @@ impl NativeJigAgentRunner {
                 run.as_mut().poll(cx)
             })
             .await
-        } else {
-            run.await
         };
-        let (result, _totals) = outcome.map_err(|error| {
-            let worker_cancellation_requested =
-                attempt_control
-                    .as_ref()
-                    .is_some_and(|(fence, cancellation)| {
-                        cancellation.is_cancelled() || !fence.is_open()
-                    });
-            agent_error(error, worker_cancellation_requested)
-        })?;
+        let worker_cancellation_requested = cancellation.is_cancelled() || !fence.is_open();
+        let outcome = match outcome {
+            Ok(_) if worker_cancellation_requested => Err(CodingAgentError::Aborted {
+                authority: AgentAbortAuthority::WorkerRequested,
+            }),
+            outcome => outcome,
+        };
+        if worker_cancellation_requested {
+            accepted_submit.clear();
+        }
+        let (result, _totals) =
+            outcome.map_err(|error| agent_error(error, worker_cancellation_requested))?;
+        if !fence.is_open() || cancellation.is_cancelled() {
+            accepted_submit.clear();
+            return Err(AgentRunError::new(
+                temper_protocol_worker::FailureClass::Canceled,
+                "agent attempt is no longer available",
+            ));
+        }
         Ok(AgentRunOutput {
             result,
             accepted_submit: accepted_submit.latest(),

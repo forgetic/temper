@@ -3,6 +3,7 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 
 use temper_protocol_agent::{
     AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleCancellationAckV1, AgentLifecycleCommandV1,
@@ -13,6 +14,7 @@ use temper_protocol_agent::{
 struct CancellationState {
     requested: bool,
     callback: Option<Arc<dyn Fn() + Send + Sync>>,
+    waiters: Vec<Waker>,
 }
 
 /// Race-safe bridge between the lifecycle command reader and the core control
@@ -51,17 +53,44 @@ impl AgentCancellationLatch {
     /// Requests in-process cancellation through the same race-safe latch used
     /// by the lifecycle command reader.
     pub fn request_cancel(&self) {
-        let callback = {
+        let (callback, waiters) = {
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             state.requested = true;
-            state.callback.clone()
+            (state.callback.clone(), std::mem::take(&mut state.waiters))
         };
+        for waiter in waiters {
+            waiter.wake();
+        }
         if let Some(callback) = callback {
             callback();
         }
+    }
+
+    /// Waits for worker cancellation even before the core model-loop control
+    /// exists. Native startup owners (notably MCP and credential loading) race
+    /// this future and join on drop before installing the core callback.
+    pub async fn cancelled(&self) {
+        std::future::poll_fn(|cx| {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.requested {
+                return Poll::Ready(());
+            }
+            if !state
+                .waiters
+                .iter()
+                .any(|waiter| waiter.will_wake(cx.waker()))
+            {
+                state.waiters.push(cx.waker().clone());
+            }
+            Poll::Pending
+        })
+        .await
     }
 }
 
