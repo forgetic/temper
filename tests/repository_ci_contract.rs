@@ -28,6 +28,24 @@ fn repository_ci_accepts_feature_branch_pull_request_targets() {
 }
 
 #[test]
+fn repository_ci_bounds_parallel_rust_builds_on_shared_host() {
+    let validate_job = CI_WORKFLOW
+        .split_once("  validate:\n")
+        .expect("CI declares the validate job")
+        .1
+        .split_once("    steps:\n")
+        .expect("validate job declares steps")
+        .0;
+
+    assert!(
+        validate_job
+            .lines()
+            .any(|line| line.trim() == "CARGO_BUILD_JOBS: \"4\""),
+        "the no-swap shared runner must bound parallel rustc/linker processes"
+    );
+}
+
+#[test]
 fn repository_ci_reclaims_linked_test_binaries_after_failure() {
     let cleanup_step = CI_WORKFLOW
         .split_once("      - name: Free linked test binaries\n")

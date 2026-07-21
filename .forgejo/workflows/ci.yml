@@ -33,6 +33,10 @@ on:
 jobs:
   validate:
     runs-on: host
+    # The shared runner has no swap. An all-targets cold build can otherwise
+    # launch enough rustc/linker processes to OOM the runner and strand the job.
+    env:
+      CARGO_BUILD_JOBS: "4"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
