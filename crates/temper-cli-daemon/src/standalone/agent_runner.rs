@@ -13,7 +13,7 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
@@ -27,7 +27,7 @@ use temper_log::emit::{
     AgentFinished, AgentStarted, AgentTerminalReasonV1, AgentTerminalStatus, emit_agent_finished,
     emit_agent_started,
 };
-use temper_protocol_activity::{FailureCodeV1, ModelFailureV1};
+use temper_protocol_activity::ModelFailureV1;
 use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext};
 use temper_protocol_worker::FailureClass;
 use temper_worker::{
@@ -35,9 +35,8 @@ use temper_worker::{
     AgentRunRequest, AgentRunner, TraceCollector, WorkerAgentTraceConfig,
 };
 
-const TERMINAL_ACTIVITY_FLUSH_TIMEOUT: Duration = Duration::from_millis(250);
-
 mod attempt_fencing;
+mod terminal;
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {
@@ -203,6 +202,7 @@ impl InProcessAgentRunner {
         let item = work_item_ref(context);
         let kind = run_kind(&role);
         let started = Instant::now();
+        let tracing_required = self.trace_collector.tracing_enabled();
         let trace = match self.trace_collector.begin_run(job_id, context) {
             Ok(trace) => trace,
             Err(error) => {
@@ -334,51 +334,15 @@ impl InProcessAgentRunner {
             if let Some(endpoint) = activity_endpoint {
                 endpoint.stop();
             }
-            if let Some(trace) = trace {
-                // Authoritative cancellation has one canonical terminal
-                // boundary even when the native future returned a late success.
-                let terminal = if worker_cancellation_requested {
-                    trace.finish_cancelled()
-                } else {
-                    match &outcome {
-                        Ok(_) => trace.finish_success(None),
-                        Err(error) => trace.finish_failure(
-                            FailureCodeV1::Internal,
-                            coding_agent_failure_class(error, false),
-                        ),
-                    }
-                };
-                match terminal {
-                    Ok(sequence) => {
-                        if !trace_collector
-                            .await_acknowledged(
-                                trace.run_id(),
-                                sequence,
-                                TERMINAL_ACTIVITY_FLUSH_TIMEOUT,
-                            )
-                            .await
-                        {
-                            tracing::warn!(
-                                target: "temper::worker",
-                                service = "worker",
-                                event = "agent.activity.terminal_flush_timeout",
-                                run_id = trace.run_id(),
-                                "standalone worker terminal activity flush did not complete before its deadline; preserving the agent outcome"
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            target: "temper::worker",
-                            service = "worker",
-                            event = "agent.activity.terminal_failed",
-                            run_id = trace.run_id(),
-                            %error,
-                            "standalone worker could not persist the terminal agent activity event"
-                        );
-                    }
-                }
-            }
+            terminal::finish_and_acknowledge(
+                trace,
+                &trace_collector,
+                &cancellation,
+                tracing_required,
+                worker_cancellation_requested,
+                &outcome,
+            )
+            .await;
 
             // §7 `agent.finished` on both paths. Typed status and terminal
             // reason keep abnormal agent stops queryable and ensure failures

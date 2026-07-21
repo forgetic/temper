@@ -2,19 +2,17 @@
 
 //! Recovered-assignment ownership-loss acceptance matrix over the real stack.
 
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use temper_engine::AgentTraceRunStatus;
 use temper_forge_memory::FaultOp;
-use temper_forge_model::{Forge, Issue, IssueState, UpdateIssue};
 use temper_protocol_activity::{AgentActivityEventV1, RunFinishedV1, RunStatusV1};
 use temper_protocol_worker::{FailureClass, ReleaseDisposition, ResultStatus};
-use temper_testing::real_stack::{
-    FakeModelResponse, HermeticActivitySnapshot, HermeticIssueSpec, HermeticRealStack,
-    HermeticRealStackBuilder, PausePermit, PausePoint, ReachedPause,
-};
-use temper_workflow::{DurableAssignment, parse_metadata_block, replace_metadata_block};
+use temper_testing::real_stack::{PausePoint, ReachedPause};
+use temper_workflow::{DurableAssignment, parse_metadata_block};
+
+#[path = "ownership_loss_support.rs"]
+mod support;
+use support::*;
 
 #[derive(Clone, Copy, Debug)]
 enum OwnershipLoss {
@@ -82,6 +80,9 @@ fn run_ownership_loss(loss: OwnershipLoss) {
         let replacement_attempt = mutate_durable_ownership(&stack, loss).await;
 
         let cancel_requested = stack.pause_hooks().arm(PausePoint::WorkerCancelRequested);
+        let terminal_acknowledgement = stack
+            .pause_hooks()
+            .arm(PausePoint::WorkerTerminalTraceAcknowledgement);
         let quiesced = stack.pause_hooks().arm(PausePoint::WorkerQuiesced);
         let result_recorded = stack.pause_hooks().arm(PausePoint::WorkerResultRecorded);
         let delivery_resolved = stack
@@ -128,7 +129,82 @@ fn run_ownership_loss(loss: OwnershipLoss) {
 
         cancel_requested.release();
         recovered.session.release();
-        let quiesced = await_pause(&cx, quiesced, "recursive cleanup and endpoint joins").await;
+        let terminal_acknowledgement = await_pause(
+            &cx,
+            terminal_acknowledgement,
+            "engine-persisted terminal trace before worker acknowledgement",
+        )
+        .await;
+        let terminal_sequence = assert_cancelled_journal(&stack);
+        let local = stack
+            .local_trace_runs()
+            .expect("local terminal trace spool");
+        assert_eq!(local.len(), 1);
+        assert_eq!(
+            local[0].events.last().expect("local terminal event").seq,
+            terminal_sequence
+        );
+        assert!(
+            local[0].acknowledged_seq < terminal_sequence,
+            "the transport pause must withhold the terminal acknowledgement"
+        );
+
+        // Elapsed time is never quiescence proof. Keep the daemon's terminal
+        // acknowledgement blocked beyond the historical 250 ms flush window
+        // and prove every worker/daemon ownership surface remains occupied.
+        let heartbeat_while_pending = stack
+            .pause_hooks()
+            .arm(PausePoint::WorkerHeartbeatReportingJob);
+        temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(300)).await;
+        let heartbeat_while_pending = await_pause(
+            &cx,
+            heartbeat_while_pending,
+            "heartbeat membership while terminal acknowledgement is pending",
+        )
+        .await;
+        assert_eq!(
+            stack
+                .pause_hooks()
+                .reached_count(PausePoint::WorkerQuiesced),
+            0,
+            "AttemptQuiesced cannot precede terminal trace acknowledgement"
+        );
+        assert_eq!(
+            stack
+                .pause_hooks()
+                .reached_count(PausePoint::WorkerResultRecorded),
+            0,
+            "the canceled result cannot become durable while tracing is pending"
+        );
+        assert_eq!(stack.pending_result_count().unwrap(), 0);
+        assert!(stack.published_results().is_empty());
+        assert_eq!(
+            stack
+                .pause_hooks()
+                .reached_count(PausePoint::WorkerCapacityReleased),
+            0
+        );
+        let active = stack.active_worker_tasks();
+        assert_eq!(active.len(), 1, "the registry entry remains occupied");
+        assert_eq!(active[0].job_id(), job_id);
+        assert_eq!(active[0].attempt_id(), attempt_id);
+        assert!(!active[0].fence().is_open());
+        assert!(
+            stack
+                .daemon()
+                .workstream_active_by_correlation_key(&correlation_key)
+                .await,
+            "daemon capacity remains occupied until trace acknowledgement"
+        );
+        heartbeat_while_pending.release();
+        terminal_acknowledgement.release();
+
+        let quiesced = await_pause(
+            &cx,
+            quiesced,
+            "recursive cleanup, endpoint joins, and terminal trace acknowledgement",
+        )
+        .await;
         assert_eq!(stack.pending_result_count().unwrap(), 0);
         assert_eq!(
             stack
@@ -355,6 +431,12 @@ fn ownership_loss_restart_does_not_stage_removed_attempt_and_cancels_old_heartbe
         );
 
         let cancel_requested = stack.pause_hooks().arm(PausePoint::WorkerCancelRequested);
+        let terminal_forwarding = stack
+            .pause_hooks()
+            .arm(PausePoint::WorkerTerminalTraceForwarding);
+        let terminal_acknowledgement = stack
+            .pause_hooks()
+            .arm(PausePoint::WorkerTerminalTraceAcknowledgement);
         let acknowledged = stack
             .pause_hooks()
             .arm(PausePoint::WorkerResultAcknowledged);
@@ -368,6 +450,54 @@ fn ownership_loss_restart_does_not_stage_removed_attempt_and_cancels_old_heartbe
         assert!(!active[0].fence().is_open());
         cancel_requested.release();
         recovered.session.release();
+
+        let terminal_forwarding = await_pause(
+            &cx,
+            terminal_forwarding,
+            "locally durable terminal trace awaiting daemon forwarding",
+        )
+        .await;
+        let local = stack.local_trace_runs().expect("pending local trace");
+        let terminal_sequence = local[0].events.last().expect("terminal trace").seq;
+        assert!(matches!(
+            &local[0].events.last().expect("terminal trace").event,
+            AgentActivityEventV1::RunFinished(RunFinishedV1 {
+                status: RunStatusV1::Cancelled,
+                ..
+            })
+        ));
+        assert!(local[0].acknowledged_seq < terminal_sequence);
+        assert_eq!(stack.pending_result_count().unwrap(), 0);
+        assert_eq!(
+            stack
+                .pause_hooks()
+                .reached_count(PausePoint::WorkerQuiesced),
+            0
+        );
+
+        // The forwarding future resolves the daemon on every retry/send. Hold
+        // the durable terminal before resolution, replace the daemon, then let
+        // the existing forwarder deliver to the restarted journal.
+        stack.replace_daemon(&handle).await;
+        assert!(stack.open_recovery_barrier().await.is_empty());
+        terminal_forwarding.release();
+        let terminal_acknowledgement = await_pause(
+            &cx,
+            terminal_acknowledgement,
+            "restarted daemon terminal acknowledgement",
+        )
+        .await;
+        assert_eq!(assert_cancelled_journal(&stack), terminal_sequence);
+        assert_eq!(stack.pending_result_count().unwrap(), 0);
+        assert!(stack.published_results().is_empty());
+        assert_eq!(
+            stack
+                .pause_hooks()
+                .reached_count(PausePoint::WorkerCapacityReleased),
+            0
+        );
+        assert_eq!(stack.active_worker_tasks().len(), 1);
+        terminal_acknowledgement.release();
 
         let acknowledged =
             await_pause(&cx, acknowledged, "restarted stale result acknowledgement").await;
@@ -404,230 +534,4 @@ fn ownership_loss_restart_does_not_stage_removed_attempt_and_cancels_old_heartbe
         assert_eq!(stack.observed_agent_sessions().len(), 1);
         stack.crash_worker().await;
     });
-}
-
-async fn ownership_world(handle: &skein::runtime::RuntimeHandle) -> HermeticRealStack {
-    HermeticRealStackBuilder::new()
-        .issue(HermeticIssueSpec::ready_code(
-            "Recovered ownership acceptance",
-            "The recovered attempt must stop if its exact durable authority disappears.\n\n<!-- temper:workflow\n{\"kind\":\"code\"}\n-->",
-        ))
-        .fake_model_response(FakeModelResponse::write_file(
-            "service/OWNED.md",
-            "completed while still owned\n",
-            "Completed the still-owned recovered attempt.",
-        ))
-        .enable_agent_traces()
-        .worker_heartbeat_interval(Duration::from_millis(100))
-        .build(handle)
-        .await
-        .expect("ownership-loss world builds")
-}
-
-async fn start_recovered_attempt(
-    stack: &mut HermeticRealStack,
-    cx: &skein::cx::Cx,
-    handle: &skein::runtime::RuntimeHandle,
-) -> RecoveredAttempt {
-    assert_eq!(
-        stack
-            .enqueue_scanned_role_work(stack.clock().now())
-            .await
-            .expect("source enqueues"),
-        1
-    );
-    let session = stack.pause_hooks().arm(PausePoint::AgentSessionStarted);
-    let first_heartbeat = stack
-        .pause_hooks()
-        .arm(PausePoint::WorkerHeartbeatReportingJob);
-    stack.start_worker(handle);
-    let first_heartbeat = await_pause(cx, first_heartbeat, "first live heartbeat").await;
-    let session = skein::time::timeout(
-        temper_engine_io::runtime::timer_now(cx),
-        Duration::from_secs(20),
-        Box::pin(session.arrived()),
-    )
-    .await
-    .unwrap_or_else(|_| {
-        panic!(
-            "timed out waiting for active native-agent session; observed_sessions={} active_tasks={:?} publications={:?} outbox={:?}",
-            stack.observed_agent_sessions().len(),
-            stack
-                .active_worker_tasks()
-                .iter()
-                .map(|task| (task.job_id(), task.join_state()))
-                .collect::<Vec<_>>(),
-            stack.published_results(),
-            stack.pending_result_count()
-        )
-    });
-    let issue = current_issue(stack).await;
-    let assignment = parse_metadata_block(&issue.body)
-        .unwrap()
-        .expect("claimed metadata")
-        .assignment
-        .expect("durable assignment");
-
-    stack.replace_daemon(handle).await;
-    let heartbeat_completed = stack
-        .pause_hooks()
-        .arm(PausePoint::WorkerHeartbeatCompleted);
-    first_heartbeat.release();
-    let heartbeat_completed =
-        await_pause(cx, heartbeat_completed, "recovered heartbeat reattachment").await;
-    assert!(
-        stack.open_recovery_barrier().await.is_empty(),
-        "the exact attempt reattaches before recovery opens"
-    );
-    assert_eq!(stack.observed_agent_sessions().len(), 1);
-    RecoveredAttempt {
-        session,
-        reattached_heartbeat: heartbeat_completed,
-        assignment,
-    }
-}
-
-async fn mutate_durable_ownership(
-    stack: &HermeticRealStack,
-    loss: OwnershipLoss,
-) -> Option<String> {
-    let issue = current_issue(stack).await;
-    let mut metadata = parse_metadata_block(&issue.body)
-        .unwrap()
-        .expect("claimed metadata");
-    let mut update = UpdateIssue {
-        expected_version: Some(issue.version),
-        remove_assignees: issue.assignees.clone(),
-        ..UpdateIssue::default()
-    };
-    let replacement_attempt = match loss {
-        OwnershipLoss::Blocked => {
-            metadata.assignment = None;
-            metadata.lease = None;
-            update.set_labels = Some(vec!["blocked".to_string(), "code".to_string()]);
-            None
-        }
-        OwnershipLoss::Closed => {
-            metadata.assignment = None;
-            metadata.lease = None;
-            update.state = Some(IssueState::Closed);
-            update.set_labels = Some(vec!["code".to_string()]);
-            None
-        }
-        OwnershipLoss::Replaced => {
-            let assignment = metadata.assignment.as_mut().expect("old assignment");
-            let old_attempt = assignment.attempt_id.as_deref().expect("old attempt");
-            let replacement = format!("{old_attempt}-newer");
-            assignment.attempt_id = Some(replacement.clone());
-            Some(replacement)
-        }
-    };
-    update.body = Some(replace_metadata_block(&issue.body, &metadata).unwrap());
-    stack
-        .forge()
-        .update_issue(&issue.id, update)
-        .await
-        .expect("durable ownership mutation lands");
-    replacement_attempt
-}
-
-async fn current_issue(stack: &HermeticRealStack) -> Issue {
-    stack
-        .forge()
-        .get_issue_by_number(stack.primary_repo_id(), stack.issue_number())
-        .await
-        .expect("issue lookup")
-        .expect("source issue")
-}
-
-async fn assert_cancelled_trace(stack: &HermeticRealStack, cx: &skein::cx::Cx) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let runs = stack.trace_runs().expect("trace journal query");
-        if runs.len() == 1 && runs[0].summary.status == AgentTraceRunStatus::Cancelled {
-            let terminal = runs[0].events.last().expect("terminal trace event");
-            assert!(matches!(
-                &terminal.event,
-                AgentActivityEventV1::RunFinished(RunFinishedV1 {
-                    status: RunStatusV1::Cancelled,
-                    ..
-                })
-            ));
-            assert!(
-                runs.iter()
-                    .all(|run| run.summary.status != AgentTraceRunStatus::Active),
-                "forwarding must not leave an active journal run"
-            );
-            let local = stack.local_trace_runs().expect("local trace spool");
-            assert_eq!(local.len(), 1);
-            assert!(local[0].acknowledged_seq >= terminal.seq);
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for one terminal cancelled trace: {:?}",
-            runs.iter()
-                .map(|run| run.summary.status)
-                .collect::<Vec<_>>()
-        );
-        temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
-    }
-}
-
-fn assert_no_agent_effects(snapshot: HermeticActivitySnapshot) {
-    assert_eq!(snapshot, HermeticActivitySnapshot::default());
-}
-
-async fn assert_no_product_effects(stack: &HermeticRealStack) {
-    assert_eq!(
-        stack.origin_branches(stack.primary_repo_path()).unwrap(),
-        vec!["main".to_string()],
-        "a fenced attempt cannot push a product branch"
-    );
-    assert!(
-        stack
-            .pull_requests()
-            .await
-            .expect("pull request inventory")
-            .is_empty(),
-        "a fenced attempt cannot submit an implementation PR"
-    );
-    let checkout = stack
-        .workspace_checkout(stack.primary_repo_path())
-        .expect("prepared checkout");
-    let output = Command::new("git")
-        .args(["-C", checkout.to_str().unwrap(), "status", "--porcelain"])
-        .output()
-        .expect("inspect workspace git status");
-    assert!(output.status.success());
-    assert!(
-        output.stdout.is_empty(),
-        "a fenced attempt cannot mutate its checkout: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-}
-
-async fn await_pause(cx: &skein::cx::Cx, pause: PausePermit, description: &str) -> ReachedPause {
-    skein::time::timeout(
-        temper_engine_io::runtime::timer_now(cx),
-        Duration::from_secs(20),
-        Box::pin(pause.arrived()),
-    )
-    .await
-    .unwrap_or_else(|_| panic!("timed out waiting for {description}"))
-}
-
-async fn wait_for_outbox_count(stack: &HermeticRealStack, cx: &skein::cx::Cx, expected: usize) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let count = stack.pending_result_count().expect("read result outbox");
-        if count == expected {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {expected} outbox entries, saw {count}"
-        );
-        temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(1)).await;
-    }
 }

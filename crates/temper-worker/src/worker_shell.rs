@@ -380,6 +380,20 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 let nested_containment_events = containment_events.clone();
                 let nested_containment_context = containment_context.clone();
                 job_cancellation.set_cleanup_observer(move |observation| {
+                    if let JobContainmentObservation::QuiescencePending(reason) = observation {
+                        cleanup_registry.mark_cleanup_pending(
+                            &cleanup_job_id,
+                            &cleanup_attempt_id,
+                            generation,
+                        );
+                        let _ = cleanup_cq.send(WorkerCompletion::AttemptCleanupPending {
+                            job_id: cleanup_job_id.clone(),
+                            attempt_id: cleanup_attempt_id.clone(),
+                            generation,
+                            reason,
+                        });
+                        return;
+                    }
                     let blocked = match observation {
                         JobContainmentObservation::Cleanup(observation) => {
                             containment_events.cleanup(&containment_context, &observation);
@@ -403,6 +417,9 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                         // accepts jobs; per-factory copies are deliberately
                         // suppressed here.
                         JobContainmentObservation::Capability(_) => None,
+                        JobContainmentObservation::QuiescencePending(_) => {
+                            unreachable!("quiescence pending handled above")
+                        }
                     };
                     let Some(snapshot) = blocked else {
                         return;

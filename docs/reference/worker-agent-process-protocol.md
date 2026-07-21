@@ -73,13 +73,24 @@ joined supervisor has completed graceful exit or forced process-group
 termination and descendant cleanup, the worker appends one synthetic canonical
 `run.finished` activity with `status=cancelled` and
 `stop_reason=cancelled`. The host-only record is durable even when the child
-never connected, stopped responding, or was killed; terminal insertion is
-idempotent if a terminal host record already exists. The in-process runner uses
-the same ordering: it requests native model/tool cancellation, waits for the
-native task group and managed effects to join, persists `RunFinished(Cancelled)`,
-waits for trace forwarding to acknowledge that sequence, and only then returns
-attempt quiescence. Thus neither carrier can expose a quiescent canceled run
-whose journal query still reports `active`.
+never connected, stopped responding, or was killed. Repeating terminal
+insertion returns the original cancelled sequence, so out-of-process cleanup
+can write the boundary early without losing the sequence needed by the outer
+forwarding wait. The in-process runner uses the same ordering: it requests
+native model/tool cancellation, waits for the native task group and managed
+effects to join, persists `RunFinished(Cancelled)`, waits for trace forwarding
+to acknowledge that exact sequence, and only then returns attempt quiescence.
+
+The ordinary success/failure path may give forwarding a bounded 250 ms flush
+opportunity without changing the product result. That timeout is never used for
+ownership-loss cancellation. While a durable cancellation sequence is
+unacknowledged, the attempt is `cleanup_pending`: its closed fence, task-registry
+entry, heartbeat membership, daemon slot, and worker permit remain occupied,
+and no canceled result is recorded. Transport, daemon, storage-cursor, and
+forwarding failures leave this state intact while the existing forwarder retry
+and startup-recovery passes drain the spool. Capture `off` is the sole explicit
+no-trace compatibility case. Thus neither carrier can expose a quiescent
+cancelled run whose journal query still reports `active`.
 
 The producer maps model attempt boundaries, tool boundaries, steering, and
 agent termination directly from `AgentEvent`. Non-empty text deltas and

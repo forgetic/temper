@@ -16,6 +16,8 @@ use temper_protocol_agent::{
     AgentSessionState, WorkspaceContext, WorkspaceRepository, WorkspaceWorkItem,
 };
 
+use temper_protocol_worker::FailureClass;
+
 use super::*;
 
 pub(super) fn context() -> WorkspaceContext {
@@ -79,6 +81,31 @@ pub(super) fn usage_frame(tokens: u64) -> AgentActivityFrameV1 {
             cache_write_tokens: 0,
         }),
     }
+}
+
+#[test]
+fn repeated_cancelled_finish_preserves_the_original_terminal_sequence() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let collector = collector(temp.path());
+    let run = collector
+        .begin_run("cancelled-sequence", &context())
+        .expect("begin")
+        .expect("enabled");
+
+    let sequence = run.finish_cancelled().expect("first cancellation terminal");
+    assert_eq!(
+        run.finish_cancelled()
+            .expect("idempotent cancellation terminal"),
+        sequence
+    );
+    assert!(matches!(
+        run.finish_failure(FailureCodeV1::Internal, FailureClass::Transient),
+        Err(TraceError::AlreadyTerminal)
+    ));
+
+    let recovered = collector.recover().expect("recover cancellation terminal");
+    assert_eq!(recovered[0].events.len(), 2);
+    assert_eq!(recovered[0].events[1].seq, sequence);
 }
 
 #[test]

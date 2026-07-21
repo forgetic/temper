@@ -601,6 +601,12 @@ impl OutOfProcessRunner {
                 "agent cleanup did not prove recursive emptiness and endpoint joins",
             ));
         }
+        if cancelled || cancellation.is_cancelled() || !fence.is_open() {
+            return Err(AgentRunError::new(
+                temper_protocol_worker::FailureClass::Canceled,
+                "agent attempt was cancelled after joined process cleanup",
+            ));
+        }
         let ChildOutcome {
             status_code,
             stderr_tail,
@@ -620,7 +626,8 @@ impl OutOfProcessRunner {
         }
 
         if !fence.is_open() {
-            return Err(AgentRunError::transient(
+            return Err(AgentRunError::new(
+                temper_protocol_worker::FailureClass::Canceled,
                 "agent attempt was cancelled before result acceptance",
             ));
         }
@@ -628,7 +635,8 @@ impl OutOfProcessRunner {
             AgentRunError::permanent(format!("agent did not write a valid result file: {error}"))
         })?;
         if !fence.is_open() {
-            return Err(AgentRunError::transient(
+            return Err(AgentRunError::new(
+                temper_protocol_worker::FailureClass::Canceled,
                 "agent attempt was cancelled while reading its result",
             ));
         }
