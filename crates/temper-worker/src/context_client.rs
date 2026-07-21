@@ -22,6 +22,7 @@ pub struct ForgeContextClient<T: Transport> {
     transport: T,
     worker_id: String,
     job_id: String,
+    attempt_id: String,
     auth: Option<WorkerAuth>,
 }
 
@@ -30,12 +31,14 @@ impl<T: Transport> ForgeContextClient<T> {
         transport: T,
         worker_id: impl Into<String>,
         job_id: impl Into<String>,
+        attempt_id: impl Into<String>,
         auth: Option<WorkerAuth>,
     ) -> Self {
         Self {
             transport,
             worker_id: worker_id.into(),
             job_id: job_id.into(),
+            attempt_id: attempt_id.into(),
             auth,
         }
     }
@@ -45,7 +48,7 @@ impl<T: Transport> ForgeContextClient<T> {
         cx: Cx,
         operation: ForgeContextOperation,
     ) -> Result<ForgeContextResult, ContextClientError> {
-        let request = FetchContext::new(&self.worker_id, &self.job_id, operation);
+        let request = FetchContext::new(&self.worker_id, &self.job_id, &self.attempt_id, operation);
         let response = self
             .transport
             .send(
@@ -76,9 +79,9 @@ impl<T: Transport> ForgeContextClient<T> {
     }
 }
 
-/// Builds the worker-owned per-run host. The returned callback accepts only a
-/// job id plus the closed operation; worker identity, pool auth, transport, and
-/// runtime capability remain captured on the host side.
+/// Builds the worker-owned per-run host. The returned callback accepts exact
+/// job and attempt ids plus the closed operation; worker identity, pool auth,
+/// transport, and runtime capability remain captured on the host side.
 pub fn forge_context_host<T: Transport>(
     transport: Arc<T>,
     cx: Cx,
@@ -86,13 +89,13 @@ pub fn forge_context_host<T: Transport>(
     auth: Option<WorkerAuth>,
 ) -> AgentForgeContextHost {
     let worker_id = worker_id.into();
-    Arc::new(move |job_id, operation| {
+    Arc::new(move |job_id, attempt_id, operation| {
         let transport = Arc::clone(&transport);
         let worker_id = worker_id.clone();
         let auth = auth.clone();
         let cx = cx.clone();
         Box::pin(async move {
-            let request = FetchContext::new(&worker_id, &job_id, operation);
+            let request = FetchContext::new(&worker_id, &job_id, &attempt_id, operation);
             let response = transport
                 .send(cx, WorkerProtocolMessage::FetchContext(request), auth)
                 .await
@@ -205,11 +208,16 @@ mod tests {
                 include_comments: false,
             });
             assert_eq!(
-                host("job-a".to_string(), operation.clone()).await,
+                host(
+                    "job-a".to_string(),
+                    "attempt-a".to_string(),
+                    operation.clone(),
+                )
+                .await,
                 Err(ForgeContextErrorCode::NotFound)
             );
             assert_eq!(
-                host("job-b".to_string(), operation).await,
+                host("job-b".to_string(), "attempt-b".to_string(), operation).await,
                 Err(ForgeContextErrorCode::NotFound)
             );
             assert_eq!(&*jobs.lock().expect("jobs"), &["job-a", "job-b"]);
@@ -225,6 +233,7 @@ mod tests {
                 transport,
                 "worker-a",
                 "job-283",
+                "attempt-283",
                 Some(WorkerAuth::bearer("pool-secret")),
             );
             let operation = ForgeContextOperation::ForgeGetItem(ForgeGetItemOperation {
@@ -243,6 +252,7 @@ mod tests {
             };
             assert_eq!(request.worker_id, "worker-a");
             assert_eq!(request.job_id, "job-283");
+            assert_eq!(request.attempt_id.as_deref(), Some("attempt-283"));
             assert_eq!(request.operation, operation);
             assert_eq!(auth.expect("auth metadata").expose_bearer(), "pool-secret");
         });

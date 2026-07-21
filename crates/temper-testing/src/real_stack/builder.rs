@@ -37,6 +37,7 @@ pub struct HermeticRealStackBuilder {
     enable_subagents: bool,
     submit_for_pr: SubmitForPrHost,
     apply_grace: Option<Duration>,
+    worker_heartbeat_interval: Duration,
     worker_liveness_limits: temper_worker::WorkerLivenessLimits,
 }
 
@@ -64,6 +65,7 @@ impl HermeticRealStackBuilder {
             enable_subagents: false,
             submit_for_pr: default_submit_for_pr_host(),
             apply_grace: None,
+            worker_heartbeat_interval: Duration::from_millis(50),
             worker_liveness_limits: Default::default(),
         }
     }
@@ -163,6 +165,14 @@ impl HermeticRealStackBuilder {
         self
     }
 
+    /// Overrides the worker heartbeat cadence for lifecycle tests that need to
+    /// isolate another worker/daemon protocol boundary.
+    #[must_use]
+    pub fn worker_heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.worker_heartbeat_interval = interval;
+        self
+    }
+
     /// Overrides worker-owned watchdog limits for restart/cancellation tests.
     #[must_use]
     pub fn worker_liveness_limits(mut self, limits: temper_worker::WorkerLivenessLimits) -> Self {
@@ -258,12 +268,16 @@ impl HermeticRealStackBuilder {
         let router_for_context = Arc::clone(&router);
         let context_worker_id = primary_worker_role.worker_id.clone();
         let forge_context: temper_worker::AgentForgeContextHost =
-            Arc::new(move |job_id, operation| {
+            Arc::new(move |job_id, attempt_id, operation| {
                 let router = Arc::clone(&router_for_context);
                 let worker_id = context_worker_id.clone();
                 Box::pin(async move {
-                    let request =
-                        temper_protocol_worker::FetchContext::new(&worker_id, &job_id, operation);
+                    let request = temper_protocol_worker::FetchContext::new(
+                        &worker_id,
+                        &job_id,
+                        &attempt_id,
+                        operation,
+                    );
                     let response = router
                         .current()
                         .deliver_protocol_message(
@@ -348,7 +362,7 @@ impl HermeticRealStackBuilder {
                 .min()
                 .unwrap_or(1),
             poll_wait: Duration::from_millis(25),
-            heartbeat_interval: Duration::from_millis(50),
+            heartbeat_interval: self.worker_heartbeat_interval,
             liveness_limits: self.worker_liveness_limits,
             result_root: workspace_root.join(".temper/worker-results"),
             agent_traces: Default::default(),

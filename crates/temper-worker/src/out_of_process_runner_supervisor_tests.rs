@@ -185,7 +185,7 @@ printf '{"summary":"ok"}' > "$result"
     let host_started = Arc::new(AtomicBool::new(false));
     let host_started_for_call = Arc::clone(&host_started);
     let connected_for_host = connected.clone();
-    let host: AgentForgeContextHost = Arc::new(move |_job_id, _operation| {
+    let host: AgentForgeContextHost = Arc::new(move |_job_id, _attempt_id, _operation| {
         host_started_for_call.store(true, Ordering::Release);
         std::fs::write(&connected_for_host, b"").expect("mark host invocation");
         Box::pin(std::future::pending())

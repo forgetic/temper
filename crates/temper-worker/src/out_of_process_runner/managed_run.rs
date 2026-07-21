@@ -373,6 +373,7 @@ impl OutOfProcessRunner {
         let submit_context = context.clone();
         let submit_cwd = cwd.to_path_buf();
         let bound_job_id = job_id.to_string();
+        let bound_attempt_id = attempt_id.to_string();
         let mut pending_forge: Option<ForgeHostTask> = None;
         let mut pending_submit: Option<SubmitHostTask> = None;
         let mut forge_closed = false;
@@ -496,7 +497,11 @@ impl OutOfProcessRunner {
                     Some(host) if fence.is_open() => {
                         pending_forge = Some(ForgeHostTask {
                             future: bounded_forge_future(
-                                host(bound_job_id.clone(), request.operation),
+                                host(
+                                    bound_job_id.clone(),
+                                    bound_attempt_id.clone(),
+                                    request.operation,
+                                ),
                                 operation_timeout,
                             ),
                             response: request.response,

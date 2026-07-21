@@ -100,6 +100,13 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
                 "Restarted cancellation converged exactly once.",
             ))
             .worker_liveness_limits(initial_limits)
+            // This matrix exercises watchdog cancellation and durable result
+            // replay, not lease-heartbeat convergence. Frequent heartbeats
+            // rewrite the same MemoryForge issue while retryable result apply
+            // clears its claim, making acknowledgement timing depend on CAS
+            // contention under loaded CI. Keep that independent protocol out
+            // of this fault-injection window.
+            .worker_heartbeat_interval(Duration::from_secs(300))
             .apply_grace(Duration::ZERO)
             .build(&handle)
             .await
@@ -156,14 +163,15 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
                     "accepted pre-crash delivery must leave no startup orphan"
                 );
             }
-            let replay_ack = stack
+            let replay_converged = stack
                 .pause_hooks()
-                .arm(PausePoint::WorkerResultAcknowledged);
+                .arm(PausePoint::ResultApplicationCompleted);
             stack.start_worker(&handle);
-            let replay_ack =
-                await_result_ack(&cx, replay_ack, "replayed result acknowledgement").await;
+            let replay_converged =
+                await_result_convergence(&cx, replay_converged, "replayed result application")
+                    .await;
+            replay_converged.release();
             let transient = await_retryable_result(&mut stack, &cx).await;
-            replay_ack.release();
             wait_for_outbox_count(&stack, &cx, 0).await;
             if !delivery_already_converged {
                 assert!(
@@ -187,13 +195,13 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
                 stack.set_worker_liveness_limits(restart_watchdog_limits());
             }
             let retry_running = stack.pause_hooks().arm(PausePoint::AgentSessionStarted);
-            // Observe the exact acknowledgement boundary instead of racing
-            // durable outbox compaction with a wall-clock polling deadline.
-            // Several retryable daemon replies may precede this event, so keep
-            // the hook armed before the first publication.
-            let retry_ack = stack
+            // Observe the daemon's successful application boundary instead of
+            // racing the worker's follow-up acknowledgement task. Retryable
+            // replies do not reach this hook, so it still proves that the
+            // durable claim converged before outbox compaction is checked.
+            let retry_converged = stack
                 .pause_hooks()
-                .arm(PausePoint::WorkerResultAcknowledged);
+                .arm(PausePoint::ResultApplicationCompleted);
             assert_eq!(
                 stack
                     .enqueue_scanned_role_work(stack.clock().now())
@@ -204,11 +212,12 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
             stack.start_worker(&handle);
             let retry_running = await_pause(&cx, retry_running, "timeout retry session").await;
             assert_restart_dirty_state(&stack);
+            let retry_converged =
+                await_result_convergence(&cx, retry_converged, "retryable result application")
+                    .await;
+            retry_converged.release();
             let transient = await_retryable_result(&mut stack, &cx).await;
             drop(retry_running);
-            let retry_ack =
-                await_result_ack(&cx, retry_ack, "retryable result acknowledgement").await;
-            retry_ack.release();
             transient
         };
         assert_eq!(transient.status, ResultStatus::Failure);
@@ -379,14 +388,14 @@ async fn await_pause(cx: &skein::cx::Cx, pause: PausePermit, description: &str) 
     .unwrap_or_else(|_| panic!("timed out waiting for {description}"))
 }
 
-async fn await_result_ack(
+async fn await_result_convergence(
     cx: &skein::cx::Cx,
     pause: PausePermit,
     description: &str,
 ) -> ReachedPause {
-    // Result delivery retries use bounded exponential backoff. Allow the replay
-    // to pass the 32-second slot (2s + 4s + 8s + 16s + 32s) while retaining an
-    // actionable acknowledgement-specific failure for a genuinely stuck run.
+    // Result application may return retryable failures before durable claim
+    // convergence succeeds. Keep this bound beyond the 32-second replay slot
+    // while retaining an actionable failure for a genuinely stuck run.
     skein::time::timeout(
         temper_engine_io::runtime::timer_now(cx),
         Duration::from_secs(90),

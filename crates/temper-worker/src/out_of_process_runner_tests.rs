@@ -279,11 +279,11 @@ fn forge_side_channel_binds_job_and_supports_repeated_indirect_reads() {
     let responses_path = temp.path().join("forge-responses.json");
     let observed = Arc::new(Mutex::new(Vec::new()));
     let observed_for_host = Arc::clone(&observed);
-    let host: crate::AgentForgeContextHost = Arc::new(move |job_id, operation| {
+    let host: crate::AgentForgeContextHost = Arc::new(move |job_id, attempt_id, operation| {
         observed_for_host
             .lock()
             .expect("observed Forge calls")
-            .push((job_id, operation.clone()));
+            .push((job_id, attempt_id, operation.clone()));
         Box::pin(async move {
             let value = match operation {
                 ForgeContextOperation::ForgeGetItem(_) => serde_json::json!({
@@ -318,10 +318,15 @@ fn forge_side_channel_binds_job_and_supports_repeated_indirect_reads() {
 
     let calls = observed.lock().expect("observed Forge calls");
     assert_eq!(calls.len(), 2);
-    assert!(calls.iter().all(|(job_id, _)| job_id == "host-job-284"));
-    assert!(matches!(calls[0].1, ForgeContextOperation::ForgeGetItem(_)));
+    assert!(
+        calls
+            .iter()
+            .all(|(job_id, attempt_id, _)| job_id == "host-job-284"
+                && attempt_id == "host-job-284")
+    );
+    assert!(matches!(calls[0].2, ForgeContextOperation::ForgeGetItem(_)));
     assert!(matches!(
-        calls[1].1,
+        calls[1].2,
         ForgeContextOperation::ForgeListRelated(_)
     ));
     let responses: serde_json::Value =

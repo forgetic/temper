@@ -383,17 +383,23 @@ impl DaemonCore {
             .count()
     }
 
-    /// Authenticates a worker and proves that `job_id` is its currently active
-    /// assignment. Pending, staged, completed, released, unknown, and
-    /// wrong-worker jobs all return `None` after authentication.
+    /// Authenticates a worker and proves that `(job_id, attempt_id)` is its
+    /// currently active exact assignment. A compatibility-optional `None`
+    /// attempt matches only recovered assignment metadata that also has no
+    /// attempt id; it never authorizes a current fenced attempt. Pending,
+    /// staged, completed, released, unknown, and mismatched assignments all
+    /// return `None` after authentication.
     pub fn authorize_context_read(
         &self,
         worker_id: &str,
         job_id: &str,
+        attempt_id: Option<&str>,
         auth: Option<&WorkerAuth>,
     ) -> Result<Option<InFlightJob>, WorkerAuthError> {
         self.authenticate_registered_worker(worker_id, None, auth)?;
-        if self.coordinator.assigned_worker(job_id) != Some(worker_id) {
+        if self.coordinator.assigned_worker(job_id) != Some(worker_id)
+            || self.assignment_attempts.get(job_id).map(String::as_str) != attempt_id
+        {
             return Ok(None);
         }
         Ok(self.in_flight_job(job_id))
@@ -509,13 +515,13 @@ impl DaemonCore {
                 self.authenticate_registered_worker(&poll.worker_id, None, auth)?;
                 Ok(Some(self.handle_poll(poll)))
             }
-            WorkerProtocolMessage::Assign(_) | WorkerProtocolMessage::Release(_) => {
-                Ok(Some(error_response(
-                    ErrorCode::MalformedMessage,
-                    "daemon-to-worker message received inbound",
-                    None,
-                )))
-            }
+            WorkerProtocolMessage::Assign(_)
+            | WorkerProtocolMessage::CancelAttempts(_)
+            | WorkerProtocolMessage::Release(_) => Ok(Some(error_response(
+                ErrorCode::MalformedMessage,
+                "daemon-to-worker message received inbound",
+                None,
+            ))),
             WorkerProtocolMessage::Heartbeat(heartbeat) => self
                 .handle_authenticated_heartbeat(heartbeat, auth)
                 .map(|(response, _recovery)| response),
@@ -747,6 +753,7 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::Poll(msg) => msg.protocol_version,
         WorkerProtocolMessage::Assign(msg) => msg.protocol_version,
         WorkerProtocolMessage::Heartbeat(msg) => msg.protocol_version,
+        WorkerProtocolMessage::CancelAttempts(msg) => msg.protocol_version(),
         WorkerProtocolMessage::Result(msg) => msg.protocol_version,
         WorkerProtocolMessage::Release(msg) => msg.protocol_version,
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,

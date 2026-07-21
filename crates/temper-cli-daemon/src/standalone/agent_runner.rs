@@ -186,6 +186,7 @@ impl InProcessAgentRunner {
         >,
     > {
         let job_id = request.job_id;
+        let attempt_id = request.attempt_id;
         let context = request.context;
         let cwd = request.cwd;
         let fence = request.fence;
@@ -271,8 +272,10 @@ impl InProcessAgentRunner {
         let submit_for_pr = Some(submit_for_pr);
         let forge_context: Option<ForgeContextHost> = self.forge_context.clone().map(|host| {
             let job_id = job_id.to_string();
-            std::sync::Arc::new(move |operation| host(job_id.clone(), operation))
-                as ForgeContextHost
+            let attempt_id = attempt_id.clone();
+            std::sync::Arc::new(move |operation| {
+                host(job_id.clone(), attempt_id.clone(), operation)
+            }) as ForgeContextHost
         });
         let containment = self.containment.clone();
         let agent_cancellation = AgentCancellationLatch::default();

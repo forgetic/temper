@@ -34,9 +34,9 @@ semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.allowed_verdicts`, `JobContext.verdict_contracts`,
 `JobContext.source_metadata`, `JobContext.artifact_context`, `JobResult.verdict`, `JobResult.body`,
 `JobResult.children`, and `JobResult.children[].kind` are all optional, and the
-protocol version remains `1`. The `fetch-context`/`context-response` pair and
-`activity-batch`/`activity-ack` pair are additive capabilities in the same v1
-envelope.
+protocol version remains `1`. The `fetch-context`/`context-response`,
+`activity-batch`/`activity-ack`, and daemon-to-worker `cancel-attempts`
+capabilities are additive in the same v1 envelope.
 
 ## Envelope
 
@@ -186,6 +186,7 @@ the same authorization and retrieval implementation.
 | `type` | string | yes | Constant `fetch-context`. |
 | `worker_id` | string | yes | Registered worker identity, at most 256 bytes. |
 | `job_id` | string | yes | An assignment currently active on that worker, at most 256 bytes. |
+| `attempt_id` | string | yes | Exact attempt fence copied from the assignment, at most 256 bytes. Omission is accepted only when deserializing a legacy request. |
 | `operation` | object | yes | Exactly one closed-vocabulary operation described below. |
 
 `forge_get_item` accepts `repo`, positive `number`, optional `type`
@@ -196,9 +197,11 @@ non-empty unique subset of `parent`, `child`, `dependency`, `dependent`,
 `depth` and `limit`. Repeated calls are supported so a client can deliberately
 follow indirect relations without one unbounded graph request.
 
-The daemon authorizes the worker-pool credential, exact `(worker_id, job_id)`
-active-assignment binding, and configured repository before any Forge read.
-Pending, completed, another worker's, and unconfigured-repository reads are
+The daemon authorizes the worker-pool credential, exact
+`(worker_id, job_id, attempt_id)` active-assignment binding, and configured
+repository before any Forge read. A legacy omitted attempt id compares as exact
+`None`, never as a wildcard for a current fenced attempt. Pending, completed,
+another worker's, another attempt's, and unconfigured-repository reads are
 `not_authorized`. The operation is read-only; mutation names are invalid.
 
 ### `context-response` — daemon → worker
@@ -311,6 +314,35 @@ the report additively. Registered workers have a `jobs` array of latest reports;
 in-flight jobs include `attempt_id` and optional `worker_report`. An absent
 report means unknown/legacy, not healthy or idle. Tool arguments, result bodies,
 prompts, credentials, and model content cannot appear in these DTOs.
+
+A normal successful heartbeat has no message body (`204` over HTTP / `None` in
+the protocol API). This remains the common response and is unchanged by the
+additive cancellation capability. When durable ownership of one or more exact
+attempts is lost, the daemon may instead return `cancel-attempts`.
+
+### `cancel-attempts` — daemon → worker
+
+The response requests idempotent cancellation of one or more attempts reported
+by the same worker heartbeat. Entries are unique exact identities and serialize
+in deterministic `(job_id, attempt_id)` order.
+
+| Field | Type | Required | Semantics |
+| --- | --- | --- | --- |
+| `protocol_version` | integer | yes | Constant `1`. |
+| `type` | string | yes | Constant `cancel-attempts`. |
+| `worker_id` | string | yes | Worker whose heartbeat is being answered. |
+| `cancellations` | array | yes | Non-empty list of unique exact cancellation entries. |
+| `cancellations[].worker_id` | string | yes | Must equal the envelope `worker_id`. |
+| `cancellations[].job_id` | string | yes | Exact assigned job identity. |
+| `cancellations[].attempt_id` | string | yes | Exact attempt fence. Omission is accepted only when reading legacy metadata and compares as `None`, never as a wildcard. Modern directives require a non-blank value. |
+| `cancellations[].cause` | string | yes | Stable value `ownership_lost`. |
+| `cancellations[].reason` | string | yes | Stable non-blank operator-facing reason, at most 512 UTF-8 bytes. |
+
+Workers must match all three identity components exactly before acting. A stale
+directive for another attempt is a no-op. Cancellation is idempotent: the daemon
+may repeat the same directive on later heartbeats until that exact attempt
+reports a terminal result. See the canonical multi-attempt fixture
+[`cancel-attempts.json`](worker-daemon-wire-protocol/examples/cancel-attempts.json).
 
 ### `result` — worker → daemon
 
@@ -451,5 +483,7 @@ assignment remains active.
 - Readers must ignore unknown fields in otherwise valid messages.
 - Additive optional fields and message capabilities do not require a version bump.
 - `artifact_context` is additive. The singular `artifact` remains valid and unchanged for backward compatibility.
-- `fetch-context`/`context-response` and `activity-batch`/`activity-ack` are optional v1 capabilities; workers that do not use them continue to interoperate.
-- Context operations and public errors are closed vocabularies even though readers ignore unknown fields elsewhere.
+- `fetch-context`/`context-response`, `activity-batch`/`activity-ack`, and `cancel-attempts` are optional additive v1 capabilities.
+- Context requests and cancellation directives carry exact attempt identities. Compatibility-optional omitted ids compare only as `None` and never as wildcards.
+- Rollout safety requires draining or restarting old workers that cannot consume `cancel-attempts` while deploying a daemon that may emit it; the additive v1 version alone cannot make those workers stop orphaned work.
+- Context operations, cancellation causes, and public errors are closed vocabularies even though readers ignore unknown fields elsewhere.
