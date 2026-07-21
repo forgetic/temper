@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::recovery_plan::{RecoveryPlanRequest, render as render_recovery_plan};
 use super::{CheckoutState, Workspace, WorkspaceError};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -29,6 +30,10 @@ pub struct QuarantineManifest {
     pub failure_phase: String,
     pub failure: String,
     pub recovery_commands: Vec<String>,
+    #[serde(default)]
+    pub replay_commits: Vec<String>,
+    #[serde(default)]
+    pub recovery_notes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,17 +55,18 @@ pub(super) enum ReadOnlyTarget {
 }
 
 #[derive(Debug)]
-struct RepositoryState {
-    branch: Option<String>,
-    head: Option<String>,
-    status_paths: Vec<String>,
-    operation: Option<String>,
+pub(super) struct RepositoryState {
+    pub(super) branch: Option<String>,
+    pub(super) head: Option<String>,
+    pub(super) status_paths: Vec<String>,
+    pub(super) operation: Option<String>,
 }
 
 #[derive(Default)]
 struct RecoveryArtifacts {
     refs: Vec<String>,
     stash_ref: Option<String>,
+    replay_commits: Vec<String>,
 }
 
 impl Workspace {
@@ -200,7 +206,10 @@ impl Workspace {
             });
         }
 
-        let mut artifacts = RecoveryArtifacts::default();
+        let mut artifacts = RecoveryArtifacts {
+            replay_commits: commits.clone(),
+            ..RecoveryArtifacts::default()
+        };
         if let Err(error) = self.preserve_state(&state, &mut artifacts).await {
             return self
                 .quarantine(
@@ -227,6 +236,7 @@ impl Workspace {
                 .await;
         }
         if !commits.is_empty() {
+            let pre_replay_head = self.head_sha().await?;
             let mut args = vec![OsString::from("cherry-pick")];
             args.extend(commits.iter().map(OsString::from));
             if let Err(error) = self
@@ -237,19 +247,32 @@ impl Workspace {
                 )
                 .await
             {
+                let failure = error.to_string();
+                let (phase, failure) = match self.normalize_failed_replay(&pre_replay_head).await {
+                    Ok(()) => (
+                        "replay-commits",
+                        format!("{failure}; failed cherry-pick was aborted and normalized"),
+                    ),
+                    Err(normalization) => (
+                        "replay-commits-ambiguous",
+                        format!("{failure}; cherry-pick normalization failed: {normalization}"),
+                    ),
+                };
                 return self
                     .quarantine(
                         &state,
                         work_branch,
                         Some(target_sha),
-                        "replay-commits",
-                        error.to_string(),
+                        phase,
+                        failure,
                         artifacts,
                     )
                     .await;
             }
         }
         if let Some(stash_ref) = artifacts.stash_ref.as_ref() {
+            let pre_apply_head = self.head_sha().await?;
+            let cleanup_paths = self.stash_cleanup_paths(stash_ref).await;
             if let Err(error) = self
                 .run_workspace_git(
                     false,
@@ -263,13 +286,31 @@ impl Workspace {
                 )
                 .await
             {
+                let failure = error.to_string();
+                let normalization = match cleanup_paths {
+                    Ok(paths) => {
+                        self.normalize_failed_stash_apply(&pre_apply_head, &paths)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                let (phase, failure) = match normalization {
+                    Ok(()) => (
+                        "restore-worktree",
+                        format!("{failure}; failed stash apply was reset and normalized"),
+                    ),
+                    Err(normalization) => (
+                        "restore-worktree-ambiguous",
+                        format!("{failure}; stash-apply normalization failed: {normalization}"),
+                    ),
+                };
                 return self
                     .quarantine(
                         &state,
                         work_branch,
                         Some(target_sha),
-                        "restore-worktree",
-                        error.to_string(),
+                        phase,
+                        failure,
                         artifacts,
                     )
                     .await;
@@ -403,46 +444,6 @@ impl Workspace {
         Ok(PreparationOutcome::CleanReuse {
             head: self.head_sha().await?,
         })
-    }
-
-    async fn inspect_repository(&self) -> Result<RepositoryState, WorkspaceError> {
-        let head = self.optional_ref("HEAD").await?;
-        let branch_output = self
-            .run_workspace_git(
-                false,
-                "git branch --show-current".to_string(),
-                vec![OsString::from("branch"), OsString::from("--show-current")],
-            )
-            .await?;
-        let branch = output_string(branch_output.stdout)?;
-        let branch = (!branch.trim().is_empty()).then(|| branch.trim().to_string());
-        let status_paths = self.status_paths().await?;
-        let git_dir = self.resolve_git_dir().await?;
-        let operation = self
-            .run_blocking("temper-workspace-operation-inspect", move || {
-                detect_operation(&git_dir)
-            })
-            .await?;
-        Ok(RepositoryState {
-            branch,
-            head,
-            status_paths,
-            operation,
-        })
-    }
-
-    async fn resolve_git_dir(&self) -> Result<PathBuf, WorkspaceError> {
-        let output = self
-            .run_workspace_git(
-                false,
-                "git rev-parse --absolute-git-dir".to_string(),
-                vec![
-                    OsString::from("rev-parse"),
-                    OsString::from("--absolute-git-dir"),
-                ],
-            )
-            .await?;
-        Ok(PathBuf::from(output_string(output.stdout)?.trim()))
     }
 
     async fn preserve_and_quarantine(
@@ -580,7 +581,18 @@ impl Workspace {
                 return Ok(PreparationOutcome::Quarantined(Box::new(manifest)));
             }
         }
-        let recovery_commands = recovery_commands(&quarantine_path, &artifacts.refs);
+        let plan = render_recovery_plan(RecoveryPlanRequest {
+            failure_phase: phase,
+            checkout_path: &self.path,
+            quarantine_path: &quarantine_path,
+            expected_branch,
+            git_user: &self.identity.user,
+            git_email: &self.identity.email,
+            target_sha: target_sha.as_deref(),
+            recovery_refs: &artifacts.refs,
+            stash_ref: artifacts.stash_ref.as_deref(),
+            replay_commits: &artifacts.replay_commits,
+        });
         let manifest = QuarantineManifest {
             job_id: self.recovery_context.job_id.clone(),
             correlation_key: self.recovery_context.correlation_key.clone(),
@@ -595,7 +607,9 @@ impl Workspace {
             recovery_refs: artifacts.refs,
             failure_phase: phase.to_string(),
             failure,
-            recovery_commands,
+            recovery_commands: plan.commands,
+            replay_commits: artifacts.replay_commits,
+            recovery_notes: plan.notes,
         };
         let bytes = serde_json::to_vec_pretty(&manifest)
             .map_err(|error| WorkspaceError::Recovery(error.to_string()))?;
@@ -678,7 +692,10 @@ impl Workspace {
             .collect())
     }
 
-    async fn optional_ref(&self, reference: &str) -> Result<Option<String>, WorkspaceError> {
+    pub(super) async fn optional_ref(
+        &self,
+        reference: &str,
+    ) -> Result<Option<String>, WorkspaceError> {
         // `show-ref --verify --quiet` would discard the value and its expected
         // non-zero "missing" status is awkward through the strict git wrapper.
         // `rev-parse --verify --quiet` is therefore run in one blocking command
@@ -722,19 +739,7 @@ impl Workspace {
     }
 }
 
-fn detect_operation(git_dir: &Path) -> Option<String> {
-    [
-        ("MERGE_HEAD", "merge"),
-        ("rebase-merge", "rebase"),
-        ("rebase-apply", "rebase"),
-        ("CHERRY_PICK_HEAD", "cherry-pick"),
-        ("BISECT_LOG", "bisect"),
-    ]
-    .into_iter()
-    .find_map(|(marker, operation)| git_dir.join(marker).exists().then(|| operation.to_string()))
-}
-
-fn output_string(output: Vec<u8>) -> Result<String, WorkspaceError> {
+pub(super) fn output_string(output: Vec<u8>) -> Result<String, WorkspaceError> {
     String::from_utf8(output).map_err(|error| WorkspaceError::Utf8(error.to_string()))
 }
 
@@ -754,25 +759,4 @@ fn recovery_ref_component(value: &str) -> String {
     } else {
         component
     }
-}
-
-fn recovery_commands(quarantine_path: &Path, refs: &[String]) -> Vec<String> {
-    let quoted = format!(
-        "'{}'",
-        quarantine_path.display().to_string().replace('\'', "'\\''")
-    );
-    let mut commands = vec![format!("git -C {quoted} status --short --branch")];
-    commands.extend(
-        refs.iter()
-            .map(|reference| format!("git -C {quoted} show {reference}")),
-    );
-    if let Some(worktree_ref) = refs
-        .iter()
-        .find(|reference| reference.contains("/worktree-"))
-    {
-        commands.push(format!(
-            "git -C {quoted} stash apply --index {worktree_ref}"
-        ));
-    }
-    commands
 }

@@ -65,13 +65,74 @@ child correlation keys. A retry therefore neither duplicates a child nor
 dispatches a partially wired child, and a later legitimate fan-out cannot alias
 or discard an earlier round's children.
 
-## Workspace and repaired-PR convergence
+## Workspace quarantine recovery
 
 A reusable writable checkout is inspected before reset or fetch. Local commits,
 tracked edits, and untracked files are preserved under deterministic recovery
 refs/stashes and replayed over the current remote target. If replay cannot be
-proved safe, the checkout is moved to one actionable quarantine with a manifest
-and recovery commands; retries reuse that quarantine instead of overwriting it.
+proved safe, the checkout is moved to one stable `<checkout>.temper-quarantine`
+directory. Its `temper-recovery.json` manifest records the repository, canonical
+and quarantine paths, failure phase and underlying failure, target and replay
+state, immutable recovery refs, operator notes, and an ordered list of runnable
+shell commands. Retries reuse that quarantine instead of overwriting it. The
+permanent worker failure repeats the phase/path diagnostics and notes, but keeps
+commands in a separately delimited command section so prose and Forge actions
+cannot be mistaken for shell input.
+
+Recovery is phase-aware:
+
+- `replay-commits` and `restore-worktree` are normalized before quarantine. A
+  failed cherry-pick has been aborted, or a failed stash apply has been reset to
+  its captured pre-apply head and only represented non-ignored untracked paths
+  have been cleaned. When the manifest has a known target SHA, its reset,
+  ordered commit replay, and stash-apply commands may therefore be run in order.
+- `verify` is completion-capable but is not a replay phase: local work is already
+  present. Inspect and resolve it in place; never apply the preserved stash a
+  second time.
+- `preserve`, `inspect-operation`, `inspect-branch`, `inspect-read-only`,
+  `read-only-local-commits`, `checkout-anchor`, `replay-commits-ambiguous`, and
+  `restore-worktree-ambiguous` are inspection-only. An unknown phase, or a
+  replay/restore manifest without a target SHA, also fails closed as
+  inspection-only. Do not run a blind stash apply or destructive reset for these
+  states; diagnose the recorded operation, index, target, and refs first.
+
+### Recovery-to-requeue procedure
+
+1. Open `temper-recovery.json` in the quarantine and read `failure_phase`,
+   `failure`, `recovery_notes`, `target_sha`, `replay_commits`, and
+   `recovery_refs`. Confirm whether the phase is normalized/completion-capable or
+   inspection-only before running any mutation.
+2. Run the manifest's inspection commands first. In particular, inspect
+   `git status --short --branch`, `git diff --cc`, and `git diff --cached`, and
+   inspect each preserved ref. Never delete the original-head or worktree stash
+   refs: they are permanent recovery evidence, including after a successful
+   repair.
+3. For a normalized plan, run the remaining commands exactly in manifest order.
+   If cherry-pick replay or stash application conflicts, stop. Re-run status and
+   both conflict/index diffs, resolve every file deliberately, and stage each
+   resolution with `git add <path>`. Continue a cherry-pick with
+   `git cherry-pick --continue` only after that explicit resolution. Do not pick
+   `ours` or `theirs` automatically, and do not restart the command list over an
+   unmerged index. For `verify`, skip reset/replay/stash application because the
+   local work is already present.
+4. After all desired work is restored and every conflict is resolved and staged,
+   run the manifest's final guarded completion command. It refuses to proceed if
+   unmerged paths or an active merge/rebase/cherry-pick/revert/bisect/sequencer
+   operation remains, or if the canonical checkout path already exists (as a
+   file, directory, or symlink). Only then does it move the quarantine back to
+   the recorded canonical `checkout_path`; it removes `temper-recovery.json`
+   only after that move succeeds. The immutable original-head/worktree refs stay
+   in the restored repository and must not be deleted.
+5. Verify the repository at the canonical path and confirm the quarantine path
+   is gone. Filesystem recovery must succeed before the parked artifact is
+   requeued.
+6. Finally, a human requeues the Forge artifact by removing `needs-human` and
+   restoring the appropriate queue label. Forge mutation remains outside the
+   worker: recovery notes describe this final action, but `recovery_commands`
+   contain shell commands only and never label changes or other Forge
+   operations.
+
+## Repaired-PR convergence
 
 PR repair records `repaired_head` when the repaired branch is published. Landing
 continues to require CI for that exact head: missing, queued, running, or stale
