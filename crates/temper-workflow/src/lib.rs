@@ -122,7 +122,7 @@ pub use compile::{
     PromptSection, QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
     ValidationBindingManifest, compile,
 };
-pub use context::{CreateIssuesChild, ExecutionContext};
+pub use context::{CreateIssuesChild, ExecutionContext, TransitionCompletionAudit};
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
 pub use execute::{
     ChildIssueCheckpoint, ChildIssueLifecycleHook, CorrelationLookupPlan, EnsureOutcome,

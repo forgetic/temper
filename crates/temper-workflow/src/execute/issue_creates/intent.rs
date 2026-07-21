@@ -1,5 +1,6 @@
 //! Parent-intent discovery and compare-and-swap pass checkpoints.
 
+use super::super::audit::CompletionAuditIssue;
 use super::super::{ExecutionError, Executor};
 use super::round::{IntentRound, select_intent_round};
 use super::{
@@ -332,6 +333,28 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
         }
         let completion = common_completion(intents)?;
+        if let Some(audit) = completion.and_then(|completion| completion.completion_audit.as_ref())
+        {
+            let children = intents
+                .iter()
+                .flat_map(|pending| &pending.intent.children)
+                .map(|child| {
+                    Ok(CompletionAuditIssue {
+                        slug: child.slug.clone(),
+                        title: child.title.clone(),
+                        repository_id: child.repository_id.clone(),
+                        number: child.number.ok_or_else(|| ExecutionError::Backend {
+                            message: format!(
+                                "create-issues intent child `{}` has no final number for its completion audit",
+                                child.slug
+                            ),
+                        })?,
+                    })
+                })
+                .collect::<Result<Vec<_>, ExecutionError>>()?;
+            self.ensure_issue_completion_audit(&parent, audit, &children)
+                .await?;
+        }
 
         for _ in 0..3 {
             let mut metadata = parse_metadata_block(&parent.body)

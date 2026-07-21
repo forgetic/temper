@@ -9,7 +9,7 @@ mod wiring;
 use super::verify::AppliedState;
 use super::{ChildIssueCheckpoint, ExecutionError, Executor};
 use crate::classify::ArtifactSource;
-use crate::context::CreateIssuesChild;
+use crate::context::{CreateIssuesChild, TransitionCompletionAudit};
 use crate::ids::TransitionId;
 use crate::metadata::{
     CreateIssueIntentChild, CreateIssuesCompletion, CreateIssuesIntent,
@@ -320,6 +320,7 @@ pub(super) fn create_issues_completion(
     remove_labels: &[String],
     add_assignees: &[UserId],
     remove_assignees: &[UserId],
+    completion_audit: Option<TransitionCompletionAudit>,
 ) -> CreateIssuesCompletion {
     CreateIssuesCompletion {
         body_hex: body.map(|body| hex_encode(body.as_bytes())),
@@ -327,6 +328,7 @@ pub(super) fn create_issues_completion(
         remove_labels: remove_labels.to_vec(),
         add_assignees: add_assignees.to_vec(),
         remove_assignees: remove_assignees.to_vec(),
+        completion_audit,
     }
 }
 

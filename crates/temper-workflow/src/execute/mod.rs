@@ -91,6 +91,7 @@
 //! duplicate.
 
 mod apply;
+mod audit;
 mod ensure;
 mod error;
 mod issue_creates;

@@ -47,6 +47,7 @@
 //! recomputes the same key without delimiter collisions.
 
 use crate::artifact::ArtifactRef;
+use crate::context::TransitionCompletionAudit;
 use crate::ids::{ArtifactKindId, RoleId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -179,6 +180,10 @@ pub struct CreateIssuesCompletion {
     pub add_assignees: Vec<UserId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remove_assignees: Vec<UserId>,
+    /// Runtime-bound comment that must be published after child activation and
+    /// before this source update commits. Older intents omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_audit: Option<TransitionCompletionAudit>,
 }
 
 /// Persisted normalized input and progress for one intended child issue.
