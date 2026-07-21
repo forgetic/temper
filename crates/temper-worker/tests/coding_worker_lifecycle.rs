@@ -157,13 +157,17 @@ fn engineer_session_resumes_after_ci_failure_then_lands_and_cleans_workstream() 
             "failed CI on the implementation PR should enqueue one PR-feedback job"
         );
 
-        let feedback_result = harness.await_result().await;
+        let feedback_job_fragment =
+            format!("/pull_request-{}/engineer/pr_ci_failed", pull.number.get());
+        let feedback_result = loop {
+            let result = harness.await_result().await;
+            if result.job_id.contains(&feedback_job_fragment) {
+                break result;
+            }
+        };
         assert_eq!(feedback_result.status, ResultStatus::Success);
         assert!(
-            feedback_result.job_id.contains(&format!(
-                "/pull_request-{}/engineer/pr_ci_failed",
-                pull.number.get()
-            )),
+            feedback_result.job_id.contains(&feedback_job_fragment),
             "feedback job id should target the failed implementation PR: {}",
             feedback_result.job_id
         );

@@ -80,12 +80,13 @@ pub struct RecoveredJob {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeartbeatRecovery {
-    /// Durable jobs that match this worker. Includes jobs reattached by this
-    /// heartbeat and already-reattached jobs refreshed by later heartbeats.
-    pub matched_job_ids: Vec<String>,
-    /// Job ids reported by the worker that were unknown or belonged to another
-    /// worker. These ids must never extend a durable lease.
-    pub rejected_job_ids: Vec<String>,
+    /// Exact reports for durable jobs that match this worker. Includes jobs
+    /// reattached by this heartbeat and already-reattached jobs refreshed by
+    /// later heartbeats.
+    pub matched_reports: Vec<JobHeartbeat>,
+    /// Exact reports that were unknown or belonged to another worker/attempt.
+    /// These reports must never extend a durable lease.
+    pub rejected_reports: Vec<JobHeartbeat>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -381,6 +382,34 @@ impl DaemonCore {
             .assigned_work_items()
             .filter(|item| item.role == role)
             .count()
+    }
+
+    /// Returns the worker and attempt identity currently reserved by either an
+    /// active or startup-staged assignment. This is scheduling state only; the
+    /// daemon machine separately tracks monotonic ownership-loss fences.
+    pub fn current_assignment_identity(&self, job_id: &str) -> Option<(String, Option<String>)> {
+        if let Some(worker_id) = self.coordinator.assigned_worker(job_id) {
+            return Some((
+                worker_id.to_string(),
+                self.assignment_attempts.get(job_id).cloned(),
+            ));
+        }
+        self.staged_recovery
+            .get(job_id)
+            .map(|staged| (staged.worker_id.clone(), staged.attempt_id.clone()))
+    }
+
+    /// Whether an exact worker/job/attempt identity is the active assignment.
+    /// Startup-staged assignments are deliberately excluded because they have
+    /// not yet consumed daemon/registry capacity.
+    pub fn is_current_attempt(
+        &self,
+        worker_id: &str,
+        job_id: &str,
+        attempt_id: Option<&str>,
+    ) -> bool {
+        self.coordinator.assigned_worker(job_id) == Some(worker_id)
+            && self.assignment_attempts.get(job_id).map(String::as_str) == attempt_id
     }
 
     /// Authenticates a worker and proves that `(job_id, attempt_id)` is its
@@ -805,6 +834,9 @@ mod daemon_core_auth_tests;
 #[cfg(test)]
 #[path = "daemon_core_tests.rs"]
 mod daemon_core_tests;
+
+#[cfg(test)]
+mod heartbeat_tests;
 
 #[cfg(test)]
 mod result_tests;

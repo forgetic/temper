@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#[path = "transport/fencing.rs"]
+mod fencing;
+
 use std::time::Duration;
 use std::time::Instant;
 

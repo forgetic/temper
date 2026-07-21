@@ -10,6 +10,8 @@
 //! [`executor::DaemonExecutor`] on the engine runtime.
 
 mod activity_transport;
+mod assignment_support;
+mod attempt_fencing;
 mod change_source_wiring;
 mod context_reader;
 mod context_transport;
@@ -19,6 +21,7 @@ mod handlers;
 mod machine;
 mod protocol;
 mod result_application;
+mod result_transport;
 mod shutdown;
 pub mod state_dto;
 // The coordinator's complete role/mechanical/poll contract is consumed in

@@ -5,13 +5,13 @@
 use temper_engine_io::http::{HttpResponder, HttpResponseData};
 use temper_protocol_worker::{JobResult, ReleaseDisposition, WorkerProtocolMessage};
 
-use super::machine::{DaemonMachine, DaemonRequest, retry_delay};
+use super::machine::{AttemptKey, DaemonMachine, DaemonRequest, retry_delay};
 use crate::applier::ApplyOutcome;
 
 impl DaemonMachine {
     fn remember_completed_result(
         &mut self,
-        key: (String, Option<String>),
+        key: AttemptKey,
         result: JobResult,
         response: WorkerProtocolMessage,
     ) {
@@ -69,7 +69,7 @@ impl DaemonMachine {
         outcome: ApplyOutcome,
     ) -> Vec<DaemonRequest> {
         let job_id = result.job_id.clone();
-        let key = (job_id.clone(), result.attempt_id.clone());
+        let key = AttemptKey::from_result(&result);
         self.applying.remove(&job_id);
         self.pending_results.remove(&key);
 
@@ -91,15 +91,27 @@ impl DaemonMachine {
                 });
             }
             ApplyOutcome::Stale => {
-                let release = self
+                // The applier found no durable authority for the exact attempt
+                // that is still current in this daemon. No newer daemon attempt
+                // exists, so this is reclaimed rather than superseded. Results
+                // rejected against an actually newer attempt are classified in
+                // `result_job` before application starts.
+                self.fence_attempt(
+                    key.clone(),
+                    "result application found the assignment attempt reclaimed".to_string(),
+                    ReleaseDisposition::Reclaimed,
+                );
+                let _ = self
                     .core
-                    .complete_result(&result, ReleaseDisposition::Superseded);
+                    .complete_result(&result, ReleaseDisposition::Reclaimed);
+                let release = self
+                    .fenced_release(&result)
+                    .expect("stale application creates an exact-attempt tombstone");
                 self.assignment_contexts.remove(&job_id);
                 self.retry_attempts.remove(&job_id);
                 self.retry_backoff_until.remove(&job_id);
                 self.recently_applied
                     .insert(job_id.clone(), self.now + self.apply_grace);
-                self.remember_completed_result(key, result, release.clone());
                 requests.push(DaemonRequest::Respond {
                     responder,
                     response: super::protocol::protocol_response(Some(release)),

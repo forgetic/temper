@@ -219,17 +219,28 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     applier.release_claim(job, context).await;
                 });
             }
-            DaemonRequest::RunHeartbeatsAndRespond {
-                assignments,
+            DaemonRequest::RunRecoveredHeartbeats {
+                checks,
+                worker_id,
+                reports,
                 responder,
                 response,
             } => {
                 let applier = Arc::clone(&self.applier);
+                let cq = self.cq.clone();
                 self.spawner.spawn_with_cx(move |_cx| async move {
-                    for (job, context) in assignments {
-                        applier.heartbeat(job, context).await;
+                    let mut outcomes = Vec::with_capacity(checks.len());
+                    for check in checks {
+                        let outcome = applier.heartbeat(check.job, check.context).await;
+                        outcomes.push((check.key, outcome));
                     }
-                    responder.respond(response);
+                    let _ = cq.send(DaemonCompletion::RecoveredHeartbeatsFinished {
+                        worker_id,
+                        reports,
+                        outcomes,
+                        responder,
+                        response,
+                    });
                 });
             }
             DaemonRequest::RunShutdownRelease { assignments, reply } => {

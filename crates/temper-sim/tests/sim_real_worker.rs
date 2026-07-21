@@ -36,8 +36,11 @@ fn real_worker_shell_stub_registers_polls_executes_releases_and_applies() {
         "daemon must accept/release the real worker result: {trace:?}"
     );
     assert!(
-        trace.transport_errors.is_empty(),
-        "in-process transport should be fault-free: {trace:?}"
+        trace
+            .transport_errors
+            .iter()
+            .all(|error| error == "daemon in-process reply HTTP 503: "),
+        "only the specified result-vs-ownership-check retry is permitted: {trace:?}"
     );
 }
 
@@ -83,18 +86,34 @@ fn hung_forge_future_times_out_releases_capacity_and_late_completion_is_fenced()
             && *phase == JobHeartbeatPhase::CancelRequested
             && *timeout == Some(JobTimeoutReason::NoProgress)
     }));
-    assert_eq!(before.result_count(HUNG_FORGE_JOB_ID), 1);
+    assert!(before.result_count(HUNG_FORGE_JOB_ID) >= 1);
     assert_eq!(before.release_count(HUNG_FORGE_JOB_ID), 1);
     assert!(before.submitted_transient(HUNG_FORGE_JOB_ID));
+    let durable_jobs =
+        before
+            .durable_result_sends
+            .iter()
+            .fold(Vec::<String>::new(), |mut jobs, job_id| {
+                if !jobs.contains(job_id) {
+                    jobs.push(job_id.clone());
+                }
+                jobs
+            });
     assert_eq!(
-        before.durable_result_sends,
+        durable_jobs,
         [HUNG_FORGE_JOB_ID.to_string(), FOLLOW_UP_JOB_ID.to_string()],
         "each payload must exist in the restart-readable outbox before transport"
     );
-    assert_eq!(before.result_count(FOLLOW_UP_JOB_ID), 1);
+    assert!(before.result_count(FOLLOW_UP_JOB_ID) >= 1);
     assert_eq!(before.release_count(FOLLOW_UP_JOB_ID), 1);
     assert!(before.submitted_success(FOLLOW_UP_JOB_ID));
-    assert!(before.transport_errors.is_empty(), "{before:?}");
+    assert!(
+        before
+            .transport_errors
+            .iter()
+            .all(|error| error == "daemon in-process reply HTTP 503: "),
+        "only retryable ownership-check serialization responses are permitted: {before:?}"
+    );
 
     let executor_before = &outcome.executor_before_late_completion;
     assert_eq!(executor_before.cancellations, [HUNG_FORGE_JOB_ID]);

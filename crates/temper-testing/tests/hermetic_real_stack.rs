@@ -252,7 +252,7 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             "fake provider should see the initial HTTP 500 plus configured stream retries"
         );
 
-        let issue_after_failure = current_issue(&stack).await;
+        let issue_after_failure = wait_for_retry_release(&stack, &cx).await;
         assert!(
             issue_after_failure
                 .labels
@@ -390,7 +390,8 @@ async fn enqueue_until_worker_result(
             .await_worker_result(cx, Duration::from_millis(500))
             .await
         {
-            Ok(result) => return Ok(result),
+            Ok(result) if result.status == ResultStatus::Success => return Ok(result),
+            Ok(_) => {}
             Err(error) if error.contains("timed out") => {
                 if Instant::now() >= deadline {
                     return Err(error);
@@ -426,6 +427,24 @@ async fn wait_for_issue_matching(
                 issue.labels, issue.assignees, issue.body
             );
         }
+        temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_retry_release(stack: &HermeticRealStack, cx: &skein::cx::Cx) -> Issue {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let issue = current_issue(stack).await;
+        if issue.labels.iter().any(|label| label == "ready")
+            && !issue.labels.iter().any(|label| label == "in-progress")
+        {
+            return issue;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for retryable result application: {:?}",
+            issue.labels
+        );
         temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
