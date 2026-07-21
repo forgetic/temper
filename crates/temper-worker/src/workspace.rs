@@ -6,6 +6,8 @@ use crate::managed_effect::JoinedBlocking;
 
 mod git;
 mod recovery;
+mod recovery_normalize;
+mod recovery_plan;
 mod target_branch;
 
 use recovery::ReadOnlyTarget;
