@@ -81,7 +81,11 @@ Plan-validation outcomes are durable ordinary comments on the coordinating plan.
 Portable callers retrieve them with `list_issue_comments`; assignment-bound
 agents can use `forge_get_item(include_comments=true)`, which returns the same
 conversation surface under worker response bounds. The stable
-`temper:comment-key=plan-validation:<job-id>` marker identifies these records.
+`temper:comment-key=plan-validation:<assignment-key>` marker identifies these
+records. Its `assignment-sha256:<digest>` key is derived from the exact job and
+attempt identity: a later validation round gets a distinct marker even when it
+reuses the deterministic job ID, while exact result replay reuses the marker.
+The ordinary comment renders both identifiers for retrieval and diagnosis.
 
 Provider-specific label/timeline history is outside the current `Forge` trait.
 In particular, Forgejo may persist label changes as internal timeline comment

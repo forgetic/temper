@@ -195,9 +195,11 @@ the same authorization and retrieval implementation.
 coordinating plan's durable validation-audit comment, but excludes Forgejo label
 changes and provider timeline/activity records: the portable Forge abstraction
 does not expose those records. Operators and agents should use the stable
-`temper:comment-key=plan-validation:<job-id>` ordinary comment rather than
-Temper journals, Forgejo SQLite, or hidden timeline rows when reconstructing a
-validation outcome.
+`temper:comment-key=plan-validation:<assignment-key>` ordinary comment. Its key
+is derived from the exact job and attempt identity, so repeated rounds with one
+job ID remain distinct and exact replay remains idempotent. The visible audit
+renders both IDs. Do not use Temper journals, Forgejo SQLite, or hidden timeline
+rows when reconstructing a validation outcome.
 
 `forge_list_related` accepts `repo`, positive `number`, optional `type`, a
 non-empty unique subset of `parent`, `child`, `dependency`, `dependent`,

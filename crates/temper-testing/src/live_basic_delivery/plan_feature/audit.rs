@@ -85,10 +85,29 @@ pub(super) async fn validation_audit_evidence(
         return Err("validation-audit workspace coordination key was unavailable".to_string());
     }
 
-    let marker = format!("<!-- {MARKER_PREFIX}{job_id} -->");
-    if body.matches(MARKER_PREFIX).count() != 1 || !body.contains(&marker) {
+    let marker_prefix = format!("<!-- {MARKER_PREFIX}");
+    let marker = body
+        .lines()
+        .find(|line| line.starts_with(&marker_prefix))
+        .ok_or_else(|| {
+            format!(
+                "validation-audit comment {} is missing its assignment-bound marker",
+                comment.id
+            )
+        })?;
+    let marker_key = marker
+        .strip_prefix(&marker_prefix)
+        .and_then(|value| value.strip_suffix(" -->"))
+        .unwrap_or_default();
+    let digest = marker_key
+        .strip_prefix("assignment-sha256:")
+        .unwrap_or_default();
+    if body.matches(MARKER_PREFIX).count() != 1
+        || digest.len() != 64
+        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
         return Err(format!(
-            "validation-audit comment {} must contain exactly one job-bound marker {marker:?}",
+            "validation-audit comment {} must contain exactly one valid assignment-bound marker; got {marker:?}",
             comment.id
         ));
     }

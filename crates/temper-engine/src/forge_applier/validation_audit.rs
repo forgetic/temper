@@ -15,6 +15,7 @@ use crate::applier::ApplyOutcome;
 use crate::forge_applier::ForgeApplier;
 
 const VALIDATION_ACTION: &str = "validate_plan";
+const VALIDATION_MARKER_DOMAIN: &[u8] = b"temper:plan-validation-assignment:v1";
 const MAX_SCOPE_REFERENCES: usize = 50;
 const MAX_INLINE_CHARS: usize = 160;
 
@@ -105,7 +106,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .unwrap_or_default();
         let marker = format!(
             "<!-- temper:comment-key=plan-validation:{} -->",
-            marker_job_id(&job.job_id)
+            assignment_marker_key(&job.job_id, job.attempt_id.as_deref())
         );
         let body = render_validation_audit(
             &marker,
@@ -115,6 +116,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             &actor.handle,
             actor.id.as_str(),
             &job.job_id,
+            job.attempt_id.as_deref(),
             routed.as_str(),
             &correlation_key,
             scope,
@@ -144,6 +146,7 @@ fn render_validation_audit(
     actor_handle: &str,
     actor_id: &str,
     job_id: &str,
+    attempt_id: Option<&str>,
     transition: &str,
     correlation_key: &str,
     scope: &[ArtifactSummary],
@@ -153,14 +156,18 @@ fn render_validation_audit(
     } else {
         escape_html(summary_preview)
     };
+    let attempt_id = attempt_id
+        .map(bounded_inline)
+        .unwrap_or_else(|| "legacy-unfenced".to_string());
     let mut body = format!(
-        "## Plan validation outcome\n\n**Outcome:** `{}`  \n**Summary:** {}\n\n- Workflow role: `{}`\n- Forge actor: `{}` (`{}`)\n- Job ID: `{}`\n- Routed transition: `{}`\n- Workspace coordination key: `{}`",
+        "## Plan validation outcome\n\n**Outcome:** `{}`  \n**Summary:** {}\n\n- Workflow role: `{}`\n- Forge actor: `{}` (`{}`)\n- Job ID: `{}`\n- Attempt ID: `{}`\n- Routed transition: `{}`\n- Workspace coordination key: `{}`",
         outcome.as_str(),
         summary,
         bounded_inline(workflow_role),
         bounded_inline(actor_handle),
         bounded_inline(actor_id),
         bounded_inline(job_id),
+        attempt_id,
         bounded_inline(transition),
         bounded_inline(correlation_key),
     );
@@ -210,16 +217,30 @@ fn bounded_inline(value: &str) -> String {
     bounded
 }
 
-fn marker_job_id(job_id: &str) -> String {
-    if job_id.chars().count() <= MAX_INLINE_CHARS
-        && job_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '/'))
-    {
-        return job_id.to_string();
+/// Returns a compact, unambiguous key for the exact durable attempt.
+///
+/// Job IDs identify a queue slot and are intentionally reused when a plan
+/// returns to validation. The optional attempt fence is therefore part of the
+/// marker identity. Length-prefixing keeps arbitrary opaque values distinct;
+/// hashing keeps the hidden comment bounded and prevents marker injection.
+fn assignment_marker_key(job_id: &str, attempt_id: Option<&str>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(VALIDATION_MARKER_DOMAIN);
+    hash_marker_component(&mut hasher, job_id.as_bytes());
+    match attempt_id {
+        Some(attempt_id) => {
+            hasher.update([1]);
+            hash_marker_component(&mut hasher, attempt_id.as_bytes());
+        }
+        None => hasher.update([0]),
     }
-    let digest = Sha256::digest(job_id.as_bytes());
-    format!("sha256:{digest:x}")
+    let digest = hasher.finalize();
+    format!("assignment-sha256:{digest:x}")
+}
+
+fn hash_marker_component(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+    hasher.update(value);
 }
 
 fn escape_html(value: &str) -> String {
@@ -234,12 +255,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unsafe_or_oversized_job_ids_use_a_stable_marker_digest() {
-        let unsafe_id = format!("{} -->", "x".repeat(MAX_INLINE_CHARS));
-        let key = marker_job_id(&unsafe_id);
-        assert!(key.starts_with("sha256:"));
-        assert_eq!(key, marker_job_id(&unsafe_id));
-        assert!(!key.contains("-->"));
+    fn assignment_markers_are_stable_distinct_attempt_identities() {
+        let first = assignment_marker_key("same-job", Some("attempt-1"));
+        assert_eq!(first, assignment_marker_key("same-job", Some("attempt-1")));
+        assert_ne!(first, assignment_marker_key("same-job", Some("attempt-2")));
+        assert_ne!(first, assignment_marker_key("same-job", None));
+        assert!(first.starts_with("assignment-sha256:"));
+        assert_eq!(first.len(), "assignment-sha256:".len() + 64);
+    }
+
+    #[test]
+    fn assignment_marker_encoding_has_no_component_boundary_collisions() {
+        assert_ne!(
+            assignment_marker_key("ab", Some("c")),
+            assignment_marker_key("a", Some("bc"))
+        );
     }
 
     #[test]

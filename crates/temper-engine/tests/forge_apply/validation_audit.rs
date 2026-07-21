@@ -172,6 +172,16 @@ fn needs_followup_result(job: &InFlightJob, summary: &str) -> JobResult {
     result
 }
 
+fn round_followup_result(job: &InFlightJob, summary: &str, slug: &str, title: &str) -> JobResult {
+    let mut child = job_child(slug, title, "round-specific child body", &[]);
+    child.kind = Some("code".to_string());
+    let mut result =
+        verdict_result_with_children("worker-a", &job.job_id, "needs_followup", vec![child]);
+    result.attempt_id = job.attempt_id.clone();
+    result.summary = Some(summary.to_string());
+    result
+}
+
 fn actor() -> User {
     User {
         id: UserId::new("forge-user-9"),
@@ -444,6 +454,9 @@ fn negative_audit_replay_links_each_final_child_once_and_bounds_summary() {
         assert_eq!(issue_comments(&forge, &repo, plan).await.len(), 1);
     });
 }
+
+#[path = "validation_audit/rounds.rs"]
+mod rounds;
 
 #[test]
 fn audit_convergence_returns_503_and_retains_durable_assignment_for_exact_replay() {
