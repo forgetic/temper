@@ -382,9 +382,15 @@ async fn drain_after_signal(
 mod tests {
     use super::*;
     use temper_engine::NoopApplier;
+    use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, UserId};
+    use temper_forge_memory::{FaultOp, MemoryForge};
     use temper_protocol_worker::{
         Artifact, Capability, Capacity, Poll, Register, WORKER_PROTOCOL_VERSION,
         WorkerProtocolMessage,
+    };
+    use temper_workflow::{
+        ArtifactSource, CreateIssuesChild, ExecutionContext, RoleId, TransitionCompletionAudit,
+        TransitionId,
     };
 
     #[test]
@@ -463,5 +469,140 @@ mod tests {
         }
 
         assert_eq!(assigned_roles, ["alpha", "beta", "beta", "gamma", "gamma"]);
+    }
+
+    #[test]
+    fn startup_barrier_recovers_persisted_negative_validation_audit_once() {
+        temper_engine_io::block_on(async move {
+            let spec = temper_workflow::parse_workflow_spec(
+                "startup-validation-audit.json",
+                r#"{
+                  "name":"startup-validation-audit",
+                  "roles":[{"id":"tester"}],
+                  "labels":[
+                    {"id":"plan"},{"id":"needs-validation"},{"id":"in-progress"},
+                    {"id":"code"},{"id":"ready"}
+                  ],
+                  "artifact_kinds":[
+                    {"id":"plan","target":"issue","identifying_labels":["plan"]},
+                    {"id":"code","target":"issue","identifying_labels":["code"],"initial_labels":["ready"]}
+                  ],
+                  "relations":[{"kind":"parent","source":"code","target":"plan"}],
+                  "transitions":[{
+                    "id":"plan_validation_needs_followup",
+                    "artifact":"plan",
+                    "roles":["tester"],
+                    "effects":[
+                      {"kind":"create_issues","correlation_key":"validation-followup","record_parent_dependencies":true},
+                      {"kind":"remove_label","label":"needs-validation"},
+                      {"kind":"add_label","label":"in-progress"}
+                    ]
+                  }]
+                }"#,
+            )
+            .expect("workflow parses");
+            let workflow = spec.validate().expect("workflow validates");
+            let forge = MemoryForge::new();
+            let repo = forge
+                .create_repository(CreateRepository {
+                    owner: "acme".to_string(),
+                    name: "service".to_string(),
+                    default_branch: "main".to_string(),
+                    description: None,
+                })
+                .await
+                .expect("repository is created")
+                .id;
+            let parent = forge
+                .create_issue(
+                    &repo,
+                    CreateIssue {
+                        title: "Interrupted validation".to_string(),
+                        body: "Plan awaiting validation".to_string(),
+                        labels: vec!["plan".to_string(), "needs-validation".to_string()],
+                        assignees: Vec::<UserId>::new(),
+                    },
+                )
+                .await
+                .expect("plan is created");
+            let transition = TransitionId::new("plan_validation_needs_followup");
+            let marker = "<!-- temper:comment-key=plan-validation:startup-job -->";
+            let context = ExecutionContext::new()
+                .with_create_issues_at(
+                    transition.clone(),
+                    0,
+                    [CreateIssuesChild::new(
+                        "repair-gap",
+                        "Repair validation gap",
+                        "durable child body",
+                    )
+                    .with_labels(["code", "ready"])],
+                )
+                .with_transition_completion_audit(TransitionCompletionAudit::new(
+                    marker,
+                    "## Plan validation outcome\n\n**Outcome:** `needs_followup`",
+                ));
+
+            forge.fail_next(FaultOp::AddIssueComment, "comment service unavailable");
+            workflow
+                .executor_with_context(&forge, context)
+                .execute(
+                    &repo,
+                    ArtifactSource::Issue {
+                        number: parent.number,
+                    },
+                    &transition,
+                    &RoleId::new("tester"),
+                )
+                .await
+                .expect_err("publication failure leaves a persisted completion intent");
+            assert_eq!(
+                forge
+                    .list_issues(&repo, IssueQuery::default())
+                    .await
+                    .unwrap()
+                    .len(),
+                2,
+                "the follow-up already exists before startup recovery"
+            );
+
+            recover_child_create_intents(&forge, &workflow, std::slice::from_ref(&repo))
+                .await
+                .expect("startup barrier converges the persisted audit");
+            let completed = forge
+                .get_issue_by_number(&repo, parent.number)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                completed.labels,
+                vec!["in-progress".to_string(), "plan".to_string()]
+            );
+            let comments = forge.list_issue_comments(&completed.id).await.unwrap();
+            assert_eq!(comments.len(), 1);
+            assert!(comments[0].body.contains(marker));
+            assert!(comments[0].body.contains("Repair validation gap"));
+            assert_eq!(
+                forge
+                    .list_issues(&repo, IssueQuery::default())
+                    .await
+                    .unwrap()
+                    .len(),
+                2,
+                "startup recovery does not recreate the child"
+            );
+
+            recover_child_create_intents(&forge, &workflow, std::slice::from_ref(&repo))
+                .await
+                .expect("replayed startup recovery is idempotent");
+            assert_eq!(
+                forge
+                    .list_issue_comments(&completed.id)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+        });
     }
 }

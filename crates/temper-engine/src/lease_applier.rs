@@ -414,7 +414,10 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
             }
 
             let outcome = self.inner.apply(job.clone(), result).await;
-            if matches!(outcome, ApplyOutcome::Retryable { .. }) {
+            if matches!(
+                outcome,
+                ApplyOutcome::Retryable { .. } | ApplyOutcome::ConvergencePending { .. }
+            ) {
                 return outcome;
             }
 

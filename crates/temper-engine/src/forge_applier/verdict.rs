@@ -6,7 +6,7 @@
 //! metadata-driven `create_pull_request` inputs declared by the routed issue
 //! transition.
 
-use temper_forge::{Forge, ItemNumber, RepositoryId, RepositoryPath};
+use temper_forge::{Forge, ItemNumber, RepositoryId, RepositoryPath, UserId};
 use temper_protocol_worker::{JobChild, JobResult};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, Classifier, Effect, ExecutionContext, ExecutionError, Executor,
@@ -21,6 +21,7 @@ use temper_runner::{artifact_ref, labels_delta, queue_after_transition, workspac
 use crate::InFlightJob;
 use crate::applier::ApplyOutcome;
 use crate::forge_applier::ForgeApplier;
+use crate::forge_applier::validation_audit::ValidationAudit;
 use crate::forge_applier::verdict_pr::VerdictPullRequestBinding;
 
 /// Carries the arguments [`ForgeApplier::execute_routed_verdict`] needs without a
@@ -36,6 +37,7 @@ pub(super) struct RoutedVerdictApply<'a> {
     pub(super) artifact_label: &'static str,
     pub(super) number: ItemNumber,
     pub(super) context: ExecutionContext,
+    pub(super) validation_audit: Option<ValidationAudit>,
 }
 
 /// Carries the arguments [`ForgeApplier::bind_create_issues_children`] needs.
@@ -207,6 +209,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return ApplyOutcome::Stale;
         }
 
+        let validation_audit = match self
+            .build_validation_audit(job, job_context, &result, routed)
+            .await
+        {
+            Ok(audit) => audit,
+            Err(outcome) => return outcome,
+        };
         let result_title = result.title.clone();
         let result_body = result.body.clone();
         let result_children = result.children;
@@ -218,8 +227,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             role_id,
             number,
             result_body.clone(),
+            validation_audit.as_ref().map(|audit| &audit.actor_id),
         )
         .await;
+        if let Some(audit) = validation_audit.as_ref() {
+            context.set_transition_completion_audit(audit.completion.clone());
+        }
         if !result_children.is_empty()
             && !self
                 .bind_create_issues_children(VerdictChildrenBinding {
@@ -262,6 +275,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             artifact_label: "issue",
             number,
             context,
+            validation_audit,
         })
         .await
     }
@@ -293,6 +307,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return ApplyOutcome::Stale;
         }
 
+        let validation_audit = match self
+            .build_validation_audit(job, job_context, &result, routed)
+            .await
+        {
+            Ok(audit) => audit,
+            Err(outcome) => return outcome,
+        };
         let context = verdict_execution_context(
             self.forge.as_ref(),
             job,
@@ -301,8 +322,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             role_id,
             number,
             result.body,
+            validation_audit.as_ref().map(|audit| &audit.actor_id),
         )
         .await;
+        let mut context = context;
+        if let Some(audit) = validation_audit.as_ref() {
+            context.set_transition_completion_audit(audit.completion.clone());
+        }
 
         self.execute_routed_verdict(RoutedVerdictApply {
             job,
@@ -315,6 +341,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             artifact_label: "pull_request",
             number,
             context,
+            validation_audit,
         })
         .await
     }
@@ -327,6 +354,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         // execution context is moved into the executor below.
         let repository_id = apply.repository_id;
         let source = apply.source;
+        let audit_pending = apply.validation_audit.is_some();
         let mut executor =
             Executor::with_context(self.workflow.as_ref(), self.forge.as_ref(), apply.context);
         if let Some(hook) = &self.child_issue_hook {
@@ -338,6 +366,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         {
             Ok(report) => {
                 self.emit_routed_verdict_observability(repository_id, source, &report);
+                if let Some(audit) = apply.validation_audit.as_ref() {
+                    audit.emit(repository_id, source, &apply.job.role);
+                }
                 ApplyOutcome::Applied
             }
             Err(error) if is_stale(&error) => ApplyOutcome::Stale,
@@ -356,6 +387,11 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     "forge applier could not apply routed verdict transition"
                 );
                 match error {
+                    ExecutionError::Backend { .. } if audit_pending => {
+                        ApplyOutcome::ConvergencePending {
+                            reason: error.to_string(),
+                        }
+                    }
                     ExecutionError::Backend { .. } => ApplyOutcome::Retryable {
                         reason: error.to_string(),
                     },
@@ -433,20 +469,25 @@ async fn verdict_execution_context<F: Forge + ?Sized>(
     role_id: &RoleId,
     number: ItemNumber,
     body: Option<String>,
+    known_assignee: Option<&UserId>,
 ) -> ExecutionContext {
     let mut context = ExecutionContext::new();
-    match forge.current_user().await {
-        Ok(user) => {
-            context.set_assignee(role_id.clone(), user.id);
+    if let Some(user_id) = known_assignee {
+        context.set_assignee(role_id.clone(), user_id.clone());
+    } else {
+        match forge.current_user().await {
+            Ok(user) => {
+                context.set_assignee(role_id.clone(), user.id);
+            }
+            Err(error) => tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                role = %job.role,
+                %error,
+                "forge applier could not bind current role assignee"
+            ),
         }
-        Err(error) => tracing::warn!(
-            target: "temper_daemon",
-            job_id = %job.job_id,
-            repo = %job.repo,
-            role = %job.role,
-            %error,
-            "forge applier could not bind current role assignee"
-        ),
     }
     if let Some(body) = body {
         let content_key =

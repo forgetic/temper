@@ -66,6 +66,7 @@ fn apply_outcome_name(outcome: &ApplyOutcome) -> &'static str {
     match outcome {
         ApplyOutcome::Applied => "applied",
         ApplyOutcome::RetryReleased => "retry_released",
+        ApplyOutcome::ConvergencePending { .. } => "convergence_pending",
         ApplyOutcome::Stale => "stale",
         ApplyOutcome::Retryable { .. } => "retryable",
         ApplyOutcome::Rejected { .. } => "rejected",

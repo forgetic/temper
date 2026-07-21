@@ -204,7 +204,8 @@ pub(crate) fn remove_dependency(
 }
 
 pub(crate) fn list_comments(forge: &MemoryForge, id: &IssueId) -> ForgeResult<Vec<Comment>> {
-    let inner = forge.lock();
+    let mut inner = forge.lock();
+    inner.faults.take(FaultOp::ListIssueComments)?;
     inner
         .state
         .find_issue(id)
@@ -220,6 +221,7 @@ pub(crate) fn add_comment(
     input: CreateComment,
 ) -> ForgeResult<Comment> {
     let mut inner = forge.lock();
+    inner.faults.take(FaultOp::AddIssueComment)?;
     inner
         .state
         .find_issue(id)
