@@ -64,6 +64,7 @@ pub struct HermeticDurableWorld {
     pub(crate) role: String,
     pub(crate) worker_config: WorkerConfig,
     pub(crate) coding_config: CodingExecutorConfig,
+    pub(crate) worker_containment_factory: Option<temper_process_containment::ContainmentFactory>,
     pub(crate) runner: Arc<NativeJigAgentRunner>,
     pub(crate) clock: MutableWallClock,
     pub(crate) hooks: PauseHooks,
@@ -195,12 +196,15 @@ impl HermeticRealStack {
         self.router.replace(daemon.clone());
         self.components.daemon = daemon;
         self.components.recovered = recovered;
-        self.components.executor = Arc::new(
-            CodingExecutor::new(self.coding_config.clone(), self.runner.clone())
-                .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(
-                    self.components.daemon.clone(),
-                ))),
-        );
+        let executor = CodingExecutor::new(self.coding_config.clone(), self.runner.clone())
+            .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(
+                self.components.daemon.clone(),
+            )));
+        let executor = match self.worker_containment_factory.clone() {
+            Some(factory) => executor.with_containment_factory(factory),
+            None => executor,
+        };
+        self.components.executor = Arc::new(executor);
     }
 
     /// Opens the current daemon's startup barrier at a named deterministic

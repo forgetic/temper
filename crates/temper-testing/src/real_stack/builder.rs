@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,6 +41,7 @@ pub struct HermeticRealStackBuilder {
     worker_heartbeat_interval: Duration,
     worker_liveness_limits: temper_worker::WorkerLivenessLimits,
     enable_agent_traces: bool,
+    linux_supervisor_helper: Option<PathBuf>,
 }
 
 impl Default for HermeticRealStackBuilder {
@@ -69,6 +71,7 @@ impl HermeticRealStackBuilder {
             worker_heartbeat_interval: Duration::from_millis(50),
             worker_liveness_limits: Default::default(),
             enable_agent_traces: false,
+            linux_supervisor_helper: None,
         }
     }
 
@@ -189,8 +192,20 @@ impl HermeticRealStackBuilder {
         self
     }
 
+    /// Forces worker-owned fixture commands through the real Linux supervisor
+    /// using an explicitly built early-main helper. This instance-scoped test
+    /// seam bypasses delegated cgroups without changing production automatic
+    /// backend selection.
+    #[must_use]
+    pub fn linux_supervisor_helper(mut self, helper: impl Into<PathBuf>) -> Self {
+        self.linux_supervisor_helper = Some(helper.into());
+        self
+    }
+
     /// Builds the hermetic world on the provided skein runtime handle.
     pub async fn build(self, handle: &RuntimeHandle) -> Result<HermeticRealStack, String> {
+        let worker_containment_factory =
+            linux_supervisor_containment_factory(self.linux_supervisor_helper.as_deref())?;
         let primary = self
             .repos
             .first()
@@ -452,10 +467,13 @@ impl HermeticRealStackBuilder {
             git_base_url: format!("file://{}", path_str(&git_root)?),
             role_identities,
         };
-        let executor = Arc::new(
-            CodingExecutor::new(coding_config.clone(), runner.clone())
-                .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(daemon.clone()))),
-        );
+        let executor = CodingExecutor::new(coding_config.clone(), runner.clone())
+            .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(daemon.clone())));
+        let executor = match worker_containment_factory.clone() {
+            Some(factory) => executor.with_containment_factory(factory),
+            None => executor,
+        };
+        let executor = Arc::new(executor);
 
         Ok(HermeticRealStack {
             world: HermeticDurableWorld {
@@ -477,6 +495,7 @@ impl HermeticRealStackBuilder {
                 role: primary_worker_role.role,
                 worker_config,
                 coding_config,
+                worker_containment_factory,
                 runner,
                 clock,
                 hooks,
@@ -493,6 +512,65 @@ impl HermeticRealStackBuilder {
                 recovered: BTreeMap::new(),
             },
         })
+    }
+}
+
+fn linux_supervisor_containment_factory(
+    helper: Option<&Path>,
+) -> Result<Option<temper_process_containment::ContainmentFactory>, String> {
+    let Some(helper) = helper else {
+        return Ok(None);
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        use temper_process_containment::{
+            ContainmentBackendFactory, ContainmentBackendPolicy, ContainmentFactory,
+            LinuxSupervisorBackendFactory,
+        };
+
+        let actionable = || {
+            "build the `temper-real-stack-supervisor-helper` binary and pass its path from \
+             `env!(\"CARGO_BIN_EXE_temper-real-stack-supervisor-helper\")`"
+        };
+        let helper = helper.canonicalize().map_err(|error| {
+            format!(
+                "HermeticRealStack Linux supervisor helper `{}` cannot be selected: {error}; {}",
+                helper.display(),
+                actionable()
+            )
+        })?;
+        let metadata = helper.metadata().map_err(|error| {
+            format!(
+                "HermeticRealStack Linux supervisor helper `{}` cannot be inspected: {error}; {}",
+                helper.display(),
+                actionable()
+            )
+        })?;
+        if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+            return Err(format!(
+                "HermeticRealStack Linux supervisor helper `{}` is not an executable file; {}",
+                helper.display(),
+                actionable()
+            ));
+        }
+        let backend: Arc<dyn ContainmentBackendFactory> = Arc::new(
+            LinuxSupervisorBackendFactory::with_helper_executable(helper),
+        );
+        Ok(Some(ContainmentFactory::new(
+            ContainmentBackendPolicy::ForceLinuxSupervisor,
+            backend,
+        )))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err(format!(
+            "HermeticRealStack Linux supervisor helper `{}` was configured on unsupported target `{}`",
+            helper.display(),
+            std::env::consts::OS
+        ))
     }
 }
 

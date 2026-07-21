@@ -211,12 +211,18 @@ impl JobCancellation {
         factory: temper_process_containment::ContainmentFactory,
     ) -> Self {
         let cancellation = Self::default();
+        cancellation.install_containment_factory(factory);
         cancellation
-            .state
+    }
+
+    pub(crate) fn install_containment_factory(
+        &self,
+        factory: temper_process_containment::ContainmentFactory,
+    ) {
+        self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .containment_factory = Some(factory);
-        cancellation
     }
 
     pub(crate) fn containment_factory(

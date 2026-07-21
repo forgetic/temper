@@ -25,6 +25,14 @@ path = "src/bin/temper-descendant-fixture.rs"
 name = "temper-containment-acceptance"
 path = "src/bin/temper-containment-acceptance.rs"
 
+# Early-main supervisor dispatcher selected explicitly by the hermetic
+# ownership-loss matrix. Referencing CARGO_BIN_EXE from the integration test
+# makes Cargo/nextest build it even for a focused test filter and fresh target.
+[[bin]]
+name = "temper-real-stack-supervisor-helper"
+path = "src/bin/temper-real-stack-supervisor-helper.rs"
+test = false
+
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true

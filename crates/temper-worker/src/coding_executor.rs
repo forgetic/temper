@@ -15,6 +15,7 @@ use crate::workspace::{
 };
 
 mod context;
+mod execution;
 mod outcome;
 mod session;
 mod verdict;
@@ -49,6 +50,8 @@ pub struct CodingExecutor<R: AgentRunner> {
     runner: Arc<R>,
     /// Optional host-provided guard for PR-head freshness checks before pushes.
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
+    /// Instance-scoped process containment override for worker-owned commands.
+    containment_factory: Option<temper_process_containment::ContainmentFactory>,
     progress_reporter_factory: ProgressReporterFactory,
 }
 
@@ -58,6 +61,7 @@ impl<R: AgentRunner + 'static> CodingExecutor<R> {
             config,
             runner,
             pr_freshness_guard: None,
+            containment_factory: None,
             progress_reporter_factory: Arc::new(|_job_id, attempt_id| {
                 JobProgressReporter::noop(attempt_id.to_string())
             }),
@@ -94,26 +98,17 @@ impl<R: AgentRunner + 'static> CodingExecutor<R> {
     }
 }
 
-impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
-    fn execute(
-        &self,
-        assign: Assign,
-        execution: JobExecutionContext,
-    ) -> impl std::future::Future<Output = JobOutcome> + Send {
-        let config = self.config.clone();
-        let runner = Arc::clone(&self.runner);
-        let pr_freshness_guard = self.pr_freshness_guard.clone();
-        async move { execute(config, runner, pr_freshness_guard, assign, execution).await }
-    }
-}
-
 async fn execute<R: AgentRunner>(
     config: CodingExecutorConfig,
     runner: Arc<R>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
+    containment_factory: Option<temper_process_containment::ContainmentFactory>,
     assign: Assign,
     execution: JobExecutionContext,
 ) -> JobOutcome {
+    if let Some(factory) = containment_factory {
+        execution.cancellation.install_containment_factory(factory);
+    }
     let artifact_item = assign.artifact.item.clone();
     let job_id = assign.job_id.clone();
     let assignment_trace_context = assign.trace_context.clone();
