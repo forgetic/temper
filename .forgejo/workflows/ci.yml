@@ -84,9 +84,10 @@ jobs:
           export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
           cargo dev-test-e2e-all
       - name: Free linked test binaries
-        # Keep kache-warmed libraries, but drop the linked executables that
-        # clippy does not consume; this keeps the checkout target dir below the
-        # host runner's disk ceiling.
+        # Reclaim the large linked test set even when the live e2e lane fails;
+        # otherwise a resource-related test failure can exhaust the shared host
+        # and make the following web job fail before npm can install.
+        if: ${{ always() }}
         run: find target/debug target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
       - name: Lint
         run: cargo dev-clippy
