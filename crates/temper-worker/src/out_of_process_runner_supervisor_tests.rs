@@ -478,7 +478,13 @@ while :; do sleep 1; done
                 late_copy.display().to_string(),
             ),
         ])
-        .with_liveness_limits(short_limits());
+        // The TERM trap is the behavior under test. Give the shell enough time
+        // to be rescheduled on a loaded CI host before containment escalates to
+        // KILL; the shared short grace made this test depend on host load.
+        .with_liveness_limits(WorkerLivenessLimits {
+            forced_termination_grace: Duration::from_secs(1),
+            ..short_limits()
+        });
     let context = test_context();
     let cwd = temp.path().to_path_buf();
     let cancellation = JobCancellation::default();

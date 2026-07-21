@@ -33,6 +33,10 @@ pub enum FaultOp {
     GetIssueByNumber,
     /// `update_issue`.
     UpdateIssue,
+    /// `list_issue_comments`.
+    ListIssueComments,
+    /// `add_issue_comment`.
+    AddIssueComment,
     /// `list_pull_requests`.
     ListPullRequests,
     /// `create_pull_request`.

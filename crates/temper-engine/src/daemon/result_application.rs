@@ -32,7 +32,7 @@ impl DaemonMachine {
     ) -> Vec<DaemonRequest> {
         self.applying.remove(&job_id);
         let mut requests = match outcome {
-            ApplyOutcome::Retryable { reason } => {
+            ApplyOutcome::Retryable { reason } | ApplyOutcome::ConvergencePending { reason } => {
                 let attempt = self.retry_attempts.entry(job_id.clone()).or_insert(0);
                 *attempt = attempt.saturating_add(1);
                 let delay = retry_delay(*attempt);
@@ -117,7 +117,7 @@ impl DaemonMachine {
                     response: super::protocol::protocol_response(Some(release)),
                 });
             }
-            ApplyOutcome::Retryable { reason } => {
+            ApplyOutcome::Retryable { reason } | ApplyOutcome::ConvergencePending { reason } => {
                 let attempt = self.retry_attempts.entry(job_id.clone()).or_insert(0);
                 *attempt = attempt.saturating_add(1);
                 let delay = retry_delay(*attempt);

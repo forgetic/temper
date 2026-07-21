@@ -40,6 +40,14 @@ pub enum ApplyOutcome {
     Applied,
     /// Retry bookkeeping and exact claim release completed successfully.
     RetryReleased,
+    /// A runtime-bound audit or its routed transition has not converged yet.
+    ///
+    /// Unlike ordinary retryable work, this outcome must retain the exact
+    /// assignment and worker result so replay can finish publication without
+    /// rerunning the verdict or recreating products.
+    ConvergencePending {
+        reason: String,
+    },
     Stale,
     Retryable {
         reason: String,
