@@ -7,9 +7,8 @@
 //! a credential before they land in a log field or human message (§8 — the
 //! redaction rule survives, re-homed from the runner into the event model).
 //!
-//! This is the re-home of `temper-runner`'s `observability/redact.rs`. The
-//! functions and the [`REDACTED`] marker keep their behavior and tests verbatim;
-//! WI-2 migrates the runner call sites to this copy and removes the duplicate.
+//! These helpers originated in `temper-runner`'s
+//! `observability/redact.rs` and now centralize the shared event-model policy.
 
 /// Marker substituted when text looks like it may contain a credential/token.
 pub const REDACTED: &str = "<redacted>";
@@ -21,31 +20,22 @@ pub const REDACTED: &str = "<redacted>";
 /// characters, appending an ellipsis (`…`) when it had to cut. `max_chars == 0`
 /// yields the empty string.
 pub fn bounded_preview(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() <= max_chars {
-        return normalized;
-    }
-    if max_chars == 1 {
-        return "…".to_string();
-    }
-    let mut preview = normalized.chars().take(max_chars - 1).collect::<String>();
-    preview.push('…');
-    preview
+    bounded_normalized_preview(&normalize_whitespace(text), max_chars)
 }
 
 /// Returns a [`bounded_preview`], replacing secret-like text with [`REDACTED`].
 ///
-/// When the input contains a credential-shaped substring (a `token=`, a
-/// `Bearer ` header, a PEM header, …) the whole preview collapses to the
-/// [`REDACTED`] marker rather than risk leaking a fragment of the secret.
+/// Whitespace is normalized before credential detection so folded headers and
+/// key/value pairs cannot evade the heuristic. When the input contains a
+/// credential-shaped substring (a `token=`, a `Bearer ` header, a PEM header,
+/// …) the whole preview collapses to the [`REDACTED`] marker rather than risk
+/// leaking a fragment of the secret.
 pub fn redacted_preview(text: &str, max_chars: usize) -> String {
-    if contains_secret_like(text) {
+    let normalized = normalize_whitespace(text);
+    if contains_secret_like(&normalized) {
         REDACTED.to_string()
     } else {
-        bounded_preview(text, max_chars)
+        bounded_normalized_preview(&normalized, max_chars)
     }
 }
 
@@ -58,26 +48,58 @@ pub fn redacted_lossy_preview(bytes: &[u8], max_chars: usize) -> String {
     redacted_preview(&text, max_chars)
 }
 
-/// Heuristic: does the text contain a credential-shaped substring?
+fn normalize_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn bounded_normalized_preview(normalized: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if normalized.chars().count() <= max_chars {
+        return normalized.to_string();
+    }
+    if max_chars == 1 {
+        return "…".to_string();
+    }
+    let mut preview = normalized.chars().take(max_chars - 1).collect::<String>();
+    preview.push('…');
+    preview
+}
+
+/// Heuristic: does normalized text contain a credential-shaped substring?
 fn contains_secret_like(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
+    if ["bearer ", "-----begin "]
+        .iter()
+        .any(|needle| lowered.contains(needle))
+    {
+        return true;
+    }
+
     [
-        "token=",
-        "token:",
-        "password=",
-        "password:",
-        "secret=",
-        "secret:",
-        "authorization=",
-        "authorization:",
-        "bearer ",
-        "api_key=",
-        "api-key=",
-        "auth=",
-        "-----begin ",
+        "token",
+        "password",
+        "secret",
+        "authorization",
+        "api_key",
+        "api-key",
+        "auth",
     ]
     .iter()
-    .any(|needle| lowered.contains(needle))
+    .any(|key| contains_key_separator(&lowered, key))
+}
+
+fn contains_key_separator(text: &str, key: &str) -> bool {
+    text.match_indices(key).any(|(index, _)| {
+        matches!(
+            text[index + key.len()..]
+                .trim_start_matches(char::is_whitespace)
+                .chars()
+                .next(),
+            Some('=' | ':')
+        )
+    })
 }
 
 #[cfg(test)]
@@ -95,10 +117,20 @@ mod tests {
 
     #[test]
     fn secret_like_previews_are_excluded() {
-        assert_eq!(
-            redacted_preview("TEMPER_FORGEJO_TOKEN=super-secret", 80),
-            REDACTED
-        );
+        for secret_like in [
+            "TEMPER_FORGEJO_TOKEN=super-secret",
+            "Authorization: bearer abc123",
+            "Bearer\tfolded-tab-secret",
+            "Bearer\nfolded-newline-secret",
+            "token \t=\n folded-token-secret",
+            "api_key\n:\t folded-api-key-secret",
+        ] {
+            assert_eq!(
+                redacted_preview(secret_like, 80),
+                REDACTED,
+                "credential shape was not redacted: {secret_like:?}"
+            );
+        }
         assert_eq!(
             redacted_lossy_preview(b"Authorization: bearer abc123", 80),
             REDACTED

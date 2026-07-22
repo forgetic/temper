@@ -82,23 +82,43 @@ fn validation_outcome_projects_every_safe_typed_field() {
 }
 
 #[test]
-fn secret_and_oversized_summaries_match_in_both_projections() {
-    const SECRET: &str = "VALIDATION-SECRET-SENTINEL";
-    let secret_record = capture(&format!(
-        "Checks pass, but Authorization: Bearer {SECRET} must not escape"
-    ));
-    let secret_fields = fields(&secret_record);
-    assert_eq!(
-        secret_fields.get("summary.preview").and_then(Value::as_str),
-        Some("<redacted>")
-    );
-    let secret_message = secret_fields
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap();
-    assert!(secret_message.ends_with(" | <redacted>"));
-    assert!(!secret_record.to_string().contains(SECRET));
-    assert!(!secret_record.to_string().contains("Bearer"));
+fn folded_credentials_and_oversized_summaries_match_in_both_event_projections() {
+    for (summary, secret) in [
+        (
+            "Checks pass, but Authorization: Bearer VALIDATION-AUTH-SENTINEL must not escape",
+            "VALIDATION-AUTH-SENTINEL",
+        ),
+        (
+            "Checks pass, but Bearer\tVALIDATION-BEARER-TAB-SENTINEL must not escape",
+            "VALIDATION-BEARER-TAB-SENTINEL",
+        ),
+        (
+            "Checks pass, but Bearer\nVALIDATION-BEARER-NEWLINE-SENTINEL must not escape",
+            "VALIDATION-BEARER-NEWLINE-SENTINEL",
+        ),
+        (
+            "Checks pass, but token \t=\n VALIDATION-TOKEN-SENTINEL must not escape",
+            "VALIDATION-TOKEN-SENTINEL",
+        ),
+        (
+            "Checks pass, but api_key\n:\tVALIDATION-API-KEY-SENTINEL must not escape",
+            "VALIDATION-API-KEY-SENTINEL",
+        ),
+    ] {
+        let secret_record = capture(summary);
+        let secret_fields = fields(&secret_record);
+        assert_eq!(
+            secret_fields.get("summary.preview").and_then(Value::as_str),
+            Some("<redacted>"),
+            "credential shape was not redacted: {summary:?}"
+        );
+        let secret_message = secret_fields
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(secret_message.ends_with(" | <redacted>"));
+        assert!(!secret_record.to_string().contains(secret));
+    }
 
     let oversized = format!("  validation\n{}  ", "界".repeat(300));
     let expected = validation_summary_preview(&oversized);
