@@ -13,7 +13,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use skein::runtime::RuntimeHandle;
 use temper_worker_io::{CqSender, OneshotReceiver, Spawner, channel, drive, oneshot};
@@ -24,7 +24,8 @@ use crate::executor::JobExecutor;
 use crate::lifecycle_hook::{NoopWorkerLifecycleHook, WorkerLifecycleHook};
 use crate::result_outbox::ResultOutbox;
 use crate::task_registry::{
-    WorkerComponentTasks, WorkerShutdown, WorkerTaskJoinNotification, WorkerTaskRegistry,
+    WorkerComponentTasks, WorkerShutdown, WorkerShutdownBlocker, WorkerShutdownReport,
+    WorkerTaskJoinNotification, WorkerTaskRegistry,
 };
 use crate::trace::{TraceCollector, spawn_activity_forwarder};
 use crate::transport::{HttpTransport, Transport};
@@ -117,6 +118,7 @@ where
 /// jobs, then joins that loop. This is intentionally distinct from graceful
 /// workflow cleanup so restart tests can retain durable assignment state.
 pub struct WorkerComponentHandle {
+    worker_id: String,
     completions: CqSender<WorkerCompletion>,
     joined: Option<OneshotReceiver<()>>,
     forwarder_joined: Option<OneshotReceiver<()>>,
@@ -150,6 +152,71 @@ impl WorkerComponentHandle {
         self.stop_background_and_machine().await;
     }
 
+    /// Stops intake and escalates active attempts within one absolute deadline.
+    /// Deadline expiry returns exact unresolved registry entries without
+    /// removing them, publishing quiescence/results, or releasing capacity.
+    pub async fn shutdown_bounded(mut self, deadline: Instant) -> WorkerShutdownReport {
+        let initial = self
+            .task_registry
+            .active_jobs()
+            .into_iter()
+            .map(|task| task.identity(&self.worker_id))
+            .collect::<Vec<_>>();
+        let notification = self.task_registry.begin_shutdown(WorkerShutdown::Graceful);
+        let _ = self.completions.send(WorkerCompletion::BeginShutdown);
+        if !wait_until_or_deadline(notification, self.graceful_cancellation_grace, deadline).await {
+            self.task_registry
+                .request_all(crate::JobCancellationRequest::ForcedTermination);
+            if !wait_until_or_deadline(
+                self.task_registry.join_notification(),
+                self.forced_termination_grace,
+                deadline,
+            )
+            .await
+            {
+                self.task_registry
+                    .request_all(crate::JobCancellationRequest::HardKill);
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let _ =
+                    wait_until_or_timeout(self.task_registry.join_notification(), remaining).await;
+            }
+        }
+
+        let unresolved_tasks = self.task_registry.active_jobs();
+        let unresolved_identities = unresolved_tasks
+            .iter()
+            .map(|task| task.identity(&self.worker_id))
+            .collect::<std::collections::BTreeSet<_>>();
+        let joined_attempts = initial
+            .into_iter()
+            .filter(|identity| !unresolved_identities.contains(identity))
+            .collect();
+        let unresolved_blockers = unresolved_tasks
+            .into_iter()
+            .map(|task| WorkerShutdownBlocker {
+                identity: task.identity(&self.worker_id),
+                registry_state: task.join_state(),
+                emergency_termination: task
+                    .cancellation()
+                    .emergency_termination_registry()
+                    .snapshot(),
+            })
+            .collect::<Vec<_>>();
+
+        if unresolved_blockers.is_empty() {
+            let _ = self.stop_background_and_machine_until(deadline).await;
+        } else {
+            // Stop component intake without awaiting potentially blocked owner
+            // tasks. The registry and attempt futures remain the authorities.
+            self.component_tasks.stop_accepting();
+            self.cancellation.cancel();
+        }
+        WorkerShutdownReport {
+            joined_attempts,
+            unresolved_blockers,
+        }
+    }
+
     /// Stops the component without publishing or releasing active claims. It
     /// immediately hard-escalates every attempt, but still waits indefinitely
     /// for recursive emptiness and resource joins before returning.
@@ -176,6 +243,25 @@ impl WorkerComponentHandle {
         if let Some(joined) = self.forwarder_joined.take() {
             let _ = joined.recv().await;
         }
+    }
+
+    async fn stop_background_and_machine_until(&mut self, deadline: Instant) -> bool {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let mut stopped = std::pin::pin!(self.stop_background_and_machine());
+        let mut timer = std::pin::pin!(temper_worker_io::sleep_for(remaining));
+        std::future::poll_fn(|cx| {
+            if stopped.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(true);
+            }
+            if timer.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(false);
+            }
+            Poll::Pending
+        })
+        .await
     }
 
     async fn stop_background_and_machine(&mut self) {
@@ -214,6 +300,15 @@ pub async fn shutdown_worker_after_signal<S, B, A>(
     before_worker_join.await;
     worker.shutdown().await;
     after_worker_join.await;
+}
+
+async fn wait_until_or_deadline(
+    notification: WorkerTaskJoinNotification,
+    stage_grace: Duration,
+    deadline: Instant,
+) -> bool {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    wait_until_or_timeout(notification, stage_grace.min(remaining)).await
 }
 
 async fn wait_until_or_timeout(
@@ -367,6 +462,7 @@ where
     });
 
     WorkerComponentHandle {
+        worker_id: config.worker_id,
         completions: cq_tx,
         joined: Some(joined),
         forwarder_joined,

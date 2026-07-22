@@ -176,18 +176,37 @@ pub enum AgentLifecycleAgentStatusV1 {
     Cancelled,
 }
 
+/// Monotonic cancellation stages understood by first-party native agents.
+///
+/// A receiver must consume every intermediate stage even when a later stage was
+/// published before it next polls. Forced and hard stages also drive the
+/// attempt-owned emergency process registry, independently of the agent future.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCancellationStage {
+    #[default]
+    Graceful,
+    ForcedTermination,
+    HardKill,
+}
+
 /// Worker-to-agent lifecycle commands. The command contains no assignment
-/// identity; endpoint ownership supplies that binding.
+/// identity; endpoint ownership supplies that binding. `stage` defaults to
+/// graceful so version-one peers that only sent `reason` remain compatible.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentLifecycleCommandV1 {
-    Cancel { reason: String },
+    Cancel {
+        #[serde(default)]
+        stage: AgentCancellationStage,
+        reason: String,
+    },
 }
 
 impl AgentLifecycleCommandV1 {
     pub fn validate(&self) -> Result<(), AgentLifecycleValidationError> {
         match self {
-            Self::Cancel { reason } => bounded_nonempty(
+            Self::Cancel { reason, .. } => bounded_nonempty(
                 "cancel reason",
                 reason,
                 MAX_AGENT_LIFECYCLE_CANCEL_REASON_BYTES,

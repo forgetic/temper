@@ -9,6 +9,37 @@ use temper_protocol_activity::{AgentActivityEventV1, RunFinishedV1, RunStatusV1}
 use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
 
 #[test]
+fn native_stage_bridge_preserves_every_stage_when_the_agent_is_pending() {
+    let cancellation = temper_worker::JobCancellation::default();
+    let native = AgentCancellationLatch::default();
+    cancellation.hard_kill();
+    let mut observed = None;
+    let mut stages = Vec::new();
+    let waker = std::task::Waker::noop();
+    let mut cx = std::task::Context::from_waker(waker);
+
+    while let std::task::Poll::Ready(request) = cancellation.poll_request(observed, &mut cx) {
+        observed = Some(request);
+        let stage = agent_cancellation_stage(request);
+        stages.push(stage);
+        native.request(stage);
+    }
+
+    assert_eq!(
+        stages,
+        vec![
+            temper_protocol_agent::AgentCancellationStage::Graceful,
+            temper_protocol_agent::AgentCancellationStage::ForcedTermination,
+            temper_protocol_agent::AgentCancellationStage::HardKill,
+        ]
+    );
+    assert_eq!(
+        native.requested_stage(),
+        Some(temper_protocol_agent::AgentCancellationStage::HardKill)
+    );
+}
+
+#[test]
 fn authoritative_in_process_cancellation_discards_forge_and_finishes_trace_cancelled() {
     let fake = FakeLlm::start(Script::Fixed(Reply {
         turns: vec![Turn::ToolCall {

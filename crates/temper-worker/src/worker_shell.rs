@@ -491,6 +491,10 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                     let outcome = job_cancellation
                         .run_to_quiescence(executor.execute(assign, execution))
                         .await;
+                    // Process-owning futures hand cleanup to dedicated threads
+                    // on Drop. Keep the registry entry, fence, heartbeat slot,
+                    // and permit until their ordinary cleanup is observable.
+                    job_cancellation.wait_for_process_owners().await;
                     if job_cancellation
                         .cleanup()
                         .is_some_and(|cleanup| !cleanup.proves_quiescence())

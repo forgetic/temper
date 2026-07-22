@@ -109,7 +109,7 @@ const MATRIX: &[Criterion] = &[
             Evidence {
                 crate_path: "temper-agent-core::managed_bash",
                 source: MANAGED_BASH,
-                test: "direct_task_drop_is_a_synchronous_cleanup_boundary",
+                test: "direct_task_drop_does_not_block_while_cleanup_joins",
             },
             Evidence {
                 crate_path: "temper-agent-core::machine::batching",
@@ -139,7 +139,7 @@ const MATRIX: &[Criterion] = &[
             Evidence {
                 crate_path: "temper-agent-core::subagent_tool",
                 source: SUBAGENT,
-                test: "dropping_nested_run_aborts_every_control_and_joins_its_task_group",
+                test: "dropping_nested_run_aborts_every_control_on_its_dedicated_owner",
             },
         ],
     },

@@ -273,12 +273,23 @@ impl NativeJigAgentRunner {
             })
         } else {
             let mut run = std::pin::pin!(run);
-            let mut cancelled = std::pin::pin!(cancellation.cancelled());
-            let mut forwarded = false;
+            let mut observed = None;
             std::future::poll_fn(|cx| {
-                if !forwarded && cancelled.as_mut().poll(cx).is_ready() {
-                    forwarded = true;
-                    agent_cancellation.request_cancel();
+                while let std::task::Poll::Ready(request) = cancellation.poll_request(observed, cx)
+                {
+                    observed = Some(request);
+                    let stage = match request {
+                        temper_worker::JobCancellationRequest::Graceful => {
+                            temper_protocol_agent::AgentCancellationStage::Graceful
+                        }
+                        temper_worker::JobCancellationRequest::ForcedTermination => {
+                            temper_protocol_agent::AgentCancellationStage::ForcedTermination
+                        }
+                        temper_worker::JobCancellationRequest::HardKill => {
+                            temper_protocol_agent::AgentCancellationStage::HardKill
+                        }
+                    };
+                    agent_cancellation.request(stage);
                 }
                 run.as_mut().poll(cx)
             })

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command as StdCommand, Stdio as StdStdio};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -137,6 +137,16 @@ fn assert_reader_joined(config: &StdioMcpServerConfig) {
     );
 }
 
+fn wait_for_cleanup(config: &StdioMcpServerConfig, pids: &[u32]) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while pids.iter().any(|pid| process_alive(*pid))
+        || !super::connection::output_reader_joined(config)
+    {
+        assert!(Instant::now() < deadline, "MCP cleanup owner did not join");
+        std::thread::yield_now();
+    }
+}
+
 #[test]
 fn containment_identity_never_uses_mcp_command_or_arguments() {
     let config = StdioMcpServerConfig::new(
@@ -150,6 +160,35 @@ fn containment_identity_never_uses_mcp_command_or_arguments() {
             .containment_identity(),
         "codebase-memory"
     );
+}
+
+#[test]
+fn emergency_hard_kill_bypasses_a_blocked_mcp_request_mutex() {
+    let _serial = PROCESS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = fake_server_script();
+    let config = fake_command(&dir, Some("hang_call"));
+    temper_agent_io::block_on(async move {
+        let containment = crate::containment_tests::containment_context();
+        let emergency = containment.emergency_termination_registry();
+        let client = StdioMcpClient::connect_with_containment(config.clone(), containment)
+            .await
+            .expect("connect fake MCP server");
+        let pid = client.child_id();
+        let request = client.call_tool("blocked", json!({}), Duration::from_secs(30));
+        let kill = async move {
+            temper_agent_io::sleep_for(Duration::from_millis(25)).await;
+            let receipt = emergency.request_hard_kill();
+            assert_eq!(receipt.requested_count(), 1);
+        };
+        let completed =
+            temper_agent_io::timeout(Duration::from_secs(2), futures::future::join(request, kill))
+                .await
+                .expect("emergency KILL must settle blocked MCP request");
+        assert!(completed.0.is_err());
+        wait_for_cleanup(&config, &[pid]);
+    });
 }
 
 #[test]
@@ -172,8 +211,7 @@ fn cancellation_wakes_a_request_mutex_waiter_and_joins_both_operations() {
         )
         .await;
         assert!(outcome.is_err(), "generic cancellation must win");
-        assert!(!process_alive(pid), "MCP server survived cancellation");
-        assert_reader_joined(&config);
+        wait_for_cleanup(&config, &[pid]);
     });
 }
 
@@ -204,15 +242,7 @@ fn cancellation_reaps_the_mcp_server_grandchild_group() {
             .expect("grandchild pid")
             .parse()
             .expect("numeric pid");
-        assert!(
-            !process_alive(server_pid),
-            "MCP server survived cancellation"
-        );
-        assert!(
-            !process_alive(grandchild_pid),
-            "MCP grandchild {grandchild_pid} survived cancellation"
-        );
-        assert_reader_joined(&config);
+        wait_for_cleanup(&config, &[server_pid, grandchild_pid]);
     });
 }
 

@@ -180,6 +180,9 @@ pub struct AgentRunRequest<'a> {
     pub cwd: &'a Path,
     pub fence: AttemptFence,
     pub cancellation: JobCancellation,
+    /// Explicit attempt-owned authority threaded into native and
+    /// out-of-process containment composition.
+    pub emergency_termination: temper_process_containment::EmergencyTerminationRegistry,
     pub progress: JobProgressReporter,
 }
 
@@ -212,6 +215,7 @@ impl<'a> AgentRunRequest<'a> {
         cancellation: JobCancellation,
         progress: JobProgressReporter,
     ) -> Self {
+        let emergency_termination = cancellation.emergency_termination_registry();
         Self {
             job_id,
             attempt_id: attempt_id.into(),
@@ -219,6 +223,7 @@ impl<'a> AgentRunRequest<'a> {
             cwd,
             fence,
             cancellation,
+            emergency_termination,
             progress,
         }
     }
@@ -417,8 +422,8 @@ fn unavailable_submit_response() -> SubmitForPrResponse {
 }
 
 /// Polls one attempt-owned future until it completes or cancellation wins.
-/// Proof is cleared before dropping the future (which synchronously joins
-/// managed owners) and again after that drop.
+/// Proof is cleared before handing a dropped managed future to its dedicated
+/// cleanup owner and again after that drop.
 async fn run_fenced<F: Future>(
     store: &AcceptedSubmitProofStore,
     fence: &AttemptFence,

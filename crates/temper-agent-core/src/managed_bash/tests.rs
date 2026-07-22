@@ -246,7 +246,7 @@ fn explicit_tool_timeout_waits_for_cleanup_and_reader_join() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn generic_cancellation_drops_only_after_cleanup_and_reader_join() {
+fn generic_cancellation_hands_cleanup_to_a_dedicated_owner() {
     let _serial = PROCESS_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -265,16 +265,13 @@ fn generic_cancellation_drops_only_after_cleanup_and_reader_join() {
     });
     assert!(outcome.is_err(), "generic cancellation must win");
     let pid = wait_for_pid(&pid_file);
-    assert!(
-        !process_alive(pid),
-        "cancelled future returned before proof"
-    );
-    assert_eq!(ACTIVE_OUTPUT_READERS.load(Ordering::Acquire), 0);
+    wait_for_process_exit(pid);
+    wait_for_output_readers();
 }
 
 #[test]
 #[cfg(target_os = "linux")]
-fn direct_task_drop_is_a_synchronous_cleanup_boundary() {
+fn direct_task_drop_does_not_block_while_cleanup_joins() {
     let _serial = PROCESS_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -292,8 +289,29 @@ fn direct_task_drop_is_a_synchronous_cleanup_boundary() {
     .expect("spawn managed task");
     let pid = wait_for_pid(&pid_file);
     drop(task);
-    assert!(!process_alive(pid), "Drop returned before cleanup proof");
-    assert_eq!(ACTIVE_OUTPUT_READERS.load(Ordering::Acquire), 0);
+    wait_for_process_exit(pid);
+    wait_for_output_readers();
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_process_exit(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while process_alive(pid) {
+        assert!(
+            Instant::now() < deadline,
+            "cleanup owner did not reap {pid}"
+        );
+        thread::yield_now();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_output_readers() {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while ACTIVE_OUTPUT_READERS.load(Ordering::Acquire) != 0 {
+        assert!(Instant::now() < deadline, "output reader did not join");
+        thread::yield_now();
+    }
 }
 
 #[test]

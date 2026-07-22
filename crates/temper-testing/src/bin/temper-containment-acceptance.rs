@@ -536,12 +536,11 @@ mod linux {
         if report.backend() != expected_backend
             || report.trigger() != trigger
             || report.disposition() == CleanupDisposition::AlreadyEmpty
-            || report.term_attempts().is_empty()
             || report.observed_survivors().is_empty()
             || !matches!(report.recursive_empty(), RecursiveEmptyProof::Proven { .. })
         {
             return Err(io::Error::other(format!(
-                "cleanup evidence did not prove signal survivor recovery: {report:?}"
+                "cleanup evidence did not prove survivor recovery: {report:?}"
             )));
         }
         if report.observed_survivors().iter().any(|identity| {

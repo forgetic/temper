@@ -100,11 +100,13 @@ fn containment_lifecycle_contract_is_bounded_and_assignment_free() {
 #[test]
 fn lifecycle_commands_and_acknowledgements_validate() {
     let cancel = AgentLifecycleCommandV1::Cancel {
+        stage: AgentCancellationStage::HardKill,
         reason: "worker no-progress deadline".to_string(),
     };
     cancel.validate().expect("bounded cancellation command");
     assert!(
         AgentLifecycleCommandV1::Cancel {
+            stage: AgentCancellationStage::Graceful,
             reason: String::new()
         }
         .validate()

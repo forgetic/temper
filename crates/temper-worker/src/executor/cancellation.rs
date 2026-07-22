@@ -8,7 +8,7 @@ use std::task::{Context, Poll, Waker};
 
 use temper_process_containment::{
     CleanupObservation, CleanupReport, CleanupSnapshot, CleanupTrigger,
-    ContainmentCapabilityDiagnostic, ContainmentFallbackObservation,
+    ContainmentCapabilityDiagnostic, ContainmentFallbackObservation, EmergencyTerminationRegistry,
 };
 
 /// Escalation requested by the worker-owned watchdog.
@@ -173,6 +173,7 @@ type CleanupSnapshotObserver = Arc<dyn Fn(JobContainmentObservation) + Send + Sy
 struct JobCancellationState {
     request_waiters: Vec<Waker>,
     async_owners: usize,
+    cleanup_owners: usize,
     cleanup: Option<JobCleanup>,
     cleanup_observer: Option<CleanupSnapshotObserver>,
     containment_factory: Option<temper_process_containment::ContainmentFactory>,
@@ -189,6 +190,7 @@ struct JobCancellationState {
 pub struct JobCancellation {
     request: Arc<AtomicU8>,
     state: Arc<Mutex<JobCancellationState>>,
+    emergency_registry: EmergencyTerminationRegistry,
 }
 
 impl std::fmt::Debug for JobCancellation {
@@ -222,7 +224,8 @@ impl JobCancellation {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .containment_factory = Some(factory);
+            .containment_factory =
+            Some(factory.with_emergency_registry(self.emergency_registry.clone()));
     }
 
     pub(crate) fn containment_factory(
@@ -233,6 +236,11 @@ impl JobCancellation {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .containment_factory
             .clone()
+    }
+
+    /// Attempt-owned out-of-band authority shared by every spawned boundary.
+    pub fn emergency_termination_registry(&self) -> EmergencyTerminationRegistry {
+        self.emergency_registry.clone()
     }
 
     /// Requests cooperative cancellation. Compatibility callers use this
@@ -276,6 +284,15 @@ impl JobCancellation {
         for waiter in waiters {
             waiter.wake();
         }
+        match JobCancellationRequest::decode(requested) {
+            Some(JobCancellationRequest::ForcedTermination) => {
+                let _ = self.emergency_registry.request_forced_termination();
+            }
+            Some(JobCancellationRequest::HardKill) => {
+                let _ = self.emergency_registry.request_hard_kill();
+            }
+            Some(JobCancellationRequest::Graceful) | None => {}
+        }
     }
 
     pub fn requested(&self) -> Option<JobCancellationRequest> {
@@ -310,11 +327,20 @@ impl JobCancellation {
         .await
     }
 
+    /// Waits for the next request after `observed`. Intermediate escalation
+    /// stages are never coalesced, even when HardKill was already published.
+    pub async fn next_request_after(
+        &self,
+        observed: Option<JobCancellationRequest>,
+    ) -> JobCancellationRequest {
+        std::future::poll_fn(|cx| self.poll_request(observed, cx)).await
+    }
+
     /// Polls for the next request after `observed`. Intermediate escalation
     /// stages are never coalesced: if the shell publishes soft and hard
     /// escalation before the owner is polled again, the owner still observes
     /// Graceful, ForcedTermination, then HardKill in order.
-    pub(crate) fn poll_request(
+    pub fn poll_request(
         &self,
         observed: Option<JobCancellationRequest>,
         cx: &mut Context<'_>,
@@ -339,7 +365,7 @@ impl JobCancellation {
         Poll::Pending
     }
 
-    fn next_request(
+    pub(crate) fn next_request(
         &self,
         observed: Option<JobCancellationRequest>,
     ) -> Option<JobCancellationRequest> {
@@ -430,6 +456,37 @@ impl JobCancellation {
         self.observe_containment(JobContainmentObservation::QuiescencePending(reason.into()));
     }
 
+    /// Waits asynchronously until every process boundary registered to this
+    /// attempt has completed ordinary proof-based cleanup. Emergency dispatch
+    /// never makes this future ready.
+    pub async fn wait_for_process_owners(&self) {
+        loop {
+            let cleanup_owners = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .cleanup_owners;
+            if cleanup_owners == 0 && self.emergency_registry.snapshot().is_empty() {
+                return;
+            }
+            temper_worker_io::sleep_for(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Registers an owner whose process spawn/cleanup may outlive a dropped
+    /// effect future. Worker attempt completion waits for these owners as well
+    /// as the emergency process registry, closing the pre-spawn race.
+    pub(crate) fn register_cleanup_owner(&self) -> JobCancellationOwner {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cleanup_owners += 1;
+        JobCancellationOwner {
+            cancellation: self.clone(),
+            cleanup_owner: true,
+        }
+    }
+
     /// Registers an owner that must receive escalation requests and report
     /// quiescence asynchronously instead of being destroyed by the shell's
     /// compatibility cancellation race.
@@ -440,6 +497,7 @@ impl JobCancellation {
             .async_owners += 1;
         JobCancellationOwner {
             cancellation: self.clone(),
+            cleanup_owner: false,
         }
     }
 
@@ -539,6 +597,7 @@ impl temper_process_containment::CleanupObserver for JobCleanupObserver {
 
 pub struct JobCancellationOwner {
     cancellation: JobCancellation,
+    cleanup_owner: bool,
 }
 
 impl Drop for JobCancellationOwner {
@@ -549,7 +608,11 @@ impl Drop for JobCancellationOwner {
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.async_owners = state.async_owners.saturating_sub(1);
+            if self.cleanup_owner {
+                state.cleanup_owners = state.cleanup_owners.saturating_sub(1);
+            } else {
+                state.async_owners = state.async_owners.saturating_sub(1);
+            }
             std::mem::take(&mut state.request_waiters)
         };
         for waiter in waiters {

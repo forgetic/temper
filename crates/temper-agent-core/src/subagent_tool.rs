@@ -61,8 +61,8 @@ pub struct SubAgentTool {
     /// parallel sub-agents never share scope identity or in-flight state.
     observer_factory: Option<SubAgentObserverFactory>,
     /// Kept in the public constructor for compatibility. Nested runs now own a
-    /// dedicated joined runtime so dropping the parent tool can synchronously
-    /// drive cancellation to quiescence.
+    /// dedicated runtime so cancellation and recursive tool cleanup never run
+    /// on the parent event-loop thread.
     _handle: RuntimeHandle,
 }
 
@@ -73,7 +73,8 @@ impl SubAgentTool {
     /// sub-agent that is safe to run in parallel with siblings. `factory`
     /// assembles the nested [`SubAgent`] from the task string. `handle` remains
     /// part of the compatibility surface; each invocation is driven on its own
-    /// joined runtime so parent cancellation can synchronously join it.
+    /// joined runtime so parent cancellation can be requested without sharing
+    /// the parent event-loop thread.
     pub fn new(
         handle: RuntimeHandle,
         name: impl Into<String>,
@@ -202,10 +203,9 @@ struct ManagedSubAgentState {
     waker: Option<Waker>,
 }
 
-/// Nested run on a dedicated joined runtime. Drop reaches every published
-/// `SubAgentControl`, aborts the nested machine, lets that runtime drive all
-/// model/tool wrappers to quiescence, and joins the owner thread before the
-/// parent tool task can settle.
+/// Nested run on a dedicated runtime. Drop reaches every published
+/// `SubAgentControl` and aborts the nested machine, while the owner thread keeps
+/// driving model/tool wrappers to quiescence independently of the parent loop.
 struct ManagedSubAgentRun {
     state: Arc<Mutex<ManagedSubAgentState>>,
     cancelled: Arc<AtomicBool>,
@@ -317,7 +317,10 @@ impl Drop for ManagedSubAgentRun {
         {
             control.abort();
         }
-        self.join();
+        // The nested runtime is already a dedicated owner. Detach its join
+        // handle so parent cancellation cannot synchronously recurse through
+        // nested tool cleanup on the standalone event-loop thread.
+        let _ = self.thread.take();
     }
 }
 
@@ -399,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn dropping_nested_run_aborts_every_control_and_joins_its_task_group() {
+    fn dropping_nested_run_aborts_every_control_on_its_dedicated_owner() {
         let started = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
         let sub_agent = SubAgent {
@@ -430,6 +433,11 @@ mod tests {
 
         let cancellation_started = Instant::now();
         drop(run);
+        while !dropped.load(Ordering::Acquire)
+            && cancellation_started.elapsed() < Duration::from_millis(500)
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
         assert!(dropped.load(Ordering::Acquire));
         assert!(cancellation_started.elapsed() < Duration::from_millis(500));
     }

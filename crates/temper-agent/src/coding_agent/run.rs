@@ -346,9 +346,8 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
         model_idle_timeout: std::time::Duration::from_secs(runtime_limits.model_idle_timeout_secs),
     };
     let capability = Capability::for_role(&context.work_item.role);
-    // Build the always-on lifecycle carrier before codebase-memory MCP startup
-    // so startup failures and later managed-bash cleanup share one attempt-bound
-    // observer. No activity frame is emitted until `main` is minted below.
+    // Build lifecycle before codebase-memory MCP startup so every process owner
+    // shares one attempt-bound observer. No frame is emitted before `main`.
     let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
     let cancellation = activity_config.cancellation.clone();
     let scope_factory =
@@ -357,6 +356,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
         Some(observer) => containment.with_observer(observer),
         None => containment,
     };
+    cancellation.install_emergency_registry(containment.emergency_termination_registry());
     let codebase_memory = run_until_agent_cancellation(
         &cancellation,
         prepare_codebase_memory_tools_with_timeout(
@@ -502,8 +502,8 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
 }
 
 /// Races native startup work with worker cancellation. Dropping the boxed
-/// future is deliberate: MCP and managed blocking owners synchronously cancel
-/// descendants and join their threads from `Drop` before this helper returns.
+/// future requests MCP/managed-owner cancellation; their dedicated threads keep
+/// containment registrations alive until ordinary cleanup becomes observable.
 async fn run_until_agent_cancellation<F: std::future::Future>(
     cancellation: &crate::activity::AgentCancellationLatch,
     future: F,

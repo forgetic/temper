@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use temper_process_containment::{
     ContainmentBackendFactory, ContainmentBackendPolicy, ContainmentFactory, ContainmentIdentity,
-    ContainmentScope, ContainmentSpec,
+    ContainmentScope, ContainmentSpec, EmergencyTerminationRegistry,
 };
 
 /// Concrete containment authority shared by one agent and all of its nested
@@ -68,6 +68,17 @@ impl AgentContainmentContext {
 
     pub fn factory(&self) -> &ContainmentFactory {
         &self.factory
+    }
+
+    /// Rebinds every process spawned from this context to the attempt-owned
+    /// emergency authority. Existing backend/observer selection is preserved.
+    pub fn with_emergency_registry(mut self, registry: EmergencyTerminationRegistry) -> Self {
+        self.factory = self.factory.with_emergency_registry(registry);
+        self
+    }
+
+    pub fn emergency_termination_registry(&self) -> EmergencyTerminationRegistry {
+        self.factory.emergency_termination_registry()
     }
 
     /// Adds attempt-scoped cleanup delivery while preserving any observer

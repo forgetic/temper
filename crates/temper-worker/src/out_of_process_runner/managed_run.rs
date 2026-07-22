@@ -271,8 +271,9 @@ impl OutOfProcessRunner {
             (self.containment_factory)(job_id, attempt_id).map_err(|error| {
                 AgentRunError::transient(format!("create agent containment factory: {error}"))
             })?;
-        let containment_factory =
-            containment_factory.with_observer(Arc::new(JobCleanupObserver(cancellation.clone())));
+        let containment_factory = containment_factory
+            .with_emergency_registry(cancellation.emergency_termination_registry())
+            .with_observer(Arc::new(JobCleanupObserver(cancellation.clone())));
         let containment_spec = temper_process_containment::ContainmentSpec::new(
             temper_process_containment::ContainmentIdentity::new(format!(
                 "job-{job_id}-attempt-{attempt_id}"
@@ -379,7 +380,7 @@ impl OutOfProcessRunner {
         let mut forge_closed = false;
         let mut submit_closed = false;
         let mut observed_cancellation = None;
-        let mut _lifecycle_cancel = None;
+        let mut lifecycle_cancellations = Vec::new();
         let supervisor_result = loop {
             enum Next {
                 Cancellation(JobCancellationRequest),
@@ -449,20 +450,32 @@ impl OutOfProcessRunner {
                         }
                     }
                     observed_cancellation = Some(request);
+                    if let Some(endpoint) = resources.lifecycle.as_ref() {
+                        let handle = endpoint.cancellation_handle();
+                        let stage = match request {
+                            JobCancellationRequest::Graceful => {
+                                temper_protocol_agent::AgentCancellationStage::Graceful
+                            }
+                            JobCancellationRequest::ForcedTermination => {
+                                temper_protocol_agent::AgentCancellationStage::ForcedTermination
+                            }
+                            JobCancellationRequest::HardKill => {
+                                temper_protocol_agent::AgentCancellationStage::HardKill
+                            }
+                        };
+                        lifecycle_cancellations.push(JoinedBlocking::spawn(
+                            "agent-lifecycle-cancel",
+                            move || {
+                                handle.request(
+                                    stage,
+                                    "worker cancelled agent attempt",
+                                    LIFECYCLE_CONNECT_GRACE,
+                                )
+                            },
+                        ));
+                    }
                     match request {
                         JobCancellationRequest::Graceful => {
-                            if let Some(endpoint) = resources.lifecycle.as_ref() {
-                                let handle = endpoint.cancellation_handle();
-                                _lifecycle_cancel = Some(JoinedBlocking::spawn(
-                                    "agent-lifecycle-cancel",
-                                    move || {
-                                        handle.request_cancel(
-                                            "worker cancelled agent attempt",
-                                            LIFECYCLE_CONNECT_GRACE,
-                                        )
-                                    },
-                                ));
-                            }
                             let _ = resources.process_mut().request_cancel();
                         }
                         JobCancellationRequest::ForcedTermination => {
@@ -594,11 +607,20 @@ impl OutOfProcessRunner {
 
         let cancelled = cancellation.is_cancelled()
             || supervisor_result.quiesced.cleanup.cancellation.is_some();
-        let lifecycle_cancellation = if let Some(owner) = _lifecycle_cancel.take() {
-            drop(owner);
-            ResourceJoinStatus::Joined
-        } else {
+        let lifecycle_cancellation = if lifecycle_cancellations.is_empty() {
             ResourceJoinStatus::NotApplicable
+        } else {
+            let mut joined = true;
+            for owner in lifecycle_cancellations {
+                joined &= owner.await.is_ok();
+            }
+            if joined {
+                ResourceJoinStatus::Joined
+            } else {
+                ResourceJoinStatus::Failed(
+                    "one or more lifecycle cancellation owners failed".to_string(),
+                )
+            }
         };
         let supervisor_result =
             resources.finish(supervisor_result, cancelled, lifecycle_cancellation);
