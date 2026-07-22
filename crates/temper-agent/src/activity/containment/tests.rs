@@ -88,6 +88,7 @@ fn nested_cleanup_is_throttled_content_free_and_lifecycle_visible() {
     assert_eq!(first.repeated_failures, 1);
     assert_eq!(first.owner.owner_kind, "tool");
     assert_eq!(first.owner.tool_command_id, "bash-call-42");
+    assert_eq!(first.owner.root_pid, Some(42));
     let AgentLifecycleEventV1::Containment {
         observation: AgentContainmentEventV1::CleanupBlocked(third),
     } = &events[1].1

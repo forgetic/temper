@@ -44,6 +44,10 @@ pub struct AgentContainmentOwnerV1 {
     pub tool_command_id: String,
     pub backend: AgentContainmentBackendV1,
     pub root: String,
+    /// Spawned boundary PID, when the sender can observe one. The default keeps
+    /// lifecycle frames from older agents additively compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_pid: Option<u32>,
 }
 
 impl AgentContainmentOwnerV1 {

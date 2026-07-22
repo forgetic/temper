@@ -3,7 +3,7 @@ use std::time::Duration;
 use temper_protocol_activity::FailureCodeV1;
 
 use crate::agent_runner::{AgentRunError, AgentRunOutput};
-use crate::executor::JobCancellation;
+use crate::executor::{JobCancellation, TerminalTraceBlocker};
 use crate::trace::{TraceCollector, TraceRun};
 
 const ORDINARY_TERMINAL_ACTIVITY_FLUSH_TIMEOUT: Duration = Duration::from_millis(250);
@@ -30,9 +30,9 @@ pub(super) async fn finish_and_flush(
     };
     match terminal {
         Ok(sequence) if cancelled => {
-            cancellation.quiescence_pending(format!(
-                "terminal trace {} sequence {sequence} is awaiting durable acknowledgement",
-                trace.run_id()
+            cancellation.terminal_trace_pending(TerminalTraceBlocker::awaiting_acknowledgement(
+                trace.run_id(),
+                sequence,
             ));
             collector
                 .await_terminal_acknowledged(trace.run_id(), sequence)
@@ -58,10 +58,8 @@ pub(super) async fn finish_and_flush(
             }
         }
         Err(error) if cancelled => {
-            cancellation.quiescence_pending(format!(
-                "cancelled terminal trace {} could not be persisted: {error}",
-                trace.run_id()
-            ));
+            cancellation
+                .terminal_trace_pending(TerminalTraceBlocker::persistence_failed(trace.run_id()));
             tracing::warn!(
                 target: "temper::worker",
                 service = "worker",

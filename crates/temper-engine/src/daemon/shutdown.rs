@@ -4,9 +4,12 @@
 //! release transitions.
 
 use std::collections::BTreeSet;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use temper_engine_io::http::{HttpResponder, HttpResponseData};
-use temper_protocol_worker::Assign;
+use temper_protocol_worker::{
+    Assign, ShutdownBlocker, ShutdownBlockerKind, ShutdownEscalationStage,
+};
 
 use super::machine::{AttemptKey, DaemonMachine, DaemonRequest};
 use crate::InFlightJob;
@@ -86,6 +89,7 @@ pub struct DaemonShutdownReport {
     pub pending_applications: BTreeSet<AssignmentAttemptIdentity>,
     pub pending_claims: BTreeSet<AssignmentAttemptIdentity>,
     pub pending_context_operations: BTreeSet<AssignmentAttemptIdentity>,
+    pub blockers: Vec<ShutdownBlocker>,
 }
 
 /// Handle for work that crossed daemon admission before the shutdown fence.
@@ -120,6 +124,29 @@ impl DaemonShutdownHandle {
     }
 }
 
+fn daemon_shutdown_blocker(
+    identity: &AssignmentAttemptIdentity,
+    kind: ShutdownBlockerKind,
+    owner_name: &str,
+) -> ShutdownBlocker {
+    let first_seen_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    ShutdownBlocker::new(
+        kind,
+        ShutdownEscalationStage::Graceful,
+        "daemon",
+        owner_name,
+    )
+    .with_identity(
+        Some(&identity.worker_id),
+        Some(&identity.job_id),
+        identity.attempt_id.as_deref(),
+    )
+    .with_timing(first_seen_millis, 0, 0)
+}
+
 impl DaemonMachine {
     pub(super) fn begin_shutdown(
         &mut self,
@@ -137,19 +164,58 @@ impl DaemonMachine {
             })
             .collect();
 
+        let pending_results = self
+            .pending_results
+            .keys()
+            .map(AssignmentAttemptIdentity::from)
+            .collect::<BTreeSet<_>>();
+        let pending_applications = self
+            .admitted_result_applications
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let pending_claims = self
+            .admitted_claims
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let pending_context_operations = self
+            .admitted_contexts
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut blockers = Vec::new();
+        blockers.extend(pending_results.iter().map(|identity| {
+            daemon_shutdown_blocker(
+                identity,
+                ShutdownBlockerKind::ResultDelivery,
+                "result_transport",
+            )
+        }));
+        blockers.extend(pending_applications.iter().map(|identity| {
+            daemon_shutdown_blocker(
+                identity,
+                ShutdownBlockerKind::ResultDelivery,
+                "result_application",
+            )
+        }));
+        blockers.extend(pending_claims.iter().map(|identity| {
+            daemon_shutdown_blocker(identity, ShutdownBlockerKind::ComponentTask, "claim")
+        }));
+        blockers.extend(pending_context_operations.iter().map(|identity| {
+            daemon_shutdown_blocker(
+                identity,
+                ShutdownBlockerKind::ComponentTask,
+                "forge_context",
+            )
+        }));
+        blockers.truncate(temper_protocol_worker::MAX_SHUTDOWN_BLOCKERS);
         let report = DaemonShutdownReport {
-            pending_results: self
-                .pending_results
-                .keys()
-                .map(AssignmentAttemptIdentity::from)
-                .collect(),
-            pending_applications: self
-                .admitted_result_applications
-                .values()
-                .cloned()
-                .collect(),
-            pending_claims: self.admitted_claims.values().cloned().collect(),
-            pending_context_operations: self.admitted_contexts.values().cloned().collect(),
+            pending_results,
+            pending_applications,
+            pending_claims,
+            pending_context_operations,
+            blockers,
         };
         self.shutdown_join_waiters.push(joined);
         self.notify_shutdown_joined_if_ready();

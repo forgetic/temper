@@ -11,6 +11,9 @@ use temper_process_containment::{
     ContainmentCapabilityDiagnostic, ContainmentFallbackObservation, EmergencyTerminationRegistry,
 };
 
+mod terminal_trace;
+pub use terminal_trace::{TerminalTraceBlocker, TerminalTraceBlockerState};
+
 /// Escalation requested by the worker-owned watchdog.
 ///
 /// Values are ordered so a late or duplicate lower-severity request can never
@@ -164,7 +167,7 @@ pub(crate) enum JobContainmentObservation {
     Capability(ContainmentCapabilityDiagnostic),
     Fallback(ContainmentFallbackObservation),
     /// Non-process attempt work still required before quiescence can publish.
-    QuiescencePending(String),
+    TerminalTracePending(TerminalTraceBlocker),
 }
 
 type CleanupSnapshotObserver = Arc<dyn Fn(JobContainmentObservation) + Send + Sync>;
@@ -448,12 +451,16 @@ impl JobCancellation {
             .clone()
     }
 
-    /// Reports durable non-process cleanup that must finish before the attempt
-    /// may publish quiescence. Terminal trace forwarding uses this boundary to
-    /// retain the fence, heartbeat membership, registry entry, and permit while
-    /// its exact cancellation sequence remains unacknowledged.
-    pub fn quiescence_pending(&self, reason: impl Into<String>) {
-        self.observe_containment(JobContainmentObservation::QuiescencePending(reason.into()));
+    /// Reports typed durable terminal-trace work that must finish before the
+    /// attempt may publish quiescence.
+    pub fn terminal_trace_pending(&self, blocker: TerminalTraceBlocker) {
+        self.observe_containment(JobContainmentObservation::TerminalTracePending(blocker));
+    }
+
+    /// Compatibility boundary for external executors. Rendering is bounded and
+    /// credential-redacted; first-party trace paths use `terminal_trace_pending`.
+    pub fn quiescence_pending(&self, reason: impl AsRef<str>) {
+        self.terminal_trace_pending(TerminalTraceBlocker::compatibility(reason.as_ref()));
     }
 
     /// Waits asynchronously until every process boundary registered to this

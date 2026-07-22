@@ -11,6 +11,8 @@ use super::*;
 pub(super) fn containment_event_from_lifecycle(
     context: &ContainmentEventContext,
     observation: &AgentContainmentEventV1,
+    first_seen_millis: u64,
+    age_millis: u64,
 ) -> ContainmentEvent {
     match observation {
         AgentContainmentEventV1::CleanupBlocked(event) => {
@@ -19,6 +21,8 @@ pub(super) fn containment_event_from_lifecycle(
                 trigger: trigger_name_v1(event.trigger),
                 phase: phase_name_v1(event.phase),
                 repeated_failures: event.repeated_failures,
+                first_seen_millis,
+                age_millis,
                 term_outcomes: serialize_signal_attempts_v1(&event.term_attempts),
                 omitted_term_outcomes: to_usize(event.omitted_term_attempts),
                 kill_outcomes: serialize_signal_attempts_v1(&event.kill_attempts),
@@ -90,6 +94,7 @@ fn owner(
         tool_command_id: bounded_diagnostic(&owner.tool_command_id, MAX_EVENT_IDENTIFIER_BYTES),
         backend: backend_name_v1(owner.backend),
         root: bounded_diagnostic(&owner.root, MAX_EVENT_ROOT_BYTES),
+        root_pid: owner.root_pid,
     }
 }
 

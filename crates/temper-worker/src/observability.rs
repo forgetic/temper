@@ -10,6 +10,7 @@ use temper_protocol_worker::{Assign, FailureClass, JobResult, ResultStatus};
 use crate::config::CapabilitySpec;
 mod containment;
 mod liveness;
+mod shutdown;
 pub use containment::{
     CleanupBlocked, CleanupCompleted, ContainmentEvent, ContainmentEventContext,
     ContainmentEventIdentity, ContainmentEventObserver, ContainmentFallbackActivated,
@@ -18,6 +19,9 @@ pub use containment::{
 };
 pub(crate) use containment::{ContainmentEventThrottle, emit_startup_containment_capability_once};
 pub use liveness::{ObservedOperation, WorkerEvent};
+pub use shutdown::{
+    StandaloneShutdownBlockerEvent, StandaloneShutdownDisposition, StandaloneShutdownSummaryEvent,
+};
 
 pub fn registered_worker_line(
     worker_id: &str,

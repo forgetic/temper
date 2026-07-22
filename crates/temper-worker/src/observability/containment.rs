@@ -57,6 +57,7 @@ pub struct ContainmentEventIdentity {
     pub tool_command_id: String,
     pub backend: &'static str,
     pub root: String,
+    pub root_pid: Option<u32>,
 }
 
 impl ContainmentEventIdentity {
@@ -70,6 +71,7 @@ impl ContainmentEventIdentity {
             ),
             backend: backend_name(observation.backend()),
             root: bounded_diagnostic(observation.root().value(), MAX_EVENT_ROOT_BYTES),
+            root_pid: (observation.root_pid() != 0).then_some(observation.root_pid()),
         }
     }
 
@@ -86,6 +88,7 @@ impl ContainmentEventIdentity {
             ),
             backend: backend_name(observation.backend()),
             root: bounded_diagnostic(observation.root().value(), MAX_EVENT_ROOT_BYTES),
+            root_pid: None,
         }
     }
 }
@@ -97,6 +100,8 @@ pub struct CleanupBlocked {
     pub trigger: &'static str,
     pub phase: &'static str,
     pub repeated_failures: u64,
+    pub first_seen_millis: u64,
+    pub age_millis: u64,
     pub term_outcomes: String,
     pub omitted_term_outcomes: usize,
     pub kill_outcomes: String,
@@ -191,6 +196,8 @@ impl ContainmentEvent {
         observation: &CleanupObservation,
         repeated_failures: u64,
         pending_signals: Option<&PendingSignalEvidence>,
+        first_seen_millis: u64,
+        age_millis: u64,
     ) -> Option<Self> {
         let owner = ContainmentEventIdentity::cleanup(context, observation);
         match observation.snapshot() {
@@ -205,6 +212,8 @@ impl ContainmentEvent {
                 trigger: trigger_name(*trigger),
                 phase: phase_name(*phase),
                 repeated_failures,
+                first_seen_millis,
+                age_millis,
                 term_outcomes: pending_signals.map_or_else(
                     || "[]".to_string(),
                     |signals| serialize_signal_attempts(&signals.term),
@@ -340,6 +349,7 @@ pub(crate) struct ContainmentEventThrottle {
 struct ContainmentEventThrottleInner {
     observer: Arc<dyn ContainmentEventObserver>,
     interval: Duration,
+    clock: Arc<dyn Fn() -> Duration + Send + Sync>,
     blocked: Mutex<HashMap<String, RootObservationState>>,
 }
 
@@ -354,7 +364,8 @@ struct PendingSignalEvidence {
 #[derive(Default)]
 struct RootObservationState {
     failures: u64,
-    last_emitted: Option<Instant>,
+    first_seen: Option<Duration>,
+    last_emitted: Option<Duration>,
     signals: PendingSignalEvidence,
 }
 
@@ -369,10 +380,20 @@ impl Default for ContainmentEventThrottle {
 
 impl ContainmentEventThrottle {
     pub(crate) fn new(observer: Arc<dyn ContainmentEventObserver>, interval: Duration) -> Self {
+        let epoch = Instant::now();
+        Self::with_clock(observer, interval, Arc::new(move || epoch.elapsed()))
+    }
+
+    pub(crate) fn with_clock(
+        observer: Arc<dyn ContainmentEventObserver>,
+        interval: Duration,
+        clock: Arc<dyn Fn() -> Duration + Send + Sync>,
+    ) -> Self {
         Self {
             inner: Arc::new(ContainmentEventThrottleInner {
                 observer,
                 interval,
+                clock,
                 blocked: Mutex::new(HashMap::new()),
             }),
         }
@@ -384,68 +405,77 @@ impl ContainmentEventThrottle {
         observation: &CleanupObservation,
     ) {
         let root = observation.root().value().to_string();
-        let (repeated_failures, pending_signals) = match observation.snapshot() {
-            CleanupSnapshot::SignalAttempted {
-                signal,
-                attempts,
-                omitted,
-                ..
-            } => {
-                let mut states = self
-                    .inner
-                    .blocked
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let signals = &mut states.entry(root).or_default().signals;
-                let (retained, omitted_total) = match signal {
-                    temper_process_containment::ContainmentSignal::Term => {
-                        (&mut signals.term, &mut signals.omitted_term)
-                    }
-                    temper_process_containment::ContainmentSignal::Kill => {
-                        (&mut signals.kill, &mut signals.omitted_kill)
-                    }
-                };
-                let remaining = MAX_EVENT_SIGNAL_OUTCOMES.saturating_sub(retained.len());
-                retained.extend(attempts.iter().take(remaining).cloned());
-                *omitted_total = omitted_total
-                    .saturating_add(*omitted)
-                    .saturating_add(attempts.len().saturating_sub(remaining));
-                return;
-            }
-            CleanupSnapshot::Blocked { .. } => {
-                let now = Instant::now();
-                let mut states = self
-                    .inner
-                    .blocked
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let state = states.entry(root).or_default();
-                state.failures = state.failures.saturating_add(1);
-                let promoted = state.failures == 3;
-                let due = state
-                    .last_emitted
-                    .is_none_or(|last| now.duration_since(last) >= self.inner.interval);
-                if !promoted && !due {
+        let (repeated_failures, pending_signals, first_seen_millis, age_millis) =
+            match observation.snapshot() {
+                CleanupSnapshot::SignalAttempted {
+                    signal,
+                    attempts,
+                    omitted,
+                    ..
+                } => {
+                    let mut states = self
+                        .inner
+                        .blocked
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let signals = &mut states.entry(root).or_default().signals;
+                    let (retained, omitted_total) = match signal {
+                        temper_process_containment::ContainmentSignal::Term => {
+                            (&mut signals.term, &mut signals.omitted_term)
+                        }
+                        temper_process_containment::ContainmentSignal::Kill => {
+                            (&mut signals.kill, &mut signals.omitted_kill)
+                        }
+                    };
+                    let remaining = MAX_EVENT_SIGNAL_OUTCOMES.saturating_sub(retained.len());
+                    retained.extend(attempts.iter().take(remaining).cloned());
+                    *omitted_total = omitted_total
+                        .saturating_add(*omitted)
+                        .saturating_add(attempts.len().saturating_sub(remaining));
                     return;
                 }
-                state.last_emitted = Some(now);
-                (state.failures, Some(state.signals.clone()))
-            }
-            CleanupSnapshot::Completed { .. } => {
-                self.inner
-                    .blocked
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .remove(&root);
-                (0, None)
-            }
-            _ => (0, None),
-        };
+                CleanupSnapshot::Blocked { .. } => {
+                    let now = (self.inner.clock)();
+                    let mut states = self
+                        .inner
+                        .blocked
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let state = states.entry(root).or_default();
+                    let first_seen = *state.first_seen.get_or_insert(now);
+                    state.failures = state.failures.saturating_add(1);
+                    let promoted = state.failures == 3;
+                    let due = state
+                        .last_emitted
+                        .is_none_or(|last| now.saturating_sub(last) >= self.inner.interval);
+                    if !promoted && !due {
+                        return;
+                    }
+                    state.last_emitted = Some(now);
+                    (
+                        state.failures,
+                        Some(state.signals.clone()),
+                        duration_millis(first_seen),
+                        duration_millis(now.saturating_sub(first_seen)),
+                    )
+                }
+                CleanupSnapshot::Completed { .. } => {
+                    self.inner
+                        .blocked
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .remove(&root);
+                    (0, None, 0, 0)
+                }
+                _ => (0, None, 0, 0),
+            };
         if let Some(event) = ContainmentEvent::from_cleanup(
             context,
             observation,
             repeated_failures,
             pending_signals.as_ref(),
+            first_seen_millis,
+            age_millis,
         ) {
             self.inner.observer.observe(&event);
         }
@@ -457,36 +487,50 @@ impl ContainmentEventThrottle {
         observation: &temper_protocol_agent::AgentContainmentEventV1,
     ) {
         let root = lifecycle_root(observation).to_string();
-        if let Some(reported_failures) = lifecycle_repeated_failures(observation) {
-            let now = Instant::now();
-            let mut states = self
-                .inner
-                .blocked
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let state = states.entry(root).or_default();
-            let promoted = state.failures < 3 && reported_failures >= 3;
-            let due = state
-                .last_emitted
-                .is_none_or(|last| now.duration_since(last) >= self.inner.interval);
-            state.failures = state.failures.max(reported_failures);
-            if !promoted && !due {
-                return;
-            }
-            state.last_emitted = Some(now);
-        } else if matches!(
-            observation,
-            temper_protocol_agent::AgentContainmentEventV1::CleanupCompleted(_)
-        ) {
-            self.inner
-                .blocked
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .remove(&root);
-        }
+        let (first_seen_millis, age_millis) =
+            if let Some(reported_failures) = lifecycle_repeated_failures(observation) {
+                let now = (self.inner.clock)();
+                let mut states = self
+                    .inner
+                    .blocked
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let state = states.entry(root).or_default();
+                let first_seen = *state.first_seen.get_or_insert(now);
+                let promoted = state.failures < 3 && reported_failures >= 3;
+                let due = state
+                    .last_emitted
+                    .is_none_or(|last| now.saturating_sub(last) >= self.inner.interval);
+                state.failures = state.failures.max(reported_failures);
+                if !promoted && !due {
+                    return;
+                }
+                state.last_emitted = Some(now);
+                (
+                    duration_millis(first_seen),
+                    duration_millis(now.saturating_sub(first_seen)),
+                )
+            } else {
+                if matches!(
+                    observation,
+                    temper_protocol_agent::AgentContainmentEventV1::CleanupCompleted(_)
+                ) {
+                    self.inner
+                        .blocked
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .remove(&root);
+                }
+                (0, 0)
+            };
         self.inner
             .observer
-            .observe(&containment_event_from_lifecycle(context, observation));
+            .observe(&containment_event_from_lifecycle(
+                context,
+                observation,
+                first_seen_millis,
+                age_millis,
+            ));
     }
 
     pub(crate) fn fallback(
@@ -498,6 +542,10 @@ impl ContainmentEventThrottle {
             .observer
             .observe(&ContainmentEvent::from_fallback(context, observation));
     }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
