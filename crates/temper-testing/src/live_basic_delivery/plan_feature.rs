@@ -1,22 +1,22 @@
 use std::fs;
+use std::process::Command;
 use std::time::{Duration, Instant};
+
 use temper_forge_forgejo::ForgejoForge;
-use temper_forge_model::{
-    CreateIssue, Forge, Issue, IssueQuery, ItemNumber, PullRequest, PullRequestQuery,
-    PullRequestState, RepositoryId,
-};
+use temper_forge_model::{CreateIssue, Forge, ItemNumber, RepositoryId};
+
 #[path = "plan_feature/audit.rs"]
 mod audit;
 #[path = "plan_feature/fake.rs"]
 mod fake;
+#[path = "plan_feature/verify.rs"]
+mod verify;
 
 pub use audit::ValidationAuditEvidence;
-use audit::validation_audit_evidence;
 use fake::PlanFeatureFake;
+use verify::poll_plan_feature;
 
-use super::convergence::{
-    admin_forge, ci_diagnostics, ci_job_evidence, completed_ci_jobs, repository,
-};
+use super::convergence::{admin_forge, ci_diagnostics, repository};
 use super::process::{
     TemperInitRequest, assert_init_workflow_yaml_matches, convergence_timeout, free_port,
     mint_site_admin_token, populate_repo, read_tail, run_temper_init, spawn_temper_standalone,
@@ -29,14 +29,16 @@ use super::{
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
 
-const FEATURE_BRANCH: &str = "feature/plan-centric-dogfood";
 const FEATURE_TITLE: &str = "Ship plan-centric dogfood feature branch delivery";
 const PLAN_TITLE: &str = "Plan plan-centric dogfood delivery";
 const FIRST_CODE_TITLE: &str = "Implement plan foundation slice";
 const SECOND_CODE_TITLE: &str = "Implement validation and landing slice";
+const FOLLOWUP_CODE_TITLE: &str = "Implement validation follow-up regression";
 const LANDING_TITLE: &str = "Land plan-centric dogfood feature branch";
+const FOLLOWUP_VALIDATION_SUMMARY: &str =
+    "Requested one implementation follow-up before aggregate landing.";
 const VALIDATION_SUMMARY: &str =
-    "Validated the sequential feature-branch implementation and aggregate landing readiness.";
+    "Validated all feature-branch implementations and aggregate landing readiness.";
 const ASSERT_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,13 +48,22 @@ pub struct LivePlanFeatureEvidence {
     pub plan_issue: IssueState,
     pub first_code_issue: IssueState,
     pub second_code_issue: IssueState,
+    pub followup_code_issue: IssueState,
     pub first_pr: PullRequestStateEvidence,
     pub second_pr: PullRequestStateEvidence,
+    pub followup_pr: PullRequestStateEvidence,
     pub landing_pr: PullRequestStateEvidence,
     pub ci_jobs: Vec<PullRequestCiJobEvidence>,
-    pub validation_audit: ValidationAuditEvidence,
+    pub validation_audits: Vec<ValidationAuditEvidence>,
+    pub prompt_guidance: Vec<RolePromptEvidence>,
+    pub initial_main_sha: String,
+    pub main_sha_before_landing: String,
+    pub final_main_sha: String,
     pub observed_second_blocked: bool,
     pub observed_second_unblocked: bool,
+    pub observed_landing_open_with_parents_open: bool,
+    pub validation_waited_for_implementations: bool,
+    pub ci_green_before_merge: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,6 +72,7 @@ pub struct IssueState {
     pub title: String,
     pub state: String,
     pub labels: Vec<String>,
+    pub target_branch: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,6 +83,8 @@ pub struct PullRequestStateEvidence {
     pub labels: Vec<String>,
     pub source_branch: String,
     pub target_branch: String,
+    pub head_sha: Option<String>,
+    pub base_sha: Option<String>,
     pub merged_sha: Option<String>,
 }
 
@@ -83,10 +97,14 @@ pub struct PullRequestCiJobEvidence {
     pub url: Option<String>,
 }
 
-#[derive(Default)]
-struct Observations {
-    second_blocked: bool,
-    second_unblocked_after_first_closed: bool,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RolePromptEvidence {
+    pub role: String,
+    pub request_count: usize,
+    pub role_guidance_excerpt: String,
+    pub prompt_guidance_excerpt: String,
+    pub tool_guidance_excerpt: String,
+    pub constraint_excerpts: Vec<String>,
 }
 
 pub(super) fn run_live_plan_feature_branch(
@@ -154,6 +172,12 @@ pub(super) fn run_live_plan_feature_branch(
         &harness.scenario.repo,
         &logs.repo_populate_log,
     )?;
+    let initial_main_sha = local_checkout_head(
+        &workspace
+            .path()
+            .join("repo-seed")
+            .join(&harness.scenario.repo.name),
+    )?;
 
     let mut standalone = spawn_temper_standalone(
         &harness.temper,
@@ -178,12 +202,18 @@ pub(super) fn run_live_plan_feature_branch(
     let timeout = convergence_timeout(harness.scenario.timeout);
     let convergence_start = Instant::now();
     let deadline = Instant::now() + timeout;
-    let plan_feature = match poll_plan_feature(
+    let mut plan_feature = match poll_plan_feature(
         deadline,
         &mut standalone,
         &forge,
         &repository,
         feature_issue,
+        &harness.scenario.repo.default_branch,
+        &initial_main_sha,
+        server.base_url(),
+        &admin_token,
+        &harness.scenario.repo.owner,
+        &harness.scenario.repo.name,
     ) {
         Ok(evidence) => evidence,
         Err(error) => {
@@ -204,22 +234,36 @@ pub(super) fn run_live_plan_feature_branch(
         }
     };
 
-    if fake.architect_requests() < 2 {
-        return Err(format!(
-            "fake LLM never served both architect loops\n{}",
-            fake.log_tail()
-        ));
+    for (role, actual, minimum) in [
+        ("architect", fake.architect_requests(), 4),
+        ("engineer", fake.engineer_requests(), 6),
+        ("tester", fake.tester_requests(), 4),
+    ] {
+        if actual < minimum {
+            return Err(format!(
+                "fake LLM served only {actual} {role} requests; expected at least {minimum}\n{}",
+                fake.log_tail()
+            ));
+        }
     }
-    if fake.engineer_requests() < 4 {
+    plan_feature.prompt_guidance = fake.prompt_guidance_evidence()?;
+    plan_feature.final_main_sha = remote_branch_head(
+        server.base_url(),
+        &admin_token,
+        &harness.scenario.repo.owner,
+        &harness.scenario.repo.name,
+        &harness.scenario.repo.default_branch,
+    )?;
+    if plan_feature.final_main_sha
+        != plan_feature
+            .landing_pr
+            .merged_sha
+            .clone()
+            .unwrap_or_default()
+    {
         return Err(format!(
-            "fake LLM never served both engineer tool loops\n{}",
-            fake.log_tail()
-        ));
-    }
-    if fake.tester_requests() < 2 {
-        return Err(format!(
-            "fake LLM never served the tester tool loop\n{}",
-            fake.log_tail()
+            "main did not end at the aggregate landing merge: main={} landing={:?}",
+            plan_feature.final_main_sha, plan_feature.landing_pr.merged_sha
         ));
     }
 
@@ -253,6 +297,7 @@ pub(super) fn run_live_plan_feature_branch(
             base_url: fake.base_url(),
             architect_requests: fake.architect_requests(),
             engineer_requests: fake.engineer_requests(),
+            tester_requests: fake.tester_requests(),
             log_path: logs.fake_llm_log.clone(),
         },
         final_state: FinalStateEvidence {
@@ -270,7 +315,7 @@ pub(super) fn run_live_plan_feature_branch(
                 author: super::ENGINEER.to_string(),
                 merged_by: None,
                 head_branch: plan_feature.landing_pr.source_branch.clone(),
-                head_sha: None,
+                head_sha: plan_feature.landing_pr.head_sha.clone(),
                 merged_sha: plan_feature.landing_pr.merged_sha.clone(),
             },
             ci_jobs: plan_feature
@@ -311,6 +356,62 @@ async fn seed_feature_issue(
         .await
         .map(|issue| issue.number)
         .map_err(|error| format!("create feature issue failed: {error}"))
+}
+
+fn local_checkout_head(checkout: &std::path::Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(checkout)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|error| format!("read seeded repository head: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "read seeded repository head failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .filter(|sha| !sha.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "seeded repository did not expose a HEAD SHA".to_string())
+}
+
+pub(super) fn remote_branch_head(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    branch: &str,
+) -> Result<String, String> {
+    super::process::engine_block_on(async {
+        let response = temper_engine_io::http::JsonClient::new()
+            .send(
+                "GET",
+                format!("{base_url}/api/v1/repos/{owner}/{repo}/branches/{branch}"),
+                Some(token),
+                None,
+            )
+            .await
+            .map_err(|error| format!("query remote branch {branch}: {error}"))?;
+        if !(200..300).contains(&response.status) {
+            return Err(format!(
+                "query remote branch {branch} returned HTTP {}: {}",
+                response.status,
+                String::from_utf8_lossy(&response.body)
+            ));
+        }
+        let body: serde_json::Value = serde_json::from_slice(&response.body)
+            .map_err(|error| format!("parse remote branch {branch}: {error}"))?;
+        body.pointer("/commit/id")
+            .or_else(|| body.pointer("/commit/sha"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|sha| !sha.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("remote branch {branch} did not expose a commit id: {body}"))
+    })
 }
 
 fn retain_failure_logs(
@@ -358,276 +459,4 @@ fn failure_report(
         logs.ci_diagnostics_log.display(),
         ci_diagnostics(forge, repository),
     )
-}
-
-fn poll_plan_feature(
-    deadline: Instant,
-    standalone: &mut super::process::ChildGuard,
-    forge: &ForgejoForge,
-    repository: &RepositoryId,
-    feature_issue: ItemNumber,
-) -> Result<LivePlanFeatureEvidence, String> {
-    let mut observations = Observations::default();
-    loop {
-        if let Some(status) = standalone.try_wait()? {
-            return Err(format!("{} exited early with {status:?}", standalone.label));
-        }
-        match super::process::engine_block_on(verify_plan_feature(
-            forge,
-            repository,
-            feature_issue,
-            &mut observations,
-        )) {
-            Ok(value) => return Ok(value),
-            Err(error) if Instant::now() < deadline => {
-                let _ = error;
-                std::thread::sleep(ASSERT_POLL);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-async fn verify_plan_feature(
-    forge: &ForgejoForge,
-    repository: &RepositoryId,
-    feature_issue: ItemNumber,
-    observations: &mut Observations,
-) -> Result<LivePlanFeatureEvidence, String> {
-    let issues = forge
-        .list_issues(repository, IssueQuery::default())
-        .await
-        .map_err(|error| format!("list issues: {error}"))?;
-    let pulls = forge
-        .list_pull_requests(repository, PullRequestQuery::default())
-        .await
-        .map_err(|error| format!("list pull requests: {error}"))?;
-
-    let feature = issue_by_number(&issues, feature_issue)?;
-    let plan = issue_by_label_and_title(&issues, "plan", PLAN_TITLE)?;
-    let first = issue_by_label_and_title(&issues, "code", FIRST_CODE_TITLE)
-        .map_err(|error| format!("{error}\n{}", describe_state(&issues, &pulls)))?;
-    let second = issue_by_label_and_title(&issues, "code", SECOND_CODE_TITLE)
-        .map_err(|error| format!("{error}\n{}", describe_state(&issues, &pulls)))?;
-
-    if has_label(second, "blocked") {
-        observations.second_blocked = true;
-    }
-    if issue_closed(first) && !has_label(second, "blocked") {
-        observations.second_unblocked_after_first_closed = true;
-    }
-
-    let implementation_prs = pulls
-        .iter()
-        .filter(|pull| has_pr_label(pull, "implementation"))
-        .collect::<Vec<_>>();
-    let first_pr = pr_by_title(&implementation_prs, FIRST_CODE_TITLE)?;
-    let second_pr = pr_by_title(&implementation_prs, SECOND_CODE_TITLE)?;
-    let landing_pr = pulls
-        .iter()
-        .find(|pull| has_pr_label(pull, "feature-landing"))
-        .ok_or_else(|| "feature landing PR was not created yet".to_string())?;
-
-    require_pr_target(first_pr, FEATURE_BRANCH)?;
-    require_pr_target(second_pr, FEATURE_BRANCH)?;
-    require_pr_branch(landing_pr, FEATURE_BRANCH, "main")?;
-
-    if !observations.second_blocked {
-        return Err("downstream code issue was not observed with blocked label".to_string());
-    }
-    if !observations.second_unblocked_after_first_closed {
-        return Err(
-            "downstream code issue was not observed unblocked after the first code issue closed"
-                .to_string(),
-        );
-    }
-    if !issue_closed(first) || !issue_closed(second) {
-        return Err("code issues are not both closed yet".to_string());
-    }
-    if !matches!(first_pr.state, PullRequestState::Merged)
-        || !matches!(second_pr.state, PullRequestState::Merged)
-    {
-        return Err("implementation PRs are not both merged yet".to_string());
-    }
-    if !matches!(landing_pr.state, PullRequestState::Merged) {
-        return Err("feature landing PR is not merged yet".to_string());
-    }
-    let ci_jobs =
-        merged_pr_ci_evidence(forge, repository, &[first_pr, second_pr, landing_pr]).await?;
-    if !issue_closed(feature) || !issue_closed(plan) {
-        return Err("feature and plan issues are not both closed yet".to_string());
-    }
-    let validation_audit = validation_audit_evidence(forge, plan, VALIDATION_SUMMARY).await?;
-
-    Ok(LivePlanFeatureEvidence {
-        feature_branch: FEATURE_BRANCH.to_string(),
-        feature_issue: issue_state(feature),
-        plan_issue: issue_state(plan),
-        first_code_issue: issue_state(first),
-        second_code_issue: issue_state(second),
-        first_pr: pr_state(first_pr),
-        second_pr: pr_state(second_pr),
-        landing_pr: pr_state(landing_pr),
-        ci_jobs,
-        validation_audit,
-        observed_second_blocked: observations.second_blocked,
-        observed_second_unblocked: observations.second_unblocked_after_first_closed,
-    })
-}
-
-async fn merged_pr_ci_evidence(
-    forge: &ForgejoForge,
-    repository: &RepositoryId,
-    pulls: &[&PullRequest],
-) -> Result<Vec<PullRequestCiJobEvidence>, String> {
-    let mut evidence = Vec::new();
-    for pull in pulls {
-        let jobs = completed_ci_jobs(forge, repository, pull).await?;
-        if jobs.is_empty() {
-            return Err(format!("no completed CI jobs for PR #{}", pull.number));
-        }
-        if jobs.last().and_then(|job| job.conclusion)
-            != Some(temper_forge_model::CiJobConclusion::Success)
-        {
-            return Err(format!(
-                "latest completed CI job for PR #{} was not successful: {:?}",
-                pull.number,
-                jobs.last().and_then(|job| job.conclusion)
-            ));
-        }
-        evidence.extend(jobs.iter().map(|job| {
-            let job = ci_job_evidence(job);
-            PullRequestCiJobEvidence {
-                pull_request_number: pull.number.get(),
-                name: job.name,
-                status: job.status,
-                conclusion: job.conclusion,
-                url: job.url,
-            }
-        }));
-    }
-    Ok(evidence)
-}
-
-fn issue_by_number(issues: &[Issue], number: ItemNumber) -> Result<&Issue, String> {
-    issues
-        .iter()
-        .find(|issue| issue.number == number)
-        .ok_or_else(|| format!("issue #{number} not found"))
-}
-
-fn issue_by_label_and_title<'a>(
-    issues: &'a [Issue],
-    label: &str,
-    title: &str,
-) -> Result<&'a Issue, String> {
-    issues
-        .iter()
-        .find(|issue| has_label(issue, label) && issue.title == title)
-        .ok_or_else(|| format!("issue `{title}` with label `{label}` not found yet"))
-}
-
-fn pr_by_title<'a>(pulls: &'a [&PullRequest], title: &str) -> Result<&'a PullRequest, String> {
-    pulls
-        .iter()
-        .copied()
-        .find(|pull| pull.title == title)
-        .ok_or_else(|| format!("implementation PR `{title}` not found yet"))
-}
-
-fn require_pr_branch(
-    pull: &PullRequest,
-    source_branch: &str,
-    target_branch: &str,
-) -> Result<(), String> {
-    if pull.source.branch != source_branch || pull.target.branch != target_branch {
-        return Err(format!(
-            "PR #{} branch mismatch: expected {source_branch}->{target_branch}, got {}->{}",
-            pull.number, pull.source.branch, pull.target.branch
-        ));
-    }
-    Ok(())
-}
-
-fn require_pr_target(pull: &PullRequest, target_branch: &str) -> Result<(), String> {
-    if pull.target.branch != target_branch {
-        return Err(format!(
-            "PR #{} target mismatch: expected {target_branch}, got {}->{}",
-            pull.number, pull.source.branch, pull.target.branch
-        ));
-    }
-    Ok(())
-}
-
-fn describe_state(issues: &[Issue], pulls: &[PullRequest]) -> String {
-    let issues = issues
-        .iter()
-        .map(|issue| {
-            format!(
-                "issue #{} {:?} title={:?} labels={:?} deps={:?}",
-                issue.number, issue.state, issue.title, issue.labels, issue.dependencies
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let pulls = pulls
-        .iter()
-        .map(|pull| {
-            format!(
-                "pr #{} {:?} title={:?} labels={:?} branch {}->{} deps={:?}",
-                pull.number,
-                pull.state,
-                pull.title,
-                pull.labels,
-                pull.source.branch,
-                pull.target.branch,
-                pull.dependencies
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("observed issues:\n{issues}\nobserved pull requests:\n{pulls}")
-}
-
-fn has_label(issue: &Issue, label: &str) -> bool {
-    issue.labels.iter().any(|candidate| candidate == label)
-}
-
-fn issue_closed(issue: &Issue) -> bool {
-    matches!(issue.state, temper_forge_model::IssueState::Closed)
-}
-
-fn has_pr_label(pull: &PullRequest, label: &str) -> bool {
-    pull.labels.iter().any(|candidate| candidate == label)
-}
-
-fn issue_state(issue: &Issue) -> IssueState {
-    IssueState {
-        number: issue.number.get(),
-        title: issue.title.clone(),
-        state: if issue_closed(issue) {
-            "closed"
-        } else {
-            "open"
-        }
-        .to_string(),
-        labels: issue.labels.clone(),
-    }
-}
-
-fn pr_state(pull: &PullRequest) -> PullRequestStateEvidence {
-    PullRequestStateEvidence {
-        number: pull.number.get(),
-        title: pull.title.clone(),
-        state: match pull.state {
-            PullRequestState::Open => "open",
-            PullRequestState::Closed => "closed",
-            PullRequestState::Merged => "merged",
-        }
-        .to_string(),
-        labels: pull.labels.clone(),
-        source_branch: pull.source.branch.clone(),
-        target_branch: pull.target.branch.clone(),
-        merged_sha: pull.merge.as_ref().map(|merge| merge.commit_sha.clone()),
-    }
 }

@@ -1,8 +1,8 @@
 schema = "temper.scenario.v1"
 name = "plan-centric-feature-branch"
 status = "active"
-intent = "Validate #144 plan-centric feature branch dogfood delivery from feature issue through aggregate landing PR."
-introduced_by = "#144"
+intent = "Reproduce #620 with repository-default feature metadata, derive a non-default feature branch, inherit it through validation follow-up work, and CI-gate one aggregate landing."
+introduced_by = "#620"
 owner_area = "delivery-validation"
 stability = "provisional"
 timeout = "15m"
@@ -126,11 +126,11 @@ after = "temper.launch_standalone"
 [[steps]]
 id = "wait-for-plan-centric-convergence"
 action = "workflow.wait_convergence"
-until = "feature landing PR merged and feature plus plan issues closed"
+until = "three implementation PRs merged only to the derived feature branch, then one CI-green aggregate landing PR merged to main and feature plus plan issues closed"
 
 [expect]
-outcome = "Feature issue is planned, decomposed into sequential code work, implemented on a feature branch, validated, and landed to main."
-closed_parent_issues = 4
+outcome = "Repository-default feature metadata is replaced by an engine-derived branch, inherited through validation follow-up work, and landed through exactly one CI-gated aggregate PR."
+closed_parent_issues = 5
 
 [change_policy]
 validation_report_required = true
@@ -138,7 +138,7 @@ promotion_artifact = "checked-in"
 fixture_paths_must_exist = true
 compatible_changes = [
   "Clarify scenario documentation without changing the workflow contract.",
-  "Add additional evidence lines or assertions for the same plan-centric flow.",
+  "Add evidence or assertions for derived-branch inheritance, validation follow-ups, prompt guidance, or aggregate landing gates.",
 ]
 requires_new_scenario_or_major_update = [
   "Removing the plan issue control plane.",

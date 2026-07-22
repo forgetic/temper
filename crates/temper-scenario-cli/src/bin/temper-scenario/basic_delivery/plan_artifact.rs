@@ -5,47 +5,82 @@ use temper_testing::live_basic_delivery::{LiveBasicDeliveryEvidence, LivePlanFea
 use crate::run_evidence;
 
 pub(super) fn evidence_lines(plan: &LivePlanFeatureEvidence) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!(
-            "plan-centric feature branch: {} (feature #{} plan #{})",
+            "plan-centric derived feature branch: {} (default metadata on feature #{}; plan #{})",
             plan.feature_branch, plan.feature_issue.number, plan.plan_issue.number
         ),
         format!(
-            "sequential children: first #{} closed, second #{} closed, observed_blocked={} observed_unblocked={}",
+            "issue target branches: feature={:?} plan={:?} first={:?} second={:?} followup={:?}",
+            plan.feature_issue.target_branch,
+            plan.plan_issue.target_branch,
+            plan.first_code_issue.target_branch,
+            plan.second_code_issue.target_branch,
+            plan.followup_code_issue.target_branch
+        ),
+        format!(
+            "sequential children: first #{} closed, second #{} closed, followup #{} closed, observed_blocked={} observed_unblocked={}",
             plan.first_code_issue.number,
             plan.second_code_issue.number,
+            plan.followup_code_issue.number,
             plan.observed_second_blocked,
             plan.observed_second_unblocked
         ),
         format!(
-            "implementation PR targets: #{} {}->{}, #{} {}->{}",
+            "implementation PR targets: #{} {}->{}, #{} {}->{}, #{} {}->{}",
             plan.first_pr.number,
             plan.first_pr.source_branch,
             plan.first_pr.target_branch,
             plan.second_pr.number,
             plan.second_pr.source_branch,
-            plan.second_pr.target_branch
+            plan.second_pr.target_branch,
+            plan.followup_pr.number,
+            plan.followup_pr.source_branch,
+            plan.followup_pr.target_branch
         ),
         format!(
-            "feature landing PR: #{} {}->{} state={} merged_sha={:?}",
+            "main topology: initial={} before_landing={} final={} validation_waited={} landing_open_with_parents_open={} ci_green_before_merge={}",
+            plan.initial_main_sha,
+            plan.main_sha_before_landing,
+            plan.final_main_sha,
+            plan.validation_waited_for_implementations,
+            plan.observed_landing_open_with_parents_open,
+            plan.ci_green_before_merge
+        ),
+        format!(
+            "single feature landing PR: #{} {}->{} state={} merged_sha={:?}",
             plan.landing_pr.number,
             plan.landing_pr.source_branch,
             plan.landing_pr.target_branch,
             plan.landing_pr.state,
             plan.landing_pr.merged_sha
         ),
+    ];
+    lines.extend(plan.validation_audits.iter().map(|audit| {
         format!(
             "plan validation audit: ordinary comment {} author={} outcome={} role={} actor={} job={} transition={} coordination={}",
-            plan.validation_audit.comment_id,
-            plan.validation_audit.author_id,
-            plan.validation_audit.outcome,
-            plan.validation_audit.workflow_role,
-            plan.validation_audit.forge_actor,
-            plan.validation_audit.job_id,
-            plan.validation_audit.routed_transition,
-            plan.validation_audit.coordination_key
-        ),
-    ]
+            audit.comment_id,
+            audit.author_id,
+            audit.outcome,
+            audit.workflow_role,
+            audit.forge_actor,
+            audit.job_id,
+            audit.routed_transition,
+            audit.coordination_key
+        )
+    }));
+    lines.extend(plan.prompt_guidance.iter().map(|prompt| {
+        format!(
+            "captured {} prompts: requests={} role_guidance={:?} prompt_guidance={:?} tool_guidance={:?} constraints={:?}",
+            prompt.role,
+            prompt.request_count,
+            prompt.role_guidance_excerpt,
+            prompt.prompt_guidance_excerpt,
+            prompt.tool_guidance_excerpt,
+            prompt.constraint_excerpts
+        )
+    }));
+    lines
 }
 
 pub(super) fn final_state(
@@ -58,10 +93,12 @@ pub(super) fn final_state(
             issue("plan", &plan.plan_issue),
             issue("first-code", &plan.first_code_issue),
             issue("second-code", &plan.second_code_issue),
+            issue("validation-followup", &plan.followup_code_issue),
         ],
         pull_requests: vec![
             pull_request("first-implementation", &plan.first_pr),
             pull_request("second-implementation", &plan.second_pr),
+            pull_request("followup-implementation", &plan.followup_pr),
             pull_request("feature-landing", &plan.landing_pr),
         ],
         repositories: vec![run_evidence::RepositoryStateEvidence {
@@ -70,12 +107,12 @@ pub(super) fn final_state(
             branches: vec![
                 run_evidence::RepositoryBranchStateEvidence {
                     name: evidence.repo_default_branch.clone(),
-                    head_sha: plan.landing_pr.merged_sha.clone(),
+                    head_sha: Some(plan.final_main_sha.clone()),
                     contains_engineer_diff: Some(true),
                 },
                 run_evidence::RepositoryBranchStateEvidence {
                     name: plan.feature_branch.clone(),
-                    head_sha: plan.second_pr.merged_sha.clone(),
+                    head_sha: plan.followup_pr.merged_sha.clone(),
                     contains_engineer_diff: Some(true),
                 },
             ],
@@ -122,7 +159,7 @@ fn pull_request(
         state: Some(pull.state.clone()),
         labels: pull.labels.clone(),
         head_branch: Some(pull.source_branch.clone()),
-        head_sha: None,
+        head_sha: pull.head_sha.clone(),
         merged_sha: pull.merged_sha.clone(),
     }
 }
