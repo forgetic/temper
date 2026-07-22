@@ -70,6 +70,24 @@ fn repository_ci_runs_e2e_from_repaired_captured_binaries() {
 }
 
 #[test]
+fn repository_ci_installs_locked_web_dependencies_without_advisory_network_calls() {
+    let install_step = CI_WORKFLOW
+        .split_once("      - name: Install (npm ci)\n")
+        .expect("CI declares the web dependency install step")
+        .1
+        .split_once("      - name: Test (vitest)\n")
+        .expect("the web dependency install precedes tests")
+        .0;
+
+    assert!(
+        install_step
+            .lines()
+            .any(|line| line.trim() == "run: npm ci --no-audit --no-fund"),
+        "web dependency installation must avoid non-gating advisory and funding network calls"
+    );
+}
+
+#[test]
 fn repository_ci_reclaims_linked_test_binaries_after_failure() {
     let cleanup_step = CI_WORKFLOW
         .split_once("      - name: Free linked test binaries\n")

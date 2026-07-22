@@ -133,9 +133,10 @@ jobs:
         # prevent this job from reaching the repository checkout.
         uses: https://github.com/actions/checkout@v4
       - name: Install (npm ci)
-        # `npm ci` installs exactly the committed package-lock.json — fails if it
-        # is missing or out of sync with package.json.
-        run: npm ci
+        # `npm ci` installs exactly the committed package-lock.json. Keep the
+        # install hermetic and bounded: advisory/funding network calls are not
+        # validation gates and can strand the shared runner after extraction.
+        run: npm ci --no-audit --no-fund
       - name: Test (vitest)
         run: npm test
       - name: Build (esbuild)
