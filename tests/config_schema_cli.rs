@@ -68,6 +68,10 @@ fn config_schema_default_prints_valid_json_with_current_sections() {
         json!(["standalone", "distributed"])
     );
     assert_eq!(
+        properties["deployment"]["properties"]["standalone_shutdown_budget_secs"]["minimum"],
+        1
+    );
+    assert_eq!(
         properties["workflow"]["properties"]["file"]["type"],
         "string"
     );

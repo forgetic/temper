@@ -156,8 +156,9 @@ impl<T> Drop for OneshotSender<T> {
 }
 
 impl<T> OneshotReceiver<T> {
-    /// Wait for the value; `None` if the sender was dropped without sending.
-    pub async fn recv(self) -> Option<T> {
+    /// Wait for the value without consuming the receiver. A caller may cancel
+    /// this wait and retain the same join authority for a later bounded wait.
+    pub async fn recv_mut(&mut self) -> Option<T> {
         std::future::poll_fn(|task_cx| {
             let mut inner = self.0.lock().expect("oneshot lock");
             if let Some(value) = inner.value.take() {
@@ -170,6 +171,11 @@ impl<T> OneshotReceiver<T> {
             Poll::Pending
         })
         .await
+    }
+
+    /// Wait for the value; `None` if the sender was dropped without sending.
+    pub async fn recv(mut self) -> Option<T> {
+        self.recv_mut().await
     }
 }
 
@@ -217,6 +223,25 @@ mod tests {
             Poll::Ready(Some("ok")) => {}
             other => panic!("unexpected poll result: {other:?}"),
         }
+    }
+
+    #[test]
+    fn cancelled_mutable_oneshot_wait_retains_join_authority() {
+        use std::future::Future;
+
+        let (tx, mut rx) = oneshot::<&str>();
+        let waker = std::task::Waker::noop();
+        let mut task_cx = std::task::Context::from_waker(waker);
+        {
+            let mut pending = std::pin::pin!(rx.recv_mut());
+            assert!(pending.as_mut().poll(&mut task_cx).is_pending());
+        }
+        tx.send("joined");
+        let mut resumed = std::pin::pin!(rx.recv_mut());
+        assert!(matches!(
+            resumed.as_mut().poll(&mut task_cx),
+            Poll::Ready(Some("joined"))
+        ));
     }
 
     #[test]

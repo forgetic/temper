@@ -102,6 +102,12 @@ fn deployment_config_schema() -> Value {
                     ["standalone", "distributed"],
                 ),
             ),
+            (
+                "standalone_shutdown_budget_secs",
+                positive_integer_schema(
+                    "Absolute internal shutdown budget for temper serve standalone, in seconds.",
+                ),
+            ),
         ],
     )
 }

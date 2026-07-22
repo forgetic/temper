@@ -94,16 +94,28 @@ impl StandaloneShutdownSummaryEvent {
     pub fn emit(&self) {
         let blockers = serde_json::to_string(&self.blockers)
             .expect("bounded shutdown blocker summary serializes");
-        tracing::error!(
-            target: "temper::standalone",
-            service = "standalone",
-            event = "standalone.shutdown.summary",
-            disposition = self.disposition.as_str(),
-            blocker_count = self.blockers.len(),
-            omitted_blockers = self.omitted_blockers,
-            blockers = blockers.as_str(),
-            "standalone shutdown reached its terminal disposition"
-        );
+        match self.disposition {
+            StandaloneShutdownDisposition::GracefulExit => tracing::info!(
+                target: "temper::standalone",
+                service = "standalone",
+                event = "standalone.shutdown.summary",
+                disposition = self.disposition.as_str(),
+                blocker_count = self.blockers.len(),
+                omitted_blockers = self.omitted_blockers,
+                blockers = blockers.as_str(),
+                "standalone shutdown reached its terminal disposition"
+            ),
+            StandaloneShutdownDisposition::BoundedCrashHandoff => tracing::error!(
+                target: "temper::standalone",
+                service = "standalone",
+                event = "standalone.shutdown.summary",
+                disposition = self.disposition.as_str(),
+                blocker_count = self.blockers.len(),
+                omitted_blockers = self.omitted_blockers,
+                blockers = blockers.as_str(),
+                "standalone shutdown reached its terminal disposition"
+            ),
+        }
     }
 }
 

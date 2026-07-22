@@ -77,8 +77,9 @@ pub use resolved::{
     AgentTraceSettings, Capability, CodebaseMemoryIndex, CodebaseMemoryMode,
     CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
     ForgeSettings, GitIdentity, ObservabilitySettings, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, SecretReference, WebUiCreds,
-    WorkerLivenessLimits, WorkerPoolSettings, WorkerSettings,
+    ProviderKind, ProviderSettings, RepoPath, Resolved, STANDALONE_FINAL_KILL_ALLOWANCE,
+    STANDALONE_HTTP_DRAIN_ALLOWANCE, SecretReference, WebUiCreds, WorkerLivenessLimits,
+    WorkerPoolSettings, WorkerSettings,
 };
 pub use schema::{
     AgentConfig, AgentCredentials, AgentDeadlineConfig, AgentProfileConfig, AgentProviderConfig,

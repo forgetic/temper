@@ -42,11 +42,17 @@ pub struct Resolved {
     pub agent: AgentSettings,
 }
 
+/// Allowance reserved for draining accepted HTTP connections after local work joins.
+pub const STANDALONE_HTTP_DRAIN_ALLOWANCE: Duration = Duration::from_secs(5);
+/// Allowance between out-of-band emergency KILL and the no-unwind process terminator.
+pub const STANDALONE_FINAL_KILL_ALLOWANCE: Duration = Duration::from_secs(5);
+
 /// Resolved target-era deployment metadata.
 #[derive(Debug, Clone)]
 pub struct DeploymentSettings {
     pub name: Option<String>,
     pub topology: Option<DeploymentTopology>,
+    pub standalone_shutdown_budget: Duration,
 }
 
 /// The supported deployment topology declarations.

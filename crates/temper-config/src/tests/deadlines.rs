@@ -14,6 +14,10 @@ fn deadline_and_liveness_defaults_apply_without_new_toml() {
     let resolved = resolve_text("schema_version = 1\n").expect("legacy config resolves");
 
     assert_eq!(
+        resolved.deployment.standalone_shutdown_budget,
+        Duration::from_secs(30)
+    );
+    assert_eq!(
         resolved.agent.operation_limits.tool_timeout,
         Duration::from_secs(600)
     );
@@ -48,6 +52,7 @@ fn deadline_and_liveness_defaults_apply_without_new_toml() {
 fn config_template_resolves_the_documented_liveness_contract() {
     let template = config_template();
     for documented in [
+        "standalone_shutdown_budget_secs = 30",
         "max_no_progress_secs = 900",
         "graceful_cancellation_grace_secs = 10",
         "forced_termination_grace_secs = 5",
@@ -66,6 +71,28 @@ fn config_template_resolves_the_documented_liveness_contract() {
     assert_eq!(
         resolved.agent.operation_limits.tool_timeout,
         Duration::from_secs(600)
+    );
+}
+
+#[test]
+fn standalone_shutdown_budget_strictly_exceeds_all_fixed_and_worker_allowances() {
+    let resolved =
+        resolve_text("schema_version = 1\n[deployment]\nstandalone_shutdown_budget_secs = 26\n")
+            .expect("one second beyond all default allowances is valid");
+    assert_eq!(
+        resolved.deployment.standalone_shutdown_budget,
+        Duration::from_secs(26)
+    );
+
+    let error = resolve_text(
+        "schema_version = 1\n[deployment]\nstandalone_shutdown_budget_secs = 30\n[worker]\ngraceful_cancellation_grace_secs = 15\nforced_termination_grace_secs = 5\n",
+    )
+    .expect_err("equality with all allowances is invalid");
+    assert!(
+        error
+            .to_string()
+            .contains("must strictly exceed worker graceful_cancellation_grace_secs"),
+        "{error}"
     );
 }
 
@@ -138,6 +165,11 @@ fn invalid_liveness_orderings_are_rejected() {
             "graceful_cancellation_grace_secs plus forced_termination_grace_secs",
         ),
         (
+            "standalone shutdown budget",
+            "[deployment]\nstandalone_shutdown_budget_secs = 25\n",
+            "standalone_shutdown_budget_secs",
+        ),
+        (
             "tool deadline",
             "[worker]\nmax_no_progress_secs = 600\n[agent.deadlines]\ntool_timeout_secs = 600\n",
             "tool_timeout_secs",
@@ -168,6 +200,7 @@ fn invalid_liveness_orderings_are_rejected() {
 #[test]
 fn every_new_duration_rejects_zero() {
     let fields = [
+        ("deployment", "standalone_shutdown_budget_secs"),
         ("worker", "heartbeat_interval_ms"),
         ("worker", "max_no_progress_secs"),
         ("worker", "graceful_cancellation_grace_secs"),
@@ -206,6 +239,11 @@ tool_timeout_secs = 1000
 #[test]
 fn json_schema_marks_all_duration_seconds_as_positive() {
     let schema = config_json_schema();
+    let deployment = &schema["properties"]["deployment"]["properties"];
+    assert_eq!(
+        deployment["standalone_shutdown_budget_secs"]["minimum"],
+        Value::from(1)
+    );
     let worker = &schema["properties"]["worker"]["properties"];
     for field in [
         "heartbeat_interval_ms",

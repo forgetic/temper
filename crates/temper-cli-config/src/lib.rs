@@ -423,6 +423,11 @@ fn render(resolved: &Resolved) -> String {
             .map(|topology| topology.as_str())
             .unwrap_or("(unset)")
     );
+    let _ = writeln!(
+        out,
+        "  standalone_shutdown_budget_secs = {}",
+        resolved.deployment.standalone_shutdown_budget.as_secs()
+    );
 
     let _ = writeln!(out, "\n[paths]");
     let _ = writeln!(

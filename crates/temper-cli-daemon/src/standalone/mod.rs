@@ -13,6 +13,7 @@
 
 mod agent_runner;
 mod banner;
+mod shutdown;
 mod shutdown_signal;
 mod trace_config;
 mod transport;
@@ -195,7 +196,7 @@ async fn run_async(
         None => daemon,
     };
     let daemon = attach_trace_query(daemon, &engine_agent_traces, trace_journal.as_ref());
-    let trace_retention = trace_journal.as_ref().map(|journal| {
+    let mut trace_retention = trace_journal.as_ref().map(|journal| {
         spawn_trace_retention_task(
             &spawner,
             daemon.clone(),
@@ -327,7 +328,7 @@ async fn run_async(
     let traces = TraceCollector::new(worker_config.agent_traces.clone());
     let forge_context = temper_worker::forge_context_host(
         Arc::clone(&transport),
-        cx,
+        cx.clone(),
         worker_config.worker_id.clone(),
         worker_config.worker_auth.clone(),
     );
@@ -361,7 +362,8 @@ async fn run_async(
         .with_pr_freshness_guard(pr_freshness_guard),
     );
 
-    let worker = start_shared_worker(handle.clone(), worker_config, executor, transport, traces);
+    let mut worker =
+        start_shared_worker(handle.clone(), worker_config, executor, transport, traces);
 
     // §7 planes-up line (engine + worker + agent all on this loop) and the
     // workflow's global per-role concurrency limits.
@@ -396,7 +398,7 @@ async fn run_async(
     };
 
     // --- HTTP listener (the readiness signal operators wait for) ---
-    let server = temper_engine::serve(&handle, &daemon, daemon_config.bind)
+    let mut server = temper_engine::serve(&handle, &daemon, daemon_config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
 
@@ -442,25 +444,17 @@ async fn run_async(
     // repos. This is the operator-facing "ready" the boot block closes on.
     emit_engine_status(banner::ready(&repo_paths));
 
-    shutdown_signal::wait().await?;
-    // Close dispatch and HTTP after the signal but before worker proof; release
-    // assignments only after the active-attempt registry has joined.
-    daemon.begin_shutdown().await;
-    server.begin_drain(std::time::Duration::from_secs(5));
-    temper_worker::shutdown_worker_after_signal(
-        std::future::ready(()),
-        std::future::ready(()),
-        worker,
-        async {
-            if let Some(trace_retention) = trace_retention {
-                trace_retention.stop().await;
-            }
-            daemon.release_assignments_for_shutdown().await;
-            server.finish_drain().await;
-        },
+    let signal = shutdown_signal::wait().await?;
+    shutdown::orchestrate(
+        &cx,
+        signal.received_at,
+        resolved.deployment.standalone_shutdown_budget,
+        &daemon,
+        &mut worker,
+        &mut server,
+        &mut trace_retention,
     )
-    .await;
-    Ok(())
+    .await
 }
 
 fn standalone_daemon(

@@ -115,11 +115,18 @@ impl EngineHttpServer {
         let _ = self.shutdown.begin_drain(timeout);
     }
 
-    /// Wait until the listener and every accepted connection have joined.
-    pub async fn finish_drain(mut self) {
-        if let Some(joined) = self.joined.take() {
+    /// Wait until the listener and every accepted connection have joined while
+    /// retaining this server handle if the caller's absolute deadline wins.
+    pub async fn wait_for_drain(&mut self) {
+        if let Some(joined) = self.joined.as_mut() {
             let _ = joined.await;
         }
+        self.joined.take();
+    }
+
+    /// Wait until the listener and every accepted connection have joined.
+    pub async fn finish_drain(mut self) {
+        self.wait_for_drain().await;
     }
 }
 
