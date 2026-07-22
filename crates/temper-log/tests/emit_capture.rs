@@ -229,6 +229,10 @@ fn ci_completed_carries_pr_ref_and_numeric_duration() {
             item: &pr,
             conclusion: "success",
             duration_ms: 280_000,
+            trigger_source: Some("ci_poll"),
+            detection_latency_ms: Some(1_500),
+            queue: Some("pr_ci_failed"),
+            role: Some("engineer"),
         });
     });
 
@@ -243,6 +247,19 @@ fn ci_completed_carries_pr_ref_and_numeric_duration() {
         ev.fields.get("duration_ms").map(String::as_str),
         Some("280000")
     );
+    assert_eq!(
+        ev.fields.get("trigger.source").map(String::as_str),
+        Some("ci_poll")
+    );
+    assert_eq!(
+        ev.fields.get("ci.detection_latency_ms").map(String::as_str),
+        Some("1500")
+    );
+    assert_eq!(
+        ev.fields.get("queue").map(String::as_str),
+        Some("pr_ci_failed")
+    );
+    assert_eq!(ev.fields.get("role").map(String::as_str), Some("engineer"));
     assert_eq!(
         ev.fields.get("message").map(String::as_str),
         Some("trigger: [acme/widgets PR#44] CI completed: success (4m40s)")
@@ -284,6 +301,10 @@ fn every_emit_message_carries_the_padded_service_prefix() {
             item: &pr,
             conclusion: "success",
             duration_ms: 280_000,
+            trigger_source: None,
+            detection_latency_ms: None,
+            queue: None,
+            role: None,
         });
         emit::emit_engine_status("ready -- watching acme/widgets, idle");
     });

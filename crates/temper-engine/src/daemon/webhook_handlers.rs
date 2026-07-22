@@ -68,7 +68,18 @@ impl DaemonMachine {
                             self.wake_coordinator
                                 .configure_repository(verified.hint.repo.clone(), lanes);
                         }
-                        requests.extend(self.schedule_wake(WakeRequest::from_hint(verified.hint)));
+                        let ci = crate::webhook::parse_trigger_facts(
+                            &request.body,
+                            crate::webhook::webhook_event(&headers),
+                            &verified.hint,
+                        )
+                        .ci_completed;
+                        let wake_request = WakeRequest::from_webhook_hint(
+                            verified.hint,
+                            ci.as_ref().and_then(|facts| facts.terminal_verdict()),
+                            ci.and_then(|facts| facts.completed_at),
+                        );
+                        requests.extend(self.schedule_wake(wake_request));
                     }
                     WebhookDisposition::SuppressHeartbeat => {
                         requests.push(DaemonRequest::WakeMeasurement(

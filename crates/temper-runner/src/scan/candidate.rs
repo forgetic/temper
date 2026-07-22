@@ -3,7 +3,8 @@ use temper_forge::{
     PullRequestCandidateQuery,
 };
 use temper_workflow::{
-    ArtifactTarget, CompiledWorkflow, QueueManifest, RoleId, ValidatedWorkflow, workflow_interest,
+    ArtifactTarget, CompiledWorkflow, GateCondition, QueueManifest, RoleId, ValidatedWorkflow,
+    workflow_interest,
 };
 
 /// Breadth of artifact listing a scan should plan.
@@ -48,6 +49,38 @@ pub fn candidate_query_plan_for_roles(
     mode: ScanMode,
 ) -> CandidateQueryPlan {
     candidate_query_plan_for_queues(workflow, queues_for_roles(compiled, roles), mode)
+}
+
+/// Plans the single open pull-request bucket needed to observe CI-gated queues.
+///
+/// Unlike normal scan planning, this deliberately has no issue or terminal
+/// recovery interest. Positive labels still come from the same queue planner as
+/// every other scan, including unfiltered dominance for label-free queues.
+pub(crate) fn ci_candidate_query_plan(
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+) -> CandidateQueryPlan {
+    let mut builder = CandidateQueryBuilder::default();
+    for queue in ci_pull_request_queues(workflow, compiled) {
+        builder.add_open_queue(ArtifactTarget::PullRequest, queue);
+    }
+    builder.build()
+}
+
+pub(crate) fn ci_pull_request_queues<'a>(
+    workflow: &ValidatedWorkflow,
+    compiled: &'a CompiledWorkflow,
+) -> Vec<&'a QueueManifest> {
+    compiled
+        .queues()
+        .iter()
+        .filter(|queue| {
+            matches!(
+                queue.condition.as_ref(),
+                Some(GateCondition::CiPassed | GateCondition::CiFailed)
+            ) && queue_targets(workflow, queue).contains(&ArtifactTarget::PullRequest)
+        })
+        .collect()
 }
 
 fn candidate_query_plan_for_queues(

@@ -13,7 +13,9 @@ use temper_protocol_worker::JobArtifactSnapshot;
 use temper_runner::{
     ArtifactAddress, ScanError, TargetedArtifactSnapshot, WorkItem, targeted_role_work_items,
 };
-use temper_workflow::{ClassifiedArtifact, CompiledWorkflow, RoleId, ValidatedWorkflow};
+use temper_workflow::{
+    CiStatus, ClassifiedArtifact, CompiledWorkflow, QueueId, RoleId, ValidatedWorkflow,
+};
 
 use super::{
     EnrichOutcome, WorkItemJob, enrich_work_item_job_inner, enrichment_failure_log_line,
@@ -29,6 +31,10 @@ pub struct TargetedRoleFeedResult {
     pub artifact: ArtifactAddress,
     pub enqueued: usize,
     pub current_job_ids: BTreeMap<RoleId, BTreeSet<String>>,
+    /// Fresh CI aggregate read while evaluating CI-gated role queues.
+    pub ci_status: Option<CiStatus>,
+    /// Queue/role selections whose enriched jobs were submitted to the daemon.
+    pub enqueued_work: Vec<(QueueId, RoleId)>,
 }
 
 pub(super) struct TargetedEnrichment<'a> {
@@ -190,6 +196,8 @@ pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
             .cloned()
             .map(|role| (role, BTreeSet::new()))
             .collect(),
+        ci_status: None,
+        enqueued_work: Vec::new(),
     };
     let Some(scan) =
         targeted_role_work_items(forge, repo, workflow, compiled, artifact, roles, now).await?
@@ -197,6 +205,7 @@ pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
         return Ok(result);
     };
 
+    result.ci_status = scan.ci_status;
     for item in &scan.work_items {
         let mut job: WorkItemJob = job_from_work_item(&repo_label, item);
         match enrich_work_item_job_inner(
@@ -232,6 +241,9 @@ pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
                         job.job_payload,
                     )
                     .await;
+                result
+                    .enqueued_work
+                    .push((item.queue.clone(), item.role.clone()));
                 result.enqueued += 1;
             }
             Ok(

@@ -8,8 +8,9 @@ use temper_log::emit::{CiCompleted, GateEvaluated, emit_ci_completed, emit_gate_
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
-    ArtifactSource, CiState, ClassifiedArtifact, Classifier, CompiledWorkflow, ExecutionError,
-    GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow, queue_active,
+    ArtifactSource, CiState, CiStatus, ClassifiedArtifact, Classifier, CompiledWorkflow,
+    ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow,
+    queue_active,
 };
 
 use super::candidate::{
@@ -120,11 +121,20 @@ pub(super) async fn targeted_role_inner<F: Forge + ?Sized>(
     classified: ClassifiedArtifact,
     roles: &[RoleId],
     now: DateTime<Utc>,
-) -> Result<Vec<WorkItem>, ScanError> {
+) -> Result<(Vec<WorkItem>, Option<CiStatus>), ScanError> {
     let queues = candidate::queues_for_roles(compiled, roles);
+    let needs_ci = queues
+        .iter()
+        .any(|queue| matches_queue_cheap(*queue, &classified) && SignalNeeds::for_queue(*queue).ci);
     let artifacts =
         targeted_artifacts(forge, repo, workflow, &queues, snapshot, classified, false).await?;
-    Ok(work_items_for_roles(&queues, &artifacts, now, roles))
+    let ci_status = needs_ci
+        .then(|| artifacts.first().map(|artifact| *artifact.signals.ci()))
+        .flatten();
+    Ok((
+        work_items_for_roles(&queues, &artifacts, now, roles),
+        ci_status,
+    ))
 }
 
 pub(super) async fn targeted_automated_inner<F: Forge + ?Sized>(
@@ -412,11 +422,19 @@ fn emit_pr_gate_evaluated(
                 item: &item,
                 conclusion: "success",
                 duration_ms: 0,
+                trigger_source: None,
+                detection_latency_ms: None,
+                queue: None,
+                role: None,
             }),
             CiState::Failed => emit_ci_completed(CiCompleted {
                 item: &item,
                 conclusion: "failure",
                 duration_ms: 0,
+                trigger_source: None,
+                detection_latency_ms: None,
+                queue: None,
+                role: None,
             }),
             CiState::Pending => {}
         }

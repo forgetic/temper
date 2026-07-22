@@ -1,8 +1,16 @@
 # Production worker runtime
 
 In the current two-tier deployment, `temper serve engine` owns webhook intake,
-poll backstops, and queue scheduling while one or more `temper serve worker`
-processes long-poll it for jobs. Forgejo webhooks are posted to the
+the dedicated CI-status and full role-feed poll backstops, mechanical cadence,
+and queue scheduling while one or more `temper serve worker` processes long-
+poll it for jobs. `ci_poll_cadence_secs` bounds webhook-less terminal red-repair
+and green-landing detection, while `poll_cadence_secs` remains the full
+correctness/liveness backstop. `mechanical_cadence_secs` alone does not discover
+red engineer repair work. A `ci_failed` queue matches only after every latest-
+per-name job for the current PR head is terminal; a visible failure mixed with
+queued/running work remains pending.
+
+Forgejo webhooks are posted to the
 engine/standalone HTTP surface at `POST /forgejo/webhook` when `[engine]
 webhook_secret` or `webhook_secret_file` is configured; there is no separate
 `temper serve trigger` process. The older per-role worker, mechanical worker,

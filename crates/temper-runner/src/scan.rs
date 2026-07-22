@@ -6,6 +6,7 @@
 //! are left to the workflow reconciler and do not fail the scan.
 
 mod candidate;
+mod ci;
 mod query;
 
 use chrono::{DateTime, Utc};
@@ -17,13 +18,14 @@ use temper_forge::{
     PullRequestState, RepositoryId,
 };
 use temper_workflow::{
-    ArtifactKindId, ArtifactSource, ClassifiedArtifact, CompiledWorkflow, ExecutionError,
+    ArtifactKindId, ArtifactSource, CiStatus, ClassifiedArtifact, CompiledWorkflow, ExecutionError,
     ExternalToolId, QueueId, RoleId, TransitionId, ValidatedWorkflow, VerdictId,
 };
 
 pub use candidate::{
     CandidateQueryPlan, ScanMode, candidate_query_plan, candidate_query_plan_for_roles,
 };
+pub use ci::{CiStatusObservation, read_ci_status_observations};
 
 /// Explicit issue-or-pull-request address used by item-scoped scans.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -96,6 +98,9 @@ pub struct LoadedTargetedArtifact {
 pub struct TargetedRoleScan {
     pub snapshot: TargetedArtifactSnapshot,
     pub classified: ClassifiedArtifact,
+    /// Fresh aggregate CI status when at least one evaluated role queue needs
+    /// CI. `None` means the exact scan did not read CI.
+    pub ci_status: Option<CiStatus>,
     pub work_items: Vec<WorkItem>,
 }
 
@@ -314,7 +319,7 @@ pub async fn targeted_role_work_items<F: Forge + ?Sized>(
     let Some(loaded) = load_targeted_artifact(forge, repo, workflow, address).await? else {
         return Ok(None);
     };
-    let work_items = query::targeted_role_inner(
+    let (work_items, ci_status) = query::targeted_role_inner(
         forge,
         repo,
         workflow,
@@ -328,6 +333,7 @@ pub async fn targeted_role_work_items<F: Forge + ?Sized>(
     Ok(Some(TargetedRoleScan {
         snapshot: loaded.snapshot,
         classified: loaded.classified,
+        ci_status,
         work_items,
     }))
 }

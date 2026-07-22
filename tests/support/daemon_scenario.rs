@@ -6,23 +6,26 @@
 //!   (real Forgejo API, real git, real Actions CI),
 //! - the real engine service (`temper daemon --service engine`, from the
 //!   `CARGO_BIN_EXE_temper` binary, config-file driven): webhook route, long
-//!   poll backstop, short mechanical backstop, per-role token routing,
+//!   role and mechanical backstops, short dedicated CI-status poll, and
+//!   per-role token routing,
 //! - the deterministic **`temper-testing-daemon-worker`** binary: wire-protocol
-//!   client + real git push as the engineer role identity.
+//!   client + real git push as the engineer role identity, including the
+//!   `pr_ci_failed` sentinel repair.
 //!
 //! The daemon runs the engineer-only daemon-delivery workflow
 //! (`daemon-delivery.json`, the dogfood deployment shape): the mechanical
 //! `raw_intake` automation stamps the seeded intake issue `code`+`ready`, the
 //! engineer worker pushes the implementation branch, the daemon applies the
-//! result as the engineer (PR authored by the engineer role), and the
-//! mechanical backstop lands the PR once real CI is green. Merging closes the
+//! result as the engineer (PR authored by the engineer role), and targeted
+//! mechanical handling lands the PR once real CI is green. Merging closes the
 //! source issue through the provider's native close-on-merge keyword carried by
 //! the worker's commit.
 //!
-//! The daemon's poll backstop is deliberately long: webhooks must drive all
-//! Forge-event progress before that deadline (CI completion has no webhook on
-//! Forgejo 7.0.x, which is exactly what the short mechanical cadence backstops,
-//! same as the legacy fleet's narrow CI status poll).
+//! The daemon's role and broad mechanical backstops are deliberately long.
+//! Webhooks drive ordinary Forge events, while a short dedicated CI-status poll
+//! detects terminal red and green heads that Forgejo 7.0.x does not webhook.
+//! Convergence before either broad deadline therefore proves the exact CI wake
+//! path, not a general role scan or broad mechanical tick.
 
 #[path = "daemon_scenario/convergence.rs"]
 mod convergence;
@@ -48,10 +51,12 @@ use temper_workflow::RoleId;
 /// automation + engineer `open_pr` + mechanical CI-gated `land_pr`).
 const DAEMON_WORKFLOW: &str = include_str!("daemon-delivery.json");
 
-/// Deliberately long daemon poll backstop; scenario progress must come from
-/// Forgejo webhooks delivered to the daemon's webhook route before this
-/// deadline.
+/// Deliberately long broad backstops. The dedicated CI-status cadence must
+/// drive red repair and green landing before either one can run.
 const DAEMON_POLL_CADENCE_SECS: u64 = 600;
+const DAEMON_MECHANICAL_CADENCE_SECS: u64 = 600;
+/// Short test-only cadence for Forgejo's missing Actions-completion webhooks.
+const DAEMON_CI_POLL_CADENCE_SECS: u64 = 1;
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(300);
 
 const ENGINEER: &str = "engineer";
@@ -177,15 +182,8 @@ pub fn run_daemon_variant(variant: Variant) {
     let convergence_start = Instant::now();
     let forge = convergence::admin_forge(&server, &provisioned, &engineer);
 
-    let converged = convergence::drive_variant(
-        &variant,
-        &server,
-        &provisioned,
-        &engineer,
-        &forge,
-        issue,
-        timeout,
-    );
+    let converged =
+        convergence::drive_variant(&variant, &provisioned, &engineer, &forge, issue, timeout);
     let convergence = convergence_start.elapsed();
 
     if let Err(error) = converged {
@@ -202,11 +200,23 @@ pub fn run_daemon_variant(variant: Variant) {
         );
     }
 
-    // Webhooks (plus the narrow mechanical CI backstop) must have driven
-    // convergence; the long poll backstop never gets a chance to.
+    if variant.ci_sentinel == "deferred" {
+        let repairs = worker.assigned_job_count("pr_ci_failed");
+        assert_eq!(
+            repairs,
+            1,
+            "scenario '{}' expected exactly one pr_ci_failed engineer repair, observed {repairs}\n--- worker log ---\n{}",
+            variant.name,
+            worker.log_tail()
+        );
+    }
+
+    // Webhooks plus exact dedicated-CI wakes must have driven convergence; the
+    // broad role and mechanical fallback cadences never get a chance to run.
     assert!(
-        convergence < Duration::from_secs(DAEMON_POLL_CADENCE_SECS),
-        "scenario '{}' converged in {convergence:?}, not before the {DAEMON_POLL_CADENCE_SECS}s poll backstop\n--- daemon log ---\n{}",
+        convergence < Duration::from_secs(DAEMON_POLL_CADENCE_SECS)
+            && convergence < Duration::from_secs(DAEMON_MECHANICAL_CADENCE_SECS),
+        "scenario '{}' converged in {convergence:?}, not before the {DAEMON_POLL_CADENCE_SECS}s role-poll and {DAEMON_MECHANICAL_CADENCE_SECS}s mechanical fallbacks\n--- daemon log ---\n{}",
         variant.name,
         daemon.log_tail()
     );

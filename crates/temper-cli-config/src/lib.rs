@@ -296,6 +296,14 @@ fn render(resolved: &Resolved) -> String {
     let _ = writeln!(out, "  poll_cadence = {:?}", resolved.engine.poll_cadence);
     let _ = writeln!(
         out,
+        "  ci_poll_cadence = {}",
+        match resolved.engine.ci_poll_cadence {
+            Some(cadence) => format!("{cadence:?}"),
+            None => "disabled".to_string(),
+        }
+    );
+    let _ = writeln!(
+        out,
         "  mechanical   = {}",
         match resolved.engine.mechanical_cadence {
             Some(cadence) => format!("{cadence:?}"),
@@ -584,4 +592,42 @@ fn render(resolved: &Resolved) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render;
+
+    fn render_with_ci_cadence(cadence_secs: Option<u64>) -> String {
+        let config = temper_config::Config {
+            engine: temper_config::EngineConfig {
+                ci_poll_cadence_secs: cadence_secs,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = temper_config::resolve(
+            &config,
+            &temper_config::Credentials::default(),
+            &temper_config::NoEnv,
+        )
+        .expect("config resolves");
+        render(&resolved)
+    }
+
+    #[test]
+    fn config_show_displays_effective_ci_poll_cadence_and_disabled_state() {
+        assert!(
+            render_with_ci_cadence(None).contains("ci_poll_cadence = 60s"),
+            "the resolved default should be visible"
+        );
+        assert!(
+            render_with_ci_cadence(Some(23)).contains("ci_poll_cadence = 23s"),
+            "a positive override should be visible"
+        );
+        assert!(
+            render_with_ci_cadence(Some(0)).contains("ci_poll_cadence = disabled"),
+            "an explicit zero should be shown as disabled"
+        );
+    }
 }

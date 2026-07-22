@@ -460,6 +460,64 @@ fn ci_status_filters_to_current_head_before_latest_job_aggregation() {
 }
 
 #[test]
+fn ci_status_completion_comes_only_from_terminal_latest_jobs() {
+    let at = |value: &str| -> DateTime<Utc> { value.parse().expect("valid timestamp") };
+    let head = "abcdef0123456789abcdef0123456789abcdef01";
+
+    let mut old_attempt = ci_job(
+        "build",
+        head,
+        CiJobStatus::Completed,
+        Some(CiJobConclusion::Failure),
+    );
+    old_attempt.created_at = at("2026-05-29T00:00:01Z");
+    old_attempt.completed_at = Some(at("2026-05-29T00:10:00Z"));
+
+    let mut latest_build = ci_job(
+        "build",
+        head,
+        CiJobStatus::Completed,
+        Some(CiJobConclusion::Success),
+    );
+    latest_build.created_at = at("2026-05-29T00:00:02Z");
+    latest_build.completed_at = Some(at("2026-05-29T00:01:02Z"));
+
+    let mut latest_test = ci_job(
+        "test",
+        head,
+        CiJobStatus::Completed,
+        Some(CiJobConclusion::Success),
+    );
+    latest_test.created_at = at("2026-05-29T00:00:03Z");
+    latest_test.completed_at = Some(at("2026-05-29T00:01:03Z"));
+
+    let terminal = CiStatus::from_jobs_for_head(
+        &[old_attempt, latest_build, latest_test.clone()],
+        Some(head),
+    );
+    assert_eq!(terminal.state(), CiState::Passed);
+    assert_eq!(
+        terminal.completed_at(),
+        Some(at("2026-05-29T00:01:03Z")),
+        "an older attempt cannot move aggregate completion later"
+    );
+
+    let running = ci_job("lint", head, CiJobStatus::Running, None);
+    let pending = CiStatus::from_jobs_for_head(&[latest_test.clone(), running], Some(head));
+    assert_eq!(pending.state(), CiState::Pending);
+    assert_eq!(pending.completed_at(), None);
+
+    latest_test.completed_at = None;
+    let terminal_without_complete_timestamps =
+        CiStatus::from_jobs_for_head(&[latest_test], Some(head));
+    assert_eq!(
+        terminal_without_complete_timestamps.state(),
+        CiState::Passed
+    );
+    assert_eq!(terminal_without_complete_timestamps.completed_at(), None);
+}
+
+#[test]
 fn ci_gate_requires_runtime_ci_signal_before_merge_plans() {
     let json = r#"{
         "name": "ci-gated-merge",

@@ -15,6 +15,9 @@ use temper_workflow::RoleId;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
 const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
+/// Dedicated CI-status polling defaults to a short cadence and can be disabled
+/// independently without changing the mandatory role-feed poll backstop.
+const DEFAULT_CI_POLL_CADENCE_SECS: u64 = 60;
 /// Mechanical backstop runs by default. Webhooks are the primary reaction path,
 /// so this level-triggered safety net uses a conservative cadence. Pass
 /// `--mechanical-cadence-secs 0` to disable the mechanical worker entirely.
@@ -28,7 +31,8 @@ pub const USAGE: &str = concat!(
     "--repo <owner/name> [--repo <owner/name> ...] ",
     "--role <role> [--role <role> ...] ",
     "[--workflow <path>] [--poll-cadence-secs <n>] ",
-    "[--mechanical-cadence-secs <n>] [--lease-ttl-secs <n>] ",
+    "[--ci-poll-cadence-secs <n>] [--mechanical-cadence-secs <n>] ",
+    "[--lease-ttl-secs <n>] ",
     "[--webhook-secret-file <path>] [--daemon-id <id>]\n",
     "  Forgejo connection settings (URL, admin token, optional CI web-UI ",
     "credentials) come from the resolved temper config, translated by ",
@@ -43,6 +47,7 @@ pub struct DaemonRunConfig {
     pub roles: Vec<RoleId>,
     pub workflow_file: Option<PathBuf>,
     pub poll_cadence: Duration,
+    pub ci_poll_cadence: Option<Duration>,
     pub mechanical_cadence: Option<Duration>,
     pub lease_ttl: Duration,
     pub webhook_secret_file: Option<PathBuf>,
@@ -118,6 +123,7 @@ struct RawArgs {
     roles: Vec<String>,
     workflow_file: Option<String>,
     poll_cadence_secs: Option<String>,
+    ci_poll_cadence_secs: Option<String>,
     mechanical_cadence_secs: Option<String>,
     lease_ttl_secs: Option<String>,
     webhook_secret_file: Option<String>,
@@ -136,6 +142,9 @@ impl RawArgs {
                 "--role" => raw.roles.push(value_for(&flag, &mut iter)?),
                 "--workflow" => raw.workflow_file = Some(value_for(&flag, &mut iter)?),
                 "--poll-cadence-secs" => raw.poll_cadence_secs = Some(value_for(&flag, &mut iter)?),
+                "--ci-poll-cadence-secs" => {
+                    raw.ci_poll_cadence_secs = Some(value_for(&flag, &mut iter)?)
+                }
                 "--mechanical-cadence-secs" => {
                     raw.mechanical_cadence_secs = Some(value_for(&flag, &mut iter)?)
                 }
@@ -159,6 +168,11 @@ impl RawArgs {
             "--poll-cadence-secs",
             DEFAULT_POLL_CADENCE_SECS,
         )?;
+        let ci_poll_cadence = parse_disableable_secs(
+            self.ci_poll_cadence_secs.as_deref(),
+            "--ci-poll-cadence-secs",
+            DEFAULT_CI_POLL_CADENCE_SECS,
+        )?;
         let mechanical_cadence = parse_disableable_secs(
             self.mechanical_cadence_secs.as_deref(),
             "--mechanical-cadence-secs",
@@ -177,6 +191,7 @@ impl RawArgs {
             roles,
             workflow_file: self.workflow_file.map(PathBuf::from),
             poll_cadence,
+            ci_poll_cadence,
             mechanical_cadence,
             lease_ttl,
             webhook_secret_file: self.webhook_secret_file.map(PathBuf::from),

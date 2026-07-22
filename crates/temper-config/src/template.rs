@@ -44,9 +44,13 @@ port = 4000
 repos = [\"acme/widgets\"]
 roles = [\"architect\", \"engineer\", \"code-reviewer\"]
 poll_cadence_secs = 300
-# Mechanical backstop (label transitions / PR landing). On by default;
-# webhooks are the primary reaction path and this is the level-triggered
-# safety net. Omit for the default cadence; set 0 to disable.
+# Dedicated CI-status backstop for webhook-less terminal red repair and green
+# landing detection. Omit for the 60-second default; set 0 to disable. The
+# general role poll above remains the full correctness/liveness backstop.
+ci_poll_cadence_secs = 60
+# Mechanical backstop (label transitions / PR landing). On by default; it does
+# not discover red engineer repair work. Omit for the default cadence; set 0 to
+# disable.
 # mechanical_cadence_secs = 120
 lease_ttl_secs = 300
 # Optional target-era references into the selected secret source. Values are

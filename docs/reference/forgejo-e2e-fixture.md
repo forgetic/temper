@@ -90,9 +90,19 @@ the engineer's fix commit includes `[ci-pass]`, producing a passing run on a new
 head SHA. This avoids `actions/checkout` and lets fail-then-pass scenarios assert
 two verdicts on two SHAs of the same head branch.
 
-Forgejo 7.0.x does not emit Actions-completion repo webhooks. CI-reading role
-workers therefore use a 1s status-poll fallback for CI verdict transitions: the
-owner in every scenario, and the engineer in the fail-then-pass scenario.
+Forgejo 7.0.x does not emit Actions-completion repository webhooks. The daemon
+fixture therefore sets `ci_poll_cadence_secs = 1` while retaining deliberately
+long 600-second `poll_cadence_secs` and `mechanical_cadence_secs` values. The
+short dedicated monitor emits exact PR CI hints: terminal red evaluates
+`pr_ci_failed` for the engineer, and terminal green runs targeted mechanical
+landing. Convergence before either broad fallback proves the dedicated path.
+
+`ci_poll_cadence_secs` bounds webhook-less red-repair and green-landing
+detection; `poll_cadence_secs` remains the full correctness/liveness backstop.
+A mechanical cadence alone does not discover red engineer work. The CI
+aggregate is latest-per-name for the current head, so `ci_failed` requires every
+latest job to be terminal; a failed job mixed with queued or running work stays
+pending.
 
 ## PR head preparation
 
@@ -104,13 +114,10 @@ Recreating the branch or prep file is tolerated, making the step idempotent.
 
 ## Diagnostics and quirks
 
-Scenario fixtures set `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` so web-UI CI fallback
-reads are counted. Worker summaries include tick counts, scanned repository
-counts/paths, and CI read log lines. Timeout panics print worker logs, runner log
-tail, trigger URL, stalled assertion text, and per-repo CI diagnostics.
-The trigger URL / wake-socket details here describe legacy/internal fixture
-paths; supported operator webhook intake is the engine/standalone
-`/forgejo/webhook` route.
+Scenario diagnostics identify the dedicated `ci_poll` trigger and print each
+PR head plus its CI jobs. Timeout panics also include daemon and worker log tails,
+runner status/log tail, and the stalled assertion. The red→green capstone counts
+`pr_ci_failed` worker assignments and requires exactly one.
 
 The server config must allow loopback webhook targets:
 `[webhook] ALLOWED_HOST_LIST = 127.0.0.1,localhost`. If hooks register but no

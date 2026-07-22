@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
+use crate::{CiTerminalTransition, CiTerminalVerdict};
+use temper_workflow::RoleId;
 
 fn t(nanos: u64) -> EngineTime {
     EngineTime::from_nanos(nanos)
@@ -70,8 +72,9 @@ fn assert_mixed_mechanical_scope(scope: &WakeScope, number: u64) {
     assert_eq!(
         scope
             .targets()
-            .get(&(HintArtifactKind::PullRequest, ItemNumber::new(number))),
-        Some(&ChangeKind::Ci),
+            .get(&(HintArtifactKind::PullRequest, ItemNumber::new(number)))
+            .map(|target| target.change),
+        Some(ChangeKind::Ci),
         "the exact CI target is retained beside broad work"
     );
 }
@@ -287,10 +290,99 @@ fn duplicate_pr_changes_merge_semantically_and_keep_ci_behavior() {
         assert_eq!(
             scope
                 .targets()
-                .get(&(HintArtifactKind::PullRequest, ItemNumber::new(7))),
-            Some(&ChangeKind::Ci)
+                .get(&(HintArtifactKind::PullRequest, ItemNumber::new(7)))
+                .map(|target| target.change),
+            Some(ChangeKind::Ci)
         );
     }
+}
+
+#[test]
+fn ci_provenance_coalesces_by_source_priority_in_both_orders() {
+    let repository = repo("ai", "temper");
+    for poll_first in [true, false] {
+        let lane = WakeLane::Role(RoleId::new("engineer"));
+        let mut coordinator = configured(Duration::ZERO, 2, &repository, [lane.clone()]);
+        let hint =
+            ChangeHint::pull_request(repository.clone(), ItemNumber::new(627), ChangeKind::Ci);
+        let webhook = WakeRequest::from_webhook_hint(
+            hint.clone(),
+            Some(CiTerminalVerdict::Failed),
+            Some("2026-07-21T10:00:00Z".parse().unwrap()),
+        );
+        let poll = WakeRequest::from_ci_poll_transition(CiTerminalTransition {
+            hint,
+            head_sha: "head-627".to_string(),
+            verdict: CiTerminalVerdict::Passed,
+            completed_at: Some("2026-07-21T10:00:01Z".parse().unwrap()),
+        });
+        let requests = if poll_first {
+            [poll, webhook]
+        } else {
+            [webhook, poll]
+        };
+        for (index, request) in requests.into_iter().enumerate() {
+            coordinator.schedule(t(index as u64), request, false);
+        }
+
+        let target = coordinator
+            .repository_state(&repository)
+            .unwrap()
+            .pending
+            .scope(&lane)
+            .unwrap()
+            .targets()
+            .get(&(HintArtifactKind::PullRequest, ItemNumber::new(627)))
+            .copied()
+            .expect("CI target is retained");
+        let facts = target.ci.expect("CI provenance is retained");
+        assert_eq!(facts.source, CiTriggerSource::CiPoll);
+        assert_eq!(facts.verdict, Some(CiTerminalVerdict::Passed));
+        assert_eq!(
+            facts.completed_at,
+            Some("2026-07-21T10:00:01Z".parse().unwrap())
+        );
+    }
+}
+
+#[test]
+fn role_broad_scope_retains_only_bounded_ci_provenance() {
+    let repository = repo("ai", "temper");
+    let lane = WakeLane::Role(RoleId::new("engineer"));
+    let mut coordinator = configured(Duration::ZERO, 2, &repository, [lane.clone()]);
+    coordinator.schedule(
+        t(0),
+        WakeRequest::broad_for_lanes(repository.clone(), [lane.clone()], BroadMode::Poll),
+        false,
+    );
+    coordinator.schedule(
+        t(1),
+        WakeRequest::from_ci_poll_transition(CiTerminalTransition {
+            hint: ChangeHint::pull_request(repository.clone(), ItemNumber::new(44), ChangeKind::Ci),
+            head_sha: "head-44".to_string(),
+            verdict: CiTerminalVerdict::Failed,
+            completed_at: None,
+        }),
+        false,
+    );
+
+    let scope = coordinator
+        .repository_state(&repository)
+        .unwrap()
+        .pending
+        .scope(&lane)
+        .unwrap();
+    assert_eq!(scope.broad_mode(), Some(BroadMode::Poll));
+    assert_eq!(scope.target_count(), 1);
+    assert_eq!(
+        scope
+            .targets()
+            .values()
+            .next()
+            .and_then(|target| target.ci)
+            .map(|facts| facts.source),
+        Some(CiTriggerSource::CiPoll)
+    );
 }
 
 #[test]
@@ -341,7 +433,8 @@ fn ci_after_in_flight_broad_pass_creates_exact_dirty_follow_up() {
     assert_eq!(
         scope
             .targets()
-            .get(&(HintArtifactKind::PullRequest, ItemNumber::new(314))),
-        Some(&ChangeKind::Ci)
+            .get(&(HintArtifactKind::PullRequest, ItemNumber::new(314)))
+            .map(|target| target.change),
+        Some(ChangeKind::Ci)
     );
 }

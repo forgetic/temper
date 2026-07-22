@@ -541,6 +541,15 @@ impl Daemon {
         });
     }
 
+    /// Submits one synthetic terminal CI transition through the same bounded
+    /// admission, coalescing, apply-window, and repository-concurrency path as
+    /// webhook wakes.
+    pub fn submit_ci_poll_transition(&self, transition: crate::CiTerminalTransition) {
+        let _ = self.cq.send(DaemonCompletion::ScheduleWake {
+            request: WakeRequest::from_ci_poll_transition(transition),
+        });
+    }
+
     /// Schedules one mandatory broad role-poll backstop generation.
     pub fn schedule_role_poll<I>(&self, repo: RepositoryPath, roles: I)
     where

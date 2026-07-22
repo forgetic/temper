@@ -27,6 +27,9 @@ bind = "0.0.0.0:4000"
 repos = ["acme/service"]
 roles = ["architect", "engineer", "reviewer"]
 poll_cadence_secs = 300
+# Dedicated polling for terminal CI changes when Actions-completion webhooks are
+# unavailable. Set 0 to disable; poll_cadence_secs remains the full backstop.
+ci_poll_cadence_secs = 60
 mechanical_cadence_secs = 120
 lease_ttl_secs = 300
 forge_token = "engine-forge-token"

@@ -19,8 +19,9 @@ value the hermetic suite cannot give:
    real git push auth, and the real `temper-daemon` binary's
    env→config→composition (`FORGEJO_*`, `TEMPER_FORGEJO_TOKEN_<ROLE>`,
    CLI flags).
-2. **Real CI red→green**: mechanical merge-on-green against real Actions
-   verdicts — including *not* merging while CI is red.
+2. **Real CI red→green**: terminal red starts one `pr_ci_failed` engineer
+   repair, that repair pushes a distinct green head, and the exact green CI wake
+   drives mechanical merge — including *not* merging while CI is red.
 
 It deliberately does **not** re-prove workflow logic; scenarios are minimal.
 
@@ -39,8 +40,8 @@ Two ignored tests; each owns the live world for one scenario:
   │ temper-daemon / serve engine  │   │ temper-testing-    │ │ forgejo-runner │
   │ or standalone binary          │   │ daemon-worker      │ │ (host mode)    │
   │ (engine webhook route,        │◄──┤ (wire-protocol     │ └────────────────┘
-  │  poll + mechanical backstops, │   │  client + real git │
-  │  lease-gated appliers)        │   │  push)             │
+  │  role + CI polls, mechanical  │   │  client + real git │
+  │  backstop, lease appliers)    │   │  push)             │
   └───────────────────────────────┘   └────────────────────┘
 ```
 
@@ -119,21 +120,31 @@ later passing fix SHA — two real verdicts.
 
 **Reading.** Forgejo 7.0.12 lacks Actions run/task REST endpoints, so
 `list_ci_jobs` is REST-first with a **password/web-UI fallback** (ADR 0019).
-The daemon's mechanical backstop performs these reads with the web-UI
-credentials passed through its environment, exactly as the production
-launcher wires them.
+The dedicated CI-status monitor performs these reads with the web-UI
+credentials passed through the daemon's environment, exactly as the production
+launcher wires them. Its terminal transitions enter the bounded wake
+coordinator as exact PR-scoped CI hints; the fresh targeted path evaluates role
+queues for red and mechanical queues for green.
 
 ## Triggering status
 
-Each scenario is webhook-driven: real Forgejo posts to the daemon's webhook
-route and every verified delivery wake-scans the configured feeds. The
-daemon's normal poll backstop is deliberately long (600 s) and the tests
-assert convergence before it, so webhook wakes must carry all Forge-event
-progress. Forgejo 7.0.x does not surface Actions completion as a repo
-webhook, so the daemon's short mechanical cadence is the CI-verdict backstop
-(the successor of the legacy fleet's narrow CI status poll). Polling remains
-the correctness backstop; webhook payloads are hints only and every wake runs
-a fresh Forge scan.
+Ordinary scenario progress is webhook-driven: real Forgejo posts to the
+daemon's webhook route and every verified delivery wake-scans fresh Forge state.
+CI completion is the exception on Forgejo 7.0.x, which does not surface Actions
+completion as a repository webhook. The fixture therefore configures a short
+1-second `ci_poll_cadence_secs` and deliberately long 600-second
+`poll_cadence_secs` and `mechanical_cadence_secs`. Convergence before the
+300-second test deadline proves terminal red repair and terminal green landing
+came from exact synthetic CI hints, not from either broad fallback.
+
+The cadence boundaries are intentionally distinct. `ci_poll_cadence_secs`
+bounds webhook-less detection for both red engineer repair and green mechanical
+landing. `poll_cadence_secs` remains the full correctness/liveness backstop.
+`mechanical_cadence_secs` runs automated queues, but alone cannot discover the
+role-owned `pr_ci_failed` repair queue. The monitored aggregate is current-head
+and latest-per-job-name: `ci_failed` matches only after every latest job is
+terminal and at least one is non-success. A visible failure alongside any
+queued or running latest job remains pending.
 
 ## What replaced the legacy fleet e2e
 
