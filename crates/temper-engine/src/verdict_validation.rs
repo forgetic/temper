@@ -2,7 +2,7 @@
 
 //! Authoritative successful-verdict validation against fresh Forge state.
 
-use temper_forge::{Forge, ItemNumber, RepositoryPath};
+use temper_forge::{Forge, ItemNumber, Repository, RepositoryPath};
 use temper_protocol_worker::{JobContext, JobResult};
 use temper_verdict::{SourceMetadata, validate_verdict_result};
 use temper_workflow::{
@@ -12,7 +12,8 @@ use temper_workflow::{
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
 use crate::verdict_contract::{
-    child_kind_has_reachable_queue, derive_verdict_contracts, source_metadata_from_workflow,
+    BranchResolutionContext, child_kind_has_reachable_queue, derive_resolved_verdict_contracts,
+    source_metadata_from_workflow,
 };
 
 pub(crate) enum VerdictCheck {
@@ -20,6 +21,13 @@ pub(crate) enum VerdictCheck {
     Stale,
     Retryable(String),
     Rejected(String),
+}
+
+struct FreshVerdictSource {
+    metadata: SourceMetadata,
+    kind: ArtifactKindId,
+    number: ItemNumber,
+    repository: Repository,
 }
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
@@ -60,17 +68,15 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 "action `{action}` does not declare verdict `{verdict}`"
             ));
         };
-        let contracts = derive_verdict_contracts(self.workflow.as_ref(), tool);
-        let contract = contracts.get(verdict.trim());
 
-        let (source_body, source_metadata) = match job.artifact.kind.as_str() {
+        let fresh = match job.artifact.kind.as_str() {
             "issue" => match self.fresh_issue_for_validation(job, &context).await {
-                Ok(Some(body)) => body,
+                Ok(Some(source)) => source,
                 Ok(None) => return VerdictCheck::Stale,
                 Err(outcome) => return outcome,
             },
             "pull_request" => match self.fresh_pull_request_for_validation(job, &context).await {
-                Ok(Some(body)) => body,
+                Ok(Some(source)) => source,
                 Ok(None) => return VerdictCheck::Stale,
                 Err(outcome) => return outcome,
             },
@@ -81,14 +87,38 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             }
         };
 
-        if let Err(error) = validate_verdict_result(result, &contracts, &source_metadata) {
+        let correlation_key = context
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.coordination_key.as_str());
+        let contracts = match derive_resolved_verdict_contracts(
+            self.workflow.as_ref(),
+            tool,
+            &BranchResolutionContext {
+                source_kind: fresh.kind.as_str(),
+                source_number: Some(fresh.number.get()),
+                source_metadata: &fresh.metadata,
+                repository_default: &fresh.repository.default_branch,
+                correlation_key,
+            },
+        ) {
+            Ok(contracts) => contracts,
+            Err(reason) => {
+                return VerdictCheck::Rejected(format!(
+                    "action `{action}`, verdict `{verdict}`, routed transition `{routed}`: {reason}"
+                ));
+            }
+        };
+        let contract = contracts.get(verdict.trim());
+
+        if let Err(error) = validate_verdict_result(result, &contracts, &fresh.metadata) {
             return VerdictCheck::Rejected(format!(
                 "action `{action}`, verdict `{verdict}`, routed transition `{routed}`: {error}"
             ));
         }
         if contract.is_some_and(|contract| contract.min_children > 0) {
             if let Err(reason) = self
-                .validate_child_inputs(job, result, &source_body, contract.expect("checked"))
+                .validate_child_inputs(job, result, contract.expect("checked"))
                 .await
             {
                 return reason;
@@ -101,11 +131,11 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         &self,
         job: &InFlightJob,
         context: &JobContext,
-    ) -> Result<Option<(String, SourceMetadata)>, VerdictCheck> {
-        let (repo, number) = self.validation_coordinates(job).await?;
+    ) -> Result<Option<FreshVerdictSource>, VerdictCheck> {
+        let (repository, number) = self.validation_coordinates(job).await?;
         let issue = self
             .forge
-            .get_issue_by_number(&repo, number)
+            .get_issue_by_number(&repository.id, number)
             .await
             .map_err(|error| {
                 VerdictCheck::Retryable(format!("read fresh source issue: {error}"))
@@ -120,24 +150,27 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .map(source_metadata_from_workflow)
             .unwrap_or_default();
         let source_kind = ArtifactKindId::new(&context.artifact_kind);
-        if !matches!(
-            Classifier::new(self.workflow.as_ref()).classify_issue(&issue),
-            Ok(classified) if classified.kind == source_kind
-        ) {
-            return Ok(None);
-        }
-        Ok(Some((issue.body, metadata)))
+        let classified = match Classifier::new(self.workflow.as_ref()).classify_issue(&issue) {
+            Ok(classified) if classified.kind == source_kind => classified,
+            _ => return Ok(None),
+        };
+        Ok(Some(FreshVerdictSource {
+            metadata,
+            kind: classified.kind,
+            number,
+            repository,
+        }))
     }
 
     async fn fresh_pull_request_for_validation(
         &self,
         job: &InFlightJob,
         context: &JobContext,
-    ) -> Result<Option<(String, SourceMetadata)>, VerdictCheck> {
-        let (repo, number) = self.validation_coordinates(job).await?;
+    ) -> Result<Option<FreshVerdictSource>, VerdictCheck> {
+        let (repository, number) = self.validation_coordinates(job).await?;
         let pull = self
             .forge
-            .get_pull_request_by_number(&repo, number)
+            .get_pull_request_by_number(&repository.id, number)
             .await
             .map_err(|error| {
                 VerdictCheck::Retryable(format!("read fresh source pull request: {error}"))
@@ -152,19 +185,23 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .map(source_metadata_from_workflow)
             .unwrap_or_default();
         let source_kind = ArtifactKindId::new(&context.artifact_kind);
-        if !matches!(
-            Classifier::new(self.workflow.as_ref()).classify_pull_request(&pull),
-            Ok(classified) if classified.kind == source_kind
-        ) {
-            return Ok(None);
-        }
-        Ok(Some((pull.body, metadata)))
+        let classified = match Classifier::new(self.workflow.as_ref()).classify_pull_request(&pull)
+        {
+            Ok(classified) if classified.kind == source_kind => classified,
+            _ => return Ok(None),
+        };
+        Ok(Some(FreshVerdictSource {
+            metadata,
+            kind: classified.kind,
+            number,
+            repository,
+        }))
     }
 
     async fn validation_coordinates(
         &self,
         job: &InFlightJob,
-    ) -> Result<(temper_forge::RepositoryId, ItemNumber), VerdictCheck> {
+    ) -> Result<(Repository, ItemNumber), VerdictCheck> {
         let (owner, name) = job.repo.split_once('/').ok_or_else(|| {
             VerdictCheck::Rejected(format!("malformed repository path `{}`", job.repo))
         })?;
@@ -182,14 +219,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .ok_or_else(|| {
                 VerdictCheck::Rejected("source artifact number is not numeric".to_string())
             })?;
-        Ok((repository.id, number))
+        Ok((repository, number))
     }
 
     async fn validate_child_inputs(
         &self,
         job: &InFlightJob,
         result: &JobResult,
-        _source_body: &str,
         contract: &temper_verdict::VerdictContract,
     ) -> Result<(), VerdictCheck> {
         for child in &result.children {

@@ -43,7 +43,7 @@ pub(super) struct RoutedVerdictApply<'a> {
 /// Carries the arguments [`ForgeApplier::bind_create_issues_children`] needs.
 pub(super) struct VerdictChildrenBinding<'a> {
     pub(super) job: &'a InFlightJob,
-    pub(super) repository_id: &'a RepositoryId,
+    pub(super) repository: &'a temper_forge::Repository,
     pub(super) artifact_kind: &'a str,
     pub(super) source_body: &'a str,
     pub(super) source_labels: &'a [String],
@@ -237,7 +237,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             && !self
                 .bind_create_issues_children(VerdictChildrenBinding {
                     job,
-                    repository_id: &repository.id,
+                    repository: &repository,
                     artifact_kind: &job_context.artifact_kind,
                     source_body: &issue.body,
                     source_labels: &issue.labels,

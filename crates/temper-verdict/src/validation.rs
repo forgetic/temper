@@ -202,7 +202,7 @@ fn validate_child_metadata<C: VerdictChildView>(
     contract: &crate::VerdictContract,
     problems: &mut Vec<String>,
 ) {
-    if contract.required_child_metadata.is_empty() {
+    if contract.required_child_metadata.is_empty() && contract.target_branch.is_none() {
         return;
     }
     let metadata = match parse_workflow_metadata(child.body()) {
@@ -216,6 +216,11 @@ fn validate_child_metadata<C: VerdictChildView>(
         }
     };
     for key in &contract.required_child_metadata {
+        // A resolved target-branch requirement owns both exact-value validation
+        // and omission semantics. Do not also apply the legacy non-blank rule.
+        if key == "target_branch" && contract.target_branch.is_some() {
+            continue;
+        }
         if metadata
             .get(key)
             .and_then(serde_json::Value::as_str)
@@ -226,6 +231,53 @@ fn validate_child_metadata<C: VerdictChildView>(
                 display_slug(child, index)
             ));
         }
+    }
+    if let Some(requirement) = &contract.target_branch {
+        validate_target_branch(child, index, &metadata, requirement, problems);
+    }
+}
+
+fn validate_target_branch<C: VerdictChildView>(
+    child: &C,
+    index: usize,
+    metadata: &BTreeMap<String, serde_json::Value>,
+    requirement: &crate::TargetBranchRequirement,
+    problems: &mut Vec<String>,
+) {
+    let slug = display_slug(child, index);
+    let Some(authored) = metadata.get("target_branch") else {
+        if !requirement.allow_omission {
+            problems.push(format!(
+                "child `{slug}` must explicitly set workflow metadata `target_branch` to `{}`",
+                requirement.expected
+            ));
+        }
+        return;
+    };
+    let Some(authored) = authored.as_str() else {
+        problems.push(format!(
+            "child `{slug}` explicitly sets workflow metadata `target_branch` to a blank or non-string value"
+        ));
+        return;
+    };
+    if authored.trim().is_empty() {
+        problems.push(format!(
+            "child `{slug}` explicitly sets blank workflow metadata `target_branch`"
+        ));
+        return;
+    }
+    if requirement.expected != requirement.repository_default
+        && authored == requirement.repository_default
+    {
+        problems.push(format!(
+            "child `{slug}` explicitly targets repository default branch `{authored}`; expected `{}`",
+            requirement.expected
+        ));
+    } else if authored != requirement.expected {
+        problems.push(format!(
+            "child `{slug}` explicitly targets branch `{authored}`; expected `{}`",
+            requirement.expected
+        ));
     }
 }
 

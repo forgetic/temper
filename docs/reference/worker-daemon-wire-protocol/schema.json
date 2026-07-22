@@ -434,6 +434,9 @@
      "type": "array",
      "items": { "type": "string" }
     },
+    "target_branch": {
+     "$ref": "#/$defs/targetBranchRequirement"
+    },
     "requires_pr_title": { "type": "boolean" },
     "requires_pr_body": { "type": "boolean" },
     "requires_body": { "type": "boolean" },
@@ -442,6 +445,16 @@
      "items": { "type": "string" }
     }
    }
+  },
+  "targetBranchRequirement": {
+   "type": "object",
+   "required": ["expected", "repository_default"],
+   "properties": {
+    "expected": { "type": "string", "minLength": 1 },
+    "repository_default": { "type": "string", "minLength": 1 },
+    "allow_omission": { "type": "boolean" }
+   },
+   "additionalProperties": false
   },
   "jobChild": {
    "type": "object",

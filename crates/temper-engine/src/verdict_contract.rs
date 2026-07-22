@@ -5,11 +5,21 @@
 use std::collections::BTreeSet;
 
 use temper_protocol_worker::JobArtifactSnapshot;
-use temper_verdict::{SourceMetadata, VerdictContract, VerdictContracts};
+use temper_verdict::{SourceMetadata, TargetBranchRequirement, VerdictContract, VerdictContracts};
 use temper_workflow::{
-    ArtifactKindId, Effect, RelationKind, ToolManifest, ValidatedWorkflow, WorkflowMetadata,
-    parse_metadata_block,
+    ArtifactKindId, Effect, RelationKind, TargetBranchPolicy, ToolManifest, ValidatedWorkflow,
+    WorkflowMetadata, parse_metadata_block,
 };
+
+/// Fresh source/repository facts used to turn a typed workflow policy into one
+/// exact branch contract.
+pub(crate) struct BranchResolutionContext<'a> {
+    pub(crate) source_kind: &'a str,
+    pub(crate) source_number: Option<u64>,
+    pub(crate) source_metadata: &'a SourceMetadata,
+    pub(crate) repository_default: &'a str,
+    pub(crate) correlation_key: Option<&'a str>,
+}
 
 pub(crate) fn derive_verdict_contracts(
     workflow: &ValidatedWorkflow,
@@ -82,6 +92,121 @@ pub(crate) fn derive_verdict_contracts(
         .collect()
 }
 
+/// Derives the ordinary result shape and resolves every child branch policy
+/// against the supplied source and repository facts.
+pub(crate) fn derive_resolved_verdict_contracts(
+    workflow: &ValidatedWorkflow,
+    tool: &ToolManifest,
+    resolution: &BranchResolutionContext<'_>,
+) -> Result<VerdictContracts, String> {
+    let mut contracts = derive_verdict_contracts(workflow, tool);
+    for (verdict, routed) in &tool.outcomes {
+        let Some(transition) = workflow
+            .transitions()
+            .iter()
+            .find(|transition| transition.id == *routed)
+        else {
+            continue;
+        };
+        let Some(contract) = contracts.get_mut(verdict.as_str()) else {
+            continue;
+        };
+        for policy in transition.effects.iter().filter_map(|effect| match effect {
+            Effect::CreateIssues {
+                target_branch_policy: Some(policy),
+                ..
+            } => Some(*policy),
+            _ => None,
+        }) {
+            let requirement = resolve_target_branch_requirement(policy, resolution)?;
+            if contract
+                .target_branch
+                .as_ref()
+                .is_some_and(|existing| existing != &requirement)
+            {
+                return Err(format!(
+                    "routed transition `{routed}` resolves conflicting child target branches"
+                ));
+            }
+            contract.target_branch = Some(requirement);
+        }
+    }
+    Ok(contracts)
+}
+
+/// Resolves one typed branch policy. Deterministic branch production prefers the
+/// fresh source kind/number identity and uses a stable correlation key only when
+/// a source number is unavailable to a compatibility caller.
+pub(crate) fn resolve_target_branch_requirement(
+    policy: TargetBranchPolicy,
+    context: &BranchResolutionContext<'_>,
+) -> Result<TargetBranchRequirement, String> {
+    let repository_default = context.repository_default.trim();
+    if repository_default.is_empty() {
+        return Err("source repository has a blank default branch".to_string());
+    }
+
+    let expected = match policy {
+        TargetBranchPolicy::DerivedFeatureBranch => {
+            let source_kind = context.source_kind.trim();
+            match (
+                source_kind.is_empty(),
+                context.source_number.filter(|number| *number > 0),
+            ) {
+                (false, Some(number)) => {
+                    format!("agent/pr-for-{}-{number}", safe_fragment(source_kind))
+                }
+                _ => {
+                    let correlation_key = context
+                    .source_metadata
+                    .get("correlation_key")
+                    .map(String::as_str)
+                    .or(context.correlation_key)
+                    .map(str::trim)
+                    .filter(|key| !key.is_empty())
+                    .ok_or_else(|| {
+                        "derived target-branch policy has neither a source number nor a stable correlation key"
+                            .to_string()
+                    })?;
+                    format!("agent/{}", safe_fragment(correlation_key))
+                }
+            }
+        }
+        TargetBranchPolicy::Inherit => context
+            .source_metadata
+            .get("target_branch")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty())
+            .ok_or_else(|| {
+                "inherited target-branch policy requires non-blank source metadata `target_branch`"
+                    .to_string()
+            })?
+            .to_string(),
+        TargetBranchPolicy::RepositoryDefault => repository_default.to_string(),
+        TargetBranchPolicy::NonDefault => {
+            return Err(
+                "non_default is a consuming policy and cannot stamp create_issues children"
+                    .to_string(),
+            );
+        }
+    };
+
+    if policy != TargetBranchPolicy::RepositoryDefault && expected == repository_default {
+        return Err(format!(
+            "target-branch policy `{policy}` resolved to repository default branch `{repository_default}`"
+        ));
+    }
+
+    Ok(TargetBranchRequirement {
+        expected,
+        repository_default: repository_default.to_string(),
+        // Every policy accepted on create_issues is a production policy: the
+        // engine, not the model, owns stamping an omitted child value.
+        allow_omission: true,
+    })
+}
+
 pub(crate) fn child_kind_has_reachable_queue(
     workflow: &ValidatedWorkflow,
     kind: &ArtifactKindId,
@@ -116,7 +241,28 @@ pub(crate) fn source_metadata_from_workflow(metadata: WorkflowMetadata) -> Sourc
     if let Some(target_branch) = metadata.target_branch {
         values.insert("target_branch".to_string(), target_branch);
     }
+    if let Some(correlation_key) = metadata.correlation_key {
+        values.insert("correlation_key".to_string(), correlation_key);
+    }
     values
+}
+
+fn safe_fragment(value: &str) -> String {
+    let safe: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if safe.is_empty() {
+        "work".to_string()
+    } else {
+        safe
+    }
 }
 
 fn push_unique(values: &mut Vec<String>, value: &str) {
@@ -133,51 +279,44 @@ mod tests {
     const PLAN_CENTRIC: &str =
         include_str!("../../../scenarios/plan-centric-feature-branch/config/workflow.json");
 
-    #[test]
-    fn derives_exact_plan_child_and_metadata_driven_pr_contracts() {
+    fn workflow_and_tool(
+        name: &str,
+        role: &str,
+    ) -> (ValidatedWorkflow, temper_workflow::ToolManifest) {
         let spec: RawWorkflowSpec = serde_json::from_str(PLAN_CENTRIC).expect("parse");
         let workflow = spec.validate().expect("validate");
-        let compiled = workflow.compile();
-        let architect = compiled
+        let tool = workflow
+            .compile()
             .roles()
             .iter()
-            .find(|role| role.id.as_str() == "architect")
-            .expect("architect");
-        let plan_feature = architect
-            .tools
-            .iter()
-            .find(|tool| tool.name == "plan_feature")
-            .expect("plan feature");
-        let contracts = derive_verdict_contracts(&workflow, plan_feature);
+            .find(|candidate| candidate.id.as_str() == role)
+            .and_then(|role| role.tools.iter().find(|tool| tool.name == name))
+            .cloned()
+            .expect("tool");
+        (workflow, tool)
+    }
+
+    #[test]
+    fn derives_exact_plan_child_and_metadata_driven_pr_contracts() {
+        let (workflow, plan_feature) = workflow_and_tool("plan_feature", "architect");
+        let contracts = derive_verdict_contracts(&workflow, &plan_feature);
         let needs_plan = &contracts["needs_plan"];
         assert_eq!(needs_plan.min_children, 1);
         assert_eq!(needs_plan.max_children, Some(1));
         assert_eq!(needs_plan.allowed_child_kinds, vec!["plan"]);
         assert_eq!(needs_plan.required_child_metadata, vec!["target_branch"]);
+        assert!(needs_plan.target_branch.is_none());
         assert_eq!(contracts["config_only"].max_children, Some(0));
 
-        let decompose_plan = architect
-            .tools
-            .iter()
-            .find(|tool| tool.name == "decompose_plan")
-            .expect("decompose plan");
-        let contracts = derive_verdict_contracts(&workflow, decompose_plan);
+        let (_, decompose_plan) = workflow_and_tool("decompose_plan", "architect");
+        let contracts = derive_verdict_contracts(&workflow, &decompose_plan);
         assert_eq!(
             contracts["children_ready"].allowed_child_kinds,
             vec!["code"]
         );
 
-        let tester = compiled
-            .roles()
-            .iter()
-            .find(|role| role.id.as_str() == "tester")
-            .expect("tester");
-        let validate = tester
-            .tools
-            .iter()
-            .find(|tool| tool.name == "validate_plan")
-            .expect("validate plan");
-        let contracts = derive_verdict_contracts(&workflow, validate);
+        let (_, validate) = workflow_and_tool("validate_plan", "tester");
+        let contracts = derive_verdict_contracts(&workflow, &validate);
         assert!(contracts["validated"].requires_pr_title);
         assert!(contracts["validated"].requires_pr_body);
         assert_eq!(
@@ -190,5 +329,110 @@ mod tests {
                 .allowed_child_kinds
                 .contains(&"code".to_string())
         );
+    }
+
+    #[test]
+    fn resolves_derived_inherited_and_fallback_branch_requirements() {
+        let metadata = SourceMetadata::new();
+        let context = BranchResolutionContext {
+            source_kind: "feature",
+            source_number: Some(620),
+            source_metadata: &metadata,
+            repository_default: "main",
+            correlation_key: None,
+        };
+        let derived =
+            resolve_target_branch_requirement(TargetBranchPolicy::DerivedFeatureBranch, &context)
+                .expect("derived branch");
+        assert_eq!(derived.expected, "agent/pr-for-feature-620");
+        assert!(derived.allow_omission);
+
+        let metadata = SourceMetadata::from([(
+            "target_branch".to_string(),
+            "agent/pr-for-feature-620".to_string(),
+        )]);
+        let inherited = resolve_target_branch_requirement(
+            TargetBranchPolicy::Inherit,
+            &BranchResolutionContext {
+                source_kind: "plan",
+                source_number: Some(651),
+                source_metadata: &metadata,
+                repository_default: "main",
+                correlation_key: None,
+            },
+        )
+        .expect("inherited branch");
+        assert_eq!(inherited.expected, derived.expected);
+
+        let fallback = resolve_target_branch_requirement(
+            TargetBranchPolicy::DerivedFeatureBranch,
+            &BranchResolutionContext {
+                source_kind: "feature",
+                source_number: None,
+                source_metadata: &SourceMetadata::new(),
+                repository_default: "main",
+                correlation_key: Some("pr-for-feature:legacy/620"),
+            },
+        )
+        .expect("stable fallback");
+        assert_eq!(fallback.expected, "agent/pr-for-feature-legacy-620");
+
+        let repository_default = resolve_target_branch_requirement(
+            TargetBranchPolicy::RepositoryDefault,
+            &BranchResolutionContext {
+                source_kind: "feature",
+                source_number: Some(620),
+                source_metadata: &SourceMetadata::new(),
+                repository_default: "trunk",
+                correlation_key: None,
+            },
+        )
+        .expect("intentional repository default");
+        assert_eq!(repository_default.expected, "trunk");
+        assert_eq!(repository_default.repository_default, "trunk");
+        assert!(repository_default.allow_omission);
+    }
+
+    #[test]
+    fn resolved_contract_exposes_exact_branch_and_rejects_default_inheritance() {
+        let (workflow, plan_feature) = workflow_and_tool("plan_feature", "architect");
+        let metadata = SourceMetadata::new();
+        let contracts = derive_resolved_verdict_contracts(
+            &workflow,
+            &plan_feature,
+            &BranchResolutionContext {
+                source_kind: "feature",
+                source_number: Some(620),
+                source_metadata: &metadata,
+                repository_default: "main",
+                correlation_key: None,
+            },
+        )
+        .expect("resolved contracts");
+        assert_eq!(
+            contracts["needs_plan"].target_branch,
+            Some(TargetBranchRequirement {
+                expected: "agent/pr-for-feature-620".to_string(),
+                repository_default: "main".to_string(),
+                allow_omission: true,
+            })
+        );
+
+        let (_, decompose_plan) = workflow_and_tool("decompose_plan", "architect");
+        let default_metadata =
+            SourceMetadata::from([("target_branch".to_string(), "main".to_string())]);
+        let error = derive_resolved_verdict_contracts(
+            &workflow,
+            &decompose_plan,
+            &BranchResolutionContext {
+                source_kind: "plan",
+                source_number: Some(651),
+                source_metadata: &default_metadata,
+                repository_default: "main",
+                correlation_key: None,
+            },
+        )
+        .expect_err("default inheritance is invalid");
+        assert!(error.contains("repository default branch `main`"));
     }
 }

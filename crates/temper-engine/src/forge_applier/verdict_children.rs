@@ -7,8 +7,8 @@
 use temper_forge::{Forge, ItemNumber, Repository, RepositoryId};
 use temper_protocol_worker::JobChild;
 use temper_workflow::{
-    ArtifactKindId, ArtifactTarget, CreateIssuesChild, WorkflowMetadata, parse_metadata_block,
-    replace_metadata_block,
+    ArtifactKindId, ArtifactTarget, CreateIssuesChild, TargetBranchPolicy, TransitionId,
+    ValidatedWorkflow, WorkflowMetadata, parse_metadata_block, replace_metadata_block,
 };
 
 use temper_runner::workspace_content_key;
@@ -21,7 +21,35 @@ use crate::forge_applier::verdict::{
 use crate::forge_applier::verdict_child_relations::{
     source_parent_kinds_after_transition, validate_child_parent_relation,
 };
+use crate::verdict_contract::{
+    BranchResolutionContext, resolve_target_branch_requirement, source_metadata_from_workflow,
+};
 use crate::workflow_meta::artifact_kind_child_create_labels;
+
+#[derive(Clone, Copy)]
+struct ChildBranchBinding<'a> {
+    legacy_source: Option<&'a str>,
+    enforced: Option<&'a str>,
+}
+
+fn create_issues_target_branch_policy(
+    workflow: &ValidatedWorkflow,
+    transition: &TransitionId,
+) -> Option<TargetBranchPolicy> {
+    workflow
+        .transitions()
+        .iter()
+        .find(|candidate| &candidate.id == transition)?
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            temper_workflow::Effect::CreateIssues {
+                target_branch_policy,
+                ..
+            } => *target_branch_policy,
+            _ => None,
+        })
+}
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn bind_create_issues_children(
@@ -42,12 +70,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return true;
         };
 
-        let source_target_branch = match parse_source_target_branch(
+        let source_workflow = match parse_source_workflow_metadata(
             binding.job,
             binding.number,
             binding.source_body,
         ) {
-            Ok(target_branch) => target_branch,
+            Ok(metadata) => metadata,
             Err(error) => {
                 tracing::warn!(
                     target: "temper_daemon",
@@ -59,6 +87,52 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 );
                 return false;
             }
+        };
+        let source_target_branch = source_workflow
+            .target_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty());
+        let correlation_key = serde_json::from_value::<temper_protocol_worker::JobContext>(
+            binding.job.job_payload.clone(),
+        )
+        .ok()
+        .and_then(|context| {
+            context
+                .workspace
+                .map(|workspace| workspace.coordination_key)
+        });
+        let enforced_target_branch = match create_issues_target_branch_policy(
+            self.workflow.as_ref(),
+            binding.routed,
+        ) {
+            Some(policy) => {
+                let source_metadata = source_metadata_from_workflow(source_workflow.clone());
+                match resolve_target_branch_requirement(
+                    policy,
+                    &BranchResolutionContext {
+                        source_kind: binding.artifact_kind,
+                        source_number: Some(binding.number.get()),
+                        source_metadata: &source_metadata,
+                        repository_default: &binding.repository.default_branch,
+                        correlation_key: correlation_key.as_deref(),
+                    },
+                ) {
+                    Ok(requirement) => Some(requirement.expected),
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "temper_daemon",
+                            job_id = %binding.job.job_id,
+                            repo = %binding.job.repo,
+                            issue = %binding.number,
+                            %error,
+                            "forge applier dropped verdict apply with unresolved child target branch"
+                        );
+                        return false;
+                    }
+                }
+            }
+            None => None,
         };
 
         let source_kind = ArtifactKindId::new(binding.artifact_kind);
@@ -74,9 +148,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             let Some(mapped_child) = self
                 .map_job_child(
                     binding.job,
-                    binding.repository_id,
+                    &binding.repository.id,
                     binding.number,
-                    source_target_branch.as_deref(),
+                    ChildBranchBinding {
+                        legacy_source: source_target_branch,
+                        enforced: enforced_target_branch.as_deref(),
+                    },
                     &source_parent_kinds,
                     child,
                 )
@@ -108,7 +185,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         job: &InFlightJob,
         source_repo: &RepositoryId,
         number: ItemNumber,
-        source_target_branch: Option<&str>,
+        branch: ChildBranchBinding<'_>,
         source_parent_kinds: &std::collections::BTreeSet<ArtifactKindId>,
         child: JobChild,
     ) -> Option<CreateIssuesChild> {
@@ -171,7 +248,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             &child.body,
             metadata,
             &child_kind,
-            source_target_branch,
+            branch,
         ) {
             Ok(body) => body,
             Err(error) => {
@@ -308,34 +385,30 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     }
 }
 
-fn parse_source_target_branch(
+fn parse_source_workflow_metadata(
     job: &InFlightJob,
     number: ItemNumber,
     source_body: &str,
-) -> Result<Option<String>, String> {
-    let metadata = parse_metadata_block(source_body).map_err(|error| error.to_string())?;
-    let target_branch = metadata
-        .and_then(|metadata| metadata.target_branch)
-        .and_then(|branch| {
-            let trimmed = branch.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        });
+) -> Result<WorkflowMetadata, String> {
+    let metadata = parse_metadata_block(source_body)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
     tracing::trace!(
         target: "temper_daemon",
         job_id = %job.job_id,
         repo = %job.repo,
         issue = %number,
-        has_source_target_branch = target_branch.is_some(),
+        has_source_target_branch = has_non_empty_target_branch(&metadata),
         "forge applier parsed source workflow metadata for verdict children"
     );
-    Ok(target_branch)
+    Ok(metadata)
 }
 
 fn child_body_with_workflow_metadata(
     body: &str,
     metadata: Option<WorkflowMetadata>,
     kind: &ArtifactKindId,
-    source_target_branch: Option<&str>,
+    branch: ChildBranchBinding<'_>,
 ) -> Result<String, String> {
     let mut metadata = metadata.unwrap_or_default();
     let mut changed = false;
@@ -343,8 +416,18 @@ fn child_body_with_workflow_metadata(
         metadata.kind = Some(kind.clone());
         changed = true;
     }
-    if !has_non_empty_target_branch(&metadata) {
-        if let Some(source_target_branch) = source_target_branch {
+    if let Some(enforced_target_branch) = branch.enforced {
+        // Authoritative validation already rejected any explicit divergence.
+        // Always bind the engine-resolved value so this defense-in-depth layer
+        // can never preserve or introduce a child override.
+        if metadata.target_branch.as_deref() != Some(enforced_target_branch) {
+            metadata.target_branch = Some(enforced_target_branch.to_string());
+            changed = true;
+        }
+    } else if !has_non_empty_target_branch(&metadata) {
+        // Legacy transitions without a typed branch policy retain their
+        // historical inherit-unless-overridden behavior.
+        if let Some(source_target_branch) = branch.legacy_source {
             metadata.target_branch = Some(source_target_branch.to_string());
             changed = true;
         }

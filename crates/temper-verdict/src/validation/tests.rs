@@ -160,6 +160,116 @@ fn validates_required_child_workflow_metadata() {
 }
 
 #[test]
+fn validates_resolved_target_branch_and_engine_stamping_omission() {
+    let contract = VerdictContract {
+        min_children: 1,
+        target_branch: Some(crate::TargetBranchRequirement {
+            expected: "agent/pr-for-feature-207".to_string(),
+            repository_default: "main".to_string(),
+            allow_omission: true,
+        }),
+        ..VerdictContract::default()
+    };
+    let mut result = ResultView {
+        verdict: Some("needs_plan".to_string()),
+        title: None,
+        body: None,
+        children: vec![Child::valid("plan", "plan")],
+    };
+    validate_verdict_result(
+        &result,
+        &contracts(contract.clone()),
+        &SourceMetadata::new(),
+    )
+    .expect("policy-authorized omission is valid for engine stamping");
+
+    result.children[0].body =
+        "Body\n\n<!-- temper:workflow\n{\"target_branch\":\"agent/pr-for-feature-207\"}\n-->"
+            .to_string();
+    validate_verdict_result(
+        &result,
+        &contracts(contract.clone()),
+        &SourceMetadata::new(),
+    )
+    .expect("the exact explicit branch is valid");
+
+    for (authored, expected_message) in [
+        ("   ", "explicitly sets blank"),
+        ("main", "repository default branch `main`"),
+        ("feature/other", "expected `agent/pr-for-feature-207`"),
+    ] {
+        result.children[0].body =
+            format!("Body\n\n<!-- temper:workflow\n{{\"target_branch\":\"{authored}\"}}\n-->");
+        let error = validate_verdict_result(
+            &result,
+            &contracts(contract.clone()),
+            &SourceMetadata::new(),
+        )
+        .expect_err("explicit divergence is rejected")
+        .to_string();
+        assert!(error.contains(expected_message), "error: {error}");
+    }
+
+    result.children[0].body =
+        "Body\n\n<!-- temper:workflow\n{\"target_branch\":null}\n-->".to_string();
+    assert!(
+        validate_verdict_result(&result, &contracts(contract), &SourceMetadata::new())
+            .expect_err("explicit null is rejected")
+            .to_string()
+            .contains("blank or non-string")
+    );
+
+    result.children[0].body =
+        "Body\n\n<!-- temper:workflow\n{\"target_branch\":\"main\"}\n-->".to_string();
+    validate_verdict_result(
+        &result,
+        &contracts(VerdictContract {
+            min_children: 1,
+            target_branch: Some(crate::TargetBranchRequirement {
+                expected: "main".to_string(),
+                repository_default: "main".to_string(),
+                allow_omission: true,
+            }),
+            ..VerdictContract::default()
+        }),
+        &SourceMetadata::new(),
+    )
+    .expect("an explicit repository-default policy remains supported");
+}
+
+#[test]
+fn resolved_target_branch_can_require_explicit_metadata_and_is_wire_compatible() {
+    let contract = VerdictContract {
+        min_children: 1,
+        target_branch: Some(crate::TargetBranchRequirement {
+            expected: "release".to_string(),
+            repository_default: "main".to_string(),
+            allow_omission: false,
+        }),
+        ..VerdictContract::default()
+    };
+    let result = ResultView {
+        verdict: Some("needs_plan".to_string()),
+        title: None,
+        body: None,
+        children: vec![Child::valid("plan", "plan")],
+    };
+    assert!(
+        validate_verdict_result(&result, &contracts(contract), &SourceMetadata::new(),)
+            .expect_err("omission is not always authorized")
+            .to_string()
+            .contains("must explicitly set")
+    );
+
+    let legacy: VerdictContract = serde_json::from_value(serde_json::json!({
+        "min_children": 1,
+        "required_child_metadata": ["target_branch"]
+    }))
+    .expect("older contract parses without resolved branch requirement");
+    assert!(legacy.target_branch.is_none());
+}
+
+#[test]
 fn rejects_duplicate_unknown_self_and_cyclic_dependencies() {
     let contract = VerdictContract {
         min_children: 1,

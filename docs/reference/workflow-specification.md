@@ -105,10 +105,21 @@ such as `target_branch: main`; intentional default-branch workflows must say
 
 | Policy | Supported effect(s) | Contract |
 | --- | --- | --- |
-| `derived_feature_branch` | `create_issues` | Deterministically produce `agent/pr-for-feature-<source-feature-number>` rather than accepting artifact-authored repository-default intent. |
-| `inherit` | `create_issues` | Copy the source artifact's already-validated target branch to every produced child. |
+| `derived_feature_branch` | `create_issues` | Deterministically produce `agent/pr-for-<fresh-source-kind>-<source-number>` (for a feature, `agent/pr-for-feature-<number>`). A stable sanitized correlation key is the compatibility fallback when a source number is unavailable. |
+| `inherit` | `create_issues` | Copy the source artifact's already-validated, non-default target branch to every produced child. |
 | `non_default` | `create_pull_request` | Require the branch consumed by PR creation to be present, validated, and different from the repository's actual default. For implementation PRs this is the PR target; for aggregate landing it is the feature-branch source. |
 | `repository_default` | `create_issues`, `create_pull_request` | Explicitly select/permit the repository default. On PR creation this preserves intentional same-branch satisfied-create convergence. |
+
+The engine resolves a producing policy against the freshly classified source,
+item number, and repository default before dispatch and repeats that resolution
+before verdict mutation. The additive verdict contract exposes the exact branch,
+the observed repository default, and whether omission authorizes engine stamping.
+For `derived_feature_branch`, `inherit`, and child `repository_default`, omission
+is authorized and the binder stamps the resolved value. An explicit value must
+match exactly; explicit blank, accidental repository-default (for non-default
+policies), and divergent values are rejected before child, label, dependency, or
+lifecycle mutation. The binder always writes the validated value and cannot
+preserve a child override.
 
 The policy is retained in validated `Effect` values and compiled tool and
 transition manifests. Unsupported combinations (for example `non_default` on

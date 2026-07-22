@@ -3,7 +3,7 @@
 mod guidance;
 
 use self::guidance::pull_request_writable_guidance;
-use temper_forge::{CiJobQuery, Forge, ForgeError, PullRequest, RepositoryId};
+use temper_forge::{CiJobQuery, Forge, ForgeError, PullRequest, Repository, RepositoryId};
 use temper_protocol_worker::{JobContext, JobGuidance, PullRequestFreshness, RepoAccess};
 use temper_runner::{ScanError, WorkItem};
 use temper_workflow::{
@@ -14,6 +14,7 @@ pub(super) fn enrich_job_context_from_workflow(
     item: &WorkItem,
     workflow: &temper_workflow::ValidatedWorkflow,
     compiled: &CompiledWorkflow,
+    repository: &Repository,
     context: &mut JobContext,
 ) -> Result<(), ScanError> {
     let selected = select_workflow_action(item, compiled)?;
@@ -26,8 +27,25 @@ pub(super) fn enrich_job_context_from_workflow(
 
     context.action = Some(selected.tool.name.clone());
     context.allowed_verdicts = allowed_verdicts(selected.tool);
-    context.verdict_contracts =
-        crate::verdict_contract::derive_verdict_contracts(workflow, selected.tool);
+    let source_number = match item.target {
+        ArtifactSource::Issue { number } | ArtifactSource::PullRequest { number } => number.get(),
+    };
+    let correlation_key = context
+        .workspace
+        .as_ref()
+        .map(|workspace| workspace.coordination_key.as_str());
+    context.verdict_contracts = crate::verdict_contract::derive_resolved_verdict_contracts(
+        workflow,
+        selected.tool,
+        &crate::verdict_contract::BranchResolutionContext {
+            source_kind: item.kind.as_str(),
+            source_number: Some(source_number),
+            source_metadata: &context.source_metadata,
+            repository_default: &repository.default_branch,
+            correlation_key,
+        },
+    )
+    .map_err(invalid_workflow_scan)?;
     context.checkout_capability = Some(checkout);
     context.guidance = (!guidance.is_empty()).then_some(guidance);
     Ok(())

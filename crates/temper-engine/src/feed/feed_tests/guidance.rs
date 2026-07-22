@@ -4,94 +4,116 @@ use super::*;
 
 #[test]
 fn normal_dispatch_composes_configured_guidance_for_architect_engineer_and_tester() {
-    let mut spec: RawWorkflowSpec = serde_json::from_str(include_str!(
-        "../../../../../scenarios/plan-centric-feature-branch/config/workflow.json"
-    ))
-    .expect("plan-centric workflow parses");
-    for queue in &mut spec.queues {
-        for action in &mut queue.actions {
-            action.guidance = Some(format!("Queue guidance for {}.", action.role));
+    temper_engine_io::block_on(async move {
+        let forge = MemoryForge::new();
+        let repository = forge
+            .create_repository(CreateRepository {
+                owner: "ai".to_string(),
+                name: "temper".to_string(),
+                default_branch: "main".to_string(),
+                description: None,
+            })
+            .await
+            .expect("repository is created");
+        let mut spec: RawWorkflowSpec = serde_json::from_str(include_str!(
+            "../../../../../scenarios/plan-centric-feature-branch/config/workflow.json"
+        ))
+        .expect("plan-centric workflow parses");
+        for queue in &mut spec.queues {
+            for action in &mut queue.actions {
+                action.guidance = Some(format!("Queue guidance for {}.", action.role));
+            }
         }
-    }
-    let workflow = spec.validate().expect("plan-centric workflow validates");
-    let compiled = workflow.compile();
+        let workflow = spec.validate().expect("plan-centric workflow validates");
+        let compiled = workflow.compile();
 
-    let cases = [
-        (
-            "architect",
-            "feature_planning",
-            "feature",
-            "Own product feature shaping.",
-            "For feature_planning, decide whether",
-            "Use this from feature_planning and decompose_plan.",
-            "Only read the work-item context",
-        ),
-        (
-            "engineer",
-            "code_ready",
-            "code",
-            "Claim ready code issues",
-            "Use open_pr for ready code issues.",
-            "Use this for open_pr on ready code issues",
-            "Only touch the checked-out repository workspace.",
-        ),
-        (
-            "tester",
-            "plan_needs_validation",
-            "plan",
-            "Validate completed feature plans",
-            "Use validate_plan only after reading",
-            "Use this from validate_plan.",
-            "Tie validation evidence to the current feature branch head",
-        ),
-    ];
+        let cases = [
+            (
+                "architect",
+                "feature_planning",
+                "feature",
+                "Own product feature shaping.",
+                "For feature_planning, decide whether",
+                "Use this from feature_planning and decompose_plan.",
+                "Only read the work-item context",
+            ),
+            (
+                "engineer",
+                "code_ready",
+                "code",
+                "Claim ready code issues",
+                "Use open_pr for ready code issues.",
+                "Use this for open_pr on ready code issues",
+                "Only touch the checked-out repository workspace.",
+            ),
+            (
+                "tester",
+                "plan_needs_validation",
+                "plan",
+                "Validate completed feature plans",
+                "Use validate_plan only after reading",
+                "Use this from validate_plan.",
+                "Tie validation evidence to the current feature branch head",
+            ),
+        ];
 
-    for (role, queue, kind, charter, prompt, tool, constraint) in cases {
-        let item = WorkItem {
-            queue: QueueId::new(queue),
-            role: RoleId::new(role),
-            target: ArtifactSource::Issue {
-                number: temper_forge::ItemNumber::new(1),
-            },
-            kind: ArtifactKindId::new(kind),
-        };
-        let job = job_from_work_item("ai/temper", &item);
-        let mut context: JobContext =
-            serde_json::from_value(job.job_payload).expect("thin JobContext parses");
+        for (role, queue, kind, charter, prompt, tool, constraint) in cases {
+            let item = WorkItem {
+                queue: QueueId::new(queue),
+                role: RoleId::new(role),
+                target: ArtifactSource::Issue {
+                    number: temper_forge::ItemNumber::new(1),
+                },
+                kind: ArtifactKindId::new(kind),
+            };
+            let job = job_from_work_item("ai/temper", &item);
+            let mut context: JobContext =
+                serde_json::from_value(job.job_payload).expect("thin JobContext parses");
+            context.source_metadata.insert(
+                "target_branch".to_string(),
+                "agent/pr-for-feature-1".to_string(),
+            );
 
-        enrich_job_context_from_workflow(&item, &workflow, &compiled, &mut context)
+            enrich_job_context_from_workflow(
+                &item,
+                &workflow,
+                &compiled,
+                &repository,
+                &mut context,
+            )
             .expect("normal action assignment succeeds");
 
-        let guidance = context.guidance.expect("configured guidance is assigned");
-        let role_guidance = guidance.role_guidance.expect("role guidance is assigned");
-        assert!(
-            role_guidance.starts_with(charter),
-            "{role}: {role_guidance}"
-        );
-        assert!(role_guidance.contains(prompt), "{role}: {role_guidance}");
-        assert_eq!(
-            guidance.action_guidance.as_deref(),
-            Some(format!("Queue guidance for {role}.").as_str()),
-            "{role}: {:?}",
-            guidance.action_guidance
-        );
-        assert!(
-            guidance
-                .tool_guidance
-                .as_deref()
-                .is_some_and(|guidance| guidance.contains(tool)),
-            "{role}: {:?}",
-            guidance.tool_guidance
-        );
-        assert!(
-            guidance
-                .tool_constraints
-                .iter()
-                .any(|configured| configured.contains(constraint)),
-            "{role}: {:?}",
-            guidance.tool_constraints
-        );
-    }
+            let guidance = context.guidance.expect("configured guidance is assigned");
+            let role_guidance = guidance.role_guidance.expect("role guidance is assigned");
+            assert!(
+                role_guidance.starts_with(charter),
+                "{role}: {role_guidance}"
+            );
+            assert!(role_guidance.contains(prompt), "{role}: {role_guidance}");
+            assert_eq!(
+                guidance.action_guidance.as_deref(),
+                Some(format!("Queue guidance for {role}.").as_str()),
+                "{role}: {:?}",
+                guidance.action_guidance
+            );
+            assert!(
+                guidance
+                    .tool_guidance
+                    .as_deref()
+                    .is_some_and(|guidance| guidance.contains(tool)),
+                "{role}: {:?}",
+                guidance.tool_guidance
+            );
+            assert!(
+                guidance
+                    .tool_constraints
+                    .iter()
+                    .any(|configured| configured.contains(constraint)),
+                "{role}: {:?}",
+                guidance.tool_constraints
+            );
+        }
+    });
 }
 
 #[test]
