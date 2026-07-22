@@ -6,6 +6,7 @@
 //! [`run`] is the entry point used by both the slim `temper-engine` binary and
 //! the unified binary's `temper serve engine` path. The reusable wiring
 //! ([`resolve_repositories`], [`role_feed_targets`], [`ensure_workflow_labels`],
+//! [`configured_role_forges`], [`recover_child_create_intents`], and
 //! [`result_applier`]) is `pub` so the unified binary's standalone (all-in-one)
 //! mode composes the same engine without duplicating it.
 //!
@@ -29,10 +30,12 @@ mod startup_recovery;
 pub use adapt::{
     daemon_run_config, engine_config, forgejo_config, worker_pool_auth_config, workflow_role_limits,
 };
-pub use applier::result_applier;
+pub use applier::{configured_role_forges, result_applier};
 pub use repositories::{ensure_workflow_labels, resolve_repositories, role_feed_targets};
 pub use retention::{
     AGENT_TRACE_RETENTION_INTERVAL, TraceRetentionTask, spawn_trace_retention_task,
 };
-pub use runtime::{attach_trace_query, run, run_async, start_trace_journal};
+pub use runtime::{
+    attach_trace_query, recover_child_create_intents, run, run_async, start_trace_journal,
+};
 pub use startup_recovery::{RecoveredClaim, converge_startup_orphans, stage_startup_assignments};

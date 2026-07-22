@@ -16,10 +16,10 @@ use temper_forge::{Forge, RepositoryId, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
-    AGENT_TRACE_RETENTION_INTERVAL, TraceRetentionTask, converge_startup_orphans, engine_config,
-    ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
-    spawn_trace_retention_task, stage_startup_assignments, worker_pool_auth_config,
-    workflow_role_limits,
+    AGENT_TRACE_RETENTION_INTERVAL, TraceRetentionTask, configured_role_forges,
+    converge_startup_orphans, engine_config, ensure_workflow_labels, resolve_repositories,
+    result_applier, role_feed_targets, spawn_trace_retention_task, stage_startup_assignments,
+    worker_pool_auth_config, workflow_role_limits,
 };
 
 /// Runs the engine on the skein runtime until SIGINT/SIGTERM, then drains.
@@ -55,8 +55,8 @@ pub async fn run_async(
             "agent tracing disabled: no durable paths.state_dir is available for the engine journal"
         );
     }
-    let forge_config_for_roles = forge_config.clone();
     let forge_url = forge_config.base_url.clone();
+    let role_forges = configured_role_forges(&forge_config, &config, &role_tokens);
     let forge = temper_forge::factory::new_forgejo(forge_config);
 
     let (workflow, compiled) = load_workflow(&config)?;
@@ -77,16 +77,16 @@ pub async fn run_async(
     // Complete durable child-create intents before constructing the daemon or
     // spawning either dispatch backstop. This is the startup recovery barrier:
     // no role scan can observe a partially-wired child while recovery runs.
-    recover_child_create_intents(forge.as_ref(), workflow.as_ref(), &repo_ids).await?;
+    recover_child_create_intents(forge.as_ref(), &role_forges, workflow.as_ref(), &repo_ids)
+        .await?;
 
     let daemon = split_daemon(
         Arc::clone(&spawner),
         result_applier(
             forge.clone(),
-            forge_config_for_roles,
+            &role_forges,
             workflow.clone(),
             &config,
-            &role_tokens,
             lease_ttl,
         ),
         config.worker_pools.clone(),
@@ -254,15 +254,20 @@ fn lease_ttl(config: &DaemonRunConfig) -> Result<chrono::Duration, String> {
         .map_err(|error| format!("invalid lease ttl: {error}"))
 }
 
-async fn recover_child_create_intents(
+/// Completes durable child-create intents through their assignment role's
+/// configured Forge identity before startup dispatch opens.
+pub async fn recover_child_create_intents(
     forge: &dyn Forge,
+    role_forges: &BTreeMap<String, Arc<dyn Forge>>,
     workflow: &ValidatedWorkflow,
     repo_ids: &[RepositoryId],
 ) -> Result<(), String> {
     let executor = workflow.executor(forge);
     for repo_id in repo_ids {
         executor
-            .recover_create_issue_intents(repo_id)
+            .recover_create_issue_intents_with_role_forges(repo_id, |role| {
+                role_forges.get(role.as_str()).cloned()
+            })
             .await
             .map_err(|error| {
                 format!("failed to recover durable child-create intents in `{repo_id}`: {error}")
@@ -382,15 +387,15 @@ async fn drain_after_signal(
 mod tests {
     use super::*;
     use temper_engine::NoopApplier;
-    use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, UserId};
+    use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, User, UserId};
     use temper_forge_memory::{FaultOp, MemoryForge};
     use temper_protocol_worker::{
         Artifact, Capability, Capacity, Poll, Register, WORKER_PROTOCOL_VERSION,
         WorkerProtocolMessage,
     };
     use temper_workflow::{
-        ArtifactSource, CreateIssuesChild, ExecutionContext, RoleId, TransitionCompletionAudit,
-        TransitionId,
+        ArtifactSource, CreateIssuesChild, DurableAssignment, ExecutionContext, RoleId,
+        TransitionCompletionAudit, TransitionId, WorkflowMetadata, render_metadata_block,
     };
 
     #[test]
@@ -502,7 +507,22 @@ mod tests {
             )
             .expect("workflow parses");
             let workflow = spec.validate().expect("workflow validates");
-            let forge = MemoryForge::new();
+            let bot = User {
+                id: UserId::new("bot-id"),
+                handle: "bot".to_string(),
+                display_name: Some("Default Bot".to_string()),
+                email: None,
+            };
+            let architect = User {
+                id: UserId::new("architect-id"),
+                handle: "architect".to_string(),
+                display_name: Some("Plan Tester".to_string()),
+                email: None,
+            };
+            let forge = MemoryForge::with_current_user(bot.clone());
+            let tester_forge = forge.as_user(architect.clone());
+            let tester_handle: Arc<dyn Forge> = Arc::new(tester_forge.clone());
+            let role_forges = BTreeMap::from([("tester".to_string(), tester_handle)]);
             let repo = forge
                 .create_repository(CreateRepository {
                     owner: "acme".to_string(),
@@ -518,7 +538,16 @@ mod tests {
                     &repo,
                     CreateIssue {
                         title: "Interrupted validation".to_string(),
-                        body: "Plan awaiting validation".to_string(),
+                        body: format!(
+                            "Plan awaiting validation\n\n{}",
+                            render_metadata_block(&WorkflowMetadata {
+                                assignment: Some(DurableAssignment {
+                                    role: Some(RoleId::new("tester")),
+                                    ..DurableAssignment::default()
+                                }),
+                                ..WorkflowMetadata::default()
+                            })
+                        ),
                         labels: vec!["plan".to_string(), "needs-validation".to_string()],
                         assignees: Vec::<UserId>::new(),
                     },
@@ -540,12 +569,12 @@ mod tests {
                 )
                 .with_transition_completion_audit(TransitionCompletionAudit::new(
                     marker,
-                    "## Plan validation outcome\n\n**Outcome:** `needs_followup`",
+                    "## Plan validation outcome\n\n**Outcome:** `needs_followup`\n\n- Workflow role: `tester`\n- Forge actor: `architect` (`architect-id`)",
                 ));
 
             forge.fail_next(FaultOp::AddIssueComment, "comment service unavailable");
             workflow
-                .executor_with_context(&forge, context)
+                .executor_with_context(&tester_forge, context)
                 .execute(
                     &repo,
                     ArtifactSource::Issue {
@@ -566,9 +595,14 @@ mod tests {
                 "the follow-up already exists before startup recovery"
             );
 
-            recover_child_create_intents(&forge, &workflow, std::slice::from_ref(&repo))
-                .await
-                .expect("startup barrier converges the persisted audit");
+            recover_child_create_intents(
+                &forge,
+                &role_forges,
+                &workflow,
+                std::slice::from_ref(&repo),
+            )
+            .await
+            .expect("startup barrier converges the persisted audit");
             let completed = forge
                 .get_issue_by_number(&repo, parent.number)
                 .await
@@ -580,7 +614,11 @@ mod tests {
             );
             let comments = forge.list_issue_comments(&completed.id).await.unwrap();
             assert_eq!(comments.len(), 1);
+            assert_eq!(comments[0].author_id, architect.id);
+            assert_ne!(comments[0].author_id, bot.id);
             assert!(comments[0].body.contains(marker));
+            assert!(comments[0].body.contains("Workflow role: `tester`"));
+            assert!(comments[0].body.contains("Forge actor: `architect`"));
             assert!(comments[0].body.contains("Repair validation gap"));
             assert_eq!(
                 forge
@@ -592,9 +630,14 @@ mod tests {
                 "startup recovery does not recreate the child"
             );
 
-            recover_child_create_intents(&forge, &workflow, std::slice::from_ref(&repo))
-                .await
-                .expect("replayed startup recovery is idempotent");
+            recover_child_create_intents(
+                &forge,
+                &role_forges,
+                &workflow,
+                std::slice::from_ref(&repo),
+            )
+            .await
+            .expect("replayed startup recovery is idempotent");
             assert_eq!(
                 forge
                     .list_issue_comments(&completed.id)
@@ -602,6 +645,15 @@ mod tests {
                     .unwrap()
                     .len(),
                 1
+            );
+            assert_eq!(
+                forge
+                    .list_issues(&repo, IssueQuery::default())
+                    .await
+                    .unwrap()
+                    .len(),
+                2,
+                "replayed startup recovery does not recreate the child"
             );
         });
     }
