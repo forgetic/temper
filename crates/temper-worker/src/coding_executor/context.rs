@@ -8,6 +8,19 @@ use temper_protocol_worker::{
 };
 use temper_verdict::{SourceMetadata, VerdictContracts};
 
+pub(super) fn effective_job_guidance(
+    structured: Option<JobGuidance>,
+    legacy: Option<String>,
+) -> Option<JobGuidance> {
+    structured
+        .filter(|guidance| !guidance.is_empty())
+        .or_else(|| {
+            legacy
+                .filter(|guidance| !guidance.trim().is_empty())
+                .map(JobGuidance::from_legacy)
+        })
+}
+
 /// Assembles the typed [`WorkspaceContext`] the agent turn receives, listing
 /// every manifest repo with its sibling dir and access (ADR 0023).
 ///

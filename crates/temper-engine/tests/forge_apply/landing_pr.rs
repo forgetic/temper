@@ -160,6 +160,7 @@ fn plan_validation_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )

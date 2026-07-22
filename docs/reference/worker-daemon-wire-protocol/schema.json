@@ -330,6 +330,12 @@
        "additionalProperties": {
         "type": "string"
        }
+      },
+      "guidance": {
+       "type": "string"
+      },
+      "structured_guidance": {
+       "$ref": "#/$defs/jobGuidance"
       }
      }
     }
@@ -453,6 +459,19 @@
     "expected": { "type": "string", "minLength": 1 },
     "repository_default": { "type": "string", "minLength": 1 },
     "allow_omission": { "type": "boolean" }
+   },
+   "additionalProperties": false
+  },
+  "jobGuidance": {
+   "type": "object",
+   "properties": {
+    "role_guidance": { "type": "string" },
+    "tool_guidance": { "type": "string" },
+    "tool_constraints": {
+     "type": "array",
+     "items": { "type": "string" }
+    },
+    "action_guidance": { "type": "string" }
    },
    "additionalProperties": false
   },

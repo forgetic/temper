@@ -83,7 +83,9 @@ fn normal_dispatch_composes_configured_guidance_for_architect_engineer_and_teste
             )
             .expect("normal action assignment succeeds");
 
-            let guidance = context.guidance.expect("configured guidance is assigned");
+            let guidance = context
+                .structured_guidance
+                .expect("configured guidance is assigned");
             let role_guidance = guidance.role_guidance.expect("role guidance is assigned");
             assert!(
                 role_guidance.starts_with(charter),
@@ -231,7 +233,9 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
         );
         assert_eq!(primary.base_branch, "main");
         // Guidance surfaces the durable PR handoff plus fresh structured CI gate details.
-        let guidance = context.guidance.expect("ci-failure guidance present");
+        let guidance = context
+            .structured_guidance
+            .expect("ci-failure guidance present");
         assert!(
             guidance
                 .tool_guidance

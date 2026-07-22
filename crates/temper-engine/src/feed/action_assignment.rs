@@ -47,7 +47,7 @@ pub(super) fn enrich_job_context_from_workflow(
     )
     .map_err(invalid_workflow_scan)?;
     context.checkout_capability = Some(checkout);
-    context.guidance = (!guidance.is_empty()).then_some(guidance);
+    context.set_guidance(guidance);
     Ok(())
 }
 
@@ -345,10 +345,7 @@ fn condition_token(condition: &GateCondition) -> Option<String> {
 }
 
 fn append_guidance(context: &mut JobContext, generated: String) {
-    context
-        .guidance
-        .get_or_insert_with(JobGuidance::default)
-        .append_action_guidance(generated);
+    context.append_action_guidance(generated);
 }
 
 /// Composes the same role/tool guidance categories used by workspace

@@ -66,7 +66,16 @@ fn reference_open_pr_assignment_carries_decline_verdicts() {
             context.allowed_verdicts,
             vec!["needs_architect".to_string(), "needs_human".to_string()]
         );
-        let guidance = context.guidance.expect("structured guidance present");
+        let legacy_guidance = context
+            .guidance
+            .as_deref()
+            .expect("legacy string guidance present");
+        assert!(legacy_guidance.contains("Claim ready code issues"));
+        assert!(legacy_guidance.contains("Tool guidance:"));
+        assert!(legacy_guidance.contains("Tool constraints:"));
+        let guidance = context
+            .structured_guidance
+            .expect("structured guidance present");
         let role_guidance = guidance.role_guidance.expect("role guidance present");
         assert!(role_guidance.starts_with("Claim ready code issues"));
         assert!(role_guidance.contains("Use open_pr for ready code"));
@@ -210,7 +219,13 @@ fn reference_pr_head_fix_assignments_checkout_real_pr_head() {
                 .expect("primary present");
             assert!(primary.is_writable());
             assert_eq!(primary.branch_hint.as_deref(), Some(head.as_str()));
-            let guidance = context.guidance.expect("guidance present");
+            let legacy_guidance = context
+                .guidance
+                .as_deref()
+                .expect("legacy guidance present");
+            assert!(legacy_guidance.contains(action));
+            assert!(legacy_guidance.contains(queue));
+            let guidance = context.structured_guidance.expect("guidance present");
             assert_eq!(
                 guidance.tool_guidance.as_deref(),
                 Some(
@@ -449,7 +464,9 @@ fn reference_review_changes_requested_assignment_includes_review_feedback() {
             Some("review_changes_requested")
         );
 
-        let guidance = context.guidance.expect("review guidance present");
+        let guidance = context
+            .structured_guidance
+            .expect("review guidance present");
         assert!(
             guidance
                 .tool_guidance

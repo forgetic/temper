@@ -76,6 +76,7 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
         verdict_contracts: Default::default(),
         source_metadata: Default::default(),
         guidance: None,
+        structured_guidance: None,
         pull_request_freshness: None,
     };
 
@@ -318,6 +319,7 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
         verdict_contracts: Default::default(),
         source_metadata,
         guidance: None,
+        structured_guidance: None,
         pull_request_freshness: None,
     };
     enrich_job_context_from_workflow(item, workflow, compiled, &repository, &mut context)?;

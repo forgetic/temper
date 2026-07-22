@@ -42,6 +42,7 @@ pub(crate) fn plan_feature_in_flight_job(repo_path: &str, number: ItemNumber) ->
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )

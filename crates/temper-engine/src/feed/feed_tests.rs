@@ -201,6 +201,7 @@ fn maps_issue_work_item_to_daemon_job() {
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         }
     );

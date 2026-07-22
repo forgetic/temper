@@ -93,7 +93,10 @@ fn structured_job_guidance_is_copied_to_agent_workspace_context() {
         let agent = AgentBehavior::Success.runner();
         let executor = fixture.executor(agent.clone(), true);
         let mut assignment = assign("agent/pr-for-code-guidance", "guidance-7");
-        assignment.job_payload["guidance"] = json!({
+        assignment.job_payload["guidance"] = json!(
+            "role charter\n\nrole prompt\n\nTool guidance:\ncoding workspace guidance\n\nTool constraints:\n- workspace constraint\n- result constraint\n\nAction guidance:\nqueue action"
+        );
+        assignment.job_payload["structured_guidance"] = json!({
             "role_guidance": "role charter\n\nrole prompt",
             "tool_guidance": "coding workspace guidance",
             "tool_constraints": ["workspace constraint", "result constraint"],
