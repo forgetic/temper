@@ -491,6 +491,23 @@ impl OutOfProcessRunner {
                     {
                         outcome.quiesced.cleanup.cancellation = Some(CancellationOutcome::Graceful);
                     }
+                    // Containment cleanup is blocking: it can consume the
+                    // forced-termination command and escalate to KILL before the
+                    // supervisor receives an already-observed hard-kill command.
+                    // Preserve the strongest delivered outcome when cleanup
+                    // confirms that the process tree was in fact killed.
+                    if matches!(
+                        observed_cancellation,
+                        Some(JobCancellationRequest::HardKill)
+                    ) && matches!(
+                        outcome.quiesced.cleanup.cancellation,
+                        Some(CancellationOutcome::ForcedTermination)
+                    ) && matches!(
+                        outcome.quiesced.cleanup.containment.disposition(),
+                        temper_process_containment::CleanupDisposition::Killed
+                    ) {
+                        outcome.quiesced.cleanup.cancellation = Some(CancellationOutcome::HardKill);
+                    }
                     break outcome;
                 }
                 Next::ForgeRequest(Some(request)) => match &forge_context {

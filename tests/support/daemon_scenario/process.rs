@@ -9,14 +9,14 @@ use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{ForgejoServer, Provisioned, RoleIdentity};
 
 use super::runtime::block_on_with_cx;
-use super::{DAEMON_POLL_CADENCE_SECS, ENGINEER};
+use super::{
+    DAEMON_CI_POLL_CADENCE_SECS, DAEMON_MECHANICAL_CADENCE_SECS, DAEMON_POLL_CADENCE_SECS, ENGINEER,
+};
 
-/// Narrow mechanical backstop cadence. Forgejo 7.0.x does not emit
-/// Actions-completion webhooks through repository hooks, so mechanical landing
-/// keeps a short test-only poll for CI status transitions only (legacy
-/// `CI_STATUS_POLL`). The convergence assertions poll every second, so matching
-/// that cadence avoids adding a second of avoidable e2e latency.
-const DAEMON_MECHANICAL_CADENCE_SECS: u64 = 1;
+/// The CI-status cadence is deliberately short because Forgejo 7.0.x does not
+/// emit Actions-completion repository webhooks. Both broad fallbacks remain at
+/// 600s, beyond the scenario timeout, so red repair and green landing can only
+/// arrive through exact synthetic CI hints.
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) const WEBHOOK_SECRET: &str = "daemon-e2e-webhook-secret";
@@ -52,6 +52,7 @@ pub(super) fn spawn_daemon(
          workflow = \"{workflow}\"\n\
          webhook_secret_file = \"{secret}\"\n\
          poll_cadence_secs = {poll}\n\
+         ci_poll_cadence_secs = {ci_poll}\n\
          mechanical_cadence_secs = {mech}\n\
          daemon_id = \"temper-daemon-e2e\"\n",
         base_url = server.base_url(),
@@ -60,6 +61,7 @@ pub(super) fn spawn_daemon(
         workflow = workflow_file.display(),
         secret = secret_file.display(),
         poll = DAEMON_POLL_CADENCE_SECS,
+        ci_poll = DAEMON_CI_POLL_CADENCE_SECS,
         mech = DAEMON_MECHANICAL_CADENCE_SECS,
     );
     std::fs::write(&config_path, config).expect("write daemon config");
@@ -292,6 +294,18 @@ impl ChildGuard {
             }
             Err(error) => format!("<could not read {}: {error}>", self.log.display()),
         }
+    }
+
+    pub(super) fn assigned_job_count(&self, queue: &str) -> usize {
+        let queue_suffix = format!("/{queue}");
+        std::fs::read_to_string(&self.log)
+            .map(|contents| {
+                contents
+                    .lines()
+                    .filter(|line| line.contains("assigned job") && line.contains(&queue_suffix))
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     /// Waits for a graceful exit, escalating to kill at `timeout`.

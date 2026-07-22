@@ -5,20 +5,17 @@ use temper_forge::{
     PullRequestQuery, PullRequestState, UserId,
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_testing::forgejo_server::{
-    ForgejoServer, Provisioned, RoleIdentity, commit_ci_sentinel,
-};
+use temper_testing::forgejo_server::{ForgejoServer, Provisioned, RoleIdentity};
 use temper_workflow::{CiStatus, parse_metadata_block};
 
 use super::Variant;
-use super::runtime::{block_on, block_on_with_cx};
+use super::runtime::block_on;
 
 /// How often the driver re-runs the assert closure while polling.
 const ASSERT_POLL: Duration = Duration::from_secs(1);
 
 pub(super) fn drive_variant(
     variant: &Variant,
-    server: &ForgejoServer,
     provisioned: &Provisioned,
     engineer: &RoleIdentity,
     forge: &ForgejoForge,
@@ -31,35 +28,11 @@ pub(super) fn drive_variant(
             block_on(assert_converged(forge, provisioned, engineer, issue, 1))
         }),
         "deferred" => {
-            // Phase A: the worker's marker-less head fails real CI and the PR
-            // must stay unmerged while red.
-            let head_branch = poll_until(deadline, || {
-                block_on(assert_ci_red_and_unmerged(
-                    forge,
-                    provisioned,
-                    engineer,
-                    issue,
-                ))
-            })?;
-
-            // Phase B: push the CI sentinel fix to the PR head as the engineer;
-            // the new head goes green and the mechanical backstop lands it.
-            {
-                let base_url = server.base_url().to_string();
-                let token = engineer.token.clone();
-                let owner = provisioned.owner.clone();
-                let name = provisioned.name.clone();
-                let branch = head_branch.clone();
-                block_on_with_cx(move |cx| async move {
-                    commit_ci_sentinel(&cx, &base_url, &token, &owner, &name, &branch).await
-                })
-            }
-            .map_err(|error| format!("ci sentinel commit failed: {error}"))?;
-            eprintln!(
-                "daemon_forgejo_e2e scenario '{}' pushed CI sentinel fix to {head_branch}",
-                variant.name
-            );
-
+            // The worker withholds the marker on the implementation head. The
+            // dedicated CI poll must observe its terminal failure, enqueue the
+            // PR-targeted engineer repair, observe the repair head turn green,
+            // and land it. No driver-side sentinel push is allowed here: final
+            // convergence therefore proves the real repair assignment path.
             poll_until(deadline, || {
                 block_on(assert_converged(forge, provisioned, engineer, issue, 2))
             })
@@ -113,10 +86,15 @@ async fn assert_converged(
             jobs.len()
         ));
     }
-    if min_ci_verdicts >= 2
-        && jobs.first().and_then(|job| job.conclusion) != Some(CiJobConclusion::Failure)
-    {
-        return Err("first CI verdict did not fail".to_string());
+    if min_ci_verdicts >= 2 {
+        let failed = jobs.first().ok_or("missing failed CI verdict")?;
+        let passed = jobs.last().ok_or("missing passing CI verdict")?;
+        if failed.conclusion != Some(CiJobConclusion::Failure) {
+            return Err("first CI verdict did not fail".to_string());
+        }
+        if failed.commit_sha == passed.commit_sha {
+            return Err("CI repair did not create a new head SHA".to_string());
+        }
     }
     if jobs.last().and_then(|job| job.conclusion) != Some(CiJobConclusion::Success) {
         return Err("latest CI verdict did not pass".to_string());
@@ -138,41 +116,6 @@ async fn assert_converged(
     }
 
     Ok(())
-}
-
-/// Red phase of the CI variant: the engineer-authored PR exists, has at least
-/// one failed real CI verdict, and is **not** merged. Returns the head branch.
-async fn assert_ci_red_and_unmerged(
-    forge: &ForgejoForge,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-    issue: ItemNumber,
-) -> Result<String, String> {
-    let pull_request = implementation_pr(forge, provisioned, issue).await?;
-
-    if pull_request.author_id != UserId::new(engineer.user.clone()) {
-        return Err(format!(
-            "implementation PR #{} was authored by {:?}, not the engineer role identity",
-            pull_request.number, pull_request.author_id
-        ));
-    }
-    assert!(
-        pull_request.merge.is_none() && pull_request.state == PullRequestState::Open,
-        "implementation PR #{} merged or closed while its CI was red (state {:?})",
-        pull_request.number,
-        pull_request.state
-    );
-
-    let jobs = completed_ci_jobs(forge, provisioned, &pull_request).await?;
-    if jobs.last().and_then(|job| job.conclusion) != Some(CiJobConclusion::Failure) {
-        return Err(format!(
-            "no failed CI verdict for PR #{} yet ({} completed jobs)",
-            pull_request.number,
-            jobs.len()
-        ));
-    }
-
-    Ok(pull_request.source.branch.clone())
 }
 
 /// Finds the single implementation PR and checks its workflow correlation

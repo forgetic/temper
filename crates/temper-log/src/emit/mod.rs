@@ -24,6 +24,7 @@
 //! [`Event`]: crate::Event
 //! [`Service`]: crate::Service
 
+mod ci;
 pub mod human;
 mod validation_outcome;
 
@@ -32,6 +33,8 @@ pub use validation_outcome::{ValidationOutcome, ValidationOutcomeKind, emit_vali
 use std::borrow::Cow;
 
 use crate::{WorkItemRef, event::Event, service::Service};
+
+pub use ci::CiCompleted;
 
 pub use temper_protocol_activity::{AgentTerminalReasonV1, ModelFailureV1};
 
@@ -57,17 +60,6 @@ pub struct WakeReceived<'a> {
     pub artifact_kind: &'a str,
     /// Queue the wake routes into (e.g. `raw_intake`).
     pub queue: &'a str,
-}
-
-/// Inputs for [`emit_ci_completed`] (`trigger` / `ci.completed`).
-#[derive(Clone, Debug)]
-pub struct CiCompleted<'a> {
-    /// The pull request whose CI finished.
-    pub item: &'a WorkItemRef,
-    /// CI conclusion token (e.g. `success`, `failure`).
-    pub conclusion: &'a str,
-    /// Wall-clock CI duration in milliseconds (numeric field; human-formatted).
-    pub duration_ms: u64,
 }
 
 /// Inputs for [`emit_lease_claimed`] (`worker` / `lease.claimed`).
@@ -383,6 +375,10 @@ pub fn emit_ci_completed(ev: CiCompleted<'_>) {
         artifact.ref = %ev.item,
         conclusion = ev.conclusion,
         duration_ms = ev.duration_ms,
+        trigger.source = ev.trigger_source,
+        ci.detection_latency_ms = ev.detection_latency_ms,
+        queue = ev.queue,
+        role = ev.role,
         "{message}",
     );
 }

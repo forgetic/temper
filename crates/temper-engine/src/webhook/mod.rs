@@ -16,7 +16,8 @@ use temper_workflow::{CompiledWorkflow, ValidatedWorkflow, is_heartbeat_only_bod
 
 use crate::{Daemon, RoleFeedMode, RoleFeedTarget};
 use payload::{is_ci_event, is_review_event, parse_repo, parse_target};
-use trigger_facts::{parse_trigger_facts, wake_artifact_kind, wake_queue};
+pub(crate) use trigger_facts::parse_trigger_facts;
+use trigger_facts::{wake_artifact_kind, wake_queue};
 
 /// Errors returned while verifying or parsing a webhook delivery.
 #[derive(Debug, Eq, PartialEq)]
@@ -319,6 +320,13 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
             item: &item,
             conclusion: &ci.conclusion,
             duration_ms: ci.duration_ms,
+            trigger_source: Some("webhook"),
+            detection_latency_ms: ci.completed_at.map(|completed_at| {
+                u64::try_from(now.signed_duration_since(completed_at).num_milliseconds())
+                    .unwrap_or(0)
+            }),
+            queue: None,
+            role: None,
         });
     }
 

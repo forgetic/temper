@@ -1,13 +1,13 @@
 //! Hermetic contract test for the deterministic daemon test worker.
 //!
 //! Boots an in-process `temper_engine::Daemon` transport on an ephemeral local
-//! port, enqueues one enriched issue job, and spawns the real
-//! `temper-testing-daemon-worker` binary against it with a local bare git
-//! repository served over `file://` as `--git-base-url` (mirroring
-//! smith-worker's bare-origin executor tests). Asserts the worker registers,
-//! receives the assignment, pushes the hinted branch with the expected
-//! deterministic commit, and that the daemon's applier seam observes
-//! `result(success)` carrying the pushed head.
+//! port, enqueues an implementation job followed by its enriched
+//! `pull_request_writable` CI-repair job, and spawns the real
+//! `temper-testing-daemon-worker` binary against a local bare git repository
+//! served over `file://` as `--git-base-url` (mirroring smith-worker's
+//! bare-origin executor tests). Asserts the first marker-less head is followed
+//! by one marker-bearing repair commit on the same branch and both assignments
+//! publish `result(success)` with their pushed heads.
 
 #![cfg(unix)]
 
@@ -19,7 +19,8 @@ use std::time::Duration;
 use serde_json::json;
 use temper_engine::{Daemon, InFlightJob, ResultApplier};
 use temper_protocol_worker::{
-    Artifact, JobArtifactSnapshot, JobContext, JobResult, ResultStatus, WorkspaceManifest,
+    Artifact, JobArtifactSnapshot, JobContext, JobResult, PullRequestFreshness, ResultStatus,
+    WorkspaceManifest,
 };
 use temper_testing::daemon_worker::{CI_PASS_MARKER, GIT_TOKEN_ENV, GIT_USER_ENV};
 use temper_testing::forgejo_runtime::RunWorkspace;
@@ -60,7 +61,7 @@ impl Drop for WorkerGuard {
 }
 
 #[test]
-fn daemon_worker_pushes_branch_and_daemon_sees_success() {
+fn daemon_worker_repairs_ci_failed_pull_request_head() {
     temper_engine_io::block_on_with(move |cx, handle| async move {
         let workspace = RunWorkspace::new("temper-daemon-worker-hermetic");
 
@@ -171,7 +172,7 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
         ]);
         assert_eq!(pushed_sha, branch.head_sha);
 
-        // Deterministic commit: role identity, CI sentinel, and the native
+        // Deterministic implementation commit: deferred CI marker and the native
         // close-on-merge keyword for the source issue.
         let message = git_output(&[
             "-C",
@@ -182,8 +183,12 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
             "refs/heads/agent/pr-for-code-7",
         ]);
         assert!(
-            message.starts_with(&format!("Implement pr-for-code-7 {CI_PASS_MARKER}")),
+            message.starts_with("Implement pr-for-code-7"),
             "unexpected commit subject: {message}"
+        );
+        assert!(
+            !message.contains(CI_PASS_MARKER),
+            "deferred implementation head unexpectedly carries the CI marker: {message}"
         );
         assert!(
             message.contains("Closes #7"),
@@ -200,6 +205,97 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
         assert_eq!(
             author,
             "engineer <engineer@example.invalid>|engineer <engineer@example.invalid>"
+        );
+
+        // The dedicated CI path assigns the same worker a writable repair of
+        // the existing PR head. The fixture worker must push one new marker-
+        // bearing commit to that branch instead of opening another branch.
+        let repair_context = JobContext {
+            trace_context: None,
+            artifact_context: None,
+            role: "engineer".to_string(),
+            repo: "acme/service".to_string(),
+            queue: "pr_ci_failed".to_string(),
+            artifact_kind: "implementation_pr".to_string(),
+            workspace: Some(WorkspaceManifest::single(
+                "acme/service",
+                "service",
+                "main",
+                "main",
+                branch.name.clone(),
+                "pr-for-code-7",
+            )),
+            artifact: Some(JobArtifactSnapshot {
+                number: 8,
+                title: "Implementation PR".to_string(),
+                body: "Current implementation report".to_string(),
+                labels: vec!["implementation".to_string()],
+                state: "Open".to_string(),
+            }),
+            action: Some("address_ci_failure".to_string()),
+            checkout_capability: Some("pull_request_writable".to_string()),
+            allowed_verdicts: Vec::new(),
+            verdict_contracts: Default::default(),
+            source_metadata: Default::default(),
+            guidance: Some("Repair the terminal failed CI head.".to_string()),
+            pull_request_freshness: Some(PullRequestFreshness {
+                repository_id: "repo-acme-service".to_string(),
+                repo: "acme/service".to_string(),
+                role: "engineer".to_string(),
+                queue: "pr_ci_failed".to_string(),
+                action: "address_ci_failure".to_string(),
+                number: 8,
+                pull_request_id: "pr-8".to_string(),
+                head_sha: Some(branch.head_sha.clone()),
+                queue_condition: Some("ci_failed".to_string()),
+                queue_labels: Vec::new(),
+            }),
+        };
+        daemon
+            .enqueue_job(
+                "acme/service/pull_request-8/engineer/pr_ci_failed",
+                "engineer",
+                "acme/service",
+                Artifact {
+                    item: json!(8),
+                    kind: "pull_request".to_string(),
+                },
+                serde_json::to_value(&repair_context).expect("repair JobContext serializes"),
+            )
+            .await;
+
+        let (repair_job, repair) = skein::time::timeout(
+            temper_engine_io::runtime::timer_now(&cx),
+            RESULT_TIMEOUT,
+            Box::pin(rx.recv()),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "daemon did not observe the CI repair result within {RESULT_TIMEOUT:?}\n--- worker log ---\n{}",
+                worker.logs()
+            )
+        })
+        .expect("applier channel stays open");
+        assert_eq!(
+            repair_job.job_id,
+            "acme/service/pull_request-8/engineer/pr_ci_failed"
+        );
+        assert_eq!(repair.status, ResultStatus::Success, "{}", worker.logs());
+        assert_eq!(repair.repos.len(), 1);
+        assert_eq!(repair.repos[0].branch.name, branch.name);
+        assert_ne!(repair.repos[0].branch.head_sha, branch.head_sha);
+        let repaired_message = git_output(&[
+            "-C",
+            path_str(&origin),
+            "log",
+            "-1",
+            "--format=%B",
+            "refs/heads/agent/pr-for-code-7",
+        ]);
+        assert!(
+            repaired_message.starts_with(&format!("Repair pr-for-code-7 {CI_PASS_MARKER}")),
+            "unexpected repair commit: {repaired_message}"
         );
 
         // The stop-file ends the loop and the worker exits cleanly.
@@ -231,6 +327,8 @@ fn spawn_worker(
         .arg(workspace.join("worker-root"))
         .arg("--stop-file")
         .arg(stop_file)
+        .arg("--ci-sentinel")
+        .arg("deferred")
         .arg("--poll-wait-ms")
         .arg("500")
         .env(GIT_USER_ENV, "engineer")

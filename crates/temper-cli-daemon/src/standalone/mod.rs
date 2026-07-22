@@ -32,8 +32,8 @@ use skein::runtime::RuntimeHandle;
 use temper_config::{ExposeSecret, Resolved, WorkerSettings};
 use temper_engine::{
     CoordinatedMechanical, Daemon, EngineConfig, MechanicalBackstopConfig, MechanicalTrigger,
-    PollBackstopConfig, RoleFeedMode, WebhookConfig, spawn_coordinated_mechanical_backstop,
-    spawn_coordinated_poll_backstop,
+    PollBackstopConfig, RoleFeedMode, WebhookConfig, spawn_ci_status_monitor,
+    spawn_coordinated_mechanical_backstop, spawn_coordinated_poll_backstop,
 };
 use temper_engine_service::{
     AGENT_TRACE_RETENTION_INTERVAL, attach_trace_query, configured_role_forges,
@@ -399,6 +399,25 @@ async fn run_async(
     let server = temper_engine::serve(&handle, &daemon, daemon_config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
+
+    // Match split-engine startup ordering: only launch the immediate first CI
+    // snapshot after the daemon's readiness socket is bound. In particular,
+    // slow Forge CI reads must never delay or starve standalone readiness.
+    if let Some(cadence) = daemon_config.ci_poll_cadence {
+        spawn_ci_status_monitor(
+            &spawner,
+            daemon.clone(),
+            forge.clone(),
+            repositories.clone(),
+            workflow.clone(),
+            compiled.clone(),
+            cadence,
+        );
+    }
+    emit_engine_status(banner::ci_poll_backstop(
+        daemon_config.ci_poll_cadence,
+        repo_ids.len(),
+    ));
 
     let local_addr = server.local_addr();
     if webhook_enabled {

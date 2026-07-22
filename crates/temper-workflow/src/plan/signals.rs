@@ -18,6 +18,7 @@
 use super::{DependencyStatus, queue::QueueQuery};
 use crate::ids::TransitionId;
 use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use temper_forge::{CiJob, CiJobConclusion, CiJobStatus, PullRequestReviewStatus};
 
@@ -134,6 +135,7 @@ impl ValidatedWorkflow {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CiStatus {
     state: CiState,
+    completed_at: Option<DateTime<Utc>>,
 }
 
 /// Portable aggregate state for the latest native CI jobs on an artifact.
@@ -158,6 +160,7 @@ impl CiStatus {
     pub fn passed() -> Self {
         Self {
             state: CiState::Passed,
+            completed_at: None,
         }
     }
 
@@ -165,6 +168,7 @@ impl CiStatus {
     pub fn failed() -> Self {
         Self {
             state: CiState::Failed,
+            completed_at: None,
         }
     }
 
@@ -175,12 +179,24 @@ impl CiStatus {
 
     /// Builds a status directly from an aggregate CI state.
     pub fn with_state(state: CiState) -> Self {
-        Self { state }
+        Self {
+            state,
+            completed_at: None,
+        }
     }
 
     /// Returns the aggregate CI state.
     pub fn state(&self) -> CiState {
         self.state
+    }
+
+    /// Returns when the complete latest-job set became terminal, when known.
+    ///
+    /// Pending aggregates never expose a completion time. A terminal aggregate
+    /// exposes the maximum completion timestamp only when every latest job
+    /// supplies one, so the value cannot predate an un-timestamped job.
+    pub fn completed_at(&self) -> Option<DateTime<Utc>> {
+        self.completed_at
     }
 
     /// Returns whether CI has passed.
@@ -246,13 +262,22 @@ impl CiStatus {
         {
             return Self::new();
         }
-        if latest
+        let state = if latest
             .values()
             .all(|job| job.conclusion == Some(CiJobConclusion::Success))
         {
-            Self::passed()
+            CiState::Passed
         } else {
-            Self::failed()
+            CiState::Failed
+        };
+        let completed_at = latest
+            .values()
+            .map(|job| job.completed_at)
+            .collect::<Option<Vec<_>>>()
+            .and_then(|timestamps| timestamps.into_iter().max());
+        Self {
+            state,
+            completed_at,
         }
     }
 }

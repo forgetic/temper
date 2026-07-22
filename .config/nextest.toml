@@ -57,6 +57,13 @@ filter = '''
 '''
 threads-required = 4
 
+# The Forgejo backend live tests each start another host-mode runner against the
+# same host-global cache. Reserve the scheduler so their workflows cannot be
+# stranded behind a concurrently-owned runner cache.
+[[profile.e2e.overrides]]
+filter = 'package(temper-forge-forgejo) & binary(live)'
+threads-required = 4
+
 [[profile.e2e.overrides]]
 filter = 'package(temper) & (binary(basic_delivery_forgejo_e2e) | binary(daemon_forgejo_e2e) | binary(init_forgejo_e2e))'
 test-group = 'root-forgejo-e2e'

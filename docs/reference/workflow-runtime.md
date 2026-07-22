@@ -36,6 +36,10 @@ CI status comes from `list_ci_jobs`, queried with both the PR identity and head
 SHA when the backend supplies one. Those filters are conjunctive, and the
 runtime independently verifies each returned job's non-empty commit SHA against
 the head before aggregation so stale provider results cannot satisfy a gate.
+For that current head, jobs are reduced to the latest job per name. `ci_failed`
+matches only when that set is non-empty, every latest job is terminal, and at
+least one conclusion is non-success. A visible failure mixed with a queued or
+running latest job remains pending; it is not eligible for repair yet.
 Review status comes from requested reviewers plus native review events; the
 portable review aggregate is not head-SHA-scoped.
 

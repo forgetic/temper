@@ -148,6 +148,7 @@ pub fn build_config(inputs: &ConfigInputs) -> Config {
         repos: non_empty_vec(&inputs.repos),
         roles: non_empty_vec(&inputs.roles),
         poll_cadence_secs: None,
+        ci_poll_cadence_secs: None,
         mechanical_cadence_secs: None,
         lease_ttl_secs: None,
         daemon_id: None,

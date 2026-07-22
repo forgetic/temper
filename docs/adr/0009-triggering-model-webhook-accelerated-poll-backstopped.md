@@ -47,6 +47,30 @@ engine` or `temper serve standalone` when `[engine] webhook_secret` or
 `temper serve trigger` process. `trigger` remains the logging/service plane name
 for inbound facts and wake hints, not a runnable `serve` component.
 
+### Dedicated CI-status polling
+
+Actions-completion webhooks are unavailable or unreliable on supported Forgejo
+deployments, so the engine also runs a narrow CI-status monitor over open PRs
+relevant to `ci_passed` or `ci_failed` workflow conditions. Its
+`ci_poll_cadence_secs` setting bounds webhook-less detection latency for both a
+terminal red head that needs engineer repair and a terminal green head that can
+land. A newly observed terminal aggregate becomes an exact PR-scoped
+`ChangeKind::Ci` hint and enters the same bounded coordinator as provider
+webhooks; it does not bypass fresh-state reads or mutation serialization.
+
+This dedicated cadence is an acceleration backstop, not the full liveness
+contract. `poll_cadence_secs` remains the mandatory, repository-wide role-feed
+correctness/liveness backstop. `mechanical_cadence_secs` reconciles automated
+queues such as landing, but by itself does **not** scan role feeds and therefore
+does not discover red `pr_ci_failed` engineer repair work.
+
+CI terminality is conservative and head-aware. Jobs are reduced to the latest
+job per name for the current PR head. `ci_failed` matches only when that set is
+non-empty, every job in it is terminal, and at least one conclusion is
+non-success. A Forge UI can therefore show a visible failure while another
+latest job is queued or running; Temper correctly keeps that aggregate pending
+until all latest-per-name jobs settle.
+
 ### Layering
 
 ```
@@ -100,10 +124,12 @@ artifact and never prune unrelated pending jobs. Every path rechecks the
 
 Pending, dirty, and apply-deferred hints are intentionally not persisted. A
 restart can lose them without losing correctness because startup schedules a
-broad generation for every configured repository and mandatory periodic polls
-continue to do the same level-triggered discovery. **Webhook receipt is never
-required for correctness**: no queue transition, recovery, or dispatch safety
-property may depend on a delivery arriving.
+broad generation for every configured repository and mandatory general role
+polls continue to do the same level-triggered discovery. The dedicated CI poll
+can restore low-latency terminal-PR hints, but the general poll is still the full
+correctness/liveness authority. **Webhook receipt is never required for
+correctness**: no queue transition, recovery, or dispatch safety property may
+depend on a delivery arriving.
 
 Mechanical scope compaction is deliberately asymmetric. A role-lane broad scan
 subsumes exact role targets, but a mechanical broad scope retains exact artifact
@@ -173,8 +199,9 @@ runner exists and the need is concrete.
 - Webhooks are safe to bolt on **because of** the existing design: the executor
   re-loads fresh state and trusts nothing, so a duplicated/stale/forged hint can
   at worst trigger a redundant scan that finds nothing to do.
-- The periodic poll is mandatory, not optional: it is the correctness/liveness
-  guarantee. Webhooks only lower latency.
+- The general periodic role poll is mandatory, not optional: it is the full
+  correctness/liveness guarantee. Webhooks and dedicated CI-status polling only
+  lower latency for their covered changes.
 - Operators run webhook intake through `temper serve engine` or `temper serve
   standalone`; a separate `temper serve trigger` component would add topology
   ambiguity without changing correctness.

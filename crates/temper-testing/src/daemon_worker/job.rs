@@ -82,20 +82,30 @@ async fn run_job(
     identity: &GitIdentity,
     assign: &Assign,
 ) -> Result<(Vec<RepoOutcome>, String), JobError> {
-    if assign.artifact.kind != "issue" {
-        // Mirrors smith-worker: only issue-targeted coding jobs are
-        // implemented; PR-targeted feeds (e.g. pr_ci_failed) fail as protocol.
-        return Err(JobError::protocol(format!(
-            "daemon test worker only implements issue-targeted coding jobs, got artifact kind '{}'",
-            assign.artifact.kind
-        )));
-    }
     let context: JobContext = serde_json::from_value(assign.job_payload.clone())
         .map_err(|error| JobError::protocol(format!("job payload is not a JobContext: {error}")))?;
+    let pull_request_repair = match assign.artifact.kind.as_str() {
+        "issue" => false,
+        "pull_request"
+            if context.queue == "pr_ci_failed"
+                && context.action.as_deref() == Some("address_ci_failure")
+                && context.checkout_capability.as_deref() == Some("pull_request_writable") =>
+        {
+            true
+        }
+        kind => {
+            return Err(JobError::protocol(format!(
+                "daemon test worker only implements issue coding jobs and pull_request_writable pr_ci_failed repairs, got artifact kind '{kind}', queue '{}', action {:?}",
+                context.queue, context.action
+            )));
+        }
+    };
     let manifest = context
         .workspace
         .ok_or_else(|| JobError::protocol("job payload is missing enriched workspace manifest"))?;
-    let issue_number = context.artifact.as_ref().map(|artifact| artifact.number);
+    let issue_number = (!pull_request_repair)
+        .then(|| context.artifact.as_ref().map(|artifact| artifact.number))
+        .flatten();
     let coordination_key = manifest.coordination_key.clone();
 
     // One commit/push per writable repo (ADR 0023). This deterministic worker
@@ -136,7 +146,12 @@ async fn run_job(
             identity,
         };
 
-        workspace.prepare(&base_branch, &branch_name).await?;
+        let source_branch = if pull_request_repair {
+            branch_name.as_str()
+        } else {
+            base_branch.as_str()
+        };
+        workspace.prepare(source_branch, &branch_name).await?;
 
         let change_path = workspace
             .path
@@ -147,21 +162,31 @@ async fn run_job(
                 JobError::transient(format!("creating change dir failed: {error}"))
             })?;
         }
+        let operation = if pull_request_repair {
+            "CI repair"
+        } else {
+            "implementation"
+        };
         std::fs::write(
             &change_path,
             format!(
-                "Deterministic daemon test-worker change.\njob_id: {}\nrepo: {}\nbranch: {branch_name}\n",
+                "Deterministic daemon test-worker {operation}.\njob_id: {}\nrepo: {}\nbranch: {branch_name}\n",
                 assign.job_id, repo_spec.repo
             ),
         )
         .map_err(|error| JobError::transient(format!("writing change file failed: {error}")))?;
 
-        let mut message = format!("Implement {coordination_key}");
-        if config.ci_sentinel == CiSentinel::Present {
-            message.push_str(&format!(" {CI_PASS_MARKER}"));
-        }
+        let mut message = if pull_request_repair {
+            format!("Repair {coordination_key} {CI_PASS_MARKER}")
+        } else {
+            let mut message = format!("Implement {coordination_key}");
+            if config.ci_sentinel == CiSentinel::Present {
+                message.push_str(&format!(" {CI_PASS_MARKER}"));
+            }
+            message
+        };
         message.push_str(&format!(
-            "\n\nDeterministic test-worker change for job {} ({}).",
+            "\n\nDeterministic test-worker {operation} for job {} ({}).",
             assign.job_id, repo_spec.repo
         ));
         // Native provider close-on-merge only works within the coordinating
@@ -191,10 +216,12 @@ async fn run_job(
         ));
     }
 
-    Ok((
-        outcomes,
-        format!("deterministic test-worker change for {coordination_key}"),
-    ))
+    let summary = if pull_request_repair {
+        format!("deterministic CI repair for {coordination_key}")
+    } else {
+        format!("deterministic test-worker change for {coordination_key}")
+    };
+    Ok((outcomes, summary))
 }
 
 /// Minimal clone-or-fetch git workspace driven through the git CLI, mirroring

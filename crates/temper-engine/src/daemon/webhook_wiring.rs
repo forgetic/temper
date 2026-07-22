@@ -11,9 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use temper_forge::{ChangeKind, Forge, HintArtifactKind, Repository, RepositoryId, RepositoryPath};
+use temper_log::WorkItemRef;
 use temper_protocol_worker::Artifact;
 use temper_runner::ArtifactAddress;
-use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
+use temper_workflow::{CiState, CiStatus, CompiledWorkflow, RoleId, ValidatedWorkflow};
 
 use crate::RoleFeedTarget;
 use crate::lease_applier::WallClock;
@@ -21,8 +22,11 @@ use crate::webhook::WebhookConfig;
 
 use super::machine::DaemonCompletion;
 use super::wake_coordinator::{
-    WakeLane, WakeOutcome, WakeScope, WakeTargets, WakeWork, merge_change_kind, prioritized_targets,
+    CiWakeFacts, WakeLane, WakeOutcome, WakeScope, WakeTargets, WakeWork, merge_change_kind,
+    prioritized_targets,
 };
+#[cfg(test)]
+use super::wake_scope::WakeTarget;
 use super::{CoordinatedMechanical, Daemon, WakeExecutor};
 
 impl Daemon {
@@ -247,6 +251,22 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
             BTreeMap::new();
         let mut mechanical_broad = false;
         let mut mechanical_targets = WakeTargets::new();
+        let mut ci_facts = BTreeMap::<ArtifactAddress, CiWakeFacts>::new();
+
+        // Trigger metadata is batch-level observability state. Collect it before
+        // broad lanes subsume exact execution so provenance survives every
+        // deterministic coordinator compaction path.
+        for scope in work.batch.lanes().values() {
+            for ((kind, number), target) in scope.targets() {
+                let Some(incoming) = target.ci else {
+                    continue;
+                };
+                ci_facts
+                    .entry(ArtifactAddress::new(*kind, *number))
+                    .and_modify(|current| *current = current.merge(incoming))
+                    .or_insert(incoming);
+            }
+        }
 
         for (lane, scope) in work.batch.lanes() {
             match lane {
@@ -255,11 +275,11 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
                         broad_roles.insert(role.clone());
                     }
                     WakeScope::Targeted(targets) => {
-                        for ((kind, number), change) in targets {
+                        for ((kind, number), target) in targets {
                             let entry = targeted_roles
                                 .entry(ArtifactAddress::new(*kind, *number))
-                                .or_insert_with(|| (*change, BTreeSet::new()));
-                            entry.0 = merge_change_kind(entry.0, *change);
+                                .or_insert_with(|| (target.change, BTreeSet::new()));
+                            entry.0 = merge_change_kind(entry.0, target.change);
                             entry.1.insert(role.clone());
                         }
                     }
@@ -272,13 +292,11 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
                         }
                         WakeScope::Targeted(targets) => targets,
                     };
-                    for (address, change) in targets {
+                    for (address, target) in targets {
                         mechanical_targets
                             .entry(*address)
-                            .and_modify(|current| {
-                                *current = merge_change_kind(*current, *change);
-                            })
-                            .or_insert(*change);
+                            .and_modify(|current| current.merge(*target))
+                            .or_insert(*target);
                     }
                 }
                 WakeLane::Role(_) => {}
@@ -316,9 +334,10 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
         }
         targeted_roles.retain(|_, (_, roles)| !roles.is_empty());
 
+        let mut broad_ci_selected = BTreeMap::new();
         if !broad_roles.is_empty() {
             let roles = broad_roles.into_iter().collect::<Vec<_>>();
-            if let Err(error) = crate::feed::enqueue_scanned_roles_wake(
+            match crate::feed::enqueue_scanned_roles_wake(
                 &self.daemon,
                 self.forge.as_ref(),
                 &repository,
@@ -329,10 +348,16 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
             )
             .await
             {
-                failures.push(format!("broad role wake failed: {error}"));
+                Ok(result) => {
+                    for (address, queue, role) in result.enqueued_work {
+                        broad_ci_selected.entry(address).or_insert((queue, role));
+                    }
+                }
+                Err(error) => failures.push(format!("broad role wake failed: {error}")),
             }
         }
 
+        let mut observed_ci_targets = BTreeSet::new();
         for (address, (_change, roles)) in targeted_roles {
             let roles = roles.into_iter().collect::<Vec<_>>();
             match self
@@ -349,6 +374,17 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
                 .await
             {
                 Ok(result) => {
+                    if let Some(facts) = ci_facts.get(&address).copied() {
+                        emit_ci_wake_observation(
+                            &route.path,
+                            address,
+                            facts,
+                            result.ci_status,
+                            result.enqueued_work.first(),
+                            now,
+                        );
+                        observed_ci_targets.insert(address);
+                    }
                     let artifact = protocol_artifact(address);
                     let repo_label = format!("{}/{}", route.path.owner, route.path.name);
                     for role in roles {
@@ -374,6 +410,19 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
             }
         }
 
+        for (address, facts) in ci_facts {
+            if !observed_ci_targets.contains(&address) {
+                emit_ci_wake_observation(
+                    &route.path,
+                    address,
+                    facts,
+                    None,
+                    broad_ci_selected.get(&address),
+                    now,
+                );
+            }
+        }
+
         if failures.is_empty() {
             WakeOutcome::Succeeded
         } else {
@@ -382,6 +431,62 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
             }
         }
     }
+}
+
+fn emit_ci_wake_observation(
+    repo: &RepositoryPath,
+    address: ArtifactAddress,
+    facts: CiWakeFacts,
+    fresh_status: Option<CiStatus>,
+    selected: Option<&(temper_workflow::QueueId, RoleId)>,
+    detected_at: chrono::DateTime<chrono::Utc>,
+) {
+    if address.kind != HintArtifactKind::PullRequest {
+        return;
+    }
+    let fresh_verdict = fresh_status.and_then(|status| match status.state() {
+        CiState::Passed => Some(crate::CiTerminalVerdict::Passed),
+        CiState::Failed => Some(crate::CiTerminalVerdict::Failed),
+        CiState::Pending => None,
+    });
+    // A fresh pending aggregate means the terminal edge was superseded by a
+    // rerun before execution; do not report the stale terminal verdict.
+    if fresh_status.is_some() && fresh_verdict.is_none() {
+        return;
+    }
+    let Some(verdict) = fresh_verdict.or(facts.verdict) else {
+        return;
+    };
+    let completed_at = fresh_status
+        .and_then(|status| status.completed_at())
+        .or(facts.completed_at);
+    let detection_latency_ms = completed_at.map(|completed_at| {
+        u64::try_from(
+            detected_at
+                .signed_duration_since(completed_at)
+                .num_milliseconds(),
+        )
+        .unwrap_or(0)
+    });
+    let item = WorkItemRef::pull_request(
+        format!("{}/{}", repo.owner, repo.name),
+        address.number.get(),
+    );
+    let (queue, role) = selected
+        .map(|(queue, role)| (Some(queue.as_str()), Some(role.as_str())))
+        .unwrap_or((None, None));
+    temper_log::emit::emit_ci_completed(temper_log::emit::CiCompleted {
+        item: &item,
+        conclusion: match verdict {
+            crate::CiTerminalVerdict::Passed => "success",
+            crate::CiTerminalVerdict::Failed => "failure",
+        },
+        duration_ms: 0,
+        trigger_source: Some(facts.source.as_str()),
+        detection_latency_ms,
+        queue,
+        role,
+    });
 }
 
 async fn execute_mechanical_work(
@@ -458,147 +563,5 @@ fn repository_key(repo: &RepositoryPath) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use temper_forge::ItemNumber;
-
-    use super::*;
-
-    #[derive(Clone, Default)]
-    struct RecordingMechanical {
-        events: Arc<std::sync::Mutex<Vec<String>>>,
-        active: Arc<AtomicUsize>,
-        max_active: Arc<AtomicUsize>,
-        changed: bool,
-    }
-
-    impl RecordingMechanical {
-        async fn record(&self, event: String) {
-            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
-            self.max_active.fetch_max(active, Ordering::SeqCst);
-            self.events.lock().expect("event log").push(event);
-            let mut yielded = false;
-            std::future::poll_fn(move |cx| {
-                if yielded {
-                    std::task::Poll::Ready(())
-                } else {
-                    yielded = true;
-                    cx.waker().wake_by_ref();
-                    std::task::Poll::Pending
-                }
-            })
-            .await;
-            self.active.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-
-    impl CoordinatedMechanical for RecordingMechanical {
-        fn run_coordinated_broad(
-            &self,
-            _repo: RepositoryPath,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>>
-        {
-            let recorder = self.clone();
-            Box::pin(async move {
-                recorder.record("mechanical:broad".to_string()).await;
-                Ok(recorder.changed)
-            })
-        }
-
-        fn run_coordinated_targeted(
-            &self,
-            _repo: RepositoryPath,
-            artifact: ArtifactAddress,
-            change: ChangeKind,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>>
-        {
-            let recorder = self.clone();
-            Box::pin(async move {
-                recorder
-                    .record(format!(
-                        "mechanical:{}#{}:{change:?}",
-                        artifact_kind(artifact.kind),
-                        artifact.number
-                    ))
-                    .await;
-                Ok(recorder.changed)
-            })
-        }
-    }
-
-    #[test]
-    fn executor_serializes_priority_targets_then_broad_then_role_work() {
-        temper_engine_io::block_on_with(move |_cx, _handle| async move {
-            let recorder = RecordingMechanical::default();
-            let events = Arc::clone(&recorder.events);
-            let max_active = Arc::clone(&recorder.max_active);
-            let mechanical: Arc<dyn CoordinatedMechanical> = Arc::new(recorder);
-            let mut targets = WakeTargets::new();
-            targets.insert(
-                (HintArtifactKind::Issue, ItemNumber::new(2)),
-                ChangeKind::Label,
-            );
-            targets.insert(
-                (HintArtifactKind::PullRequest, ItemNumber::new(8)),
-                ChangeKind::Edited,
-            );
-            targets.insert(
-                (HintArtifactKind::PullRequest, ItemNumber::new(9)),
-                ChangeKind::Ci,
-            );
-            let mut failures = Vec::new();
-
-            let changed = execute_mechanical_work(
-                Some(&mechanical),
-                &RepositoryPath::new("ai", "temper"),
-                &targets,
-                true,
-                &mut failures,
-            )
-            .await;
-            events
-                .lock()
-                .expect("event log")
-                .push("role:scan".to_string());
-
-            assert!(failures.is_empty());
-            assert!(!changed);
-            assert_eq!(
-                *events.lock().expect("event log"),
-                vec![
-                    "mechanical:pull_request#9:Ci",
-                    "mechanical:pull_request#8:Edited",
-                    "mechanical:issue#2:Label",
-                    "mechanical:broad",
-                    "role:scan",
-                ]
-            );
-            assert_eq!(max_active.load(Ordering::SeqCst), 1);
-        });
-    }
-
-    #[test]
-    fn mechanical_change_is_reported_for_role_followup() {
-        temper_engine_io::block_on_with(move |_cx, _handle| async move {
-            let recorder = RecordingMechanical {
-                changed: true,
-                ..RecordingMechanical::default()
-            };
-            let mechanical: Arc<dyn CoordinatedMechanical> = Arc::new(recorder);
-            let mut failures = Vec::new();
-
-            let changed = execute_mechanical_work(
-                Some(&mechanical),
-                &RepositoryPath::new("ai", "temper"),
-                &WakeTargets::new(),
-                true,
-                &mut failures,
-            )
-            .await;
-
-            assert!(failures.is_empty());
-            assert!(changed);
-        });
-    }
-}
+#[path = "webhook_wiring/tests.rs"]
+mod tests;
