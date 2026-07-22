@@ -160,7 +160,7 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `action` | string | no | Workflow action (intent-level tool / transition id) this job services, for example `open_pr` or `triage_intake`. |
 | `checkout_capability` | string | no | Checkout capability the worker should prepare: `writable`, `read_only`, `pull_request_read_only`, or `pull_request_writable`. Absent means writable, preserving v1's original behavior. |
 | `allowed_verdicts` | array of strings | no | Verdict vocabulary declared by `action`'s `outcomes` keys, in deterministic order. Empty or absent for a plain coding job. |
-| `verdict_contracts` | object | no | Workflow-derived result requirements keyed by verdict: child cardinality/kinds, required child/source metadata, and required PR text or authored body. Required child metadata must appear non-blank in each child body's `<!-- temper:workflow ... -->` JSON block. |
+| `verdict_contracts` | object | no | Workflow-derived result requirements keyed by verdict: child cardinality/kinds, required child/source metadata, resolved child `target_branch`, and required PR text or authored body. A resolved branch names the exact accepted value, the repository default used for comparison, and whether omission authorizes engine stamping. Older contracts omit this additive requirement. Required child metadata must appear non-blank in each child body's `<!-- temper:workflow ... -->` JSON block. |
 | `source_metadata` | object | no | Parsed assignment-time source metadata used by worker/agent preflight validation. The engine re-reads current Forge state before mutation. |
 
 For compatibility, old minimal payloads containing only `role`, `repo`, `queue`,

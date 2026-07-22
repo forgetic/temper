@@ -317,7 +317,7 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
         guidance: None,
         pull_request_freshness: None,
     };
-    enrich_job_context_from_workflow(item, workflow, compiled, &mut context)?;
+    enrich_job_context_from_workflow(item, workflow, compiled, &repository, &mut context)?;
 
     let action = context.action.as_deref().ok_or_else(|| {
         ScanError::InvalidWorkflow("enriched job is missing a selected action".to_string())

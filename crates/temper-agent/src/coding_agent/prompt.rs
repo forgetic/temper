@@ -1,6 +1,10 @@
 //! Role system-prompt and user-turn context construction.
 
+mod outcomes;
+
 use std::collections::{BTreeMap, BTreeSet};
+
+use self::outcomes::render_workflow_outcomes;
 
 use super::Capability;
 use super::tools::{registry_has_tool, subagent_guidance};
@@ -9,14 +13,14 @@ use temper_protocol_agent::{
     ArtifactSummary, ArtifactType, WorkflowArtifactReference, WorkflowChildIdentity,
     WorkspaceContext,
 };
-use temper_verdict::{VerdictContract, VerdictContracts};
+use temper_verdict::VerdictContracts;
 use tongs::tools::ToolRegistry;
 
 /// Builds the role system prompt for a capability.
 ///
 /// `allowed_verdicts` is the workflow-declared verdict vocabulary surfaced by
 /// temper (W3). When non-empty, the prompt renders only those declared outcomes
-/// and the requirements supplied by their [`VerdictContract`] values. When
+/// and the requirements supplied by their [`temper_verdict::VerdictContract`] values. When
 /// empty, the agent falls back to its built-in per-role verdict menu for
 /// compatibility with older contexts. The engineer's no-verdict success path is
 /// invariant and remains available in either case.
@@ -204,86 +208,6 @@ fn render_legacy_outcomes(prompt: &mut String, capability: Capability) {
              - `changes` with an authored `review_body` when the change is incomplete, unsafe, contradicts the contract, or is bookkeeping-only;\n\
              - `escalate` when the decision exceeds a static review (explain in `summary`).\n",
         ),
-    }
-}
-
-fn render_workflow_outcomes(
-    prompt: &mut String,
-    capability: Capability,
-    allowed_verdicts: &[String],
-    contracts: &VerdictContracts,
-) {
-    prompt.push_str("\nWORKFLOW OUTCOMES:\n");
-    if matches!(capability, Capability::CodingWorkspace) {
-        prompt.push_str(
-            "The no-verdict engineer success path remains available. If emitting a verdict, emit exactly one workflow-declared verdict below and no other verdict.\n",
-        );
-    } else {
-        prompt.push_str("Emit exactly one workflow-declared verdict below and no other verdict.\n");
-    }
-
-    for verdict in allowed_verdicts {
-        let Some(contract) = contracts.get(verdict) else {
-            prompt.push_str(&format!("- Verdict `{verdict}`.\n"));
-            continue;
-        };
-        prompt.push_str(&format!(
-            "- Verdict `{verdict}` {}.\n",
-            child_requirement(contract)
-        ));
-        if contract.min_children > 0 {
-            prompt.push_str(
-                "  Each child must include non-blank `slug`, `title`, and `body`; sibling slugs must be unique and `depends_on` must be acyclic.\n",
-            );
-        }
-        for key in &contract.required_child_metadata {
-            prompt.push_str(&format!(
-                "  Each child body must contain non-blank workflow metadata `{key}` inside a `<!-- temper:workflow ... -->` JSON block.\n"
-            ));
-        }
-        if contract.requires_pr_title {
-            prompt.push_str("  It requires a non-blank pull-request `title`.\n");
-        }
-        if contract.requires_pr_body {
-            prompt.push_str("  It requires a non-blank pull-request `body`.\n");
-        } else if contract.requires_body {
-            prompt.push_str("  It requires a non-blank authored `body` (or `review_body`).\n");
-        }
-        for key in &contract.required_source_metadata {
-            prompt.push_str(&format!(
-                "  The source artifact must contain non-blank workflow metadata `{key}`.\n"
-            ));
-        }
-    }
-}
-
-fn child_requirement(contract: &VerdictContract) -> String {
-    let count = match contract.max_children {
-        Some(max) if max == contract.min_children => {
-            format!(
-                "requires exactly {} child product(s)",
-                contract.min_children
-            )
-        }
-        Some(max) => format!(
-            "requires {}..={max} child product(s)",
-            contract.min_children
-        ),
-        None if contract.min_children > 0 => {
-            format!(
-                "requires at least {} child product(s)",
-                contract.min_children
-            )
-        }
-        None => "allows any number of child products".to_string(),
-    };
-    if contract.allowed_child_kinds.is_empty() || contract.max_children == Some(0) {
-        count
-    } else {
-        format!(
-            "{count} of kind(s): {}",
-            contract.allowed_child_kinds.join(", ")
-        )
     }
 }
 

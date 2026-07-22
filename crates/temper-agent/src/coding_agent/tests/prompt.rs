@@ -211,6 +211,35 @@ fn system_prompt_renders_exact_workflow_product_contract() {
 }
 
 #[test]
+fn system_prompt_renders_resolved_branch_value_and_omission_behavior() {
+    let allowed = vec!["needs_plan".to_string()];
+    let contracts = temper_verdict::VerdictContracts::from([(
+        "needs_plan".to_string(),
+        temper_verdict::VerdictContract {
+            min_children: 1,
+            max_children: Some(1),
+            required_child_metadata: vec!["target_branch".to_string()],
+            target_branch: Some(temper_verdict::TargetBranchRequirement {
+                expected: "agent/pr-for-feature-620".to_string(),
+                repository_default: "main".to_string(),
+                allow_omission: true,
+            }),
+            ..Default::default()
+        },
+    )]);
+
+    let prompt = system_prompt_with_contracts(Capability::TriageWorkspace, &allowed, &contracts);
+    assert!(prompt.contains("target branch is exactly `agent/pr-for-feature-620`"));
+    assert!(prompt.contains("Omit `target_branch` to let Temper stamp that value"));
+    assert!(prompt.contains("if supplied explicitly, it must match exactly"));
+    assert!(prompt.contains("repository default branch `main` is not valid"));
+    assert!(
+        !prompt.contains("must contain non-blank workflow metadata `target_branch` inside"),
+        "resolved omission semantics must replace the legacy generic requirement"
+    );
+}
+
+#[test]
 fn system_prompt_single_declared_outcome_is_the_only_verdict() {
     let allowed = vec!["ready_code".to_string()];
     let architect = system_prompt(Capability::TriageWorkspace, &allowed);

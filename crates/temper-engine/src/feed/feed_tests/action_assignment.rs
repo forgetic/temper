@@ -70,6 +70,66 @@ fn reference_open_pr_assignment_carries_decline_verdicts() {
 }
 
 #[test]
+fn plan_feature_assignment_exposes_engine_resolved_branch_contract() {
+    temper_engine_io::block_on(async move {
+        let forge = MemoryForge::new();
+        let repo = new_repo(&forge).await;
+        let issue = forge
+            .create_issue(
+                &repo,
+                temper_forge::CreateIssue {
+                    title: "feature".to_string(),
+                    body: format!(
+                        "Plan this feature.\n\n{}",
+                        render_metadata_block(&WorkflowMetadata {
+                            target_branch: Some("main".to_string()),
+                            ..WorkflowMetadata::default()
+                        })
+                    ),
+                    labels: vec!["feature".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("feature is created");
+        let spec: RawWorkflowSpec = serde_json::from_str(include_str!(
+            "../../../../../scenarios/plan-centric-feature-branch/config/workflow.json"
+        ))
+        .expect("plan-centric workflow parses");
+        let workflow = spec.validate().expect("plan-centric workflow validates");
+        let compiled = workflow.compile();
+        let item = WorkItem {
+            queue: QueueId::new("feature_planning"),
+            role: RoleId::new("architect"),
+            target: ArtifactSource::Issue {
+                number: issue.number,
+            },
+            kind: ArtifactKindId::new("feature"),
+        };
+        let mut job = job_from_work_item("ai/temper", &item);
+
+        assert_eq!(
+            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                .await
+                .expect("enrichment succeeds"),
+            EnrichOutcome::Enriched
+        );
+
+        let context: JobContext = serde_json::from_value(job.job_payload).expect("context parses");
+        let requirement = context.verdict_contracts["needs_plan"]
+            .target_branch
+            .as_ref()
+            .expect("resolved branch requirement");
+        assert_eq!(
+            requirement.expected,
+            format!("agent/pr-for-feature-{}", issue.number.get())
+        );
+        assert_eq!(requirement.repository_default, "main");
+        assert!(requirement.allow_omission);
+    })
+}
+
+#[test]
 fn reference_review_assignment_is_read_only_pr_with_declared_verdicts() {
     temper_engine_io::block_on(async move {
         let forge = MemoryForge::new();

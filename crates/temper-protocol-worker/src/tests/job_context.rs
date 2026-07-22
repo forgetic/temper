@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::{JobArtifactSnapshot, JobContext, W3cTraceContext, WorkspaceManifest};
-use temper_verdict::{VerdictContract, VerdictContracts};
+use temper_verdict::{TargetBranchRequirement, VerdictContract, VerdictContracts};
 
 use super::sample_manifest;
 
@@ -74,6 +74,11 @@ fn full_job_context_round_trips_without_loss() {
                 max_children: Some(1),
                 allowed_child_kinds: vec!["plan".to_string()],
                 required_child_metadata: vec!["target_branch".to_string()],
+                target_branch: Some(TargetBranchRequirement {
+                    expected: "agent/pr-for-feature-42".to_string(),
+                    repository_default: "main".to_string(),
+                    allow_omission: true,
+                }),
                 ..VerdictContract::default()
             },
         )]),
@@ -87,6 +92,27 @@ fn full_job_context_round_trips_without_loss() {
     let value = serde_json::to_value(&context).expect("job context serializes");
     let decoded: JobContext = serde_json::from_value(value).expect("serialized job context parses");
     assert_eq!(decoded, context);
+}
+
+#[test]
+fn worker_schema_describes_additive_resolved_target_branch_contract() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/reference/worker-daemon-wire-protocol/schema.json");
+    let schema: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root).expect("schema is readable"))
+            .expect("schema is valid JSON");
+    assert_eq!(
+        schema["$defs"]["verdictContract"]["properties"]["target_branch"]["$ref"],
+        "#/$defs/targetBranchRequirement"
+    );
+    assert_eq!(
+        schema["$defs"]["targetBranchRequirement"]["required"],
+        serde_json::json!(["expected", "repository_default"])
+    );
+    assert_eq!(
+        schema["$defs"]["targetBranchRequirement"]["properties"]["allow_omission"]["type"],
+        "boolean"
+    );
 }
 
 #[test]
