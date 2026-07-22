@@ -41,7 +41,9 @@ jobs:
       CARGO_BUILD_JOBS: "4"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Bypass the default action mirror so a data.forgejo.org outage cannot
+        # prevent this job from reaching the repository checkout.
+        uses: https://github.com/actions/checkout@v4
       - name: Prepare scratch directory
         # This Forgejo Actions runner does not provide the `runner.temp`
         # context. Use a short path outside the checkout so temporary git probes
@@ -127,7 +129,9 @@ jobs:
         working-directory: crates/temper-web/ui
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Bypass the default action mirror so a data.forgejo.org outage cannot
+        # prevent this job from reaching the repository checkout.
+        uses: https://github.com/actions/checkout@v4
       - name: Install (npm ci)
         # `npm ci` installs exactly the committed package-lock.json — fails if it
         # is missing or out of sync with package.json.
