@@ -61,11 +61,24 @@ pub struct TraceRetentionTask {
 }
 
 impl TraceRetentionTask {
-    pub async fn stop(mut self) {
+    /// Requests cancellation without consuming the join authority. Standalone
+    /// uses this split phase so deadline expiry retains the blocking owner.
+    pub fn begin_stop(&self) {
         self.cancellation.cancel();
-        if let Some(joined) = self.joined.take() {
-            let _ = joined.recv().await;
+    }
+
+    /// Waits for a previously requested stop while retaining this handle if the
+    /// caller's absolute deadline wins the wait.
+    pub async fn wait_stopped(&mut self) {
+        if let Some(joined) = self.joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.joined.take();
+    }
+
+    pub async fn stop(mut self) {
+        self.begin_stop();
+        self.wait_stopped().await;
     }
 }
 

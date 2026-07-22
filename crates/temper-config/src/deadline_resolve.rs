@@ -5,13 +5,17 @@
 use std::time::Duration;
 
 use crate::error::ConfigError;
-use crate::resolved::{AgentOperationLimits, AgentSettings, WorkerLivenessLimits};
+use crate::resolved::{
+    AgentOperationLimits, AgentSettings, STANDALONE_FINAL_KILL_ALLOWANCE,
+    STANDALONE_HTTP_DRAIN_ALLOWANCE, WorkerLivenessLimits,
+};
 use crate::schema::{AgentDeadlineConfig, Config};
 
 const DEFAULT_MAX_NO_PROGRESS_SECS: u64 = 900;
 const DEFAULT_MAX_RUN_SECS: Option<u64> = None;
 const DEFAULT_GRACEFUL_CANCELLATION_GRACE_SECS: u64 = 10;
 const DEFAULT_FORCED_TERMINATION_GRACE_SECS: u64 = 5;
+pub(crate) const DEFAULT_STANDALONE_SHUTDOWN_BUDGET_SECS: u64 = 30;
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 600;
 const DEFAULT_MODEL_CONNECT_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MODEL_IDLE_TIMEOUT_SECS: u64 = 120;
@@ -159,7 +163,25 @@ fn is_first_party_agent_command(command: &[String]) -> bool {
         || (executable == "temper" && command.get(1).is_some_and(|arg| arg == "agent"))
 }
 
-fn positive_duration_secs(secs: u64, field: &str) -> Result<Duration, ConfigError> {
+pub(crate) fn validate_standalone_shutdown_budget(
+    budget: Duration,
+    worker: WorkerLivenessLimits,
+) -> Result<(), ConfigError> {
+    let required = worker
+        .graceful_cancellation_grace
+        .checked_add(worker.forced_termination_grace)
+        .and_then(|graces| graces.checked_add(STANDALONE_HTTP_DRAIN_ALLOWANCE))
+        .and_then(|allowances| allowances.checked_add(STANDALONE_FINAL_KILL_ALLOWANCE))
+        .ok_or_else(|| ConfigError::invalid("standalone shutdown allowances overflow"))?;
+    if budget <= required {
+        return Err(ConfigError::invalid(
+            "deployment.standalone_shutdown_budget_secs must strictly exceed worker graceful_cancellation_grace_secs plus forced_termination_grace_secs plus the 5 second HTTP-drain allowance plus the 5 second final emergency-kill allowance",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn positive_duration_secs(secs: u64, field: &str) -> Result<Duration, ConfigError> {
     if secs == 0 {
         return Err(ConfigError::invalid(format!(
             "{field} must be greater than zero"

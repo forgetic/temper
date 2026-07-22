@@ -14,6 +14,12 @@ pub fn config_template() -> String {
 # Secrets (forge tokens/passwords, LLM credentials) live in the credentials file.
 schema_version = 1
 
+[deployment]
+# One absolute signal-to-exit budget for `temper serve standalone`. This must
+# exceed both worker cancellation graces plus the fixed 5-second HTTP-drain and
+# 5-second final emergency-kill allowances.
+standalone_shutdown_budget_secs = 30
+
 [observability.agent_traces]
 # Durable traces live below [paths] state_dir, never below a workstream checkout.
 # If no durable state directory can be resolved, tracing is disabled with a warning.

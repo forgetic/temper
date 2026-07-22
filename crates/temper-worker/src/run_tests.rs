@@ -200,7 +200,7 @@ fn bounded_shutdown_reports_and_retains_an_unresolved_attempt() {
         let temp = tempfile::tempdir().expect("tempdir");
         let (started_tx, mut started_rx) = channel();
         let transport = Arc::new(AssignmentTransport::new());
-        let worker = start_worker_with_transport(
+        let mut worker = start_worker_with_transport(
             handle,
             config(temp.path().join("results")),
             Arc::new(BlockingExecutor {
@@ -209,9 +209,21 @@ fn bounded_shutdown_reports_and_retains_an_unresolved_attempt() {
             Arc::clone(&transport),
         );
         let registry = worker.task_registry();
+        let registry_after_fence = registry.clone();
         let cancellation = started_rx.recv().await.expect("job started");
         let report = worker
-            .shutdown_bounded(std::time::Instant::now() + Duration::from_millis(30))
+            .shutdown_bounded_after_fence(
+                std::time::Instant::now() + Duration::from_millis(30),
+                move || {
+                    assert!(registry_after_fence.is_shutting_down());
+                    let active = registry_after_fence.active_jobs();
+                    assert_eq!(active.len(), 1);
+                    assert!(
+                        !active[0].fence().is_open(),
+                        "HTTP drain callback must follow AttemptFence closure"
+                    );
+                },
+            )
             .await;
 
         assert!(report.joined_attempts.is_empty());

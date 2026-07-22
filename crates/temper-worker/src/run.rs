@@ -129,6 +129,19 @@ pub struct WorkerComponentHandle {
     forced_termination_grace: Duration,
 }
 
+/// Cloneable, synchronous authority used by standalone's dedicated OS
+/// watchdog. Ordinary split-worker shutdown never constructs this handle.
+#[derive(Clone)]
+pub struct WorkerEmergencyShutdownHandle {
+    task_registry: WorkerTaskRegistry,
+}
+
+impl WorkerEmergencyShutdownHandle {
+    pub fn request_emergency_kill(&self) {
+        let _ = self.task_registry.begin_shutdown(WorkerShutdown::Crash);
+    }
+}
+
 impl WorkerComponentHandle {
     /// Gracefully stops intake, fences active attempts, applies configured
     /// escalation deadlines, and joins every worker-owned task.
@@ -156,6 +169,23 @@ impl WorkerComponentHandle {
     /// Deadline expiry returns exact unresolved registry entries without
     /// removing them, publishing quiescence/results, or releasing capacity.
     pub async fn shutdown_bounded(mut self, deadline: Instant) -> WorkerShutdownReport {
+        self.shutdown_bounded_after_fence(deadline, || {}).await
+    }
+
+    /// Standalone-only bounded shutdown seam. The callback runs synchronously
+    /// after registry intake and every active attempt fence are closed, but
+    /// before any graceful wait begins. This lets the composition root start
+    /// HTTP drain in the required order while retaining this handle on the
+    /// bounded-crash path.
+    #[doc(hidden)]
+    pub async fn shutdown_bounded_after_fence<F>(
+        &mut self,
+        deadline: Instant,
+        after_attempt_fence: F,
+    ) -> WorkerShutdownReport
+    where
+        F: FnOnce(),
+    {
         let initial = self
             .task_registry
             .active_jobs()
@@ -164,6 +194,7 @@ impl WorkerComponentHandle {
             .collect::<Vec<_>>();
         let notification = self.task_registry.begin_shutdown(WorkerShutdown::Graceful);
         let _ = self.completions.send(WorkerCompletion::BeginShutdown);
+        after_attempt_fence();
         if !wait_until_or_deadline(notification, self.graceful_cancellation_grace, deadline).await {
             self.task_registry
                 .request_all(crate::JobCancellationRequest::ForcedTermination);
@@ -245,6 +276,16 @@ impl WorkerComponentHandle {
         }
     }
 
+    /// Out-of-band authority safe to move to a dedicated OS watchdog thread.
+    /// It closes registry intake and attempt fences before queuing the strongest
+    /// backend kill without waiting for the single-threaded runtime.
+    #[doc(hidden)]
+    pub fn emergency_shutdown_handle(&self) -> WorkerEmergencyShutdownHandle {
+        WorkerEmergencyShutdownHandle {
+            task_registry: self.task_registry.clone(),
+        }
+    }
+
     /// Stops the component without publishing or releasing active claims. It
     /// immediately hard-escalates every attempt, but still waits indefinitely
     /// for recursive emptiness and resource joins before returning.
@@ -262,15 +303,17 @@ impl WorkerComponentHandle {
 
     /// Waits until the worker exits without requesting shutdown.
     pub async fn join(mut self) {
-        if let Some(joined) = self.joined.take() {
-            let _ = joined.recv().await;
+        if let Some(joined) = self.joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.joined.take();
         self.component_tasks.stop_accepting();
         self.cancellation.cancel();
         self.component_tasks.wait_empty().await;
-        if let Some(joined) = self.forwarder_joined.take() {
-            let _ = joined.recv().await;
+        if let Some(joined) = self.forwarder_joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.forwarder_joined.take();
     }
 
     async fn stop_background_and_machine_until(&mut self, deadline: Instant) -> bool {
@@ -296,13 +339,15 @@ impl WorkerComponentHandle {
         self.component_tasks.stop_accepting();
         self.cancellation.cancel();
         self.component_tasks.wait_empty().await;
-        if let Some(joined) = self.forwarder_joined.take() {
-            let _ = joined.recv().await;
+        if let Some(joined) = self.forwarder_joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.forwarder_joined.take();
         let _ = self.completions.send(WorkerCompletion::Shutdown);
-        if let Some(joined) = self.joined.take() {
-            let _ = joined.recv().await;
+        if let Some(joined) = self.joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.joined.take();
     }
 }
 
