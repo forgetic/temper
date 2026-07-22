@@ -2,8 +2,9 @@ use temper_protocol_agent::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
 };
 use temper_protocol_worker::{
-    ArtifactContextBundle, JobArtifactSnapshot, PullRequestFreshness as WorkerPullRequestFreshness,
-    RepoAccess, W3cTraceContext, WorkspaceManifest,
+    ArtifactContextBundle, JobArtifactSnapshot, JobGuidance,
+    PullRequestFreshness as WorkerPullRequestFreshness, RepoAccess, W3cTraceContext,
+    WorkspaceManifest,
 };
 use temper_verdict::{SourceMetadata, VerdictContracts};
 
@@ -29,7 +30,7 @@ pub(super) fn build_workspace_context(
     allowed_verdicts: &[String],
     verdict_contracts: &VerdictContracts,
     source_metadata: &SourceMetadata,
-    guidance: Option<&str>,
+    guidance: Option<&JobGuidance>,
     pull_request_freshness: Option<&WorkerPullRequestFreshness>,
     trace_context: Option<W3cTraceContext>,
 ) -> WorkspaceContext {
@@ -104,10 +105,12 @@ pub(super) fn build_workspace_context(
         allowed_verdicts: allowed_verdicts.to_vec(),
         verdict_contracts: verdict_contracts.clone(),
         source_metadata: source_metadata.clone(),
-        guidance: WorkspaceGuidance {
-            role_guidance: guidance.map(str::to_string),
-            ..WorkspaceGuidance::default()
-        },
+        guidance: guidance.map_or_else(WorkspaceGuidance::default, |guidance| WorkspaceGuidance {
+            role_guidance: guidance.role_guidance.clone(),
+            tool_guidance: guidance.tool_guidance.clone(),
+            tool_constraints: guidance.tool_constraints.clone(),
+            action_guidance: guidance.action_guidance.clone(),
+        }),
         pull_request_freshness: pull_request_freshness.map(agent_pull_request_freshness),
         agent_session: None,
     }

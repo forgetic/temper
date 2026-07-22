@@ -39,8 +39,8 @@ pub use cancellation::{
 };
 pub use context::{ContextOutcome, ContextResponse, FetchContext};
 pub use job::{
-    JobArtifactSnapshot, JobContext, PullRequestFreshness, PullRequestFreshnessResponse,
-    PullRequestFreshnessStatus,
+    JobArtifactSnapshot, JobContext, JobGuidance, PullRequestFreshness,
+    PullRequestFreshnessResponse, PullRequestFreshnessStatus,
 };
 pub use lifecycle::{
     ErrorCode, Heartbeat, HeartbeatState, JobCancellationState, JobHeartbeat, JobHeartbeatPhase,

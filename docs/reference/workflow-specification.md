@@ -157,8 +157,11 @@ workflow transition/action:
 `role` names the subscribed worker role, `action` names an authorized transition,
 and optional `artifact` disambiguates multi-kind queues. Optional `checkout`
 selects the worker checkout capability when the transition shape alone is not
-enough (notably PR-head fix queues). Optional `guidance` is appended to generated
-job guidance. Temper validates that the referenced role/action/artifact exist,
+enough (notably PR-head fix queues). Optional `guidance` is appended after the
+role charter and prompt guidance in the structured job guidance. The applicable
+workspace external tool's guidance and constraints remain separate, and generated
+writable-PR repair details are appended last without replacing configured prose.
+Temper validates that the referenced role/action/artifact exist,
 that the action authorizes the role and operates on a queue-selected artifact,
 and that checkout capability tokens are supported.
 

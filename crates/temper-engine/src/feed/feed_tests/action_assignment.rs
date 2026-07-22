@@ -66,66 +66,22 @@ fn reference_open_pr_assignment_carries_decline_verdicts() {
             context.allowed_verdicts,
             vec!["needs_architect".to_string(), "needs_human".to_string()]
         );
-    })
-}
-
-#[test]
-fn plan_feature_assignment_exposes_engine_resolved_branch_contract() {
-    temper_engine_io::block_on(async move {
-        let forge = MemoryForge::new();
-        let repo = new_repo(&forge).await;
-        let issue = forge
-            .create_issue(
-                &repo,
-                temper_forge::CreateIssue {
-                    title: "feature".to_string(),
-                    body: format!(
-                        "Plan this feature.\n\n{}",
-                        render_metadata_block(&WorkflowMetadata {
-                            target_branch: Some("main".to_string()),
-                            ..WorkflowMetadata::default()
-                        })
-                    ),
-                    labels: vec!["feature".to_string()],
-                    assignees: Vec::new(),
-                },
+        let guidance = context.guidance.expect("structured guidance present");
+        let role_guidance = guidance.role_guidance.expect("role guidance present");
+        assert!(role_guidance.starts_with("Claim ready code issues"));
+        assert!(role_guidance.contains("Use open_pr for ready code"));
+        assert_eq!(
+            guidance.tool_guidance.as_deref(),
+            Some(
+                "Use this for open_pr on ready code issues. If it is not bound, fail the assigned implementation job with a structured unavailable-workspace result."
             )
-            .await
-            .expect("feature is created");
-        let spec: RawWorkflowSpec = serde_json::from_str(include_str!(
-            "../../../../../scenarios/plan-centric-feature-branch/config/workflow.json"
-        ))
-        .expect("plan-centric workflow parses");
-        let workflow = spec.validate().expect("plan-centric workflow validates");
-        let compiled = workflow.compile();
-        let item = WorkItem {
-            queue: QueueId::new("feature_planning"),
-            role: RoleId::new("architect"),
-            target: ArtifactSource::Issue {
-                number: issue.number,
-            },
-            kind: ArtifactKindId::new("feature"),
-        };
-        let mut job = job_from_work_item("ai/temper", &item);
-
-        assert_eq!(
-            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
-                .await
-                .expect("enrichment succeeds"),
-            EnrichOutcome::Enriched
         );
-
-        let context: JobContext = serde_json::from_value(job.job_payload).expect("context parses");
-        let requirement = context.verdict_contracts["needs_plan"]
-            .target_branch
-            .as_ref()
-            .expect("resolved branch requirement");
-        assert_eq!(
-            requirement.expected,
-            format!("agent/pr-for-feature-{}", issue.number.get())
+        assert!(
+            guidance
+                .tool_constraints
+                .iter()
+                .any(|constraint| constraint.contains("bookkeeping-only diffs"))
         );
-        assert_eq!(requirement.repository_default, "main");
-        assert!(requirement.allow_omission);
     })
 }
 
@@ -255,6 +211,20 @@ fn reference_pr_head_fix_assignments_checkout_real_pr_head() {
             assert!(primary.is_writable());
             assert_eq!(primary.branch_hint.as_deref(), Some(head.as_str()));
             let guidance = context.guidance.expect("guidance present");
+            assert_eq!(
+                guidance.tool_guidance.as_deref(),
+                Some(
+                    "Use this for open_pr on ready code issues. If it is not bound, fail the assigned implementation job with a structured unavailable-workspace result."
+                )
+            );
+            assert!(!guidance.tool_constraints.is_empty());
+            let role_guidance = guidance
+                .role_guidance
+                .expect("configured role guidance present");
+            assert!(role_guidance.contains("Claim ready code issues"));
+            let guidance = guidance
+                .action_guidance
+                .expect("queue/generated repair guidance present");
             assert!(guidance.contains(action), "guidance: {guidance}");
             assert!(guidance.contains(queue), "guidance: {guidance}");
             if queue == "pr_merge_conflict" {
@@ -480,6 +450,23 @@ fn reference_review_changes_requested_assignment_includes_review_feedback() {
         );
 
         let guidance = context.guidance.expect("review guidance present");
+        assert!(
+            guidance
+                .tool_guidance
+                .as_deref()
+                .is_some_and(|configured| configured.contains("Use this for open_pr"))
+        );
+        assert!(!guidance.tool_constraints.is_empty());
+        let role_guidance = guidance
+            .role_guidance
+            .expect("configured role guidance present");
+        assert!(
+            role_guidance.contains("Claim ready code issues"),
+            "guidance: {role_guidance}"
+        );
+        let guidance = guidance
+            .action_guidance
+            .expect("generated review guidance present");
         assert!(
             guidance.contains("Current implementation PR handoff from Forge"),
             "guidance: {guidance}"

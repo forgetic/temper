@@ -239,7 +239,7 @@ async fn execute<R: AgentRunner>(
         &allowed_verdicts,
         &verdict_contracts,
         &source_metadata,
-        guidance.as_deref(),
+        guidance.as_ref(),
         pull_request_freshness.as_ref(),
         trace_context,
     );

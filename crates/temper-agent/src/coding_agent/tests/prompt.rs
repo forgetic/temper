@@ -284,6 +284,31 @@ fn user_context_includes_work_item_and_guidance() {
 }
 
 #[test]
+fn user_context_renders_composed_and_generated_guidance_without_dropping_tool_details() {
+    let mut context = parsed_fixture();
+    context.guidance = WorkspaceGuidance {
+        role_guidance: Some("role charter\n\nrole prompt".to_string()),
+        tool_guidance: Some("configured external-tool guidance".to_string()),
+        tool_constraints: vec![
+            "configured workspace constraint".to_string(),
+            "configured result constraint".to_string(),
+        ],
+        action_guidance: Some("queue action\n\ngenerated CI repair details".to_string()),
+    };
+
+    let rendered = user_context(&context);
+    let charter = rendered.find("role charter").unwrap();
+    let prompt = rendered.find("role prompt").unwrap();
+    let action = rendered.find("queue action").unwrap();
+    let generated = rendered.find("generated CI repair details").unwrap();
+    let tool = rendered.find("configured external-tool guidance").unwrap();
+    let constraints = rendered.find("configured workspace constraint").unwrap();
+    assert!(charter < prompt && prompt < tool && tool < constraints);
+    assert!(constraints < action && action < generated);
+    assert!(rendered.contains("- configured result constraint"));
+}
+
+#[test]
 fn read_only_checkout_overrides_writable_manifest_policy() {
     for (role, checkout) in [
         ("architect", "read_only"),

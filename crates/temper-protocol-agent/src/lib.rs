@@ -446,6 +446,10 @@ pub struct WorkspaceGuidance {
     pub tool_guidance: Option<String>,
     #[serde(default)]
     pub tool_constraints: Vec<String>,
+    /// Queue-action guidance and assignment-generated details, rendered after
+    /// configured role and tool instructions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_guidance: Option<String>,
 }
 
 /// The agent's terminal work product for one turn.
