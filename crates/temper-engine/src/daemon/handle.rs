@@ -30,6 +30,7 @@ use super::WakeExecutor;
 use super::executor::DaemonExecutor;
 use super::machine::{DaemonCompletion, DaemonMachine};
 use super::protocol::decode_in_process_reply;
+use super::shutdown::{AssignmentAttemptIdentity, DaemonShutdownHandle, DaemonShutdownReport};
 use super::wake_coordinator::{BroadMode, WakeLane, WakeRequest};
 
 impl Daemon {
@@ -322,7 +323,8 @@ impl Daemon {
 
     /// Stops and joins the daemon machine without releasing its assignments.
     /// This is the abrupt-loss primitive used by deterministic restart tests;
-    /// production shutdown should use [`release_assignments_for_shutdown`](Self::release_assignments_for_shutdown).
+    /// bounded shutdown starts with [`begin_shutdown`](Self::begin_shutdown)
+    /// and releases only attempts whose local worker join was proven.
     pub async fn crash(&self) {
         let (reply, rx) = temper_engine_io::oneshot();
         if self.cq.send(DaemonCompletion::Crash { reply }).is_ok() {
@@ -330,32 +332,62 @@ impl Daemon {
         }
     }
 
-    /// Closes new worker dispatch and local change-source intake without
-    /// releasing any durable assignment. Standalone shutdown calls this before
-    /// HTTP drain and before joining its co-resident worker.
-    pub async fn begin_shutdown(&self) {
+    /// Installs the daemon admission fence before returning. The returned
+    /// handle snapshots operations admitted before that fence and can be joined
+    /// within the caller's shutdown budget.
+    pub async fn begin_shutdown(&self) -> DaemonShutdownHandle {
+        let (reply, rx) = temper_engine_io::oneshot::<DaemonShutdownReport>();
+        let (joined, join_notification) = temper_engine_io::oneshot();
+        if self
+            .cq
+            .send(DaemonCompletion::BeginShutdown { reply, joined })
+            .is_err()
+        {
+            self.change_source_listeners
+                .lock()
+                .expect("change source listeners")
+                .clear();
+            return DaemonShutdownHandle::new(DaemonShutdownReport::default(), join_notification);
+        }
+        let report = rx.recv().await.unwrap_or_default();
+        // Listener drops may briefly wait for their bounded receive loop. The
+        // machine fence is already installed, so any hint racing this cleanup
+        // is rejected by serialized admission.
         self.change_source_listeners
             .lock()
             .expect("change source listeners")
             .clear();
+        DaemonShutdownHandle::new(report, join_notification)
+    }
+
+    /// Legacy split-engine compatibility path that releases every assignment
+    /// still owned by this daemon boot. Co-resident standalone shutdown must
+    /// instead call [`release_joined_assignments_for_shutdown`](Self::release_joined_assignments_for_shutdown)
+    /// with the exact attempts proven joined by its worker.
+    pub async fn release_assignments_for_shutdown(&self) {
         let (reply, rx) = temper_engine_io::oneshot();
         if self
             .cq
-            .send(DaemonCompletion::BeginShutdown { reply })
+            .send(DaemonCompletion::ReleaseAssignmentsForShutdown { reply })
             .is_ok()
         {
             let _ = rx.recv().await;
         }
     }
 
-    /// Signals clean shutdown by releasing every assignment still owned by this
-    /// daemon boot. Crash recovery remains independent because this is only a
-    /// best-effort fast path through the same conditional claim rollback.
-    pub async fn release_assignments_for_shutdown(&self) {
+    /// Releases only assignment attempts the co-resident worker proved joined.
+    /// Every field, including the attempt id, must match current daemon state.
+    pub async fn release_joined_assignments_for_shutdown(
+        &self,
+        joined: &BTreeSet<AssignmentAttemptIdentity>,
+    ) {
         let (reply, rx) = temper_engine_io::oneshot();
         if self
             .cq
-            .send(DaemonCompletion::ReleaseAssignmentsForShutdown { reply })
+            .send(DaemonCompletion::ReleaseJoinedAssignmentsForShutdown {
+                joined: joined.clone(),
+                reply,
+            })
             .is_ok()
         {
             let _ = rx.recv().await;

@@ -304,6 +304,19 @@ impl WakeCoordinator {
             .max(configured_repository_limit);
     }
 
+    pub(crate) fn begin_shutdown(&mut self) {
+        for state in self.repositories.values_mut() {
+            state.pending = WakeBatch::default();
+            state.dirty = WakeBatch::default();
+            state.apply_deferred = WakeBatch::default();
+            state.timer_generation = None;
+            state.ready = false;
+            state.pending_since = None;
+            state.dirty_since = None;
+            state.deferred_since = None;
+        }
+    }
+
     pub(crate) fn configured_repositories(&self) -> Vec<RepositoryPath> {
         self.repositories
             .values()

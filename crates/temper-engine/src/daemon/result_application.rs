@@ -55,7 +55,7 @@ impl DaemonMachine {
                 Vec::new()
             }
         };
-        if self.applying.is_empty() {
+        if self.applying.is_empty() && !self.shutdown_admission.is_fenced() {
             let decisions = self.wake_coordinator.promote_apply_deferred();
             requests.extend(self.wake_decision_requests(decisions));
         }
@@ -64,6 +64,7 @@ impl DaemonMachine {
 
     pub(super) fn handle_apply_and_respond_finished(
         &mut self,
+        admission: super::machine::ResultApplicationAdmissionGuard,
         result: JobResult,
         responder: HttpResponder,
         outcome: ApplyOutcome,
@@ -147,10 +148,11 @@ impl DaemonMachine {
                 });
             }
         }
-        if self.applying.is_empty() {
+        if self.applying.is_empty() && !self.shutdown_admission.is_fenced() {
             let decisions = self.wake_coordinator.promote_apply_deferred();
             requests.extend(self.wake_decision_requests(decisions));
         }
+        self.finish_result_application(admission);
         requests
     }
 }
