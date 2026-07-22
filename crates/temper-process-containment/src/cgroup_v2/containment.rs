@@ -62,6 +62,40 @@ impl PreparedContainmentBackend for CgroupV2PreparedContainment {
             .controls
             .take()
             .expect("prepared cgroup controls are consumed exactly once");
+        // The emergency owners receive independent resources before the
+        // payload exists. Hard kill has its own duplicate of cgroup.kill and
+        // therefore never waits for ordinary discovery or its kernel adapter.
+        let emergency_kill = controls.kill.as_ref().map(File::try_clone).transpose()?;
+        let forced_fs = Arc::clone(&self.fs);
+        let forced_processes = Arc::clone(&self.processes);
+        let forced_path = controls.path.clone();
+        let hard_fs = Arc::clone(&self.fs);
+        let hard_processes = Arc::clone(&self.processes);
+        let hard_path = controls.path.clone();
+        let mut emergency_kill = emergency_kill;
+        let emergency = EmergencyTerminationHandle::from_owners(
+            "cgroup-v2",
+            move || {
+                emergency_signal_members(
+                    forced_fs.as_ref(),
+                    forced_processes.as_ref(),
+                    &forced_path,
+                    ContainmentSignal::Term,
+                )
+            },
+            move || {
+                if let Some(control) = emergency_kill.as_mut() {
+                    hard_fs.write_cgroup_kill(&hard_path, Some(control))
+                } else {
+                    emergency_signal_members(
+                        hard_fs.as_ref(),
+                        hard_processes.as_ref(),
+                        &hard_path,
+                        ContainmentSignal::Kill,
+                    )
+                }
+            },
+        )?;
         let procs_fd = controls.procs.as_raw_fd();
         let directory_fd = controls.directory.as_raw_fd();
         let mut command = command.into_std_command();
@@ -102,7 +136,7 @@ impl PreparedContainmentBackend for CgroupV2PreparedContainment {
                     removed: false,
                     direct_child_reaped: None,
                 };
-                Ok(BackendSpawn::new(child, Box::new(kernel)))
+                Ok(BackendSpawn::new(child, Box::new(kernel), emergency))
             }
             Err(spawn_error) => {
                 let rollback =
@@ -116,6 +150,54 @@ impl PreparedContainmentBackend for CgroupV2PreparedContainment {
             }
         }
     }
+}
+
+/// Emergency cgroup signaling deliberately reads only numeric cgroup.procs
+/// membership and sends through pidfds. It never constructs the diagnostic
+/// identities used by ordinary discovery, and it runs on a dedicated owner.
+fn emergency_signal_members(
+    fs: &dyn CgroupFileSystem,
+    processes: &dyn LinuxProcessApi,
+    root: &std::path::Path,
+    signal: ContainmentSignal,
+) -> io::Result<()> {
+    let first = emergency_numeric_members(fs, root)?;
+    let mut pinned = Vec::with_capacity(first.len());
+    for pid in first {
+        match processes.open_emergency(pid) {
+            Ok(process) => pinned.push((pid, process)),
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    // Re-read numeric membership after every pidfd has been opened. A PID that
+    // exited and was reused outside this cgroup is skipped; a still-present
+    // member is signaled through the already pinned process descriptor.
+    let current = emergency_numeric_members(fs, root)?;
+    for (pid, process) in pinned {
+        if current.contains(&pid) {
+            process.signal(signal)?;
+        }
+    }
+    Ok(())
+}
+
+fn emergency_numeric_members(
+    fs: &dyn CgroupFileSystem,
+    root: &std::path::Path,
+) -> io::Result<HashSet<u32>> {
+    let mut members = HashSet::new();
+    for directory in descendant_directories(fs, root)? {
+        for line in fs.read_to_string(&directory.join("cgroup.procs"))?.lines() {
+            let pid = parse_pid(line)?;
+            if pid != 0 {
+                members.insert(pid);
+            }
+        }
+    }
+    Ok(members)
 }
 
 impl Drop for CgroupV2PreparedContainment {

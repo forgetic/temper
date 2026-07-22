@@ -14,6 +14,7 @@ pub struct CleanupObservation {
     scope: ContainmentScope,
     backend: ContainmentBackendKind,
     root: ContainmentRootIdentity,
+    root_pid: u32,
     snapshot: CleanupSnapshot,
 }
 
@@ -23,6 +24,7 @@ impl CleanupObservation {
         scope: ContainmentScope,
         backend: ContainmentBackendKind,
         root: ContainmentRootIdentity,
+        root_pid: u32,
         snapshot: CleanupSnapshot,
     ) -> Self {
         Self {
@@ -30,6 +32,7 @@ impl CleanupObservation {
             scope,
             backend,
             root,
+            root_pid,
             snapshot,
         }
     }
@@ -48,6 +51,12 @@ impl CleanupObservation {
 
     pub fn root(&self) -> &ContainmentRootIdentity {
         &self.root
+    }
+
+    /// PID returned by [`crate::ContainedProcess::id`] for this boundary. This
+    /// remains available when backend member discovery cannot produce a sample.
+    pub fn root_pid(&self) -> u32 {
+        self.root_pid
     }
 
     pub fn snapshot(&self) -> &CleanupSnapshot {

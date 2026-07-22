@@ -76,6 +76,7 @@ fn cleanup_events_have_expected_severity_bounded_evidence_and_redaction() {
         ContainmentScope::Tool,
         ContainmentBackendKind::LinuxSupervisor,
         root.clone(),
+        10_000,
         CleanupSnapshot::Blocked {
             trigger: CleanupTrigger::Cancellation,
             phase: CleanupPhase::VerifyEmpty,
@@ -89,6 +90,7 @@ fn cleanup_events_have_expected_severity_bounded_evidence_and_redaction() {
         ContainmentScope::Tool,
         ContainmentBackendKind::LinuxSupervisor,
         root.clone(),
+        10_000,
         CleanupSnapshot::Blocked {
             trigger: CleanupTrigger::Shutdown,
             phase: CleanupPhase::Discover,
@@ -102,6 +104,7 @@ fn cleanup_events_have_expected_severity_bounded_evidence_and_redaction() {
         ContainmentScope::Tool,
         ContainmentBackendKind::NoProcess,
         ContainmentRootIdentity::new(ContainmentBackendKind::NoProcess, "not-spawned"),
+        0,
         CleanupSnapshot::Completed {
             report: CleanupReport::no_process(CleanupTrigger::NormalRootExit),
         },
@@ -193,6 +196,7 @@ fn repeated_blocked_cleanup_is_throttled_by_root() {
         ContainmentScope::Tool,
         ContainmentBackendKind::LinuxSupervisor,
         ContainmentRootIdentity::new(ContainmentBackendKind::LinuxSupervisor, "root-1"),
+        42,
         CleanupSnapshot::Blocked {
             trigger: CleanupTrigger::Cancellation,
             phase: CleanupPhase::Discover,
@@ -206,6 +210,7 @@ fn repeated_blocked_cleanup_is_throttled_by_root() {
         ContainmentScope::Tool,
         ContainmentBackendKind::LinuxSupervisor,
         ContainmentRootIdentity::new(ContainmentBackendKind::LinuxSupervisor, "root-1"),
+        42,
         CleanupSnapshot::SignalAttempted {
             trigger: CleanupTrigger::Cancellation,
             signal: temper_process_containment::ContainmentSignal::Term,
