@@ -155,7 +155,7 @@ mod tests {
     use temper_workflow::RoleId;
 
     use super::*;
-    use crate::result_applier;
+    use crate::{configured_role_forges, result_applier};
 
     fn compiled_workflow_with_mixed_limits() -> CompiledWorkflow {
         let mut spec = temper_workflow::parse_workflow_spec(
@@ -213,14 +213,9 @@ mod tests {
         );
         let lease_ttl = chrono::Duration::from_std(config.daemon.lease_ttl).expect("valid ttl");
 
-        // The factory accepts the bundled daemon config + per-role tokens.
-        let _applier = result_applier(
-            forge,
-            config.forge.clone(),
-            workflow,
-            &config.daemon,
-            &config.role_tokens,
-            lease_ttl,
-        );
+        // The factories accept the bundled daemon config + per-role tokens.
+        let role_forges =
+            configured_role_forges(&config.forge, &config.daemon, &config.role_tokens);
+        let _applier = result_applier(forge, &role_forges, workflow, &config.daemon, lease_ttl);
     }
 }
