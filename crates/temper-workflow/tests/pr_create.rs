@@ -5,7 +5,7 @@ mod support;
 use support::{TestRoot, block_on, create_issue, new_repo, workflow};
 use temper_forge::{BranchRef, CreatePullRequest, Forge, PullRequestQuery, RepositoryId, UserId};
 use temper_workflow::{
-    ArtifactKindId, ArtifactSource, Diagnostic, Effect, ExecutionContext, Executor,
+    ArtifactKindId, ArtifactSource, Diagnostic, Effect, ExecutionContext, ExecutionError, Executor,
     RawWorkflowSpec, ReferenceSite, RoleId, SymbolKind, TransitionId, ValidatedWorkflow,
     WorkflowEffect, parse_metadata_block,
 };
@@ -83,6 +83,51 @@ fn ensure_pull_request_is_idempotent_across_retries() {
     assert!(!second.was_created());
     assert_eq!(second.artifact().number, created.number);
     assert_eq!(second.artifact().id, created.id);
+
+    let pull_requests = block_on(forge.list_pull_requests(&repo, PullRequestQuery::default()))
+        .expect("pull requests list");
+    assert_eq!(pull_requests.len(), 1);
+}
+
+#[test]
+fn ensure_pull_request_rejects_correlated_branch_divergence() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = workflow();
+    let repo = new_repo(&forge);
+    let executor = Executor::new(&workflow, &forge);
+
+    block_on(executor.ensure_pull_request(&repo, "pr-code-42", pr_input(&repo)))
+        .expect("initial pull request is created");
+
+    let mut divergent_source = pr_input(&repo);
+    divergent_source.source.branch = "feature/other".to_string();
+    let source_error =
+        block_on(executor.ensure_pull_request(&repo, "pr-code-42", divergent_source))
+            .expect_err("a correlated pull request with another source is rejected");
+    assert!(matches!(
+        source_error,
+        ExecutionError::PullRequestTopologyMismatch {
+            ref expected_source,
+            ref actual_source,
+            ..
+        } if expected_source.branch == "feature/other"
+            && actual_source.branch == "feature/login"
+    ));
+
+    let mut divergent_target = pr_input(&repo);
+    divergent_target.target.branch = "release".to_string();
+    let target_error =
+        block_on(executor.ensure_pull_request(&repo, "pr-code-42", divergent_target))
+            .expect_err("a correlated pull request with another target is rejected");
+    assert!(matches!(
+        target_error,
+        ExecutionError::PullRequestTopologyMismatch {
+            ref expected_target,
+            ref actual_target,
+            ..
+        } if expected_target.branch == "release" && actual_target.branch == "main"
+    ));
 
     let pull_requests = block_on(forge.list_pull_requests(&repo, PullRequestQuery::default()))
         .expect("pull requests list");

@@ -177,6 +177,47 @@ fn passing_landing_result(job: &InFlightJob) -> JobResult {
     result
 }
 
+async fn seed_correlated_landing_pr(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    issue: ItemNumber,
+    source_branch: &str,
+    target_branch: &str,
+) {
+    let metadata = WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("feature_landing_pr")),
+        parents: vec![ArtifactRef::same_repo(issue)],
+        correlation_key: Some(format!("pr-for-plan-{}", issue.get())),
+        ..WorkflowMetadata::default()
+    };
+    forge
+        .create_pull_request(
+            repo,
+            CreatePullRequest {
+                title: "Existing aggregate landing".to_string(),
+                body: format!(
+                    "Existing aggregate landing candidate.\n\n{}",
+                    render_metadata_block(&metadata)
+                ),
+                source: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: source_branch.to_string(),
+                },
+                target: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: target_branch.to_string(),
+                },
+                labels: vec![
+                    "feature-landing".to_string(),
+                    "needs-validation".to_string(),
+                ],
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("correlated landing PR is seeded");
+}
+
 #[test]
 fn verdict_transition_creates_feature_landing_pr_from_plan_metadata() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
@@ -226,6 +267,45 @@ fn verdict_transition_creates_feature_landing_pr_from_plan_metadata() {
             !has_label(&labels, "ready"),
             "ready label is cleared: {labels:?}"
         );
+    })
+}
+
+#[test]
+fn verdict_transition_rejects_correlated_landing_pr_with_divergent_topology() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        for (source_branch, target_branch) in [
+            ("feature/wrong", "stable"),
+            ("feature/144-plan-branch", "release"),
+        ] {
+            let forge = Arc::new(MemoryForge::new());
+            let repo = new_repo(&forge, "stable").await;
+            let issue = create_plan_issue(&forge, &repo, Some("feature/144-plan-branch")).await;
+            seed_correlated_landing_pr(&forge, &repo, issue, source_branch, target_branch).await;
+            let workflow = Arc::new(non_default_landing_workflow());
+            let applier = ForgeApplier::new(forge.clone(), workflow);
+            let job = plan_validation_job("acme/service", issue);
+            let result = passing_landing_result(&job);
+
+            applier.apply(job, result).await;
+
+            let pulls = forge
+                .list_pull_requests(&repo, PullRequestQuery::default())
+                .await
+                .expect("pull requests list");
+            assert_eq!(pulls.len(), 1, "divergent candidate must not be duplicated");
+            assert_eq!(pulls[0].source.branch, source_branch);
+            assert_eq!(pulls[0].target.branch, target_branch);
+
+            let labels = issue_labels(&forge, &repo, issue).await;
+            assert!(has_label(&labels, "needs-human"), "labels: {labels:?}");
+            assert!(has_label(&labels, "ready"), "labels: {labels:?}");
+            assert!(!has_label(&labels, "landing-opened"), "labels: {labels:?}");
+            let comments = issue_comment_bodies(&forge, &repo, issue).await;
+            assert_eq!(comments.len(), 1);
+            assert!(comments[0].contains("branch topology diverges"));
+            assert!(comments[0].contains("feature/144-plan-branch"));
+            assert!(comments[0].contains("stable"));
+        }
     })
 }
 

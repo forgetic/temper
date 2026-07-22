@@ -21,6 +21,9 @@ pub fn execution_error_failure_class(error: &ExecutionError) -> String {
         ExecutionError::UnresolvedAssignee { .. } => "unresolved_assignee".to_string(),
         ExecutionError::UnresolvedReviewer { .. } => "unresolved_reviewer".to_string(),
         ExecutionError::MissingCorrelationKey { .. } => "missing_correlation_key".to_string(),
+        ExecutionError::PullRequestTopologyMismatch { .. } => {
+            "pull_request_topology_mismatch".to_string()
+        }
         ExecutionError::UnresolvedPullRequestCreate { .. } => {
             "unresolved_pull_request_create".to_string()
         }

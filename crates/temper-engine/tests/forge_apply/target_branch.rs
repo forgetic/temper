@@ -124,6 +124,72 @@ fn non_default_policy_targets_fresh_validated_feature_branch() {
 }
 
 #[test]
+fn non_default_policy_rejects_existing_implementation_pr_with_default_target() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let target_branch = "agent/pr-for-feature-620";
+        let issue = create_policy_code_issue(&forge, &repo, target_branch).await;
+        let job = policy_implementation_job(issue, target_branch, target_branch);
+        let head = format!("agent/pr-for-code-{}", issue.get());
+        let original_body = "Existing implementation handoff must not be refreshed.";
+        forge
+            .create_pull_request(
+                &repo,
+                CreatePullRequest {
+                    title: "Existing implementation".to_string(),
+                    body: original_body.to_string(),
+                    source: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: head.clone(),
+                    },
+                    target: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "main".to_string(),
+                    },
+                    labels: vec!["implementation".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("divergent implementation PR is seeded");
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
+
+        applier
+            .apply(
+                job.clone(),
+                success_result(
+                    "worker-a",
+                    &job.job_id,
+                    &job.repo,
+                    &head,
+                    "must not replace the existing handoff",
+                ),
+            )
+            .await;
+
+        let pulls = forge
+            .list_pull_requests(&repo, PullRequestQuery::default())
+            .await
+            .expect("pull requests list");
+        assert_eq!(pulls.len(), 1);
+        assert_eq!(pulls[0].target.branch, "main");
+        assert_eq!(pulls[0].body, original_body);
+        assert_eq!(pulls[0].labels, vec!["implementation".to_string()]);
+
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert!(has_label(&labels, "needs-human"), "labels: {labels:?}");
+        assert!(has_label(&labels, "ready"), "labels: {labels:?}");
+        assert!(!has_label(&labels, "in-progress"), "labels: {labels:?}");
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("branch topology diverges"));
+        assert!(comments[0].contains(target_branch));
+        assert!(comments[0].contains("main"));
+    })
+}
+
+#[test]
 fn non_default_policy_rejects_default_or_divergent_workspace_base() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         for manifest_base in ["main", "agent/pr-for-feature-999"] {

@@ -7,14 +7,14 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use temper_forge::{
-    Forge, ItemNumber, PullRequest, PullRequestQuery, PullRequestState, Repository, RepositoryId,
-    RepositoryPath, RequestReviewers, UpdatePullRequest, UserId,
+    Forge, ItemNumber, PullRequest, Repository, RepositoryId, RepositoryPath, RequestReviewers,
+    UpdatePullRequest, UserId,
 };
 use temper_log::emit::{PrHandoffFacts, PrOpened, PrUpdated, emit_pr_opened, emit_pr_updated};
 use temper_protocol_worker::{FailureClass, JobContext, JobResult, RepoOutcome};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, Effect, Executor, TargetBranchPolicy, TransitionId,
-    parse_metadata_block,
+    parse_metadata_block, validate_pull_request_topology,
 };
 
 use temper_runner::{artifact_ref, pr_correlation_key};
@@ -26,6 +26,7 @@ use crate::forge_applier::coordinated::{
     CoordinatedSet, coordinated_landing_order, coordinated_pr_pull_request_input,
     manifest_base_branches, manifest_depends_on, pr_target_branch,
 };
+use crate::forge_applier::pr_reuse::pull_request_reuse_error;
 use crate::workflow_meta::{
     create_pull_request_target_branch_policy, implementation_pr_create_labels,
     implementation_pr_labels,
@@ -99,7 +100,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             Ok(None) => manifest_base_branches(&context),
             Err(outcome) => return outcome,
         };
-        self.apply_source_action_claim(&job).await;
 
         let source_kind = ArtifactKindId::new(context.artifact_kind.clone());
         // The coordination key keys every PR in the set; fall back to the
@@ -139,11 +139,22 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             depends_on: &depends_on,
             base_branches: &base_branches,
         };
+        if let Err(outcome) = self
+            .validate_existing_coordinated_pr_topologies(&set, &result.repos)
+            .await
+        {
+            return outcome;
+        }
         for index in order {
-            self.open_coordinated_pr(&set, &result.repos[index], &mut opened)
-                .await;
+            if let Err(outcome) = self
+                .open_coordinated_pr(&set, &result.repos[index], &mut opened)
+                .await
+            {
+                return outcome;
+            }
         }
         if !opened.is_empty() {
+            self.apply_source_action_claim(&job).await;
             self.clear_source_action_working_labels(&job).await;
         }
         ApplyOutcome::Applied
@@ -307,7 +318,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         set: &CoordinatedSet<'_>,
         outcome: &RepoOutcome,
         opened: &mut BTreeMap<String, (RepositoryId, ItemNumber)>,
-    ) {
+    ) -> Result<(), ApplyOutcome> {
         if outcome.branch.name.trim().is_empty() {
             tracing::warn!(
                 target: "temper_daemon",
@@ -316,10 +327,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 outcome_repo = %outcome.repo,
                 "forge applier ignored blank branch in repo outcome"
             );
-            return;
+            return Ok(());
         }
         let Some(target_repository) = self.resolve_repo_path(set.job, &outcome.repo).await else {
-            return;
+            return Ok(());
         };
         let base_branch = pr_target_branch(set, &outcome.repo, &target_repository);
         let coordinating = if &target_repository.id == set.primary_id {
@@ -345,6 +356,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         );
         let desired_title = input.title.clone();
         let desired_body = input.body.clone();
+        let desired_source = input.source.clone();
+        let desired_target = input.target.clone();
 
         if let Some(pull_request) = self
             .existing_open_pr_for_branch(
@@ -354,7 +367,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 set.lookup_labels,
             )
             .await
+            .map_err(pull_request_reuse_error)?
         {
+            validate_pull_request_topology(&pull_request, &desired_source, &desired_target)
+                .map_err(pull_request_reuse_error)?;
             self.update_existing_coordinated_pr(
                 set,
                 outcome,
@@ -366,7 +382,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 "source branch reuse",
             )
             .await;
-            return;
+            return Ok(());
         }
 
         match Executor::new(self.workflow.as_ref(), self.forge.as_ref())
@@ -391,6 +407,11 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     )
                     .await;
                 } else {
+                    // The executor validates correlation candidates before it
+                    // returns them. Keep this local check as a final guard at
+                    // the handoff boundary.
+                    validate_pull_request_topology(&pull_request, &desired_source, &desired_target)
+                        .map_err(pull_request_reuse_error)?;
                     self.update_existing_coordinated_pr(
                         set,
                         outcome,
@@ -403,6 +424,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     )
                     .await;
                 }
+                Ok(())
             }
             Err(error) => {
                 tracing::error!(
@@ -415,6 +437,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     %error,
                     "forge applier ensure_pull_request failed"
                 );
+                // A create can land even if the backend response is lost. Keep
+                // the historical branch fallback for that case, but subject it
+                // to the same immutable topology check as every other reuse.
                 if let Some(pull_request) = self
                     .existing_open_pr_for_branch(
                         set.job,
@@ -423,7 +448,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         set.lookup_labels,
                     )
                     .await
+                    .map_err(pull_request_reuse_error)?
                 {
+                    validate_pull_request_topology(&pull_request, &desired_source, &desired_target)
+                        .map_err(pull_request_reuse_error)?;
                     self.update_existing_coordinated_pr(
                         set,
                         outcome,
@@ -435,6 +463,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         "ensure fallback",
                     )
                     .await;
+                    Ok(())
+                } else {
+                    Err(pull_request_reuse_error(error))
                 }
             }
         }
@@ -521,42 +552,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             outcome.repo.clone(),
             (target_repo_id.clone(), pull_request.number),
         );
-    }
-
-    async fn existing_open_pr_for_branch(
-        &self,
-        job: &InFlightJob,
-        repo_id: &RepositoryId,
-        source_branch: &str,
-        labels: &[String],
-    ) -> Option<PullRequest> {
-        let source_branch = source_branch.trim();
-        if source_branch.is_empty() {
-            return None;
-        }
-        let query = PullRequestQuery {
-            state: Some(PullRequestState::Open),
-            labels: labels.to_vec(),
-            ..PullRequestQuery::default()
-        };
-        match self.forge.list_pull_requests(repo_id, query).await {
-            Ok(pull_requests) => pull_requests.into_iter().find(|pull_request| {
-                pull_request.source.repository_id == *repo_id
-                    && pull_request.source.branch == source_branch
-            }),
-            Err(error) => {
-                tracing::warn!(
-                    target: "temper_daemon",
-                    job_id = %job.job_id,
-                    repo = %job.repo,
-                    target_repo = %repo_id,
-                    source_branch,
-                    %error,
-                    "forge applier could not look up existing PR by source branch"
-                );
-                None
-            }
-        }
     }
 
     /// Resolves an `owner/name` repo path (a [`RepoOutcome::repo`]) to its Forge

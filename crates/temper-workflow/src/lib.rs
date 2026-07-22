@@ -127,6 +127,7 @@ pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, Validatio
 pub use execute::{
     ChildIssueCheckpoint, ChildIssueLifecycleHook, CorrelationLookupPlan, EnsureOutcome,
     ExecutionError, ExecutionReport, Executor, find_pull_request_by_correlation,
+    validate_pull_request_topology,
 };
 pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
