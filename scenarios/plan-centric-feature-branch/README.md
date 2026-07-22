@@ -1,28 +1,42 @@
 # Plan-centric feature branch scenario
 
-This live scenario validates the #144 dogfood workflow shape on real Forgejo,
-real `forgejo-runner`, a real Temper process, and Jig fake LLM responses.
+This validation-grade live scenario reproduces feature #620's production failure
+shape on real Forgejo, real `forgejo-runner`, a real Temper process, and captured
+Jig fake-LLM requests. The source feature intentionally arrives with
+`target_branch: main`; that metadata is treated as untrusted input rather than
+feature-delivery intent.
 
-It exercises:
+It proves:
 
-1. a `feature` issue;
-2. engine-owned derivation of `agent/pr-for-feature-<feature-number>` for the
-   `plan`, followed by inherited branch contracts on code and validation
-   follow-up children;
-3. dependency-linked `code` children where the second child is blocked on the
-   first;
-4. lineage delivery at every agent boundary: the versioned artifact bundle,
-   primary legacy work-item content, ancestry, and plan-validation summaries;
-5. implementation PRs whose workflow contract requires the validated,
-   non-default feature branch;
-6. tester validation creating an aggregate `feature_landing_pr` whose contract
-   requires a non-default feature-branch source before targeting `main`;
-7. one validated audit record visible through the coordinating plan's ordinary
-   Forgejo comments API, including the safe tester summary, role/actor identities,
-   and job/transition/coordination identifiers;
-8. final landing closing both plan and feature issues.
+1. the architect omits the engine-derivable branch, and Temper stamps
+   `agent/pr-for-feature-<feature-number>` dynamically;
+2. the derived branch differs from `main` and appears on the plan, both initial
+   code children, and a tester-requested validation follow-up;
+3. every implementation PR targets the derived branch, each successful merge
+   advances that branch in sequence, and `main` remains at its initial SHA;
+4. initial validation waits for both decomposed implementations, requests a
+   follow-up, and final validation waits for that follow-up implementation;
+5. exactly one aggregate feature-landing PR is created from the feature branch
+   to `main`;
+6. successful CI precedes every merge, including the aggregate landing;
+7. the plan and feature remain open while the landing PR is open and close only
+   after its merge advances `main`;
+8. every captured architect, engineer, and tester prompt contains its configured
+   role charter/prompt guidance, external-tool guidance, and tool constraints;
+9. both tester rounds leave assignment-bound ordinary-comment audit evidence.
 
-Run with:
+Intentional default-branch delivery is **not** modeled by this scenario. Its
+explicit `repository_default` same-branch convergence remains a distinct engine
+regression (`verdict_transition_treats_default_branch_source_as_satisfied_create`),
+so accidental `main` metadata here cannot be confused with declared intent.
+
+Run with the live command required by `AGENTS.md`:
+
+```sh
+cargo dev-scenario-run scenarios/plan-centric-feature-branch
+```
+
+Equivalent direct command after building `temper`:
 
 ```sh
 cargo run -p temper-scenario-cli -- run --tier live --temper-bin target/debug/temper scenarios/plan-centric-feature-branch

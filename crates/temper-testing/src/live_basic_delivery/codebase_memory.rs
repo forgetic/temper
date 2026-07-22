@@ -191,6 +191,7 @@ pub(super) fn run_live_codebase_memory_agent(
             base_url: fake.base_url(),
             architect_requests: 0,
             engineer_requests: fake.engineer_requests(),
+            tester_requests: 0,
             log_path: logs.fake_llm_log.clone(),
         },
         final_state,

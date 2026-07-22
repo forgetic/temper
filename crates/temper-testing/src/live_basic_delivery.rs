@@ -290,6 +290,7 @@ impl LiveBasicDeliveryHarness {
                 base_url: fake.base_url(),
                 architect_requests: fake.architect_requests(),
                 engineer_requests: fake.engineer_requests(),
+                tester_requests: 0,
                 log_path: logs.fake_llm_log.clone(),
             },
             final_state,
@@ -383,10 +384,11 @@ impl LiveBasicDeliveryEvidence {
                 self.convergence, self.poll_backstop, self.total_elapsed
             ),
             format!(
-                "  fake_llm: {} architect_requests={} engineer_requests={} log={}",
+                "  fake_llm: {} architect_requests={} engineer_requests={} tester_requests={} log={}",
                 self.fake_llm.base_url,
                 self.fake_llm.architect_requests,
                 self.fake_llm.engineer_requests,
+                self.fake_llm.tester_requests,
                 self.fake_llm.log_path.display()
             ),
             format!(
@@ -448,6 +450,7 @@ pub struct FakeLlmEvidence {
     pub base_url: String,
     pub architect_requests: usize,
     pub engineer_requests: usize,
+    pub tester_requests: usize,
     pub log_path: PathBuf,
 }
 

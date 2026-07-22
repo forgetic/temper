@@ -405,10 +405,11 @@ fn live_evidence_lines(
             evidence.convergence, evidence.poll_backstop, evidence.startup, evidence.total_elapsed
         ),
         format!(
-            "fake LLM: url={} architect_requests={} engineer_requests={} log={}",
+            "fake LLM: url={} architect_requests={} engineer_requests={} tester_requests={} log={}",
             evidence.fake_llm.base_url,
             evidence.fake_llm.architect_requests,
             evidence.fake_llm.engineer_requests,
+            evidence.fake_llm.tester_requests,
             fake_llm_log.display()
         ),
     ];
