@@ -281,6 +281,50 @@ fn http_and_in_process_carriers_share_durable_ack_and_deduplication() {
 }
 
 #[test]
+fn authenticated_activity_forwarding_remains_available_after_shutdown_fence() {
+    temper_engine_io::block_on_with(|_cx, handle| async move {
+        let temp = tempfile::tempdir().expect("trace tempdir");
+        let journal = temper_engine::AgentTraceJournal::open(temper_engine::TraceJournalConfig {
+            root: temp.path().join("journal"),
+            policy: AgentActivityCapturePolicyV1::default(),
+        })
+        .expect("open trace journal");
+        let daemon = temper_engine::Daemon::new(std::sync::Arc::new(handle.clone()))
+            .with_trace_journal(journal.clone());
+        daemon
+            .deliver_protocol_message(register(
+                "shutdown-trace-worker",
+                "engineer",
+                "ai/temper",
+                None,
+            ))
+            .await
+            .expect("trusted worker registers");
+
+        let shutdown = daemon.begin_shutdown().await;
+        assert!(shutdown.report().pending_applications.is_empty());
+        assert!(matches!(
+            daemon
+                .deliver_protocol_message(activity_message(
+                    "shutdown-trace-worker",
+                    "run-forwarded-during-shutdown",
+                ))
+                .await
+                .expect("post-fence activity delivery"),
+            Some(WorkerProtocolMessage::ActivityAck(_))
+        ));
+        assert_eq!(
+            journal
+                .events("run-forwarded-during-shutdown")
+                .expect("durable shutdown activity")
+                .len(),
+            1
+        );
+        assert!(shutdown.wait_for_join().await);
+    })
+}
+
+#[test]
 fn distributed_delivery_requires_configured_auth_but_trusted_carrier_does_not() {
     temper_engine_io::block_on_with(|_cx, handle| async move {
         let temp = tempfile::tempdir().expect("trace tempdir");

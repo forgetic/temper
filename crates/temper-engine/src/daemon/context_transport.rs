@@ -9,16 +9,25 @@ use temper_protocol_worker::{
 };
 
 use super::machine::{AttemptKey, ContextReadAudit, DaemonMachine, DaemonRequest};
+use super::shutdown::AssignmentAttemptIdentity;
 
 const MAX_CONTEXT_ID_BYTES: usize = 256;
 
 impl DaemonMachine {
     pub(super) fn handle_fetch_context(
-        &self,
+        &mut self,
         fetch: FetchContext,
         auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
+        if self.shutdown_admission.is_fenced() {
+            return self.context_error_requests(
+                fetch,
+                "unknown",
+                ForgeContextErrorCode::NotAuthorized,
+                responder,
+            );
+        }
         if fetch.protocol_version != WORKER_PROTOCOL_VERSION
             || fetch.worker_id.trim().is_empty()
             || fetch.worker_id.len() > MAX_CONTEXT_ID_BYTES
@@ -70,7 +79,13 @@ impl DaemonMachine {
         ) {
             return self.context_error_requests(fetch, &job.role, code, responder);
         }
+        let admission = self.admit_context(AssignmentAttemptIdentity::new(
+            fetch.worker_id.clone(),
+            fetch.job_id.clone(),
+            fetch.attempt_id.clone(),
+        ));
         vec![DaemonRequest::RunFetchContext {
+            admission,
             request: fetch,
             role: job.role,
             responder,

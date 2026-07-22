@@ -146,6 +146,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 });
             }
             DaemonRequest::RunApplyAndRespond {
+                admission,
                 job,
                 result,
                 recovered_context,
@@ -179,6 +180,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                             "engine: result apply finished"
                         );
                         let _ = cq.send(DaemonCompletion::ApplyAndRespondFinished {
+                            admission,
                             result,
                             responder,
                             outcome,
@@ -188,6 +190,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 });
             }
             DaemonRequest::RunClaim {
+                admission,
                 job,
                 worker_id,
                 daemon_boot_id,
@@ -207,6 +210,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                         )
                         .await;
                     let _ = cq.send(DaemonCompletion::ClaimFinished {
+                        admission,
                         assign,
                         worker_id,
                         responder,
@@ -214,10 +218,18 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     });
                 });
             }
-            DaemonRequest::RunClaimRollback { job, context } => {
+            DaemonRequest::RunClaimRollback {
+                job,
+                context,
+                admission,
+            } => {
                 let applier = Arc::clone(&self.applier);
+                let cq = self.cq.clone();
                 self.spawner.spawn_with_cx(move |_cx| async move {
                     applier.release_claim(job, context).await;
+                    if let Some(admission) = admission {
+                        let _ = cq.send(DaemonCompletion::ClaimRollbackFinished { admission });
+                    }
                 });
             }
             DaemonRequest::RunRecoveredHeartbeats {
@@ -264,6 +276,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 });
             }
             DaemonRequest::RunFetchContext {
+                admission,
                 request,
                 role,
                 responder,
@@ -273,6 +286,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     .lock()
                     .expect("context reader slot")
                     .clone();
+                let cq = self.cq.clone();
                 self.spawner.spawn_with_cx(move |_cx| async move {
                     let started = Instant::now();
                     let result = match reader {
@@ -296,9 +310,13 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                         Ok(result) => ContextResponse::success(&request, result),
                         Err(code) => ContextResponse::error(&request, code),
                     };
-                    responder.respond(super::protocol::protocol_response(Some(
-                        WorkerProtocolMessage::ContextResponse(response),
-                    )));
+                    let _ = cq.send(DaemonCompletion::FetchContextFinished {
+                        admission,
+                        responder,
+                        response: super::protocol::protocol_response(Some(
+                            WorkerProtocolMessage::ContextResponse(response),
+                        )),
+                    });
                 });
             }
             DaemonRequest::RunTraceQuery { request, responder } => {

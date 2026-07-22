@@ -19,6 +19,7 @@ use super::machine::{
     AttemptKey, DaemonMachine, DaemonRequest, DeferredEnqueue, PollWaiter, RecoveredHeartbeatCheck,
 };
 use super::protocol::{is_poll_timeout, protocol_response, register_log_line};
+use super::shutdown::AssignmentAttemptIdentity;
 use super::state_dto::{DaemonStateSnapshot, JobDto};
 use crate::InFlightJob;
 
@@ -88,6 +89,12 @@ impl DaemonMachine {
         body: &[u8],
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
+        if self.shutdown_admission.is_fenced() {
+            return vec![DaemonRequest::Respond {
+                responder,
+                response: HttpResponseData::status_only(503),
+            }];
+        }
         let Ok(check) = serde_json::from_slice::<PullRequestFreshness>(body) else {
             return vec![DaemonRequest::Respond {
                 responder,
@@ -225,6 +232,9 @@ impl DaemonMachine {
         for report in recovery.matched_reports {
             let key = AttemptKey::from_report(&worker_id, &report);
             reports.push(key.clone());
+            if self.shutdown_admission.is_fenced() {
+                continue;
+            }
             if self.attempt_is_fenced(&key) || self.pending_results.contains_key(&key) {
                 continue;
             }
@@ -259,7 +269,7 @@ impl DaemonMachine {
         auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
-        if self.shutting_down {
+        if self.shutdown_admission.is_fenced() {
             return vec![DaemonRequest::Respond {
                 responder,
                 response: HttpResponseData::status_only(204),
@@ -312,7 +322,7 @@ impl DaemonMachine {
     }
 
     pub(super) fn poll_response_requests(
-        &self,
+        &mut self,
         response: WorkerProtocolMessage,
         worker_id: &str,
         responder: HttpResponder,
@@ -320,7 +330,13 @@ impl DaemonMachine {
         match response {
             WorkerProtocolMessage::Assign(assign) => {
                 let job = in_flight_job_from_assign(&assign);
+                let admission = self.admit_claim(AssignmentAttemptIdentity::new(
+                    worker_id,
+                    assign.job_id.clone(),
+                    assign.attempt_id.clone(),
+                ));
                 vec![DaemonRequest::RunClaim {
+                    admission,
                     job,
                     worker_id: worker_id.to_string(),
                     daemon_boot_id: self.daemon_boot_id.clone(),
@@ -343,7 +359,7 @@ impl DaemonMachine {
         artifact: Artifact,
         job_payload: serde_json::Value,
     ) -> Vec<DaemonRequest> {
-        if self.shutting_down {
+        if self.shutdown_admission.is_fenced() {
             return Vec::new();
         }
         if self.startup_recovery {
@@ -468,7 +484,7 @@ impl DaemonMachine {
     }
 
     pub(super) fn fulfil_waiters(&mut self) -> Vec<DaemonRequest> {
-        if self.startup_recovery || self.shutting_down {
+        if self.startup_recovery || self.shutdown_admission.is_fenced() {
             return Vec::new();
         }
         let mut requests = Vec::new();

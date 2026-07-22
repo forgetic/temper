@@ -71,7 +71,10 @@ pub use ci_status_monitor::{
     spawn_ci_status_monitor,
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
-pub use daemon::{CoordinatedMechanical, Daemon, h1_handler, serve};
+pub use daemon::{
+    AssignmentAttemptIdentity, CoordinatedMechanical, Daemon, DaemonShutdownHandle,
+    DaemonShutdownReport, ShutdownAdmission, h1_handler, serve,
+};
 pub use engine_config::{EngineAgentTraceConfig, EngineConfig};
 pub use feed::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, TargetedRoleFeedResult, WorkItemJob,
