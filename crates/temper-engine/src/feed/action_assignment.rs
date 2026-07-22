@@ -4,7 +4,7 @@ mod guidance;
 
 use self::guidance::pull_request_writable_guidance;
 use temper_forge::{CiJobQuery, Forge, ForgeError, PullRequest, RepositoryId};
-use temper_protocol_worker::{JobContext, PullRequestFreshness, RepoAccess};
+use temper_protocol_worker::{JobContext, JobGuidance, PullRequestFreshness, RepoAccess};
 use temper_runner::{ScanError, WorkItem};
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, Effect, GateCondition, QueueManifest, ToolManifest,
@@ -18,20 +18,26 @@ pub(super) fn enrich_job_context_from_workflow(
 ) -> Result<(), ScanError> {
     let selected = select_workflow_action(item, compiled)?;
     let checkout = checkout_capability_for_action(item, &selected)?;
+    let guidance = compose_dispatch_guidance(
+        selected.role,
+        &checkout,
+        selected.action_guidance.as_deref(),
+    );
 
     context.action = Some(selected.tool.name.clone());
     context.allowed_verdicts = allowed_verdicts(selected.tool);
     context.verdict_contracts =
         crate::verdict_contract::derive_verdict_contracts(workflow, selected.tool);
     context.checkout_capability = Some(checkout);
-    context.guidance = selected.guidance;
+    context.guidance = (!guidance.is_empty()).then_some(guidance);
     Ok(())
 }
 
 struct SelectedWorkflowAction<'a> {
+    role: &'a temper_workflow::RoleManifest,
     tool: &'a ToolManifest,
     checkout: Option<String>,
-    guidance: Option<String>,
+    action_guidance: Option<String>,
 }
 
 fn select_workflow_action<'a>(
@@ -74,9 +80,10 @@ fn select_workflow_action<'a>(
                 )));
             }
             return Ok(SelectedWorkflowAction {
+                role,
                 tool,
                 checkout: action.checkout.clone(),
-                guidance: action.guidance.clone(),
+                action_guidance: action.guidance.clone(),
             });
         }
         [] if !queue.actions.is_empty() => {
@@ -110,9 +117,10 @@ fn select_workflow_action<'a>(
         .collect::<Vec<_>>();
     match candidates.as_slice() {
         [tool] => Ok(SelectedWorkflowAction {
+            role,
             tool,
             checkout: None,
-            guidance: None,
+            action_guidance: None,
         }),
         [] => Err(invalid_workflow_scan(format!(
             "queue `{}` role `{}` artifact `{}` did not declare an action and has no unambiguous workspace-backed fallback",
@@ -319,10 +327,62 @@ fn condition_token(condition: &GateCondition) -> Option<String> {
 }
 
 fn append_guidance(context: &mut JobContext, generated: String) {
-    context.guidance = match context.guidance.take() {
-        Some(existing) if !existing.trim().is_empty() => Some(format!("{existing}\n\n{generated}")),
-        _ => Some(generated),
+    context
+        .guidance
+        .get_or_insert_with(JobGuidance::default)
+        .append_action_guidance(generated);
+}
+
+/// Composes the same role/tool guidance categories used by workspace
+/// automation, while preserving queue-action prose as an additive category.
+/// The checkout selects the conventional workspace executor; a role with one
+/// custom declaration remains supported as a deterministic fallback.
+fn compose_dispatch_guidance(
+    role: &temper_workflow::RoleManifest,
+    checkout: &str,
+    action_guidance: Option<&str>,
+) -> JobGuidance {
+    let role_guidance = role
+        .charter
+        .iter()
+        .chain(role.prompt_extension.guidance.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let declared = applicable_workspace_tool(role, checkout);
+
+    JobGuidance {
+        role_guidance: (!role_guidance.trim().is_empty()).then_some(role_guidance),
+        tool_guidance: role
+            .prompt_extension
+            .tool_guidance
+            .clone()
+            .or_else(|| declared.and_then(|tool| tool.guidance.clone())),
+        tool_constraints: declared
+            .map(|tool| tool.constraints.clone())
+            .unwrap_or_default(),
+        action_guidance: action_guidance
+            .filter(|guidance| !guidance.trim().is_empty())
+            .map(str::to_string),
+    }
+}
+
+fn applicable_workspace_tool<'a>(
+    role: &'a temper_workflow::RoleManifest,
+    checkout: &str,
+) -> Option<&'a temper_workflow::ExternalToolManifest> {
+    let conventional = match checkout {
+        "writable" | "pull_request_writable" => "coding_workspace",
+        "pull_request_read_only" => "review_workspace",
+        _ => "triage_workspace",
     };
+    role.external_tools
+        .iter()
+        .find(|tool| tool.id.as_str() == conventional)
+        .or(match role.external_tools.as_slice() {
+            [tool] => Some(tool),
+            _ => None,
+        })
 }
 
 fn action_is_workspace_backed(tool: &ToolManifest) -> bool {

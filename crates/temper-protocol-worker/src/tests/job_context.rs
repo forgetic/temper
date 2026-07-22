@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::{JobArtifactSnapshot, JobContext, W3cTraceContext, WorkspaceManifest};
+use crate::{JobArtifactSnapshot, JobContext, JobGuidance, W3cTraceContext, WorkspaceManifest};
 use temper_verdict::{VerdictContract, VerdictContracts};
 
 use super::sample_manifest;
@@ -80,13 +80,65 @@ fn full_job_context_round_trips_without_loss() {
         source_metadata: [("target_branch".to_string(), "feature/x".to_string())]
             .into_iter()
             .collect(),
-        guidance: Some("fix CI".to_string()),
+        guidance: Some(JobGuidance {
+            role_guidance: Some("implement the configured role charter".to_string()),
+            tool_guidance: Some("use the coding workspace".to_string()),
+            tool_constraints: vec!["preserve role instructions".to_string()],
+            action_guidance: Some("fix CI".to_string()),
+        }),
         pull_request_freshness: None,
     };
 
     let value = serde_json::to_value(&context).expect("job context serializes");
     let decoded: JobContext = serde_json::from_value(value).expect("serialized job context parses");
     assert_eq!(decoded, context);
+}
+
+#[test]
+fn legacy_free_text_guidance_maps_to_structured_role_guidance() {
+    let context: JobContext = serde_json::from_value(serde_json::json!({
+        "role": "engineer",
+        "repo": "ai/temper",
+        "queue": "pr_ci_failed",
+        "artifact_kind": "implementation_pr",
+        "guidance": "repair the failing CI head"
+    }))
+    .expect("legacy free-text guidance parses");
+
+    assert_eq!(
+        context.guidance,
+        Some(JobGuidance {
+            role_guidance: Some("repair the failing CI head".to_string()),
+            ..JobGuidance::default()
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(context).unwrap()["guidance"],
+        serde_json::json!({"role_guidance": "repair the failing CI head"})
+    );
+}
+
+#[test]
+fn generated_guidance_appends_after_queue_guidance_without_replacing_tool_fields() {
+    let mut guidance = JobGuidance {
+        role_guidance: Some("role charter\n\nrole prompt".to_string()),
+        tool_guidance: Some("tool instructions".to_string()),
+        tool_constraints: vec!["tool constraint".to_string()],
+        action_guidance: Some("queue action".to_string()),
+    };
+
+    guidance.append_action_guidance("fresh CI repair details");
+
+    assert_eq!(
+        guidance.action_guidance.as_deref(),
+        Some("queue action\n\nfresh CI repair details")
+    );
+    assert_eq!(
+        guidance.role_guidance.as_deref(),
+        Some("role charter\n\nrole prompt")
+    );
+    assert_eq!(guidance.tool_guidance.as_deref(), Some("tool instructions"));
+    assert_eq!(guidance.tool_constraints, vec!["tool constraint"]);
 }
 
 #[test]

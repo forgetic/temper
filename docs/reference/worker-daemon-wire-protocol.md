@@ -32,7 +32,8 @@ JSON keeps v1 easy to inspect and fixture-test while preserving message
 semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.action`, `JobContext.checkout_capability`,
 `JobContext.allowed_verdicts`, `JobContext.verdict_contracts`,
-`JobContext.source_metadata`, `JobContext.artifact_context`, `JobResult.verdict`, `JobResult.body`,
+`JobContext.source_metadata`, `JobContext.artifact_context`, structured
+`JobContext.guidance`, `JobResult.verdict`, `JobResult.body`,
 `JobResult.children`, and `JobResult.children[].kind` are all optional, and the
 protocol version remains `1`. The `fetch-context`/`context-response`,
 `activity-batch`/`activity-ack`, and daemon-to-worker `cancel-attempts`
@@ -162,11 +163,13 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `allowed_verdicts` | array of strings | no | Verdict vocabulary declared by `action`'s `outcomes` keys, in deterministic order. Empty or absent for a plain coding job. |
 | `verdict_contracts` | object | no | Workflow-derived result requirements keyed by verdict: child cardinality/kinds, required child/source metadata, and required PR text or authored body. Required child metadata must appear non-blank in each child body's `<!-- temper:workflow ... -->` JSON block. |
 | `source_metadata` | object | no | Parsed assignment-time source metadata used by worker/agent preflight validation. The engine re-reads current Forge state before mutation. |
+| `guidance` | object or legacy string | no | Structured additive prompt guidance. `role_guidance` composes the selected role charter and role prompt guidance; `tool_guidance` and `tool_constraints` preserve the applicable declared external tool's instructions; `action_guidance` carries queue-action prose followed by any generated PR-repair details. Readers accept an older free-text string as `role_guidance`. |
 
 For compatibility, old minimal payloads containing only `role`, `repo`, `queue`,
 and `artifact_kind` remain valid; the enrichment fields are optional. The
-`action`, `checkout_capability`, `allowed_verdicts`, `verdict_contracts`, and
-`source_metadata`, and `artifact_context` additions are also optional, and adding them does not change the protocol version: it remains `1`.
+`action`, `checkout_capability`, `allowed_verdicts`, `verdict_contracts`,
+`source_metadata`, `artifact_context`, and `guidance` additions are also optional,
+and adding them does not change the protocol version: it remains `1`.
 The legacy singular `artifact` object is retained unchanged when
 `artifact_context` is present; consumers must not require one carrier to replace
 the other. Readers must ignore unknown fields in the standard payload just as they do for
