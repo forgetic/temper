@@ -371,6 +371,70 @@ fn validated_audit_retries_after_landing_pr_and_emits_only_after_convergence() {
 }
 
 #[test]
+fn folded_credentials_are_redacted_in_durable_audits_and_structured_events() {
+    let layer = CaptureLayer::default();
+    let events = layer.events.clone();
+    let subscriber = registry().with(layer);
+
+    temper_engine_io::block_on(async move {
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+        for (index, (summary, secret)) in [
+            (
+                "Checks pass, but Bearer\tAUDIT-BEARER-TAB-SENTINEL must not escape",
+                "AUDIT-BEARER-TAB-SENTINEL",
+            ),
+            (
+                "Checks pass, but Bearer\nAUDIT-BEARER-NEWLINE-SENTINEL must not escape",
+                "AUDIT-BEARER-NEWLINE-SENTINEL",
+            ),
+            (
+                "Checks pass, but token \t=\n AUDIT-TOKEN-SENTINEL must not escape",
+                "AUDIT-TOKEN-SENTINEL",
+            ),
+            (
+                "Checks pass, but api_key\n:\tAUDIT-API-KEY-SENTINEL must not escape",
+                "AUDIT-API-KEY-SENTINEL",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let forge = Arc::new(MemoryForge::with_current_user(actor()));
+            let repo = new_repo(&forge, "main").await;
+            let plan = create_plan(&forge, &repo).await;
+            let applier = ForgeApplier::new(forge.clone(), Arc::new(validation_workflow()));
+            let job = validation_job(plan, Vec::new());
+
+            assert_eq!(
+                applier
+                    .apply(job.clone(), validated_result(&job, summary))
+                    .await,
+                temper_engine::ApplyOutcome::Applied
+            );
+
+            let comments = issue_comments(&forge, &repo, plan).await;
+            assert_eq!(comments.len(), 1);
+            let audit = &comments[0].body;
+            assert!(
+                audit.contains("**Summary:** &lt;redacted&gt;"),
+                "durable audit did not redact {summary:?}"
+            );
+            assert!(!audit.contains(secret));
+
+            let captured = validation_events(&events);
+            assert_eq!(captured.len(), index + 1);
+            let fields = &captured[index].fields;
+            assert_eq!(
+                fields.get("summary.preview").map(String::as_str),
+                Some("<redacted>"),
+                "structured event did not redact {summary:?}"
+            );
+            assert!(fields.values().all(|value| !value.contains(secret)));
+        }
+    });
+}
+
+#[test]
 fn negative_audit_replay_links_each_final_child_once_and_bounds_summary() {
     temper_engine_io::block_on(async move {
         let forge = Arc::new(MemoryForge::with_current_user(actor()));

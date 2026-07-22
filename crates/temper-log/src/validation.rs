@@ -40,11 +40,20 @@ mod tests {
     }
 
     #[test]
-    fn projection_redacts_secret_shaped_text() {
-        assert_eq!(
-            validation_summary_preview("checks pass; Authorization: Bearer private-value"),
-            REDACTED
-        );
+    fn projection_redacts_secret_shaped_text_after_normalizing_whitespace() {
+        for summary in [
+            "checks pass; Authorization: Bearer private-value",
+            "checks pass; Bearer\tprivate-tab-value",
+            "checks pass; Bearer\nprivate-newline-value",
+            "checks pass; token \t=\n private-token-value",
+            "checks pass; api_key\n:\t private-key-value",
+        ] {
+            assert_eq!(
+                validation_summary_preview(summary),
+                REDACTED,
+                "credential shape was not redacted: {summary:?}"
+            );
+        }
     }
 
     #[test]
