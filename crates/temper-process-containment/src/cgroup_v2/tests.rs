@@ -194,7 +194,22 @@ impl CgroupFileSystem for FakeCgroupFs {
 #[derive(Default)]
 struct FakeProcesses {
     identities: Mutex<HashMap<u32, ProcessIdentity>>,
-    signaled: Mutex<Vec<(u32, ContainmentSignal)>>,
+    signaled: Arc<Mutex<Vec<(u32, ContainmentSignal)>>>,
+}
+
+struct FakeEmergencyProcess {
+    pid: u32,
+    signaled: Arc<Mutex<Vec<(u32, ContainmentSignal)>>>,
+}
+
+impl EmergencyProcess for FakeEmergencyProcess {
+    fn signal(&self, signal: ContainmentSignal) -> io::Result<()> {
+        self.signaled
+            .lock()
+            .expect("signals")
+            .push((self.pid, signal));
+        Ok(())
+    }
 }
 
 impl FakeProcesses {
@@ -226,6 +241,21 @@ impl LinuxProcessApi for FakeProcesses {
             .get(&pid)
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gone"))
+    }
+
+    fn open_emergency(&self, pid: u32) -> io::Result<Box<dyn EmergencyProcess>> {
+        if !self
+            .identities
+            .lock()
+            .expect("identities")
+            .contains_key(&pid)
+        {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "gone"));
+        }
+        Ok(Box::new(FakeEmergencyProcess {
+            pid,
+            signaled: Arc::clone(&self.signaled),
+        }))
     }
 
     fn signal(
@@ -501,6 +531,8 @@ fn missing_cgroup_kill_enumerates_nested_members_with_pidfds() {
     drop(kernel);
     drop(prepared);
 }
+
+mod emergency;
 
 #[test]
 fn populated_event_race_cannot_produce_an_early_empty_proof() {

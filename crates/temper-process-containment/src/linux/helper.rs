@@ -15,6 +15,11 @@ use super::protocol::{
     AutomaticSignalEvidence, send_attempts, send_error, send_final, send_members,
 };
 
+mod arguments;
+mod emergency;
+
+use arguments::HelperArguments;
+
 const HELPER_SETUP_FAILURE: u8 = 125;
 
 /// Dispatch the hidden Linux helper mode before logging, runtimes, or ordinary
@@ -25,7 +30,7 @@ pub(super) fn dispatch(arguments: impl IntoIterator<Item = OsString>) -> Option<
     if arguments.next().as_deref() != Some(OsStr::new(HELPER_MODE)) {
         return None;
     }
-    Some(match parse_helper_arguments(arguments) {
+    Some(match arguments::parse(arguments) {
         Ok(arguments) => match run_supervisor_helper(arguments) {
             Ok(status) => mirror_payload_status(status),
             Err(_) => ExitCode::from(HELPER_SETUP_FAILURE),
@@ -34,60 +39,18 @@ pub(super) fn dispatch(arguments: impl IntoIterator<Item = OsString>) -> Option<
     })
 }
 
-struct HelperArguments {
-    control_fd: RawFd,
-    term_grace: Duration,
-    inspection_retry: Duration,
-    payload_program: OsString,
-    payload_arguments: Vec<OsString>,
-}
-
-fn parse_helper_arguments(
-    mut arguments: impl Iterator<Item = OsString>,
-) -> io::Result<HelperArguments> {
-    let control_fd = parse_os_field(arguments.next(), "control fd")?;
-    let term_grace_ms = parse_os_field(arguments.next(), "TERM grace")?;
-    let inspection_retry_ms = parse_os_field(arguments.next(), "inspection retry")?;
-    if arguments.next().as_deref() != Some(OsStr::new("--")) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Linux supervisor payload separator is missing",
-        ));
-    }
-    let payload_program = arguments.next().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Linux supervisor payload program is missing",
-        )
-    })?;
-    Ok(HelperArguments {
-        control_fd,
-        term_grace: Duration::from_millis(term_grace_ms),
-        inspection_retry: Duration::from_millis(inspection_retry_ms),
-        payload_program,
-        payload_arguments: arguments.collect(),
-    })
-}
-
-fn parse_os_field<T: std::str::FromStr>(value: Option<OsString>, name: &str) -> io::Result<T> {
-    value
-        .and_then(|value| value.into_string().ok())
-        .and_then(|value| value.parse().ok())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid Linux supervisor {name}"),
-            )
-        })
-}
-
 fn run_supervisor_helper(arguments: HelperArguments) -> io::Result<PayloadStatus> {
     // SAFETY: the fd was inherited specifically for helper mode and ownership
     // is transferred exactly once into this UnixStream.
     let mut channel = unsafe { std::os::unix::net::UnixStream::from_raw_fd(arguments.control_fd) };
-    if let Err(error) =
-        become_subreaper().and_then(|()| set_close_on_exec(arguments.control_fd, true))
-    {
+    // SAFETY: this second fd is the independently inherited emergency owner
+    // channel and is transferred exactly once to the dedicated reader thread.
+    let emergency_channel =
+        unsafe { std::os::unix::net::UnixStream::from_raw_fd(arguments.emergency_fd) };
+    if let Err(error) = become_subreaper().and_then(|()| {
+        set_close_on_exec(arguments.control_fd, true)?;
+        set_close_on_exec(arguments.emergency_fd, true)
+    }) {
         let _ = send_error(&mut channel, &error);
         return Err(error);
     }
@@ -111,6 +74,21 @@ fn run_supervisor_helper(arguments: HelperArguments) -> io::Result<PayloadStatus
             return Err(error);
         }
     };
+    let emergency_stage = match emergency::spawn_owner(
+        emergency_channel,
+        std::process::id(),
+        arguments.term_grace,
+        arguments.inspection_retry,
+    ) {
+        Ok(stage) => stage,
+        Err(error) => {
+            let _ = payload.kill();
+            let _ = payload.wait();
+            let error = io::Error::other(format!("spawn Linux emergency owner: {error}"));
+            let _ = send_error(&mut channel, &error);
+            return Err(error);
+        }
+    };
     drop(payload);
 
     let mut supervisor = SupervisorState::new(
@@ -130,7 +108,7 @@ fn run_supervisor_helper(arguments: HelperArguments) -> io::Result<PayloadStatus
             helper_blocked(&mut channel, &mut owner_present, &supervisor, &error);
             continue;
         }
-        if supervisor.payload_status.is_some() || !owner_present {
+        if supervisor.payload_status.is_some() || !owner_present || emergency_stage.requested() {
             automatic_cleanup = true;
         }
 
@@ -168,8 +146,14 @@ fn run_supervisor_helper(arguments: HelperArguments) -> io::Result<PayloadStatus
                 }
                 return Ok(status);
             }
-            if !supervisor.owner_cleanup_active || !owner_present {
-                let signal_result = if supervisor.term_sent_at.is_none() {
+            if !supervisor.owner_cleanup_active || !owner_present || emergency_stage.requested() {
+                let signal_result = if emergency_stage.hard_kill_requested()
+                    && supervisor
+                        .last_kill_at
+                        .is_none_or(|sent| sent.elapsed() >= supervisor.inspection_retry)
+                {
+                    supervisor.automatic_signal_all(ContainmentSignal::Kill)
+                } else if supervisor.term_sent_at.is_none() {
                     supervisor.automatic_signal_all(ContainmentSignal::Term)
                 } else if supervisor
                     .term_sent_at

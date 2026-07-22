@@ -40,6 +40,8 @@ const SETUP_FAILURE_EXIT_CODE: u32 = 125;
 const MAX_JOB_MEMBER_IDS: usize = 1_048_576;
 const MAX_WINDOWS_PATH_CHARS: usize = 32_768;
 
+mod emergency;
+
 /// Race-free Windows descendant containment based on a kill-on-close Job
 /// Object. The payload is created suspended, assigned and independently
 /// verified in the Job, and only then is its sole initial thread resumed.
@@ -115,6 +117,10 @@ impl PreparedContainmentBackend for PreparedWindowsJob {
         if let Err(error) = verify_assignment(&job, &child) {
             return Err(abort_suspended_spawn(&job, &mut child, error));
         }
+        let emergency = match emergency::job_emergency_handle(&job) {
+            Ok(handle) => handle,
+            Err(error) => return Err(abort_suspended_spawn(&job, &mut child, error)),
+        };
         if let Err(error) = resume_initial_thread(child.id()) {
             return Err(abort_suspended_spawn(&job, &mut child, error));
         }
@@ -125,7 +131,7 @@ impl PreparedContainmentBackend for PreparedWindowsJob {
             inspections: 0,
             direct_child_reaped: None,
         };
-        Ok(BackendSpawn::new(child, Box::new(kernel)))
+        Ok(BackendSpawn::new(child, Box::new(kernel), emergency))
     }
 }
 

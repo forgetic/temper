@@ -88,6 +88,9 @@ impl CgroupFileSystem for RealCgroupFileSystem {
 pub(super) trait LinuxProcessApi: Send + Sync {
     fn pidfd_supported(&self) -> bool;
     fn identity(&self, pid: u32) -> io::Result<ProcessIdentity>;
+    /// Pin a numeric cgroup member without collecting the diagnostic process
+    /// identity used by ordinary cleanup.
+    fn open_emergency(&self, pid: u32) -> io::Result<Box<dyn EmergencyProcess>>;
     fn signal(
         &self,
         expected: &ProcessIdentity,
@@ -121,6 +124,10 @@ impl LinuxProcessApi for RealLinuxProcessApi {
 
     fn identity(&self, pid: u32) -> io::Result<ProcessIdentity> {
         proc_identity(pid)
+    }
+
+    fn open_emergency(&self, pid: u32) -> io::Result<Box<dyn EmergencyProcess>> {
+        open_emergency_process(pid)
     }
 
     fn signal(
