@@ -96,6 +96,7 @@ fn validation_job(number: ItemNumber, scope: Vec<ArtifactSummary>) -> InFlightJo
                 "feature/validation-audit".to_string(),
             )]),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )

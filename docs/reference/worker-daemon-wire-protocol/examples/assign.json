@@ -60,7 +60,8 @@
     "action": "open_pr",
     "checkout_capability": "writable",
     "allowed_verdicts": [],
-    "guidance": {
+    "guidance": "Implement the selected code issue according to the role charter.\n\nTool guidance:\nUse the configured coding workspace for this action.\n\nTool constraints:\n- Only edit manifest-writable repositories.\n\nAction guidance:\nFollow the selected queue action.",
+    "structured_guidance": {
       "role_guidance": "Implement the selected code issue according to the role charter.",
       "tool_guidance": "Use the configured coding workspace for this action.",
       "tool_constraints": ["Only edit manifest-writable repositories."],

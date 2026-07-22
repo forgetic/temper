@@ -127,6 +127,7 @@ fn inherited_policy_stamps_omission_and_rejects_an_explicit_override() {
                     verdict_contracts: Default::default(),
                     source_metadata: Default::default(),
                     guidance: None,
+                    structured_guidance: None,
                     pull_request_freshness: None,
                 },
             );
