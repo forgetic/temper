@@ -11,8 +11,11 @@ use temper_forge::{
     RepositoryPath, RequestReviewers, UpdatePullRequest, UserId,
 };
 use temper_log::emit::{PrHandoffFacts, PrOpened, PrUpdated, emit_pr_opened, emit_pr_updated};
-use temper_protocol_worker::{JobContext, JobResult, RepoOutcome};
-use temper_workflow::{ArtifactKindId, ArtifactSource, Effect, Executor};
+use temper_protocol_worker::{FailureClass, JobContext, JobResult, RepoOutcome};
+use temper_workflow::{
+    ArtifactKindId, ArtifactSource, Effect, Executor, TargetBranchPolicy, TransitionId,
+    parse_metadata_block,
+};
 
 use temper_runner::{artifact_ref, pr_correlation_key};
 
@@ -23,7 +26,10 @@ use crate::forge_applier::coordinated::{
     CoordinatedSet, coordinated_landing_order, coordinated_pr_pull_request_input,
     manifest_base_branches, manifest_depends_on, pr_target_branch,
 };
-use crate::workflow_meta::{implementation_pr_create_labels, implementation_pr_labels};
+use crate::workflow_meta::{
+    create_pull_request_target_branch_policy, implementation_pr_create_labels,
+    implementation_pr_labels,
+};
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn apply_success(&self, job: InFlightJob, result: JobResult) -> ApplyOutcome {
@@ -79,6 +85,20 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 };
             }
         };
+        let base_branches = match self
+            .validated_success_base_branches(
+                &job,
+                &context,
+                &primary_repository,
+                &issue,
+                &result.repos,
+            )
+            .await
+        {
+            Ok(Some(base_branches)) => base_branches,
+            Ok(None) => manifest_base_branches(&context),
+            Err(outcome) => return outcome,
+        };
         self.apply_source_action_claim(&job).await;
 
         let source_kind = ArtifactKindId::new(context.artifact_kind.clone());
@@ -102,7 +122,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         // links (ADR 0023, acyclic). The `dependency_gate` then holds each PR
         // closed until its prerequisites merge.
         let depends_on = manifest_depends_on(&context);
-        let base_branches = manifest_base_branches(&context);
         let order = coordinated_landing_order(&result.repos, &depends_on);
         let mut opened: BTreeMap<String, (RepositoryId, ItemNumber)> = BTreeMap::new();
 
@@ -128,6 +147,157 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             self.clear_source_action_working_labels(&job).await;
         }
         ApplyOutcome::Applied
+    }
+
+    /// Re-resolves an explicit PR target policy from fresh source and repository
+    /// state immediately before creation. Legacy actions with no policy retain
+    /// the historical manifest/default behavior.
+    async fn validated_success_base_branches(
+        &self,
+        job: &InFlightJob,
+        context: &JobContext,
+        primary_repository: &Repository,
+        issue: &temper_forge::Issue,
+        outcomes: &[RepoOutcome],
+    ) -> Result<Option<BTreeMap<String, String>>, ApplyOutcome> {
+        let Some(action) = context.action.as_deref() else {
+            return Ok(None);
+        };
+        let policy = create_pull_request_target_branch_policy(
+            self.workflow.as_ref(),
+            &TransitionId::new(action),
+        )
+        .map_err(branch_policy_rejected)?;
+        let Some(policy) = policy else {
+            // Omitted policy is the compatibility path: old workflows continue
+            // to use the assignment manifest and repository-default fallback.
+            return Ok(None);
+        };
+        let workspace = context.workspace.as_ref().ok_or_else(|| {
+            branch_policy_rejected(format!(
+                "action `{action}` has target-branch policy `{policy}` but no workspace manifest"
+            ))
+        })?;
+        let source_branch = if policy == TargetBranchPolicy::NonDefault {
+            let metadata = parse_metadata_block(&issue.body)
+                .map_err(|error| {
+                    branch_policy_rejected(format!(
+                        "fresh source issue workflow metadata is malformed: {error}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    branch_policy_rejected(
+                        "fresh source issue has no workflow metadata target branch",
+                    )
+                })?;
+            Some(
+                metadata
+                    .target_branch
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|branch| !branch.is_empty())
+                    .ok_or_else(|| {
+                        branch_policy_rejected(
+                            "fresh source issue has no non-blank workflow target branch",
+                        )
+                    })?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
+        let mut validated = BTreeMap::new();
+        for outcome in outcomes {
+            if validated.contains_key(&outcome.repo) {
+                return Err(branch_policy_rejected(format!(
+                    "successful result repeats repository outcome `{}`",
+                    outcome.repo
+                )));
+            }
+            let manifest_repos = workspace
+                .repos
+                .iter()
+                .filter(|repo| repo.repo == outcome.repo)
+                .collect::<Vec<_>>();
+            let [manifest_repo] = manifest_repos.as_slice() else {
+                return Err(branch_policy_rejected(format!(
+                    "successful result repository `{}` does not have exactly one workspace manifest entry",
+                    outcome.repo
+                )));
+            };
+            if !manifest_repo.is_writable() {
+                return Err(branch_policy_rejected(format!(
+                    "successful result repository `{}` is not writable in the workspace manifest",
+                    outcome.repo
+                )));
+            }
+
+            let target_repository = if outcome.repo == job.repo {
+                primary_repository.clone()
+            } else {
+                let (owner, name) = outcome.repo.split_once('/').ok_or_else(|| {
+                    branch_policy_rejected(format!(
+                        "successful result has malformed repository path `{}`",
+                        outcome.repo
+                    ))
+                })?;
+                if owner.is_empty() || name.is_empty() || name.contains('/') {
+                    return Err(branch_policy_rejected(format!(
+                        "successful result has malformed repository path `{}`",
+                        outcome.repo
+                    )));
+                }
+                self.forge
+                    .get_repository_by_path(&RepositoryPath::new(owner, name))
+                    .await
+                    .map_err(|error| ApplyOutcome::Retryable {
+                        reason: format!(
+                            "read fresh repository `{}` before pull-request creation: {error}",
+                            outcome.repo
+                        ),
+                    })?
+                    .ok_or_else(|| {
+                        branch_policy_rejected(format!(
+                            "successful result repository `{}` no longer exists",
+                            outcome.repo
+                        ))
+                    })?
+            };
+            let repository_default = target_repository.default_branch.trim();
+            if repository_default.is_empty() {
+                return Err(branch_policy_rejected(format!(
+                    "fresh repository `{}` has a blank default branch",
+                    outcome.repo
+                )));
+            }
+            let expected = match policy {
+                TargetBranchPolicy::NonDefault => {
+                    let source_branch = source_branch.as_deref().expect("resolved above");
+                    if source_branch == repository_default {
+                        return Err(branch_policy_rejected(format!(
+                            "fresh source target branch `{source_branch}` equals repository `{}` default branch",
+                            outcome.repo
+                        )));
+                    }
+                    source_branch
+                }
+                TargetBranchPolicy::RepositoryDefault => repository_default,
+                TargetBranchPolicy::DerivedFeatureBranch | TargetBranchPolicy::Inherit => {
+                    return Err(branch_policy_rejected(format!(
+                        "action `{action}` has unsupported create_pull_request target-branch policy `{policy}`"
+                    )));
+                }
+            };
+            if manifest_repo.base_branch.trim() != expected {
+                return Err(branch_policy_rejected(format!(
+                    "workspace repository `{}` base `{}` diverges from fresh policy target `{expected}`",
+                    outcome.repo, manifest_repo.base_branch
+                )));
+            }
+            validated.insert(outcome.repo.clone(), expected.to_string());
+        }
+        Ok(Some(validated))
     }
 
     /// Opens (or ensures) the coordinated PR for one repo outcome, recording the
@@ -560,6 +730,13 @@ struct ReviewHandoff {
 impl ReviewHandoff {
     fn is_empty(&self) -> bool {
         self.add_labels.is_empty() && self.remove_labels.is_empty() && self.reviewers.is_empty()
+    }
+}
+
+fn branch_policy_rejected(reason: impl Into<String>) -> ApplyOutcome {
+    ApplyOutcome::Rejected {
+        class: FailureClass::Protocol,
+        reason: reason.into(),
     }
 }
 

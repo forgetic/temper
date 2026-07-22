@@ -26,7 +26,10 @@ use temper_workflow::{
 };
 
 use crate::workflow_meta::implementation_pr_labels;
-use workspace::{build_workspace_manifest, target_number, terminal_checked_snapshot};
+use workspace::{
+    build_workspace_manifest, enforce_issue_workspace_target_branch_policy, target_number,
+    terminal_checked_snapshot,
+};
 
 pub use self::backstop::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, run_poll_backstop_tick,
@@ -318,6 +321,7 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
         pull_request_freshness: None,
     };
     enrich_job_context_from_workflow(item, workflow, compiled, &repository, &mut context)?;
+    enforce_issue_workspace_target_branch_policy(item, workflow, &mut context)?;
 
     let action = context.action.as_deref().ok_or_else(|| {
         ScanError::InvalidWorkflow("enriched job is missing a selected action".to_string())

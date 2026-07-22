@@ -5,8 +5,8 @@
 use temper_forge::{BranchRef, CreatePullRequest, Forge, Issue, ItemNumber, Repository};
 use temper_runner::pr_correlation_key;
 use temper_workflow::{
-    ArtifactKindId, ArtifactRef, ArtifactTarget, Effect, ExecutionContext, TransitionId,
-    ValidatedWorkflow, WorkflowMetadata, parse_metadata_block, render_metadata_block,
+    ArtifactKindId, ArtifactRef, ArtifactTarget, Effect, ExecutionContext, TargetBranchPolicy,
+    TransitionId, ValidatedWorkflow, WorkflowMetadata, parse_metadata_block, render_metadata_block,
 };
 
 use crate::InFlightJob;
@@ -37,6 +37,24 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         if create_effects.is_empty() {
             return true;
         }
+        let create_effect_count =
+            create_pull_request_effect_count(self.workflow.as_ref(), binding.routed);
+        if create_effects
+            .iter()
+            .any(|(_, _, policy)| *policy == Some(TargetBranchPolicy::NonDefault))
+            && create_effect_count != 1
+        {
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %binding.job.job_id,
+                repo = %binding.job.repo,
+                issue = %binding.number,
+                routed = %binding.routed,
+                create_effects = create_effect_count,
+                "forge applier rejected non-default landing transition that does not create exactly one pull request"
+            );
+            return false;
+        }
 
         let Some(source_metadata) = issue_pr_source_metadata(binding.job, binding.issue) else {
             return false;
@@ -49,14 +67,16 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         let authored_text_unambiguous = authored_pr_text_unambiguous(
             self.workflow.as_ref(),
             binding.routed,
-            create_effects.len(),
+            create_effect_count,
         );
         let authored_title = authored_text_unambiguous.then_some(binding.title).flatten();
         let authored_body = authored_text_unambiguous.then_some(binding.body).flatten();
         let base_correlation_key =
             pr_correlation_key(&ArtifactKindId::new(binding.artifact_kind), binding.number);
 
-        for (ordinal, (effect_index, artifact_kind)) in create_effects.iter().enumerate() {
+        for (ordinal, (effect_index, artifact_kind, target_branch_policy)) in
+            create_effects.iter().enumerate()
+        {
             let Some(kind) = self.workflow.artifact_kind(artifact_kind) else {
                 tracing::warn!(
                     target: "temper_daemon",
@@ -82,20 +102,80 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 );
                 return false;
             }
-            if source_branch == target_branch {
-                tracing::info!(
-                    target: "temper_daemon",
-                    job_id = %binding.job.job_id,
-                    repo = %binding.job.repo,
-                    issue = %binding.number,
-                    routed = %binding.routed,
-                    branch = %source_branch,
-                    "forge applier treated same-branch pull-request create as already satisfied"
-                );
-                binding
-                    .context
-                    .set_pull_request_create_satisfied_at(binding.routed.clone(), *effect_index);
-                continue;
+            let same_branch = source_branch == target_branch;
+            match target_branch_policy {
+                Some(TargetBranchPolicy::NonDefault) if same_branch => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %binding.job.job_id,
+                        repo = %binding.job.repo,
+                        issue = %binding.number,
+                        routed = %binding.routed,
+                        branch = %source_branch,
+                        "forge applier rejected non-default landing from the repository default branch"
+                    );
+                    return false;
+                }
+                Some(TargetBranchPolicy::RepositoryDefault) if !same_branch => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %binding.job.job_id,
+                        repo = %binding.job.repo,
+                        issue = %binding.number,
+                        routed = %binding.routed,
+                        source_branch = %source_branch,
+                        repository_default = %target_branch,
+                        "forge applier rejected repository-default landing with divergent source metadata"
+                    );
+                    return false;
+                }
+                Some(TargetBranchPolicy::RepositoryDefault) => {
+                    tracing::info!(
+                        target: "temper_daemon",
+                        job_id = %binding.job.job_id,
+                        repo = %binding.job.repo,
+                        issue = %binding.number,
+                        routed = %binding.routed,
+                        branch = %source_branch,
+                        "forge applier applied explicit repository-default satisfied-create policy"
+                    );
+                    binding.context.set_pull_request_create_satisfied_at(
+                        binding.routed.clone(),
+                        *effect_index,
+                    );
+                    continue;
+                }
+                // Omitted policy retains legacy feature-to-default PR creation,
+                // but cannot authorize a terminal same-branch no-op. Default
+                // intent must be explicit so `main` metadata alone is inert.
+                None if same_branch => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %binding.job.job_id,
+                        repo = %binding.job.repo,
+                        issue = %binding.number,
+                        routed = %binding.routed,
+                        branch = %source_branch,
+                        "forge applier rejected omitted-policy same-branch landing"
+                    );
+                    return false;
+                }
+                Some(
+                    policy @ (TargetBranchPolicy::DerivedFeatureBranch
+                    | TargetBranchPolicy::Inherit),
+                ) => {
+                    tracing::warn!(
+                        target: "temper_daemon",
+                        job_id = %binding.job.job_id,
+                        repo = %binding.job.repo,
+                        issue = %binding.number,
+                        routed = %binding.routed,
+                        %policy,
+                        "forge applier rejected unsupported landing target-branch policy"
+                    );
+                    return false;
+                }
+                Some(TargetBranchPolicy::NonDefault) | None => {}
             }
 
             let metadata = WorkflowMetadata {
@@ -133,7 +213,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 *effect_index,
                 create_pull_request_correlation_key(
                     &base_correlation_key,
-                    create_effects.len(),
+                    create_effect_count,
                     ordinal,
                     artifact_kind,
                 ),
@@ -143,10 +223,28 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     }
 }
 
+fn create_pull_request_effect_count(
+    workflow: &ValidatedWorkflow,
+    transition: &TransitionId,
+) -> usize {
+    workflow
+        .transitions()
+        .iter()
+        .find(|candidate| candidate.id == *transition)
+        .map(|transition| {
+            transition
+                .effects
+                .iter()
+                .filter(|effect| matches!(effect, Effect::CreatePullRequest { .. }))
+                .count()
+        })
+        .unwrap_or_default()
+}
+
 fn create_pull_request_artifact_kind_effects(
     workflow: &ValidatedWorkflow,
     transition: &TransitionId,
-) -> Vec<(usize, ArtifactKindId)> {
+) -> Vec<(usize, ArtifactKindId, Option<TargetBranchPolicy>)> {
     let Some(transition) = workflow
         .transitions()
         .iter()
@@ -158,9 +256,14 @@ fn create_pull_request_artifact_kind_effects(
     let mut create_index = 0;
     let mut effects = Vec::new();
     for effect in &transition.effects {
-        if let Effect::CreatePullRequest { artifact_kind, .. } = effect {
+        if let Effect::CreatePullRequest {
+            artifact_kind,
+            target_branch_policy,
+            ..
+        } = effect
+        {
             if let Some(artifact_kind) = artifact_kind {
-                effects.push((create_index, artifact_kind.clone()));
+                effects.push((create_index, artifact_kind.clone(), *target_branch_policy));
             }
             create_index += 1;
         }

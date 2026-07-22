@@ -8,9 +8,25 @@ fn landing_workflow_with_effect_kind_and_policy(
     effect_kind: &str,
     target_branch_policy: Option<&str>,
 ) -> Result<ValidatedWorkflow, temper_workflow::ValidationErrors> {
+    landing_workflow_with_create_count(effect_kind, target_branch_policy, 1)
+}
+
+fn landing_workflow_with_create_count(
+    effect_kind: &str,
+    target_branch_policy: Option<&str>,
+    create_count: usize,
+) -> Result<ValidatedWorkflow, temper_workflow::ValidationErrors> {
     let target_branch_policy = target_branch_policy
         .map(|policy| format!(r#", "target_branch_policy": "{policy}""#))
         .unwrap_or_default();
+    let create_effects = (0..create_count)
+        .map(|_| {
+            format!(
+                r#"{{"kind": "create_pull_request", "artifact_kind": "{effect_kind}"{target_branch_policy}}}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n        ");
     let spec_json = format!(
         r#"{{
   "name": "plan-landing",
@@ -39,7 +55,7 @@ fn landing_workflow_with_effect_kind_and_policy(
       "artifact": "plan",
       "roles": ["tester"],
       "effects": [
-        {{"kind": "create_pull_request", "artifact_kind": "{effect_kind}"{target_branch_policy}}},
+        {create_effects},
         {{"kind": "remove_label", "label": "ready"}},
         {{"kind": "add_label", "label": "landing-opened"}}
       ]
@@ -59,6 +75,11 @@ fn landing_workflow_with_effect_kind(
 
 fn landing_workflow() -> ValidatedWorkflow {
     landing_workflow_with_effect_kind("feature_landing_pr").expect("landing workflow validates")
+}
+
+fn non_default_landing_workflow() -> ValidatedWorkflow {
+    landing_workflow_with_effect_kind_and_policy("feature_landing_pr", Some("non_default"))
+        .expect("non-default landing workflow validates")
 }
 
 fn repository_default_landing_workflow() -> ValidatedWorkflow {
@@ -161,7 +182,7 @@ fn verdict_transition_creates_feature_landing_pr_from_plan_metadata() {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_plan_issue(&forge, &repo, Some("feature/144-plan-branch")).await;
-        let workflow = Arc::new(landing_workflow());
+        let workflow = Arc::new(non_default_landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
         let result = passing_landing_result(&job);
@@ -226,6 +247,93 @@ fn verdict_transition_treats_default_branch_source_as_satisfied_create() {
         assert!(!has_label(&labels, "ready"), "labels: {labels:?}");
         assert!(!has_label(&labels, "needs-human"), "labels: {labels:?}");
         assert!(issue_comment_bodies(&forge, &repo, issue).await.is_empty());
+    })
+}
+
+#[test]
+fn verdict_transition_rejects_default_source_under_non_default_policy() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let issue = create_plan_issue(&forge, &repo, Some("main")).await;
+        let workflow = Arc::new(non_default_landing_workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = plan_validation_job("acme/service", issue);
+        let result = passing_landing_result(&job);
+
+        applier.apply(job, result).await;
+
+        assert_pull_request_count_stays(&cx, &forge, &repo, 0).await;
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert!(has_label(&labels, "needs-human"), "labels: {labels:?}");
+        assert!(has_label(&labels, "ready"), "labels: {labels:?}");
+        assert!(!has_label(&labels, "landing-opened"), "labels: {labels:?}");
+    })
+}
+
+#[test]
+fn verdict_transition_rejects_multiple_creates_under_non_default_policy() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let issue = create_plan_issue(&forge, &repo, Some("feature/144-plan-branch")).await;
+        let workflow = Arc::new(
+            landing_workflow_with_create_count("feature_landing_pr", Some("non_default"), 2)
+                .expect("multiple-create workflow validates structurally"),
+        );
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = plan_validation_job("acme/service", issue);
+        let result = passing_landing_result(&job);
+
+        applier.apply(job, result).await;
+
+        assert_pull_request_count_stays(&cx, &forge, &repo, 0).await;
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert!(has_label(&labels, "needs-human"), "labels: {labels:?}");
+        assert!(has_label(&labels, "ready"), "labels: {labels:?}");
+        assert!(!has_label(&labels, "landing-opened"), "labels: {labels:?}");
+    })
+}
+
+#[test]
+fn verdict_transition_rejects_feature_source_under_repository_default_policy() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let issue = create_plan_issue(&forge, &repo, Some("feature/144-plan-branch")).await;
+        let workflow = Arc::new(repository_default_landing_workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = plan_validation_job("acme/service", issue);
+        let result = passing_landing_result(&job);
+
+        applier.apply(job, result).await;
+
+        assert_pull_request_count_stays(&cx, &forge, &repo, 0).await;
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert!(has_label(&labels, "needs-human"), "labels: {labels:?}");
+        assert!(has_label(&labels, "ready"), "labels: {labels:?}");
+        assert!(!has_label(&labels, "landing-opened"), "labels: {labels:?}");
+    })
+}
+
+#[test]
+fn verdict_transition_does_not_infer_same_branch_satisfaction_when_policy_is_omitted() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "main").await;
+        let issue = create_plan_issue(&forge, &repo, Some("main")).await;
+        let workflow = Arc::new(landing_workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = plan_validation_job("acme/service", issue);
+        let result = passing_landing_result(&job);
+
+        applier.apply(job, result).await;
+
+        assert_pull_request_count_stays(&cx, &forge, &repo, 0).await;
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert!(has_label(&labels, "needs-human"), "labels: {labels:?}");
+        assert!(has_label(&labels, "ready"), "labels: {labels:?}");
+        assert!(!has_label(&labels, "landing-opened"), "labels: {labels:?}");
     })
 }
 
@@ -306,7 +414,7 @@ fn verdict_feature_landing_pr_replay_is_idempotent() {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_plan_issue(&forge, &repo, Some("feature/144-plan-branch")).await;
-        let workflow = Arc::new(landing_workflow());
+        let workflow = Arc::new(non_default_landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
         let result = passing_landing_result(&job);
@@ -325,7 +433,7 @@ fn verdict_feature_landing_pr_requires_plan_target_branch_before_mutation() {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_plan_issue(&forge, &repo, None).await;
-        let workflow = Arc::new(landing_workflow());
+        let workflow = Arc::new(non_default_landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
         let result = passing_landing_result(&job);
