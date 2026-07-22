@@ -236,7 +236,7 @@ pub(super) fn run_live_plan_feature_branch(
 
     for (role, actual, minimum) in [
         ("architect", fake.architect_requests(), 4),
-        ("engineer", fake.engineer_requests(), 6),
+        ("engineer", fake.engineer_requests(), 9),
         ("tester", fake.tester_requests(), 4),
     ] {
         if actual < minimum {
