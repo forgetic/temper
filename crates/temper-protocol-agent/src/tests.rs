@@ -51,6 +51,7 @@ fn containment_lifecycle_contract_is_bounded_and_assignment_free() {
             tool_command_id: "bash-call-1".to_string(),
             backend: AgentContainmentBackendV1::LinuxSupervisor,
             root: "supervisor:42".to_string(),
+            root_pid: Some(42),
         },
         trigger: AgentContainmentTriggerV1::Cancellation,
         phase: AgentContainmentPhaseV1::VerifyEmpty,
@@ -82,6 +83,7 @@ fn containment_lifecycle_contract_is_bounded_and_assignment_free() {
     let wire = serde_json::to_string(&frame).unwrap();
     assert!(wire.contains("cleanup_blocked"));
     assert!(wire.contains("bash-call-1"));
+    assert!(wire.contains("\"root_pid\":42"));
     for forbidden in ["worker_id", "job_id", "arguments", "credentials"] {
         assert!(!wire.contains(forbidden));
     }
@@ -95,6 +97,24 @@ fn containment_lifecycle_contract_is_bounded_and_assignment_free() {
     };
     event.owner.tool_command_id = "credential=secret-token-sentinel".to_string();
     assert!(unsafe_frame.validate().is_err());
+}
+
+#[test]
+fn containment_owner_root_pid_is_additive_for_older_senders() {
+    let owner: AgentContainmentOwnerV1 = serde_json::from_value(serde_json::json!({
+        "owner_kind": "tool",
+        "tool_command_id": "legacy-call",
+        "backend": "linux_supervisor",
+        "root": "supervisor:legacy"
+    }))
+    .expect("older owner without root_pid remains compatible");
+    assert_eq!(owner.root_pid, None);
+    assert!(
+        serde_json::to_value(owner)
+            .expect("serialize legacy owner")
+            .get("root_pid")
+            .is_none()
+    );
 }
 
 #[test]

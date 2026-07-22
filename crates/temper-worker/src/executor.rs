@@ -77,7 +77,7 @@ impl AttemptFence {
 mod cancellation;
 pub use cancellation::{
     CancellationOutcome, JobCancellation, JobCancellationOwner, JobCancellationRequest, JobCleanup,
-    ResourceJoinReport, ResourceJoinStatus,
+    ResourceJoinReport, ResourceJoinStatus, TerminalTraceBlocker, TerminalTraceBlockerState,
 };
 pub(crate) use cancellation::{JobCleanupObserver, JobContainmentObservation};
 
@@ -251,6 +251,8 @@ pub fn job_result_for_attempt(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use serde_json::json;
     use temper_protocol_worker::Artifact;
 
@@ -270,6 +272,34 @@ mod tests {
             },
             job_payload: json!({}),
         }
+    }
+
+    #[test]
+    fn compatibility_trace_pending_reason_is_typed_bounded_and_redacted() {
+        let cancellation = JobCancellation::default();
+        let observed = Arc::new(Mutex::new(None));
+        let captured = Arc::clone(&observed);
+        cancellation.set_cleanup_observer(move |observation| {
+            let JobContainmentObservation::TerminalTracePending(blocker) = observation else {
+                panic!("expected terminal trace blocker");
+            };
+            *captured.lock().expect("captured blocker") = Some(blocker);
+        });
+
+        cancellation.quiescence_pending(format!(
+            "credential=secret-token-sentinel{}",
+            "x".repeat(temper_protocol_worker::MAX_SHUTDOWN_IDENTIFIER_BYTES + 1)
+        ));
+
+        let blocker = observed
+            .lock()
+            .expect("captured blocker")
+            .clone()
+            .expect("compatibility blocker");
+        assert_eq!(blocker.state(), TerminalTraceBlockerState::Compatibility);
+        assert_eq!(blocker.run_id(), None);
+        assert_eq!(blocker.sequence(), None);
+        assert_eq!(blocker.to_string(), "[redacted]");
     }
 
     #[test]

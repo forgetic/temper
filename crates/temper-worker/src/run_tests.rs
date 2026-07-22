@@ -215,14 +215,18 @@ fn bounded_shutdown_reports_and_retains_an_unresolved_attempt() {
             .await;
 
         assert!(report.joined_attempts.is_empty());
-        assert_eq!(report.unresolved_blockers.len(), 1);
-        let blocker = &report.unresolved_blockers[0];
-        assert_eq!(blocker.identity.worker_id, "shutdown-worker");
-        assert_eq!(blocker.identity.job_id, "active-job");
-        assert_eq!(blocker.identity.attempt_id, "active-attempt");
+        let blocker = report
+            .unresolved_blockers
+            .iter()
+            .find(|blocker| blocker.kind == crate::ShutdownBlockerKind::RegistryState)
+            .expect("registry blocker");
+        assert_eq!(blocker.worker_id.as_deref(), Some("shutdown-worker"));
+        assert_eq!(blocker.job_id.as_deref(), Some("active-job"));
+        assert_eq!(blocker.attempt_id.as_deref(), Some("active-attempt"));
+        assert_eq!(blocker.owner_name, "hard_kill_requested");
         assert_eq!(
-            blocker.registry_state,
-            crate::ActiveJobJoinState::HardKillRequested
+            blocker.escalation_stage,
+            crate::ShutdownEscalationStage::HardKill
         );
         assert_eq!(
             cancellation.requested(),

@@ -145,6 +145,79 @@ fn exact_cancellation_closes_fence_and_updates_join_state_monotonically() {
 }
 
 #[test]
+fn typed_trace_blocker_retains_attempt_and_trace_identity() {
+    let registry = WorkerTaskRegistry::new();
+    let active = task("trace", 13);
+    assert!(registry.register(active));
+    registry.mark_shutdown_blocker(
+        "trace",
+        "attempt-13",
+        13,
+        ShutdownBlocker::new(
+            ShutdownBlockerKind::TerminalTraceAck,
+            ShutdownEscalationStage::Graceful,
+            "agent_trace",
+            "awaiting_acknowledgement",
+        )
+        .with_trace(Some("run-13"), Some(27)),
+    );
+    registry.begin_shutdown(WorkerShutdown::Graceful);
+    registry.request_all(JobCancellationRequest::HardKill);
+
+    let blockers = registry.active_jobs()[0].shutdown_blockers(
+        "worker-13",
+        ShutdownEscalationStage::HardKill,
+        Instant::now() + Duration::from_secs(1),
+    );
+    let trace = blockers
+        .iter()
+        .find(|blocker| blocker.kind == ShutdownBlockerKind::TerminalTraceAck)
+        .expect("terminal trace blocker");
+    assert_eq!(trace.worker_id.as_deref(), Some("worker-13"));
+    assert_eq!(trace.job_id.as_deref(), Some("trace"));
+    assert_eq!(trace.attempt_id.as_deref(), Some("attempt-13"));
+    assert_eq!(trace.trace_run_id.as_deref(), Some("run-13"));
+    assert_eq!(trace.trace_sequence, Some(27));
+}
+
+#[test]
+fn component_tasks_are_counted_by_shutdown_kind() {
+    let tasks = WorkerComponentTasks::default();
+    let _delivery = tasks
+        .register(WorkerComponentTaskKind::ResultDelivery)
+        .expect("delivery guard");
+    let _recording = tasks
+        .register(WorkerComponentTaskKind::ResultRecordingAcknowledgement)
+        .expect("recording guard");
+    let _transport = tasks
+        .register(WorkerComponentTaskKind::Transport)
+        .expect("transport guard");
+    let _background = tasks
+        .register(WorkerComponentTaskKind::BackgroundComponent)
+        .expect("background guard");
+
+    let blockers = tasks.shutdown_blockers(
+        "worker-components",
+        ShutdownEscalationStage::HardKill,
+        Instant::now() + Duration::from_secs(1),
+    );
+    assert_eq!(blockers.len(), 4);
+    assert!(blockers.iter().any(|blocker| {
+        blocker.kind == ShutdownBlockerKind::ResultDelivery
+            && blocker.owner_name == "result_delivery"
+    }));
+    for expected in [
+        "result_recording_acknowledgement",
+        "transport",
+        "background_component",
+    ] {
+        assert!(blockers.iter().any(|blocker| {
+            blocker.kind == ShutdownBlockerKind::ComponentTask && blocker.owner_name == expected
+        }));
+    }
+}
+
+#[test]
 fn shutdown_suppresses_active_attempt_terminal_publication() {
     let registry = WorkerTaskRegistry::new();
     let active = task("restart", 12);

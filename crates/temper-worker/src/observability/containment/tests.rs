@@ -127,9 +127,9 @@ fn cleanup_events_have_expected_severity_bounded_evidence_and_redaction() {
     );
 
     let events = [
-        ContainmentEvent::from_cleanup(&context, &blocked, 1, None).unwrap(),
-        ContainmentEvent::from_cleanup(&context, &shutdown_blocked, 1, None).unwrap(),
-        ContainmentEvent::from_cleanup(&context, &completed, 0, None).unwrap(),
+        ContainmentEvent::from_cleanup(&context, &blocked, 1, None, 0, 0).unwrap(),
+        ContainmentEvent::from_cleanup(&context, &shutdown_blocked, 1, None, 0, 0).unwrap(),
+        ContainmentEvent::from_cleanup(&context, &completed, 0, None, 0, 0).unwrap(),
         ContainmentEvent::from_fallback(&context, &fallback),
         ContainmentEvent::startup("worker-1", &startup),
     ];
@@ -152,6 +152,9 @@ fn cleanup_events_have_expected_severity_bounded_evidence_and_redaction() {
     assert_eq!(fields["owner_kind"], "tool");
     assert_eq!(fields["tool_command_id"], "cargo-test");
     assert_eq!(fields["backend"], "linux_supervisor");
+    assert_eq!(fields["root_pid"], 10000);
+    assert_eq!(captured[1]["fields"]["phase"], "discover");
+    assert_eq!(captured[1]["fields"]["root_pid"], 10000);
     assert_eq!(fields["direct_child_reap"], "pending");
     assert_eq!(fields["recursive_empty"], "not_proven");
     assert!(fields["root"].as_str().unwrap().len() <= MAX_EVENT_ROOT_BYTES);
@@ -240,6 +243,51 @@ fn repeated_blocked_cleanup_is_throttled_by_root() {
 }
 
 #[test]
+fn blocker_age_uses_first_seen_across_throttled_emissions() {
+    let observer = Arc::new(RecordingObserver::default());
+    let now = Arc::new(Mutex::new(Duration::from_secs(5)));
+    let clock_now = Arc::clone(&now);
+    let throttle = ContainmentEventThrottle::with_clock(
+        observer.clone(),
+        Duration::from_secs(60),
+        Arc::new(move || *clock_now.lock().expect("clock")),
+    );
+    let context = ContainmentEventContext::new("worker-age", "job-age", "attempt-age");
+    let observation = CleanupObservation::new(
+        ContainmentIdentity::new("age-owner").unwrap(),
+        ContainmentScope::Tool,
+        ContainmentBackendKind::LinuxSupervisor,
+        ContainmentRootIdentity::new(ContainmentBackendKind::LinuxSupervisor, "age-root"),
+        77,
+        CleanupSnapshot::Blocked {
+            trigger: CleanupTrigger::Shutdown,
+            phase: CleanupPhase::Discover,
+            message: "inspection failed".to_string(),
+            survivors: Vec::new(),
+            omitted_survivors: 0,
+        },
+    );
+
+    throttle.cleanup(&context, &observation);
+    *now.lock().expect("clock") = Duration::from_secs(10);
+    throttle.cleanup(&context, &observation); // throttled
+    *now.lock().expect("clock") = Duration::from_secs(20);
+    throttle.cleanup(&context, &observation); // promoted third failure
+    *now.lock().expect("clock") = Duration::from_secs(80);
+    throttle.cleanup(&context, &observation); // interval elapsed
+
+    let events = observer.0.lock().expect("events");
+    let timings = events
+        .iter()
+        .map(|event| match event {
+            ContainmentEvent::CleanupBlocked(event) => (event.first_seen_millis, event.age_millis),
+            _ => panic!("expected blocked event"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(timings, vec![(5_000, 0), (5_000, 15_000), (5_000, 75_000)]);
+}
+
+#[test]
 fn lifecycle_nested_cleanup_is_attempt_stamped_and_redacted() {
     let observer = Arc::new(RecordingObserver::default());
     let throttle = ContainmentEventThrottle::new(observer.clone(), Duration::from_secs(60));
@@ -250,6 +298,7 @@ fn lifecycle_nested_cleanup_is_attempt_stamped_and_redacted() {
             tool_command_id: "credential=secret-token-sentinel".to_string(),
             backend: AgentContainmentBackendV1::LinuxSupervisor,
             root: "supervisor:nested".to_string(),
+            root_pid: Some(41),
         },
         trigger: AgentContainmentTriggerV1::Cancellation,
         phase: AgentContainmentPhaseV1::VerifyEmpty,
@@ -278,6 +327,7 @@ fn lifecycle_nested_cleanup_is_attempt_stamped_and_redacted() {
     assert_eq!(event.owner.context.job_id, "job-nested");
     assert_eq!(event.owner.context.attempt_id, "attempt-nested");
     assert_eq!(event.owner.owner_kind, "mcp_server");
+    assert_eq!(event.owner.root_pid, Some(41));
     assert_eq!(event.owner.tool_command_id, "[redacted]");
     let encoded = format!("{:?}", events[0]);
     assert!(!encoded.contains("secret-token-sentinel"));

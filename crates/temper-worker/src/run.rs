@@ -24,8 +24,8 @@ use crate::executor::JobExecutor;
 use crate::lifecycle_hook::{NoopWorkerLifecycleHook, WorkerLifecycleHook};
 use crate::result_outbox::ResultOutbox;
 use crate::task_registry::{
-    WorkerComponentTasks, WorkerShutdown, WorkerShutdownBlocker, WorkerShutdownReport,
-    WorkerTaskJoinNotification, WorkerTaskRegistry,
+    WorkerComponentTasks, WorkerShutdown, WorkerShutdownReport, WorkerTaskJoinNotification,
+    WorkerTaskRegistry,
 };
 use crate::trace::{TraceCollector, spawn_activity_forwarder};
 use crate::transport::{HttpTransport, Transport};
@@ -191,26 +191,54 @@ impl WorkerComponentHandle {
             .into_iter()
             .filter(|identity| !unresolved_identities.contains(identity))
             .collect();
-        let unresolved_blockers = unresolved_tasks
-            .into_iter()
-            .map(|task| WorkerShutdownBlocker {
-                identity: task.identity(&self.worker_id),
-                registry_state: task.join_state(),
-                emergency_termination: task
-                    .cancellation()
-                    .emergency_termination_registry()
-                    .snapshot(),
+        let mut unresolved_blockers = unresolved_tasks
+            .iter()
+            .flat_map(|task| {
+                task.shutdown_blockers(
+                    &self.worker_id,
+                    temper_protocol_worker::ShutdownEscalationStage::HardKill,
+                    deadline,
+                )
             })
             .collect::<Vec<_>>();
 
-        if unresolved_blockers.is_empty() {
-            let _ = self.stop_background_and_machine_until(deadline).await;
+        let background_stopped = if unresolved_tasks.is_empty() {
+            self.stop_background_and_machine_until(deadline).await
         } else {
             // Stop component intake without awaiting potentially blocked owner
             // tasks. The registry and attempt futures remain the authorities.
             self.component_tasks.stop_accepting();
             self.cancellation.cancel();
+            false
+        };
+        let component_blockers = self.component_tasks.shutdown_blockers(
+            &self.worker_id,
+            temper_protocol_worker::ShutdownEscalationStage::HardKill,
+            deadline,
+        );
+        unresolved_blockers.extend(component_blockers);
+        if !background_stopped && unresolved_tasks.is_empty() && unresolved_blockers.is_empty() {
+            unresolved_blockers.push(
+                temper_protocol_worker::ShutdownBlocker::new(
+                    temper_protocol_worker::ShutdownBlockerKind::ComponentTask,
+                    temper_protocol_worker::ShutdownEscalationStage::HardKill,
+                    "worker_component",
+                    "background_component",
+                )
+                .with_identity(Some(&self.worker_id), None, None)
+                .with_timing(
+                    0,
+                    0,
+                    u64::try_from(
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .as_millis(),
+                    )
+                    .unwrap_or(u64::MAX),
+                ),
+            );
         }
+        unresolved_blockers.truncate(temper_protocol_worker::MAX_SHUTDOWN_BLOCKERS);
         WorkerShutdownReport {
             joined_attempts,
             unresolved_blockers,

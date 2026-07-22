@@ -9,6 +9,7 @@ mod fixtures;
 mod job_context;
 mod lifecycle;
 mod result;
+mod shutdown;
 mod workspace;
 
 fn sample_manifest() -> WorkspaceManifest {

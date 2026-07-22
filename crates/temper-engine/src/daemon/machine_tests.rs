@@ -56,8 +56,18 @@ fn shutdown_report_tracks_admitted_context_until_its_typed_guard_finishes() {
     let report = temper_engine_io::block_on(report.recv()).expect("shutdown report");
     assert_eq!(
         report.pending_context_operations,
-        BTreeSet::from([identity])
+        BTreeSet::from([identity.clone()])
     );
+    assert_eq!(report.blockers.len(), 1);
+    let blocker = &report.blockers[0];
+    assert_eq!(
+        blocker.kind,
+        temper_protocol_worker::ShutdownBlockerKind::ComponentTask
+    );
+    assert_eq!(blocker.worker_id.as_deref(), Some("worker-context"));
+    assert_eq!(blocker.job_id.as_deref(), Some("job-context"));
+    assert_eq!(blocker.attempt_id.as_deref(), Some("attempt-context"));
+    assert_eq!(blocker.owner_name, "forge_context");
 
     machine.finish_context(admission);
     assert!(temper_engine_io::block_on(join_notification.recv()).is_some());

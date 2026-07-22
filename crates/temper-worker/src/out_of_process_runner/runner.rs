@@ -84,8 +84,7 @@ impl OutOfProcessRunner {
             )
             .await;
         } else if tracing_required && cancelled {
-            cancellation
-                .quiescence_pending("enabled durable tracing did not create a cancellation run");
+            cancellation.terminal_trace_pending(crate::TerminalTraceBlocker::trace_unavailable());
             tracing::warn!(
                 target: "temper::worker",
                 service = "worker",

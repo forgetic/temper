@@ -57,10 +57,14 @@ pub use context_client::{
 pub use executor::{
     AttemptFence, CancellationOutcome, JobAttempt, JobCancellation, JobCancellationOwner,
     JobCancellationRequest, JobCleanup, JobExecutionContext, JobExecutor, JobOutcome,
-    ResourceJoinReport, ResourceJoinStatus, StubExecutor, job_result, job_result_for_attempt,
+    ResourceJoinReport, ResourceJoinStatus, StubExecutor, TerminalTraceBlocker,
+    TerminalTraceBlockerState, job_result, job_result_for_attempt,
 };
 pub use lifecycle_hook::{WorkerLifecycleCheckpoint, WorkerLifecycleHook};
-pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
+pub use observability::{
+    StandaloneShutdownBlockerEvent, StandaloneShutdownDisposition, StandaloneShutdownSummaryEvent,
+    assigned_job_line, registered_worker_line, result_sent_line,
+};
 pub use out_of_process_runner::{JobQuiesced, OutOfProcessRunner};
 pub use pr_freshness::{
     HttpPrFreshnessGuard, PrFreshnessFailure, PrFreshnessGuard,
@@ -84,8 +88,9 @@ pub use run::{
     start_worker_with_transport_and_trace_collector,
 };
 pub use task_registry::{
-    ActiveJobJoinState, ActiveJobTask, WorkerAttemptIdentity, WorkerShutdown,
-    WorkerShutdownBlocker, WorkerShutdownReport, WorkerTaskJoinNotification, WorkerTaskRegistry,
+    ActiveJobJoinState, ActiveJobTask, WorkerAttemptIdentity, WorkerComponentTaskKind,
+    WorkerShutdown, WorkerShutdownBlocker, WorkerShutdownReport, WorkerTaskJoinNotification,
+    WorkerTaskRegistry,
 };
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
@@ -99,6 +104,7 @@ pub use temper_protocol_agent::{
     CodebaseMemoryToolConfig, RUNTIME_LIMITS_FLAG,
 };
 pub use temper_protocol_worker::WorkerAuth;
+pub use temper_protocol_worker::{ShutdownBlocker, ShutdownBlockerKind, ShutdownEscalationStage};
 pub use trace::{
     ActivityEndpoint, DirtyTraceRun, DirtyTraceRuns, MAX_CHILD_ACTIVITY_FRAME_BYTES,
     MAX_CHILD_ACTIVITY_RECORD_BYTES, RecoveredTraceRun, TraceCollector, TraceCoordinationSnapshot,

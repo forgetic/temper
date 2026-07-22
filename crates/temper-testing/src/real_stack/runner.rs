@@ -320,10 +320,12 @@ impl NativeJigAgentRunner {
             };
             match terminal {
                 Ok(sequence) if worker_cancellation_requested => {
-                    cancellation.quiescence_pending(format!(
-                        "terminal trace {} sequence {sequence} is awaiting durable acknowledgement",
-                        trace.run_id()
-                    ));
+                    cancellation.terminal_trace_pending(
+                        temper_worker::TerminalTraceBlocker::awaiting_acknowledgement(
+                            trace.run_id(),
+                            sequence,
+                        ),
+                    );
                     self.trace_collector
                         .await_terminal_acknowledged(trace.run_id(), sequence)
                         .await;
@@ -335,17 +337,21 @@ impl NativeJigAgentRunner {
                         .await;
                 }
                 Err(error) if worker_cancellation_requested => {
-                    cancellation.quiescence_pending(format!(
-                        "cancelled terminal trace {} could not be persisted: {error}",
-                        trace.run_id()
-                    ));
+                    cancellation.terminal_trace_pending(
+                        temper_worker::TerminalTraceBlocker::persistence_failed(trace.run_id()),
+                    );
+                    tracing::warn!(
+                        target: "temper::testing",
+                        error = %error,
+                        "real-stack cancellation trace could not be persisted"
+                    );
                     std::future::pending::<()>().await;
                 }
                 Err(_) => {}
             }
         } else if tracing_required && worker_cancellation_requested {
             cancellation
-                .quiescence_pending("enabled durable tracing did not create a cancellation run");
+                .terminal_trace_pending(temper_worker::TerminalTraceBlocker::trace_unavailable());
             std::future::pending::<()>().await;
         }
         let (result, _totals) =
