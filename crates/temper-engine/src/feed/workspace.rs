@@ -12,11 +12,13 @@ use temper_forge::{
     Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest, PullRequestState, Repository,
     RepositoryId, RepositoryPath,
 };
-use temper_protocol_worker::{JobArtifactSnapshot, RepoAccess, WorkspaceManifest, WorkspaceRepo};
-use temper_runner::ScanError;
-use temper_workflow::ArtifactSource;
+use temper_protocol_worker::{
+    JobArtifactSnapshot, JobContext, RepoAccess, WorkspaceManifest, WorkspaceRepo,
+};
+use temper_runner::{ScanError, WorkItem};
+use temper_workflow::{ArtifactSource, TargetBranchPolicy, TransitionId, ValidatedWorkflow};
 
-use crate::workflow_meta::default_base_branch;
+use crate::workflow_meta::{create_pull_request_target_branch_policy, default_base_branch};
 
 /// The workspace directory a repo is checked out into: its `name` segment, so
 /// the flat sibling layout matches the inter-repo path dependencies (ADR 0023).
@@ -175,6 +177,90 @@ fn base_branch_for_access(
         RepoAccess::Writable => target_base_branch.unwrap_or(default_branch).to_string(),
         RepoAccess::ReadOnly => default_branch.to_string(),
     }
+}
+
+/// Applies an issue action's explicit PR target policy to its freshly-built
+/// workspace. Non-default delivery must come from fresh source metadata and
+/// must match every writable checkout exactly; repository-default delivery is
+/// derived from each repository's fresh default rather than issue prose.
+pub(super) fn enforce_issue_workspace_target_branch_policy(
+    item: &WorkItem,
+    workflow: &ValidatedWorkflow,
+    context: &mut JobContext,
+) -> Result<(), ScanError> {
+    if !matches!(item.target, ArtifactSource::Issue { .. }) {
+        return Ok(());
+    }
+    let Some(action) = context.action.as_deref() else {
+        return Ok(());
+    };
+    let policy = create_pull_request_target_branch_policy(workflow, &TransitionId::new(action))
+        .map_err(ScanError::InvalidWorkflow)?;
+    let Some(policy) = policy else {
+        // Omitted policy intentionally keeps the legacy metadata/default
+        // fallback assembled by `build_workspace_manifest`.
+        return Ok(());
+    };
+    let workspace = context.workspace.as_mut().ok_or_else(|| {
+        ScanError::InvalidWorkflow(format!(
+            "action `{action}` has target-branch policy `{policy}` but no workspace manifest"
+        ))
+    })?;
+
+    match policy {
+        TargetBranchPolicy::NonDefault => {
+            let expected = context
+                .source_metadata
+                .get("target_branch")
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|branch| !branch.is_empty())
+                .ok_or_else(|| {
+                    ScanError::InvalidWorkflow(format!(
+                        "action `{action}` requires fresh non-blank source metadata `target_branch`"
+                    ))
+                })?;
+            for repo in workspace.repos.iter().filter(|repo| repo.is_writable()) {
+                let repository_default = repo.default_branch.trim();
+                if repository_default.is_empty() {
+                    return Err(ScanError::InvalidWorkflow(format!(
+                        "workspace repository `{}` has a blank fresh default branch",
+                        repo.repo
+                    )));
+                }
+                if expected == repository_default {
+                    return Err(ScanError::InvalidWorkflow(format!(
+                        "action `{action}` requires a non-default target branch, but `{expected}` is repository `{}` default",
+                        repo.repo
+                    )));
+                }
+                if repo.base_branch.trim() != expected {
+                    return Err(ScanError::InvalidWorkflow(format!(
+                        "workspace repository `{}` base `{}` diverges from fresh source target branch `{expected}`",
+                        repo.repo, repo.base_branch
+                    )));
+                }
+            }
+        }
+        TargetBranchPolicy::RepositoryDefault => {
+            for repo in workspace.repos.iter_mut().filter(|repo| repo.is_writable()) {
+                let repository_default = repo.default_branch.trim();
+                if repository_default.is_empty() {
+                    return Err(ScanError::InvalidWorkflow(format!(
+                        "workspace repository `{}` has a blank fresh default branch",
+                        repo.repo
+                    )));
+                }
+                repo.base_branch = repository_default.to_string();
+            }
+        }
+        TargetBranchPolicy::DerivedFeatureBranch | TargetBranchPolicy::Inherit => {
+            return Err(ScanError::InvalidWorkflow(format!(
+                "action `{action}` has unsupported create_pull_request target-branch policy `{policy}`"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn target_number(target: ArtifactSource) -> ItemNumber {
