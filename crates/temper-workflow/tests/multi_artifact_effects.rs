@@ -229,6 +229,7 @@ fn create_issues_deserializes_with_and_without_parent_dependency_recording() {
             min_children: 1,
             max_children: None,
             required_child_metadata: ref metadata,
+            target_branch_policy: None,
         } if k == "k1" && metadata.is_empty()
     ));
 
@@ -254,6 +255,7 @@ fn create_issues_deserializes_with_and_without_parent_dependency_recording() {
             min_children: 1,
             max_children: None,
             required_child_metadata: ref metadata,
+            target_branch_policy: None,
         } if metadata.is_empty()
     ));
 

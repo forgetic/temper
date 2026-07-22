@@ -93,6 +93,29 @@ after all children exist and sibling dependency slugs have been linked. Use this
 for plan-completion issues whose `dependencies_resolved` gate should remain
 blocked until their architect-created code/validation children close or land.
 
+### Target-branch policies
+
+Branch-producing `create_issues` effects and branch-consuming
+`create_pull_request` effects may declare an optional typed
+`target_branch_policy`. Omission preserves legacy workflow behavior for existing
+specifications, but it does **not** declare repository-default intent. A
+policy-aware runtime must not infer that intent from an artifact metadata value
+such as `target_branch: main`; intentional default-branch workflows must say
+`repository_default` explicitly.
+
+| Policy | Supported effect(s) | Contract |
+| --- | --- | --- |
+| `derived_feature_branch` | `create_issues` | Deterministically produce `agent/pr-for-feature-<source-feature-number>` rather than accepting artifact-authored repository-default intent. |
+| `inherit` | `create_issues` | Copy the source artifact's already-validated target branch to every produced child. |
+| `non_default` | `create_pull_request` | Require the branch consumed by PR creation to be present, validated, and different from the repository's actual default. For implementation PRs this is the PR target; for aggregate landing it is the feature-branch source. |
+| `repository_default` | `create_issues`, `create_pull_request` | Explicitly select/permit the repository default. On PR creation this preserves intentional same-branch satisfied-create convergence. |
+
+The policy is retained in validated `Effect` values and compiled tool and
+transition manifests. Unsupported combinations (for example `non_default` on
+`create_issues` or `inherit` on `create_pull_request`) fail static validation.
+Legacy effects serialize without a `target_branch_policy` field, while an
+explicit `repository_default` remains observably distinct from omission.
+
 ## Queue filters
 
 `labels` are conjunctive required labels; `excluded_labels` are labels that must
@@ -152,7 +175,8 @@ Validation rejects or diagnoses:
 - queue automation whose actor/transition/fallback is missing, unauthorized, or
   incompatible with the queue's artifact kinds;
 - `create_pull_request.artifact_kind` values that are undeclared or name a
-  non-`pull_request` artifact kind.
+  non-`pull_request` artifact kind;
+- target-branch policies attached to an effect that cannot implement them.
 
 Planned checks include contradictory transition effects, unsatisfiable gates,
 role tool declarations that exceed transition authority, unrepresentable Forge

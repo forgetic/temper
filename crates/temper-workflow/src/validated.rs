@@ -13,6 +13,7 @@ use crate::ids::{
 };
 use crate::metadata::WorkflowMetadataKey;
 use crate::relation::RelationKind;
+use crate::spec::TargetBranchPolicy;
 use chrono::Duration;
 use std::collections::BTreeMap;
 use temper_forge::ReviewDecision;
@@ -331,6 +332,10 @@ pub enum Effect {
         correlation_key: Option<String>,
         #[serde(default)]
         artifact_kind: Option<ArtifactKindId>,
+        /// Explicit branch contract. `None` retains legacy behavior and is
+        /// distinct from intentional [`TargetBranchPolicy::RepositoryDefault`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_branch_policy: Option<TargetBranchPolicy>,
     },
     RequestReviewers {
         roles: Vec<RoleId>,
@@ -371,6 +376,10 @@ pub enum Effect {
         max_children: Option<usize>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_child_metadata: Vec<WorkflowMetadataKey>,
+        /// Explicit child target-branch production contract. `None` retains
+        /// legacy behavior and never implies repository-default intent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_branch_policy: Option<TargetBranchPolicy>,
     },
     MergePullRequest,
     /// Close parent issues of a pull request. See [`crate::spec::RawEffect::CloseParentIssues`].
