@@ -51,6 +51,26 @@ impl JobExecutor for ControlledExecutor {
     }
 }
 
+struct BlockingExecutor {
+    started: CqSender<crate::JobCancellation>,
+}
+
+impl JobExecutor for BlockingExecutor {
+    fn execute(
+        &self,
+        _assign: Assign,
+        context: JobExecutionContext,
+    ) -> impl Future<Output = JobOutcome> + Send {
+        let cancellation = context.cancellation;
+        let owner = cancellation.register_async_owner();
+        let _ = self.started.send(cancellation.clone());
+        async move {
+            let _owner = owner;
+            std::future::pending::<JobOutcome>().await
+        }
+    }
+}
+
 struct AssignmentTransport {
     assignment_available: AtomicBool,
     sent: Mutex<Vec<WorkerProtocolMessage>>,
@@ -170,6 +190,53 @@ fn run_stop_scenario(shutdown: WorkerShutdown, finish_at: crate::JobCancellation
                 .iter()
                 .all(|message| !matches!(message, WorkerProtocolMessage::Result(_))),
             "component stop must preserve the active durable claim"
+        );
+    });
+}
+
+#[test]
+fn bounded_shutdown_reports_and_retains_an_unresolved_attempt() {
+    temper_worker_io::block_on_with(move |_cx, handle| async move {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (started_tx, mut started_rx) = channel();
+        let transport = Arc::new(AssignmentTransport::new());
+        let worker = start_worker_with_transport(
+            handle,
+            config(temp.path().join("results")),
+            Arc::new(BlockingExecutor {
+                started: started_tx,
+            }),
+            Arc::clone(&transport),
+        );
+        let registry = worker.task_registry();
+        let cancellation = started_rx.recv().await.expect("job started");
+        let report = worker
+            .shutdown_bounded(std::time::Instant::now() + Duration::from_millis(30))
+            .await;
+
+        assert!(report.joined_attempts.is_empty());
+        assert_eq!(report.unresolved_blockers.len(), 1);
+        let blocker = &report.unresolved_blockers[0];
+        assert_eq!(blocker.identity.worker_id, "shutdown-worker");
+        assert_eq!(blocker.identity.job_id, "active-job");
+        assert_eq!(blocker.identity.attempt_id, "active-attempt");
+        assert_eq!(
+            blocker.registry_state,
+            crate::ActiveJobJoinState::HardKillRequested
+        );
+        assert_eq!(
+            cancellation.requested(),
+            Some(crate::JobCancellationRequest::HardKill)
+        );
+        assert_eq!(registry.active_jobs().len(), 1);
+        assert!(
+            transport
+                .sent
+                .lock()
+                .expect("sent messages")
+                .iter()
+                .all(|message| !matches!(message, WorkerProtocolMessage::Result(_))),
+            "deadline expiry must not publish a result"
         );
     });
 }

@@ -28,6 +28,31 @@ pub enum ActiveJobJoinState {
     Joined,
 }
 
+/// Stable worker/assignment identity returned by bounded shutdown.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct WorkerAttemptIdentity {
+    pub worker_id: String,
+    pub job_id: String,
+    pub attempt_id: String,
+    pub generation: u64,
+}
+
+/// Exact registry entry that remained unresolved at the shutdown deadline.
+#[derive(Clone, Debug)]
+pub struct WorkerShutdownBlocker {
+    pub identity: WorkerAttemptIdentity,
+    pub registry_state: ActiveJobJoinState,
+    pub emergency_termination: temper_process_containment::EmergencyTerminationSnapshot,
+}
+
+/// Result of a bounded worker join. Unresolved entries remain registered and
+/// fenced; this report is evidence only and never fabricates local quiescence.
+#[derive(Clone, Debug, Default)]
+pub struct WorkerShutdownReport {
+    pub joined_attempts: Vec<WorkerAttemptIdentity>,
+    pub unresolved_blockers: Vec<WorkerShutdownBlocker>,
+}
+
 /// The complete worker-local ownership record for one daemon assignment.
 #[derive(Clone, Debug)]
 pub struct ActiveJobTask {
@@ -79,6 +104,15 @@ impl ActiveJobTask {
 
     pub fn join_state(&self) -> ActiveJobJoinState {
         self.join_state
+    }
+
+    pub fn identity(&self, worker_id: &str) -> WorkerAttemptIdentity {
+        WorkerAttemptIdentity {
+            worker_id: worker_id.to_string(),
+            job_id: self.job_id.clone(),
+            attempt_id: self.attempt_id.clone(),
+            generation: self.generation,
+        }
     }
 
     fn matches(&self, attempt_id: &str, generation: u64) -> bool {

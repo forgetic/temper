@@ -82,9 +82,13 @@ impl ManagedPrePushCommand {
         let fallback_cwd = cwd.clone();
         let owner_command = command.clone();
         let owner_cwd = cwd.clone();
+        let owner = cancellation
+            .as_ref()
+            .map(JobCancellation::register_cleanup_owner);
         let thread = match thread::Builder::new()
             .name("temper-pre-push-command".to_string())
             .spawn(move || {
+                let _owner = owner;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run_command_sync(command, cwd, &thread_cancelled, cancellation)
                 }))
@@ -161,7 +165,10 @@ impl Future for ManagedPrePushCommand {
 impl Drop for ManagedPrePushCommand {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
-        self.join();
+        // The dedicated owner retains its attempt registration through process
+        // cleanup and stream joins. Never recursively clean up from the runtime
+        // thread that dropped the request future.
+        let _ = self.thread.take();
     }
 }
 
@@ -515,15 +522,20 @@ mod tests {
 
         drop(owner);
 
-        assert!(
-            !Command::new("kill")
-                .args(["-0", child_pid.trim()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success()),
-            "pre-push owner returned before its child was reaped"
-        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Command::new("kill")
+            .args(["-0", child_pid.trim()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            assert!(
+                Instant::now() < deadline,
+                "pre-push cleanup owner did not reap its child"
+            );
+            thread::yield_now();
+        }
         std::fs::write(&release, b"").expect("release hypothetical survivor");
         assert!(
             !late.exists(),

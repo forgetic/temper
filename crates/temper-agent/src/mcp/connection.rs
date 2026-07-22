@@ -1,18 +1,20 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use temper_agent_core::{
-    AgentContainmentContext, BoundedCapture, CaptureMode, CleanupTrigger, ContainedProcess,
-    ContainmentCommand, ContainmentScope,
+    AgentContainmentContext, BoundedCapture, CaptureMode, CleanupTrigger, ContainmentCommand,
+    ContainmentScope,
 };
 
 use super::client::{McpError, StdioMcpServerConfig};
 use super::protocol::render_json;
+
+mod cleanup;
+pub(super) use cleanup::ProcessControl;
 
 /// Maximum JSON bytes in one inbound or outbound newline-delimited MCP record.
 pub(super) const MAX_MCP_RECORD_BYTES: usize = 1024 * 1024;
@@ -137,37 +139,7 @@ impl Drop for ActiveReaderGuard {
 /// Process ownership deliberately lives outside the protocol request mutex.
 /// A dropped request can therefore terminate/prove-empty the complete server
 /// and wake a blocked writer without first acquiring that mutex.
-pub(super) struct ProcessControl {
-    child_id: u32,
-    process: ContainedProcess,
-    stdin: Mutex<Option<std::process::ChildStdin>>,
-    reader: Mutex<Option<thread::JoinHandle<()>>>,
-    cancelled: AtomicBool,
-}
-
 impl ProcessControl {
-    fn new(
-        process: ContainedProcess,
-        stdin: std::process::ChildStdin,
-        reader: thread::JoinHandle<()>,
-    ) -> Self {
-        Self {
-            child_id: process.id(),
-            process,
-            stdin: Mutex::new(Some(stdin)),
-            reader: Mutex::new(Some(reader)),
-            cancelled: AtomicBool::new(false),
-        }
-    }
-
-    pub(super) fn child_id(&self) -> u32 {
-        self.child_id
-    }
-
-    pub(super) fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-
     fn write_json(&self, method: &str, request: Value, timeout: Duration) -> Result<(), McpError> {
         if timeout.is_zero() {
             self.cancel_and_join(CleanupTrigger::Timeout);
@@ -207,6 +179,7 @@ impl ProcessControl {
         bytes.push(b'\n');
         let write = {
             let mut stdin = self
+                .resources
                 .stdin
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -234,7 +207,7 @@ impl ProcessControl {
                 method: method.to_string(),
             });
         }
-        match self.process.try_wait_root() {
+        match self.resources.process.try_wait_root() {
             Ok(Some(status)) => {
                 let error = McpError::ProcessExited {
                     method: method.to_string(),
@@ -262,7 +235,7 @@ impl ProcessControl {
                 method: method.to_string(),
             };
         }
-        let error = match self.process.try_wait_root() {
+        let error = match self.resources.process.try_wait_root() {
             Ok(Some(status)) => McpError::ProcessExited {
                 method: method.to_string(),
                 status: Some(status.to_string()),
@@ -283,26 +256,6 @@ impl ProcessControl {
     fn protocol_failure(&self, error: McpError) -> McpError {
         self.cancel_and_join(CleanupTrigger::Cancellation);
         error
-    }
-
-    /// Idempotently interrupts blocked writers by terminating the process
-    /// without the stdin lock, waits for recursive emptiness/direct-child reap,
-    /// closes stdin, and joins the stdout reader exactly once.
-    pub(super) fn cancel_and_join(&self, trigger: CleanupTrigger) {
-        self.cancelled.store(true, Ordering::Release);
-        let _report = self.process.cleanup(trigger);
-        self.stdin
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        if let Some(reader) = self
-            .reader
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-        {
-            let _ = reader.join();
-        }
     }
 }
 
@@ -420,7 +373,12 @@ impl Connection {
                 });
             }
         };
-        let control = Arc::new(ProcessControl::new(process, stdin, reader));
+        let control = Arc::new(
+            ProcessControl::new(process, stdin, reader).map_err(|error| McpError::Spawn {
+                command: render_command(&config.command, &config.args),
+                message: format!("start cleanup owner: {error}"),
+            })?,
+        );
 
         Ok(Self {
             control,

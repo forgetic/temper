@@ -2,9 +2,9 @@
 //!
 //! Skein's blocking pool, like most `spawn_blocking` implementations, cannot
 //! cancel a closure after its join future is dropped. Attempt-owned effects use
-//! these adapters instead: dropping the async future synchronously cancels a
-//! subprocess (when there is one) and joins every owner before control returns
-//! to the worker shell's quiescence path.
+//! these adapters instead: process owners run on dedicated threads, retain an
+//! attempt cleanup registration, and make their join observable before worker
+//! quiescence even when the async future is dropped.
 
 use std::future::Future;
 use std::io::{self, Read};
@@ -181,9 +181,11 @@ impl ManagedCommand {
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_state = Arc::clone(&state);
         let thread_cancelled = Arc::clone(&cancelled);
+        let owner = job_cancellation.register_cleanup_owner();
         let thread = match thread::Builder::new()
             .name("temper-worker-command".to_string())
             .spawn(move || {
+                let _owner = owner;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run_command(command, &thread_cancelled, job_cancellation, capture)
                 }))
@@ -237,7 +239,10 @@ impl Drop for ManagedCommand {
         if let Some(thread) = self.thread.as_ref() {
             thread.thread().unpark();
         }
-        self.join();
+        // The owner thread retains its JobCancellationOwner and all process /
+        // reader handles until ordinary cleanup joins. Detaching here keeps a
+        // recursive-empty fault off standalone's event-loop thread.
+        let _ = self.thread.take();
     }
 }
 
@@ -498,10 +503,14 @@ mod tests {
 
         drop(effect);
 
-        assert!(
-            !process_exists(&child_pid),
-            "managed command returned from Drop before its child was reaped"
-        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_exists(&child_pid) {
+            assert!(
+                Instant::now() < deadline,
+                "managed command cleanup owner did not reap its child"
+            );
+            thread::yield_now();
+        }
         std::fs::write(&release, b"").expect("release hypothetical detached command");
         assert!(
             !late_mutation.exists(),

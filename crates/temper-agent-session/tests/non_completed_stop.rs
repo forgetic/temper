@@ -180,6 +180,7 @@ fn worker_abort_exits_nonzero_without_result_and_names_stable_reason() {
                     serde_json::to_writer(
                         &mut stream,
                         &AgentLifecycleCommandV1::Cancel {
+                            stage: temper_protocol_agent::AgentCancellationStage::Graceful,
                             reason: "test worker cancellation".to_string(),
                         },
                     )

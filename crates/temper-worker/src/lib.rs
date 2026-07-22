@@ -84,8 +84,8 @@ pub use run::{
     start_worker_with_transport_and_trace_collector,
 };
 pub use task_registry::{
-    ActiveJobJoinState, ActiveJobTask, WorkerShutdown, WorkerTaskJoinNotification,
-    WorkerTaskRegistry,
+    ActiveJobJoinState, ActiveJobTask, WorkerAttemptIdentity, WorkerShutdown,
+    WorkerShutdownBlocker, WorkerShutdownReport, WorkerTaskJoinNotification, WorkerTaskRegistry,
 };
 #[cfg(target_os = "linux")]
 #[doc(hidden)]

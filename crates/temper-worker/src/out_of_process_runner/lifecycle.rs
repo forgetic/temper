@@ -8,8 +8,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use temper_protocol_agent::{
-    AgentLifecycleCancellationAckV1, AgentLifecycleCommandV1, AgentLifecycleFrameV1,
-    AgentLifecycleHelloV1, MAX_AGENT_LIFECYCLE_FRAME_BYTES,
+    AgentCancellationStage, AgentLifecycleCancellationAckV1, AgentLifecycleCommandV1,
+    AgentLifecycleFrameV1, AgentLifecycleHelloV1, MAX_AGENT_LIFECYCLE_FRAME_BYTES,
 };
 
 use crate::agent_runner::JobProgressReporter;
@@ -38,8 +38,14 @@ impl LifecycleCancelHandle {
     /// may have completed its TCP connect and hello write just before the
     /// accept thread publishes `active_stream`, so wait for that bounded race
     /// on a joined blocking owner rather than blocking the runtime task.
-    pub(super) fn request_cancel(&self, reason: &str, connection_grace: Duration) -> bool {
+    pub(super) fn request(
+        &self,
+        stage: AgentCancellationStage,
+        reason: &str,
+        connection_grace: Duration,
+    ) -> bool {
         let command = AgentLifecycleCommandV1::Cancel {
+            stage,
             reason: reason.to_string(),
         };
         if command.validate().is_err() {

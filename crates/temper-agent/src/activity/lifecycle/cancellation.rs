@@ -1,4 +1,4 @@
-//! Cooperative worker-to-agent lifecycle cancellation transport.
+//! Monotonic worker-to-agent lifecycle cancellation transport.
 
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::TcpStream;
@@ -6,19 +6,24 @@ use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
 use temper_protocol_agent::{
-    AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleCancellationAckV1, AgentLifecycleCommandV1,
-    MAX_AGENT_LIFECYCLE_FRAME_BYTES,
+    AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentCancellationStage, AgentLifecycleCancellationAckV1,
+    AgentLifecycleCommandV1, MAX_AGENT_LIFECYCLE_FRAME_BYTES,
 };
 
 #[derive(Default)]
 struct CancellationState {
-    requested: bool,
+    requested: Option<AgentCancellationStage>,
     callback: Option<Arc<dyn Fn() + Send + Sync>>,
     waiters: Vec<Waker>,
+    emergency_registry: Option<temper_agent_core::EmergencyTerminationRegistry>,
 }
 
-/// Race-safe bridge between the lifecycle command reader and the core control
-/// handle, which becomes available only after the lifecycle transport starts.
+/// Race-safe bridge between lifecycle commands, in-process worker control, and
+/// the core control handle that becomes available after startup.
+///
+/// Cancellation is monotonic. Consumers using [`Self::next_stage_after`] see
+/// Graceful, ForcedTermination, and HardKill in order even if the publisher
+/// advances through several stages before the consumer is next polled.
 #[derive(Clone, Default)]
 pub struct AgentCancellationLatch {
     state: Arc<Mutex<CancellationState>>,
@@ -28,69 +33,153 @@ impl AgentCancellationLatch {
     pub fn install(&self, callback: impl Fn() + Send + Sync + 'static) {
         let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(callback);
         let requested = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state = self.lock();
             state.callback = Some(Arc::clone(&callback));
-            state.requested
+            state.requested.is_some()
         };
         if requested {
             callback();
         }
     }
 
-    /// Whether a validated worker lifecycle cancellation command has been
-    /// received. The state is set before the installed callback runs, so an
-    /// abort caused by that callback cannot race ahead of this query.
+    /// Installs the out-of-band process authority associated with this native
+    /// run. A forced or hard stage dispatches here before callbacks or polling,
+    /// so a blocked agent/MCP request cannot delay descendant termination.
+    pub fn install_emergency_registry(
+        &self,
+        registry: temper_agent_core::EmergencyTerminationRegistry,
+    ) {
+        let stage = {
+            let mut state = self.lock();
+            state.emergency_registry = Some(registry.clone());
+            state.requested
+        };
+        dispatch_emergency(&registry, stage);
+    }
+
+    /// Strongest validated worker cancellation stage received so far.
+    pub fn requested_stage(&self) -> Option<AgentCancellationStage> {
+        self.lock().requested
+    }
+
+    /// Compatibility query for callers that only distinguish cancellation from
+    /// normal execution.
     pub fn worker_cancellation_requested(&self) -> bool {
+        self.requested_stage().is_some()
+    }
+
+    /// Requests cooperative cancellation through the same monotonic latch used
+    /// by the lifecycle command reader.
+    pub fn request_cancel(&self) {
+        self.request(AgentCancellationStage::Graceful);
+    }
+
+    /// Publishes a cancellation stage and immediately drives the independent
+    /// process registry for forced and hard escalation.
+    pub fn request(&self, requested: AgentCancellationStage) {
+        let (callback, waiters, registry, advanced) = {
+            let mut state = self.lock();
+            if state.requested.is_some_and(|current| current >= requested) {
+                return;
+            }
+            let first = state.requested.is_none();
+            state.requested = Some(requested);
+            (
+                first.then(|| state.callback.clone()).flatten(),
+                std::mem::take(&mut state.waiters),
+                state.emergency_registry.clone(),
+                true,
+            )
+        };
+        if advanced {
+            if let Some(registry) = registry.as_ref() {
+                dispatch_emergency(registry, Some(requested));
+            }
+            for waiter in waiters {
+                waiter.wake();
+            }
+            if let Some(callback) = callback {
+                callback();
+            }
+        }
+    }
+
+    /// Returns the next monotonic stage after `observed`, preserving
+    /// intermediate stages when escalation was coalesced by scheduling.
+    pub async fn next_stage_after(
+        &self,
+        observed: Option<AgentCancellationStage>,
+    ) -> AgentCancellationStage {
+        std::future::poll_fn(|cx| self.poll_stage_after(observed, cx)).await
+    }
+
+    pub(crate) fn poll_stage_after(
+        &self,
+        observed: Option<AgentCancellationStage>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<AgentCancellationStage> {
+        if let Some(next) = next_stage(self.requested_stage(), observed) {
+            return Poll::Ready(next);
+        }
+        let mut state = self.lock();
+        if let Some(next) = next_stage(state.requested, observed) {
+            return Poll::Ready(next);
+        }
+        if !state
+            .waiters
+            .iter()
+            .any(|waiter| waiter.will_wake(cx.waker()))
+        {
+            state.waiters.push(cx.waker().clone());
+        }
+        Poll::Pending
+    }
+
+    /// Compatibility wait for the first (graceful) stage.
+    pub async fn cancelled(&self) {
+        let _ = self.next_stage_after(None).await;
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, CancellationState> {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .requested
     }
+}
 
-    /// Requests in-process cancellation through the same race-safe latch used
-    /// by the lifecycle command reader.
-    pub fn request_cancel(&self) {
-        let (callback, waiters) = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.requested = true;
-            (state.callback.clone(), std::mem::take(&mut state.waiters))
-        };
-        for waiter in waiters {
-            waiter.wake();
+fn next_stage(
+    published: Option<AgentCancellationStage>,
+    observed: Option<AgentCancellationStage>,
+) -> Option<AgentCancellationStage> {
+    let published = published?;
+    match observed {
+        None => Some(AgentCancellationStage::Graceful),
+        Some(AgentCancellationStage::Graceful)
+            if published >= AgentCancellationStage::ForcedTermination =>
+        {
+            Some(AgentCancellationStage::ForcedTermination)
         }
-        if let Some(callback) = callback {
-            callback();
+        Some(AgentCancellationStage::ForcedTermination)
+            if published >= AgentCancellationStage::HardKill =>
+        {
+            Some(AgentCancellationStage::HardKill)
         }
+        _ => None,
     }
+}
 
-    /// Waits for worker cancellation even before the core model-loop control
-    /// exists. Native startup owners (notably MCP and credential loading) race
-    /// this future and join on drop before installing the core callback.
-    pub async fn cancelled(&self) {
-        std::future::poll_fn(|cx| {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.requested {
-                return Poll::Ready(());
-            }
-            if !state
-                .waiters
-                .iter()
-                .any(|waiter| waiter.will_wake(cx.waker()))
-            {
-                state.waiters.push(cx.waker().clone());
-            }
-            Poll::Pending
-        })
-        .await
+fn dispatch_emergency(
+    registry: &temper_agent_core::EmergencyTerminationRegistry,
+    stage: Option<AgentCancellationStage>,
+) {
+    match stage {
+        Some(AgentCancellationStage::ForcedTermination) => {
+            let _ = registry.request_forced_termination();
+        }
+        Some(AgentCancellationStage::HardKill) => {
+            let _ = registry.request_hard_kill();
+        }
+        Some(AgentCancellationStage::Graceful) | None => {}
     }
 }
 
@@ -110,78 +199,118 @@ fn lifecycle_command_reader(
     cancellation: AgentCancellationLatch,
 ) {
     let mut reader = BufReader::new(stream);
-    let mut bytes = Vec::new();
-    if reader.read_until(b'\n', &mut bytes).is_err()
-        || bytes.len() > MAX_AGENT_LIFECYCLE_FRAME_BYTES
-    {
-        return;
-    }
-    if bytes.last() == Some(&b'\n') {
-        bytes.pop();
-    }
-    let Ok(command) = serde_json::from_slice::<AgentLifecycleCommandV1>(&bytes) else {
-        return;
-    };
-    if command.validate().is_err() {
-        return;
-    }
-    match command {
-        AgentLifecycleCommandV1::Cancel { .. } => cancellation.request_cancel(),
-    }
-    let acknowledgement = AgentLifecycleCancellationAckV1 {
-        version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
-    };
-    if let Ok(mut bytes) = serde_json::to_vec(&acknowledgement) {
+    loop {
+        let mut bytes = Vec::new();
+        let Ok(read) = reader.read_until(b'\n', &mut bytes) else {
+            return;
+        };
+        if read == 0 || bytes.len() > MAX_AGENT_LIFECYCLE_FRAME_BYTES {
+            return;
+        }
+        if bytes.last() == Some(&b'\n') {
+            bytes.pop();
+        }
+        let Ok(command) = serde_json::from_slice::<AgentLifecycleCommandV1>(&bytes) else {
+            return;
+        };
+        if command.validate().is_err() {
+            return;
+        }
+        match command {
+            AgentLifecycleCommandV1::Cancel { stage, .. } => cancellation.request(stage),
+        }
+        let acknowledgement = AgentLifecycleCancellationAckV1 {
+            version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+        };
+        let Ok(mut bytes) = serde_json::to_vec(&acknowledgement) else {
+            return;
+        };
         bytes.push(b'\n');
-        let _ = writer
+        if writer
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .write_all(&bytes);
+            .write_all(&bytes)
+            .is_err()
+        {
+            return;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead as _, Write as _};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{Shutdown, TcpListener, TcpStream};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
 
     #[test]
-    fn cancel_command_acknowledges_and_triggers_the_installed_control() {
+    fn every_stage_is_observed_in_order_and_first_stage_triggers_control() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled_for_callback = Arc::clone(&cancelled);
+        let latch = AgentCancellationLatch::default();
+        latch.install(move || cancelled_for_callback.store(true, Ordering::Release));
+        latch.request(AgentCancellationStage::HardKill);
+
+        let latch_for_wait = latch.clone();
+        temper_agent_io::block_on(async move {
+            let graceful = latch_for_wait.next_stage_after(None).await;
+            let forced = latch_for_wait.next_stage_after(Some(graceful)).await;
+            let hard = latch_for_wait.next_stage_after(Some(forced)).await;
+            assert_eq!(graceful, AgentCancellationStage::Graceful);
+            assert_eq!(forced, AgentCancellationStage::ForcedTermination);
+            assert_eq!(hard, AgentCancellationStage::HardKill);
+        });
+        assert!(cancelled.load(Ordering::Acquire));
+        assert_eq!(
+            latch.requested_stage(),
+            Some(AgentCancellationStage::HardKill)
+        );
+    }
+
+    #[test]
+    fn lifecycle_reader_accepts_all_monotonic_stages() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let mut client = TcpStream::connect(address).unwrap();
         let (server, _) = listener.accept().unwrap();
         let writer = Arc::new(Mutex::new(server.try_clone().unwrap()));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let cancelled_for_callback = Arc::clone(&cancelled);
         let latch = AgentCancellationLatch::default();
-        assert!(!latch.worker_cancellation_requested());
         let latch_for_reader = latch.clone();
-        latch.install(move || cancelled_for_callback.store(true, Ordering::Release));
         let reader = std::thread::spawn(move || {
             lifecycle_command_reader(server, writer, latch_for_reader);
         });
 
-        serde_json::to_writer(
-            &mut client,
-            &AgentLifecycleCommandV1::Cancel {
-                reason: "worker no-progress deadline".to_string(),
-            },
-        )
-        .unwrap();
-        client.write_all(b"\n").unwrap();
-        let mut response = String::new();
-        BufReader::new(client).read_line(&mut response).unwrap();
-        let acknowledgement: AgentLifecycleCancellationAckV1 =
-            serde_json::from_str(response.trim()).unwrap();
-
+        for stage in [
+            AgentCancellationStage::Graceful,
+            AgentCancellationStage::ForcedTermination,
+            AgentCancellationStage::HardKill,
+        ] {
+            serde_json::to_writer(
+                &mut client,
+                &AgentLifecycleCommandV1::Cancel {
+                    stage,
+                    reason: "worker cancellation".to_string(),
+                },
+            )
+            .unwrap();
+            client.write_all(b"\n").unwrap();
+            let mut response = String::new();
+            BufReader::new(client.try_clone().unwrap())
+                .read_line(&mut response)
+                .unwrap();
+            serde_json::from_str::<AgentLifecycleCancellationAckV1>(response.trim())
+                .unwrap()
+                .validate()
+                .unwrap();
+        }
+        client.shutdown(Shutdown::Write).unwrap();
         reader.join().unwrap();
-        acknowledgement.validate().unwrap();
-        assert!(cancelled.load(Ordering::Acquire));
-        assert!(latch.worker_cancellation_requested());
+        assert_eq!(
+            latch.requested_stage(),
+            Some(AgentCancellationStage::HardKill)
+        );
     }
 
     #[test]
@@ -200,6 +329,7 @@ mod tests {
         serde_json::to_writer(
             &mut client,
             &AgentLifecycleCommandV1::Cancel {
+                stage: AgentCancellationStage::Graceful,
                 reason: String::new(),
             },
         )
