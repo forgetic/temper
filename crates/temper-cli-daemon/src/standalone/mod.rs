@@ -264,17 +264,6 @@ async fn run_async(
     );
 
     daemon.complete_startup_recovery().await;
-    if let Some(cadence) = daemon_config.ci_poll_cadence {
-        spawn_ci_status_monitor(
-            &spawner,
-            daemon.clone(),
-            forge.clone(),
-            repositories.clone(),
-            workflow.clone(),
-            compiled.clone(),
-            cadence,
-        );
-    }
     if let Some(cadence) = daemon_config.mechanical_cadence {
         spawn_coordinated_mechanical_backstop(
             &spawner,
@@ -301,10 +290,6 @@ async fn run_async(
     emit_engine_status(banner::poll_backstop(
         daemon_config.poll_cadence,
         &role_names,
-        repo_ids.len(),
-    ));
-    emit_engine_status(banner::ci_poll_backstop(
-        daemon_config.ci_poll_cadence,
         repo_ids.len(),
     ));
 
@@ -422,6 +407,25 @@ async fn run_async(
     let server = temper_engine::serve(&handle, &daemon, daemon_config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
+
+    // Match split-engine startup ordering: only launch the immediate first CI
+    // snapshot after the daemon's readiness socket is bound. In particular,
+    // slow Forge CI reads must never delay or starve standalone readiness.
+    if let Some(cadence) = daemon_config.ci_poll_cadence {
+        spawn_ci_status_monitor(
+            &spawner,
+            daemon.clone(),
+            forge.clone(),
+            repositories.clone(),
+            workflow.clone(),
+            compiled.clone(),
+            cadence,
+        );
+    }
+    emit_engine_status(banner::ci_poll_backstop(
+        daemon_config.ci_poll_cadence,
+        repo_ids.len(),
+    ));
 
     let local_addr = server.local_addr();
     if webhook_enabled {
