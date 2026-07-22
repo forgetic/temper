@@ -192,11 +192,19 @@ impl<F: Forge> Forge for CrashForge<F> {
     }
 
     async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
-        self.inner.list_issue_comments(id).await
+        let n = self.tick(ForgeOp::ListIssueComments);
+        self.guard(ForgeOp::ListIssueComments, n, FaultPoint::Before)?;
+        let result = self.inner.list_issue_comments(id).await?;
+        self.guard(ForgeOp::ListIssueComments, n, FaultPoint::After)?;
+        Ok(result)
     }
 
     async fn add_issue_comment(&self, id: &IssueId, input: CreateComment) -> ForgeResult<Comment> {
-        self.inner.add_issue_comment(id, input).await
+        let n = self.tick(ForgeOp::AddIssueComment);
+        self.guard(ForgeOp::AddIssueComment, n, FaultPoint::Before)?;
+        let result = self.inner.add_issue_comment(id, input).await?;
+        self.guard(ForgeOp::AddIssueComment, n, FaultPoint::After)?;
+        Ok(result)
     }
 
     async fn list_pull_requests(
@@ -375,7 +383,11 @@ impl<F: Forge> Forge for CrashForge<F> {
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
-        self.inner.list_pull_request_comments(id).await
+        let n = self.tick(ForgeOp::ListPullRequestComments);
+        self.guard(ForgeOp::ListPullRequestComments, n, FaultPoint::Before)?;
+        let result = self.inner.list_pull_request_comments(id).await?;
+        self.guard(ForgeOp::ListPullRequestComments, n, FaultPoint::After)?;
+        Ok(result)
     }
 
     async fn add_pull_request_comment(
@@ -383,7 +395,11 @@ impl<F: Forge> Forge for CrashForge<F> {
         id: &PullRequestId,
         input: CreateComment,
     ) -> ForgeResult<Comment> {
-        self.inner.add_pull_request_comment(id, input).await
+        let n = self.tick(ForgeOp::AddPullRequestComment);
+        self.guard(ForgeOp::AddPullRequestComment, n, FaultPoint::Before)?;
+        let result = self.inner.add_pull_request_comment(id, input).await?;
+        self.guard(ForgeOp::AddPullRequestComment, n, FaultPoint::After)?;
+        Ok(result)
     }
 
     async fn merge_pull_request(

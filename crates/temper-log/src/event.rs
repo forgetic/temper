@@ -55,6 +55,8 @@ pub enum Event {
     WorkspaceDiffProduced,
     /// The engine applied a workflow transition (`transition.applied`).
     TransitionApplied,
+    /// A plan-validation result converged durably (`validation.outcome`).
+    ValidationOutcome,
     /// A work item entered a queue (`queue.entered`).
     QueueEntered,
     /// The engine evaluated the gates on a PR (`gate.evaluated`).
@@ -96,6 +98,7 @@ impl Event {
             Self::McpToolResult => "mcp.tool.result",
             Self::WorkspaceDiffProduced => "workspace.diff.produced",
             Self::TransitionApplied => "transition.applied",
+            Self::ValidationOutcome => "validation.outcome",
             Self::QueueEntered => "queue.entered",
             Self::GateEvaluated => "gate.evaluated",
             Self::PrOpened => "pr.opened",
@@ -111,7 +114,7 @@ impl Event {
     ///
     /// Kept in sync with the enum by the `all_variants_have_unique_dotted_form`
     /// test, which fails if a new variant is added without listing it here.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::IssueOpened,
         Self::WakeReceived,
         Self::CiCompleted,
@@ -128,6 +131,7 @@ impl Event {
         Self::McpToolResult,
         Self::WorkspaceDiffProduced,
         Self::TransitionApplied,
+        Self::ValidationOutcome,
         Self::QueueEntered,
         Self::GateEvaluated,
         Self::PrOpened,
@@ -164,6 +168,7 @@ mod tests {
             "mcp.tool.result",
             "workspace.diff.produced",
             "transition.applied",
+            "validation.outcome",
             "queue.entered",
             "gate.evaluated",
             "pr.opened",
@@ -201,6 +206,6 @@ mod tests {
         // variant is added but not appended to ALL, this and the uniqueness test
         // catch it (the array literal would also fail to compile on a length
         // mismatch).
-        assert_eq!(Event::ALL.len(), 24);
+        assert_eq!(Event::ALL.len(), 25);
     }
 }

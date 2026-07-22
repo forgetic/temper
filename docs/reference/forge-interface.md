@@ -72,6 +72,27 @@ and ordinary poll/audit ticks must fall back to the configured scan set.
   dependency links, reviewers, merge records, or other detail fields matter.
 - Issue and pull-request updates apply label changes as `set_labels`, then
   removals, then additions; assignee changes remove before adding.
+- Comment reads expose ordinary issue/PR conversation comments. The portable
+  interface has no provider label-event or timeline-record operation.
+
+## Audit retrieval boundary
+
+Plan-validation outcomes are durable ordinary comments on the coordinating plan.
+Portable callers retrieve them with `list_issue_comments`; assignment-bound
+agents can use `forge_get_item(include_comments=true)`, which returns the same
+conversation surface under worker response bounds. The stable
+`temper:comment-key=plan-validation:<assignment-key>` marker identifies these
+records. Its `assignment-sha256:<digest>` key is derived from the exact job and
+attempt identity: a later validation round gets a distinct marker even when it
+reuses the deterministic job ID, while exact result replay reuses the marker.
+The ordinary comment renders both identifiers for retrieval and diagnosis.
+
+Provider-specific label/timeline history is outside the current `Forge` trait.
+In particular, Forgejo may persist label changes as internal timeline comment
+records, but neither portable comment methods nor `forge_get_item` expose those
+records. Operators and agents should inspect the validation audit comment, not
+Temper journals, Forgejo SQLite, or hidden timeline storage, to determine the
+validated/needs-followup outcome and its safe summary and identifiers.
 
 ## Optimistic concurrency
 
@@ -84,6 +105,8 @@ nothing. See [Optimistic concurrency and idempotency](forge-interface-concurrenc
 ## Compatibility notes
 
 Concrete backends may expose richer provider-specific features, but portable
-workflow logic should depend only on this interface. If a provider feature
-becomes broadly useful, add it to the Forge model with documentation and backend
-conformance tests.
+workflow logic should depend only on this interface. Provider label-change and
+timeline records are not currently modeled; ordinary comments are not a
+portable proxy for that hidden history. If a provider feature becomes broadly
+useful, add it to the Forge model with documentation and backend conformance
+tests.

@@ -57,13 +57,17 @@ query pair per repository. Children are created atomically with final labels and
 `staged: true`. Returned child numbers are checkpointed once after creation,
 each dependent child receives its complete sorted dependency list in one update,
 and all child references/wiring progress are aggregated in one parent update.
-Only then does activation clear `staged`. The final source update atomically
-records activation/completion progress and the routed transition. Retries resume
-the latest matching incomplete round, while a later execution whose payload or
-current source completion differs receives a new durable round and round-scoped
-child correlation keys. A retry therefore neither duplicates a child nor
-dispatches a partially wired child, and a later legitimate fan-out cannot alias
-or discard an earlier round's children.
+Only then does activation clear `staged`. When the completion carries a
+runtime-bound validation audit, recovery next ensures the exact-assignment-keyed
+ordinary comment with every final child reference. The round-specific marker is
+part of the persisted completion descriptor, so restart recovery cannot alias a
+later validation attempt. The final source update atomically
+records activation/completion progress and the routed transition only after the
+audit exists. Retries resume the latest matching incomplete round, while a later
+execution whose payload or current source completion differs receives a new
+durable round and round-scoped child correlation keys. A retry therefore neither
+duplicates a child or audit comment nor dispatches a partially wired child, and
+a later legitimate fan-out cannot alias or discard an earlier round's children.
 
 ## Workspace quarantine recovery
 

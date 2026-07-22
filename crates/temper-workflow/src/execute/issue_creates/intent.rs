@@ -1,5 +1,6 @@
 //! Parent-intent discovery and compare-and-swap pass checkpoints.
 
+use super::super::audit::CompletionAuditIssue;
 use super::super::{ExecutionError, Executor};
 use super::round::{IntentRound, select_intent_round};
 use super::{
@@ -7,10 +8,12 @@ use super::{
     metadata_error,
 };
 use crate::classify::ArtifactSource;
+use crate::ids::RoleId;
 use crate::metadata::{
     CreateIssuesCompletion, CreateIssuesIntent, parse_metadata_block, replace_metadata_block,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use temper_forge::{
     Forge, ForgeError, Issue, IssueQuery, IssueState, ItemListDetails, RepositoryId, UpdateIssue,
 };
@@ -23,6 +26,28 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         &self,
         repo_id: &RepositoryId,
     ) -> Result<usize, ExecutionError> {
+        self.recover_create_issue_intents_with_role_forges(repo_id, |_| None)
+            .await
+    }
+
+    /// Recovers incomplete intents through the Forge identity configured for
+    /// the source artifact's durable assignment role.
+    ///
+    /// Discovery uses this executor's default Forge identity. Once an
+    /// authoritative parent body is loaded, its persisted role selects an
+    /// optional role-authenticated Forge handle for every recovery mutation,
+    /// including completion-audit publication. The durable metadata contains
+    /// only the role identifier; callers retain all credentials in runtime
+    /// configuration. Missing assignments and unconfigured roles deliberately
+    /// fall back to the default handle for backward compatibility.
+    pub async fn recover_create_issue_intents_with_role_forges<R>(
+        &self,
+        repo_id: &RepositoryId,
+        forge_for_role: R,
+    ) -> Result<usize, ExecutionError>
+    where
+        R: Fn(&RoleId) -> Option<Arc<dyn Forge>>,
+    {
         let mut parents = BTreeMap::new();
         for state in [IssueState::Open, IssueState::Closed] {
             for issue in self
@@ -48,13 +73,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
 
         let mut recovered = 0;
         for summary in parents.into_values() {
-            let started = std::time::Instant::now();
-            let provider_requests_before = self.forge.provider_request_count();
-            let mut metrics = FanOutMetrics::default();
             // Summary list responses may truncate a large persisted intent.
             // Reload the selected parent by id before parsing authoritative data.
-            metrics.read();
-            let Some(mut parent) = self
+            let Some(parent) = self
                 .forge
                 .get_issue_with_details(&summary.id, ItemListDetails::summary())
                 .await?
@@ -64,6 +85,11 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             let Some(metadata) = parse_metadata_block(&parent.body).map_err(metadata_error)? else {
                 continue;
             };
+            let recovery_role = metadata
+                .assignment
+                .as_ref()
+                .and_then(|assignment| assignment.role.as_ref())
+                .cloned();
             let incomplete = metadata
                 .create_issue_intents
                 .into_iter()
@@ -72,61 +98,85 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             if incomplete.is_empty() {
                 continue;
             }
-            let child_count = incomplete
-                .iter()
-                .map(|(_, intent)| intent.children.len())
-                .sum();
-            let dependency_edge_count = incomplete
-                .iter()
-                .flat_map(|(_, intent)| &intent.children)
-                .map(|child| child.dependencies.len())
-                .sum();
-            let parent_number = parent.number;
 
-            let mut completed = Vec::with_capacity(incomplete.len());
-            for (key, intent) in incomplete {
-                let resumed = self
-                    .resume_create_intent(
-                        repo_id,
-                        parent.number,
-                        &key,
-                        intent,
-                        IntentExecutionMode::Recovery,
-                        parent,
-                        &mut metrics,
-                    )
+            if let Some(role_forge) = recovery_role.as_ref().and_then(&forge_for_role) {
+                let executor = Executor::new(self.workflow, role_forge.as_ref());
+                recovered += executor
+                    .recover_parent_create_issue_intents(repo_id, parent, incomplete)
                     .await?;
-                parent = resumed.parent;
-                completed.push(PendingIntent {
-                    key: resumed.key,
-                    intent: resumed.intent,
-                });
-                recovered += 1;
+            } else {
+                recovered += self
+                    .recover_parent_create_issue_intents(repo_id, parent, incomplete)
+                    .await?;
             }
-            let (committed, changed) = self
-                .complete_create_intents(parent, &completed, &mut metrics)
-                .await?;
-            if changed {
-                self.child_issue_checkpoint(super::super::ChildIssueCheckpoint::Completed)
-                    .await;
-            }
-            let provider_requests = provider_requests_before.and_then(|before| {
-                self.forge
-                    .provider_request_count()
-                    .map(|after| after.saturating_sub(before))
-            });
-            super::emit_fan_out_completion(
-                repo_id,
-                parent_number,
-                child_count,
-                dependency_edge_count,
-                &metrics,
-                provider_requests,
-                true,
-                started.elapsed(),
-            );
-            drop(committed);
         }
+        Ok(recovered)
+    }
+
+    async fn recover_parent_create_issue_intents(
+        &self,
+        repo_id: &RepositoryId,
+        mut parent: Issue,
+        incomplete: Vec<(String, CreateIssuesIntent)>,
+    ) -> Result<usize, ExecutionError> {
+        let started = std::time::Instant::now();
+        let provider_requests_before = self.forge.provider_request_count();
+        let mut metrics = FanOutMetrics::default();
+        metrics.read();
+        let child_count = incomplete
+            .iter()
+            .map(|(_, intent)| intent.children.len())
+            .sum();
+        let dependency_edge_count = incomplete
+            .iter()
+            .flat_map(|(_, intent)| &intent.children)
+            .map(|child| child.dependencies.len())
+            .sum();
+        let parent_number = parent.number;
+        let recovered = incomplete.len();
+
+        let mut completed = Vec::with_capacity(incomplete.len());
+        for (key, intent) in incomplete {
+            let resumed = self
+                .resume_create_intent(
+                    repo_id,
+                    parent.number,
+                    &key,
+                    intent,
+                    IntentExecutionMode::Recovery,
+                    parent,
+                    &mut metrics,
+                )
+                .await?;
+            parent = resumed.parent;
+            completed.push(PendingIntent {
+                key: resumed.key,
+                intent: resumed.intent,
+            });
+        }
+        let (committed, changed) = self
+            .complete_create_intents(parent, &completed, &mut metrics)
+            .await?;
+        if changed {
+            self.child_issue_checkpoint(super::super::ChildIssueCheckpoint::Completed)
+                .await;
+        }
+        let provider_requests = provider_requests_before.and_then(|before| {
+            self.forge
+                .provider_request_count()
+                .map(|after| after.saturating_sub(before))
+        });
+        super::emit_fan_out_completion(
+            repo_id,
+            parent_number,
+            child_count,
+            dependency_edge_count,
+            &metrics,
+            provider_requests,
+            true,
+            started.elapsed(),
+        );
+        drop(committed);
         Ok(recovered)
     }
 
@@ -332,6 +382,28 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
         }
         let completion = common_completion(intents)?;
+        if let Some(audit) = completion.and_then(|completion| completion.completion_audit.as_ref())
+        {
+            let children = intents
+                .iter()
+                .flat_map(|pending| &pending.intent.children)
+                .map(|child| {
+                    Ok(CompletionAuditIssue {
+                        slug: child.slug.clone(),
+                        title: child.title.clone(),
+                        repository_id: child.repository_id.clone(),
+                        number: child.number.ok_or_else(|| ExecutionError::Backend {
+                            message: format!(
+                                "create-issues intent child `{}` has no final number for its completion audit",
+                                child.slug
+                            ),
+                        })?,
+                    })
+                })
+                .collect::<Result<Vec<_>, ExecutionError>>()?;
+            self.ensure_issue_completion_audit(&parent, audit, &children)
+                .await?;
+        }
 
         for _ in 0..3 {
             let mut metadata = parse_metadata_block(&parent.body)

@@ -13,15 +13,40 @@ use temper_forge::Forge;
 use temper_forge::config::ForgejoConfig;
 use temper_workflow::LeasePolicy;
 
+/// Builds the Forge clients used to route role-authored mutations.
+///
+/// The returned map retains authenticated clients in process only. Durable
+/// workflow state records role identifiers, never tokens, and startup recovery
+/// resolves those identifiers through this same configured map.
+pub fn configured_role_forges(
+    forge_config: &ForgejoConfig,
+    config: &DaemonRunConfig,
+    role_tokens: &BTreeMap<String, Secret>,
+) -> BTreeMap<String, Arc<dyn Forge>> {
+    config
+        .roles
+        .iter()
+        .filter_map(|role| {
+            let role = role.as_str().to_string();
+            let token = role_tokens.get(&role)?;
+            // I/O boundary: the per-role token is handed to its Forgejo client.
+            // Preserve all non-token defaults from the deployment Forgejo
+            // config, especially the web-UI CI fallback credentials.
+            let forge: Arc<dyn Forge> =
+                temper_forge::factory::new_forgejo(role_forgejo_config(forge_config, token));
+            Some((role, forge))
+        })
+        .collect()
+}
+
 /// Builds the result applier chain, routing each role's writes through that
-/// role's forge identity when a per-role token is available (otherwise the
+/// role's forge identity when a per-role client is available (otherwise the
 /// default identity).
 pub fn result_applier(
     default_forge: Arc<dyn Forge>,
-    forge_config: ForgejoConfig,
+    role_forges: &BTreeMap<String, Arc<dyn Forge>>,
     workflow: Arc<temper_workflow::ValidatedWorkflow>,
     config: &DaemonRunConfig,
-    role_tokens: &BTreeMap<String, Secret>,
     lease_ttl: chrono::Duration,
 ) -> Arc<dyn ResultApplier> {
     let default_chain = applier_chain(
@@ -30,7 +55,7 @@ pub fn result_applier(
         config.daemon_id.clone(),
         lease_ttl,
     );
-    if role_tokens.is_empty() {
+    if role_forges.is_empty() {
         return default_chain;
     }
 
@@ -40,14 +65,9 @@ pub fn result_applier(
 
     for role in &config.roles {
         let role = role.as_str().to_string();
-        if let Some(token) = role_tokens.get(&role) {
-            // I/O boundary: the per-role token is handed to its Forgejo client.
-            // Preserve all non-token defaults from the deployment Forgejo
-            // config, especially the web-UI CI fallback credentials.
-            let role_forge =
-                temper_forge::factory::new_forgejo(role_forgejo_config(&forge_config, token));
+        if let Some(role_forge) = role_forges.get(&role) {
             let role_chain = applier_chain(
-                role_forge,
+                role_forge.clone(),
                 workflow.clone(),
                 config.daemon_id.clone(),
                 lease_ttl,

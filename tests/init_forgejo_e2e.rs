@@ -78,6 +78,8 @@ const REPO_NAME: &str = "service";
 /// credentials verbatim and makes no LLM call.
 const DUMMY_DEEPSEEK_KEY: &str = "sk-init-e2e-dummy";
 
+// Engine startup performs live Forge authentication and workflow initialization
+// before binding. Leave bounded headroom for a loaded shared CI host.
 const DAEMON_BOOT_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[test]

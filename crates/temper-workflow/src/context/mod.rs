@@ -26,8 +26,10 @@
 //! backend. Missing bindings fail before any mutation, so a bad runtime context
 //! can never partially apply a transition.
 
+mod audit;
 mod child;
 
+pub use audit::TransitionCompletionAudit;
 pub use child::CreateIssuesChild;
 
 use crate::ids::{RoleId, TransitionId};
@@ -53,6 +55,7 @@ pub struct ExecutionContext {
     attach_review_correlation_keys: BTreeMap<(TransitionId, usize), String>,
     create_issues_inputs: BTreeMap<(TransitionId, usize), Vec<CreateIssuesChild>>,
     create_issues_correlation_keys: BTreeMap<(TransitionId, usize), String>,
+    transition_completion_audit: Option<TransitionCompletionAudit>,
 }
 
 impl ExecutionContext {
@@ -430,5 +433,27 @@ impl ExecutionContext {
         self.create_issues_correlation_keys
             .get(&(transition.clone(), index))
             .map(String::as_str)
+    }
+
+    /// Binds the idempotent audit comment that must exist before this
+    /// transition's source update commits, returning `self` for chaining.
+    pub fn with_transition_completion_audit(mut self, audit: TransitionCompletionAudit) -> Self {
+        self.set_transition_completion_audit(audit);
+        self
+    }
+
+    /// Binds the idempotent audit comment that must exist before this
+    /// transition's source update commits.
+    pub fn set_transition_completion_audit(
+        &mut self,
+        audit: TransitionCompletionAudit,
+    ) -> &mut Self {
+        self.transition_completion_audit = Some(audit);
+        self
+    }
+
+    /// Returns the runtime-bound transition-completion audit, if any.
+    pub fn transition_completion_audit(&self) -> Option<&TransitionCompletionAudit> {
+        self.transition_completion_audit.as_ref()
     }
 }

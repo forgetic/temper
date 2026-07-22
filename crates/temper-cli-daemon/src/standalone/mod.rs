@@ -36,10 +36,10 @@ use temper_engine::{
     spawn_coordinated_mechanical_backstop, spawn_coordinated_poll_backstop,
 };
 use temper_engine_service::{
-    AGENT_TRACE_RETENTION_INTERVAL, attach_trace_query, converge_startup_orphans, engine_config,
-    ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
-    spawn_trace_retention_task, stage_startup_assignments, start_trace_journal,
-    worker_pool_auth_config, workflow_role_limits,
+    AGENT_TRACE_RETENTION_INTERVAL, attach_trace_query, configured_role_forges,
+    converge_startup_orphans, engine_config, ensure_workflow_labels, recover_child_create_intents,
+    resolve_repositories, result_applier, role_feed_targets, spawn_trace_retention_task,
+    stage_startup_assignments, start_trace_journal, worker_pool_auth_config, workflow_role_limits,
 };
 use temper_forge::RepositoryId;
 use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
@@ -92,7 +92,7 @@ async fn run_async(
     } = engine_config(resolved)?;
     trace_config::warn_if_engine_storage_unavailable(resolved, &engine_agent_traces);
     let forge_base_url = forge_config.base_url.clone();
-    let forge_config_for_roles = forge_config.clone();
+    let role_forges = configured_role_forges(&forge_config, &daemon_config, &role_tokens);
     let forge = temper_forge::factory::new_forgejo(forge_config);
 
     // §7 forge line, emitted after a connectivity/auth probe (current_user is the
@@ -153,23 +153,15 @@ async fn run_async(
 
     // Startup recovery is a hard barrier: finish every durable create intent
     // before the daemon, worker, webhook, or polling scans can dispatch work.
-    let recovery_executor = workflow.executor(forge.as_ref());
-    for repo_id in &repo_ids {
-        recovery_executor
-            .recover_create_issue_intents(repo_id)
-            .await
-            .map_err(|error| {
-                format!("failed to recover durable child-create intents in `{repo_id}`: {error}")
-            })?;
-    }
+    recover_child_create_intents(forge.as_ref(), &role_forges, workflow.as_ref(), &repo_ids)
+        .await?;
 
     // --- Daemon (orchestrator) on this loop, with per-role token routing ---
     let applier = result_applier(
         forge.clone(),
-        forge_config_for_roles,
+        &role_forges,
         workflow.clone(),
         &daemon_config,
-        &role_tokens,
         lease_ttl,
     );
     let daemon = standalone_daemon(

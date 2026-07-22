@@ -16,10 +16,10 @@ use temper_forge::{Forge, RepositoryId, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
-    AGENT_TRACE_RETENTION_INTERVAL, TraceRetentionTask, converge_startup_orphans, engine_config,
-    ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
-    spawn_trace_retention_task, stage_startup_assignments, worker_pool_auth_config,
-    workflow_role_limits,
+    AGENT_TRACE_RETENTION_INTERVAL, TraceRetentionTask, configured_role_forges,
+    converge_startup_orphans, engine_config, ensure_workflow_labels, resolve_repositories,
+    result_applier, role_feed_targets, spawn_trace_retention_task, stage_startup_assignments,
+    worker_pool_auth_config, workflow_role_limits,
 };
 
 /// Runs the engine on the skein runtime until SIGINT/SIGTERM, then drains.
@@ -55,8 +55,8 @@ pub async fn run_async(
             "agent tracing disabled: no durable paths.state_dir is available for the engine journal"
         );
     }
-    let forge_config_for_roles = forge_config.clone();
     let forge_url = forge_config.base_url.clone();
+    let role_forges = configured_role_forges(&forge_config, &config, &role_tokens);
     let forge = temper_forge::factory::new_forgejo(forge_config);
 
     let (workflow, compiled) = load_workflow(&config)?;
@@ -77,16 +77,16 @@ pub async fn run_async(
     // Complete durable child-create intents before constructing the daemon or
     // spawning either dispatch backstop. This is the startup recovery barrier:
     // no role scan can observe a partially-wired child while recovery runs.
-    recover_child_create_intents(forge.as_ref(), workflow.as_ref(), &repo_ids).await?;
+    recover_child_create_intents(forge.as_ref(), &role_forges, workflow.as_ref(), &repo_ids)
+        .await?;
 
     let daemon = split_daemon(
         Arc::clone(&spawner),
         result_applier(
             forge.clone(),
-            forge_config_for_roles,
+            &role_forges,
             workflow.clone(),
             &config,
-            &role_tokens,
             lease_ttl,
         ),
         config.worker_pools.clone(),
@@ -265,15 +265,20 @@ fn lease_ttl(config: &DaemonRunConfig) -> Result<chrono::Duration, String> {
         .map_err(|error| format!("invalid lease ttl: {error}"))
 }
 
-async fn recover_child_create_intents(
+/// Completes durable child-create intents through their assignment role's
+/// configured Forge identity before startup dispatch opens.
+pub async fn recover_child_create_intents(
     forge: &dyn Forge,
+    role_forges: &BTreeMap<String, Arc<dyn Forge>>,
     workflow: &ValidatedWorkflow,
     repo_ids: &[RepositoryId],
 ) -> Result<(), String> {
     let executor = workflow.executor(forge);
     for repo_id in repo_ids {
         executor
-            .recover_create_issue_intents(repo_id)
+            .recover_create_issue_intents_with_role_forges(repo_id, |role| {
+                role_forges.get(role.as_str()).cloned()
+            })
             .await
             .map_err(|error| {
                 format!("failed to recover durable child-create intents in `{repo_id}`: {error}")
@@ -393,9 +398,15 @@ async fn drain_after_signal(
 mod tests {
     use super::*;
     use temper_engine::NoopApplier;
+    use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, User, UserId};
+    use temper_forge_memory::{FaultOp, MemoryForge};
     use temper_protocol_worker::{
         Artifact, Capability, Capacity, Poll, Register, WORKER_PROTOCOL_VERSION,
         WorkerProtocolMessage,
+    };
+    use temper_workflow::{
+        ArtifactSource, CreateIssuesChild, DurableAssignment, ExecutionContext, RoleId,
+        TransitionCompletionAudit, TransitionId, WorkflowMetadata, render_metadata_block,
     };
 
     #[test]
@@ -474,5 +485,187 @@ mod tests {
         }
 
         assert_eq!(assigned_roles, ["alpha", "beta", "beta", "gamma", "gamma"]);
+    }
+
+    #[test]
+    fn startup_barrier_recovers_persisted_negative_validation_audit_once() {
+        temper_engine_io::block_on(async move {
+            let spec = temper_workflow::parse_workflow_spec(
+                "startup-validation-audit.json",
+                r#"{
+                  "name":"startup-validation-audit",
+                  "roles":[{"id":"tester"}],
+                  "labels":[
+                    {"id":"plan"},{"id":"needs-validation"},{"id":"in-progress"},
+                    {"id":"code"},{"id":"ready"}
+                  ],
+                  "artifact_kinds":[
+                    {"id":"plan","target":"issue","identifying_labels":["plan"]},
+                    {"id":"code","target":"issue","identifying_labels":["code"],"initial_labels":["ready"]}
+                  ],
+                  "relations":[{"kind":"parent","source":"code","target":"plan"}],
+                  "transitions":[{
+                    "id":"plan_validation_needs_followup",
+                    "artifact":"plan",
+                    "roles":["tester"],
+                    "effects":[
+                      {"kind":"create_issues","correlation_key":"validation-followup","record_parent_dependencies":true},
+                      {"kind":"remove_label","label":"needs-validation"},
+                      {"kind":"add_label","label":"in-progress"}
+                    ]
+                  }]
+                }"#,
+            )
+            .expect("workflow parses");
+            let workflow = spec.validate().expect("workflow validates");
+            let bot = User {
+                id: UserId::new("bot-id"),
+                handle: "bot".to_string(),
+                display_name: Some("Default Bot".to_string()),
+                email: None,
+            };
+            let architect = User {
+                id: UserId::new("architect-id"),
+                handle: "architect".to_string(),
+                display_name: Some("Plan Tester".to_string()),
+                email: None,
+            };
+            let forge = MemoryForge::with_current_user(bot.clone());
+            let tester_forge = forge.as_user(architect.clone());
+            let tester_handle: Arc<dyn Forge> = Arc::new(tester_forge.clone());
+            let role_forges = BTreeMap::from([("tester".to_string(), tester_handle)]);
+            let repo = forge
+                .create_repository(CreateRepository {
+                    owner: "acme".to_string(),
+                    name: "service".to_string(),
+                    default_branch: "main".to_string(),
+                    description: None,
+                })
+                .await
+                .expect("repository is created")
+                .id;
+            let parent = forge
+                .create_issue(
+                    &repo,
+                    CreateIssue {
+                        title: "Interrupted validation".to_string(),
+                        body: format!(
+                            "Plan awaiting validation\n\n{}",
+                            render_metadata_block(&WorkflowMetadata {
+                                assignment: Some(DurableAssignment {
+                                    role: Some(RoleId::new("tester")),
+                                    ..DurableAssignment::default()
+                                }),
+                                ..WorkflowMetadata::default()
+                            })
+                        ),
+                        labels: vec!["plan".to_string(), "needs-validation".to_string()],
+                        assignees: Vec::<UserId>::new(),
+                    },
+                )
+                .await
+                .expect("plan is created");
+            let transition = TransitionId::new("plan_validation_needs_followup");
+            let marker = "<!-- temper:comment-key=plan-validation:startup-job -->";
+            let context = ExecutionContext::new()
+                .with_create_issues_at(
+                    transition.clone(),
+                    0,
+                    [CreateIssuesChild::new(
+                        "repair-gap",
+                        "Repair validation gap",
+                        "durable child body",
+                    )
+                    .with_labels(["code", "ready"])],
+                )
+                .with_transition_completion_audit(TransitionCompletionAudit::new(
+                    marker,
+                    "## Plan validation outcome\n\n**Outcome:** `needs_followup`\n\n- Workflow role: `tester`\n- Forge actor: `architect` (`architect-id`)",
+                ));
+
+            forge.fail_next(FaultOp::AddIssueComment, "comment service unavailable");
+            workflow
+                .executor_with_context(&tester_forge, context)
+                .execute(
+                    &repo,
+                    ArtifactSource::Issue {
+                        number: parent.number,
+                    },
+                    &transition,
+                    &RoleId::new("tester"),
+                )
+                .await
+                .expect_err("publication failure leaves a persisted completion intent");
+            assert_eq!(
+                forge
+                    .list_issues(&repo, IssueQuery::default())
+                    .await
+                    .unwrap()
+                    .len(),
+                2,
+                "the follow-up already exists before startup recovery"
+            );
+
+            recover_child_create_intents(
+                &forge,
+                &role_forges,
+                &workflow,
+                std::slice::from_ref(&repo),
+            )
+            .await
+            .expect("startup barrier converges the persisted audit");
+            let completed = forge
+                .get_issue_by_number(&repo, parent.number)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                completed.labels,
+                vec!["in-progress".to_string(), "plan".to_string()]
+            );
+            let comments = forge.list_issue_comments(&completed.id).await.unwrap();
+            assert_eq!(comments.len(), 1);
+            assert_eq!(comments[0].author_id, architect.id);
+            assert_ne!(comments[0].author_id, bot.id);
+            assert!(comments[0].body.contains(marker));
+            assert!(comments[0].body.contains("Workflow role: `tester`"));
+            assert!(comments[0].body.contains("Forge actor: `architect`"));
+            assert!(comments[0].body.contains("Repair validation gap"));
+            assert_eq!(
+                forge
+                    .list_issues(&repo, IssueQuery::default())
+                    .await
+                    .unwrap()
+                    .len(),
+                2,
+                "startup recovery does not recreate the child"
+            );
+
+            recover_child_create_intents(
+                &forge,
+                &role_forges,
+                &workflow,
+                std::slice::from_ref(&repo),
+            )
+            .await
+            .expect("replayed startup recovery is idempotent");
+            assert_eq!(
+                forge
+                    .list_issue_comments(&completed.id)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                forge
+                    .list_issues(&repo, IssueQuery::default())
+                    .await
+                    .unwrap()
+                    .len(),
+                2,
+                "replayed startup recovery does not recreate the child"
+            );
+        });
     }
 }

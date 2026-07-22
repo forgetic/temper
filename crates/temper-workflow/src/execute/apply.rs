@@ -1,12 +1,8 @@
 //! Effect application for the [`Executor`].
 //!
-//! This child module holds the mutation half of the runtime loop: turning a
-//! plan's [`WorkflowEffect`]s into Forge calls. It is split from the parent
-//! `execute` module to keep both files within the source-size budget; it accesses
-//! the parent's private [`Executor`] and [`Loaded`] items as a descendant
-//! module. Postcondition verification and the reconciler's label-only apply path
-//! live in [`verify`](super::verify); the comment/review and issue-fan-out apply
-//! paths live in [`messaging`](super::messaging) and
+//! This child module turns planned effects into Forge calls. Postcondition
+//! verification lives in [`verify`](super::verify); comment/review and issue
+//! fan-out paths live in [`messaging`](super::messaging) and
 //! [`issue_creates`](super::issue_creates).
 //!
 //! The application discipline is "validate everything, then mutate": unsupported
@@ -15,6 +11,7 @@
 //! merge (if any) and final label/assignee update — the commit point. See the
 //! parent module docs for why pre-commit effects are ordered this way.
 
+use super::audit::validate_completion_audit;
 use super::issue_creates::{
     PreparedCreateIssues, create_issues_completion, validate_child_dependencies,
 };
@@ -43,6 +40,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         plan: &TransitionPlan,
     ) -> Result<(), ExecutionError> {
         let prepared = self.prepare_effects(plan)?;
+        let completion_audit = self.context.transition_completion_audit().cloned();
+        validate_completion_audit(completion_audit.as_ref())?;
         validate_pull_request_effects(loaded, &prepared)?;
         self.apply_comments(loaded, &plan.transition, &prepared.comments)
             .await?;
@@ -54,6 +53,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             &prepared.remove_labels,
             &prepared.add_assignees,
             &prepared.remove_assignees,
+            completion_audit.clone(),
         );
         let create_committed = self
             .apply_issue_creates(
@@ -79,6 +79,11 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         .await?;
         self.apply_close_parent_issues(repo_id, loaded, prepared.close_parent_issues)
             .await?;
+        if create_committed.is_none() {
+            if let Some(audit) = completion_audit.as_ref() {
+                self.ensure_loaded_completion_audit(loaded, audit).await?;
+            }
+        }
         let committed = if create_committed.is_some() {
             // Fan-out completion atomically folded the durable intent progress
             // into the routed source update, so applying `prepared` again would

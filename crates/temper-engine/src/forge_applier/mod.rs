@@ -26,6 +26,7 @@ mod pr_repair;
 mod progress;
 mod resolve;
 mod success;
+mod validation_audit;
 mod verdict;
 mod verdict_child_relations;
 mod verdict_children;
