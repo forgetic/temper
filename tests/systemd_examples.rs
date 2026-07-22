@@ -101,7 +101,11 @@ fn bundle_files_parse_and_every_named_reference_has_a_placeholder() {
         .get("pools")
         .and_then(TomlValue::as_array)
         .expect("worker.pools array");
-    assert_eq!(pools.len(), 3, "checked-in example should cover every pool");
+    assert_eq!(
+        pools.len(),
+        4,
+        "checked-in example should cover every split pool plus local standalone"
+    );
     for pool in pools {
         references.insert(
             pool.get("worker_token")
@@ -157,6 +161,23 @@ fn offline_engine_and_every_pool_check_pass_and_redact_secrets() {
     );
     assert_eq!(engine["status"], "ok");
     assert_eq!(engine["online"], false);
+
+    let standalone = successful_json(
+        &[
+            "--config",
+            &config,
+            "--secrets",
+            &credentials,
+            "--format",
+            "json",
+            "check",
+            "--component",
+            "standalone",
+        ],
+        dir.path(),
+    );
+    assert_eq!(standalone["status"], "ok");
+    assert_eq!(standalone["online"], false);
 
     let parsed_config = parse_toml(&examples.join("config.example.toml"));
     let pools = table(&parsed_config, "worker")["pools"]
@@ -226,6 +247,7 @@ fn offline_engine_and_every_pool_check_pass_and_redact_secrets() {
         "worker-architects-token",
         "worker-engineers-token",
         "worker-reviewers-token",
+        "worker-local-token",
         "planning-provider-credentials",
         "coding-provider-credentials",
     ] {
@@ -321,6 +343,19 @@ impl SystemdUnit {
     }
 }
 
+fn systemd_duration_secs(value: &str) -> u64 {
+    for (suffix, multiplier) in [("min", 60_u64), ("s", 1_u64)] {
+        if let Some(number) = value.strip_suffix(suffix) {
+            return number
+                .parse::<u64>()
+                .unwrap_or_else(|error| panic!("invalid systemd duration `{value}`: {error}"))
+                .checked_mul(multiplier)
+                .unwrap_or_else(|| panic!("systemd duration `{value}` overflows seconds"));
+        }
+    }
+    panic!("unsupported systemd duration `{value}`");
+}
+
 #[test]
 fn units_use_public_serve_commands_and_the_bundled_credentials() {
     let examples = example_dir();
@@ -332,15 +367,28 @@ fn units_use_public_serve_commands_and_the_bundled_credentials() {
                 .is_some_and(|extension| extension == "service")
         })
         .collect::<Vec<_>>();
-    assert_eq!(service_files.len(), 2, "do not add a separate trigger unit");
+    assert_eq!(service_files.len(), 3, "do not add a separate trigger unit");
 
+    let standalone_path = examples.join("temper-standalone.service");
     let engine_path = examples.join("temper-engine.service");
     let worker_path = examples.join("temper-worker@.service");
+    let standalone = SystemdUnit::parse(&standalone_path);
     let engine = SystemdUnit::parse(&engine_path);
     let worker = SystemdUnit::parse(&worker_path);
     let credential = "credentials.toml:/etc/temper/credentials.toml";
+    assert_eq!(
+        standalone.values("Service", "LoadCredential"),
+        vec![credential]
+    );
     assert_eq!(engine.values("Service", "LoadCredential"), vec![credential]);
     assert_eq!(worker.values("Service", "LoadCredential"), vec![credential]);
+
+    let standalone_command = standalone.values("Service", "ExecStart");
+    assert_eq!(standalone_command.len(), 1);
+    assert_eq!(
+        standalone_command[0],
+        "/usr/local/bin/temper --config /etc/temper/config.toml serve standalone --id %H-standalone"
+    );
 
     let engine_command = engine.values("Service", "ExecStart");
     assert_eq!(engine_command.len(), 1);
@@ -362,7 +410,33 @@ fn units_use_public_serve_commands_and_the_bundled_credentials() {
     assert_eq!(worker.values("Service", "KillMode"), vec!["control-group"]);
     assert_eq!(worker.values("Service", "TimeoutStopSec"), vec!["5min"]);
 
-    for path in [engine_path, worker_path] {
+    assert_eq!(standalone.values("Service", "Delegate"), vec!["yes"]);
+    assert_eq!(
+        standalone.values("Service", "KillMode"),
+        vec!["control-group"]
+    );
+    assert_eq!(standalone.values("Service", "Restart"), vec!["on-failure"]);
+    let stop_timeout = standalone.values("Service", "TimeoutStopSec");
+    assert_eq!(stop_timeout.len(), 1);
+    let stop_timeout_secs = systemd_duration_secs(stop_timeout[0]);
+    let config = parse_toml(&examples.join("config.example.toml"));
+    let shutdown_budget_secs = table(&config, "deployment")
+        .get("standalone_shutdown_budget_secs")
+        .and_then(TomlValue::as_integer)
+        .and_then(|value| u64::try_from(value).ok())
+        .expect("positive standalone shutdown budget");
+    const DOCUMENTED_SAFETY_MARGIN_SECS: u64 = 15;
+    assert!(
+        stop_timeout_secs > shutdown_budget_secs,
+        "systemd must not terminate Temper at or before its internal deadline"
+    );
+    assert_eq!(
+        stop_timeout_secs - shutdown_budget_secs,
+        DOCUMENTED_SAFETY_MARGIN_SECS,
+        "standalone unit must retain its documented 15-second safety margin"
+    );
+
+    for path in [standalone_path, engine_path, worker_path] {
         let unit = read(&path);
         for forbidden in ["temper daemon", "trigger-forgejo", "serve trigger"] {
             assert!(
@@ -376,6 +450,7 @@ fn units_use_public_serve_commands_and_the_bundled_credentials() {
     let deployment_docs = [
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/how-to/deploy-with-systemd.md"),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/reference/production-worker.md"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/systemd/README.md"),
     ];
     for path in deployment_docs {
         let documentation = read(&path);
@@ -386,6 +461,9 @@ fn units_use_public_serve_commands_and_the_bundled_credentials() {
             "pidfd",
             "subreaper",
             "recursive-empty",
+            "standalone_shutdown_budget_secs",
+            "15-second safety margin",
+            "KillMode=process",
         ] {
             assert!(
                 documentation.contains(required),

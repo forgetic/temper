@@ -34,6 +34,10 @@ otherwise stdout contains a named `CGROUP SKIP` with the capability reason.
 The selector is factory-instance scoped, so the two runs cannot race through
 process environment. The same driver starts a capacity-one worker and its real
 machine/shell, watchdog, outbox, active-job registry, and signal shutdown helper.
+The split signal case exercises the ordinary proof-based worker join. The
+historical `standalone-signal-shutdown` case exercises that same worker seam;
+the standalone composition root now layers its independently tested absolute
+deadline/watchdog and exact joined-assignment release policy over the seam.
 Generated Cargo test harnesses never substitute a process-group kernel: agent
 Cargo tests use a compiled helper with production Auto or an explicitly
 injected forced supervisor, while worker Cargo tests route the same real
@@ -71,7 +75,8 @@ cleared both before and after joins.
 | Managed bash tool deadline | Capstone `managed_bash_deadline`; focused `explicit_tool_timeout_waits_for_cleanup_and_reader_join` | Auto cgroup when delegated; forced supervisor always | Timeout output follows TERM, KILL, recursive-empty proof, and reader join | completed event includes timeout trigger and signal identities |
 | Capacity-one no-progress or ownership-loss cancellation | Capstone `capacity-one-watchdog` starts the production worker machine/shell with a queued second assignment and held nested fixture; exact-attempt ownership loss enters the same cancellation path | Auto cgroup when delegated; forced supervisor always | The transport records exactly one initial poll while cancellation/cleanup is active; no later poll, permit, or second executor dispatch is observed until exact descendant absence, canceled trace forwarding, and the durable canceled-result path release capacity | `worker.job.timeout` or ownership-loss reason, `worker.job.cancellation_completed`, then `worker.capacity.released` |
 | Out-of-process agent normal completion and failure | Capstone `out_of_process_agent` with exit 0 and 17; focused `worker_descendant_containment_contract` | Auto cgroup when delegated; forced supervisor always | Result-file acceptance and error return follow nested removal, stderr join, endpoint stops, and `JobQuiesced` | `worker.job.quiesced` and cleanup-completed evidence |
-| Split worker and standalone signal shutdown | Capstone `split-signal-shutdown` and `standalone-signal-shutdown` start held compiled fixtures and enter `shutdown_worker_after_signal`, the helper called by both service composition roots | Auto cgroup when delegated; forced supervisor always | Signal intake closes, the active attempt fence and containment join, and only then may standalone assignment release run; split shutdown publishes no cancellation result and preserves the durable claim | cancellation/cleanup events; blocked cleanup retains shutdown wait |
+| Split worker and standalone worker-seam signal shutdown | Capstone `split-signal-shutdown` and `standalone-signal-shutdown` start held compiled fixtures and enter `shutdown_worker_after_signal` | Auto cgroup when delegated; forced supervisor always | Signal intake closes the active attempt fence and ordinary worker completion still requires containment/trace joins; the standalone composition's separate deadline tests require an empty blocker report before exact assignment release | cancellation/cleanup events; blocked cleanup retains ordinary shutdown wait |
+| Absolute standalone composition deadline | `temper-cli-daemon::standalone::shutdown::tests` and `standalone::shutdown::watchdog::tests` | Backend-independent orchestration plus independent OS watchdog threads | Daemon admission, worker join, trace retention, exact release, and HTTP drain share one signal-relative deadline; emergency KILL starts before no-unwind termination even if dispatch blocks | `standalone.shutdown.blocker`; terminal `graceful_exit` or `bounded_crash_handoff` summary |
 | Submit/pre-push and worker-managed commands | Capstone `worker-managed-command` invokes the exact bounded owner used by git/fingerprint effects; `pre-push` invokes the controlled production gate owner with the same compiled fixture | Auto cgroup when delegated; forced supervisor always through instance-scoped worker-command selection | Gate/command result follows recursive cleanup and bounded stdout/stderr joins; complete git overflow remains an explicit error | cleanup-completed or cleanup-blocked with owner scope |
 | TERM failure, KILL escalation, survivor and inspection faults | Capstone ignored-TERM cases plus `inspection-recovery`, which decorates the selected real backend kernel and routes its blocked snapshot through the attempt owner and active-job registry | Auto cgroup when delegated; forced supervisor always | Failed inspection leaves the registry `CleanupPending`, the queued assignment undispatched, and capacity occupied until inspection recovery and recursive-empty proof | structured TERM/KILL outcomes, bounded PID/PPID/PGID/SID/executable; throttled `worker.containment.cleanup_blocked` |
 | Exact bounded `non_completed_stop` | `worker_abort_exits_nonzero_without_result_and_names_stable_reason` | Explicit helper-capable forced Linux supervisor around the test-owned agent; production Auto containment remains active for the agent's nested bash tool | Cancellation waits until a nested `setsid` child has published PID/start identity; agent exit, recursive-empty proof, exact child absence, and lifecycle join precede assertion; no result is accepted | typed `aborted` / `worker_requested` failure, bounded diagnostics |
@@ -89,6 +94,33 @@ The exact abort regression names and asserts these limits:
   `RETAINED_PROVIDER_REQUESTS`;
 - `MAX_OBSERVED_FIXTURE_PROCESS_COUNT`.
 
+## Ordinary proof and bounded standalone handoff
+
+The ordinary cancellation rows above never turn a timeout into cleanup proof.
+Ownership loss retains the fence, registry entry, heartbeat, trace obligation,
+and permit until direct-child reap, recursive-empty evidence, and terminal-trace
+acknowledgement join. This remains true for split workers and for an ownership
+change inside a healthy standalone process.
+
+`temper serve standalone` additionally enforces
+`deployment.standalone_shutdown_budget_secs` over the whole process stop. It
+fences daemon result/claim/Forge-context/application admission before worker
+cancellation. A proven empty blocker report releases only exact joined attempts.
+Deadline expiry instead preserves durable assignments and trace spool, drives
+out-of-band emergency KILL, emits bounded crash handoff diagnostics, and aborts
+without fabricating `AttemptQuiesced`, cleanup, trace acknowledgement, result
+publication, or normal assignment release. Startup staging and orphan/feed
+convergence recover the retained assignment; exact attempt fencing rejects late
+old-process effects.
+
+Blocker records distinguish `containment`, `terminal_trace_ack`,
+`result_delivery`, `component_task`, and `registry_state`. They retain bounded
+worker/job/attempt and owner identity, root PID and survivor PIDs when known,
+containment phase or trace run/sequence, first-seen age, escalation stage,
+deadline remaining, and final `graceful_exit`/`bounded_crash_handoff`
+disposition. Root PID is carried additively through the agent lifecycle protocol
+so a discovery failure can still name the process boundary.
+
 ## #448 architecture traceability
 
 | #448 decision | Deterministic authority | Boundary / evidence |
@@ -99,7 +131,7 @@ The exact abort regression names and asserts these limits:
 | Cleanup proof and exactly-once coordination | `cleanup_runs_exactly_once_and_first_trigger_wins`, `blocked_inspection_cannot_complete_cleanup`, and capstone observer count | Completion requires terminal reap plus `RecursiveEmptyProof::Proven` |
 | Managed bash and MCP ownership | Managed-bash tests above; `cancellation_reaps_the_mcp_server_grandchild_group`, `request_timeout_waits_for_recursive_cleanup_and_reader_join` | Tool/MCP result follows containment and stream joins |
 | Agent, managed git/fingerprint, and pre-push owners | Agent and command rows above | Outer job remains final safety net; each inner owner gates its own output |
-| Active-job registry and service shutdown | Capstone capacity-one watchdog, inspection recovery, and both signal-shutdown cases; split worker and standalone call the same `shutdown_worker_after_signal` ordering helper | Worker registry join is exercised with the live compiled fixture, not inferred from source ordering | Worker joins before standalone `release_assignments_for_shutdown`; split worker waits without a fail-open timeout |
+| Active-job registry and service shutdown | Capstone capacity-one watchdog, inspection recovery, and signal-shutdown worker seams; standalone deadline/watchdog unit tests | Worker registry joins remain ordinary proof; standalone layers one absolute deadline and exact joined-attempt report over that primitive | Split waits for proof; standalone releases only a blocker-free exact set and otherwise retains assignments for process-loss recovery |
 | Bounded process/provider records | Exact abort regression plus `complete_capture_fails_after_draining_overflow`, MCP oversized-record tests, and `process-output-inventory.md` | Complete machine output overflows explicitly; human diagnostics retain bounded tails |
 | Observability and deployment | `cleanup_events_have_expected_severity_bounded_evidence_and_redaction`, `repeated_blocked_cleanup_is_throttled_by_root`, systemd deployment tests | Ordinary success debug; fallback/recovery warning; blocked cleanup warning/error with throttling |
 
