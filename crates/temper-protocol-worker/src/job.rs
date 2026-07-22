@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use temper_protocol_context::{ArtifactContextBundle, W3cTraceContext};
 use temper_verdict::VerdictContracts;
 
@@ -82,6 +82,94 @@ pub struct JobArtifactSnapshot {
     pub state: String,
 }
 
+/// Structured user-authored and assignment-specific guidance for a workspace job.
+///
+/// New daemons serialize this object so role prose, tool instructions, and tool
+/// constraints remain distinct all the way to the agent prompt. Deserialization
+/// also accepts the historical free-text string shape and maps it to
+/// `role_guidance`, preserving the worker-to-agent shape produced for older daemons.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct JobGuidance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_constraints: Vec<String>,
+    /// Queue-action prose plus later assignment-generated repair details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_guidance: Option<String>,
+}
+
+impl JobGuidance {
+    pub fn is_empty(&self) -> bool {
+        self.role_guidance
+            .as_deref()
+            .is_none_or(|guidance| guidance.trim().is_empty())
+            && self
+                .tool_guidance
+                .as_deref()
+                .is_none_or(|guidance| guidance.trim().is_empty())
+            && self.tool_constraints.is_empty()
+            && self
+                .action_guidance
+                .as_deref()
+                .is_none_or(|guidance| guidance.trim().is_empty())
+    }
+
+    /// Appends assignment-generated prose after configured queue-action prose.
+    pub fn append_action_guidance(&mut self, additional: impl AsRef<str>) {
+        let additional = additional.as_ref();
+        self.action_guidance = match self.action_guidance.take() {
+            Some(existing) if !existing.trim().is_empty() => {
+                Some(format!("{existing}\n\n{additional}"))
+            }
+            _ => Some(additional.to_string()),
+        };
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum JobGuidanceWire {
+    Structured {
+        #[serde(default)]
+        role_guidance: Option<String>,
+        #[serde(default)]
+        tool_guidance: Option<String>,
+        #[serde(default)]
+        tool_constraints: Vec<String>,
+        #[serde(default)]
+        action_guidance: Option<String>,
+    },
+    Legacy(String),
+}
+
+impl<'de> Deserialize<'de> for JobGuidance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match JobGuidanceWire::deserialize(deserializer)? {
+            JobGuidanceWire::Structured {
+                role_guidance,
+                tool_guidance,
+                tool_constraints,
+                action_guidance,
+            } => Self {
+                role_guidance,
+                tool_guidance,
+                tool_constraints,
+                action_guidance,
+            },
+            JobGuidanceWire::Legacy(role_guidance) => Self {
+                role_guidance: Some(role_guidance),
+                ..Self::default()
+            },
+        })
+    }
+}
+
 /// Standard daemon-owned job payload serialized into `Assign.job_payload`.
 ///
 /// It describes the single coordinating artifact (the issue/PR the job
@@ -141,11 +229,10 @@ pub struct JobContext {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub source_metadata: BTreeMap<String, String>,
 
-    /// Extra free-text guidance surfaced to the agent's prompt for this job,
-    /// e.g. the concrete CI failure to fix on a `pull_request_writable` job.
-    /// Absent for ordinary jobs.
+    /// Structured guidance surfaced to the agent's prompt for this job.
+    /// Historical free-text JSON values remain accepted as role guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub guidance: Option<String>,
+    pub guidance: Option<JobGuidance>,
 
     /// PR-head freshness guard for in-flight `pull_request_writable` jobs.
     #[serde(default, skip_serializing_if = "Option::is_none")]

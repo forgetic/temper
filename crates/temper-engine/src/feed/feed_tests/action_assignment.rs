@@ -66,6 +66,22 @@ fn reference_open_pr_assignment_carries_decline_verdicts() {
             context.allowed_verdicts,
             vec!["needs_architect".to_string(), "needs_human".to_string()]
         );
+        let guidance = context.guidance.expect("structured guidance present");
+        let role_guidance = guidance.role_guidance.expect("role guidance present");
+        assert!(role_guidance.starts_with("Claim ready code issues"));
+        assert!(role_guidance.contains("Use open_pr for ready code"));
+        assert_eq!(
+            guidance.tool_guidance.as_deref(),
+            Some(
+                "Use this for open_pr on ready code issues. If it is not bound, fail the assigned implementation job with a structured unavailable-workspace result."
+            )
+        );
+        assert!(
+            guidance
+                .tool_constraints
+                .iter()
+                .any(|constraint| constraint.contains("bookkeeping-only diffs"))
+        );
     })
 }
 
@@ -195,6 +211,20 @@ fn reference_pr_head_fix_assignments_checkout_real_pr_head() {
             assert!(primary.is_writable());
             assert_eq!(primary.branch_hint.as_deref(), Some(head.as_str()));
             let guidance = context.guidance.expect("guidance present");
+            assert_eq!(
+                guidance.tool_guidance.as_deref(),
+                Some(
+                    "Use this for open_pr on ready code issues. If it is not bound, fail the assigned implementation job with a structured unavailable-workspace result."
+                )
+            );
+            assert!(!guidance.tool_constraints.is_empty());
+            let role_guidance = guidance
+                .role_guidance
+                .expect("configured role guidance present");
+            assert!(role_guidance.contains("Claim ready code issues"));
+            let guidance = guidance
+                .action_guidance
+                .expect("queue/generated repair guidance present");
             assert!(guidance.contains(action), "guidance: {guidance}");
             assert!(guidance.contains(queue), "guidance: {guidance}");
             if queue == "pr_merge_conflict" {
@@ -420,6 +450,23 @@ fn reference_review_changes_requested_assignment_includes_review_feedback() {
         );
 
         let guidance = context.guidance.expect("review guidance present");
+        assert!(
+            guidance
+                .tool_guidance
+                .as_deref()
+                .is_some_and(|configured| configured.contains("Use this for open_pr"))
+        );
+        assert!(!guidance.tool_constraints.is_empty());
+        let role_guidance = guidance
+            .role_guidance
+            .expect("configured role guidance present");
+        assert!(
+            role_guidance.contains("Claim ready code issues"),
+            "guidance: {role_guidance}"
+        );
+        let guidance = guidance
+            .action_guidance
+            .expect("generated review guidance present");
         assert!(
             guidance.contains("Current implementation PR handoff from Forge"),
             "guidance: {guidance}"

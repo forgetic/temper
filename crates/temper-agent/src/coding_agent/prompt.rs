@@ -360,6 +360,9 @@ fn user_context_inner(context: &WorkspaceContext, registry: Option<&ToolRegistry
             text.push_str(&format!("- {constraint}\n"));
         }
     }
+    if let Some(action_guidance) = &context.guidance.action_guidance {
+        text.push_str(&format!("\nAction guidance:\n{action_guidance}\n"));
+    }
 
     match &context.artifact_context {
         Some(bundle) => render_artifact_context(&mut text, bundle, registry),
