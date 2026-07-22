@@ -10,6 +10,45 @@ use temper_forge::ReviewDecision;
 
 use crate::metadata::WorkflowMetadataKey;
 
+/// Declarative policy for resolving or validating an effect's target branch.
+///
+/// The policy is intentionally separate from artifact metadata. An omitted
+/// policy preserves legacy workflow behavior, while `RepositoryDefault` must be
+/// authored explicitly; runtimes must not infer that intent merely because an
+/// artifact currently names the repository default branch.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetBranchPolicy {
+    /// Derive `agent/pr-for-feature-<source-number>` from the source feature.
+    DerivedFeatureBranch,
+    /// Copy the source artifact's already-validated target branch to children.
+    Inherit,
+    /// Require the branch consumed by a PR create to differ from the repository default.
+    NonDefault,
+    /// Explicitly select the repository default branch, including intentional
+    /// same-branch PR-create convergence.
+    RepositoryDefault,
+}
+
+impl TargetBranchPolicy {
+    /// Returns the stable workflow-spec token for this policy.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DerivedFeatureBranch => "derived_feature_branch",
+            Self::Inherit => "inherit",
+            Self::NonDefault => "non_default",
+            Self::RepositoryDefault => "repository_default",
+        }
+    }
+}
+
+impl std::fmt::Display for TargetBranchPolicy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// A raw transition effect.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -49,11 +88,17 @@ pub enum RawEffect {
     /// created. Validation guarantees the kind exists and targets pull requests;
     /// runtimes can then derive creation labels and metadata from workflow
     /// declarations while preserving the older generic effect when it is omitted.
+    /// `target_branch_policy`, when present, is a workflow-owned contract for
+    /// the branch consumed by this create. `non_default` requires an explicit,
+    /// validated non-default branch; `repository_default` records intentional
+    /// default/same-branch behavior. Omission preserves legacy compatibility.
     CreatePullRequest {
         #[serde(default)]
         correlation_key: Option<String>,
         #[serde(default)]
         artifact_kind: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_branch_policy: Option<TargetBranchPolicy>,
     },
     /// Request reviews from users resolved for workflow roles on the target PR.
     RequestReviewers { roles: Vec<String> },
@@ -113,6 +158,12 @@ pub enum RawEffect {
         /// enforce. Empty preserves existing workflow behavior.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_child_metadata: Vec<WorkflowMetadataKey>,
+        /// Workflow-owned child target-branch production. `derived_feature_branch`
+        /// derives `agent/pr-for-feature-<source-number>`, `inherit` copies the
+        /// validated source branch, and `repository_default` explicitly selects
+        /// the repository default. Omission preserves legacy compatibility.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_branch_policy: Option<TargetBranchPolicy>,
     },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,

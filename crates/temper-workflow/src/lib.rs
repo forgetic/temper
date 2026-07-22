@@ -169,7 +169,7 @@ pub use spec::{
     RawArtifactKind, RawEffect, RawExternalTool, RawGate, RawGateCondition, RawIntakeAuthor,
     RawLabel, RawQueue, RawQueueAction, RawQueueAutomation, RawQueueLabelSet, RawRelation, RawRole,
     RawRolePrompt, RawState, RawStateDimension, RawTransition, RawValidationBinding,
-    RawValidationBindingDetail, RawWorkflowSpec,
+    RawValidationBindingDetail, RawWorkflowSpec, TargetBranchPolicy,
 };
 pub use validate::validate;
 pub use validated::{

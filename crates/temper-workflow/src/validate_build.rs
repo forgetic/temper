@@ -264,11 +264,13 @@ pub(crate) fn build_effect(effect: &RawEffect) -> Effect {
         RawEffect::CreatePullRequest {
             correlation_key,
             artifact_kind,
+            target_branch_policy,
         } => Effect::CreatePullRequest {
             correlation_key: correlation_key.clone(),
             artifact_kind: artifact_kind
                 .as_ref()
                 .map(|kind| ArtifactKindId::new(kind.clone())),
+            target_branch_policy: *target_branch_policy,
         },
         RawEffect::RequestReviewers { roles } => Effect::RequestReviewers {
             roles: roles.iter().map(RoleId::new).collect(),
@@ -292,12 +294,14 @@ pub(crate) fn build_effect(effect: &RawEffect) -> Effect {
             min_children,
             max_children,
             required_child_metadata,
+            target_branch_policy,
         } => Effect::CreateIssues {
             correlation_key: correlation_key.clone(),
             record_parent_dependencies: *record_parent_dependencies,
             min_children: *min_children,
             max_children: *max_children,
             required_child_metadata: required_child_metadata.clone(),
+            target_branch_policy: *target_branch_policy,
         },
         RawEffect::MergePullRequest => Effect::MergePullRequest,
         RawEffect::CloseParentIssues => Effect::CloseParentIssues,

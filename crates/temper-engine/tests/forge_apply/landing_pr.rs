@@ -4,9 +4,13 @@ use crate::assertions::*;
 use crate::support::*;
 use temper_workflow::{Diagnostic, ReferenceSite, SymbolKind};
 
-fn landing_workflow_with_effect_kind(
+fn landing_workflow_with_effect_kind_and_policy(
     effect_kind: &str,
+    target_branch_policy: Option<&str>,
 ) -> Result<ValidatedWorkflow, temper_workflow::ValidationErrors> {
+    let target_branch_policy = target_branch_policy
+        .map(|policy| format!(r#", "target_branch_policy": "{policy}""#))
+        .unwrap_or_default();
     let spec_json = format!(
         r#"{{
   "name": "plan-landing",
@@ -35,7 +39,7 @@ fn landing_workflow_with_effect_kind(
       "artifact": "plan",
       "roles": ["tester"],
       "effects": [
-        {{"kind": "create_pull_request", "artifact_kind": "{effect_kind}"}},
+        {{"kind": "create_pull_request", "artifact_kind": "{effect_kind}"{target_branch_policy}}},
         {{"kind": "remove_label", "label": "ready"}},
         {{"kind": "add_label", "label": "landing-opened"}}
       ]
@@ -47,8 +51,19 @@ fn landing_workflow_with_effect_kind(
     spec.validate()
 }
 
+fn landing_workflow_with_effect_kind(
+    effect_kind: &str,
+) -> Result<ValidatedWorkflow, temper_workflow::ValidationErrors> {
+    landing_workflow_with_effect_kind_and_policy(effect_kind, None)
+}
+
 fn landing_workflow() -> ValidatedWorkflow {
     landing_workflow_with_effect_kind("feature_landing_pr").expect("landing workflow validates")
+}
+
+fn repository_default_landing_workflow() -> ValidatedWorkflow {
+    landing_workflow_with_effect_kind_and_policy("feature_landing_pr", Some("repository_default"))
+        .expect("explicit repository-default landing workflow validates")
 }
 
 async fn create_plan_issue(
@@ -198,7 +213,7 @@ fn verdict_transition_treats_default_branch_source_as_satisfied_create() {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "main").await;
         let issue = create_plan_issue(&forge, &repo, Some("main")).await;
-        let workflow = Arc::new(landing_workflow());
+        let workflow = Arc::new(repository_default_landing_workflow());
         let applier = ForgeApplier::new(forge.clone(), workflow);
         let job = plan_validation_job("acme/service", issue);
         let result = passing_landing_result(&job);

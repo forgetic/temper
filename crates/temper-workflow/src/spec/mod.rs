@@ -11,7 +11,7 @@
 
 mod effects;
 
-pub use effects::{RawEffect, RawGateCondition};
+pub use effects::{RawEffect, RawGateCondition, TargetBranchPolicy};
 
 use crate::ValidationErrors;
 use crate::artifact::ArtifactTarget;

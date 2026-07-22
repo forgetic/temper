@@ -241,6 +241,7 @@ fn create_pull_request_effect_accepts_pr_artifact_kind() {
         Effect::CreatePullRequest {
             correlation_key: None,
             artifact_kind: Some(ArtifactKindId::new("implementation_pr")),
+            target_branch_policy: None,
         }
     );
 }

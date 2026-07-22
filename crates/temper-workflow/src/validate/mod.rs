@@ -93,6 +93,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
     queue_actions::check_queue_action_contract(spec, &roles, &mut diagnostics);
     contracts::check_validation_binding_contract(spec, &roles, &artifacts, &mut diagnostics);
     contracts::check_create_pull_request_artifact_kind_targets(spec, &mut diagnostics);
+    contracts::check_target_branch_policy_contract(spec, &mut diagnostics);
     contracts::check_create_issues_cardinality(spec, &mut diagnostics);
     contracts::check_transition_outcome_contract(spec, &mut diagnostics);
 

@@ -7,6 +7,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::spec::TargetBranchPolicy;
+
 /// Severity of a diagnostic.
 ///
 /// Phase 2 emits only [`Severity::Error`] diagnostics. The variant set is
@@ -315,6 +317,13 @@ pub enum Diagnostic {
         artifact_kind: String,
         target: String,
     },
+    /// A branch policy was attached to an effect that cannot implement its
+    /// resolution semantics.
+    UnsupportedTargetBranchPolicy {
+        transition: String,
+        effect: String,
+        policy: TargetBranchPolicy,
+    },
     /// A `create_issues` effect declared an empty or inverted cardinality.
     InvalidCreateIssuesCardinality {
         transition: String,
@@ -351,6 +360,7 @@ impl Diagnostic {
             | Diagnostic::TransitionOutcomeUnauthorized { .. }
             | Diagnostic::TransitionOutcomeArtifactMismatch { .. }
             | Diagnostic::CreatePullRequestArtifactKindTargetMismatch { .. }
+            | Diagnostic::UnsupportedTargetBranchPolicy { .. }
             | Diagnostic::InvalidCreateIssuesCardinality { .. }
             | Diagnostic::MultipleDefaultArtifactKinds { .. } => Severity::Error,
         }
@@ -510,6 +520,14 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 formatter,
                 "transition `{transition}` create_pull_request effect names artifact kind `{artifact_kind}`, but that kind targets `{target}` instead of `pull_request`"
+            ),
+            Diagnostic::UnsupportedTargetBranchPolicy {
+                transition,
+                effect,
+                policy,
+            } => write!(
+                formatter,
+                "transition `{transition}` {effect} effect does not support target_branch_policy `{policy}`"
             ),
             Diagnostic::InvalidCreateIssuesCardinality {
                 transition,
