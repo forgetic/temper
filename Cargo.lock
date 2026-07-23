@@ -2246,6 +2246,7 @@ dependencies = [
  "temper-daemon-transport",
  "temper-engine",
  "temper-engine-io",
+ "temper-engine-service",
  "temper-forge-filesystem",
  "temper-forge-forgejo",
  "temper-forge-memory",

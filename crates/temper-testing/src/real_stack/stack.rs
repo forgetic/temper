@@ -81,6 +81,8 @@ pub struct HermeticComponentHandles {
     pub(crate) executor: Arc<CodingExecutor<NativeJigAgentRunner>>,
     pub(crate) worker: Option<WorkerComponentHandle>,
     pub(crate) recovered: BTreeMap<String, HermeticRecoveredClaim>,
+    pub(crate) production_recovered:
+        Option<BTreeMap<String, temper_engine_service::RecoveredClaim>>,
 }
 
 pub(crate) struct HermeticRecoveredClaim {
@@ -190,12 +192,39 @@ impl HermeticRealStack {
     /// The new daemon starts behind its recovery barrier.
     pub async fn replace_daemon(&mut self, handle: &RuntimeHandle) {
         self.components.daemon.crash().await;
-        let daemon = self.build_daemon(handle).begin_startup_recovery();
-        let daemon = Arc::new(daemon);
+        let daemon = Arc::new(self.build_daemon(handle).begin_startup_recovery());
         let recovered = self.stage_durable_assignments(daemon.as_ref()).await;
+        self.install_replacement_daemon(daemon);
+        self.components.recovered = recovered;
+        self.components.production_recovered = None;
+    }
+
+    /// Replaces the daemon and inventories durable claims through the exported
+    /// engine-service startup path used by production. Scenarios exercising
+    /// startup classification should use this instead of fixture reconstruction.
+    pub async fn replace_daemon_through_startup_recovery(&mut self, handle: &RuntimeHandle) {
+        self.components.daemon.crash().await;
+        let daemon = Arc::new(self.build_daemon(handle).begin_startup_recovery());
+        let repos = self.repo_ids.values().cloned().collect::<Vec<_>>();
+        let recovered = temper_engine_service::stage_startup_assignments(
+            daemon.as_ref(),
+            self.forge.as_ref(),
+            &repos,
+            self.workflow.as_ref(),
+            &self.compiled,
+            temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300)),
+            self.clock.now(),
+        )
+        .await
+        .expect("hermetic production startup assignment staging");
+        self.install_replacement_daemon(daemon);
+        self.components.recovered.clear();
+        self.components.production_recovered = Some(recovered);
+    }
+
+    fn install_replacement_daemon(&mut self, daemon: Arc<Daemon>) {
         self.router.replace(daemon.clone());
         self.components.daemon = daemon;
-        self.components.recovered = recovered;
         let executor = CodingExecutor::new(self.coding_config.clone(), self.runner.clone())
             .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(
                 self.components.daemon.clone(),
@@ -214,19 +243,32 @@ impl HermeticRealStack {
         self.hooks.reach(PausePoint::RecoveryBarrierOpening).await;
         let orphaned = self.components.daemon.collect_startup_orphans().await;
         let policy = temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300));
-        for orphan in &orphaned {
-            let claim = self
-                .components
-                .recovered
-                .get(&orphan.job_id)
-                .expect("hermetic orphan has durable context");
-            LeaseManager::new(self.forge.as_ref(), policy)
-                .rollback_assignment(&claim.repo, claim.target, &claim.assignment)
-                .await
-                .expect("hermetic orphan convergence");
+        if let Some(recovered) = self.components.production_recovered.as_ref() {
+            temper_engine_service::converge_startup_orphans(
+                self.forge.as_ref(),
+                policy,
+                self.workflow.as_ref(),
+                recovered,
+                &orphaned,
+            )
+            .await
+            .expect("hermetic production orphan convergence");
+        } else {
+            for orphan in &orphaned {
+                let claim = self
+                    .components
+                    .recovered
+                    .get(&orphan.job_id)
+                    .expect("hermetic orphan has durable context");
+                LeaseManager::new(self.forge.as_ref(), policy)
+                    .rollback_assignment(&claim.repo, claim.target, &claim.assignment)
+                    .await
+                    .expect("hermetic orphan convergence");
+            }
         }
         self.components.daemon.complete_startup_recovery().await;
         self.components.recovered.clear();
+        self.components.production_recovered = None;
         orphaned
     }
 

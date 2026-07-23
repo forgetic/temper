@@ -59,6 +59,9 @@ temper-forge-memory = { path = "../temper-forge-memory" }
 # fake LLM. Keeping this cross-tier wiring in temper-testing avoids making core
 # worker crates depend on engine/agent implementations.
 temper-engine = { path = "../temper-engine" }
+# Restart regressions invoke the exported production startup inventory and
+# orphan-convergence path instead of maintaining a fixture-only reconstruction.
+temper-engine-service = { path = "../temper-engine-service" }
 temper-daemon-transport = { path = "../temper-daemon-transport" }
 temper-worker = { path = "../temper-worker" }
 temper-worker-io = { path = "../temper-worker-io" }
