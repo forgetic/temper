@@ -264,7 +264,7 @@ fn forgejo_action_run_success_webhook_is_accepted() {
         scope
             .targets()
             .get(&(HintArtifactKind::PullRequest, ItemNumber::new(23)))
-            .and_then(|target| target.ci)
+            .and_then(|target| target.ci.as_ref())
             .map(|facts| facts.source.as_str()),
         Some("webhook")
     );

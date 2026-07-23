@@ -33,30 +33,77 @@ impl CiTriggerSource {
     }
 }
 
-/// Provenance and best-known terminal facts carried with an exact CI target.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// An expired, head-specific missing-CI observation that must be revalidated
+/// before any coalesced work acts on the pull request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MissingCiRecoveryIntent {
+    pub(crate) expected_head_sha: String,
+    pub(crate) first_observed_at: DateTime<Utc>,
+}
+
+impl MissingCiRecoveryIntent {
+    fn merge(self, incoming: Self) -> Self {
+        let self_key = (self.first_observed_at, self.expected_head_sha.as_str());
+        let incoming_key = (
+            incoming.first_observed_at,
+            incoming.expected_head_sha.as_str(),
+        );
+        if incoming_key > self_key {
+            incoming
+        } else {
+            self
+        }
+    }
+}
+
+/// Provenance, best-known terminal facts, and an optional missing-CI recovery
+/// intent carried with an exact CI target.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CiWakeFacts {
     pub(crate) source: CiTriggerSource,
     pub(crate) verdict: Option<CiTerminalVerdict>,
     pub(crate) completed_at: Option<DateTime<Utc>>,
+    pub(crate) recovery: Option<MissingCiRecoveryIntent>,
 }
 
 impl CiWakeFacts {
     pub(crate) fn merge(self, incoming: Self) -> Self {
-        match self.source.cmp(&incoming.source) {
-            std::cmp::Ordering::Less => incoming,
-            std::cmp::Ordering::Greater => self,
-            std::cmp::Ordering::Equal => {
-                let self_key = (self.completed_at, verdict_priority(self.verdict));
-                let incoming_key = (incoming.completed_at, verdict_priority(incoming.verdict));
-                if incoming_key > self_key {
-                    incoming
-                } else {
-                    self
-                }
-            }
+        let recovery = match (self.recovery, incoming.recovery) {
+            (Some(existing), Some(incoming)) => Some(existing.merge(incoming)),
+            (Some(existing), None) => Some(existing),
+            (None, Some(incoming)) => Some(incoming),
+            (None, None) => None,
+        };
+        let self_terminal = (self.source, self.verdict, self.completed_at);
+        let incoming_terminal = (incoming.source, incoming.verdict, incoming.completed_at);
+        let (source, verdict, completed_at) =
+            if terminal_facts_key(incoming_terminal) > terminal_facts_key(self_terminal) {
+                incoming_terminal
+            } else {
+                self_terminal
+            };
+        Self {
+            source,
+            verdict,
+            completed_at,
+            recovery,
         }
     }
+}
+
+fn terminal_facts_key(
+    facts: (
+        CiTriggerSource,
+        Option<CiTerminalVerdict>,
+        Option<DateTime<Utc>>,
+    ),
+) -> (bool, CiTriggerSource, Option<DateTime<Utc>>, u8) {
+    (
+        facts.1.is_some(),
+        facts.0,
+        facts.2,
+        verdict_priority(facts.1),
+    )
 }
 
 fn verdict_priority(verdict: Option<CiTerminalVerdict>) -> u8 {
@@ -68,7 +115,7 @@ fn verdict_priority(verdict: Option<CiTerminalVerdict>) -> u8 {
 }
 
 /// One bounded exact target plus optional CI trigger metadata.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WakeTarget {
     pub(crate) change: ChangeKind,
     pub(crate) ci: Option<CiWakeFacts>,
@@ -84,7 +131,7 @@ impl WakeTarget {
 
     pub(crate) fn merge(&mut self, incoming: Self) {
         self.change = merge_change_kind(self.change, incoming.change);
-        self.ci = match (self.ci, incoming.ci) {
+        self.ci = match (self.ci.take(), incoming.ci) {
             (Some(existing), Some(incoming)) => Some(existing.merge(incoming)),
             (Some(existing), None) => Some(existing),
             (None, Some(incoming)) => Some(incoming),

@@ -16,8 +16,8 @@ use temper_forge::{ChangeHint, ChangeKind, HintArtifactKind, ItemNumber, Reposit
 #[cfg(test)]
 pub(crate) use super::wake_scope::MAX_TARGETED_ARTIFACTS;
 pub(crate) use super::wake_scope::{
-    BroadMode, CiTriggerSource, CiWakeFacts, MergeResult, WakeBatch, WakeLane, WakeScope,
-    WakeTargets, merge_change_kind, prioritized_targets,
+    BroadMode, CiTriggerSource, CiWakeFacts, MergeResult, MissingCiRecoveryIntent, WakeBatch,
+    WakeLane, WakeScope, WakeTargets, merge_change_kind, prioritized_targets,
 };
 
 pub(crate) const DEFAULT_MAX_IN_FLIGHT_REPOSITORIES: usize = 2;
@@ -48,6 +48,7 @@ impl WakeRequest {
                 source: CiTriggerSource::Webhook,
                 verdict,
                 completed_at,
+                recovery: None,
             }),
         )
     }
@@ -60,6 +61,7 @@ impl WakeRequest {
                     source: CiTriggerSource::CiPoll,
                     verdict: Some(transition.verdict),
                     completed_at: transition.completed_at,
+                    recovery: None,
                 }),
             ),
             crate::CiStatusTransition::MissingCurrentHead(transition) => Self::from_hint_with_ci(
@@ -68,6 +70,10 @@ impl WakeRequest {
                     source: CiTriggerSource::CiPoll,
                     verdict: None,
                     completed_at: None,
+                    recovery: Some(MissingCiRecoveryIntent {
+                        expected_head_sha: transition.head_sha,
+                        first_observed_at: transition.first_observed_at,
+                    }),
                 }),
             ),
         }
