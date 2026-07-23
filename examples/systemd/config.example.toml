@@ -5,6 +5,9 @@ schema_version = 1
 [deployment]
 name = "acme-production"
 topology = "distributed"
+# Absolute signal-to-exit budget used only by `temper serve standalone`.
+# TimeoutStopSec in temper-standalone.service is 45s, leaving a 15s margin.
+standalone_shutdown_budget_secs = 30
 
 # Relative paths are resolved from the directory containing config.toml.
 [workflow]
@@ -71,6 +74,16 @@ repos = ["acme/service"]
 max_concurrent_jobs = 1
 agent_profile = "planning"
 worker_token = "worker-reviewers-token"
+
+# This `local` pool makes the same checked bundle runnable with
+# `temper serve standalone`; standalone selects local/default when several
+# target-era pools are present.
+[[worker.pools]]
+name = "local"
+roles = ["architect", "engineer", "reviewer"]
+repos = ["acme/service"]
+max_concurrent_jobs = 1
+worker_token = "worker-local-token"
 
 # The top-level provider remains the profile-less pool migration fallback.
 [agent]

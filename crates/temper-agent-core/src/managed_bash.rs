@@ -330,11 +330,12 @@ impl Future for ManagedBashTask {
 impl Drop for ManagedBashTask {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
-        // Cleanup can interrupt the owner's root poll and remains blocked here
-        // if inspection or killing is blocked. Returning from Drop without a
-        // recursive-empty proof would detach untrusted work.
-        let _report = self.process.cleanup(CleanupTrigger::OwnerDrop);
-        self.join();
+        // The dedicated command owner holds the process and reader Arcs, runs
+        // proof-based cleanup, and joins output. Detaching its JoinHandle here
+        // prevents a blocked containment inspection from starving standalone's
+        // event loop; the attempt-owned emergency registry remains registered
+        // until cleanup itself completes.
+        let _ = self.thread.take();
     }
 }
 

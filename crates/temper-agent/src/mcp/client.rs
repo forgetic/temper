@@ -158,6 +158,12 @@ impl McpCancellationHandle {
     pub fn cancel_and_join(&self) {
         self.control.cancel_and_join(CleanupTrigger::Cancellation);
     }
+
+    /// Requests cleanup on the process's dedicated owner. This path never
+    /// waits for the serialized request mutex or recursive-empty proof.
+    pub fn request_cancel(&self) {
+        self.control.request_cleanup(CleanupTrigger::Cancellation);
+    }
 }
 
 impl std::fmt::Debug for McpCancellationHandle {
@@ -425,7 +431,7 @@ struct ClientInner {
 
 impl Drop for ClientInner {
     fn drop(&mut self) {
-        self.control.cancel_and_join(CleanupTrigger::OwnerDrop);
+        self.control.request_cleanup(CleanupTrigger::OwnerDrop);
     }
 }
 
@@ -521,10 +527,10 @@ impl<T: Send + 'static> Future for BlockingCall<T> {
 impl<T> Drop for BlockingCall<T> {
     fn drop(&mut self) {
         if !self.completed {
-            self.cancellation.cancel_and_join();
+            self.cancellation.request_cancel();
         }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        // The request thread exits after the independent cleanup owner closes
+        // the process/pipe. Detach rather than joining from standalone's loop.
+        let _ = self.thread.take();
     }
 }

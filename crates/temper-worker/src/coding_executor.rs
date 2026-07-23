@@ -102,13 +102,10 @@ async fn execute<R: AgentRunner>(
     config: CodingExecutorConfig,
     runner: Arc<R>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
-    containment_factory: Option<temper_process_containment::ContainmentFactory>,
     assign: Assign,
     execution: JobExecutionContext,
 ) -> JobOutcome {
-    if let Some(factory) = containment_factory {
-        execution.cancellation.install_containment_factory(factory);
-    }
+    let attempt_id = execution.attempt.id.clone();
     let artifact_item = assign.artifact.item.clone();
     let job_id = assign.job_id.clone();
     let assignment_trace_context = assign.trace_context.clone();
@@ -268,7 +265,6 @@ async fn execute<R: AgentRunner>(
     // Run one agent turn with the cwd set to the workspace root (not a single
     // repo), so the agent can read and build every sibling. The runner owns the
     // agent mechanism; the executor owns the workspace lifecycle around it.
-    let attempt_id = execution.attempt.id.clone();
     let progress = execution.progress.clone();
     if progress.attempt_id() != attempt_id {
         return failure(

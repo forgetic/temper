@@ -67,12 +67,17 @@ pub struct DeploymentConfig {
     /// resolution; it does not select runtime behavior yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topology: Option<String>,
+    /// Absolute internal shutdown budget for `temper serve standalone`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standalone_shutdown_budget_secs: Option<u64>,
 }
 
 impl DeploymentConfig {
     /// `true` when every field is unset, so the section can be omitted entirely.
     fn is_empty(&self) -> bool {
-        self.name.is_none() && self.topology.is_none()
+        self.name.is_none()
+            && self.topology.is_none()
+            && self.standalone_shutdown_budget_secs.is_none()
     }
 }
 

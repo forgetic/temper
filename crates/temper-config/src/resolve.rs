@@ -22,8 +22,9 @@ use secrecy::SecretString;
 use crate::agent_resolve::{parse_provider_kind, resolve_provider_credential};
 use crate::agent_trace_resolve::resolve_observability;
 use crate::deadline_resolve::{
-    positive_duration_millis, resolve_agent_operation_limits, resolve_worker_liveness_limits,
-    validate_liveness_ordering,
+    DEFAULT_STANDALONE_SHUTDOWN_BUDGET_SECS, positive_duration_millis,
+    resolve_agent_operation_limits, resolve_worker_liveness_limits, validate_liveness_ordering,
+    validate_standalone_shutdown_budget,
 };
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
@@ -109,6 +110,10 @@ pub fn resolve_with_options(
         options,
         &agent,
     )?;
+    validate_standalone_shutdown_budget(
+        deployment.standalone_shutdown_budget,
+        worker.liveness_limits,
+    )?;
     let observability = resolve_observability(
         config,
         credentials,
@@ -146,8 +151,19 @@ fn resolve_deployment(config: &Config) -> Result<DeploymentSettings, ConfigError
     let topology = trimmed(config.deployment.topology.as_deref())
         .map(|topology| parse_deployment_topology(&topology))
         .transpose()?;
+    let standalone_shutdown_budget = positive_duration_secs(
+        config
+            .deployment
+            .standalone_shutdown_budget_secs
+            .unwrap_or(DEFAULT_STANDALONE_SHUTDOWN_BUDGET_SECS),
+        "deployment.standalone_shutdown_budget_secs",
+    )?;
 
-    Ok(DeploymentSettings { name, topology })
+    Ok(DeploymentSettings {
+        name,
+        topology,
+        standalone_shutdown_budget,
+    })
 }
 
 fn parse_deployment_topology(raw: &str) -> Result<DeploymentTopology, ConfigError> {

@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use super::*;
 
@@ -80,6 +80,47 @@ pub(super) fn pidfd_open(pid: u32) -> io::Result<OwnedFd> {
         // SAFETY: successful pidfd_open returned this newly owned descriptor.
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
+}
+
+pub(super) trait EmergencyProcess: Send {
+    fn signal(&self, signal: ContainmentSignal) -> io::Result<()>;
+}
+
+struct PinnedEmergencyProcess(OwnedFd);
+
+impl EmergencyProcess for PinnedEmergencyProcess {
+    fn signal(&self, signal: ContainmentSignal) -> io::Result<()> {
+        let native_signal = match signal {
+            ContainmentSignal::Term => libc::SIGTERM,
+            ContainmentSignal::Kill => libc::SIGKILL,
+        };
+        // SAFETY: this owner pins the process with an owned pidfd and sends no
+        // pointers or diagnostic identity data.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.0.as_raw_fd(),
+                native_signal,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+pub(super) fn open_emergency_process(pid: u32) -> io::Result<Box<dyn EmergencyProcess>> {
+    pidfd_open(pid)
+        .map(|pidfd| Box::new(PinnedEmergencyProcess(pidfd)) as Box<dyn EmergencyProcess>)
 }
 
 pub(super) unsafe fn write_all_fd(fd: RawFd, bytes: &[u8]) -> io::Result<()> {

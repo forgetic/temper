@@ -18,6 +18,10 @@ struct FakeKernelState {
     reuse_pid_on_term: AtomicBool,
     term_calls: AtomicUsize,
     kill_calls: AtomicUsize,
+    emergency_term_calls: AtomicUsize,
+    emergency_kill_calls: AtomicUsize,
+    verify_blocked: AtomicBool,
+    verify_stalled: AtomicBool,
 }
 
 impl FakeKernelState {
@@ -30,6 +34,10 @@ impl FakeKernelState {
             reuse_pid_on_term: AtomicBool::new(false),
             term_calls: AtomicUsize::new(0),
             kill_calls: AtomicUsize::new(0),
+            emergency_term_calls: AtomicUsize::new(0),
+            emergency_kill_calls: AtomicUsize::new(0),
+            verify_blocked: AtomicBool::new(false),
+            verify_stalled: AtomicBool::new(false),
         }
     }
 }
@@ -148,7 +156,12 @@ impl ContainmentKernel for FakeKernel {
     }
 
     fn verify_recursive_empty(&mut self) -> io::Result<RecursiveEmptyProof> {
-        if self.state.inspection_blocked.load(Ordering::Acquire) {
+        while self.state.verify_stalled.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        if self.state.inspection_blocked.load(Ordering::Acquire)
+            || self.state.verify_blocked.load(Ordering::Acquire)
+        {
             return Err(io::Error::other("injected emptiness inspection failure"));
         }
         let members = self
@@ -197,7 +210,36 @@ impl PreparedContainmentBackend for FakePrepared {
             state: Arc::clone(&self.state),
             inspections: 0,
         };
-        Ok(BackendSpawn::new(child, Box::new(kernel)))
+        let forced_state = Arc::clone(&self.state);
+        let hard_kill_state = Arc::clone(&self.state);
+        let emergency = EmergencyTerminationHandle::from_owners(
+            "fake",
+            move || {
+                forced_state
+                    .emergency_term_calls
+                    .fetch_add(1, Ordering::AcqRel);
+                if !forced_state.term_fails.load(Ordering::Acquire) {
+                    forced_state
+                        .members
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clear();
+                }
+                Ok(())
+            },
+            move || {
+                hard_kill_state
+                    .emergency_kill_calls
+                    .fetch_add(1, Ordering::AcqRel);
+                hard_kill_state
+                    .members
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clear();
+                Ok(())
+            },
+        )?;
+        Ok(BackendSpawn::new(child, Box::new(kernel), emergency))
     }
 }
 
@@ -250,6 +292,7 @@ impl ContainmentBackendFactory for FakeBackendFactory {
 #[derive(Default)]
 struct RecordingObserver {
     snapshots: Mutex<Vec<CleanupSnapshot>>,
+    observations: Mutex<Vec<CleanupObservation>>,
     changed: Condvar,
 }
 
@@ -292,6 +335,14 @@ impl CleanupObserver for RecordingObserver {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(snapshot.clone());
         self.changed.notify_all();
+    }
+
+    fn observe_cleanup(&self, observation: &CleanupObservation) {
+        self.observations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(observation.clone());
+        self.observe(observation.snapshot());
     }
 }
 
@@ -379,78 +430,7 @@ fn cleanup_runs_exactly_once_and_first_trigger_wins() {
     assert_eq!(fake.state.term_calls.load(Ordering::Acquire), 1);
 }
 
-#[test]
-fn blocked_inspection_cannot_complete_cleanup() {
-    let fake = Arc::new(FakeBackendFactory::new(
-        ContainmentBackendKind::LinuxSupervisor,
-        vec![process_identity(201)],
-    ));
-    fake.state.inspection_blocked.store(true, Ordering::Release);
-    let observer = Arc::new(RecordingObserver::default());
-    let scoped_observer: Arc<dyn CleanupObserver> = observer.clone();
-    let factory = factory_with_observer(
-        &fake,
-        ContainmentBackendPolicy::ForceLinuxSupervisor,
-        Some(scoped_observer),
-    );
-    let process = Arc::new(
-        factory
-            .prepare(spec("blocked"))
-            .expect("prepare fake containment")
-            .spawn(exited_command())
-            .expect("spawn fake containment"),
-    );
-    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
-    let cleanup_process = Arc::clone(&process);
-    let cleanup_thread = thread::spawn(move || {
-        let report = cleanup_process.cleanup(CleanupTrigger::Watchdog);
-        completed_tx.send(report).expect("publish cleanup report");
-    });
-
-    assert!(observer.wait_for_blocked(Duration::from_secs(2)));
-    let (waiter_tx, waiter_rx) = std::sync::mpsc::channel();
-    let waiting_process = Arc::clone(&process);
-    let waiting_thread = thread::spawn(move || {
-        let report = waiting_process.cleanup(CleanupTrigger::Shutdown);
-        waiter_tx.send(report).expect("publish waiter report");
-    });
-    assert!(matches!(
-        completed_rx.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty)
-    ));
-    assert!(matches!(
-        waiter_rx.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty)
-    ));
-    assert!(
-        observer
-            .snapshots
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .all(|snapshot| !matches!(snapshot, CleanupSnapshot::Completed { .. }))
-    );
-
-    fake.state
-        .inspection_blocked
-        .store(false, Ordering::Release);
-    let report = completed_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("cleanup completes after inspection recovers");
-    let waiter_report = waiter_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("waiting caller receives the same cleanup report");
-    assert_eq!(report, waiter_report);
-    assert_eq!(report.trigger(), CleanupTrigger::Watchdog);
-    assert!(matches!(
-        report.recursive_empty(),
-        RecursiveEmptyProof::Proven { .. }
-    ));
-    assert!(!report.blocked_diagnostics().is_empty());
-    cleanup_thread.join().expect("join cleanup caller");
-    waiting_thread.join().expect("join waiting cleanup caller");
-    drop(process);
-}
+mod emergency;
 
 #[test]
 fn reports_bound_survivors_attempts_and_diagnostics() {

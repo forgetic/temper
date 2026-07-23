@@ -1,161 +1,196 @@
 # Deploy Temper with systemd
 
-Use this recipe for a split engine/worker deployment on one or more Linux hosts.
-The public startup surface is `temper serve`; the older `temper daemon` command
-is compatibility-only.
+Use this recipe for either an all-in-one standalone deployment or a split
+engine/worker deployment on Linux. The public startup surface is `temper serve`;
+the older `temper daemon` command is compatibility-only. Select one topology
+for a state directory—never run standalone beside split services over the same
+state.
 
 ## 1. Prepare, check, plan, and apply the bundle
 
-The production operator lifecycle is explicit:
+The production lifecycle is
 `temper init -> temper check -> temper plan -> temper apply -> temper serve`.
-Create a bundle with the interactive flow, review it, and run offline checks for
-the engine and every worker pool before inspecting the Forge reconciliation
-plan:
+Create and review the bundle before inspecting the Forge reconciliation plan:
 
 ```sh
 temper --config ./deploy init
 $EDITOR ./deploy/config.toml ./deploy/credentials.toml ./deploy/workflow.yaml
-temper --config ./deploy check --component engine
+temper --config ./deploy check --component standalone # all-in-one option
+temper --config ./deploy check --component engine     # split option
 temper --config ./deploy check --component worker --pool engineers
 temper --config ./deploy plan
 temper --config ./deploy apply --yes
 ```
 
-`temper plan` performs read-only Forge inspection; `temper apply` is the
-forge-mutating step. For demo-only runs, `temper init --apply --yes` combines the
-local write and apply steps. Production automation should keep check, plan, and
-apply separate.
+`temper plan` is read-only; `temper apply` is Forge-mutating. Production
+automation should keep check, plan, and apply separate.
 
 ## 2. Use systemd credentials for secrets
 
 Install non-secret config and workflow files under `/etc/temper`. Keep secrets
 in `/etc/temper/credentials.toml`, mode `0600`, owned by root or the Temper
-service user. The checked-in example stores every named Forge, webhook, pool,
-and provider secret in this TOML file.
+service user. The checked-in units use:
 
-The example units use `LoadCredential=credentials.toml:/etc/temper/credentials.toml`.
+```ini
+LoadCredential=credentials.toml:/etc/temper/credentials.toml
+```
+
 systemd copies that file into `$CREDENTIALS_DIRECTORY`; Temper reads the
 credential directory automatically when `--secrets` is omitted. A deployment
-may instead split selected names into one systemd credential file per secret;
-named files override same-named `[secrets]` entries during migration.
+may split selected names into one credential file per secret; named files
+override same-named `[secrets]` entries. For a shell preflight, pass
+`--secrets /etc/temper/credentials.toml` explicitly. `temper config show`
+reports references and availability without revealing values.
 
-For preflight checks outside systemd, pass the file explicitly:
+## 3. Run standalone
 
-```sh
-temper --config /etc/temper/config.toml \
-  --secrets /etc/temper/credentials.toml check --component engine
-temper --config /etc/temper/config.toml \
-  --secrets /etc/temper/credentials.toml check \
-  --component worker --pool engineers
-```
-
-## 3. Run the engine
-
-Copy `examples/systemd/temper-engine.service` to `/etc/systemd/system/`, edit
-paths if needed, then:
+The checked example config declares a `local` worker pool, so it is directly
+compatible with the standalone unit:
 
 ```sh
+install -m 0644 examples/systemd/temper-standalone.service \
+  /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now temper-engine.service
+temper --config /etc/temper/config.toml \
+  --secrets /etc/temper/credentials.toml check --component standalone
+systemctl enable --now temper-standalone.service
 # Equivalent foreground command:
 temper --config /etc/temper/config.toml \
-  --secrets /etc/temper/credentials.toml serve engine
+  --secrets /etc/temper/credentials.toml serve standalone
 ```
 
-The engine owns queue scheduling, the worker protocol, the Forgejo webhook
-endpoint at `/forgejo/webhook`, and three distinct cadences: dedicated CI-status,
-full role-feed, and mechanical automation backstops.
+The standalone process owns the engine, local worker, native agent, webhook,
+and polling/mechanical backstops. Its `[deployment]` setting
+`standalone_shutdown_budget_secs = 30` is one absolute duration measured from
+SIGINT/SIGTERM receipt. `temper config show` prints the resolved budget. Config
+resolution rejects a budget that does not strictly exceed the worker graceful
+and forced cancellation graces plus the fixed 5-second HTTP-drain and 5-second
+final emergency-kill allowances.
 
-## 4. Run worker pools
+The unit sets `TimeoutStopSec=45s`: it is strictly greater than Temper's default
+30-second budget and preserves an explicit 15-second safety margin for service
+manager scheduling and final accounting. Temper's deadline terminator is
+core-dump-free, so core generation cannot consume that margin. When tuning,
+increase the internal budget first, rerun `temper check`, and then set
+`TimeoutStopSec` strictly larger (preferably retaining at least this margin).
+Never configure `TimeoutStopSec` at or below Temper's internal budget.
 
-Declare worker pools in `[[worker.pools]]` and start one template instance per
+### Proof-based shutdown versus bounded process-loss recovery
+
+Ordinary ownership loss remains proof-based and fail closed. The attempt fence
+closes before cancellation; result, Forge-context, submit, workspace, git,
+push, and other attempt effects are rejected. Temper retains the registry
+entry, heartbeat membership, and permit until it has both recursive descendant
+emptiness/direct-child reap and terminal-trace acknowledgement. There is no
+ordinary timeout that fabricates `AttemptQuiesced` or permits stale publication.
+
+Stopping the standalone service adds a bounded process-level contract:
+
+1. close daemon claim, result, Forge-context, and Forge-application admission;
+2. fence every active attempt and begin HTTP drain;
+3. consume one deadline across graceful/forced/hard worker cancellation,
+   admitted daemon work, trace retention, exact joined-assignment release, and
+   HTTP drain;
+4. reserve the final five seconds for independent emergency KILL and an
+   immediate core-dump-free process exit.
+
+If every proof arrives in time, only exact joined attempts are released and
+`standalone.shutdown.summary` emits `disposition=graceful_exit`. If any proof is
+still blocked, Temper emits `disposition=bounded_crash_handoff`, retains all
+unproven durable assignments and the durable trace spool, invokes the
+attempt-owned out-of-band termination authority, and exits immediately with
+status 70. The termination primitive generates no core, does not unwind or run
+Rust owner drops, invokes no C/Rust exit handlers, and flushes no userspace
+buffers. This is process-loss recovery, not successful local quiescence: it does
+not synthesize descendant proof, terminal-trace acknowledgement, a result,
+capacity release, or normal assignment release.
+
+`Restart=on-failure` starts a replacement after the bounded handoff. Startup
+stages prior-boot assignments with dispatch closed, reattaches only exact live
+attempts, converges unreattached orphans from fresh Forge state, replays durable
+results, and forwards retained trace-spool records. Existing attempt fences and
+durable claim checks reject late results or Forge operations from the old
+attempt, while feed/startup convergence makes abandoned work recoverable once.
+
+### Shutdown diagnostics
+
+A blocked deadline emits `standalone.shutdown.blocker` events followed by the
+terminal `standalone.shutdown.summary`. The closed `blocker_kind` vocabulary is
+`containment`, `terminal_trace_ack`, `result_delivery`, `component_task`, and
+`registry_state`. Each bounded/redacted event carries available worker, job,
+and attempt IDs; owner scope/name; owner root; root PID and sampled survivor
+PIDs; containment phase or trace run/sequence; first-seen time and increasing
+age; escalation stage; deadline remaining; and occurrence/omission counts.
+A zero/`unknown` field means that evidence was unavailable, not that no process
+or blocker existed.
+
+### Descendant containment and systemd backstop
+
+The standalone and worker units set `Delegate=yes`. On cgroup-v2 Linux this
+provides a writable service subtree. Temper creates per-job and nested
+per-tool/command ownership cgroups before exec. Cleanup uses `cgroup.kill` or
+pidfd-safe nested enumeration, reaps the direct child, and waits for
+recursive-empty evidence. When delegation is unavailable, the Linux
+subreaper/supervisor fallback owns and reaps re-parented descendants across
+process groups and sessions; Windows uses nested kill-on-close Job Objects.
+
+Both units use `KillMode=control-group`. This is the external abrupt-death
+backstop for kernel failure, an early crash, or failure before Temper arms its
+watchdog. Operators must not use `KillMode=process`: killing only the main PID
+can strand agents, MCP servers, and managed commands and invalidates the
+containment guarantee. Removing `Delegate=yes` also forfeits the preferred
+cgroup-v2 backend.
+
+At startup, `worker.containment.startup_capability` reports delegation,
+subtree, `cgroup.kill`, pidfd, selected backend, and bounded fallback reason.
+Cleanup events report nested owner evidence. Proven-stale startup cgroups are
+killed and removed only after process-incarnation checks; malformed, live, or
+uninspectable roots are retained rather than signaled.
+
+## 4. Run split engine and worker pools
+
+For split operation, copy `temper-engine.service` and
+`temper-worker@.service`, then start one worker template instance per configured
 pool:
 
 ```sh
+systemctl enable --now temper-engine.service
 systemctl enable --now temper-worker@architects.service
 systemctl enable --now temper-worker@engineers.service
 systemctl enable --now temper-worker@reviewers.service
-# Equivalent foreground command for one pool:
+# Equivalent foreground worker command:
 temper --config /etc/temper/config.toml \
   --secrets /etc/temper/credentials.toml serve worker --pool engineers
 ```
 
-The `%i` instance name becomes `--pool %i`. Use `--capacity` in a local override
-for a host-specific concurrency limit; otherwise the resolved pool policy is
-used.
+The `%i` instance becomes `--pool %i`. Use `--capacity` in a local override only
+for a host-specific limit no larger than pool policy.
 
-### Descendant containment and abrupt worker death
+A split worker intentionally retains the ordinary proof-based shutdown
+semantics described above: it may wait past its graceful and forced graces while
+recursive-empty or terminal-trace proof is unavailable. Its example
+`TimeoutStopSec=5min` and `KillMode=control-group` are an external crash
+backstop, not Temper's standalone bounded-handoff path. Increase that timeout
+when legitimate kernel/storage stalls require it; do not weaken the kill mode.
 
-The checked-in worker unit sets `Delegate=yes`. On a cgroup-v2 Linux host this
-gives Temper ownership of a writable service subtree. Temper creates the
-per-job cgroup before spawning the agent, places the child in it before `exec`,
-and creates nested per-tool and per-command cgroups below that job boundary.
-Descendants cannot escape cleanup by changing process group or session. Cleanup
-attempts TERM, escalates with `cgroup.kill` (or pidfd enumeration), reaps the
-direct child, and waits for recursive `populated 0`/empty-membership proof
-before accepting tool or job completion.
-
-The preferred Linux backend requires all of the following:
-
-- a unified cgroup-v2 mount and systemd delegation (`Delegate=yes`);
-- a writable nested subtree and writable membership controls;
-- pidfd support for PID-reuse-safe signaling;
-- `cgroup.kill` when available (Temper safely enumerates nested members when it
-  is absent).
-
-At worker startup, `worker.containment.startup_capability` reports the cgroup-v2
-mount, delegation, nested-subtree writability, `cgroup.kill`, pidfd support,
-selected backend, and bounded fallback reason. Managed bash and MCP cleanup is
-reported over the attempt-bound lifecycle carrier in both split-agent and
-standalone mode, so nested blocked/fallback/completed events retain
-worker/job/attempt and owner/tool identity. If delegation is unavailable,
-Temper emits `worker.containment.fallback_activated` at warning level and uses
-its Linux subreaper/supervisor backend. That fallback tracks and reaps
-re-parented descendants across process groups and sessions; it is not the old
-process-group-only adapter. Windows workers require nested, kill-on-close Job
-Objects and recursive-empty verification. Unsupported platforms fail
-containment preparation rather than claiming a descendant-complete guarantee.
-
-Startup probing owns a dedicated `temper` subtree. Each job tree is nested
-under a logical-worker and process-boot fence containing the owner's PID and
-non-zero kernel start-time identity. If startup cannot establish that fence,
-the cgroup backend is unavailable and normal Auto selection uses the Linux
-supervisor fallback. Startup preserves every fence whose exact owner is still
-live; only a missing owner or a reused PID proves a fence stale enough to
-signal. Proven-stale cgroups are killed and removed deepest-first after an
-independent empty-tree proof. Legacy, malformed, and uninspectable roots are
-retained without signaling. `worker.containment.startup_scavenge` reports
-removed, live-protected, and retained counts, bounded retained-path diagnostics,
-and omitted counts without command or credential content. Never manually move
-unrelated processes into the Temper subtree.
-
-`SIGINT`/`SIGTERM` closes intake, fences every active attempt, requests cleanup,
-and waits for task and containment quiescence before worker shutdown returns.
-The unit retains `KillMode=control-group` as the abrupt-death backstop: if the
-worker is killed, the kernel fails, or cleanup remains blocked beyond
-`TimeoutStopSec=5min`, systemd sends SIGKILL to the entire service cgroup. That
-forced stop can preserve no application-level cleanup report; after restart,
-stale-subtree inspection supplies the available evidence. Increase
-`TimeoutStopSec` on hosts where kernel or storage stalls can legitimately delay
-cleanup, but do not use `KillMode=process` or remove delegation.
+The engine owns queue scheduling, worker protocol, webhook endpoint, and three
+distinct cadences: dedicated CI-status, full role-feed, and mechanical
+automation backstops.
 
 ## 5. Register the webhook contract
 
-Register one Forgejo webhook per managed repository with this target:
+Register one Forgejo webhook per managed repository at:
 
 ```text
-http://<engine-host>:<engine-port>/forgejo/webhook
+http://<engine-or-standalone-host>:<port>/forgejo/webhook
 ```
 
-Use the same HMAC value as the config's named `webhook-secret` credential and
-enable issue, pull-request, review/status/CI, label, and push events. Webhooks
-are edge-triggered wake hints only: the engine always reloads Forge state before
-acting. `ci_poll_cadence_secs` bounds webhook-less terminal red-repair and green-
-landing detection; `poll_cadence_secs` remains the full liveness/correctness
-backstop. `mechanical_cadence_secs` alone does not discover red engineer repair
-work. A `ci_failed` condition is eligible only after every latest-per-name job
-for the current head is terminal, so a failure mixed with queued/running work
-remains pending. Do not run a separate trigger service.
+Use the configured webhook credential and enable issue, pull-request,
+review/status/CI, label, and push events. Webhooks are wake hints only; the
+engine always reloads Forge state. `ci_poll_cadence_secs` bounds webhook-less
+terminal CI detection, `poll_cadence_secs` remains the full liveness/correctness
+backstop, and `mechanical_cadence_secs` does not replace either. Do not install
+a separate trigger service.
 
-See `examples/systemd/` for the checked-in config, workflow, credentials, and
-unit contract.
+See `examples/systemd/` for the checked config, workflow, credentials, and all
+three unit contracts.

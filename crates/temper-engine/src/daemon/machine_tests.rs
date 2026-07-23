@@ -10,11 +10,14 @@ use temper_workflow::RoleId;
 #[test]
 fn begin_shutdown_closes_dispatch_before_assignment_release() {
     let mut machine = DaemonMachine::default_machine(Duration::ZERO);
-    let (reply, _joined) = oneshot();
-    let requests =
-        machine.on_completion(EngineTime::ZERO, DaemonCompletion::BeginShutdown { reply });
+    let (reply, _report) = oneshot();
+    let (joined, _join_notification) = oneshot();
+    let requests = machine.on_completion(
+        EngineTime::ZERO,
+        DaemonCompletion::BeginShutdown { reply, joined },
+    );
     assert!(requests.is_empty());
-    assert!(machine.shutting_down);
+    assert_eq!(machine.shutdown_admission, ShutdownAdmission::Fenced);
     assert!(machine.core.in_flight_jobs().is_empty());
 
     let enqueue = machine.on_completion(
@@ -32,6 +35,129 @@ fn begin_shutdown_closes_dispatch_before_assignment_release() {
     );
     assert!(enqueue.is_empty());
     assert!(machine.core.queued_jobs().is_empty());
+}
+
+#[test]
+fn shutdown_report_tracks_admitted_context_until_its_typed_guard_finishes() {
+    let mut machine = DaemonMachine::default_machine(Duration::ZERO);
+    let identity = AssignmentAttemptIdentity::new(
+        "worker-context",
+        "job-context",
+        Some("attempt-context".to_string()),
+    );
+    let admission = machine.admit_context(identity.clone());
+    let (reply, report) = oneshot();
+    let (joined, join_notification) = oneshot();
+
+    machine.on_completion(
+        EngineTime::ZERO,
+        DaemonCompletion::BeginShutdown { reply, joined },
+    );
+    let report = temper_engine_io::block_on(report.recv()).expect("shutdown report");
+    assert_eq!(
+        report.pending_context_operations,
+        BTreeSet::from([identity.clone()])
+    );
+    assert_eq!(report.blockers.len(), 1);
+    let blocker = &report.blockers[0];
+    assert_eq!(
+        blocker.kind,
+        temper_protocol_worker::ShutdownBlockerKind::ComponentTask
+    );
+    assert_eq!(blocker.worker_id.as_deref(), Some("worker-context"));
+    assert_eq!(blocker.job_id.as_deref(), Some("job-context"));
+    assert_eq!(blocker.attempt_id.as_deref(), Some("attempt-context"));
+    assert_eq!(blocker.owner_name, "forge_context");
+
+    machine.finish_context(admission);
+    assert!(temper_engine_io::block_on(join_notification.recv()).is_some());
+}
+
+#[test]
+fn shutdown_rejects_freshness_webhooks_and_armed_wake_work() {
+    let mut machine = DaemonMachine::default_machine(Duration::ZERO);
+    machine.webhook = Some(WebhookConfig {
+        secret: "shutdown-secret".to_string(),
+        targets: Vec::new(),
+    });
+    let repository = RepositoryPath::new("ai", "temper");
+    let lane = WakeLane::Role(RoleId::new("engineer"));
+    machine
+        .wake_coordinator
+        .configure_repository(repository.clone(), [lane.clone()]);
+    let scheduled = machine.on_completion(
+        EngineTime::ZERO,
+        DaemonCompletion::ScheduleWake {
+            request: WakeRequest::targeted_for_lanes(
+                repository.clone(),
+                [lane],
+                HintArtifactKind::Issue,
+                ItemNumber::new(660),
+                ChangeKind::Label,
+            ),
+        },
+    );
+    let generation = scheduled
+        .iter()
+        .find_map(|request| match request {
+            DaemonRequest::StartWakeTimer { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .expect("wake timer is armed before shutdown");
+    let (reply, _report) = oneshot();
+    let (joined, _join_notification) = oneshot();
+    machine.on_completion(
+        EngineTime::ZERO,
+        DaemonCompletion::BeginShutdown { reply, joined },
+    );
+
+    assert!(
+        machine
+            .on_completion(
+                EngineTime::ZERO,
+                DaemonCompletion::WakeTimerElapsed {
+                    repo: repository,
+                    generation,
+                },
+            )
+            .is_empty(),
+        "an armed timer cannot start wake work after fencing"
+    );
+    for uri in ["/v1/pr-freshness", "/forgejo/webhook"] {
+        let (response, received) = oneshot();
+        let requests = machine.on_completion(
+            EngineTime::ZERO,
+            DaemonCompletion::Http {
+                request: HttpRequestData {
+                    method: "POST".to_string(),
+                    uri: uri.to_string(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                responder: HttpResponder::from_oneshot(response),
+                trusted_transport: false,
+            },
+        );
+        assert!(matches!(
+            requests.as_slice(),
+            [DaemonRequest::Respond { response, .. }] if response.status == 503
+        ));
+        for request in requests {
+            if let DaemonRequest::Respond {
+                responder,
+                response,
+            } = request
+            {
+                responder.respond(response);
+            }
+        }
+        assert_eq!(
+            temper_engine_io::block_on(received.recv())
+                .expect("fenced response")
+                .status,
+            503
+        );
+    }
 }
 
 #[test]

@@ -35,15 +35,22 @@ jobs:
     runs-on: host
     # The shared runner has no swap. An all-targets cold build can otherwise
     # launch enough rustc/linker processes to OOM the runner and strand the job.
+    # Keep the bound at two: concurrently linked test binaries also need enough
+    # temporary disk headroom for mold to finish on the shared runner.
     # Its system /tmp is also a small tmpfs shared with other workspaces, so the
     # first post-checkout step moves scratch data to disk-backed /var/tmp.
     env:
-      CARGO_BUILD_JOBS: "4"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - name: Checkout
         # Bypass the default action mirror so a data.forgejo.org outage cannot
         # prevent this job from reaching the repository checkout.
         uses: https://github.com/actions/checkout@v4
+      - name: Reclaim shared build cache
+        # The wrapper daemon is not guaranteed to remain resident between host
+        # jobs, so explicitly apply kache's configured LRU size bound before a
+        # restored build needs linker headroom.
+        run: kache gc
       - name: Prepare scratch directory
         # This Forgejo Actions runner does not provide the `runner.temp`
         # context. Use a short path outside the checkout so temporary git probes
@@ -132,10 +139,16 @@ jobs:
         # Bypass the default action mirror so a data.forgejo.org outage cannot
         # prevent this job from reaching the repository checkout.
         uses: https://github.com/actions/checkout@v4
+      - name: Reclaim shared build cache
+        # The web lane may be the first job scheduled on a full host. LRU
+        # eviction preserves warm Rust artifacts while making npm extraction
+        # independent of validate-job ordering.
+        run: kache gc
       - name: Install (npm ci)
-        # `npm ci` installs exactly the committed package-lock.json — fails if it
-        # is missing or out of sync with package.json.
-        run: npm ci
+        # `npm ci` installs exactly the committed package-lock.json. Keep the
+        # install hermetic and bounded: advisory/funding network calls are not
+        # validation gates and can strand the shared runner after extraction.
+        run: npm ci --no-audit --no-fund
       - name: Test (vitest)
         run: npm test
       - name: Build (esbuild)

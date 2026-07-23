@@ -28,11 +28,13 @@ use temper_log::emit::{
     emit_agent_started,
 };
 use temper_protocol_activity::ModelFailureV1;
-use temper_protocol_agent::{AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext};
+use temper_protocol_agent::{
+    AgentCancellationStage, AgentRuntimeLimitsV1, AgentToolConfig, WorkspaceContext,
+};
 use temper_protocol_worker::FailureClass;
 use temper_worker::{
     AcceptedSubmitProofStore, AgentForgeContextHost, AgentRunError, AgentRunOutput,
-    AgentRunRequest, AgentRunner, TraceCollector, WorkerAgentTraceConfig,
+    AgentRunRequest, AgentRunner, JobCancellationRequest, TraceCollector, WorkerAgentTraceConfig,
 };
 
 mod attempt_fencing;
@@ -192,6 +194,7 @@ impl InProcessAgentRunner {
         let cwd = request.cwd;
         let fence = request.fence;
         let cancellation = request.cancellation;
+        let emergency_termination = request.emergency_termination;
         let progress = request.progress;
         // §7 agent boundary events. The `item` ref is the work-item subject tag
         // (`[repo#n]` / `[repo PR#n]`); `kind` is the role's activity verb
@@ -265,7 +268,10 @@ impl InProcessAgentRunner {
         let forge_context = self.forge_context.clone().map(|host| {
             attempt_fencing::forge_host(host, job_id.to_string(), attempt_id.clone(), fence.clone())
         });
-        let containment = self.containment.clone();
+        let containment = self
+            .containment
+            .clone()
+            .with_emergency_registry(emergency_termination);
         let agent_cancellation = AgentCancellationLatch::default();
         let cancellation_owner = cancellation.register_async_owner();
         let lifecycle_reporter: temper_agent::AgentLifecycleReporter =
@@ -304,19 +310,24 @@ impl InProcessAgentRunner {
                     containment,
                 );
                 let mut run = std::pin::pin!(run);
-                let mut cancellation_requested = std::pin::pin!(cancellation.cancelled());
-                let mut forwarded_cancellation = false;
+                let mut observed_cancellation = None;
                 std::future::poll_fn(|cx| {
-                    if !forwarded_cancellation
-                        && cancellation_requested.as_mut().poll(cx).is_ready()
+                    while let std::task::Poll::Ready(stage) =
+                        cancellation.poll_request(observed_cancellation, cx)
                     {
-                        forwarded_cancellation = true;
-                        agent_cancellation.request_cancel();
+                        observed_cancellation = Some(stage);
+                        agent_cancellation.request(agent_cancellation_stage(stage));
                     }
                     run.as_mut().poll(cx)
                 })
                 .await
             };
+            // Managed bash/MCP owners clean up on dedicated threads. Keep the
+            // attempt owner registered until each process boundary has produced
+            // ordinary recursive-empty proof; emergency dispatch alone never
+            // satisfies this join.
+            cancellation.wait_for_process_owners().await;
+
             // A completion that races authoritative cancellation is never a
             // successful model/result completion at the worker boundary.
             let worker_cancellation_requested = cancellation.is_cancelled() || !fence.is_open();
@@ -387,6 +398,14 @@ impl InProcessAgentRunner {
                 accepted_submit: accepted_submit.latest(),
             })
         })
+    }
+}
+
+fn agent_cancellation_stage(request: JobCancellationRequest) -> AgentCancellationStage {
+    match request {
+        JobCancellationRequest::Graceful => AgentCancellationStage::Graceful,
+        JobCancellationRequest::ForcedTermination => AgentCancellationStage::ForcedTermination,
+        JobCancellationRequest::HardKill => AgentCancellationStage::HardKill,
     }
 }
 

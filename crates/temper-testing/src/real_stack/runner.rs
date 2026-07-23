@@ -273,12 +273,23 @@ impl NativeJigAgentRunner {
             })
         } else {
             let mut run = std::pin::pin!(run);
-            let mut cancelled = std::pin::pin!(cancellation.cancelled());
-            let mut forwarded = false;
+            let mut observed = None;
             std::future::poll_fn(|cx| {
-                if !forwarded && cancelled.as_mut().poll(cx).is_ready() {
-                    forwarded = true;
-                    agent_cancellation.request_cancel();
+                while let std::task::Poll::Ready(request) = cancellation.poll_request(observed, cx)
+                {
+                    observed = Some(request);
+                    let stage = match request {
+                        temper_worker::JobCancellationRequest::Graceful => {
+                            temper_protocol_agent::AgentCancellationStage::Graceful
+                        }
+                        temper_worker::JobCancellationRequest::ForcedTermination => {
+                            temper_protocol_agent::AgentCancellationStage::ForcedTermination
+                        }
+                        temper_worker::JobCancellationRequest::HardKill => {
+                            temper_protocol_agent::AgentCancellationStage::HardKill
+                        }
+                    };
+                    agent_cancellation.request(stage);
                 }
                 run.as_mut().poll(cx)
             })
@@ -309,10 +320,12 @@ impl NativeJigAgentRunner {
             };
             match terminal {
                 Ok(sequence) if worker_cancellation_requested => {
-                    cancellation.quiescence_pending(format!(
-                        "terminal trace {} sequence {sequence} is awaiting durable acknowledgement",
-                        trace.run_id()
-                    ));
+                    cancellation.terminal_trace_pending(
+                        temper_worker::TerminalTraceBlocker::awaiting_acknowledgement(
+                            trace.run_id(),
+                            sequence,
+                        ),
+                    );
                     self.trace_collector
                         .await_terminal_acknowledged(trace.run_id(), sequence)
                         .await;
@@ -324,17 +337,21 @@ impl NativeJigAgentRunner {
                         .await;
                 }
                 Err(error) if worker_cancellation_requested => {
-                    cancellation.quiescence_pending(format!(
-                        "cancelled terminal trace {} could not be persisted: {error}",
-                        trace.run_id()
-                    ));
+                    cancellation.terminal_trace_pending(
+                        temper_worker::TerminalTraceBlocker::persistence_failed(trace.run_id()),
+                    );
+                    tracing::warn!(
+                        target: "temper::testing",
+                        error = %error,
+                        "real-stack cancellation trace could not be persisted"
+                    );
                     std::future::pending::<()>().await;
                 }
                 Err(_) => {}
             }
         } else if tracing_required && worker_cancellation_requested {
             cancellation
-                .quiescence_pending("enabled durable tracing did not create a cancellation run");
+                .terminal_trace_pending(temper_worker::TerminalTraceBlocker::trace_unavailable());
             std::future::pending::<()>().await;
         }
         let (result, _totals) =

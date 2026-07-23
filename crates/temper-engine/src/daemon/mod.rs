@@ -46,6 +46,9 @@ use machine::DaemonCompletion;
 use wake_coordinator::{WakeOutcome, WakeWork};
 
 pub use handle::{h1_handler, serve};
+pub use shutdown::{
+    AssignmentAttemptIdentity, DaemonShutdownHandle, DaemonShutdownReport, ShutdownAdmission,
+};
 pub use state_dto::{
     ArtifactDto, DaemonStateSnapshot, JobDto, RoleSaturationDto, WorkerCapabilityDto, WorkerDto,
     WorkersDto,

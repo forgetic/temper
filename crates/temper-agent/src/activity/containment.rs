@@ -282,6 +282,7 @@ fn owner(observation: &CleanupObservation) -> AgentContainmentOwnerV1 {
         ),
         backend: backend_v1(observation.backend()),
         root: safe_diagnostic(observation.root().value(), MAX_AGENT_CONTAINMENT_ROOT_BYTES),
+        root_pid: (observation.root_pid() != 0).then_some(observation.root_pid()),
     }
 }
 
@@ -297,6 +298,7 @@ fn fallback_owner(observation: &ContainmentFallbackObservation) -> AgentContainm
         ),
         backend: backend_v1(observation.backend()),
         root: safe_diagnostic(observation.root().value(), MAX_AGENT_CONTAINMENT_ROOT_BYTES),
+        root_pid: None,
     }
 }
 

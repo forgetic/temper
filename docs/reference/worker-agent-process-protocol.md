@@ -52,7 +52,8 @@ newline-delimited `AgentLifecycleHelloV1` followed by monotonic
 
 - `model_started`, `model_progress`, `model_finished`, `model_retrying`;
 - `tool_started`, `tool_finished`;
-- `steering_applied`, `agent_finished`.
+- `steering_applied`, `agent_finished`;
+- `containment`, carrying bounded managed-bash/MCP cleanup evidence.
 
 For example:
 
@@ -68,8 +69,16 @@ ignores duplicate sequence numbers and stale attempts, and closes a connection
 on malformed, oversized, or gapped input. Fakes and the standalone runner use
 the same typed `JobProgressReporter` without opening a socket.
 
-Cancellation does not depend on a child-authored terminal frame. After the
-joined supervisor has completed graceful exit or forced process-group
+Cancellation does not depend on a child-authored terminal frame. The reverse
+command is `AgentLifecycleCommandV1::Cancel { stage, reason }`; `stage` is the
+monotonic `graceful`, `forced_termination`, or `hard_kill` vocabulary and
+defaults to graceful for older version-one peers. A receiver consumes every
+intermediate stage in order even if publication advances while it is not being
+polled. Forced and hard stages dispatch immediately to the attempt-owned
+emergency process registry, independently of the native agent future and any
+blocked MCP request mutex, before normal callbacks/acknowledgement handling.
+
+After the joined supervisor has completed graceful exit or strongest-backend
 termination and descendant cleanup, the worker appends one synthetic canonical
 `run.finished` activity with `status=cancelled` and
 `stop_reason=cancelled`. The host-only record is durable even when the child
@@ -80,6 +89,14 @@ forwarding wait. The in-process runner uses the same ordering: it requests
 native model/tool cancellation, waits for the native task group and managed
 effects to join, persists `RunFinished(Cancelled)`, waits for trace forwarding
 to acknowledge that exact sequence, and only then returns attempt quiescence.
+
+Nested `containment` frames remain content-free and assignment-neutral. Their
+owner includes kind, opaque tool/command ID, backend and bounded root plus the
+additive optional `root_pid`; older senders that omit `root_pid` remain valid.
+Blocked observations carry phase, repeated-failure count, bounded TERM/KILL
+attempts and survivor process identities. The worker binds them to the exact
+attempt and computes first-seen/age at its trusted boundary, so throttled
+shutdown diagnostics can retain a root PID even when later discovery fails.
 
 The ordinary success/failure path may give forwarding a bounded 250 ms flush
 opportunity without changing the product result. That timeout is never used for
@@ -92,6 +109,26 @@ and startup-recovery passes drain the spool. Capture `off` is the sole explicit
 no-trace compatibility case. Thus neither carrier can expose a quiescent
 cancelled run whose journal query still reports `active`.
 
+The ordinary ownership-loss path has no fail-open deadline: it waits for both
+recursive-empty/direct-child proof and terminal acknowledgement before
+`AttemptQuiesced`, result recording, heartbeat removal, or permit release.
+`temper serve standalone` process shutdown is deliberately different. Its one
+absolute `deployment.standalone_shutdown_budget_secs` interval may end in
+`bounded_crash_handoff`: durable assignments and trace spool are retained,
+attempt-owned emergency KILL runs out of band, and the process exits immediately
+with distinct status 70 without claiming local quiescence. The core-dump-free
+primitive does not unwind, invoke C/Rust exit handlers or owner drops, or flush
+userspace buffers. Replacement startup convergence handles the retained work,
+while the old attempt fence continues to reject result and Forge effects.
+
+`standalone.shutdown.blocker` correlates the protocol evidence as one of
+`containment`, `terminal_trace_ack`, `result_delivery`, `component_task`, or
+`registry_state`, with worker/job/attempt identity, owner root/name, root PID,
+survivor PIDs, containment phase or trace run/sequence, first-seen age,
+escalation stage, and deadline remaining. The terminal summary distinguishes
+`graceful_exit` from `bounded_crash_handoff`; missing root/PID evidence is never
+recursive-empty proof.
+
 The producer maps model attempt boundaries, tool boundaries, steering, and
 agent termination directly from `AgentEvent`. Non-empty text deltas and
 completed streamed tool calls produce content-free `model_progress`, coalesced
@@ -102,8 +139,8 @@ scopes with explicit parent IDs.
 Lifecycle production is installed beside activity normalization. It remains on
 when trace capture is `off`, and it shares no trace queue, quota, spool, or
 storage path; trace startup/storage failure therefore cannot disable progress.
-`AgentLifecycleCommandV1::Cancel { reason }` and
-`AgentLifecycleCancellationAcknowledgementV1` define the bounded reverse
+The staged `AgentLifecycleCommandV1::Cancel` and
+`AgentLifecycleCancellationAcknowledgementV1` values define the bounded reverse
 cancellation handshake used by the process supervisor. Explicit third-party
 commands receive no lifecycle flag and may emit nothing; worker fallback
 supervision remains authoritative for them.

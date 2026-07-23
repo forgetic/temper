@@ -44,6 +44,7 @@ is supplied explicitly, so the suite is reproducible.
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Assignment identity and lifecycle projection are committed before publication; startup admits only exact worker/job heartbeat reattachment and rolls back unmatched orphans before dispatch opens | `claim_is_committed_before_assignment_publication`, `matching_heartbeat_reattaches_staged_assignment_and_rejects_other_ids`, `startup_recovery_barrier_defers_enqueue_until_orphans_are_collected` |
 | A recovered attempt that loses its exact durable assignment is fenced, recursively quiesced, and represented by one durable canceled result before capacity reopens; blocked/closed removal and newer-attempt replacement are definitive, while a one-shot backend failure remains attached and retries | `hermetic_real_stack/ownership_loss.rs` (`ownership_loss_*`) |
+| Standalone SIGINT/SIGTERM uses one absolute internal budget; only fully joined attempts are released, while deadline expiry preserves unproven assignments and trace spool for startup convergence and exits through bounded crash handoff | `temper-cli-daemon::standalone::shutdown::tests`, `temper-cli-daemon::standalone::shutdown::watchdog::tests` |
 | Dirty reusable workspaces replay local commits plus tracked/untracked edits over an advanced target, or produce one stable actionable quarantine | `existing_dirty_workspace_replays_local_work_over_advanced_remote`, `conflicting_recovery_is_quarantined_once_with_actionable_manifest` |
 | Multi-child creation is durable and staged: restart resumes create/wire/activate without duplicate children or premature dispatch, while a later legitimate execution of the same transition gets a distinct durable round and child correlation identity | `create_intent_recovery.rs`, `repeated_create_rounds.rs`, `staged_children_are_excluded_from_role_scans` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
@@ -214,6 +215,46 @@ Linux that focused target explicitly builds an early-main supervisor helper and
 injects a forced-supervisor factory into worker-owned fixture commands, retaining
 descendant-complete cleanup on clean hosts without delegated cgroup access while
 production workers continue to use automatic cgroup/supervisor selection.
+
+## Standalone bounded shutdown is process-loss recovery
+
+Ordinary assignment ownership loss remains proof-based. Closing an attempt
+fence suppresses stale model, tool, result, Forge, workspace, Git, and push
+effects, but it does not itself prove quiescence. Descendant direct-child reap
+and recursive-empty proof plus acknowledgement of the exact terminal trace
+sequence remain prerequisites for `AttemptQuiesced`, heartbeat removal, canceled
+result durability, and permit release. A blocked proof may therefore wait
+indefinitely while the process is otherwise healthy.
+
+`temper serve standalone` has an additional process-level bound:
+`deployment.standalone_shutdown_budget_secs` defaults to 30 seconds and is
+measured once from signal receipt. Daemon claim/result/context/Forge-application
+admission and active attempt fences close before cancellation. Worker join,
+already-admitted daemon operations, trace retention, release of exact proven
+attempts, and HTTP drain all consume the same deadline; the final five seconds
+are reserved for an independent emergency KILL and an immediate core-dump-free
+process exit. Split workers retain their ordinary proof-based semantics.
+
+A proven path emits `standalone.shutdown.summary` with
+`disposition=graceful_exit`. A deadline blocker emits bounded/redacted
+`standalone.shutdown.blocker` events and a final
+`disposition=bounded_crash_handoff`; the process does not fabricate cleanup,
+terminal-trace acknowledgement, result publication, capacity release, or normal
+assignment release. It retains durable assignment metadata and trace spool,
+uses attempt-owned out-of-band process termination, and exits with distinct
+status 70 without unwinding, C/Rust exit handlers, owner drops, userspace buffer
+flushing, or core generation. The replacement startup stages prior-boot
+assignments with dispatch closed, converges or requeues abandoned work from
+durable Forge state, rejects old attempt results/Forge operations through the
+existing fences and exact claim checks, and forwards retained trace records
+without reviving the old attempt.
+
+Blocker kinds are `containment`, `terminal_trace_ack`, `result_delivery`,
+`component_task`, and `registry_state`. Fields include bounded worker/job/
+attempt identity, owner scope/name, root PID and sampled survivor PIDs,
+containment phase or trace run/sequence, first-seen time, increasing age,
+escalation stage, deadline remaining, and final disposition. Missing process
+evidence is reported as unknown rather than converted into proof.
 
 ## Limitations discovered by the tests
 

@@ -22,6 +22,7 @@ fn blocked_observation() -> CleanupObservation {
             ContainmentBackendKind::LinuxSupervisor,
             "root credential=secret-token-sentinel",
         ),
+        42,
         CleanupSnapshot::Blocked {
             trigger: CleanupTrigger::Cancellation,
             phase: CleanupPhase::VerifyEmpty,
@@ -70,6 +71,7 @@ fn nested_cleanup_is_throttled_content_free_and_lifecycle_visible() {
         ContainmentScope::Tool,
         ContainmentBackendKind::NoProcess,
         ContainmentRootIdentity::new(ContainmentBackendKind::NoProcess, "not-spawned"),
+        0,
         CleanupSnapshot::Completed {
             report: CleanupReport::no_process(CleanupTrigger::NormalRootExit),
         },
@@ -86,6 +88,7 @@ fn nested_cleanup_is_throttled_content_free_and_lifecycle_visible() {
     assert_eq!(first.repeated_failures, 1);
     assert_eq!(first.owner.owner_kind, "tool");
     assert_eq!(first.owner.tool_command_id, "bash-call-42");
+    assert_eq!(first.owner.root_pid, Some(42));
     let AgentLifecycleEventV1::Containment {
         observation: AgentContainmentEventV1::CleanupBlocked(third),
     } = &events[1].1

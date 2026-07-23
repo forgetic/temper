@@ -18,6 +18,8 @@ mod capture;
 #[cfg(target_os = "linux")]
 mod cgroup_v2;
 mod command;
+#[cfg(any(unix, windows))]
+mod immediate_exit;
 mod legacy;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -31,6 +33,8 @@ pub use capture::*;
 #[cfg(target_os = "linux")]
 pub use cgroup_v2::*;
 pub use command::*;
+#[cfg(any(unix, windows))]
+pub use immediate_exit::terminate_current_process_immediately;
 pub use legacy::{
     ContainmentKind, ProcessContainment, configure_command, configure_descendant_command,
 };

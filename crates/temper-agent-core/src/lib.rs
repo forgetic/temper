@@ -60,5 +60,7 @@ pub use temper_process_containment::{
     CleanupObservation, CleanupObserver, CleanupPhase, CleanupReport, CleanupSnapshot,
     CleanupTrigger, ContainedProcess, ContainmentBackendKind, ContainmentCommand,
     ContainmentFactory, ContainmentFallbackObservation, ContainmentScope, ContainmentSignal,
-    DirectChildReap, ProcessIdentity, RecursiveEmptyProof, SignalAttempt, SignalAttemptOutcome,
+    DirectChildReap, EmergencyDispatchOutcome, EmergencyEscalation, EmergencyEscalationReceipt,
+    EmergencyTerminationBoundary, EmergencyTerminationRegistry, EmergencyTerminationSnapshot,
+    ProcessIdentity, RecursiveEmptyProof, SignalAttempt, SignalAttemptOutcome,
 };

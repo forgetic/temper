@@ -57,6 +57,7 @@ mod linux {
     fn run_contract_tests() -> io::Result<()> {
         concurrent_nested_sessions_are_reaped_once()?;
         explicit_cleanup_is_coordinated_once()?;
+        emergency_kill_reaches_the_full_payload_tree()?;
         owner_channel_loss_cleans_the_containment()?;
         Ok(())
     }
@@ -149,6 +150,37 @@ mod linux {
         wait_until_gone(identity, Duration::from_secs(3))
     }
 
+    fn emergency_kill_reaches_the_full_payload_tree() -> io::Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let script = write_payload_script(temporary.path())?;
+        let pid_file = temporary.path().join("emergency.pid");
+        let cleanup_file = temporary.path().join("emergency-cleanup.log");
+        let (process, registry) =
+            spawn_supervised_with_registry("emergency-kill", &script, &pid_file, &cleanup_file, 0)?;
+        let helper_pid = process.id();
+        let descendant = wait_for_identity(&pid_file, Duration::from_secs(3))?;
+        let snapshot = registry.snapshot();
+        if snapshot.registered_count() != 1 || snapshot.boundaries()[0].root_pid() != helper_pid {
+            return Err(io::Error::other("supervisor boundary was not registered"));
+        }
+        let receipt = registry.request_hard_kill();
+        if receipt.requested_count() != 1 {
+            return Err(io::Error::other("emergency KILL was not dispatched"));
+        }
+        let report = process.cleanup(CleanupTrigger::Shutdown);
+        if !report.proves_quiescence() {
+            return Err(io::Error::other(
+                "ordinary cleanup did not prove emergency-killed tree empty",
+            ));
+        }
+        if !registry.snapshot().is_empty() {
+            return Err(io::Error::other(
+                "proven supervisor boundary remained registered",
+            ));
+        }
+        wait_until_gone(descendant, Duration::from_secs(3))
+    }
+
     fn owner_channel_loss_cleans_the_containment() -> io::Result<()> {
         let temporary = tempfile::tempdir()?;
         let script = write_payload_script(temporary.path())?;
@@ -207,11 +239,26 @@ mod linux {
         cleanup_file: &Path,
         exit_code: i32,
     ) -> io::Result<temper_process_containment::ContainedProcess> {
+        spawn_supervised_with_registry(identity, script, pid_file, cleanup_file, exit_code)
+            .map(|(process, _registry)| process)
+    }
+
+    fn spawn_supervised_with_registry(
+        identity: &str,
+        script: &Path,
+        pid_file: &Path,
+        cleanup_file: &Path,
+        exit_code: i32,
+    ) -> io::Result<(
+        temper_process_containment::ContainedProcess,
+        temper_process_containment::EmergencyTerminationRegistry,
+    )> {
         let backend: Arc<dyn ContainmentBackendFactory> = Arc::new(
             LinuxSupervisorBackendFactory::with_helper_executable(std::env::current_exe()?),
         );
         let factory =
             ContainmentFactory::new(ContainmentBackendPolicy::ForceLinuxSupervisor, backend);
+        let registry = factory.emergency_termination_registry();
         let spec =
             ContainmentSpec::new(ContainmentIdentity::new(identity)?, ContainmentScope::Tool)
                 .with_timing(Duration::from_millis(100), Duration::from_millis(10));
@@ -225,7 +272,10 @@ mod linux {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        factory.prepare(spec)?.spawn(command)
+        factory
+            .prepare(spec)?
+            .spawn(command)
+            .map(|process| (process, registry))
     }
 
     fn write_payload_script(directory: &Path) -> io::Result<PathBuf> {

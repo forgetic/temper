@@ -12,8 +12,9 @@ use std::time::Duration;
 use crate::{
     BackendSpawn, ContainmentBackendFactory, ContainmentBackendKind, ContainmentBackendPolicy,
     ContainmentCommand, ContainmentKernel, ContainmentRootIdentity, ContainmentSignal,
-    ContainmentSpec, DirectChildReap, MemberDiscovery, PreparedContainmentBackend,
-    RecursiveEmptyProof, SignalBatch,
+    ContainmentSpec, DirectChildReap, EmergencyDispatcher, EmergencyEscalation,
+    EmergencyTerminationHandle, MemberDiscovery, PreparedContainmentBackend, RecursiveEmptyProof,
+    SignalBatch,
 };
 
 mod helper;
@@ -228,17 +229,23 @@ impl PreparedContainmentBackend for PreparedLinuxSupervisor {
         command: ContainmentCommand,
     ) -> io::Result<BackendSpawn> {
         let (owner_channel, helper_channel) = std::os::unix::net::UnixStream::pair()?;
-        // Keep the private protocol away from the stdio descriptor range. This
+        let (emergency_owner_channel, emergency_helper_channel) =
+            std::os::unix::net::UnixStream::pair()?;
+        // Keep the private protocols away from the stdio descriptor range. This
         // matters for service launches whose parent deliberately closed one of
         // fd 0, 1, or 2 before preparing containment.
         let owner_channel = move_stream_above_stdio(owner_channel)?;
         let helper_channel = move_stream_above_stdio(helper_channel)?;
+        let emergency_owner_channel = move_stream_above_stdio(emergency_owner_channel)?;
+        let emergency_helper_channel = move_stream_above_stdio(emergency_helper_channel)?;
         let writer = owner_channel.try_clone()?;
         let helper_fd = helper_channel.as_raw_fd();
+        let emergency_helper_fd = emergency_helper_channel.as_raw_fd();
         let verify_helper_status = self.helper_argument_prefix.is_empty();
         let hidden_arguments = [
             OsString::from(HELPER_MODE),
             OsString::from(helper_fd.to_string()),
+            OsString::from(emergency_helper_fd.to_string()),
             OsString::from(duration_millis(self.term_grace).to_string()),
             OsString::from(duration_millis(self.inspection_retry).to_string()),
         ];
@@ -269,6 +276,7 @@ impl PreparedContainmentBackend for PreparedLinuxSupervisor {
         unsafe {
             helper.pre_exec(move || {
                 helper::set_close_on_exec(helper_fd, false)?;
+                helper::set_close_on_exec(emergency_helper_fd, false)?;
                 if let Some(null_fd) = test_stdout_null_fd {
                     if libc::dup2(libc::STDOUT_FILENO, TEST_PAYLOAD_STDOUT_FD) == -1
                         || libc::fcntl(TEST_PAYLOAD_STDOUT_FD, libc::F_SETFD, 0) == -1
@@ -282,7 +290,11 @@ impl PreparedContainmentBackend for PreparedLinuxSupervisor {
         }
         let mut child = helper.spawn()?;
         drop(helper_channel);
+        drop(emergency_helper_channel);
 
+        let emergency = EmergencyTerminationHandle::new(Arc::new(SupervisorEmergencyDispatcher {
+            channel: emergency_owner_channel,
+        }));
         let mut client = SupervisorClient::new(owner_channel, writer);
         let handshake = client.read_frame();
         match handshake {
@@ -325,7 +337,40 @@ impl PreparedContainmentBackend for PreparedLinuxSupervisor {
             automatic_kill_taken: false,
             verify_helper_status,
         };
-        Ok(BackendSpawn::new(child, Box::new(kernel)))
+        Ok(BackendSpawn::new(child, Box::new(kernel), emergency))
+    }
+}
+
+struct SupervisorEmergencyDispatcher {
+    channel: std::os::unix::net::UnixStream,
+}
+
+impl EmergencyDispatcher for SupervisorEmergencyDispatcher {
+    fn dispatch(&self, escalation: EmergencyEscalation) -> io::Result<()> {
+        let command = match escalation {
+            EmergencyEscalation::ForcedTermination => b'T',
+            EmergencyEscalation::HardKill => b'K',
+        };
+        // A one-byte nonblocking write to the helper's independent command
+        // socket cannot wait behind an ordinary request/response operation.
+        let sent = unsafe {
+            libc::send(
+                self.channel.as_raw_fd(),
+                (&raw const command).cast(),
+                1,
+                libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+            )
+        };
+        if sent == 1 {
+            Ok(())
+        } else if sent == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "Linux supervisor emergency command was not written",
+            ))
+        }
     }
 }
 

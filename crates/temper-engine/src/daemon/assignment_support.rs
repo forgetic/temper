@@ -8,8 +8,9 @@ use temper_protocol_worker::{
 };
 
 use crate::InFlightJob;
+use crate::applier::ClaimOutcome;
 
-use super::machine::DaemonRequest;
+use super::machine::{ClaimAdmissionGuard, DaemonMachine, DaemonRequest};
 
 pub(super) fn in_flight_job_from_assignment(assign: &Assign) -> InFlightJob {
     InFlightJob {
@@ -50,4 +51,71 @@ pub(super) fn new_daemon_boot_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("daemon-boot-{epoch_nanos:x}-{sequence:x}")
+}
+
+impl DaemonMachine {
+    pub(super) fn handle_claim_finished(
+        &mut self,
+        admission: ClaimAdmissionGuard,
+        assign: Assign,
+        worker_id: String,
+        responder: HttpResponder,
+        outcome: ClaimOutcome,
+    ) -> Vec<DaemonRequest> {
+        let context = crate::applier::ClaimContext {
+            worker_id: worker_id.clone(),
+            daemon_boot_id: self.daemon_boot_id.clone(),
+        };
+        if !responder.is_open() {
+            self.core.rollback_assignment(&assign.job_id);
+            return vec![DaemonRequest::RunClaimRollback {
+                job: in_flight_job_from_assignment(&assign),
+                context,
+                admission: Some(admission),
+            }];
+        }
+        match outcome {
+            ClaimOutcome::Claimed if self.shutdown_admission.is_fenced() => {
+                self.rollback_shutdown_claim(assign, responder, context, admission)
+            }
+            ClaimOutcome::Claimed => {
+                if self.core.commit_assignment(&assign.job_id).is_ok() {
+                    self.assignment_contexts
+                        .insert(assign.job_id.clone(), context.clone());
+                    self.finish_claim(admission);
+                    vec![
+                        DaemonRequest::Log(super::protocol::assignment_log_line(
+                            &assign, &worker_id,
+                        )),
+                        DaemonRequest::RespondAssignment {
+                            job: in_flight_job_from_assignment(&assign),
+                            context,
+                            responder,
+                            response: super::protocol::protocol_response(Some(
+                                WorkerProtocolMessage::Assign(assign),
+                            )),
+                        },
+                    ]
+                } else {
+                    self.core.rollback_assignment(&assign.job_id);
+                    self.finish_claim(admission);
+                    vec![claim_failure_response(
+                        responder,
+                        assign.job_id,
+                        "assignment reservation became stale".to_string(),
+                    )]
+                }
+            }
+            ClaimOutcome::Stale { reason } => {
+                self.core.discard_assignment_reservation(&assign.job_id);
+                self.finish_claim(admission);
+                vec![claim_failure_response(responder, assign.job_id, reason)]
+            }
+            ClaimOutcome::Contended { reason } | ClaimOutcome::Retryable { reason } => {
+                self.core.rollback_assignment(&assign.job_id);
+                self.finish_claim(admission);
+                vec![claim_failure_response(responder, assign.job_id, reason)]
+            }
+        }
+    }
 }

@@ -186,7 +186,7 @@ fn config_is_read_from_the_current_checkout_branch() {
 
 #[test]
 #[cfg(unix)]
-fn cancelling_a_hung_gate_kills_grandchildren_and_joins_the_command_owner() {
+fn cancelling_a_hung_gate_hands_cleanup_to_the_command_owner() {
     let temp = tempdir().expect("create temp dir");
     let pid_file = temp.path().join("gate-grandchild.pid");
     write_config(
@@ -222,10 +222,14 @@ timeout_secs = 60
         .trim()
         .parse()
         .expect("numeric pid");
-    assert!(
-        !process_alive(pid),
-        "gate grandchild {pid} survived cancellation"
-    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while process_alive(pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "gate cleanup owner did not reap grandchild {pid}"
+        );
+        std::thread::yield_now();
+    }
 }
 
 fn process_alive(pid: u32) -> bool {

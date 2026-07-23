@@ -6,7 +6,9 @@ use std::time::Duration;
 use crate::command::ContainmentCommand;
 use crate::model::*;
 
+mod emergency;
 mod evidence;
+pub use emergency::*;
 use evidence::collect_backend_signal_evidence;
 
 /// Kernel/backend operations used by the implementation-neutral cleanup state
@@ -52,11 +54,20 @@ pub trait ContainmentKernel: Send {
 pub struct BackendSpawn {
     child: Child,
     kernel: Box<dyn ContainmentKernel>,
+    emergency: EmergencyTerminationHandle,
 }
 
 impl BackendSpawn {
-    pub fn new(child: Child, kernel: Box<dyn ContainmentKernel>) -> Self {
-        Self { child, kernel }
+    pub fn new(
+        child: Child,
+        kernel: Box<dyn ContainmentKernel>,
+        emergency: EmergencyTerminationHandle,
+    ) -> Self {
+        Self {
+            child,
+            kernel,
+            emergency,
+        }
     }
 
     /// Replaces the kernel adapter while preserving the already-contained
@@ -70,6 +81,7 @@ impl BackendSpawn {
         Self {
             child: self.child,
             kernel: map(self.kernel),
+            emergency: self.emergency,
         }
     }
 }
@@ -111,6 +123,7 @@ pub struct ContainmentFactory {
     policy: ContainmentBackendPolicy,
     backend_factory: Arc<dyn ContainmentBackendFactory>,
     observer: Arc<dyn CleanupObserver>,
+    emergency_registry: EmergencyTerminationRegistry,
 }
 
 impl ContainmentFactory {
@@ -122,12 +135,26 @@ impl ContainmentFactory {
             policy,
             backend_factory,
             observer: Arc::new(NoopCleanupObserver),
+            emergency_registry: EmergencyTerminationRegistry::new(),
         }
     }
 
     pub fn with_observer(mut self, observer: Arc<dyn CleanupObserver>) -> Self {
         self.observer = observer;
         self
+    }
+
+    /// Installs the attempt- or component-owned registry that receives every
+    /// successfully spawned boundary from this factory.
+    pub fn with_emergency_registry(mut self, registry: EmergencyTerminationRegistry) -> Self {
+        self.emergency_registry = registry;
+        self
+    }
+
+    /// Returns a cloneable command surface for boundaries spawned by this
+    /// factory. Cloned factories retain the same registry.
+    pub fn emergency_termination_registry(&self) -> EmergencyTerminationRegistry {
+        self.emergency_registry.clone()
     }
 
     /// Adds an observer without discarding one already installed by a
@@ -180,6 +207,7 @@ impl ContainmentFactory {
             backend: Some(backend),
             spec,
             observer: Arc::clone(&self.observer),
+            emergency_registry: self.emergency_registry.clone(),
         })
     }
 }
@@ -219,6 +247,7 @@ pub struct PreparedContainment {
     backend: Option<Box<dyn PreparedContainmentBackend>>,
     spec: ContainmentSpec,
     observer: Arc<dyn CleanupObserver>,
+    emergency_registry: EmergencyTerminationRegistry,
 }
 
 impl PreparedContainment {
@@ -257,6 +286,7 @@ impl PreparedContainment {
             expected_kind,
             expected_root,
             self.observer,
+            self.emergency_registry,
             spawned,
         );
         if !kernel_matches {
@@ -291,7 +321,9 @@ struct CleanupCoordinator {
     spec: ContainmentSpec,
     backend: ContainmentBackendKind,
     root: ContainmentRootIdentity,
+    root_pid: u32,
     observer: Arc<dyn CleanupObserver>,
+    emergency_registration: EmergencyRegistration,
     state: Mutex<CoordinatorState>,
     completion: Condvar,
 }
@@ -313,22 +345,35 @@ impl ContainedProcess {
         backend: ContainmentBackendKind,
         root: ContainmentRootIdentity,
         observer: Arc<dyn CleanupObserver>,
+        emergency_registry: EmergencyTerminationRegistry,
         spawned: BackendSpawn,
     ) -> Self {
-        let root_pid = spawned.child.id();
+        let BackendSpawn {
+            child,
+            kernel,
+            emergency,
+        } = spawned;
+        let root_pid = child.id();
+        let emergency_registration = emergency_registry.register(
+            spec.identity.clone(),
+            spec.scope.clone(),
+            backend,
+            root.clone(),
+            root_pid,
+            emergency,
+        );
         Self {
             root_pid,
             coordinator: CleanupCoordinator {
                 spec,
                 backend,
                 root,
+                root_pid,
                 observer,
+                emergency_registration,
                 state: Mutex::new(CoordinatorState {
                     phase: CoordinatorPhase::Ready,
-                    owned: Some(OwnedContainment {
-                        child: spawned.child,
-                        kernel: spawned.kernel,
-                    }),
+                    owned: Some(OwnedContainment { child, kernel }),
                 }),
                 completion: Condvar::new(),
             },
@@ -398,6 +443,7 @@ impl ContainedProcess {
                     drop(state);
 
                     let report = run_cleanup(&self.coordinator, trigger, &mut owned);
+                    self.coordinator.emergency_registration.complete(&report);
                     let mut state = lock_unpoisoned(&self.coordinator.state);
                     state.phase = CoordinatorPhase::Complete(Box::new(report.clone()));
                     self.coordinator.completion.notify_all();
@@ -488,13 +534,7 @@ fn run_cleanup(
     let mut evidence = CleanupEvidence::new(owned.child.id());
 
     loop {
-        observe(
-            coordinator,
-            CleanupSnapshot::Inspecting {
-                trigger,
-                phase: CleanupPhase::Discover,
-            },
-        );
+        enter_phase(coordinator, trigger, CleanupPhase::Discover);
         let discovery = match owned.kernel.discover_members() {
             Ok(discovery) => discovery,
             Err(error) => {
@@ -512,13 +552,7 @@ fn run_cleanup(
         collect_backend_signal_evidence(owned.kernel.as_mut(), &mut evidence);
         evidence.remember_survivors(discovery.members(), discovery.omitted());
 
-        observe(
-            coordinator,
-            CleanupSnapshot::Inspecting {
-                trigger,
-                phase: CleanupPhase::Reap,
-            },
-        );
+        enter_phase(coordinator, trigger, CleanupPhase::Reap);
         match owned.kernel.reap_direct_child(&mut owned.child) {
             Ok(reap) => evidence.direct_child_reap = reap,
             Err(error) => {
@@ -536,13 +570,7 @@ fn run_cleanup(
 
         let mut has_members = !discovery.is_empty();
         if !has_members {
-            observe(
-                coordinator,
-                CleanupSnapshot::Inspecting {
-                    trigger,
-                    phase: CleanupPhase::VerifyEmpty,
-                },
-            );
+            enter_phase(coordinator, trigger, CleanupPhase::VerifyEmpty);
             match owned.kernel.verify_recursive_empty() {
                 Ok(RecursiveEmptyProof::Proven { inspections }) => {
                     if evidence.direct_child_reap.is_terminal() {
@@ -601,13 +629,7 @@ fn run_cleanup(
         }
 
         if has_members && !evidence.term_attempted {
-            observe(
-                coordinator,
-                CleanupSnapshot::Inspecting {
-                    trigger,
-                    phase: CleanupPhase::Term,
-                },
-            );
+            enter_phase(coordinator, trigger, CleanupPhase::Term);
             let batch = match owned.kernel.signal_members(ContainmentSignal::Term) {
                 Ok(batch) => batch,
                 Err(error) => {
@@ -634,6 +656,9 @@ fn run_cleanup(
                     omitted: batch.omitted,
                 },
             );
+            coordinator
+                .emergency_registration
+                .enter_phase(CleanupPhase::Grace);
             observe(
                 coordinator,
                 CleanupSnapshot::GracePeriod {
@@ -646,13 +671,7 @@ fn run_cleanup(
         }
 
         if has_members {
-            observe(
-                coordinator,
-                CleanupSnapshot::Inspecting {
-                    trigger,
-                    phase: CleanupPhase::Kill,
-                },
-            );
+            enter_phase(coordinator, trigger, CleanupPhase::Kill);
             let batch = match owned.kernel.signal_members(ContainmentSignal::Kill) {
                 Ok(batch) => batch,
                 Err(error) => {
@@ -693,6 +712,7 @@ fn block(
 ) {
     let message = bounded_text(error.to_string(), MAX_DIAGNOSTIC_TEXT_BYTES);
     evidence.remember_diagnostic(CleanupDiagnostic::new(phase, message.clone()));
+    coordinator.emergency_registration.mark_blocked(phase);
     observe(
         coordinator,
         CleanupSnapshot::Blocked {
@@ -706,12 +726,18 @@ fn block(
     kernel.wait(coordinator.spec.inspection_retry);
 }
 
+fn enter_phase(coordinator: &CleanupCoordinator, trigger: CleanupTrigger, phase: CleanupPhase) {
+    coordinator.emergency_registration.enter_phase(phase);
+    observe(coordinator, CleanupSnapshot::Inspecting { trigger, phase });
+}
+
 fn observe(coordinator: &CleanupCoordinator, snapshot: CleanupSnapshot) {
     let observation = CleanupObservation::new(
         coordinator.spec.identity.clone(),
         coordinator.spec.scope.clone(),
         coordinator.backend,
         coordinator.root.clone(),
+        coordinator.root_pid,
         snapshot,
     );
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

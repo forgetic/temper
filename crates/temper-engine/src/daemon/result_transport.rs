@@ -12,6 +12,7 @@ use super::machine::{AttemptKey, DaemonMachine, DaemonRequest};
 use super::protocol::{
     protocol_response, result_disposition, result_disposition_log_value, result_received_log_line,
 };
+use super::shutdown::AssignmentAttemptIdentity;
 
 impl DaemonMachine {
     pub(super) fn handle_result(
@@ -20,11 +21,18 @@ impl DaemonMachine {
         auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
-        match self.core.authenticate_result(&result, auth.as_ref()) {
+        let authentication = self.core.authenticate_result(&result, auth.as_ref());
+        match authentication {
             Err(_) => {
                 return vec![DaemonRequest::Respond {
                     responder,
                     response: HttpResponseData::status_only(401),
+                }];
+            }
+            Ok(_) if self.shutdown_admission.is_fenced() => {
+                return vec![DaemonRequest::Respond {
+                    responder,
+                    response: HttpResponseData::status_only(503),
                 }];
             }
             Ok(Some(response)) => {
@@ -156,8 +164,10 @@ impl DaemonMachine {
             requests.extend(self.wake_decision_requests(decisions));
         }
         self.applying.insert(job.job_id.clone());
-        self.pending_results.insert(key, result.clone());
+        self.pending_results.insert(key.clone(), result.clone());
+        let admission = self.admit_result_application(AssignmentAttemptIdentity::from(&key));
         requests.push(DaemonRequest::RunApplyAndRespond {
+            admission,
             job,
             result,
             recovered_context,

@@ -28,10 +28,12 @@ use crate::InFlightJob;
 use crate::applier::{ApplyOutcome, ClaimOutcome, RecoveredHeartbeatOutcome};
 use crate::webhook::WebhookConfig;
 
-use super::assignment_support::{
-    claim_failure_response, in_flight_job_from_assignment, new_daemon_boot_id,
-};
+use super::assignment_support::new_daemon_boot_id;
 pub(super) use super::attempt_fencing::{AttemptKey, FencedAttempt, RecoveredHeartbeatCheck};
+use super::shutdown::{AssignmentAttemptIdentity, DaemonShutdownReport, ShutdownAdmission};
+pub(super) use super::shutdown::{
+    ClaimAdmissionGuard, ContextAdmissionGuard, ResultApplicationAdmissionGuard,
+};
 use super::wake_coordinator::{
     BroadMode, WakeCoordinator, WakeLane, WakeOutcome, WakeRequest, WakeWork,
 };
@@ -50,6 +52,7 @@ pub(super) enum DaemonCompletion {
     PollDeadline { id: u64 },
     /// A durable assignment claim finished off-loop.
     ClaimFinished {
+        admission: ClaimAdmissionGuard,
         assign: Assign,
         worker_id: String,
         responder: HttpResponder,
@@ -59,6 +62,8 @@ pub(super) enum DaemonCompletion {
         job: InFlightJob,
         context: crate::applier::ClaimContext,
     },
+    /// A shutdown claim rollback finished off-loop.
+    ClaimRollbackFinished { admission: ClaimAdmissionGuard },
     /// A result applier finished off-loop.
     #[cfg(test)]
     ApplyFinished {
@@ -67,6 +72,7 @@ pub(super) enum DaemonCompletion {
     },
     /// Result application that still owns the worker request responder.
     ApplyAndRespondFinished {
+        admission: ResultApplicationAdmissionGuard,
         result: JobResult,
         responder: HttpResponder,
         outcome: ApplyOutcome,
@@ -77,6 +83,13 @@ pub(super) enum DaemonCompletion {
         worker_id: String,
         reports: Vec<AttemptKey>,
         outcomes: Vec<(AttemptKey, RecoveredHeartbeatOutcome)>,
+        responder: HttpResponder,
+        response: HttpResponseData,
+    },
+    /// One assignment-scoped context operation finished off-loop. Routing the
+    /// response back through the machine releases its typed admission guard.
+    FetchContextFinished {
+        admission: ContextAdmissionGuard,
         responder: HttpResponder,
         response: HttpResponseData,
     },
@@ -107,9 +120,14 @@ pub(super) enum DaemonCompletion {
     /// Close dispatch admission and release all outstanding long-poll waiters
     /// without releasing durable assignments.
     BeginShutdown {
-        reply: temper_engine_io::OneshotSender<()>,
+        reply: temper_engine_io::OneshotSender<DaemonShutdownReport>,
+        joined: temper_engine_io::OneshotSender<()>,
     },
     ReleaseAssignmentsForShutdown {
+        reply: temper_engine_io::OneshotSender<()>,
+    },
+    ReleaseJoinedAssignmentsForShutdown {
+        joined: BTreeSet<AssignmentAttemptIdentity>,
         reply: temper_engine_io::OneshotSender<()>,
     },
     /// Snapshot the jobs whose terminal traces retention must not remove.
@@ -209,6 +227,7 @@ pub(super) enum DaemonRequest {
     /// Apply retry bookkeeping before acknowledging a retryable/canceled result
     /// to the worker so the source claim is released before the next rescan.
     RunApplyAndRespond {
+        admission: ResultApplicationAdmissionGuard,
         job: InFlightJob,
         result: JobResult,
         /// Present only when `job` was restored from durable startup state and
@@ -219,6 +238,7 @@ pub(super) enum DaemonRequest {
     /// Apply an assignment-time source claim before returning the assignment to
     /// the worker that will start the job.
     RunClaim {
+        admission: ClaimAdmissionGuard,
         job: InFlightJob,
         worker_id: String,
         daemon_boot_id: String,
@@ -228,6 +248,9 @@ pub(super) enum DaemonRequest {
     RunClaimRollback {
         job: InFlightJob,
         context: crate::applier::ClaimContext,
+        /// Retained only when a pre-fence claim must durably roll back before
+        /// the shutdown join notification can fire.
+        admission: Option<ClaimAdmissionGuard>,
     },
     /// Refresh exact recovered assignments off-loop. Completion is routed back
     /// through the machine before any heartbeat response is sent.
@@ -247,6 +270,7 @@ pub(super) enum DaemonRequest {
         responder: HttpResponder,
     },
     RunFetchContext {
+        admission: ContextAdmissionGuard,
         request: FetchContext,
         role: String,
         responder: HttpResponder,
@@ -346,8 +370,13 @@ pub(super) struct DaemonMachine {
     /// Closed while durable assignments are inventoried and offered a bounded
     /// heartbeat reattachment grace period.
     pub(super) startup_recovery: bool,
-    /// Closed before standalone HTTP drain to prevent another assignment.
-    pub(super) shutting_down: bool,
+    /// Monotonic daemon-wide shutdown admission barrier.
+    pub(super) shutdown_admission: ShutdownAdmission,
+    pub(super) admitted_claims: BTreeMap<ClaimAdmissionGuard, AssignmentAttemptIdentity>,
+    pub(super) admitted_result_applications:
+        BTreeMap<ResultApplicationAdmissionGuard, AssignmentAttemptIdentity>,
+    pub(super) admitted_contexts: BTreeMap<ContextAdmissionGuard, AssignmentAttemptIdentity>,
+    pub(super) shutdown_join_waiters: Vec<temper_engine_io::OneshotSender<()>>,
     pub(super) deferred_enqueues: Vec<DeferredEnqueue>,
     pub(super) assignment_contexts: BTreeMap<String, crate::applier::ClaimContext>,
     pub(super) artifact_catalog: crate::ConfiguredRepositoryCatalog,
@@ -419,7 +448,11 @@ impl DaemonMachine {
             now: EngineTime::ZERO,
             daemon_boot_id,
             startup_recovery: false,
-            shutting_down: false,
+            shutdown_admission: ShutdownAdmission::Open,
+            admitted_claims: BTreeMap::new(),
+            admitted_result_applications: BTreeMap::new(),
+            admitted_contexts: BTreeMap::new(),
+            shutdown_join_waiters: Vec::new(),
             deferred_enqueues: Vec::new(),
             assignment_contexts: BTreeMap::new(),
             artifact_catalog: crate::ConfiguredRepositoryCatalog::default(),
@@ -481,7 +514,7 @@ impl DaemonMachine {
     }
 
     pub(super) fn schedule_wake(&mut self, request: WakeRequest) -> Vec<DaemonRequest> {
-        if self.shutting_down {
+        if self.shutdown_admission.is_fenced() {
             return Vec::new();
         }
         let apply_active = !self.applying.is_empty();
@@ -520,7 +553,7 @@ impl Machine for DaemonMachine {
                 trusted_transport,
             } => self.handle_http(request, responder, trusted_transport),
             DaemonCompletion::PollDeadline { id } => {
-                if self.startup_recovery || self.shutting_down {
+                if self.startup_recovery || self.shutdown_admission.is_fenced() {
                     return Vec::new();
                 }
                 let Some(waiter) = self.waiters.remove(&id) else {
@@ -541,76 +574,46 @@ impl Machine for DaemonMachine {
                 self.poll_response_requests(response, &waiter.poll.worker_id, waiter.responder)
             }
             DaemonCompletion::ClaimFinished {
+                admission,
                 assign,
                 worker_id,
                 responder,
                 outcome,
-            } => {
-                let context = crate::applier::ClaimContext {
-                    worker_id: worker_id.clone(),
-                    daemon_boot_id: self.daemon_boot_id.clone(),
-                };
-                if !responder.is_open() {
-                    self.core.rollback_assignment(&assign.job_id);
-                    return vec![DaemonRequest::RunClaimRollback {
-                        job: in_flight_job_from_assignment(&assign),
-                        context,
-                    }];
-                }
-                match outcome {
-                    ClaimOutcome::Claimed if self.shutting_down => {
-                        self.rollback_shutdown_claim(assign, responder, context)
-                    }
-                    ClaimOutcome::Claimed => {
-                        if self.core.commit_assignment(&assign.job_id).is_ok() {
-                            self.assignment_contexts
-                                .insert(assign.job_id.clone(), context.clone());
-                            vec![
-                                DaemonRequest::Log(super::protocol::assignment_log_line(
-                                    &assign, &worker_id,
-                                )),
-                                DaemonRequest::RespondAssignment {
-                                    job: in_flight_job_from_assignment(&assign),
-                                    context,
-                                    responder,
-                                    response: super::protocol::protocol_response(Some(
-                                        WorkerProtocolMessage::Assign(assign),
-                                    )),
-                                },
-                            ]
-                        } else {
-                            self.core.rollback_assignment(&assign.job_id);
-                            vec![claim_failure_response(
-                                responder,
-                                assign.job_id,
-                                "assignment reservation became stale".to_string(),
-                            )]
-                        }
-                    }
-                    ClaimOutcome::Stale { reason } => {
-                        self.core.discard_assignment_reservation(&assign.job_id);
-                        vec![claim_failure_response(responder, assign.job_id, reason)]
-                    }
-                    ClaimOutcome::Contended { reason } | ClaimOutcome::Retryable { reason } => {
-                        self.core.rollback_assignment(&assign.job_id);
-                        vec![claim_failure_response(responder, assign.job_id, reason)]
-                    }
-                }
-            }
+            } => self.handle_claim_finished(admission, assign, worker_id, responder, outcome),
             DaemonCompletion::AssignmentDeliveryFailed { job, context } => {
                 self.assignment_contexts.remove(&job.job_id);
                 self.core.rollback_committed_assignment(&job.job_id);
-                vec![DaemonRequest::RunClaimRollback { job, context }]
+                vec![DaemonRequest::RunClaimRollback {
+                    job,
+                    context,
+                    admission: None,
+                }]
+            }
+            DaemonCompletion::ClaimRollbackFinished { admission } => {
+                self.finish_claim(admission);
+                Vec::new()
             }
             #[cfg(test)]
             DaemonCompletion::ApplyFinished { job_id, outcome } => {
                 self.handle_apply_finished(job_id, outcome)
             }
             DaemonCompletion::ApplyAndRespondFinished {
+                admission,
                 result,
                 responder,
                 outcome,
-            } => self.handle_apply_and_respond_finished(result, responder, outcome),
+            } => self.handle_apply_and_respond_finished(admission, result, responder, outcome),
+            DaemonCompletion::FetchContextFinished {
+                admission,
+                responder,
+                response,
+            } => {
+                self.finish_context(admission);
+                vec![DaemonRequest::Respond {
+                    responder,
+                    response,
+                }]
+            }
             DaemonCompletion::RecoveredHeartbeatsFinished {
                 worker_id,
                 reports,
@@ -690,9 +693,12 @@ impl Machine for DaemonMachine {
                 reply.send(());
                 Vec::new()
             }
-            DaemonCompletion::BeginShutdown { reply } => self.begin_shutdown(reply),
+            DaemonCompletion::BeginShutdown { reply, joined } => self.begin_shutdown(reply, joined),
             DaemonCompletion::ReleaseAssignmentsForShutdown { reply } => {
                 self.release_assignments_for_shutdown(reply)
+            }
+            DaemonCompletion::ReleaseJoinedAssignmentsForShutdown { joined, reply } => {
+                self.release_joined_assignments_for_shutdown(joined, reply)
             }
             DaemonCompletion::TraceRetentionProtection(reply) => {
                 reply.send(crate::RetentionProtection {
@@ -744,6 +750,9 @@ impl Machine for DaemonMachine {
             )],
             DaemonCompletion::ScheduleWake { request } => self.schedule_wake(request),
             DaemonCompletion::WakeTimerElapsed { repo, generation } => {
+                if self.shutdown_admission.is_fenced() {
+                    return Vec::new();
+                }
                 let decisions = self.wake_coordinator.timer_elapsed(
                     self.now,
                     repo,
@@ -753,12 +762,11 @@ impl Machine for DaemonMachine {
                 self.wake_decision_requests(decisions)
             }
             DaemonCompletion::WakeFinished { work, outcome } => {
-                let decisions = self.wake_coordinator.finish(
-                    self.now,
-                    &work,
-                    outcome,
-                    !self.applying.is_empty(),
-                );
+                let apply_or_shutdown =
+                    !self.applying.is_empty() || self.shutdown_admission.is_fenced();
+                let decisions =
+                    self.wake_coordinator
+                        .finish(self.now, &work, outcome, apply_or_shutdown);
                 self.wake_decision_requests(decisions)
             }
             DaemonCompletion::ConfigureWakeRepositories {

@@ -1,0 +1,37 @@
+[Unit]
+Description=Temper standalone engine, worker, and agent
+Documentation=https://github.com/temper-rs/temper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=temper
+Group=temper
+StateDirectory=temper
+WorkingDirectory=/var/lib/temper
+Environment=RUST_LOG=info
+LoadCredential=credentials.toml:/etc/temper/credentials.toml
+ExecStart=/usr/local/bin/temper --config /etc/temper/config.toml serve standalone --id %H-standalone
+Restart=on-failure
+RestartSec=5s
+# Delegate the cgroup-v2 subtree used for attempt and descendant ownership.
+Delegate=yes
+# Temper's default internal shutdown budget is 30 seconds. The extra 15-second
+# safety margin lets Temper's core-dump-free exit complete before systemd
+# applies its external control-group backstop; core generation cannot consume
+# that margin.
+TimeoutStopSec=45s
+# Never use KillMode=process: the abrupt-death backstop must include agents,
+# MCP servers, managed commands, and every other service descendant.
+KillMode=control-group
+
+# Standalone needs writable state, trace spool, and prepared workspaces.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/temper
+
+[Install]
+WantedBy=multi-user.target

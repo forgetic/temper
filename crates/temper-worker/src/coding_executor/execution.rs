@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use temper_protocol_worker::Assign;
+use temper_protocol_worker::{Assign, FailureClass};
 
-use super::{CodingExecutor, execute};
+use super::{CodingExecutor, execute, failure};
 use crate::agent_runner::AgentRunner;
 use crate::executor::{JobExecutionContext, JobExecutor, JobOutcome};
 
@@ -32,15 +32,31 @@ impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
         let pr_freshness_guard = self.pr_freshness_guard.clone();
         let containment_factory = self.containment_factory.clone();
         async move {
-            execute(
-                config,
-                runner,
-                pr_freshness_guard,
-                containment_factory,
-                assign,
-                execution,
-            )
-            .await
+            let attempt_id = execution.attempt.id.clone();
+            let containment_factory = match containment_factory {
+                Some(factory) => factory,
+                None => match crate::process_containment::production_factory(
+                    &assign.job_id,
+                    &attempt_id,
+                ) {
+                    Ok(factory) => factory,
+                    Err(error) => {
+                        return failure(
+                            FailureClass::Transient,
+                            format!("create attempt process containment: {error}"),
+                        );
+                    }
+                },
+            };
+            execution
+                .cancellation
+                .install_containment_factory(containment_factory);
+            let cancellation = execution.cancellation.clone();
+            let outcome = execute(config, runner, pr_freshness_guard, assign, execution).await;
+            // Direct callers receive the same joined process-owner guarantee
+            // as WorkerShell across workspace, fingerprint, and gate commands.
+            cancellation.wait_for_process_owners().await;
+            outcome
         }
     }
 }

@@ -8,5 +8,7 @@ mod failure;
 mod ownership_fencing;
 #[path = "apply/result_delivery.rs"]
 mod result_delivery;
+#[path = "apply/shutdown_admission.rs"]
+mod shutdown_admission;
 #[path = "apply/support.rs"]
 mod support;

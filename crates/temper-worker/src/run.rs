@@ -13,7 +13,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use skein::runtime::RuntimeHandle;
 use temper_worker_io::{CqSender, OneshotReceiver, Spawner, channel, drive, oneshot};
@@ -24,7 +24,8 @@ use crate::executor::JobExecutor;
 use crate::lifecycle_hook::{NoopWorkerLifecycleHook, WorkerLifecycleHook};
 use crate::result_outbox::ResultOutbox;
 use crate::task_registry::{
-    WorkerComponentTasks, WorkerShutdown, WorkerTaskJoinNotification, WorkerTaskRegistry,
+    WorkerComponentTasks, WorkerShutdown, WorkerShutdownReport, WorkerTaskJoinNotification,
+    WorkerTaskRegistry,
 };
 use crate::trace::{TraceCollector, spawn_activity_forwarder};
 use crate::transport::{HttpTransport, Transport};
@@ -117,6 +118,7 @@ where
 /// jobs, then joins that loop. This is intentionally distinct from graceful
 /// workflow cleanup so restart tests can retain durable assignment state.
 pub struct WorkerComponentHandle {
+    worker_id: String,
     completions: CqSender<WorkerCompletion>,
     joined: Option<OneshotReceiver<()>>,
     forwarder_joined: Option<OneshotReceiver<()>>,
@@ -125,6 +127,19 @@ pub struct WorkerComponentHandle {
     component_tasks: WorkerComponentTasks,
     graceful_cancellation_grace: Duration,
     forced_termination_grace: Duration,
+}
+
+/// Cloneable, synchronous authority used by standalone's dedicated OS
+/// watchdog. Ordinary split-worker shutdown never constructs this handle.
+#[derive(Clone)]
+pub struct WorkerEmergencyShutdownHandle {
+    task_registry: WorkerTaskRegistry,
+}
+
+impl WorkerEmergencyShutdownHandle {
+    pub fn request_emergency_kill(&self) {
+        let _ = self.task_registry.begin_shutdown(WorkerShutdown::Crash);
+    }
 }
 
 impl WorkerComponentHandle {
@@ -150,6 +165,127 @@ impl WorkerComponentHandle {
         self.stop_background_and_machine().await;
     }
 
+    /// Stops intake and escalates active attempts within one absolute deadline.
+    /// Deadline expiry returns exact unresolved registry entries without
+    /// removing them, publishing quiescence/results, or releasing capacity.
+    pub async fn shutdown_bounded(mut self, deadline: Instant) -> WorkerShutdownReport {
+        self.shutdown_bounded_after_fence(deadline, || {}).await
+    }
+
+    /// Standalone-only bounded shutdown seam. The callback runs synchronously
+    /// after registry intake and every active attempt fence are closed, but
+    /// before any graceful wait begins. This lets the composition root start
+    /// HTTP drain in the required order while retaining this handle on the
+    /// bounded-crash path.
+    #[doc(hidden)]
+    pub async fn shutdown_bounded_after_fence<F>(
+        &mut self,
+        deadline: Instant,
+        after_attempt_fence: F,
+    ) -> WorkerShutdownReport
+    where
+        F: FnOnce(),
+    {
+        let initial = self
+            .task_registry
+            .active_jobs()
+            .into_iter()
+            .map(|task| task.identity(&self.worker_id))
+            .collect::<Vec<_>>();
+        let notification = self.task_registry.begin_shutdown(WorkerShutdown::Graceful);
+        let _ = self.completions.send(WorkerCompletion::BeginShutdown);
+        after_attempt_fence();
+        if !wait_until_or_deadline(notification, self.graceful_cancellation_grace, deadline).await {
+            self.task_registry
+                .request_all(crate::JobCancellationRequest::ForcedTermination);
+            if !wait_until_or_deadline(
+                self.task_registry.join_notification(),
+                self.forced_termination_grace,
+                deadline,
+            )
+            .await
+            {
+                self.task_registry
+                    .request_all(crate::JobCancellationRequest::HardKill);
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let _ =
+                    wait_until_or_timeout(self.task_registry.join_notification(), remaining).await;
+            }
+        }
+
+        let unresolved_tasks = self.task_registry.active_jobs();
+        let unresolved_identities = unresolved_tasks
+            .iter()
+            .map(|task| task.identity(&self.worker_id))
+            .collect::<std::collections::BTreeSet<_>>();
+        let joined_attempts = initial
+            .into_iter()
+            .filter(|identity| !unresolved_identities.contains(identity))
+            .collect();
+        let mut unresolved_blockers = unresolved_tasks
+            .iter()
+            .flat_map(|task| {
+                task.shutdown_blockers(
+                    &self.worker_id,
+                    temper_protocol_worker::ShutdownEscalationStage::HardKill,
+                    deadline,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let background_stopped = if unresolved_tasks.is_empty() {
+            self.stop_background_and_machine_until(deadline).await
+        } else {
+            // Stop component intake without awaiting potentially blocked owner
+            // tasks. The registry and attempt futures remain the authorities.
+            self.component_tasks.stop_accepting();
+            self.cancellation.cancel();
+            false
+        };
+        let component_blockers = self.component_tasks.shutdown_blockers(
+            &self.worker_id,
+            temper_protocol_worker::ShutdownEscalationStage::HardKill,
+            deadline,
+        );
+        unresolved_blockers.extend(component_blockers);
+        if !background_stopped && unresolved_tasks.is_empty() && unresolved_blockers.is_empty() {
+            unresolved_blockers.push(
+                temper_protocol_worker::ShutdownBlocker::new(
+                    temper_protocol_worker::ShutdownBlockerKind::ComponentTask,
+                    temper_protocol_worker::ShutdownEscalationStage::HardKill,
+                    "worker_component",
+                    "background_component",
+                )
+                .with_identity(Some(&self.worker_id), None, None)
+                .with_timing(
+                    0,
+                    0,
+                    u64::try_from(
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .as_millis(),
+                    )
+                    .unwrap_or(u64::MAX),
+                ),
+            );
+        }
+        unresolved_blockers.truncate(temper_protocol_worker::MAX_SHUTDOWN_BLOCKERS);
+        WorkerShutdownReport {
+            joined_attempts,
+            unresolved_blockers,
+        }
+    }
+
+    /// Out-of-band authority safe to move to a dedicated OS watchdog thread.
+    /// It closes registry intake and attempt fences before queuing the strongest
+    /// backend kill without waiting for the single-threaded runtime.
+    #[doc(hidden)]
+    pub fn emergency_shutdown_handle(&self) -> WorkerEmergencyShutdownHandle {
+        WorkerEmergencyShutdownHandle {
+            task_registry: self.task_registry.clone(),
+        }
+    }
+
     /// Stops the component without publishing or releasing active claims. It
     /// immediately hard-escalates every attempt, but still waits indefinitely
     /// for recursive emptiness and resource joins before returning.
@@ -167,28 +303,51 @@ impl WorkerComponentHandle {
 
     /// Waits until the worker exits without requesting shutdown.
     pub async fn join(mut self) {
-        if let Some(joined) = self.joined.take() {
-            let _ = joined.recv().await;
+        if let Some(joined) = self.joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.joined.take();
         self.component_tasks.stop_accepting();
         self.cancellation.cancel();
         self.component_tasks.wait_empty().await;
-        if let Some(joined) = self.forwarder_joined.take() {
-            let _ = joined.recv().await;
+        if let Some(joined) = self.forwarder_joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.forwarder_joined.take();
+    }
+
+    async fn stop_background_and_machine_until(&mut self, deadline: Instant) -> bool {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let mut stopped = std::pin::pin!(self.stop_background_and_machine());
+        let mut timer = std::pin::pin!(temper_worker_io::sleep_for(remaining));
+        std::future::poll_fn(|cx| {
+            if stopped.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(true);
+            }
+            if timer.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(false);
+            }
+            Poll::Pending
+        })
+        .await
     }
 
     async fn stop_background_and_machine(&mut self) {
         self.component_tasks.stop_accepting();
         self.cancellation.cancel();
         self.component_tasks.wait_empty().await;
-        if let Some(joined) = self.forwarder_joined.take() {
-            let _ = joined.recv().await;
+        if let Some(joined) = self.forwarder_joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.forwarder_joined.take();
         let _ = self.completions.send(WorkerCompletion::Shutdown);
-        if let Some(joined) = self.joined.take() {
-            let _ = joined.recv().await;
+        if let Some(joined) = self.joined.as_mut() {
+            let _ = joined.recv_mut().await;
         }
+        self.joined.take();
     }
 }
 
@@ -214,6 +373,15 @@ pub async fn shutdown_worker_after_signal<S, B, A>(
     before_worker_join.await;
     worker.shutdown().await;
     after_worker_join.await;
+}
+
+async fn wait_until_or_deadline(
+    notification: WorkerTaskJoinNotification,
+    stage_grace: Duration,
+    deadline: Instant,
+) -> bool {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    wait_until_or_timeout(notification, stage_grace.min(remaining)).await
 }
 
 async fn wait_until_or_timeout(
@@ -367,6 +535,7 @@ where
     });
 
     WorkerComponentHandle {
+        worker_id: config.worker_id,
         completions: cq_tx,
         joined: Some(joined),
         forwarder_joined,

@@ -85,6 +85,10 @@ settings are visible in the generated configuration template and in
   `worker.forced_termination_grace_secs` bound cooperative cancellation and
   escalation requests; a worker still fails closed and retains the attempt
   fence and permit while descendant inspection cannot prove emptiness;
+- `deployment.standalone_shutdown_budget_secs` (default 30) is the separate
+  absolute signal-to-exit bound for the co-resident `serve standalone` process.
+  It must strictly exceed both worker graces plus the fixed 5-second HTTP-drain
+  and 5-second final emergency-kill allowances;
 - first-party operation limits live in `agent.deadlines` (with profile
   overrides) and must remain below the no-progress bound.
 
@@ -154,15 +158,59 @@ uninspectable trees remain without being signaled.
 `worker.containment.startup_scavenge` reports removed/live-protected/retained
 counts, a bounded list of retained path diagnostics, and the omitted-diagnostic
 count; retained or omitted evidence is warning level. During `SIGINT` or
-`SIGTERM`, the worker
-stops intake, fences all attempts, escalates every active owner, and joins the
-active-job registry before returning. With the example systemd unit,
-`Delegate=yes` permits nested
-ownership and `KillMode=control-group` kills the complete service cgroup after
-`TimeoutStopSec` if application cleanup cannot complete. Abrupt `SIGKILL`,
-kernel failure, or power loss cannot produce a terminal cleanup event; the
-service cgroup is the backstop and the next startup performs stale ownership
-inspection.
+`SIGTERM`, a split worker stops intake, fences all attempts,
+escalates every active owner, and joins the active-job registry before
+returning. With the example worker unit, `Delegate=yes` permits nested ownership
+and `KillMode=control-group` kills the complete service cgroup after its
+five-minute external `TimeoutStopSec` backstop. Abrupt `SIGKILL`, kernel
+failure, or power loss cannot produce a terminal cleanup event; the next
+startup performs stale ownership inspection. Do not use `KillMode=process`:
+it can leave the worker's agent, MCP, or managed-command descendants alive.
+
+## Standalone shutdown budget and blocker diagnostics
+
+Standalone keeps the ordinary worker proof rules above while the process is
+healthy: ownership loss still waits for recursive-empty/direct-child evidence
+and the exact terminal-trace acknowledgement before quiescence, result
+recording, heartbeat removal, or permit release. The standalone signal path is
+a distinct bounded process-loss contract, not a timeout that weakens those
+rules.
+
+The default `deployment.standalone_shutdown_budget_secs = 30` is one absolute
+interval from signal receipt across daemon admission fencing, attempt
+cancellation/join, already-admitted operations, trace retention, exact joined-
+assignment release, and HTTP drain. The checked standalone unit uses
+`TimeoutStopSec=45s`, keeping systemd strictly outside Temper's deadline with a
+15-second safety margin. The deadline exit is core-dump-free, so core generation
+cannot consume that margin. When tuning either value, rerun `temper check` and
+keep `TimeoutStopSec` strictly greater than Temper's budget; never configure it
+at or below the budget.
+
+Before cancellation, standalone fences new claims, worker results, result
+application, assignment-scoped Forge context, and active attempts. A complete
+join emits `standalone.shutdown.summary` with `disposition=graceful_exit` and
+releases only exact attempts in the proven worker report. At deadline expiry it
+emits `disposition=bounded_crash_handoff`, retains unproven durable assignments
+and trace spool, drives attempt-owned emergency process termination, and exits
+with status 70 through a core-dump-free primitive. It does not unwind, run C/Rust
+exit handlers or owner drops, or flush userspace buffers. Restart then uses
+startup assignment staging, orphan/feed convergence, durable-result replay, and
+trace-spool forwarding. Existing fences and exact durable claim checks reject
+late results and Forge operations from the previous process.
+
+`standalone.shutdown.blocker` uses the closed kinds `containment`,
+`terminal_trace_ack`, `result_delivery`, `component_task`, and `registry_state`.
+Bounded/redacted fields include worker/job/attempt identity, owner scope/name and
+root, root PID, sampled survivor PIDs and omitted count, containment phase,
+trace run/sequence, first-seen timestamp, monotonically increasing age,
+escalation stage, deadline remaining, and occurrence count. The terminal
+summary carries the final disposition and a bounded blocker rollup. Unknown
+root/PID evidence is not interpreted as recursive-empty proof.
+
+The standalone unit also requires `Delegate=yes` for its preferred cgroup-v2
+ownership, pidfd signaling, and recursive-empty checks, and
+`KillMode=control-group` as the service-manager backstop. Never use
+`KillMode=process`.
 
 ## Diagnostics
 

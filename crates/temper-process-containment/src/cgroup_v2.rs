@@ -30,9 +30,9 @@ use process::*;
 use crate::{
     BackendSpawn, ContainmentBackendFactory, ContainmentBackendKind, ContainmentBackendPolicy,
     ContainmentCommand, ContainmentKernel, ContainmentRootIdentity, ContainmentScope,
-    ContainmentSignal, ContainmentSpec, DirectChildReap, MemberDiscovery,
-    PreparedContainmentBackend, ProcessIdentity, RecursiveEmptyProof, SignalAttempt,
-    SignalAttemptOutcome, SignalBatch,
+    ContainmentSignal, ContainmentSpec, DirectChildReap, EmergencyTerminationHandle,
+    MemberDiscovery, PreparedContainmentBackend, ProcessIdentity, RecursiveEmptyProof,
+    SignalAttempt, SignalAttemptOutcome, SignalBatch,
 };
 
 /// Descriptor used to pass a job's cgroup directory to an out-of-process

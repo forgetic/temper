@@ -57,10 +57,14 @@ pub use context_client::{
 pub use executor::{
     AttemptFence, CancellationOutcome, JobAttempt, JobCancellation, JobCancellationOwner,
     JobCancellationRequest, JobCleanup, JobExecutionContext, JobExecutor, JobOutcome,
-    ResourceJoinReport, ResourceJoinStatus, StubExecutor, job_result, job_result_for_attempt,
+    ResourceJoinReport, ResourceJoinStatus, StubExecutor, TerminalTraceBlocker,
+    TerminalTraceBlockerState, job_result, job_result_for_attempt,
 };
 pub use lifecycle_hook::{WorkerLifecycleCheckpoint, WorkerLifecycleHook};
-pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
+pub use observability::{
+    StandaloneShutdownBlockerEvent, StandaloneShutdownDisposition, StandaloneShutdownSummaryEvent,
+    assigned_job_line, registered_worker_line, result_sent_line,
+};
 pub use out_of_process_runner::{JobQuiesced, OutOfProcessRunner};
 pub use pr_freshness::{
     HttpPrFreshnessGuard, PrFreshnessFailure, PrFreshnessGuard,
@@ -77,14 +81,16 @@ pub use result_outbox::{
     ResultOutbox, ResultOutboxEntry, ResultOutboxError,
 };
 pub use run::{
-    WorkerComponentHandle, run_worker, run_worker_with_trace_collector, run_worker_with_transport,
+    WorkerComponentHandle, WorkerEmergencyShutdownHandle, run_worker,
+    run_worker_with_trace_collector, run_worker_with_transport,
     run_worker_with_transport_and_trace_collector, shutdown_worker_after_signal,
     start_worker_with_transport, start_worker_with_transport_and_hook,
     start_worker_with_transport_and_hook_and_trace_collector,
     start_worker_with_transport_and_trace_collector,
 };
 pub use task_registry::{
-    ActiveJobJoinState, ActiveJobTask, WorkerShutdown, WorkerTaskJoinNotification,
+    ActiveJobJoinState, ActiveJobTask, WorkerAttemptIdentity, WorkerComponentTaskKind,
+    WorkerShutdown, WorkerShutdownBlocker, WorkerShutdownReport, WorkerTaskJoinNotification,
     WorkerTaskRegistry,
 };
 #[cfg(target_os = "linux")]
@@ -99,6 +105,7 @@ pub use temper_protocol_agent::{
     CodebaseMemoryToolConfig, RUNTIME_LIMITS_FLAG,
 };
 pub use temper_protocol_worker::WorkerAuth;
+pub use temper_protocol_worker::{ShutdownBlocker, ShutdownBlockerKind, ShutdownEscalationStage};
 pub use trace::{
     ActivityEndpoint, DirtyTraceRun, DirtyTraceRuns, MAX_CHILD_ACTIVITY_FRAME_BYTES,
     MAX_CHILD_ACTIVITY_RECORD_BYTES, RecoveredTraceRun, TraceCollector, TraceCoordinationSnapshot,

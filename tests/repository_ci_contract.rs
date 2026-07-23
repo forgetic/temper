@@ -40,9 +40,45 @@ fn repository_ci_bounds_parallel_rust_builds_on_shared_host() {
     assert!(
         validate_job
             .lines()
-            .any(|line| line.trim() == "CARGO_BUILD_JOBS: \"4\""),
-        "the no-swap shared runner must bound parallel rustc/linker processes"
+            .any(|line| line.trim() == "CARGO_BUILD_JOBS: \"2\""),
+        "the shared runner must preserve memory and linker disk headroom"
     );
+}
+
+#[test]
+fn repository_ci_reclaims_oversized_shared_cache_before_disk_consumers() {
+    let validate_job = CI_WORKFLOW
+        .split_once("  validate:\n")
+        .expect("CI declares the validate job")
+        .1
+        .split_once("  web:\n")
+        .expect("validate precedes web")
+        .0;
+    let web_job = CI_WORKFLOW
+        .split_once("  web:\n")
+        .expect("CI declares the web job")
+        .1;
+
+    for (job, first_consumer) in [
+        (validate_job, "      - name: Prepare scratch directory\n"),
+        (web_job, "      - name: Install (npm ci)\n"),
+    ] {
+        let gc_offset = job
+            .find("      - name: Reclaim shared build cache\n")
+            .expect("host job explicitly runs build-cache LRU eviction");
+        let consumer_offset = job
+            .find(first_consumer)
+            .expect("host job declares its first disk consumer");
+        assert!(
+            gc_offset < consumer_offset,
+            "shared cache must be size-bounded before the job consumes disk"
+        );
+        let gc_step = &job[gc_offset..consumer_offset];
+        assert!(
+            gc_step.lines().any(|line| line.trim() == "run: kache gc"),
+            "shared cache reclamation must use configured LRU eviction"
+        );
+    }
 }
 
 #[test]
@@ -66,6 +102,24 @@ fn repository_ci_runs_e2e_from_repaired_captured_binaries() {
             .lines()
             .any(|line| line.trim() == "cargo dev-test-e2e-all"),
         "a direct nextest alias can restore non-executable harnesses after permission repair"
+    );
+}
+
+#[test]
+fn repository_ci_installs_locked_web_dependencies_without_advisory_network_calls() {
+    let install_step = CI_WORKFLOW
+        .split_once("      - name: Install (npm ci)\n")
+        .expect("CI declares the web dependency install step")
+        .1
+        .split_once("      - name: Test (vitest)\n")
+        .expect("the web dependency install precedes tests")
+        .0;
+
+    assert!(
+        install_step
+            .lines()
+            .any(|line| line.trim() == "run: npm ci --no-audit --no-fund"),
+        "web dependency installation must avoid non-gating advisory and funding network calls"
     );
 }
 

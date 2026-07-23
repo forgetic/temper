@@ -21,6 +21,8 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
     std::fs::write(
         bundle.join("config.toml"),
         "schema_version = 1\n\
+         [deployment]\n\
+         standalone_shutdown_budget_secs = 40\n\
          [forge]\n\
          url = \"http://localhost:3000\"\n\
          admin = \"agent\"\n\
@@ -115,6 +117,10 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
     assert!(stdout.contains("model=claude-opus-4-8"), "{stdout}");
     assert!(
         stdout.contains("credential=agent-provider (available)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("standalone_shutdown_budget_secs = 40"),
         "{stdout}"
     );
     assert!(stdout.contains("max_no_progress_secs = 777"), "{stdout}");

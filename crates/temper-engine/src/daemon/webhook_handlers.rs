@@ -19,6 +19,12 @@ impl DaemonMachine {
         request: &HttpRequestData,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
+        if self.shutdown_admission.is_fenced() {
+            return vec![DaemonRequest::Respond {
+                responder,
+                response: HttpResponseData::status_only(503),
+            }];
+        }
         let config = self
             .webhook
             .as_ref()

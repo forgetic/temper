@@ -28,6 +28,7 @@ mod job;
 mod lifecycle;
 mod message;
 mod result;
+mod shutdown;
 mod workspace;
 
 pub use activity::{WorkerActivityAcknowledgement, WorkerActivityBatch};
@@ -50,6 +51,11 @@ pub use lifecycle::{
 };
 pub use message::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 pub use result::{Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus};
+pub use shutdown::{
+    MAX_SHUTDOWN_BLOCKERS, MAX_SHUTDOWN_IDENTIFIER_BYTES, MAX_SHUTDOWN_ROOT_BYTES,
+    MAX_SHUTDOWN_SURVIVOR_PIDS, ShutdownBlocker, ShutdownBlockerKind, ShutdownEscalationStage,
+    safe_shutdown_identifier, safe_shutdown_root,
+};
 pub use temper_protocol_context::{
     ARTIFACT_CONTEXT_VERSION, ArtifactContextBundle, ArtifactContextDiagnostic,
     ArtifactContextDiagnosticCode, ArtifactContextTruncation, ArtifactIndexEntry,
