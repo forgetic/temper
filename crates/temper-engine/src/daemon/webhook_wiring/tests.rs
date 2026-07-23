@@ -221,6 +221,7 @@ fn coordinated_ci_observability_preserves_webhook_and_poll_provenance() {
                     source,
                     verdict: Some(crate::CiTerminalVerdict::Failed),
                     completed_at: Some(completed_at.parse().unwrap()),
+                    recovery: None,
                 },
                 Some(CiStatus::failed()),
                 Some(&selected),

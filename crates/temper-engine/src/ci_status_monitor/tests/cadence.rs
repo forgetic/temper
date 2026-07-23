@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
+use temper_forge::UpdatePullRequest;
+use temper_workflow::{WorkflowMetadata, render_metadata_block};
 
 const CI_LANDING_WORKFLOW: &str = r#"
 {
@@ -196,6 +198,78 @@ fn terminal_green_cadence_runs_targeted_mechanical_landing_without_fallback_scan
             .expect("pull request read succeeds")
             .expect("pull request still exists");
         assert_eq!(landed.state, temper_forge::PullRequestState::Merged);
+        assert!(daemon.queued_jobs().await.is_empty());
+    });
+}
+
+#[test]
+fn expired_missing_ci_intent_is_parked_through_coordinated_wake_before_role_dispatch() {
+    temper_engine_io::block_on_with(move |cx, handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repository = create_repository(forge.as_ref(), "missing-current-head");
+        let pull_request = create_pull_request(forge.as_ref(), &repository, "head-missing");
+        let pull_request = forge
+            .update_pull_request(
+                &pull_request.id,
+                UpdatePullRequest {
+                    body: Some(render_metadata_block(&WorkflowMetadata {
+                        repaired_head: Some("head-missing".to_string()),
+                        ..WorkflowMetadata::default()
+                    })),
+                    expected_version: Some(pull_request.version),
+                    ..UpdatePullRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+        let workflow = Arc::new(
+            serde_json::from_str::<RawWorkflowSpec>(REFERENCE_WORKFLOW)
+                .expect("reference workflow parses")
+                .validate()
+                .expect("reference workflow validates"),
+        );
+        let compiled = Arc::new(workflow.compile());
+        let spawner: Arc<dyn temper_engine_io::Spawner> = Arc::new(handle);
+        let daemon = crate::Daemon::new(Arc::clone(&spawner)).with_wake_execution(
+            Arc::clone(&forge),
+            Arc::clone(&workflow),
+            compiled,
+            vec![crate::RoleFeedTarget {
+                repo: repository.id.clone(),
+                path: repository.path.clone(),
+                role: temper_workflow::RoleId::new("engineer"),
+                mode: crate::RoleFeedMode::Wake,
+            }],
+            Arc::new(|| timestamp("2026-07-21T12:00:01Z")),
+            None,
+        );
+
+        daemon.submit_ci_poll_transition(CiStatusTransition::MissingCurrentHead(
+            CiMissingCurrentHeadTransition {
+                hint: ChangeHint::pull_request(
+                    repository.path.clone(),
+                    pull_request.number,
+                    ChangeKind::Ci,
+                ),
+                head_sha: "head-missing".to_string(),
+                first_observed_at: timestamp("2026-07-21T11:55:00Z"),
+            },
+        ));
+        temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(50)).await;
+
+        let parked = forge
+            .get_pull_request_by_number(&repository.id, pull_request.number)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            parked.labels,
+            vec!["implementation", "needs-human", "watch"]
+        );
+        let comments = forge.list_pull_request_comments(&parked.id).await.unwrap();
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].body.contains("head-missing"));
+        assert!(comments[0].body.contains("matching `repaired_head`"));
         assert!(daemon.queued_jobs().await.is_empty());
     });
 }

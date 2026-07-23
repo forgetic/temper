@@ -16,6 +16,10 @@ use temper_protocol_worker::Artifact;
 use temper_runner::ArtifactAddress;
 use temper_workflow::{CiState, CiStatus, CompiledWorkflow, RoleId, ValidatedWorkflow};
 
+mod missing_ci_recovery;
+
+use self::missing_ci_recovery::recover_missing_current_head_ci;
+
 use crate::RoleFeedTarget;
 use crate::lease_applier::WallClock;
 use crate::webhook::WebhookConfig;
@@ -258,12 +262,12 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
         // deterministic coordinator compaction path.
         for scope in work.batch.lanes().values() {
             for ((kind, number), target) in scope.targets() {
-                let Some(incoming) = target.ci else {
+                let Some(incoming) = target.ci.clone() else {
                     continue;
                 };
                 ci_facts
                     .entry(ArtifactAddress::new(*kind, *number))
-                    .and_modify(|current| *current = current.merge(incoming))
+                    .and_modify(|current| *current = current.clone().merge(incoming.clone()))
                     .or_insert(incoming);
             }
         }
@@ -295,8 +299,8 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
                     for (address, target) in targets {
                         mechanical_targets
                             .entry(*address)
-                            .and_modify(|current| current.merge(*target))
-                            .or_insert(*target);
+                            .and_modify(|current| current.merge(target.clone()))
+                            .or_insert_with(|| target.clone());
                     }
                 }
                 WakeLane::Role(_) => {}
@@ -305,6 +309,24 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
 
         let mut failures = Vec::new();
         let now = (self.clock)();
+
+        // A missing-CI wake is only an intent. Revalidate and, when still safe,
+        // install the attention barrier before mechanical or role work can act
+        // on this exact target in the coalesced repository generation.
+        for (address, facts) in &ci_facts {
+            if let Some(recovery) = facts.recovery.as_ref() {
+                recover_missing_current_head_ci(
+                    self.forge.as_ref(),
+                    &repository,
+                    self.workflow.as_ref(),
+                    self.compiled.as_ref(),
+                    now,
+                    *address,
+                    recovery,
+                )
+                .await;
+            }
+        }
 
         // Exact mechanical transitions run in explicit priority order before
         // retained broad reconciliation. Role work starts only after all
@@ -374,7 +396,7 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
                 .await
             {
                 Ok(result) => {
-                    if let Some(facts) = ci_facts.get(&address).copied() {
+                    if let Some(facts) = ci_facts.get(&address).cloned() {
                         emit_ci_wake_observation(
                             &route.path,
                             address,
