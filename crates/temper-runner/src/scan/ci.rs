@@ -12,7 +12,7 @@ use temper_forge::{
 use temper_workflow::plan::matches_queue_cheap;
 use temper_workflow::{
     CiState, CiStatus, ClassifiedArtifact, Classifier, CompiledWorkflow, QueueManifest,
-    ValidatedWorkflow,
+    ValidatedWorkflow, requires_human_attention,
 };
 
 use super::ScanError;
@@ -37,9 +37,9 @@ pub struct CiStatusObservation {
 ///
 /// Candidate discovery uses one queue-derived open pull-request bucket. Each
 /// listed summary is classified and cheap-matched before an exact refresh, and
-/// the exact artifact is checked again before its CI jobs are read. Staged,
-/// terminal, unclassifiable, unrelated, or headless pull requests are skipped.
-/// CI queries are conjunctively scoped to both the pull request and its current
+/// the exact artifact is checked again before its CI jobs are read. Attention-
+/// marked, staged, terminal, unclassifiable, unrelated, or headless pull
+/// requests are skipped. CI queries are conjunctively scoped to both the pull
 /// non-empty head SHA. This function performs no Forge mutation.
 pub async fn read_ci_status_observations<F: Forge + ?Sized>(
     forge: &F,
@@ -128,6 +128,7 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
 
 fn relevant_candidate(queues: &[&QueueManifest], classified: &ClassifiedArtifact) -> bool {
     !classified.metadata.staged
+        && !requires_human_attention(&classified.labels)
         && queues
             .iter()
             .any(|queue| matches_queue_cheap(*queue, classified))

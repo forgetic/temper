@@ -257,6 +257,26 @@ fn ci_discovery_uses_only_one_open_pull_request_bucket() {
 }
 
 #[test]
+fn attention_marked_candidate_is_omitted_before_exact_head_or_ci_reads() {
+    let inner = MemoryForge::new();
+    let repo = new_repo(&inner);
+    create_pr(
+        &inner,
+        &repo,
+        &["implementation", "watch", "needs-human"],
+        String::new(),
+        Some("parked-head"),
+    );
+    let forge = CountingForge::new(inner);
+    let workflow = workflow(CI_WORKFLOW);
+
+    assert!(observations(&forge, &repo, &workflow).is_empty());
+    assert_eq!(forge.count(CountedForgeOp::GetPullRequest), 0);
+    assert_eq!(forge.count(CountedForgeOp::ListCiJobs), 0);
+    assert_eq!(forge.write_count(), 0);
+}
+
+#[test]
 fn candidates_are_classified_and_cheap_matched_before_ci_reads() {
     let inner = MemoryForge::new();
     let repo = new_repo(&inner);

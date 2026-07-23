@@ -10,7 +10,7 @@ use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
     ArtifactSource, CiState, CiStatus, ClassifiedArtifact, Classifier, CompiledWorkflow,
     ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow,
-    queue_active,
+    queue_active, requires_human_attention,
 };
 
 use super::candidate::{
@@ -337,10 +337,10 @@ async fn push_candidate<F: Forge + ?Sized>(
     artifacts: &mut Vec<ScannedArtifact>,
     emit_ci_completed: bool,
 ) -> Result<(), ScanError> {
-    // A durable create intent keeps children staged until the entire sibling
-    // graph exists. This metadata guard is independent of labels and therefore
-    // applies uniformly to normal, wake, audit, automated, and targeted scans.
-    if classified.metadata.staged {
+    // Staging and human-attention state are global automation barriers. Check
+    // both before any queue-specific gate read so custom workflows cannot
+    // accidentally bypass them.
+    if classified.metadata.staged || requires_human_attention(&classified.labels) {
         return Ok(());
     }
     let Some(needs) = signal_needs_for_candidate(queues, &classified) else {
@@ -381,6 +381,12 @@ async fn push_candidate<F: Forge + ?Sized>(
     };
 
     emit_pr_gate_evaluated(repo, &classified, &signals, needs, emit_ci_completed);
+    // Broad signal reads return a freshly classified artifact. Re-check the
+    // attention barrier so a park that became visible during candidate
+    // enrichment cannot produce work from the stale summary.
+    if requires_human_attention(&classified.labels) {
+        return Ok(());
+    }
     artifacts.push(ScannedArtifact {
         classified,
         signals,

@@ -8,10 +8,11 @@ mod support;
 
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
-    BranchRef, CandidateLabelSelection, CandidateLifecycle, CreateIssue, CreatePullRequest,
-    CreateRepository, Forge, IssueCandidateQuery, IssueQuery, IssueState, ItemListDetails,
-    ItemNumber, MergeMethod, MergePullRequest, PullRequestCandidateQuery, PullRequestQuery,
-    PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
+    BranchRef, CandidateLabelSelection, CandidateLifecycle, ChangeKind, CreateIssue,
+    CreatePullRequest, CreateRepository, Forge, HintArtifactKind, IssueCandidateQuery, IssueQuery,
+    IssueState, ItemListDetails, ItemNumber, MergeMethod, MergePullRequest,
+    PullRequestCandidateQuery, PullRequestQuery, PullRequestUpdateState, RepositoryId, UpdateIssue,
+    UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Progress, Worker};
@@ -403,6 +404,57 @@ fn deep_audit_tick_finds_unlabelled_expired_lease() {
             .expect("metadata present")
             .lease
             .is_none()
+    );
+}
+
+#[test]
+fn attention_marked_expired_lease_is_inert_in_targeted_bounded_and_deep_reconciliation() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let issue = create_issue_with_body(
+        &forge,
+        &repo,
+        &["code", "in-progress", "needs-human"],
+        expired_lease_body(),
+    );
+    let workflow = workflow();
+    let journal = InMemoryJournal::new();
+    let worker = mechanical_worker(&forge, &repo, &workflow, &journal);
+
+    assert_eq!(
+        block_on(worker.tick_artifact(
+            ts("2026-05-29T00:20:00Z"),
+            issue,
+            HintArtifactKind::Issue,
+            ChangeKind::Label,
+        ))
+        .expect("targeted reconciliation succeeds"),
+        Progress::unchanged()
+    );
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:21:00Z"))).expect("bounded reconciliation succeeds"),
+        Progress::unchanged()
+    );
+    assert_eq!(
+        block_on(worker.tick_deep_audit(ts("2026-05-29T00:22:00Z")))
+            .expect("deep audit reconciliation succeeds"),
+        Progress::unchanged()
+    );
+    assert!(
+        parse_metadata_block(&issue_body(&forge, &repo, issue))
+            .expect("metadata parses")
+            .expect("metadata present")
+            .lease
+            .is_some(),
+        "every mechanical reconciliation mode must preserve parked state"
+    );
+    assert_eq!(
+        issue_labels(&forge, &repo, issue),
+        vec![
+            "code".to_string(),
+            "in-progress".to_string(),
+            "needs-human".to_string(),
+        ]
     );
 }
 
