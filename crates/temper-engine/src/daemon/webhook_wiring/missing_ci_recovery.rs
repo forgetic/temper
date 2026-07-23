@@ -10,18 +10,20 @@ use temper_forge::{
 };
 use temper_runner::ArtifactAddress;
 use temper_workflow::{
-    Classifier, CompiledWorkflow, GateCondition, NEEDS_HUMAN_LABEL, ValidatedWorkflow,
-    WorkflowMetadata, matches_queue_cheap, requires_human_attention,
+    Classifier, CompiledWorkflow, GateCondition, MissingCiRecoveryState, NEEDS_HUMAN_LABEL,
+    ValidatedWorkflow, WorkflowMetadata, matches_queue_cheap, parse_metadata_block,
+    replace_metadata_block, requires_human_attention,
 };
 
 use crate::daemon::wake_coordinator::MissingCiRecoveryIntent;
 
 const MISSING_CI_COMMENT_KEY_PREFIX: &str = "missing_current_head_ci:";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum MissingCiRecoveryOutcome {
     Parked,
     Suppressed,
+    Retryable { reason: String },
 }
 
 /// Revalidates an expired observation against authoritative Forge state and
@@ -55,11 +57,11 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
         Ok(Some(pull_request)) => pull_request,
         Ok(None) => return suppress(repository, address, intent, "pull_request_missing"),
         Err(error) => {
-            return suppress(
+            return retry(
                 repository,
                 address,
                 intent,
-                &format!("pull_request_read_failed: {error}"),
+                format!("pull_request_read_failed: {error}"),
             );
         }
     };
@@ -92,11 +94,11 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
     {
         Ok(jobs) => jobs,
         Err(error) => {
-            return suppress(
+            return retry(
                 repository,
                 address,
                 intent,
-                &format!("current_head_jobs_read_failed: {error}"),
+                format!("current_head_jobs_read_failed: {error}"),
             );
         }
     };
@@ -107,8 +109,8 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
         return suppress(repository, address, intent, "current_head_job_visible");
     }
 
-    let classified = match Classifier::new(workflow).classify_pull_request(&pull_request) {
-        Ok(classified) => classified,
+    let parsed_metadata = match parse_metadata_block(&pull_request.body) {
+        Ok(metadata) => metadata.unwrap_or_default(),
         Err(error) => {
             return suppress(
                 repository,
@@ -118,6 +120,24 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
             );
         }
     };
+    let mut classification_pull_request = pull_request.clone();
+    if parsed_metadata.missing_ci_recovery.is_some() {
+        classification_pull_request
+            .labels
+            .retain(|label| label != NEEDS_HUMAN_LABEL);
+    }
+    let classified =
+        match Classifier::new(workflow).classify_pull_request(&classification_pull_request) {
+            Ok(classified) => classified,
+            Err(error) => {
+                return suppress(
+                    repository,
+                    address,
+                    intent,
+                    &format!("workflow_metadata_or_classification_invalid: {error}"),
+                );
+            }
+        };
     if classified.metadata.staged {
         return suppress(repository, address, intent, "workflow_metadata_staged");
     }
@@ -132,68 +152,159 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
     if let Err(reason) = validate_repaired_head(&classified.metadata) {
         return suppress(repository, address, intent, reason);
     }
-
-    let marker = missing_ci_comment_marker(current_head);
-    let comments = match forge.list_pull_request_comments(&pull_request.id).await {
-        Ok(comments) => comments,
-        Err(error) => {
-            return suppress(
-                repository,
-                address,
-                intent,
-                &format!("audit_comments_read_failed: {error}"),
-            );
-        }
-    };
-    if comments
-        .iter()
-        .any(|comment| comment.body.contains(&marker))
-    {
-        return suppress(repository, address, intent, "head_already_parked");
-    }
-    if requires_human_attention(&pull_request.labels) {
-        return suppress(
-            repository,
-            address,
-            intent,
-            "human_attention_already_required",
-        );
-    }
     match has_live_or_ambiguous_ownership(&classified.metadata, now) {
         Ok(true) => return suppress(repository, address, intent, "live_assignment_or_lease"),
         Ok(false) => {}
         Err(reason) => return suppress(repository, address, intent, &reason),
     }
 
+    let marker = missing_ci_comment_marker(current_head);
+    let comments = match forge.list_pull_request_comments(&pull_request.id).await {
+        Ok(comments) => comments,
+        Err(error) => {
+            return retry(
+                repository,
+                address,
+                intent,
+                format!("audit_comments_read_failed: {error}"),
+            );
+        }
+    };
+    let audit_exists = comments
+        .iter()
+        .any(|comment| comment.body.contains(&marker));
+    let attention_installed = requires_human_attention(&pull_request.labels);
+    let mut metadata = classified.metadata.clone();
+    let durable_recovery = metadata.missing_ci_recovery.clone();
+
+    let recovery = match durable_recovery {
+        Some(recovery) => {
+            if recovery.head_sha.trim() != recovery.head_sha
+                || recovery.head_sha.is_empty()
+                || recovery.head_sha != current_head
+            {
+                return suppress(
+                    repository,
+                    address,
+                    intent,
+                    "different_missing_ci_recovery_in_progress",
+                );
+            }
+            recovery
+        }
+        None => {
+            if audit_exists {
+                return suppress(repository, address, intent, "head_already_parked");
+            }
+            if attention_installed {
+                return suppress(
+                    repository,
+                    address,
+                    intent,
+                    "unrelated_human_attention_already_required",
+                );
+            }
+            MissingCiRecoveryState {
+                head_sha: current_head.to_string(),
+                first_observed_at: intent.first_observed_at,
+            }
+        }
+    };
+
+    // Install the public attention barrier and a durable operation marker in
+    // one conditional update. If comment publication or the process fails next,
+    // a fresh daemon can distinguish this operation from unrelated attention.
+    let mut parking_body = pull_request.body.clone();
+    let mut parking_version = pull_request.version;
+    if metadata.missing_ci_recovery.is_none() || !attention_installed {
+        metadata.missing_ci_recovery = Some(recovery.clone());
+        parking_body = match replace_metadata_block(&parking_body, &metadata) {
+            Ok(body) => body,
+            Err(error) => {
+                return suppress(
+                    repository,
+                    address,
+                    intent,
+                    &format!("workflow_metadata_update_invalid: {error}"),
+                );
+            }
+        };
+        let updated = match forge
+            .update_pull_request(
+                &pull_request.id,
+                UpdatePullRequest {
+                    body: Some(parking_body.clone()),
+                    add_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
+                    expected_version: Some(parking_version),
+                    ..UpdatePullRequest::default()
+                },
+            )
+            .await
+        {
+            Ok(updated) => updated,
+            Err(error) => {
+                return retry(
+                    repository,
+                    address,
+                    intent,
+                    format!("parking_barrier_write_failed: {error}"),
+                );
+            }
+        };
+        parking_body = updated.body;
+        parking_version = updated.version;
+    }
+
+    if !audit_exists {
+        let body = missing_ci_comment_body(
+            &classified.metadata,
+            current_head,
+            recovery.first_observed_at,
+            &marker,
+        );
+        if let Err(error) = forge
+            .add_pull_request_comment(&pull_request.id, CreateComment { body })
+            .await
+        {
+            return retry(
+                repository,
+                address,
+                intent,
+                format!("audit_comment_write_failed_after_barrier: {error}"),
+            );
+        }
+    }
+
+    // The attention label and head-keyed audit are now the durable final state;
+    // remove only the operation marker so normal attention filtering resumes.
+    metadata.missing_ci_recovery = None;
+    let completed_body = match replace_metadata_block(&parking_body, &metadata) {
+        Ok(body) => body,
+        Err(error) => {
+            return retry(
+                repository,
+                address,
+                intent,
+                format!("parking_marker_clear_render_failed: {error}"),
+            );
+        }
+    };
     if let Err(error) = forge
         .update_pull_request(
             &pull_request.id,
             UpdatePullRequest {
-                add_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
-                expected_version: Some(pull_request.version),
+                body: Some(completed_body),
+                expected_version: Some(parking_version),
                 ..UpdatePullRequest::default()
             },
         )
         .await
     {
-        return suppress(
+        return retry(
             repository,
             address,
             intent,
-            &format!("attention_label_write_failed: {error}"),
-        );
-    }
-
-    let body = missing_ci_comment_body(&classified.metadata, current_head, intent, &marker);
-    if let Err(error) = forge
-        .add_pull_request_comment(&pull_request.id, CreateComment { body })
-        .await
-    {
-        return suppress(
-            repository,
-            address,
-            intent,
-            &format!("audit_comment_write_failed_after_label: {error}"),
+            format!("parking_marker_clear_failed: {error}"),
         );
     }
 
@@ -204,7 +315,7 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
         repository_id = %repository.id,
         pull_request = address.number.get(),
         expected_head_sha = %intent.expected_head_sha,
-        first_observed_at = %intent.first_observed_at,
+        first_observed_at = %recovery.first_observed_at,
         recovery_outcome = "parked",
         "missing-CI recovery parked pull request for human attention"
     );
@@ -311,7 +422,7 @@ fn missing_ci_comment_marker(head_sha: &str) -> String {
 fn missing_ci_comment_body(
     metadata: &WorkflowMetadata,
     current_head: &str,
-    intent: &MissingCiRecoveryIntent,
+    first_observed_at: DateTime<Utc>,
     marker: &str,
 ) -> String {
     let repaired_head = match metadata.repaired_head.as_deref() {
@@ -324,9 +435,29 @@ fn missing_ci_comment_body(
         None => "Workflow metadata does not record a `repaired_head`.".to_string(),
     };
     format!(
-        "Temper parked this pull request because no CI run or status for the current head was found during final validation.\n\nCurrent head: `{current_head}`\nMissing-CI observation began: `{}`\n\n{repaired_head}\n\nOperator action: retrigger CI for this exact head. After a current-head run or status appears, clear `needs-human` so workflow automation may resume.\n\n{marker}",
-        intent.first_observed_at
+        "Temper parked this pull request because no CI run or status for the current head was found during final validation.\n\nCurrent head: `{current_head}`\nMissing-CI observation began: `{first_observed_at}`\n\n{repaired_head}\n\nOperator action: retrigger CI for this exact head. After a current-head run or status appears, clear `needs-human` so workflow automation may resume.\n\n{marker}"
     )
+}
+
+fn retry(
+    repository: &Repository,
+    address: ArtifactAddress,
+    intent: &MissingCiRecoveryIntent,
+    reason: String,
+) -> MissingCiRecoveryOutcome {
+    tracing::warn!(
+        target: "temper::engine",
+        service = "engine",
+        repo = %format!("{}/{}", repository.owner, repository.name),
+        repository_id = %repository.id,
+        pull_request = address.number.get(),
+        expected_head_sha = %intent.expected_head_sha,
+        first_observed_at = %intent.first_observed_at,
+        recovery_outcome = "retryable",
+        retry_reason = %reason,
+        "missing-CI recovery remains incomplete and will be retried"
+    );
+    MissingCiRecoveryOutcome::Retryable { reason }
 }
 
 fn suppress(

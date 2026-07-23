@@ -72,10 +72,7 @@ struct ObservationKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RecordedObservation {
     Present(CiState),
-    Missing {
-        first_observed_at: DateTime<Utc>,
-        recovery_emitted: bool,
-    },
+    Missing { first_observed_at: DateTime<Utc> },
 }
 
 /// In-memory CI aggregate and missing-interval history for configured repositories.
@@ -108,8 +105,10 @@ impl CiStatusMonitor {
     /// Returned transitions are deterministic by pull-request number. Present
     /// pending observations update history but do not emit. A changed terminal
     /// verdict emits even without an intervening observed pending snapshot. A
-    /// missing observation emits only once its uninterrupted grace has elapsed,
-    /// and at most once until presence, a head change, or pruning resets it.
+    /// missing observation emits whenever its uninterrupted grace has elapsed.
+    /// Re-emission is deliberate: submissions still pass through bounded wake
+    /// coalescing, while transient validation or mutation failures receive a
+    /// later pass until authoritative observations change or parking completes.
     pub fn observe_repository_snapshot(
         &mut self,
         repository: &RepositoryTarget,
@@ -156,11 +155,8 @@ impl CiStatusMonitor {
                 }
                 RecordedObservation::Present(observation.state)
             } else {
-                let (first_observed_at, mut recovery_emitted) = match prior {
-                    Some(RecordedObservation::Missing {
-                        first_observed_at,
-                        recovery_emitted,
-                    }) => (first_observed_at, recovery_emitted),
+                let first_observed_at = match prior {
+                    Some(RecordedObservation::Missing { first_observed_at }) => first_observed_at,
                     _ => {
                         tracing::info!(
                             target: "temper::engine",
@@ -173,15 +169,14 @@ impl CiStatusMonitor {
                             grace_secs = self.missing_grace.as_secs(),
                             "CI status monitor first observed missing current-head jobs"
                         );
-                        (now, false)
+                        now
                     }
                 };
 
-                if !recovery_emitted
-                    && now
-                        .signed_duration_since(first_observed_at)
-                        .to_std()
-                        .is_ok_and(|elapsed| elapsed >= self.missing_grace)
+                if now
+                    .signed_duration_since(first_observed_at)
+                    .to_std()
+                    .is_ok_and(|elapsed| elapsed >= self.missing_grace)
                 {
                     transitions.push(CiStatusTransition::MissingCurrentHead(
                         CiMissingCurrentHeadTransition {
@@ -190,7 +185,6 @@ impl CiStatusMonitor {
                             first_observed_at,
                         },
                     ));
-                    recovery_emitted = true;
                     tracing::warn!(
                         target: "temper::engine",
                         service = "engine",
@@ -205,10 +199,7 @@ impl CiStatusMonitor {
                     );
                 }
 
-                RecordedObservation::Missing {
-                    first_observed_at,
-                    recovery_emitted,
-                }
+                RecordedObservation::Missing { first_observed_at }
             };
             next.push((key, recorded));
         }

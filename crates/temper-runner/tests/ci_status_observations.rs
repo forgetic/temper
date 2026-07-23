@@ -1,5 +1,7 @@
 //! Regression coverage for the narrow CI-gated pull-request observation path.
 
+#[path = "ci_status_observations/interrupted.rs"]
+mod interrupted;
 mod support;
 
 use chrono::{DateTime, Utc};
@@ -15,7 +17,8 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_runner::{CiStatusObservation, read_ci_status_observations};
 use temper_workflow::{
-    ArtifactKindId, CiState, RawWorkflowSpec, WorkflowMetadata, render_metadata_block,
+    ArtifactKindId, CiState, MissingCiRecoveryState, RawWorkflowSpec, WorkflowMetadata,
+    render_metadata_block,
 };
 
 const CI_WORKFLOW: &str = r#"

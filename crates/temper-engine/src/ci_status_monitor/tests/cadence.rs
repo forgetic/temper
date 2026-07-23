@@ -2,7 +2,9 @@
 
 use super::*;
 use temper_forge::UpdatePullRequest;
-use temper_workflow::{WorkflowMetadata, render_metadata_block};
+use temper_workflow::{
+    WorkflowMetadata, parse_metadata_block, render_metadata_block, requires_human_attention,
+};
 
 const CI_LANDING_WORKFLOW: &str = r#"
 {
@@ -244,17 +246,45 @@ fn expired_missing_ci_intent_is_parked_through_coordinated_wake_before_role_disp
             None,
         );
 
-        daemon.submit_ci_poll_transition(CiStatusTransition::MissingCurrentHead(
-            CiMissingCurrentHeadTransition {
-                hint: ChangeHint::pull_request(
-                    repository.path.clone(),
-                    pull_request.number,
-                    ChangeKind::Ci,
-                ),
-                head_sha: "head-missing".to_string(),
-                first_observed_at: timestamp("2026-07-21T11:55:00Z"),
-            },
-        ));
+        let transition = CiStatusTransition::MissingCurrentHead(CiMissingCurrentHeadTransition {
+            hint: ChangeHint::pull_request(
+                repository.path.clone(),
+                pull_request.number,
+                ChangeKind::Ci,
+            ),
+            head_sha: "head-missing".to_string(),
+            first_observed_at: timestamp("2026-07-21T11:55:00Z"),
+        });
+        forge.fail_next(
+            FaultOp::AddPullRequestComment,
+            "transient missing-CI audit failure",
+        );
+        daemon.submit_ci_poll_transition(transition.clone());
+        temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(50)).await;
+
+        let interrupted = forge
+            .get_pull_request_by_number(&repository.id, pull_request.number)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(requires_human_attention(&interrupted.labels));
+        assert!(
+            parse_metadata_block(&interrupted.body)
+                .unwrap()
+                .unwrap()
+                .missing_ci_recovery
+                .is_some()
+        );
+        assert!(
+            forge
+                .list_pull_request_comments(&interrupted.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(daemon.queued_jobs().await.is_empty());
+
+        daemon.submit_ci_poll_transition(transition);
         temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(50)).await;
 
         let parked = forge
@@ -270,6 +300,13 @@ fn expired_missing_ci_intent_is_parked_through_coordinated_wake_before_role_disp
         assert_eq!(comments.len(), 1);
         assert!(comments[0].body.contains("head-missing"));
         assert!(comments[0].body.contains("matching `repaired_head`"));
+        assert!(
+            parse_metadata_block(&parked.body)
+                .unwrap()
+                .unwrap()
+                .missing_ci_recovery
+                .is_none()
+        );
         assert!(daemon.queued_jobs().await.is_empty());
     });
 }

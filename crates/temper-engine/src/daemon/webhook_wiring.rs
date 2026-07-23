@@ -18,7 +18,7 @@ use temper_workflow::{CiState, CiStatus, CompiledWorkflow, RoleId, ValidatedWork
 
 mod missing_ci_recovery;
 
-use self::missing_ci_recovery::recover_missing_current_head_ci;
+use self::missing_ci_recovery::{MissingCiRecoveryOutcome, recover_missing_current_head_ci};
 
 use crate::RoleFeedTarget;
 use crate::lease_applier::WallClock;
@@ -315,7 +315,7 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
         // on this exact target in the coalesced repository generation.
         for (address, facts) in &ci_facts {
             if let Some(recovery) = facts.recovery.as_ref() {
-                recover_missing_current_head_ci(
+                let outcome = recover_missing_current_head_ci(
                     self.forge.as_ref(),
                     &repository,
                     self.workflow.as_ref(),
@@ -325,6 +325,15 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
                     recovery,
                 )
                 .await;
+                if let MissingCiRecoveryOutcome::Retryable { reason } = outcome {
+                    return WakeOutcome::Failed {
+                        reason: format!(
+                            "missing-CI recovery remains incomplete for {}#{}: {reason}",
+                            artifact_kind(address.kind),
+                            address.number
+                        ),
+                    };
+                }
             }
         }
 

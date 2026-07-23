@@ -45,6 +45,10 @@ pub enum FaultOp {
     GetPullRequestByNumber,
     /// `update_pull_request`.
     UpdatePullRequest,
+    /// `list_pull_request_comments`.
+    ListPullRequestComments,
+    /// `add_pull_request_comment`.
+    AddPullRequestComment,
     /// `merge_pull_request`.
     MergePullRequest,
 }
