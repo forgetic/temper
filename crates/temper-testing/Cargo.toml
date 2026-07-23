@@ -33,9 +33,18 @@ name = "temper-real-stack-supervisor-helper"
 path = "src/bin/temper-real-stack-supervisor-helper.rs"
 test = false
 
+# Public-standalone capstone fixture. The root package declares the same
+# self-contained source as a test-only compiled target so its integration test
+# can inject an exact path without recursive Cargo or ambient backend selectors.
+[[bin]]
+name = "temper-standalone-descendant-fixture"
+path = "src/bin/temper-standalone-descendant-fixture.rs"
+test = false
+
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+fs2.workspace = true
 tracing = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true

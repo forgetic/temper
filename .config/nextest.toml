@@ -39,6 +39,11 @@ test-group = 'native-process-fixtures'
 threads-required = "num-cpus"
 
 [[profile.default.overrides]]
+filter = 'package(temper) & binary(standalone_shutdown_forgejo_e2e)'
+test-group = 'native-process-fixtures'
+threads-required = "num-cpus"
+
+[[profile.default.overrides]]
 filter = 'package(temper-worker) & binary(temper_worker) & test(/^out_of_process_runner::supervisor_tests::/)'
 test-group = 'native-process-fixtures'
 threads-required = "num-cpus"
@@ -50,6 +55,11 @@ fail-fast = false
 # These suites start host-mode runners whose embedded cache server uses a
 # host-global Bolt database. Run them without concurrent live fixtures so cache
 # lock contention cannot leave their queued workflows unclaimed until timeout.
+[[profile.e2e.overrides]]
+filter = 'package(temper) & binary(standalone_shutdown_forgejo_e2e)'
+test-group = 'native-process-fixtures'
+threads-required = 4
+
 [[profile.e2e.overrides]]
 filter = '''
 (package(temper-testing) & (binary(forgejo_ci_web_ui) | binary(forgejo_runner))) |

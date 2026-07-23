@@ -415,6 +415,10 @@ pub(super) struct ChildGuard {
 }
 
 impl ChildGuard {
+    pub(super) fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     pub(super) fn try_wait(&mut self) -> Result<Option<ExitStatus>, String> {
         self.child
             .try_wait()
@@ -427,6 +431,37 @@ impl ChildGuard {
             self.log.display(),
             read_tail(&self.log, 160)
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn signal(&self, signal: &str) -> Result<(), String> {
+        let status = Command::new("kill")
+            .arg(format!("-{signal}"))
+            .arg(self.child.id().to_string())
+            .status()
+            .map_err(|error| format!("send {signal} to {}: {error}", self.label))?;
+        status
+            .success()
+            .then_some(())
+            .ok_or_else(|| format!("send {signal} to {} failed with {status}", self.label))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn wait_for_exit(&mut self, timeout: Duration) -> Result<ExitStatus, String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.try_wait()? {
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "{} did not exit within {timeout:?}\n--- log ---\n{}",
+                    self.label,
+                    self.log_tail()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     pub(super) fn kill(&mut self) {
