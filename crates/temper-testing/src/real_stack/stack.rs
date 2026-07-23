@@ -17,8 +17,8 @@ use temper_worker::{
 };
 use temper_workflow::InMemoryJournal;
 use temper_workflow::{
-    ArtifactSource, CompiledWorkflow, DurableAssignment, LeaseManager, RoleId, ValidatedWorkflow,
-    parse_metadata_block,
+    ArtifactSource, Classifier, CompiledWorkflow, DurableAssignment, LeaseManager, RoleId,
+    ValidatedWorkflow, parse_metadata_block,
 };
 
 use super::DEFAULT_NOW;
@@ -245,12 +245,16 @@ impl HermeticRealStack {
                 .expect("hermetic startup issue metadata parses")
                 .unwrap_or_default();
             if let Some(assignment) = metadata.assignment {
+                let kind = Classifier::new(self.workflow.as_ref())
+                    .classify_issue(&issue)
+                    .expect("hermetic startup issue classifies")
+                    .kind;
                 candidates.push((
                     ArtifactSource::Issue {
                         number: self.issue_number,
                     },
                     assignment,
-                    metadata.kind,
+                    kind,
                     None,
                 ));
             }
@@ -265,12 +269,16 @@ impl HermeticRealStack {
                 .expect("hermetic startup pull-request metadata parses")
                 .unwrap_or_default();
             if let Some(assignment) = metadata.assignment {
+                let kind = Classifier::new(self.workflow.as_ref())
+                    .classify_pull_request(&pull_request)
+                    .expect("hermetic startup pull request classifies")
+                    .kind;
                 candidates.push((
                     ArtifactSource::PullRequest {
                         number: pull_request.number,
                     },
                     assignment,
-                    metadata.kind,
+                    kind,
                     pull_request.head_sha,
                 ));
             }
@@ -282,27 +290,27 @@ impl HermeticRealStack {
             // sees that durable assignment's branch already advanced, use the
             // production monotonic repair recovery instead of staging an orphan
             // that would redispatch the same repair.
-            if matches!(target, ArtifactSource::PullRequest { .. })
+            let advanced_head_recovered = if matches!(target, ArtifactSource::PullRequest { .. })
                 && assignment.assignment_pr_head.as_deref() != current_head.as_deref()
                 && current_head
                     .as_deref()
                     .is_some_and(|head| !head.trim().is_empty())
             {
-                let kind = kind
-                    .unwrap_or_else(|| temper_workflow::ArtifactKindId::new("implementation_pr"));
-                if temper_engine::recover_advanced_pull_request_assignment_from_durable(
+                temper_engine::recover_advanced_pull_request_assignment_from_durable(
                     self.forge.as_ref(),
                     &self.primary_repo_id,
                     target,
                     &assignment,
-                    kind,
+                    kind.clone(),
                     self.workflow.as_ref(),
                 )
                 .await
                 .expect("hermetic advanced PR assignment recovers")
-                {
-                    continue;
-                }
+            } else {
+                false
+            };
+            if advanced_head_recovered {
+                continue;
             }
 
             let job_id = assignment
@@ -326,6 +334,7 @@ impl HermeticRealStack {
                 &self.primary_repo_id,
                 target,
                 &assignment,
+                kind,
                 self.workflow.as_ref(),
                 &self.compiled,
                 artifact_context.as_ref(),

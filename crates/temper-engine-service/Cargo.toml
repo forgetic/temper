@@ -23,6 +23,7 @@ temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 

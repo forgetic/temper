@@ -1910,6 +1910,7 @@ name = "temper-engine-service"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "serde_json",
  "skein",
  "temper-config",
  "temper-engine",
