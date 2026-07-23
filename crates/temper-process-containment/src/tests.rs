@@ -21,6 +21,7 @@ struct FakeKernelState {
     emergency_term_calls: AtomicUsize,
     emergency_kill_calls: AtomicUsize,
     verify_blocked: AtomicBool,
+    verify_stalled: AtomicBool,
 }
 
 impl FakeKernelState {
@@ -36,6 +37,7 @@ impl FakeKernelState {
             emergency_term_calls: AtomicUsize::new(0),
             emergency_kill_calls: AtomicUsize::new(0),
             verify_blocked: AtomicBool::new(false),
+            verify_stalled: AtomicBool::new(false),
         }
     }
 }
@@ -154,6 +156,9 @@ impl ContainmentKernel for FakeKernel {
     }
 
     fn verify_recursive_empty(&mut self) -> io::Result<RecursiveEmptyProof> {
+        while self.state.verify_stalled.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(1));
+        }
         if self.state.inspection_blocked.load(Ordering::Acquire)
             || self.state.verify_blocked.load(Ordering::Acquire)
         {

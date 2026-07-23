@@ -165,6 +165,10 @@ impl ActiveJobTask {
                 break;
             }
             let root_pid = (boundary.root_pid() != 0).then_some(boundary.root_pid());
+            let age = boundary
+                .first_blocked_age()
+                .unwrap_or_else(|| boundary.phase_age());
+            let age_millis = duration_millis(age);
             blockers.push(
                 ShutdownBlocker::new(
                     ShutdownBlockerKind::Containment,
@@ -173,8 +177,18 @@ impl ActiveJobTask {
                     boundary.identity().owner_identifier(),
                 )
                 .with_identity(Some(worker_id), Some(&self.job_id), Some(&self.attempt_id))
-                .with_containment(Some(boundary.root().value()), root_pid, None, [], 0)
-                .with_timing(unix_time_millis(), 0, remaining),
+                .with_containment(
+                    Some(boundary.root().value()),
+                    root_pid,
+                    boundary.cleanup_phase().map(containment_phase_name),
+                    [],
+                    0,
+                )
+                .with_timing(
+                    unix_time_millis().saturating_sub(age_millis),
+                    age_millis,
+                    remaining,
+                ),
             );
         }
 
@@ -486,6 +500,17 @@ fn containment_scope_name(scope: &temper_process_containment::ContainmentScope) 
         temper_process_containment::ContainmentScope::WorkerCommand => "worker_command",
         temper_process_containment::ContainmentScope::PrePush => "pre_push",
         temper_process_containment::ContainmentScope::Custom(name) => name,
+    }
+}
+
+fn containment_phase_name(phase: temper_process_containment::CleanupPhase) -> &'static str {
+    match phase {
+        temper_process_containment::CleanupPhase::Discover => "discover",
+        temper_process_containment::CleanupPhase::Term => "term",
+        temper_process_containment::CleanupPhase::Grace => "grace",
+        temper_process_containment::CleanupPhase::Kill => "kill",
+        temper_process_containment::CleanupPhase::Reap => "reap",
+        temper_process_containment::CleanupPhase::VerifyEmpty => "verify_empty",
     }
 }
 

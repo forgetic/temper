@@ -322,8 +322,10 @@ pub fn run_standalone_shutdown_acceptance(
         Duration::from_secs(5),
         "recursive-empty obstruction",
     )?;
+    let obstruction_observed_at = Instant::now();
 
     let first_status = first.wait_for_exit(PROCESS_EXIT_BOUND)?;
+    let obstruction_interval = obstruction_observed_at.elapsed();
     let shutdown_elapsed = shutdown_started.elapsed();
     let shutdown_status = exit_status(&first_status);
     if shutdown_elapsed > PROCESS_EXIT_BOUND {
@@ -342,7 +344,12 @@ pub fn run_standalone_shutdown_acceptance(
     }
     trace_journal_obstruction.release()?;
 
-    let blocker = shutdown_blocker(&first_log, &old_attempt, supervisor_pid)?;
+    let blocker = shutdown_blocker(
+        &first_log,
+        &old_attempt,
+        supervisor_pid,
+        obstruction_interval,
+    )?;
     let after_fence = forge_snapshot(&forge, &repository, issue)?;
     if after_fence != before_fence {
         return Err(format!(

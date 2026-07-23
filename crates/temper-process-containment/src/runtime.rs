@@ -534,13 +534,7 @@ fn run_cleanup(
     let mut evidence = CleanupEvidence::new(owned.child.id());
 
     loop {
-        observe(
-            coordinator,
-            CleanupSnapshot::Inspecting {
-                trigger,
-                phase: CleanupPhase::Discover,
-            },
-        );
+        enter_phase(coordinator, trigger, CleanupPhase::Discover);
         let discovery = match owned.kernel.discover_members() {
             Ok(discovery) => discovery,
             Err(error) => {
@@ -558,13 +552,7 @@ fn run_cleanup(
         collect_backend_signal_evidence(owned.kernel.as_mut(), &mut evidence);
         evidence.remember_survivors(discovery.members(), discovery.omitted());
 
-        observe(
-            coordinator,
-            CleanupSnapshot::Inspecting {
-                trigger,
-                phase: CleanupPhase::Reap,
-            },
-        );
+        enter_phase(coordinator, trigger, CleanupPhase::Reap);
         match owned.kernel.reap_direct_child(&mut owned.child) {
             Ok(reap) => evidence.direct_child_reap = reap,
             Err(error) => {
@@ -582,13 +570,7 @@ fn run_cleanup(
 
         let mut has_members = !discovery.is_empty();
         if !has_members {
-            observe(
-                coordinator,
-                CleanupSnapshot::Inspecting {
-                    trigger,
-                    phase: CleanupPhase::VerifyEmpty,
-                },
-            );
+            enter_phase(coordinator, trigger, CleanupPhase::VerifyEmpty);
             match owned.kernel.verify_recursive_empty() {
                 Ok(RecursiveEmptyProof::Proven { inspections }) => {
                     if evidence.direct_child_reap.is_terminal() {
@@ -647,13 +629,7 @@ fn run_cleanup(
         }
 
         if has_members && !evidence.term_attempted {
-            observe(
-                coordinator,
-                CleanupSnapshot::Inspecting {
-                    trigger,
-                    phase: CleanupPhase::Term,
-                },
-            );
+            enter_phase(coordinator, trigger, CleanupPhase::Term);
             let batch = match owned.kernel.signal_members(ContainmentSignal::Term) {
                 Ok(batch) => batch,
                 Err(error) => {
@@ -680,6 +656,9 @@ fn run_cleanup(
                     omitted: batch.omitted,
                 },
             );
+            coordinator
+                .emergency_registration
+                .enter_phase(CleanupPhase::Grace);
             observe(
                 coordinator,
                 CleanupSnapshot::GracePeriod {
@@ -692,13 +671,7 @@ fn run_cleanup(
         }
 
         if has_members {
-            observe(
-                coordinator,
-                CleanupSnapshot::Inspecting {
-                    trigger,
-                    phase: CleanupPhase::Kill,
-                },
-            );
+            enter_phase(coordinator, trigger, CleanupPhase::Kill);
             let batch = match owned.kernel.signal_members(ContainmentSignal::Kill) {
                 Ok(batch) => batch,
                 Err(error) => {
@@ -739,6 +712,7 @@ fn block(
 ) {
     let message = bounded_text(error.to_string(), MAX_DIAGNOSTIC_TEXT_BYTES);
     evidence.remember_diagnostic(CleanupDiagnostic::new(phase, message.clone()));
+    coordinator.emergency_registration.mark_blocked(phase);
     observe(
         coordinator,
         CleanupSnapshot::Blocked {
@@ -750,6 +724,11 @@ fn block(
         },
     );
     kernel.wait(coordinator.spec.inspection_retry);
+}
+
+fn enter_phase(coordinator: &CleanupCoordinator, trigger: CleanupTrigger, phase: CleanupPhase) {
+    coordinator.emergency_registration.enter_phase(phase);
+    observe(coordinator, CleanupSnapshot::Inspecting { trigger, phase });
 }
 
 fn observe(coordinator: &CleanupCoordinator, snapshot: CleanupSnapshot) {

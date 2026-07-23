@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use crate::{
-    CleanupReport, ContainmentBackendKind, ContainmentIdentity, ContainmentRootIdentity,
-    ContainmentScope,
+    CleanupPhase, CleanupReport, ContainmentBackendKind, ContainmentIdentity,
+    ContainmentRootIdentity, ContainmentScope,
 };
 
 /// Maximum number of boundary dispatch results retained in one emergency receipt
@@ -34,6 +35,9 @@ pub struct EmergencyTerminationBoundary {
     backend: ContainmentBackendKind,
     root: ContainmentRootIdentity,
     root_pid: u32,
+    cleanup_phase: Option<CleanupPhase>,
+    phase_age: Duration,
+    first_blocked_age: Option<Duration>,
 }
 
 impl EmergencyTerminationBoundary {
@@ -55,6 +59,25 @@ impl EmergencyTerminationBoundary {
 
     pub fn root_pid(&self) -> u32 {
         self.root_pid
+    }
+
+    /// Cleanup operation currently being executed by the ordinary owner. The
+    /// phase is recorded before observer notification or the backend call, so
+    /// a non-returning operation remains diagnosable out of band.
+    pub fn cleanup_phase(&self) -> Option<CleanupPhase> {
+        self.cleanup_phase
+    }
+
+    /// Monotonic time elapsed since the current cleanup operation was entered.
+    pub fn phase_age(&self) -> Duration {
+        self.phase_age
+    }
+
+    /// Monotonic time elapsed since this boundary first returned a blocked
+    /// cleanup response. A boundary stuck in its first backend call has no such
+    /// response; callers should use [`Self::phase_age`] for that case.
+    pub fn first_blocked_age(&self) -> Option<Duration> {
+        self.first_blocked_age
     }
 }
 
@@ -237,6 +260,38 @@ struct RegistryState {
 struct RegisteredBoundary {
     boundary: EmergencyTerminationBoundary,
     handle: EmergencyTerminationHandle,
+    progress: Arc<Mutex<BoundaryCleanupProgress>>,
+}
+
+struct BoundaryCleanupProgress {
+    phase: Option<CleanupPhase>,
+    phase_entered_at: Instant,
+    first_blocked_at: Option<Instant>,
+}
+
+impl BoundaryCleanupProgress {
+    fn new() -> Self {
+        Self {
+            phase: None,
+            phase_entered_at: Instant::now(),
+            first_blocked_at: None,
+        }
+    }
+}
+
+impl RegisteredBoundary {
+    fn snapshot(&self, now: Instant) -> EmergencyTerminationBoundary {
+        let progress = lock_unpoisoned(&self.progress);
+        let mut boundary = self.boundary.clone();
+        boundary.cleanup_phase = progress.phase;
+        boundary.phase_age = progress.phase.map_or(Duration::ZERO, |_| {
+            now.saturating_duration_since(progress.phase_entered_at)
+        });
+        boundary.first_blocked_age = progress
+            .first_blocked_at
+            .map(|blocked_at| now.saturating_duration_since(blocked_at));
+        boundary
+    }
 }
 
 impl EmergencyTerminationRegistry {
@@ -259,11 +314,12 @@ impl EmergencyTerminationRegistry {
     pub fn snapshot(&self) -> EmergencyTerminationSnapshot {
         let state = lock_unpoisoned(&self.inner.state);
         let total = state.boundaries.len();
+        let now = Instant::now();
         let boundaries = state
             .boundaries
             .values()
             .take(MAX_EMERGENCY_TERMINATION_EVIDENCE)
-            .map(|registered| registered.boundary.clone())
+            .map(|registered| registered.snapshot(now))
             .collect::<Vec<_>>();
         EmergencyTerminationSnapshot {
             omitted: total.saturating_sub(boundaries.len()),
@@ -285,7 +341,7 @@ impl EmergencyTerminationRegistry {
             let outcome = registered.handle.dispatch(escalation);
             if dispatched.len() < MAX_EMERGENCY_TERMINATION_EVIDENCE {
                 dispatched.push(EmergencyBoundaryDispatch {
-                    boundary: registered.boundary,
+                    boundary: registered.snapshot(Instant::now()),
                     outcome,
                 });
             }
@@ -309,6 +365,7 @@ impl EmergencyTerminationRegistry {
         let mut state = lock_unpoisoned(&self.inner.state);
         let id = state.next_id;
         state.next_id = state.next_id.wrapping_add(1);
+        let progress = Arc::new(Mutex::new(BoundaryCleanupProgress::new()));
         state.boundaries.insert(
             id,
             RegisteredBoundary {
@@ -318,13 +375,18 @@ impl EmergencyTerminationRegistry {
                     backend,
                     root,
                     root_pid,
+                    cleanup_phase: None,
+                    phase_age: Duration::ZERO,
+                    first_blocked_age: None,
                 },
                 handle,
+                progress: Arc::clone(&progress),
             },
         );
         EmergencyRegistration {
             registry: self.clone(),
             id,
+            progress,
         }
     }
 }
@@ -332,9 +394,28 @@ impl EmergencyTerminationRegistry {
 pub(super) struct EmergencyRegistration {
     registry: EmergencyTerminationRegistry,
     id: u64,
+    progress: Arc<Mutex<BoundaryCleanupProgress>>,
 }
 
 impl EmergencyRegistration {
+    /// Record phase entry before diagnostics or a backend operation can block.
+    pub(super) fn enter_phase(&self, phase: CleanupPhase) {
+        let mut progress = lock_unpoisoned(&self.progress);
+        progress.phase = Some(phase);
+        progress.phase_entered_at = Instant::now();
+    }
+
+    /// Preserve the first returned blocked response independently of observer
+    /// throttling and later cleanup retries.
+    pub(super) fn mark_blocked(&self, phase: CleanupPhase) {
+        let mut progress = lock_unpoisoned(&self.progress);
+        if progress.phase != Some(phase) {
+            progress.phase = Some(phase);
+            progress.phase_entered_at = Instant::now();
+        }
+        progress.first_blocked_at.get_or_insert_with(Instant::now);
+    }
+
     /// Remove only after the caller has constructed a valid ordinary cleanup
     /// report. Keeping this check here prevents future call sites from turning
     /// emergency dispatch into synthetic quiescence.

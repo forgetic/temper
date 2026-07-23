@@ -252,6 +252,7 @@ pub(super) fn shutdown_blocker(
     log: &Path,
     old: &AttemptIdentity,
     expected_root_pid: u32,
+    obstruction_interval: Duration,
 ) -> Result<ShutdownBlockerEvidence, String> {
     let events = json_log_events(log)?;
     let (summary_index, summary) = events
@@ -321,14 +322,27 @@ pub(super) fn shutdown_blocker(
             evidence.root_pid, expected_root_pid
         ));
     }
-    // A control call can be blocked inside the backend before another phase
-    // notification is deliverable; `unknown` is the explicit phase value for
-    // that state, not an omitted field. Other faults retain their concrete
-    // discover/term/grace/kill/reap/verify_empty phase.
-    if evidence.containment_phase.is_empty() {
-        return Err("shutdown blocker omitted containment_phase".to_string());
+    // The Linux supervisor's owner-side discovery request includes the
+    // helper's recursive-empty proof, so stopping the helper may retain either
+    // `discover` or `verify_empty` depending on which side reached the
+    // obstruction first. It must never erase that live phase as `unknown`.
+    if !["discover", "term", "grace", "kill", "reap", "verify_empty"]
+        .contains(&evidence.containment_phase.as_str())
+    {
+        return Err(format!(
+            "obstructed recursive-empty blocker reported unknown phase {:?}",
+            evidence.containment_phase
+        ));
     }
+    let maximum_obstruction_age = u64::try_from(
+        obstruction_interval
+            .saturating_add(Duration::from_millis(500))
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
     if evidence.first_seen_millis == 0
+        || evidence.age_millis == 0
+        || evidence.age_millis > maximum_obstruction_age
         || evidence.age_millis > SHUTDOWN_BUDGET.as_millis() as u64
         || evidence.escalation_stage != "emergency_kill"
         || evidence.deadline_remaining_millis == 0
@@ -356,6 +370,11 @@ fn assert_summary_contains_blocker(
             && field_string(blocker, "attempt_id") == Some(expected.attempt_id.as_str())
             && blocker.get("root_pid").and_then(JsonValue::as_u64)
                 == Some(u64::from(expected.root_pid))
+            && field_string(blocker, "containment_phase")
+                == Some(expected.containment_phase.as_str())
+            && blocker.get("first_seen_millis").and_then(JsonValue::as_u64)
+                == Some(expected.first_seen_millis)
+            && blocker.get("age_millis").and_then(JsonValue::as_u64) == Some(expected.age_millis)
     });
     included.then_some(()).ok_or_else(|| {
         format!("terminal shutdown summary omitted the asserted containment blocker: {summary}")
