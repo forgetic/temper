@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
-use crate::{CiTerminalTransition, CiTerminalVerdict};
+use crate::{
+    CiMissingCurrentHeadTransition, CiStatusTransition, CiTerminalTransition, CiTerminalVerdict,
+};
 use temper_workflow::RoleId;
 
 fn t(nanos: u64) -> EngineTime {
@@ -298,6 +300,44 @@ fn duplicate_pr_changes_merge_semantically_and_keep_ci_behavior() {
 }
 
 #[test]
+fn missing_ci_transition_uses_an_exact_coordinated_wake_without_a_terminal_verdict() {
+    let repository = repo("ai", "temper");
+    let lane = WakeLane::Role(RoleId::new("engineer"));
+    let mut coordinator = configured(Duration::ZERO, 2, &repository, [lane.clone()]);
+    coordinator.schedule(
+        t(0),
+        WakeRequest::from_ci_poll_transition(CiStatusTransition::MissingCurrentHead(
+            CiMissingCurrentHeadTransition {
+                hint: ChangeHint::pull_request(
+                    repository.clone(),
+                    ItemNumber::new(692),
+                    ChangeKind::Ci,
+                ),
+                head_sha: "head-missing".to_string(),
+                first_observed_at: "2026-07-21T10:00:00Z".parse().unwrap(),
+            },
+        )),
+        false,
+    );
+
+    let target = coordinator
+        .repository_state(&repository)
+        .unwrap()
+        .pending
+        .scope(&lane)
+        .unwrap()
+        .targets()
+        .get(&(HintArtifactKind::PullRequest, ItemNumber::new(692)))
+        .copied()
+        .expect("missing-CI target is retained");
+    assert_eq!(target.change, ChangeKind::Ci);
+    let facts = target.ci.expect("CI monitor provenance is retained");
+    assert_eq!(facts.source, CiTriggerSource::CiPoll);
+    assert_eq!(facts.verdict, None);
+    assert_eq!(facts.completed_at, None);
+}
+
+#[test]
 fn ci_provenance_coalesces_by_source_priority_in_both_orders() {
     let repository = repo("ai", "temper");
     for poll_first in [true, false] {
@@ -310,12 +350,14 @@ fn ci_provenance_coalesces_by_source_priority_in_both_orders() {
             Some(CiTerminalVerdict::Failed),
             Some("2026-07-21T10:00:00Z".parse().unwrap()),
         );
-        let poll = WakeRequest::from_ci_poll_transition(CiTerminalTransition {
-            hint,
-            head_sha: "head-627".to_string(),
-            verdict: CiTerminalVerdict::Passed,
-            completed_at: Some("2026-07-21T10:00:01Z".parse().unwrap()),
-        });
+        let poll = WakeRequest::from_ci_poll_transition(CiStatusTransition::Terminal(
+            CiTerminalTransition {
+                hint,
+                head_sha: "head-627".to_string(),
+                verdict: CiTerminalVerdict::Passed,
+                completed_at: Some("2026-07-21T10:00:01Z".parse().unwrap()),
+            },
+        ));
         let requests = if poll_first {
             [poll, webhook]
         } else {
@@ -357,12 +399,12 @@ fn role_broad_scope_retains_only_bounded_ci_provenance() {
     );
     coordinator.schedule(
         t(1),
-        WakeRequest::from_ci_poll_transition(CiTerminalTransition {
+        WakeRequest::from_ci_poll_transition(CiStatusTransition::Terminal(CiTerminalTransition {
             hint: ChangeHint::pull_request(repository.clone(), ItemNumber::new(44), ChangeKind::Ci),
             head_sha: "head-44".to_string(),
             verdict: CiTerminalVerdict::Failed,
             completed_at: None,
-        }),
+        })),
         false,
     );
 

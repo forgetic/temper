@@ -100,6 +100,8 @@ fn terminal_red_cadence_uses_exact_coordinated_wake_and_enqueues_once() {
             workflow,
             compiled,
             Duration::from_millis(5),
+            Duration::from_secs(300),
+            Arc::new(|| timestamp("2026-07-21T12:00:01Z")),
         );
         temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(50)).await;
 
@@ -183,6 +185,8 @@ fn terminal_green_cadence_runs_targeted_mechanical_landing_without_fallback_scan
             workflow,
             compiled,
             Duration::from_millis(5),
+            Duration::from_secs(300),
+            Arc::new(|| timestamp("2026-07-21T12:00:01Z")),
         );
         temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(50)).await;
 

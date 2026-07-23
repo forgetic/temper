@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Ephemeral, head-aware CI terminal-transition monitoring.
+//! Ephemeral, head-aware CI transition monitoring.
 //!
-//! The runner owns authoritative current-head aggregation. This module only
-//! remembers the last successfully observed aggregate long enough to turn a
-//! terminal edge into an exact daemon wake hint. The general role poll remains
-//! the durable liveness backstop.
+//! The runner owns authoritative current-head aggregation and distinguishes a
+//! genuinely missing current-head job set from active pending work. This module
+//! remembers successful observations long enough to turn terminal edges and an
+//! uninterrupted, grace-aged missing interval into exact daemon wake hints. The
+//! general role poll remains the durable liveness backstop.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -16,6 +17,8 @@ use temper_engine_io::Spawner;
 use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryId};
 use temper_runner::{CiStatusObservation, RepositorySet, RepositoryTarget};
 use temper_workflow::{CiState, CompiledWorkflow, ValidatedWorkflow};
+
+use crate::lease_applier::WallClock;
 
 /// Terminal CI verdict carried beside a synthetic CI change hint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +42,26 @@ pub struct CiTerminalTransition {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
+/// One uninterrupted missing-current-head interval whose grace has expired.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CiMissingCurrentHeadTransition {
+    /// Exact pull-request-scoped `ChangeKind::Ci` wake hint.
+    pub hint: ChangeHint,
+    /// Exact current head SHA for which no matching job was observed.
+    pub head_sha: String,
+    /// Wall-clock time of the first successful missing observation.
+    pub first_observed_at: DateTime<Utc>,
+}
+
+/// A transition emitted by the narrow CI status monitor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CiStatusTransition {
+    /// A current-head aggregate newly became terminal.
+    Terminal(CiTerminalTransition),
+    /// Current-head jobs remained missing for the configured grace period.
+    MissingCurrentHead(CiMissingCurrentHeadTransition),
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ObservationKey {
     repository: RepositoryId,
@@ -46,35 +69,52 @@ struct ObservationKey {
     head_sha: String,
 }
 
-/// In-memory CI aggregate history for configured repositories.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RecordedObservation {
+    Present(CiState),
+    Missing {
+        first_observed_at: DateTime<Utc>,
+        recovery_emitted: bool,
+    },
+}
+
+/// In-memory CI aggregate and missing-interval history for configured repositories.
 ///
 /// State is deliberately ephemeral. A successful snapshot replaces all state
 /// for its repository, pruning absent pull requests and superseded heads. A
 /// failed read never calls [`Self::observe_repository_snapshot`], preserving
-/// prior state so recovery cannot repeat an already emitted terminal edge.
-#[derive(Debug, Default)]
+/// prior state without advancing or emitting a missing-current-head recovery.
 pub struct CiStatusMonitor {
-    observations: BTreeMap<ObservationKey, CiState>,
+    observations: BTreeMap<ObservationKey, RecordedObservation>,
+    missing_grace: Duration,
+    clock: WallClock,
 }
 
 impl CiStatusMonitor {
-    /// Creates an empty monitor. A terminal state in the first successful
-    /// snapshot is therefore emitted as a transition.
-    pub fn new() -> Self {
-        Self::default()
+    /// Creates an empty monitor with an injected grace and wall clock.
+    ///
+    /// A terminal state in the first successful snapshot is emitted as a
+    /// transition. Missing CI instead starts a fresh grace window.
+    pub fn new(missing_grace: Duration, clock: WallClock) -> Self {
+        Self {
+            observations: BTreeMap::new(),
+            missing_grace,
+            clock,
+        }
     }
 
     /// Applies one complete, successful repository snapshot.
     ///
-    /// Returned transitions are deterministic by pull-request number. Pending
-    /// observations update history but do not emit. A changed terminal verdict
-    /// emits even without an intervening observed pending snapshot, allowing a
-    /// fast rerun to move directly from failed to passed between polls.
+    /// Returned transitions are deterministic by pull-request number. Present
+    /// pending observations update history but do not emit. A changed terminal
+    /// verdict emits even without an intervening observed pending snapshot. A
+    /// missing observation emits only once its uninterrupted grace has elapsed,
+    /// and at most once until presence, a head change, or pruning resets it.
     pub fn observe_repository_snapshot(
         &mut self,
         repository: &RepositoryTarget,
         observations: Vec<CiStatusObservation>,
-    ) -> Vec<CiTerminalTransition> {
+    ) -> Vec<CiStatusTransition> {
         // The runner emits one current head per PR. Keying by PR here also
         // makes a malformed duplicate deterministic (the final observation is
         // authoritative) and prevents one snapshot retaining two heads.
@@ -90,44 +130,92 @@ impl CiStatusMonitor {
                 head_sha: observation.head_sha.clone(),
             })
             .collect();
+        // Read the injected clock only for a successful repository snapshot so
+        // failed Forge reads cannot age or emit recovery from stale evidence.
+        let now = (self.clock)();
 
         let mut transitions = Vec::new();
+        let mut next = Vec::with_capacity(current.len());
         for observation in current.values() {
-            let Some(verdict) = terminal_verdict(observation.state) else {
-                continue;
-            };
             let key = ObservationKey {
                 repository: repository.id.clone(),
                 pull_request: observation.pull_request_number,
                 head_sha: observation.head_sha.clone(),
             };
-            if self.observations.get(&key).copied() == Some(observation.state) {
-                continue;
-            }
-            transitions.push(CiTerminalTransition {
-                hint: ChangeHint::pull_request(
-                    repository.path.clone(),
-                    observation.pull_request_number,
-                    ChangeKind::Ci,
-                ),
-                head_sha: observation.head_sha.clone(),
-                verdict,
-                completed_at: observation.completed_at,
-            });
+            let prior = self.observations.get(&key).cloned();
+            let recorded = if observation.current_head_jobs_present {
+                if prior != Some(RecordedObservation::Present(observation.state)) {
+                    if let Some(verdict) = terminal_verdict(observation.state) {
+                        transitions.push(CiStatusTransition::Terminal(CiTerminalTransition {
+                            hint: ci_hint(repository, observation.pull_request_number),
+                            head_sha: observation.head_sha.clone(),
+                            verdict,
+                            completed_at: observation.completed_at,
+                        }));
+                    }
+                }
+                RecordedObservation::Present(observation.state)
+            } else {
+                let (first_observed_at, mut recovery_emitted) = match prior {
+                    Some(RecordedObservation::Missing {
+                        first_observed_at,
+                        recovery_emitted,
+                    }) => (first_observed_at, recovery_emitted),
+                    _ => {
+                        tracing::info!(
+                            target: "temper::engine",
+                            service = "engine",
+                            repo = %repository.display_path(),
+                            repository_id = %repository.id,
+                            pull_request = observation.pull_request_number.get(),
+                            head_sha = %observation.head_sha,
+                            first_observed_at = %now,
+                            grace_secs = self.missing_grace.as_secs(),
+                            "CI status monitor first observed missing current-head jobs"
+                        );
+                        (now, false)
+                    }
+                };
+
+                if !recovery_emitted
+                    && now
+                        .signed_duration_since(first_observed_at)
+                        .to_std()
+                        .is_ok_and(|elapsed| elapsed >= self.missing_grace)
+                {
+                    transitions.push(CiStatusTransition::MissingCurrentHead(
+                        CiMissingCurrentHeadTransition {
+                            hint: ci_hint(repository, observation.pull_request_number),
+                            head_sha: observation.head_sha.clone(),
+                            first_observed_at,
+                        },
+                    ));
+                    recovery_emitted = true;
+                    tracing::warn!(
+                        target: "temper::engine",
+                        service = "engine",
+                        repo = %repository.display_path(),
+                        repository_id = %repository.id,
+                        pull_request = observation.pull_request_number.get(),
+                        head_sha = %observation.head_sha,
+                        first_observed_at = %first_observed_at,
+                        grace_expired_at = %now,
+                        grace_secs = self.missing_grace.as_secs(),
+                        "CI status monitor missing current-head grace expired"
+                    );
+                }
+
+                RecordedObservation::Missing {
+                    first_observed_at,
+                    recovery_emitted,
+                }
+            };
+            next.push((key, recorded));
         }
 
         self.observations
             .retain(|key, _| key.repository != repository.id || current_keys.contains(key));
-        for (pull_request, observation) in current {
-            self.observations.insert(
-                ObservationKey {
-                    repository: repository.id.clone(),
-                    pull_request,
-                    head_sha: observation.head_sha,
-                },
-                observation.state,
-            );
-        }
+        self.observations.extend(next);
 
         transitions
     }
@@ -144,7 +232,7 @@ pub async fn run_ci_status_monitor_tick<F: Forge + ?Sized>(
     repositories: &RepositorySet,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
-) -> Vec<CiTerminalTransition> {
+) -> Vec<CiStatusTransition> {
     let mut transitions = Vec::new();
     for repository in repositories.repositories() {
         match temper_runner::read_ci_status_observations(forge, &repository.id, workflow, compiled)
@@ -166,9 +254,11 @@ pub async fn run_ci_status_monitor_tick<F: Forge + ?Sized>(
     transitions
 }
 
-/// Spawns the fixed-delay CI monitor. Each terminal edge is submitted as an
-/// exact daemon wake; the cadence task performs no mechanical or role work
-/// itself and therefore cannot bypass bounded coordinator admission.
+/// Spawns the fixed-delay CI monitor. Each terminal or grace-expired missing
+/// edge is submitted as an exact daemon wake; the cadence task performs no
+/// mechanical or role work itself and therefore cannot bypass bounded
+/// coordinator admission.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_ci_status_monitor<F: Forge + Send + Sync + ?Sized + 'static>(
     spawner: &Arc<dyn Spawner>,
     daemon: crate::Daemon,
@@ -177,11 +267,13 @@ pub fn spawn_ci_status_monitor<F: Forge + Send + Sync + ?Sized + 'static>(
     workflow: Arc<ValidatedWorkflow>,
     compiled: Arc<CompiledWorkflow>,
     cadence: Duration,
+    missing_grace: Duration,
+    clock: WallClock,
 ) {
     // Cadence ticks are fixed-delay and never overlap. Taking the monitor out of
     // the mutex before awaiting keeps the spawned future Send without holding a
     // synchronous guard across Forge I/O.
-    let monitor = Arc::new(Mutex::new(Some(CiStatusMonitor::new())));
+    let monitor = Arc::new(Mutex::new(Some(CiStatusMonitor::new(missing_grace, clock))));
     temper_engine_io::spawn_cadence_loop(spawner, cadence, move || {
         let daemon = daemon.clone();
         let forge = Arc::clone(&forge);
@@ -209,6 +301,10 @@ pub fn spawn_ci_status_monitor<F: Forge + Send + Sync + ?Sized + 'static>(
             }
         }
     });
+}
+
+fn ci_hint(repository: &RepositoryTarget, pull_request: ItemNumber) -> ChangeHint {
+    ChangeHint::pull_request(repository.path.clone(), pull_request, ChangeKind::Ci)
 }
 
 fn terminal_verdict(state: CiState) -> Option<CiTerminalVerdict> {
