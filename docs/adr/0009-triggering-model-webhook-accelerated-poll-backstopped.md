@@ -58,6 +58,20 @@ land. A newly observed terminal aggregate becomes an exact PR-scoped
 `ChangeKind::Ci` hint and enters the same bounded coordinator as provider
 webhooks; it does not bypass fresh-state reads or mutation serialization.
 
+The positive `ci_missing_grace_secs` setting (300 seconds by default) bounds
+how long an exact current head may have no matching CI run/status before that
+absence becomes actionable. Missing observations must remain continuous for the
+same head throughout the grace period; current-head queued, running, or terminal
+CI clears them. The recovery path re-reads current state and can park an
+unchanged, unowned CI-gated PR for human attention. It does not manufacture a CI
+verdict or perform a provider-specific CI operation.
+
+Setting `ci_poll_cadence_secs = 0` disables the dedicated monitor. Terminal-CI
+acceleration, missing-current-head detection, and missing-CI parking are all
+inactive in that mode even though the positive grace remains configured and is
+shown by `temper config show`. The grace has no independent disable value;
+`ci_missing_grace_secs = 0` is invalid.
+
 This dedicated cadence is an acceleration backstop, not the full liveness
 contract. `poll_cadence_secs` remains the mandatory, repository-wide role-feed
 correctness/liveness backstop. `mechanical_cadence_secs` reconciles automated

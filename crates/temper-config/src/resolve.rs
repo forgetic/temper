@@ -45,6 +45,10 @@ const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
 /// scans. Set `ci_poll_cadence_secs = 0` to disable only this dedicated poll;
 /// the general role poll remains the full correctness/liveness backstop.
 const DEFAULT_CI_POLL_CADENCE_SECS: u64 = 60;
+/// A missing exact-head CI observation must remain continuously visible for
+/// this long before it can become actionable. This remains positive and
+/// configured even when the dedicated CI-status poll is disabled.
+const DEFAULT_CI_MISSING_GRACE_SECS: u64 = 300;
 /// Mechanical backstop runs by default. It is the level-triggered safety net
 /// (webhooks accelerate it), so the cadence is conservative rather than
 /// aggressive: a slow idle backstop. Set `mechanical_cadence_secs = 0` to
@@ -344,6 +348,13 @@ fn resolve_engine(
         0 => None,
         secs => Some(positive_duration_secs(secs, "engine.ci_poll_cadence_secs")?),
     };
+    let ci_missing_grace = positive_duration_secs(
+        config
+            .engine
+            .ci_missing_grace_secs
+            .unwrap_or(DEFAULT_CI_MISSING_GRACE_SECS),
+        "engine.ci_missing_grace_secs",
+    )?;
     let mechanical_cadence = match config
         .engine
         .mechanical_cadence_secs
@@ -379,6 +390,7 @@ fn resolve_engine(
         workflow_file,
         poll_cadence,
         ci_poll_cadence,
+        ci_missing_grace,
         mechanical_cadence,
         lease_ttl,
         forge_token: secrets.forge_token.clone(),

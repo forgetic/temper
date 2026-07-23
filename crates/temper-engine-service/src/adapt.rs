@@ -62,6 +62,7 @@ pub fn daemon_run_config(resolved: &Resolved) -> Result<DaemonRunConfig, String>
         workflow_file: engine.workflow_file.clone(),
         poll_cadence: engine.poll_cadence,
         ci_poll_cadence: engine.ci_poll_cadence,
+        ci_missing_grace: engine.ci_missing_grace,
         mechanical_cadence: engine.mechanical_cadence,
         lease_ttl: engine.lease_ttl,
         webhook_secret_file: engine.webhook_secret_file.clone(),
@@ -190,6 +191,7 @@ mod tests {
             workflow_file: None,
             poll_cadence: Duration::from_secs(30),
             ci_poll_cadence: Some(Duration::from_secs(60)),
+            ci_missing_grace: Duration::from_secs(300),
             mechanical_cadence: Some(Duration::from_secs(120)),
             lease_ttl: Duration::from_secs(300),
             webhook_secret_file: None,
@@ -203,12 +205,13 @@ mod tests {
     }
 
     #[test]
-    fn daemon_adapter_preserves_the_resolved_ci_poll_cadence() {
+    fn daemon_adapter_preserves_the_resolved_ci_poll_settings() {
         let config = temper_config::Config {
             engine: temper_config::EngineConfig {
                 repos: Some(vec!["acme/widgets".to_string()]),
                 roles: Some(vec!["engineer".to_string()]),
                 ci_poll_cadence_secs: Some(19),
+                ci_missing_grace_secs: Some(43),
                 ..Default::default()
             },
             ..Default::default()
@@ -223,6 +226,7 @@ mod tests {
         let daemon = daemon_run_config(&resolved).expect("daemon config adapts");
 
         assert_eq!(daemon.ci_poll_cadence, Some(Duration::from_secs(19)));
+        assert_eq!(daemon.ci_missing_grace, Duration::from_secs(43));
         assert_eq!(daemon.poll_cadence, Duration::from_secs(300));
         assert_eq!(daemon.mechanical_cadence, Some(Duration::from_secs(120)));
     }

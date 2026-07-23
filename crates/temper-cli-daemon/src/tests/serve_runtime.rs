@@ -56,6 +56,31 @@ fn worker_pool_config() -> &'static str {
 }
 
 #[test]
+fn standalone_ci_missing_grace_reaches_the_shared_daemon_config() {
+    let (dir, resolved) = resolved_from_config(
+        "standalone-ci-missing-grace",
+        "schema_version = 1\n\
+         [engine]\n\
+         repos = [\"ai/temper\"]\n\
+         roles = [\"engineer\"]\n\
+         ci_missing_grace_secs = 47\n",
+    );
+
+    assert_eq!(
+        resolved.engine.ci_missing_grace,
+        std::time::Duration::from_secs(47)
+    );
+    assert_eq!(
+        temper_engine_service::daemon_run_config(&resolved)
+            .expect("standalone daemon config builds")
+            .ci_missing_grace,
+        std::time::Duration::from_secs(47)
+    );
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn standalone_id_overrides_engine_and_in_process_worker_id() {
     let (dir, mut resolved) = resolved_from_config("standalone-id", base_config());
 

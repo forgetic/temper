@@ -304,6 +304,18 @@ fn render(resolved: &Resolved) -> String {
     );
     let _ = writeln!(
         out,
+        "  ci_missing_grace = {}",
+        if resolved.engine.ci_poll_cadence.is_some() {
+            format!("{:?}", resolved.engine.ci_missing_grace)
+        } else {
+            format!(
+                "{:?} (inactive while ci_poll_cadence is disabled)",
+                resolved.engine.ci_missing_grace
+            )
+        }
+    );
+    let _ = writeln!(
+        out,
         "  mechanical   = {}",
         match resolved.engine.mechanical_cadence {
             Some(cadence) => format!("{cadence:?}"),
@@ -603,10 +615,11 @@ fn render(resolved: &Resolved) -> String {
 mod tests {
     use super::render;
 
-    fn render_with_ci_cadence(cadence_secs: Option<u64>) -> String {
+    fn render_with_ci_settings(cadence_secs: Option<u64>, grace_secs: Option<u64>) -> String {
         let config = temper_config::Config {
             engine: temper_config::EngineConfig {
                 ci_poll_cadence_secs: cadence_secs,
+                ci_missing_grace_secs: grace_secs,
                 ..Default::default()
             },
             ..Default::default()
@@ -621,18 +634,31 @@ mod tests {
     }
 
     #[test]
-    fn config_show_displays_effective_ci_poll_cadence_and_disabled_state() {
+    fn config_show_displays_effective_ci_poll_settings_and_disabled_state() {
+        let defaults = render_with_ci_settings(None, None);
         assert!(
-            render_with_ci_cadence(None).contains("ci_poll_cadence = 60s"),
-            "the resolved default should be visible"
+            defaults.contains("ci_poll_cadence = 60s"),
+            "the resolved cadence default should be visible"
         );
         assert!(
-            render_with_ci_cadence(Some(23)).contains("ci_poll_cadence = 23s"),
-            "a positive override should be visible"
+            defaults.contains("ci_missing_grace = 300s"),
+            "the resolved grace default should be visible"
+        );
+
+        let overridden = render_with_ci_settings(Some(23), Some(47));
+        assert!(
+            overridden.contains("ci_poll_cadence = 23s"),
+            "a positive cadence override should be visible"
         );
         assert!(
-            render_with_ci_cadence(Some(0)).contains("ci_poll_cadence = disabled"),
-            "an explicit zero should be shown as disabled"
+            overridden.contains("ci_missing_grace = 47s"),
+            "a positive grace override should be visible"
+        );
+
+        assert!(
+            render_with_ci_settings(Some(0), Some(41))
+                .contains("ci_missing_grace = 41s (inactive while ci_poll_cadence is disabled)"),
+            "the configured grace should explain why it is inactive"
         );
     }
 }

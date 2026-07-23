@@ -418,6 +418,7 @@ async fn run_async(
     }
     emit_engine_status(banner::ci_poll_backstop(
         daemon_config.ci_poll_cadence,
+        daemon_config.ci_missing_grace,
         repo_ids.len(),
     ));
 
