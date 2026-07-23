@@ -28,6 +28,7 @@ temper-forge = { path = "../temper-forge" }
 temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-worker = { path = "../temper-worker" }
+temper-process-containment = { path = "../temper-process-containment" }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-protocol-activity = { path = "../temper-protocol-activity" }
 temper-agent = { path = "../temper-agent" }

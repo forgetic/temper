@@ -1800,6 +1800,7 @@ dependencies = [
  "temper-engine-service",
  "temper-forge",
  "temper-log",
+ "temper-process-containment",
  "temper-protocol-activity",
  "temper-protocol-agent",
  "temper-protocol-worker",

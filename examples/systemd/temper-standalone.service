@@ -18,7 +18,9 @@ RestartSec=5s
 # Delegate the cgroup-v2 subtree used for attempt and descendant ownership.
 Delegate=yes
 # Temper's default internal shutdown budget is 30 seconds. The extra 15-second
-# safety margin lets Temper exit before systemd applies its external backstop.
+# safety margin lets Temper's core-dump-free exit complete before systemd
+# applies its external control-group backstop; core generation cannot consume
+# that margin.
 TimeoutStopSec=45s
 # Never use KillMode=process: the abrupt-death backstop must include agents,
 # MCP servers, managed commands, and every other service descendant.

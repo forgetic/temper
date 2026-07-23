@@ -22,6 +22,7 @@ use processes::{ExactProcessCleanup, wait_for_identities, wait_for_processes_gon
 use trace::{TraceJournalObstruction, old_trace_evidence, wait_for_journal_sequence};
 
 use std::fs;
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -59,6 +60,7 @@ const REPLACEMENT_WAIT: Duration = Duration::from_secs(120);
 const REPLACEMENT_FILE: &str = "service/STANDALONE_RESTART_RECOVERED.md";
 const REPLACEMENT_SUMMARY: &str =
     "Replacement standalone attempt completed after bounded recovery.";
+const BOUNDED_CRASH_EXIT_CODE: i32 = 70;
 
 /// Inputs whose executable paths are supplied by Cargo rather than discovered
 /// through ambient environment variables or recursive Cargo invocations.
@@ -331,9 +333,13 @@ pub fn run_standalone_shutdown_acceptance(
             "standalone exceeded its fixed signal-to-exit bound: {shutdown_elapsed:?}"
         ));
     }
-    if first_status.success() || shutdown_status != "signal:6" {
+    if first_status.success()
+        || first_status.code() != Some(BOUNDED_CRASH_EXIT_CODE)
+        || first_status.signal().is_some()
+        || first_status.core_dumped()
+    {
         return Err(format!(
-            "deliberately obstructed standalone exited as {shutdown_status}, expected its own no-unwind SIGABRT bounded crash handoff\n{}",
+            "deliberately obstructed standalone exited as {shutdown_status}, expected core-dump-free immediate exit:{BOUNDED_CRASH_EXIT_CODE} bounded crash handoff\n{}",
             first.log_tail()
         ));
     }

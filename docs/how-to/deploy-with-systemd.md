@@ -69,10 +69,11 @@ final emergency-kill allowances.
 
 The unit sets `TimeoutStopSec=45s`: it is strictly greater than Temper's default
 30-second budget and preserves an explicit 15-second safety margin for service
-manager scheduling and final accounting. When tuning, increase the internal
-budget first, rerun `temper check`, and then set `TimeoutStopSec` strictly larger
-(preferably retaining at least this margin). Never configure
-`TimeoutStopSec` at or below Temper's internal budget.
+manager scheduling and final accounting. Temper's deadline terminator is
+core-dump-free, so core generation cannot consume that margin. When tuning,
+increase the internal budget first, rerun `temper check`, and then set
+`TimeoutStopSec` strictly larger (preferably retaining at least this margin).
+Never configure `TimeoutStopSec` at or below Temper's internal budget.
 
 ### Proof-based shutdown versus bounded process-loss recovery
 
@@ -90,18 +91,19 @@ Stopping the standalone service adds a bounded process-level contract:
 3. consume one deadline across graceful/forced/hard worker cancellation,
    admitted daemon work, trace retention, exact joined-assignment release, and
    HTTP drain;
-4. reserve the final five seconds for independent emergency KILL and a no-unwind
-   process abort.
+4. reserve the final five seconds for independent emergency KILL and an
+   immediate core-dump-free process exit.
 
 If every proof arrives in time, only exact joined attempts are released and
 `standalone.shutdown.summary` emits `disposition=graceful_exit`. If any proof is
 still blocked, Temper emits `disposition=bounded_crash_handoff`, retains all
 unproven durable assignments and the durable trace spool, invokes the
-attempt-owned out-of-band termination authority, and exits non-zero by aborting
-without running potentially blocking owner drops. This is process-loss
-recovery, not successful local quiescence: it does not synthesize descendant
-proof, terminal-trace acknowledgement, a result, capacity release, or normal
-assignment release.
+attempt-owned out-of-band termination authority, and exits immediately with
+status 70. The termination primitive generates no core, does not unwind or run
+Rust owner drops, invokes no C/Rust exit handlers, and flushes no userspace
+buffers. This is process-loss recovery, not successful local quiescence: it does
+not synthesize descendant proof, terminal-trace acknowledgement, a result,
+capacity release, or normal assignment release.
 
 `Restart=on-failure` starts a replacement after the bounded handoff. Startup
 stages prior-boot assignments with dispatch closed, reattaches only exact live

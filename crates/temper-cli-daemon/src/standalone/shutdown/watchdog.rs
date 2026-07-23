@@ -57,14 +57,20 @@ trait ProcessTerminator: Send + Sync + 'static {
     fn terminate(&self);
 }
 
-struct AbortProcess;
+/// Stable non-zero status reserved for standalone bounded crash handoff.
+pub(super) const BOUNDED_CRASH_EXIT_CODE: u8 = 70;
 
-impl ProcessTerminator for AbortProcess {
+struct CorelessProcessTermination;
+
+/// Ends the process without signals, unwinding, exit handlers, owner drops,
+/// userspace buffer flushing, or core-dump generation.
+pub(super) fn terminate_for_bounded_crash() -> ! {
+    temper_process_containment::terminate_current_process_immediately(BOUNDED_CRASH_EXIT_CODE)
+}
+
+impl ProcessTerminator for CorelessProcessTermination {
     fn terminate(&self) {
-        // `abort` neither unwinds nor runs process-owner drops. That is required
-        // on bounded crash handoff because an owner drop may itself be the
-        // operation that blocked the single-threaded runtime.
-        std::process::abort();
+        terminate_for_bounded_crash();
     }
 }
 
@@ -86,7 +92,7 @@ impl StandaloneShutdownCoordinator {
         Self::arm_with(
             deadline,
             Arc::new(SystemWatchdogClock::default()),
-            Arc::new(AbortProcess),
+            Arc::new(CorelessProcessTermination),
             Arc::new(move || emergency.request_emergency_kill()),
         )
     }
@@ -157,10 +163,26 @@ impl StandaloneShutdownCoordinator {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::io::{BufWriter, Write as _};
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use super::*;
+
+    const CORELESS_CHILD_MARKER: &str = "coreless-termination-child";
+
+    struct DropMarker(PathBuf);
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            fs::write(&self.0, b"owner drop ran\n").expect("write drop marker");
+        }
+    }
 
     struct FakeClock {
         now: Mutex<Instant>,
@@ -221,6 +243,55 @@ mod tests {
             assert!(Instant::now() < deadline, "watchdog action did not run");
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn coreless_bounded_crash_termination_skips_process_cleanup() {
+        if PathBuf::from(CORELESS_CHILD_MARKER).exists() {
+            let root = PathBuf::from(".");
+            let _drop_marker = DropMarker(root.join("owner-drop-ran"));
+            let mut buffered = BufWriter::new(
+                fs::File::create(root.join("buffered-output")).expect("create buffered output"),
+            );
+            buffered
+                .write_all(b"must remain in userspace")
+                .expect("buffer output");
+            terminate_for_bounded_crash();
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join(CORELESS_CHILD_MARKER), b"child\n").expect("write child marker");
+        let status = Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                "standalone::shutdown::watchdog::tests::coreless_bounded_crash_termination_skips_process_cleanup",
+            ])
+            .current_dir(dir.path())
+            .status()
+            .expect("run coreless termination child");
+
+        assert_eq!(
+            status.code(),
+            Some(i32::from(BOUNDED_CRASH_EXIT_CODE)),
+            "bounded crash handoff must retain its distinct non-zero exit disposition: {status}"
+        );
+        #[cfg(unix)]
+        {
+            assert_eq!(status.signal(), None, "termination must not use a signal");
+            assert!(
+                !status.core_dumped(),
+                "termination must not generate a core"
+            );
+        }
+        assert!(
+            !dir.path().join("owner-drop-ran").exists(),
+            "bounded crash termination ran a Rust owner drop"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("buffered-output")).expect("read buffered output"),
+            b"",
+            "bounded crash termination flushed a userspace buffer"
+        );
     }
 
     #[test]
