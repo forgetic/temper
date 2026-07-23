@@ -6,11 +6,11 @@ use std::sync::Arc;
 use skein::runtime::RuntimeHandle;
 use temper_engine::{
     ArtifactContextBundleService, ArtifactContextPolicy, ConfiguredRepositoryCatalog, Daemon,
-    RepositoryTarget,
+    RepositoryTarget, RoleFeedMode, RoleFeedTarget,
 };
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{Forge, RepositoryId, RepositoryPath};
-use temper_workflow::{LeasePolicy, ValidatedWorkflow};
+use temper_workflow::{CompiledWorkflow, LeasePolicy, RoleId, ValidatedWorkflow};
 
 use super::stack::HermeticRealStack;
 
@@ -34,11 +34,55 @@ impl HermeticRealStack {
             Some(journal) => daemon.with_trace_journal(journal.clone()),
             None => daemon,
         };
-        match self.apply_grace {
+        let daemon = match self.apply_grace {
             Some(grace) => daemon.with_apply_grace(grace),
             None => daemon,
-        }
+        };
+        with_wake_execution(
+            daemon,
+            self.forge.clone(),
+            self.workflow.clone(),
+            &self.compiled,
+            &self.repo_ids,
+            &self.role,
+            &self.clock,
+        )
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn with_wake_execution(
+    daemon: Daemon,
+    forge: Arc<MemoryForge>,
+    workflow: Arc<ValidatedWorkflow>,
+    compiled: &CompiledWorkflow,
+    repo_ids: &BTreeMap<String, RepositoryId>,
+    role: &str,
+    clock: &super::MutableWallClock,
+) -> Daemon {
+    let role = RoleId::new(role.to_string());
+    let targets = repo_ids
+        .iter()
+        .map(|(path, id)| {
+            let (owner, name) = path
+                .split_once('/')
+                .expect("hermetic repository path is owner/name");
+            RoleFeedTarget {
+                repo: id.clone(),
+                path: RepositoryPath::new(owner, name),
+                role: role.clone(),
+                mode: RoleFeedMode::Wake,
+            }
+        })
+        .collect();
+    daemon.with_wake_execution(
+        forge,
+        workflow,
+        Arc::new(compiled.clone()),
+        targets,
+        clock.capability(),
+        None,
+    )
 }
 
 pub(super) fn daemon_service(daemon: &Daemon) -> Arc<ArtifactContextBundleService> {
