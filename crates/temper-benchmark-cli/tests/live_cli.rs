@@ -419,6 +419,14 @@ host, port = address.rsplit(":", 1)
 with socket.create_connection((host, int(port))) as stream:
     for value in frames:
         stream.sendall(json.dumps(value, separators=(",", ":")).encode() + b"\n")
+    # The fake child must not exit until the worker has drained its activity
+    # stream. Otherwise process exit can race endpoint acceptance on a loaded
+    # runner and the host may synthesize run.finished before the content frame
+    # becomes durable.
+    stream.shutdown(socket.SHUT_WR)
+    stream.settimeout(2)
+    if stream.recv(1):
+        raise RuntimeError("activity endpoint returned unexpected response bytes")
 PY
 printf '%s\n' '{{"title":"Capture live","body":"# Report","summary":"capture completed"}}' > "$result"
 "##,
