@@ -299,6 +299,8 @@ impl Lease {
 /// Error returned when a metadata block is present but cannot be parsed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MetadataError {
+    /// More than one managed metadata block was found in the body.
+    DuplicateBlocks { count: usize },
     /// A metadata block opened but was never closed with `-->`.
     Unterminated,
     /// The metadata block contained invalid JSON.
@@ -308,6 +310,11 @@ pub enum MetadataError {
 impl fmt::Display for MetadataError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            MetadataError::DuplicateBlocks { count } => write!(
+                formatter,
+                "artifact body contained {count} managed workflow metadata blocks; expected at \
+                 most one; remove the duplicate blocks before retrying"
+            ),
             MetadataError::Unterminated => {
                 formatter.write_str("workflow metadata block was not terminated with `-->`")
             }
@@ -334,197 +341,73 @@ pub fn render_metadata_block(metadata: &WorkflowMetadata) -> String {
     format!("{METADATA_BEGIN}\n{json}\n{METADATA_END}")
 }
 
+/// Exact byte span occupied by one real managed metadata block.
+///
+/// The start is inclusive and the end is exclusive. Callers can use these
+/// offsets to sanitize or canonicalize managed blocks without changing any
+/// authored bytes around them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct MetadataBlockSpan {
+pub struct MetadataBlockSpan {
     start: usize,
     end: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct MarkdownFence {
-    marker: u8,
-    length: usize,
+impl MetadataBlockSpan {
+    pub const fn start(self) -> usize {
+        self.start
+    }
+
+    pub const fn end(self) -> usize {
+        self.end
+    }
 }
 
-/// Locates the byte span of the first managed metadata block in a body.
+/// Structural inspection of all real managed metadata blocks in a body.
 ///
-/// Inline code spans and fenced code blocks are authored examples, not managed
-/// metadata. Keeping that distinction in this locator makes parsing, splitting,
-/// replacement, and heartbeat comparison agree on the exact same boundary.
+/// Inline and fenced examples are excluded. Inspection deliberately does not
+/// parse block JSON, allowing downstream sanitizers to identify the exact spans
+/// of malformed as well as valid managed blocks.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MetadataBlockInspection {
+    blocks: Vec<MetadataBlockSpan>,
+}
+
+impl MetadataBlockInspection {
+    pub fn blocks(&self) -> &[MetadataBlockSpan] {
+        &self.blocks
+    }
+
+    pub fn block_count(&self) -> usize {
+        self.blocks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+}
+
+mod inspection;
+
+/// Inspects every real managed workflow metadata block in an artifact body.
+///
+/// Markers in inline or fenced code remain authored examples and are omitted.
+/// An opening marker without a closing `-->` returns [`MetadataError::Unterminated`].
+/// Valid and malformed JSON blocks are both included because this function only
+/// identifies structural managed-block boundaries.
+pub fn inspect_metadata_blocks(body: &str) -> Result<MetadataBlockInspection, MetadataError> {
+    let blocks = inspection::metadata_block_spans(body)?;
+    Ok(MetadataBlockInspection { blocks })
+}
+
 fn locate_metadata_block(body: &str) -> Result<Option<MetadataBlockSpan>, MetadataError> {
-    let Some(start) = first_metadata_begin_outside_code(body) else {
-        return Ok(None);
-    };
-    let after_begin = start + METADATA_BEGIN.len();
-    let Some(relative_end) = body[after_begin..].find(METADATA_END) else {
-        return Err(MetadataError::Unterminated);
-    };
-    Ok(Some(MetadataBlockSpan {
-        start,
-        end: after_begin + relative_end + METADATA_END.len(),
-    }))
-}
-
-fn first_metadata_begin_outside_code(body: &str) -> Option<usize> {
-    let fenced_ranges = fenced_code_ranges(body);
-    let mut text_start = 0;
-    for (fence_start, fence_end) in fenced_ranges {
-        if let Some(start) = find_metadata_begin_in_text(&body[text_start..fence_start]) {
-            return Some(text_start + start);
-        }
-        text_start = fence_end;
+    let inspection = inspect_metadata_blocks(body)?;
+    match inspection.blocks.as_slice() {
+        [] => Ok(None),
+        [span] => Ok(Some(*span)),
+        blocks => Err(MetadataError::DuplicateBlocks {
+            count: blocks.len(),
+        }),
     }
-    find_metadata_begin_in_text(&body[text_start..]).map(|start| text_start + start)
-}
-
-fn fenced_code_ranges(body: &str) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut active: Option<(usize, MarkdownFence)> = None;
-    let mut offset = 0;
-
-    for line_with_ending in body.split_inclusive('\n') {
-        let line = line_with_ending
-            .strip_suffix('\n')
-            .unwrap_or(line_with_ending);
-        let line = line.strip_suffix('\r').unwrap_or(line);
-
-        if let Some((start, fence)) = active {
-            if is_closing_fence(line, fence) {
-                ranges.push((start, offset + line_with_ending.len()));
-                active = None;
-            }
-        } else if let Some(fence) = opening_fence(line) {
-            active = Some((offset, fence));
-        }
-
-        offset += line_with_ending.len();
-    }
-
-    if let Some((start, _)) = active {
-        ranges.push((start, body.len()));
-    }
-    ranges
-}
-
-fn opening_fence(line: &str) -> Option<MarkdownFence> {
-    let bytes = line.as_bytes();
-    let mut start = 0;
-    while start < bytes.len() && bytes[start] == b' ' && start < 4 {
-        start += 1;
-    }
-    if start > 3 {
-        return None;
-    }
-
-    let marker = *bytes.get(start)?;
-    if marker != b'`' && marker != b'~' {
-        return None;
-    }
-    let length = bytes[start..]
-        .iter()
-        .take_while(|byte| **byte == marker)
-        .count();
-    if length < 3 {
-        return None;
-    }
-    if marker == b'`' && bytes[start + length..].contains(&b'`') {
-        return None;
-    }
-    Some(MarkdownFence { marker, length })
-}
-
-fn is_closing_fence(line: &str, fence: MarkdownFence) -> bool {
-    let bytes = line.as_bytes();
-    let mut start = 0;
-    while start < bytes.len() && bytes[start] == b' ' && start < 4 {
-        start += 1;
-    }
-    if start > 3 || bytes.get(start) != Some(&fence.marker) {
-        return false;
-    }
-
-    let length = bytes[start..]
-        .iter()
-        .take_while(|byte| **byte == fence.marker)
-        .count();
-    length >= fence.length
-        && bytes[start + length..]
-            .iter()
-            .all(|byte| *byte == b' ' || *byte == b'\t')
-}
-
-fn find_metadata_begin_in_text(text: &str) -> Option<usize> {
-    let mut cursor = 0;
-    while cursor < text.len() {
-        let marker = text[cursor..]
-            .find(METADATA_BEGIN)
-            .map(|relative| cursor + relative);
-        let backticks = text[cursor..].find('`').map(|relative| cursor + relative);
-
-        match (marker, backticks) {
-            (Some(marker), Some(backticks)) if marker < backticks => {
-                if metadata_begin_has_boundary(text, marker) {
-                    return Some(marker);
-                }
-                cursor = marker + METADATA_BEGIN.len();
-            }
-            (Some(marker), None) => {
-                if metadata_begin_has_boundary(text, marker) {
-                    return Some(marker);
-                }
-                cursor = marker + METADATA_BEGIN.len();
-            }
-            (_, Some(backticks)) => {
-                let length = backtick_run_length(text, backticks);
-                let after_open = backticks + length;
-                if !is_escaped(text, backticks) {
-                    if let Some(after_close) = matching_backtick_close(text, after_open, length) {
-                        cursor = after_close;
-                        continue;
-                    }
-                }
-                cursor = after_open;
-            }
-            (None, None) => return None,
-        }
-    }
-    None
-}
-
-fn metadata_begin_has_boundary(text: &str, start: usize) -> bool {
-    text[start + METADATA_BEGIN.len()..]
-        .chars()
-        .next()
-        .is_none_or(char::is_whitespace)
-}
-
-fn backtick_run_length(text: &str, start: usize) -> usize {
-    text.as_bytes()[start..]
-        .iter()
-        .take_while(|byte| **byte == b'`')
-        .count()
-}
-
-fn is_escaped(text: &str, start: usize) -> bool {
-    text.as_bytes()[..start]
-        .iter()
-        .rev()
-        .take_while(|byte| **byte == b'\\')
-        .count()
-        % 2
-        == 1
-}
-
-fn matching_backtick_close(text: &str, mut cursor: usize, length: usize) -> Option<usize> {
-    while let Some(relative) = text[cursor..].find('`') {
-        let start = cursor + relative;
-        let candidate_length = backtick_run_length(text, start);
-        if candidate_length == length {
-            return Some(start + candidate_length);
-        }
-        cursor = start + candidate_length;
-    }
-    None
 }
 
 fn parse_metadata_in_span(
@@ -535,12 +418,13 @@ fn parse_metadata_in_span(
     serde_json::from_str(json).map_err(|err| MetadataError::InvalidJson(err.to_string()))
 }
 
-/// Parses the first managed workflow metadata block found in an artifact body.
+/// Parses the sole managed workflow metadata block found in an artifact body.
 ///
 /// Returns `Ok(None)` when the body contains no managed block, `Ok(Some(_))`
-/// when a block parses, and `Err(_)` when a real block is malformed. Surrounding
-/// prose is ignored. Occurrences in inline and fenced code are authored examples
-/// and do not count as managed blocks.
+/// when one block parses, and `Err(_)` when a real block is malformed,
+/// unterminated, or duplicated. Surrounding prose is ignored. Occurrences in
+/// inline and fenced code are authored examples and do not count as managed
+/// blocks.
 pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, MetadataError> {
     let Some(span) = locate_metadata_block(body)? else {
         return Ok(None);
@@ -552,8 +436,9 @@ pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, Meta
 ///
 /// A valid managed block is removed in place by concatenating its unmodified
 /// prefix and suffix. When no managed block exists, the returned body equals the
-/// input exactly and metadata is `None`. Malformed or unterminated real blocks
-/// return the same diagnostics as [`parse_metadata_block`] and are never removed.
+/// input exactly and metadata is `None`. Malformed, unterminated, or duplicate
+/// real blocks return the same diagnostics as [`parse_metadata_block`] and are
+/// never removed.
 pub fn split_metadata_block(
     body: &str,
 ) -> Result<(String, Option<WorkflowMetadata>), MetadataError> {
@@ -575,7 +460,8 @@ pub fn split_metadata_block(
 /// block must be byte-for-byte identical, and every metadata field must compare
 /// equal after normalizing `lease.heartbeat_at`, `lease.expires_at`, and
 /// `assignment.expires_at`. At least one of those three values must have
-/// changed. Missing or malformed metadata is never classified as a heartbeat.
+/// changed. Missing, malformed, unterminated, or duplicate metadata is never
+/// classified as a heartbeat.
 pub fn is_heartbeat_only_body_change(old_body: &str, new_body: &str) -> bool {
     let Ok((old_prose, Some(old_metadata))) = split_metadata_block(old_body) else {
         return false;
@@ -622,9 +508,9 @@ pub fn is_heartbeat_only_body_change(old_body: &str, new_body: &str) -> bool {
 /// If the body already contains a block, it is replaced in place so surrounding
 /// prose is preserved; otherwise a fresh block is appended (separated by a blank
 /// line when the body is non-empty). The result round-trips through
-/// [`parse_metadata_block`]. A malformed or unterminated existing block is an
-/// error rather than being silently overwritten, so authored-visible diagnostic
-/// content is surfaced, not clobbered.
+/// [`parse_metadata_block`]. Malformed, unterminated, or duplicate existing
+/// blocks are errors rather than being silently overwritten, so ambiguous or
+/// authored-visible diagnostic content is surfaced, not clobbered.
 pub fn replace_metadata_block(
     body: &str,
     metadata: &WorkflowMetadata,

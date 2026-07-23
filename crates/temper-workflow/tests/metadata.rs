@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, DurableAssignment, Lease, MetadataError, RoleId, WorkflowMetadata,
-    global_child_correlation_key, is_heartbeat_only_body_change, parse_metadata_block,
-    render_metadata_block, replace_metadata_block, split_metadata_block,
+    global_child_correlation_key, inspect_metadata_blocks, is_heartbeat_only_body_change,
+    parse_metadata_block, render_metadata_block, replace_metadata_block, split_metadata_block,
 };
 
 fn ts(value: &str) -> DateTime<Utc> {
@@ -167,11 +167,17 @@ fn malformed_metadata_json_is_reported() {
     let body = metadata_fixture("{ not valid json }");
     let error = parse_metadata_block(&body).expect_err("invalid json must fail");
     assert!(matches!(error, MetadataError::InvalidJson(_)));
+    let inspection = inspect_metadata_blocks(&body).expect("malformed JSON still has a span");
+    assert_eq!(inspection.block_count(), 1);
 }
 
 #[test]
 fn unterminated_metadata_block_is_reported() {
     let body = format!("{}\n{{}}", temper_workflow::METADATA_BEGIN);
+    assert_eq!(
+        inspect_metadata_blocks(&body),
+        Err(MetadataError::Unterminated)
+    );
     assert_eq!(
         parse_metadata_block(&body),
         Err(MetadataError::Unterminated)
@@ -282,6 +288,96 @@ fn malformed_and_unterminated_real_blocks_are_never_removed_or_replaced() {
     );
     assert_eq!(
         replace_metadata_block(&unterminated, &replacement),
+        Err(MetadataError::Unterminated)
+    );
+}
+
+#[test]
+fn inspection_distinguishes_zero_one_and_multiple_real_blocks() {
+    let examples = authored_metadata_examples();
+    let first = render_metadata_block(&WorkflowMetadata {
+        correlation_key: Some("first".to_string()),
+        ..WorkflowMetadata::default()
+    });
+    let second = render_metadata_block(&WorkflowMetadata {
+        correlation_key: Some("second".to_string()),
+        ..WorkflowMetadata::default()
+    });
+
+    let empty = inspect_metadata_blocks(&examples).expect("examples are structurally valid");
+    assert!(empty.is_empty());
+    assert_eq!(empty.block_count(), 0);
+
+    let one_body = format!("{first}\n\nAuthored prose after the block.\n{examples}");
+    let one = inspect_metadata_blocks(&one_body).expect("one block is inspectable");
+    assert_eq!(one.block_count(), 1);
+    let span = one.blocks()[0];
+    assert_eq!(&one_body[span.start()..span.end()], first);
+
+    let duplicate_body =
+        format!("{first}\n\nAuthored prose between blocks.\n{examples}\n{second}\nTrailing prose.");
+    let multiple =
+        inspect_metadata_blocks(&duplicate_body).expect("all terminated blocks are inspectable");
+    assert_eq!(multiple.block_count(), 2);
+    assert_eq!(
+        &duplicate_body[multiple.blocks()[0].start()..multiple.blocks()[0].end()],
+        first
+    );
+    assert_eq!(
+        &duplicate_body[multiple.blocks()[1].start()..multiple.blocks()[1].end()],
+        second
+    );
+}
+
+#[test]
+fn duplicate_real_blocks_are_rejected_consistently() {
+    let first = render_metadata_block(&WorkflowMetadata {
+        correlation_key: Some("current".to_string()),
+        ..WorkflowMetadata::default()
+    });
+    let stale = render_metadata_block(&WorkflowMetadata {
+        correlation_key: Some("stale".to_string()),
+        ..WorkflowMetadata::default()
+    });
+    let body = format!("{first}\n\nAuthored handoff.\n\n{stale}");
+    let expected = MetadataError::DuplicateBlocks { count: 2 };
+
+    assert_eq!(parse_metadata_block(&body), Err(expected.clone()));
+    assert_eq!(split_metadata_block(&body), Err(expected.clone()));
+    assert_eq!(
+        replace_metadata_block(&body, &WorkflowMetadata::default()),
+        Err(expected.clone())
+    );
+    assert!(!is_heartbeat_only_body_change(&body, &body));
+    assert_eq!(
+        expected.to_string(),
+        "artifact body contained 2 managed workflow metadata blocks; expected at most one; \
+         remove the duplicate blocks before retrying"
+    );
+}
+
+#[test]
+fn unterminated_block_after_a_valid_block_preserves_the_structural_diagnostic() {
+    let body = format!(
+        "{}\n\nProse.\n\n{}\n{{}}",
+        render_metadata_block(&WorkflowMetadata::default()),
+        temper_workflow::METADATA_BEGIN
+    );
+
+    assert_eq!(
+        inspect_metadata_blocks(&body),
+        Err(MetadataError::Unterminated)
+    );
+    assert_eq!(
+        parse_metadata_block(&body),
+        Err(MetadataError::Unterminated)
+    );
+    assert_eq!(
+        split_metadata_block(&body),
+        Err(MetadataError::Unterminated)
+    );
+    assert_eq!(
+        replace_metadata_block(&body, &WorkflowMetadata::default()),
         Err(MetadataError::Unterminated)
     );
 }
