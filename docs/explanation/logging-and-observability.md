@@ -408,9 +408,12 @@ are absent from the default info-only operator view. The merge and resolution
 lines remain info workflow-state changes.
 
 The three startup lines are separate contracts: the CI-status cadence bounds
-webhook-less red repair and green landing detection; the role poll is the full
-correctness/liveness fallback; the mechanical cadence does not discover
-`pr_ci_failed` engineer work. Structured `ci.completed` records identify
+webhook-less red repair and green landing detection, and its line reports the
+positive grace before continuously missing current-head CI becomes actionable.
+When that cadence is disabled, the line instead explains that missing-CI
+detection and parking are inactive while the grace remains configured. The role
+poll is the full correctness/liveness fallback; the mechanical cadence does not
+discover `pr_ci_failed` engineer work. Structured `ci.completed` records identify
 `trigger.source=webhook|ci_poll`, numeric `ci.detection_latency_ms`, and the
 selected `queue`/`role` when red CI enqueues repair work. The aggregate stays
 pending until every latest-per-name job on the current head is terminal.
@@ -428,7 +431,7 @@ $ journalctl -u temper -o short-iso
 2026-06-16T09:00:02+0000 temper[4821]: engine:  planes up: engine + worker + agent on one loop
 2026-06-16T09:00:02+0000 temper[4821]: trigger: webhook listener up on :8080/forgejo/webhook (engine/standalone intake; issue, PR, CI events)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  poll backstop every 300s (architect, engineer feeds across 2 repos)
-2026-06-16T09:00:02+0000 temper[4821]: engine:  CI-status poll backstop every 60s (CI-gated pull requests across 2 repos)
+2026-06-16T09:00:02+0000 temper[4821]: engine:  CI-status poll backstop every 60s (CI-gated pull requests across 2 repos; missing-current-head grace 300s)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  mechanical backstop every 120s (raw_intake, landing across 2 repos)
 2026-06-16T09:00:02+0000 temper[4821]: worker:  capacity: architect=1 engineer=1 mechanical=1 (per-role, shared across all repos)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  ready -- watching acme/widgets, acme/api, idle

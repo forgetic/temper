@@ -243,6 +243,12 @@ fn engine_config_schema() -> Value {
                 ),
             ),
             (
+                "ci_missing_grace_secs",
+                positive_integer_schema(
+                    "Grace period before missing current-head CI is actionable; detection and parking are inactive when ci_poll_cadence_secs is 0.",
+                ),
+            ),
+            (
                 "mechanical_cadence_secs",
                 integer_schema(
                     "Mechanical-backstop cadence in seconds; 0 disables it.",

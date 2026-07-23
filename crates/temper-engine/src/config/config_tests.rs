@@ -122,6 +122,7 @@ fn defaults_apply_when_only_repo_and_role_given() {
     assert_eq!(config.roles, vec![role("engineer")]);
     assert_eq!(config.poll_cadence, Duration::from_secs(300));
     assert_eq!(config.ci_poll_cadence, Some(Duration::from_secs(60)));
+    assert_eq!(config.ci_missing_grace, Duration::from_secs(300));
     // The mechanical backstop is on by default; webhooks are the primary
     // reaction path and this is the level-triggered safety net.
     assert_eq!(config.mechanical_cadence, Some(Duration::from_secs(120)));
@@ -193,6 +194,10 @@ fn bind_and_cadence_and_ttl_and_secret_and_workflow_parse() {
         "5",
         "--ci-poll-cadence-secs",
         "17",
+        "--ci-missing-grace-secs",
+        "11",
+        "--ci-missing-grace-secs",
+        "47",
         "--mechanical-cadence-secs",
         "7",
         "--mechanical-cadence-secs",
@@ -218,6 +223,7 @@ fn bind_and_cadence_and_ttl_and_secret_and_workflow_parse() {
     assert_eq!(config.bind, "0.0.0.0:9000".parse().unwrap());
     assert_eq!(config.poll_cadence, Duration::from_secs(60));
     assert_eq!(config.ci_poll_cadence, Some(Duration::from_secs(17)));
+    assert_eq!(config.ci_missing_grace, Duration::from_secs(47));
     assert_eq!(config.mechanical_cadence, Some(Duration::from_secs(120)));
     assert_eq!(config.lease_ttl, Duration::from_secs(900));
     assert_eq!(
@@ -277,6 +283,25 @@ fn invalid_ci_poll_cadence_is_rejected() {
 }
 
 #[test]
+fn invalid_or_zero_missing_ci_grace_is_rejected() {
+    for raw in ["nope", "0"] {
+        let error = parse(strings(&[
+            "--repo",
+            "a/b",
+            "--role",
+            "engineer",
+            "--ci-missing-grace-secs",
+            raw,
+        ]))
+        .unwrap_err();
+        assert!(
+            error.contains("--ci-missing-grace-secs"),
+            "error for {raw:?}: {error}"
+        );
+    }
+}
+
+#[test]
 fn zero_ci_poll_cadence_disables_the_dedicated_backstop() {
     let config = run(&[
         "--repo",
@@ -287,6 +312,7 @@ fn zero_ci_poll_cadence_disables_the_dedicated_backstop() {
         "0",
     ]);
     assert_eq!(config.ci_poll_cadence, None);
+    assert_eq!(config.ci_missing_grace, Duration::from_secs(300));
     assert_eq!(config.poll_cadence, Duration::from_secs(300));
     assert_eq!(config.mechanical_cadence, Some(Duration::from_secs(120)));
 }

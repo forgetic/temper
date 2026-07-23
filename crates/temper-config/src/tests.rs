@@ -494,11 +494,19 @@ fn config_template_enables_codebase_memory_auto_defaults() {
         template.contains("ci_poll_cadence_secs = 60"),
         "starter template should surface the dedicated CI cadence"
     );
+    assert!(
+        template.contains("ci_missing_grace_secs = 300"),
+        "starter template should surface the missing-CI grace"
+    );
     let config = parse_config(&template);
     let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("template resolves");
     assert_eq!(
         resolved.engine.ci_poll_cadence,
         Some(std::time::Duration::from_secs(60))
+    );
+    assert_eq!(
+        resolved.engine.ci_missing_grace,
+        std::time::Duration::from_secs(300)
     );
     let tool = resolved
         .agent

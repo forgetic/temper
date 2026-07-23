@@ -225,6 +225,12 @@ pub struct EngineConfig {
     /// correctness/liveness backstop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_poll_cadence_secs: Option<u64>,
+    /// Grace period in seconds before missing current-head CI is actionable.
+    /// Must be positive and defaults to 300 seconds. When CI-status polling is
+    /// disabled, missing-CI detection and parking are inactive even though this
+    /// grace value remains configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_missing_grace_secs: Option<u64>,
     /// Mechanical-backstop cadence in seconds. The mechanical backstop (label
     /// transitions / lease-gated PR landing) runs by default; it does not scan
     /// role feeds or discover red-CI engineer repair work. Webhooks are the
@@ -264,6 +270,7 @@ impl EngineConfig {
             && self.roles.is_none()
             && self.poll_cadence_secs.is_none()
             && self.ci_poll_cadence_secs.is_none()
+            && self.ci_missing_grace_secs.is_none()
             && self.mechanical_cadence_secs.is_none()
             && self.lease_ttl_secs.is_none()
             && self.daemon_id.is_none()
