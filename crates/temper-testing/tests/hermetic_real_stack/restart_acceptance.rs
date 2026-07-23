@@ -16,7 +16,7 @@ use temper_workflow::parse_metadata_block;
 #[test]
 fn dirty_workspace_replays_after_target_advance_and_component_replacement() {
     temper_engine_io::block_on_with(|cx, handle| async move {
-        let mut stack = HermeticRealStackBuilder::new()
+        let mut stack = restart_stack_builder()
             .issue(HermeticIssueSpec::ready_code(
                 "Recover dirty workspace",
                 "Preserve interrupted tracked and untracked edits.\n\n<!-- temper:workflow\n{\"kind\":\"code\"}\n-->",
@@ -103,7 +103,7 @@ fn dirty_workspace_replays_after_target_advance_and_component_replacement() {
 fn matching_worker_heartbeat_reattaches_exact_durable_job_once() {
     temper_engine_io::block_on_with(|cx, handle| async move {
         let sessions = Arc::new(AtomicUsize::new(0));
-        let mut stack = HermeticRealStackBuilder::new()
+        let mut stack = restart_stack_builder()
             .issue(HermeticIssueSpec::ready_code(
                 "Reattach exact heartbeat",
                 "Keep one active coding session across daemon replacement.\n\n<!-- temper:workflow\n{\"kind\":\"code\"}\n-->",
@@ -192,7 +192,7 @@ fn matching_worker_heartbeat_reattaches_exact_durable_job_once() {
 fn repaired_head_recovery_waits_for_exact_ci_after_daemon_replacement() {
     temper_engine_io::block_on_with(|cx, handle| async move {
         let sessions = Arc::new(AtomicUsize::new(0));
-        let mut stack = HermeticRealStackBuilder::new()
+        let mut stack = restart_stack_builder()
             .issue(HermeticIssueSpec::ready_code(
                 "Restart merge-conflict repair",
                 "Open and then repair one implementation PR.",
@@ -366,7 +366,7 @@ fn repaired_head_recovery_waits_for_exact_ci_after_daemon_replacement() {
 #[test]
 fn startup_mechanical_reconciliation_unblocks_dependency_before_dispatch() {
     temper_engine_io::block_on_with(|cx, handle| async move {
-        let mut stack = HermeticRealStackBuilder::new()
+        let mut stack = restart_stack_builder()
             .issue(
                 HermeticIssueSpec::ready_code(
                     "Dependent after offline prerequisite",
@@ -483,6 +483,14 @@ fn startup_mechanical_reconciliation_unblocks_dependency_before_dispatch() {
         assert_eq!(stack.persisted_session_count().expect("session count"), 1);
         stack.crash_worker().await;
     });
+}
+
+fn restart_stack_builder() -> HermeticRealStackBuilder {
+    let builder = HermeticRealStackBuilder::new();
+    #[cfg(target_os = "linux")]
+    let builder =
+        builder.linux_supervisor_helper(env!("CARGO_BIN_EXE_temper-real-stack-supervisor-helper"));
+    builder
 }
 
 fn numbered_write_script(
