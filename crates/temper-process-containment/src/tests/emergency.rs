@@ -47,6 +47,11 @@ fn blocked_inspection_cannot_complete_cleanup() {
     let snapshot = emergency_registry.snapshot();
     assert_eq!(snapshot.registered_count(), 1);
     assert_eq!(snapshot.boundaries()[0].root_pid(), process.id());
+    assert_eq!(
+        snapshot.boundaries()[0].cleanup_phase(),
+        Some(CleanupPhase::Discover)
+    );
+    assert!(snapshot.boundaries()[0].first_blocked_age().is_some());
     let receipt = emergency_registry.request_hard_kill();
     assert_eq!(receipt.escalation(), EmergencyEscalation::HardKill);
     assert_eq!(receipt.requested_count(), 1);
@@ -171,6 +176,85 @@ fn failed_recursive_empty_verification_cannot_prevent_emergency_kill() {
         .expect("ordinary proof completes after verification recovers");
     assert!(report.proves_quiescence());
     assert!(registry.snapshot().is_empty());
+    cleanup_thread.join().expect("join cleanup");
+    drop(process);
+}
+
+#[test]
+fn non_returning_backend_operation_retains_phase_and_age_without_blocked_response() {
+    let fake = Arc::new(FakeBackendFactory::new(
+        ContainmentBackendKind::LinuxSupervisor,
+        Vec::new(),
+    ));
+    fake.state.verify_stalled.store(true, Ordering::Release);
+    let observer = Arc::new(RecordingObserver::default());
+    let factory = factory_with_observer(
+        &fake,
+        ContainmentBackendPolicy::ForceLinuxSupervisor,
+        Some(observer.clone()),
+    );
+    let registry = factory.emergency_termination_registry();
+    let process = Arc::new(
+        factory
+            .prepare(spec("verify-stalled"))
+            .expect("prepare fake containment")
+            .spawn(exited_command())
+            .expect("spawn fake containment"),
+    );
+    let (report_tx, report_rx) = std::sync::mpsc::channel();
+    let cleanup_process = Arc::clone(&process);
+    let cleanup_thread = thread::spawn(move || {
+        report_tx
+            .send(cleanup_process.cleanup(CleanupTrigger::Shutdown))
+            .expect("publish cleanup report");
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = registry.snapshot();
+        if snapshot
+            .boundaries()
+            .first()
+            .and_then(|boundary| boundary.cleanup_phase())
+            == Some(CleanupPhase::VerifyEmpty)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cleanup did not enter verify-empty"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+    thread::sleep(Duration::from_millis(20));
+    let boundary = registry
+        .snapshot()
+        .boundaries()
+        .first()
+        .cloned()
+        .expect("registered boundary");
+    assert_eq!(boundary.cleanup_phase(), Some(CleanupPhase::VerifyEmpty));
+    assert!(boundary.phase_age() >= Duration::from_millis(10));
+    assert_eq!(boundary.first_blocked_age(), None);
+    assert!(matches!(
+        report_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert!(
+        observer
+            .snapshots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .all(|snapshot| !matches!(snapshot, CleanupSnapshot::Blocked { .. })),
+        "a non-returning operation must not fabricate a blocked response"
+    );
+
+    fake.state.verify_stalled.store(false, Ordering::Release);
+    let report = report_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("ordinary proof completes after operation resumes");
+    assert!(report.proves_quiescence());
     cleanup_thread.join().expect("join cleanup");
     drop(process);
 }
