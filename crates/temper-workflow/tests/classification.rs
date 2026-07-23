@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use temper_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSource, ArtifactTarget, ClassificationDiagnostic,
-    ClassifiedRelation, Classifier, LabelId, RawWorkflowSpec, RelationKind, StateDimensionId,
-    StateId, ValidatedWorkflow, WorkflowMetadata, render_metadata_block,
+    ClassifiedRelation, Classifier, RawWorkflowSpec, RelationKind, StateDimensionId, StateId,
+    ValidatedWorkflow, WorkflowMetadata, render_metadata_block,
 };
 
 fn ts() -> DateTime<Utc> {
@@ -18,12 +18,13 @@ fn workflow() -> ValidatedWorkflow {
     let json = r#"{
         "name": "five-role",
         "labels": [
-            {"id": "epic"}, {"id": "code"}, {"id": "implementation"},
+            {"id": "epic"}, {"id": "feature"}, {"id": "code"}, {"id": "implementation"},
             {"id": "ready"}, {"id": "in-progress"}, {"id": "blocked"},
             {"id": "needs-review"}, {"id": "review-approved"}
         ],
         "artifact_kinds": [
             {"id": "epic", "target": "issue", "identifying_labels": ["epic"]},
+            {"id": "feature", "target": "issue", "identifying_labels": ["feature"]},
             {"id": "code", "target": "issue", "identifying_labels": ["code"]},
             {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
         ],
@@ -134,6 +135,27 @@ fn issue_is_classified_as_code_from_labels() {
 }
 
 #[test]
+fn feature_label_resolves_without_metadata() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+
+    let labels = vec!["feature".to_string()];
+    assert_eq!(
+        classifier
+            .resolve_kind(ArtifactTarget::Issue, &labels, None)
+            .expect("the shared kind resolver accepts label-only recovery input"),
+        ArtifactKindId::new("feature")
+    );
+
+    let artifact = classifier
+        .classify_issue(&issue(43, &["feature"], "ordinary issue body"))
+        .expect("the identifying feature label is sufficient");
+
+    assert_eq!(artifact.kind, ArtifactKindId::new("feature"));
+    assert!(artifact.metadata.is_empty());
+}
+
+#[test]
 fn pull_request_is_classified_as_implementation_pr_from_labels() {
     let workflow = workflow();
     let classifier = Classifier::new(&workflow);
@@ -206,6 +228,7 @@ fn unmatched_issue_is_unclassified() {
             .diagnostics()
             .contains(&ClassificationDiagnostic::Unclassified {
                 target: ArtifactTarget::Issue,
+                labels: vec!["ready".to_string()],
             })
     );
 }
@@ -247,7 +270,7 @@ fn malformed_metadata_is_reported_deterministically() {
 }
 
 #[test]
-fn metadata_kind_drift_reports_missing_identifying_label() {
+fn explicit_metadata_kind_must_agree_with_labels() {
     let workflow = workflow();
     let classifier = Classifier::new(&workflow);
     let body = render_metadata_block(&WorkflowMetadata {
@@ -255,18 +278,80 @@ fn metadata_kind_drift_reports_missing_identifying_label() {
         ..WorkflowMetadata::default()
     });
 
-    // Metadata claims `code` but the identifying `code` label is absent.
-    let error = classifier
-        .classify_issue(&issue(1, &["ready"], &body))
-        .expect_err("label drift must fail");
+    let artifact = classifier
+        .classify_issue(&issue(1, &["code"], &body))
+        .expect("matching metadata and label evidence classify");
 
+    assert_eq!(artifact.kind, ArtifactKindId::new("code"));
+}
+
+#[test]
+fn explicit_metadata_kind_cannot_override_labels() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        ..WorkflowMetadata::default()
+    });
+
+    let error = classifier
+        .classify_issue(&issue(1, &["feature"], &body))
+        .expect_err("contradictory metadata and labels must fail");
+
+    assert_eq!(
+        error.diagnostics(),
+        &[ClassificationDiagnostic::MetadataKindDisagreement {
+            metadata_kind: ArtifactKindId::new("code"),
+            label_kind: ArtifactKindId::new("feature"),
+        }]
+    );
     assert!(
         error
-            .diagnostics()
-            .contains(&ClassificationDiagnostic::MissingIdentifyingLabel {
-                kind: ArtifactKindId::new("code"),
-                label: LabelId::new("code"),
-            })
+            .to_string()
+            .contains("metadata names artifact kind `code`, but labels resolve to `feature`")
+    );
+}
+
+#[test]
+fn unknown_metadata_kind_is_rejected_even_when_labels_resolve() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("unknown")),
+        ..WorkflowMetadata::default()
+    });
+
+    let error = classifier
+        .classify_issue(&issue(1, &["code"], &body))
+        .expect_err("an undeclared metadata kind must fail closed");
+
+    assert_eq!(
+        error.diagnostics(),
+        &[ClassificationDiagnostic::UnknownMetadataKind {
+            kind: ArtifactKindId::new("unknown"),
+        }]
+    );
+}
+
+#[test]
+fn explicit_metadata_without_resolving_labels_is_unclassified() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        ..WorkflowMetadata::default()
+    });
+
+    let error = classifier
+        .classify_issue(&issue(1, &["ready"], &body))
+        .expect_err("metadata cannot replace absent label evidence");
+
+    assert_eq!(
+        error.diagnostics(),
+        &[ClassificationDiagnostic::Unclassified {
+            target: ArtifactTarget::Issue,
+            labels: vec!["ready".to_string()],
+        }]
     );
 }
 
@@ -420,6 +505,80 @@ fn metadata_target_mismatch_is_diagnosed() {
     )));
 }
 
+/// A workflow with one broad feature kind and two equally specific refinements.
+fn workflow_with_specific_kinds() -> ValidatedWorkflow {
+    let json = r#"{
+        "name": "specific-kinds",
+        "labels": [{"id": "feature"}, {"id": "planned"}, {"id": "ready"}],
+        "artifact_kinds": [
+            {"id": "feature", "target": "issue", "identifying_labels": ["feature"]},
+            {"id": "planned_feature", "target": "issue", "identifying_labels": ["feature", "planned"]},
+            {"id": "ready_feature", "target": "issue", "identifying_labels": ["feature", "ready"]}
+        ]
+    }"#;
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("fixture parses");
+    spec.validate().expect("fixture validates")
+}
+
+#[test]
+fn most_specific_label_kind_wins() {
+    let workflow = workflow_with_specific_kinds();
+    let classifier = Classifier::new(&workflow);
+
+    let artifact = classifier
+        .classify_issue(&issue(1, &["feature", "planned"], ""))
+        .expect("the two-label kind is more specific");
+
+    assert_eq!(artifact.kind, ArtifactKindId::new("planned_feature"));
+}
+
+#[test]
+fn metadata_cannot_override_a_more_specific_label_kind() {
+    let workflow = workflow_with_specific_kinds();
+    let classifier = Classifier::new(&workflow);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("feature")),
+        ..WorkflowMetadata::default()
+    });
+
+    let error = classifier
+        .classify_issue(&issue(1, &["feature", "planned"], &body))
+        .expect_err("broad metadata cannot override specific labels");
+
+    assert_eq!(
+        error.diagnostics(),
+        &[ClassificationDiagnostic::MetadataKindDisagreement {
+            metadata_kind: ArtifactKindId::new("feature"),
+            label_kind: ArtifactKindId::new("planned_feature"),
+        }]
+    );
+}
+
+#[test]
+fn equal_specificity_is_ambiguous_in_stable_candidate_order() {
+    let workflow = workflow_with_specific_kinds();
+    let classifier = Classifier::new(&workflow);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("feature")),
+        ..WorkflowMetadata::default()
+    });
+
+    let error = classifier
+        .classify_issue(&issue(1, &["feature", "ready", "planned"], &body))
+        .expect_err("metadata cannot suppress equal-specificity ambiguity");
+
+    assert_eq!(
+        error.diagnostics(),
+        &[ClassificationDiagnostic::AmbiguousArtifactKind {
+            target: ArtifactTarget::Issue,
+            candidates: vec![
+                ArtifactKindId::new("planned_feature"),
+                ArtifactKindId::new("ready_feature"),
+            ],
+        }]
+    );
+}
+
 /// A workflow whose issue target declares a default (catch-all) `intake` kind
 /// with no identifying labels, plus a labeled `code` kind. Raw human intake (an
 /// issue with no labels) classifies as `intake`; labeled issues still prefer the
@@ -479,6 +638,7 @@ fn default_kind_does_not_admit_a_foreign_target() {
             .diagnostics()
             .contains(&ClassificationDiagnostic::Unclassified {
                 target: ArtifactTarget::PullRequest,
+                labels: Vec::new(),
             })
     );
 }
