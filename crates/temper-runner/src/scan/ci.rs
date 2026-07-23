@@ -7,12 +7,12 @@
 
 use chrono::{DateTime, Utc};
 use temper_forge::{
-    CiJobQuery, Forge, ItemListDetails, ItemNumber, PullRequestState, RepositoryId,
+    CiJobQuery, Forge, ItemListDetails, ItemNumber, PullRequest, PullRequestState, RepositoryId,
 };
 use temper_workflow::plan::matches_queue_cheap;
 use temper_workflow::{
-    CiState, CiStatus, ClassifiedArtifact, Classifier, CompiledWorkflow, QueueManifest,
-    ValidatedWorkflow, requires_human_attention,
+    CiState, CiStatus, ClassifiedArtifact, Classifier, CompiledWorkflow, NEEDS_HUMAN_LABEL,
+    QueueManifest, ValidatedWorkflow, parse_metadata_block, requires_human_attention,
 };
 
 use super::ScanError;
@@ -44,9 +44,12 @@ pub struct CiStatusObservation {
 /// Candidate discovery uses one queue-derived open pull-request bucket. Each
 /// listed summary is classified and cheap-matched before an exact refresh, and
 /// the exact artifact is checked again before its CI jobs are read. Attention-
-/// marked, staged, terminal, unclassifiable, unrelated, or headless pull
-/// requests are skipped. CI queries are conjunctively scoped to both the pull
-/// request and its non-empty head SHA. This function performs no Forge mutation.
+/// marked requests are skipped unless they carry a durable missing-CI recovery
+/// marker for their exact current head, allowing an interrupted parking pass to
+/// converge while unrelated attention remains inert. Staged, terminal,
+/// unclassifiable, unrelated, or headless pull requests are skipped. CI queries
+/// are conjunctively scoped to both the pull request and its non-empty head SHA.
+/// This function performs no Forge mutation.
 pub async fn read_ci_status_observations<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
@@ -59,7 +62,6 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
     }
 
     let plan = ci_candidate_query_plan(workflow, compiled);
-    let classifier = Classifier::new(workflow);
     let mut candidates = Vec::new();
     for query in plan.pull_request_queries {
         candidates.extend(forge.list_pull_request_candidates(repo, query).await?);
@@ -76,7 +78,7 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
         if summary.state != PullRequestState::Open {
             continue;
         }
-        let Ok(classified) = classifier.classify_pull_request(&summary) else {
+        let Some(classified) = classify_ci_candidate(workflow, &summary) else {
             continue;
         };
         if !relevant_candidate(&queues, &classified) {
@@ -94,7 +96,7 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
         if pull_request.state != PullRequestState::Open {
             continue;
         }
-        let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
+        let Some(classified) = classify_ci_candidate(workflow, &pull_request) else {
             continue;
         };
         if !relevant_candidate(&queues, &classified) {
@@ -109,6 +111,15 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
         else {
             continue;
         };
+        if requires_human_attention(&pull_request.labels)
+            && classified
+                .metadata
+                .missing_ci_recovery
+                .as_ref()
+                .is_none_or(|recovery| recovery.head_sha != head_sha)
+        {
+            continue;
+        }
 
         let mut jobs = forge
             .list_ci_jobs(
@@ -141,6 +152,23 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
     Ok(observations)
 }
 
+fn classify_ci_candidate(
+    workflow: &ValidatedWorkflow,
+    pull_request: &PullRequest,
+) -> Option<ClassifiedArtifact> {
+    let recovering = parse_metadata_block(&pull_request.body)
+        .ok()
+        .flatten()
+        .is_some_and(|metadata| metadata.missing_ci_recovery.is_some());
+    let mut candidate = pull_request.clone();
+    if recovering {
+        candidate.labels.retain(|label| label != NEEDS_HUMAN_LABEL);
+    }
+    Classifier::new(workflow)
+        .classify_pull_request(&candidate)
+        .ok()
+}
+
 fn sha_identifies_head(job_sha: &str, head_sha: &str) -> bool {
     let job_sha = job_sha.trim();
     if job_sha.is_empty() {
@@ -162,9 +190,20 @@ fn sha_identifies_head(job_sha: &str, head_sha: &str) -> bool {
 }
 
 fn relevant_candidate(queues: &[&QueueManifest], classified: &ClassifiedArtifact) -> bool {
-    !classified.metadata.staged
-        && !requires_human_attention(&classified.labels)
-        && queues
-            .iter()
-            .any(|queue| matches_queue_cheap(*queue, classified))
+    if classified.metadata.staged {
+        return false;
+    }
+    let recovering = classified.metadata.missing_ci_recovery.is_some();
+    if requires_human_attention(&classified.labels) && !recovering {
+        return false;
+    }
+    let mut ci_gate_candidate = classified.clone();
+    if recovering {
+        ci_gate_candidate
+            .labels
+            .retain(|label| label != NEEDS_HUMAN_LABEL);
+    }
+    queues
+        .iter()
+        .any(|queue| matches_queue_cheap(*queue, &ci_gate_candidate))
 }

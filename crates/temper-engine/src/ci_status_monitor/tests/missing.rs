@@ -29,7 +29,7 @@ fn missing_transition(transition: &CiStatusTransition) -> &CiMissingCurrentHeadT
 }
 
 #[test]
-fn missing_current_head_emits_once_only_after_the_grace_expires() {
+fn missing_current_head_reemits_after_grace_until_observation_changes() {
     let repository = target("repo-1", "acme", "service");
     let (mut monitor, now) = controlled_monitor("2026-07-21T10:00:00Z", Duration::from_secs(300));
 
@@ -58,11 +58,13 @@ fn missing_current_head_emits_once_only_after_the_grace_expires() {
     assert_eq!(expired.first_observed_at, timestamp("2026-07-21T10:00:00Z"));
 
     *now.lock().expect("test clock") = timestamp("2026-07-21T11:00:00Z");
-    assert!(
-        monitor
-            .observe_repository_snapshot(&repository, vec![missing_observation(7, "head-missing")],)
-            .is_empty(),
-        "one uninterrupted missing interval emits at most once"
+    let retry = monitor
+        .observe_repository_snapshot(&repository, vec![missing_observation(7, "head-missing")]);
+    assert_eq!(retry.len(), 1, "expired missing intervals remain retryable");
+    assert_eq!(
+        missing_transition(&retry[0]).first_observed_at,
+        timestamp("2026-07-21T10:00:00Z"),
+        "retries retain the original uninterrupted observation time"
     );
 }
 

@@ -6,7 +6,8 @@ use temper_forge::{
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_workflow::{
-    DurableAssignment, Lease, RawWorkflowSpec, RoleId, WorkflowMetadata, render_metadata_block,
+    DurableAssignment, Lease, MissingCiRecoveryState, RawWorkflowSpec, RoleId, WorkflowMetadata,
+    parse_metadata_block, render_metadata_block,
 };
 
 use super::*;
@@ -153,6 +154,16 @@ impl Fixture {
     }
 }
 
+fn assert_retryable(outcome: MissingCiRecoveryOutcome, expected_reason: &str) {
+    let MissingCiRecoveryOutcome::Retryable { reason } = outcome else {
+        panic!("expected retryable missing-CI recovery, got {outcome:?}");
+    };
+    assert!(
+        reason.contains(expected_reason),
+        "retry reason `{reason}` did not contain `{expected_reason}`"
+    );
+}
+
 fn ci_job(fixture: &Fixture, head: &str, status: CiJobStatus) -> CiJob {
     let completed = (status == CiJobStatus::Completed).then_some(fixture.now);
     CiJob {
@@ -193,6 +204,14 @@ fn unchanged_ci_gated_unowned_pr_is_parked_once_with_actionable_head_audit() {
             .await
             .unwrap();
         assert_eq!(comments.len(), 1);
+        assert!(
+            parse_metadata_block(&parked.body)
+                .unwrap()
+                .unwrap()
+                .missing_ci_recovery
+                .is_none(),
+            "completed parking clears its transient durable marker"
+        );
         let audit = &comments[0].body;
         assert!(audit.contains(HEAD));
         assert!(audit.contains("matching `repaired_head`"));
@@ -371,7 +390,7 @@ fn active_assignment_or_lease_suppresses_parking_but_expired_ownership_does_not(
 }
 
 #[test]
-fn malformed_or_ambiguous_metadata_and_failed_final_read_are_suppressed() {
+fn malformed_or_ambiguous_metadata_is_suppressed_and_failed_final_read_retries() {
     temper_engine_io::block_on(async move {
         let fixture = Fixture::new().await;
         fixture
@@ -410,10 +429,158 @@ fn malformed_or_ambiguous_metadata_and_failed_final_read_are_suppressed() {
             FaultOp::GetPullRequestByNumber,
             "injected final validation outage",
         );
+        assert_retryable(fixture.recover().await, "pull_request_read_failed");
+        fixture.assert_unmutated().await;
+        assert_eq!(fixture.recover().await, MissingCiRecoveryOutcome::Parked);
+    });
+}
+
+#[test]
+fn transient_barrier_conflict_and_comment_failure_converge_on_later_passes() {
+    temper_engine_io::block_on(async move {
+        let fixture = Fixture::new().await;
+        fixture.forge.conflict_next(
+            FaultOp::UpdatePullRequest,
+            "injected conditional parking conflict",
+        );
+        assert_retryable(fixture.recover().await, "parking_barrier_write_failed");
+        fixture.assert_unmutated().await;
+        assert_eq!(fixture.recover().await, MissingCiRecoveryOutcome::Parked);
+
+        let fixture = Fixture::new().await;
+        fixture.forge.fail_next(
+            FaultOp::AddPullRequestComment,
+            "injected audit publication outage",
+        );
+        assert_retryable(
+            fixture.recover().await,
+            "audit_comment_write_failed_after_barrier",
+        );
+        let interrupted = fixture.fresh().await;
+        assert!(requires_human_attention(&interrupted.labels));
+        let interrupted_metadata = parse_metadata_block(&interrupted.body).unwrap().unwrap();
+        let operation = interrupted_metadata
+            .missing_ci_recovery
+            .expect("interrupted parking keeps a durable operation marker");
+        assert_eq!(operation.head_sha, HEAD);
+        assert!(
+            fixture
+                .forge
+                .list_pull_request_comments(&interrupted.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        assert_eq!(fixture.recover().await, MissingCiRecoveryOutcome::Parked);
+        let completed = fixture.fresh().await;
+        assert!(requires_human_attention(&completed.labels));
+        assert!(
+            parse_metadata_block(&completed.body)
+                .unwrap()
+                .unwrap()
+                .missing_ci_recovery
+                .is_none()
+        );
+        assert_eq!(
+            fixture
+                .forge
+                .list_pull_request_comments(&completed.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    });
+}
+
+#[test]
+fn interrupted_marker_cleanup_retries_without_duplicate_audit() {
+    temper_engine_io::block_on(async move {
+        let fixture = Fixture::new().await;
+        let partial_metadata = WorkflowMetadata {
+            repaired_head: Some(HEAD.to_string()),
+            missing_ci_recovery: Some(MissingCiRecoveryState {
+                head_sha: HEAD.to_string(),
+                first_observed_at: fixture.intent().first_observed_at,
+            }),
+            ..WorkflowMetadata::default()
+        };
+        fixture
+            .forge
+            .update_pull_request(
+                &fixture.pull_request.id,
+                UpdatePullRequest {
+                    body: Some(render_metadata_block(&partial_metadata)),
+                    add_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
+                    expected_version: Some(fixture.pull_request.version),
+                    ..UpdatePullRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        fixture.forge.conflict_next(
+            FaultOp::UpdatePullRequest,
+            "injected operation-marker cleanup conflict",
+        );
+        assert_retryable(fixture.recover().await, "parking_marker_clear_failed");
+        let partial_comments = fixture
+            .forge
+            .list_pull_request_comments(&fixture.pull_request.id)
+            .await
+            .unwrap();
+        assert_eq!(partial_comments.len(), 1);
+
+        assert_eq!(fixture.recover().await, MissingCiRecoveryOutcome::Parked);
+        assert_eq!(
+            fixture
+                .forge
+                .list_pull_request_comments(&fixture.pull_request.id)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "cleanup retries reuse the head-keyed audit"
+        );
+        assert!(
+            parse_metadata_block(&fixture.fresh().await.body)
+                .unwrap()
+                .unwrap()
+                .missing_ci_recovery
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn unrelated_attention_is_not_treated_as_interrupted_missing_ci_parking() {
+    temper_engine_io::block_on(async move {
+        let fixture = Fixture::new().await;
+        fixture
+            .forge
+            .update_pull_request(
+                &fixture.pull_request.id,
+                UpdatePullRequest {
+                    add_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
+                    expected_version: Some(fixture.pull_request.version),
+                    ..UpdatePullRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+
         assert_eq!(
             fixture.recover().await,
             MissingCiRecoveryOutcome::Suppressed
         );
-        fixture.assert_unmutated().await;
+        assert!(
+            fixture
+                .forge
+                .list_pull_request_comments(&fixture.pull_request.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     });
 }

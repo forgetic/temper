@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use temper_forge_memory::FaultOp;
 use temper_forge_model::{
     CiJobConclusion, CiJobQuery, CiJobStatus, CreatePullRequestReview, Forge, PullRequest,
     PullRequestState, RequestReviewers, ReviewDecision, UpdatePullRequest, UserId,
@@ -180,6 +181,10 @@ fn missing_repaired_head_ci_parks_once_across_restarts_and_blocks_landing_until_
         assert_eq!(sessions.load(Ordering::SeqCst), 2);
 
         stack.clock().advance(chrono::Duration::seconds(2));
+        stack.forge().fail_next(
+            FaultOp::AddPullRequestComment,
+            "interrupt missing-CI parking after its durable barrier",
+        );
         assert_eq!(
             stack
                 .run_ci_status_monitor_cadence()
@@ -187,7 +192,67 @@ fn missing_repaired_head_ci_parks_once_across_restarts_and_blocks_landing_until_
                 .expect("expired missing observation"),
             1
         );
-        let parked = wait_for_pull_request_label(&stack, &cx, pull.number, "needs-human").await;
+        let interrupted =
+            wait_for_pull_request_label(&stack, &cx, pull.number, "needs-human").await;
+        let interrupted_metadata = parse_metadata_block(&interrupted.body).unwrap().unwrap();
+        let interrupted_recovery = interrupted_metadata
+            .missing_ci_recovery
+            .as_ref()
+            .expect("interrupted parking retains a durable operation marker");
+        assert_eq!(interrupted_recovery.head_sha, repaired_head);
+        assert!(
+            stack
+                .forge()
+                .list_pull_request_comments(&interrupted.id)
+                .await
+                .expect("interrupted missing-CI comments")
+                .is_empty()
+        );
+        assert_eq!(
+            stack
+                .reconcile_targeted_ci_mechanical(pull.number)
+                .await
+                .expect("interrupted targeted mechanical is barred"),
+            temper_runner::Progress::unchanged()
+        );
+        assert_eq!(
+            stack
+                .reconcile_startup_mechanical()
+                .await
+                .expect("interrupted broad mechanical is barred"),
+            temper_runner::Progress::unchanged()
+        );
+        assert_eq!(
+            stack
+                .enqueue_scanned_role_work(stack.clock().now())
+                .await
+                .expect("interrupted role dispatch is barred"),
+            0
+        );
+
+        // Replace the daemon and its ephemeral monitor after the attention
+        // write but before the audit. The durable marker keeps this PR in the
+        // narrow CI snapshot without making it eligible for role or mechanical
+        // work, and a later bounded pass completes the same operation.
+        stack.replace_daemon(&handle).await;
+        assert!(stack.open_recovery_barrier().await.is_empty());
+        assert_eq!(
+            stack
+                .run_ci_status_monitor_cadence()
+                .await
+                .expect("replacement monitor observes interrupted parking"),
+            0
+        );
+        stack.clock().advance(chrono::Duration::seconds(31));
+        assert_eq!(
+            stack
+                .run_ci_status_monitor_cadence()
+                .await
+                .expect("replacement monitor retries interrupted parking"),
+            1
+        );
+        wait_for_missing_ci_comment(&stack, &cx, &pull, &repaired_head).await;
+        let parked = current_pull_request(&stack, pull.number).await;
         for label in &preserved_workflow_labels {
             assert!(
                 parked.labels.contains(label),
@@ -203,8 +268,8 @@ fn missing_repaired_head_ci_parks_once_across_restarts_and_blocks_landing_until_
             parked_metadata.repaired_head.as_deref(),
             Some(repaired_head.as_str())
         );
+        assert!(parked_metadata.missing_ci_recovery.is_none());
         assert!(parked_metadata.assignment.is_none() && parked_metadata.lease.is_none());
-        wait_for_missing_ci_comment(&stack, &cx, &pull, &repaired_head).await;
         assert_eq!(
             stack
                 .enqueue_scanned_role_work(stack.clock().now())
@@ -220,7 +285,7 @@ fn missing_repaired_head_ci_parks_once_across_restarts_and_blocks_landing_until_
             stack
                 .run_ci_status_monitor_cadence()
                 .await
-                .expect("same monitor stays bounded"),
+                .expect("completed parking leaves the monitor snapshot"),
             0
         );
         assert_eq!(
