@@ -17,8 +17,8 @@ use temper_worker::{
 };
 use temper_workflow::InMemoryJournal;
 use temper_workflow::{
-    ArtifactSource, CompiledWorkflow, DurableAssignment, LeaseManager, RoleId, ValidatedWorkflow,
-    parse_metadata_block,
+    ArtifactSource, Classifier, CompiledWorkflow, DurableAssignment, LeaseManager, RoleId,
+    ValidatedWorkflow, parse_metadata_block,
 };
 
 use super::DEFAULT_NOW;
@@ -82,6 +82,8 @@ pub struct HermeticComponentHandles {
     pub(crate) executor: Arc<CodingExecutor<NativeJigAgentRunner>>,
     pub(crate) worker: Option<WorkerComponentHandle>,
     pub(crate) recovered: BTreeMap<String, HermeticRecoveredClaim>,
+    pub(crate) production_recovered:
+        Option<BTreeMap<String, temper_engine_service::RecoveredClaim>>,
     pub(crate) ci_status_monitor: temper_engine::CiStatusMonitor,
 }
 
@@ -192,12 +194,39 @@ impl HermeticRealStack {
     /// The new daemon starts behind its recovery barrier.
     pub async fn replace_daemon(&mut self, handle: &RuntimeHandle) {
         self.components.daemon.crash().await;
-        let daemon = self.build_daemon(handle).begin_startup_recovery();
-        let daemon = Arc::new(daemon);
+        let daemon = Arc::new(self.build_daemon(handle).begin_startup_recovery());
         let recovered = self.stage_durable_assignments(daemon.as_ref()).await;
+        self.install_replacement_daemon(daemon);
+        self.components.recovered = recovered;
+        self.components.production_recovered = None;
+    }
+
+    /// Replaces the daemon and inventories durable claims through the exported
+    /// engine-service startup path used by production. Scenarios exercising
+    /// startup classification should use this instead of fixture reconstruction.
+    pub async fn replace_daemon_through_startup_recovery(&mut self, handle: &RuntimeHandle) {
+        self.components.daemon.crash().await;
+        let daemon = Arc::new(self.build_daemon(handle).begin_startup_recovery());
+        let repos = self.repo_ids.values().cloned().collect::<Vec<_>>();
+        let recovered = temper_engine_service::stage_startup_assignments(
+            daemon.as_ref(),
+            self.forge.as_ref(),
+            &repos,
+            self.workflow.as_ref(),
+            &self.compiled,
+            temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300)),
+            self.clock.now(),
+        )
+        .await
+        .expect("hermetic production startup assignment staging");
+        self.install_replacement_daemon(daemon);
+        self.components.recovered.clear();
+        self.components.production_recovered = Some(recovered);
+    }
+
+    fn install_replacement_daemon(&mut self, daemon: Arc<Daemon>) {
         self.router.replace(daemon.clone());
         self.components.daemon = daemon;
-        self.components.recovered = recovered;
         self.components.ci_status_monitor =
             temper_engine::CiStatusMonitor::new(self.ci_missing_grace, self.clock.capability());
         let executor = CodingExecutor::new(self.coding_config.clone(), self.runner.clone())
@@ -218,19 +247,32 @@ impl HermeticRealStack {
         self.hooks.reach(PausePoint::RecoveryBarrierOpening).await;
         let orphaned = self.components.daemon.collect_startup_orphans().await;
         let policy = temper_workflow::LeasePolicy::new(chrono::Duration::seconds(300));
-        for orphan in &orphaned {
-            let claim = self
-                .components
-                .recovered
-                .get(&orphan.job_id)
-                .expect("hermetic orphan has durable context");
-            LeaseManager::new(self.forge.as_ref(), policy)
-                .rollback_assignment(&claim.repo, claim.target, &claim.assignment)
-                .await
-                .expect("hermetic orphan convergence");
+        if let Some(recovered) = self.components.production_recovered.as_ref() {
+            temper_engine_service::converge_startup_orphans(
+                self.forge.as_ref(),
+                policy,
+                self.workflow.as_ref(),
+                recovered,
+                &orphaned,
+            )
+            .await
+            .expect("hermetic production orphan convergence");
+        } else {
+            for orphan in &orphaned {
+                let claim = self
+                    .components
+                    .recovered
+                    .get(&orphan.job_id)
+                    .expect("hermetic orphan has durable context");
+                LeaseManager::new(self.forge.as_ref(), policy)
+                    .rollback_assignment(&claim.repo, claim.target, &claim.assignment)
+                    .await
+                    .expect("hermetic orphan convergence");
+            }
         }
         self.components.daemon.complete_startup_recovery().await;
         self.components.recovered.clear();
+        self.components.production_recovered = None;
         orphaned
     }
 
@@ -249,12 +291,16 @@ impl HermeticRealStack {
                 .expect("hermetic startup issue metadata parses")
                 .unwrap_or_default();
             if let Some(assignment) = metadata.assignment {
+                let kind = Classifier::new(self.workflow.as_ref())
+                    .classify_issue(&issue)
+                    .expect("hermetic startup issue classifies")
+                    .kind;
                 candidates.push((
                     ArtifactSource::Issue {
                         number: self.issue_number,
                     },
                     assignment,
-                    metadata.kind,
+                    kind,
                     None,
                 ));
             }
@@ -269,12 +315,16 @@ impl HermeticRealStack {
                 .expect("hermetic startup pull-request metadata parses")
                 .unwrap_or_default();
             if let Some(assignment) = metadata.assignment {
+                let kind = Classifier::new(self.workflow.as_ref())
+                    .classify_pull_request(&pull_request)
+                    .expect("hermetic startup pull request classifies")
+                    .kind;
                 candidates.push((
                     ArtifactSource::PullRequest {
                         number: pull_request.number,
                     },
                     assignment,
-                    metadata.kind,
+                    kind,
                     pull_request.head_sha,
                 ));
             }
@@ -286,27 +336,27 @@ impl HermeticRealStack {
             // sees that durable assignment's branch already advanced, use the
             // production monotonic repair recovery instead of staging an orphan
             // that would redispatch the same repair.
-            if matches!(target, ArtifactSource::PullRequest { .. })
+            let advanced_head_recovered = if matches!(target, ArtifactSource::PullRequest { .. })
                 && assignment.assignment_pr_head.as_deref() != current_head.as_deref()
                 && current_head
                     .as_deref()
                     .is_some_and(|head| !head.trim().is_empty())
             {
-                let kind = kind
-                    .unwrap_or_else(|| temper_workflow::ArtifactKindId::new("implementation_pr"));
-                if temper_engine::recover_advanced_pull_request_assignment_from_durable(
+                temper_engine::recover_advanced_pull_request_assignment_from_durable(
                     self.forge.as_ref(),
                     &self.primary_repo_id,
                     target,
                     &assignment,
-                    kind,
+                    kind.clone(),
                     self.workflow.as_ref(),
                 )
                 .await
                 .expect("hermetic advanced PR assignment recovers")
-                {
-                    continue;
-                }
+            } else {
+                false
+            };
+            if advanced_head_recovered {
+                continue;
             }
 
             let job_id = assignment
@@ -330,6 +380,7 @@ impl HermeticRealStack {
                 &self.primary_repo_id,
                 target,
                 &assignment,
+                kind,
                 self.workflow.as_ref(),
                 &self.compiled,
                 artifact_context.as_ref(),

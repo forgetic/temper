@@ -35,6 +35,8 @@ mod attention;
 mod guidance;
 #[path = "feed_tests/reconciliation.rs"]
 mod reconciliation;
+#[path = "feed_tests/recovery_kind.rs"]
+mod recovery_kind;
 #[path = "feed_tests/target_branch.rs"]
 mod target_branch;
 #[path = "feed_tests/targeted.rs"]

@@ -46,10 +46,21 @@ contracts](cross-repo-workflows.md).
 `ValidatedWorkflow`. It reads labels, metadata, native dependency links, and
 fallback relation metadata; it never mutates Forge state.
 
-Kind resolution uses metadata `kind` when present. Otherwise the classifier
-matches `identifying_labels` and chooses the most specific match. State
-resolution maps present labels into each state dimension and rejects impossible
-exclusive combinations or states illegal for the artifact kind.
+Kind resolution always evaluates label evidence independently. Candidates are
+filtered to the Forge target, all of their `identifying_labels` must be present,
+and the candidate with the most identifying labels wins. Equal-specificity
+candidates are reported in stable kind-id order. If no labeled kind matches, the
+target's optional empty-label default kind is used.
+
+Metadata `kind` is an optional consistency assertion, not an authority. When it
+is present, the named kind must exist, map to the artifact's Forge target, and
+agree with the independently resolved label kind. Metadata therefore cannot
+override contradictory labels, a more-specific label match, or ambiguous label
+evidence. Missing metadata remains valid whenever labels (or the target default)
+resolve one kind.
+
+State resolution maps present labels into each state dimension and rejects
+impossible exclusive combinations or states illegal for the artifact kind.
 
 Dependency relation resolution prefers native same-repository dependency links.
 Metadata dependency fallbacks are used when there are no native same-repo links
@@ -58,9 +69,11 @@ feed `parent` relations; PR parent metadata feeds declared `produced_pr`
 relations.
 
 Classification errors are collected, not stopped at the first problem. They
-cover unclassified or ambiguous kinds, unknown metadata kinds, target mismatches,
-missing identifying labels, exclusive-state conflicts, illegal artifact states,
-and malformed metadata.
+cover unknown metadata kinds, target mismatches, metadata/label disagreement,
+ambiguous candidates in stable kind-id order, and unclassified evidence with the
+stably ordered present labels. They also cover exclusive-state conflicts,
+illegal artifact states, and malformed metadata. Diagnostic ordering is
+deterministic so recovery audit evidence is stable.
 
 ## Queue evaluation
 

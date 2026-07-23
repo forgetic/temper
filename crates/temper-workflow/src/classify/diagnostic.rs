@@ -5,7 +5,7 @@
 //! [`Classifier`](super::Classifier) that produces them.
 
 use crate::artifact::ArtifactTarget;
-use crate::ids::{ArtifactKindId, LabelId, StateDimensionId, StateId};
+use crate::ids::{ArtifactKindId, StateDimensionId, StateId};
 use std::error::Error;
 use std::fmt;
 
@@ -14,9 +14,11 @@ use std::fmt;
 pub enum ClassificationDiagnostic {
     /// The artifact body contained a metadata block that could not be parsed.
     MalformedMetadata { reason: String },
-    /// No declared artifact kind matched the target and labels, and no metadata
-    /// named a kind.
-    Unclassified { target: ArtifactTarget },
+    /// No declared artifact kind matched the target and present labels.
+    Unclassified {
+        target: ArtifactTarget,
+        labels: Vec<String>,
+    },
     /// Several artifact kinds matched the labels equally well.
     AmbiguousArtifactKind {
         target: ArtifactTarget,
@@ -30,10 +32,10 @@ pub enum ClassificationDiagnostic {
         expected: ArtifactTarget,
         actual: ArtifactTarget,
     },
-    /// The resolved kind requires an identifying label that is absent.
-    MissingIdentifyingLabel {
-        kind: ArtifactKindId,
-        label: LabelId,
+    /// Metadata and independently resolved label evidence name different kinds.
+    MetadataKindDisagreement {
+        metadata_kind: ArtifactKindId,
+        label_kind: ArtifactKindId,
     },
     /// Labels for several states of one exclusive dimension are present.
     ExclusiveStateConflict {
@@ -54,8 +56,19 @@ impl fmt::Display for ClassificationDiagnostic {
             ClassificationDiagnostic::MalformedMetadata { reason } => {
                 write!(formatter, "malformed workflow metadata: {reason}")
             }
-            ClassificationDiagnostic::Unclassified { target } => {
-                write!(formatter, "no artifact kind matched this {target}")
+            ClassificationDiagnostic::Unclassified { target, labels } => {
+                if labels.is_empty() {
+                    write!(
+                        formatter,
+                        "no artifact kind matched this unlabeled {target}"
+                    )
+                } else {
+                    write!(
+                        formatter,
+                        "no artifact kind matched this {target}; present labels: {}",
+                        join_labels(labels)
+                    )
+                }
             }
             ClassificationDiagnostic::AmbiguousArtifactKind { target, candidates } => {
                 write!(
@@ -78,9 +91,12 @@ impl fmt::Display for ClassificationDiagnostic {
                 formatter,
                 "artifact kind `{kind}` maps to a {expected} but was found on a {actual}"
             ),
-            ClassificationDiagnostic::MissingIdentifyingLabel { kind, label } => write!(
+            ClassificationDiagnostic::MetadataKindDisagreement {
+                metadata_kind,
+                label_kind,
+            } => write!(
                 formatter,
-                "artifact kind `{kind}` requires missing identifying label `{label}`"
+                "metadata names artifact kind `{metadata_kind}`, but labels resolve to `{label_kind}`"
             ),
             ClassificationDiagnostic::ExclusiveStateConflict { dimension, states } => write!(
                 formatter,
@@ -102,6 +118,14 @@ impl fmt::Display for ClassificationDiagnostic {
 fn join_ids(ids: &[ArtifactKindId]) -> String {
     ids.iter()
         .map(|id| format!("`{id}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn join_labels(labels: &[String]) -> String {
+    labels
+        .iter()
+        .map(|label| format!("`{label}`"))
         .collect::<Vec<_>>()
         .join(", ")
 }

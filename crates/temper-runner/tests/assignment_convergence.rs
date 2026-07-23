@@ -6,14 +6,16 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use temper_forge::{
-    CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UpdateIssue, UserId,
+    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, ItemNumber, RepositoryId,
+    UpdateIssue, UserId,
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_runner::{MechanicalWorker, Progress, Worker};
 use temper_workflow::{
-    ArtifactKindId, ArtifactSnapshot, ArtifactSource, AssignmentConvergenceOutcome,
-    AssignmentConverger, DurableAssignment, InMemoryJournal, Lease, LeasePolicy, RawWorkflowSpec,
-    RoleId, WorkflowMetadata, parse_metadata_block, render_metadata_block,
+    ArtifactKindId, ArtifactRef, ArtifactSnapshot, ArtifactSource, AssignmentConvergenceOutcome,
+    AssignmentConverger, AssignmentValidation, CreateIssuesIntent, DurableAssignment,
+    InMemoryJournal, Lease, LeasePolicy, RawWorkflowSpec, RoleId, WorkflowMetadata,
+    parse_metadata_block, render_metadata_block,
 };
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -58,6 +60,9 @@ fn capture_logs<T>(run: impl FnOnce() -> T) -> (T, Vec<serde_json::Value>) {
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
+#[path = "assignment_convergence/quarantine.rs"]
+mod quarantine;
+
 struct NoopWake;
 impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
@@ -80,6 +85,28 @@ fn ts(value: &str) -> DateTime<Utc> {
 fn workflow() -> temper_workflow::ValidatedWorkflow {
     let spec: RawWorkflowSpec = serde_json::from_str(FIXTURE).expect("fixture parses");
     spec.validate().expect("fixture validates")
+}
+
+fn ambiguous_workflow() -> temper_workflow::ValidatedWorkflow {
+    let mut value: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture parses");
+    let labels = value["labels"].as_array_mut().expect("labels are an array");
+    labels.push(serde_json::json!({"id": "variant-a"}));
+    labels.push(serde_json::json!({"id": "variant-b"}));
+    let kinds = value["artifact_kinds"]
+        .as_array_mut()
+        .expect("artifact kinds are an array");
+    kinds.push(serde_json::json!({
+        "id": "code_variant_a",
+        "target": "issue",
+        "identifying_labels": ["code", "variant-a"]
+    }));
+    kinds.push(serde_json::json!({
+        "id": "code_variant_b",
+        "target": "issue",
+        "identifying_labels": ["code", "variant-b"]
+    }));
+    let spec: RawWorkflowSpec = serde_json::from_value(value).expect("fixture still parses");
+    spec.validate().expect("fixture still validates")
 }
 
 fn new_repo(forge: &MemoryForge) -> RepositoryId {
@@ -128,13 +155,86 @@ fn create_claimed_issue(
     repo: &RepositoryId,
     metadata: &WorkflowMetadata,
 ) -> temper_forge::Issue {
+    create_claimed_issue_with(
+        forge,
+        repo,
+        render_metadata_block(metadata),
+        vec![
+            "code".to_string(),
+            "in-progress".to_string(),
+            "priority-high".to_string(),
+        ],
+    )
+}
+
+fn create_claimed_issue_with(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    body: String,
+    labels: Vec<String>,
+) -> temper_forge::Issue {
     block_on(forge.create_issue(
         repo,
         CreateIssue {
             title: "recover abandoned issue".to_string(),
+            body,
+            labels,
+            assignees: vec![UserId::new("engineer")],
+        },
+    ))
+    .unwrap()
+}
+
+fn expired_pull_request_assignment() -> (DurableAssignment, WorkflowMetadata) {
+    let expires_at = ts("2026-05-29T00:10:00Z");
+    let assignment = DurableAssignment {
+        job_id: Some("job-pr-recovery".to_string()),
+        role: Some(RoleId::new("engineer")),
+        queue: Some("pr_changes_requested".to_string()),
+        action: Some("address_review_changes".to_string()),
+        worker_id: Some("worker-a".to_string()),
+        coordination_key: Some("repair-pr-recovery".to_string()),
+        daemon_boot_id: Some("boot-a".to_string()),
+        pre_claim_labels: vec!["implementation".to_string(), "priority-high".to_string()],
+        assigned_at: Some(ts("2026-05-29T00:00:00Z")),
+        expires_at: Some(expires_at),
+        ..DurableAssignment::default()
+    };
+    let metadata = WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("implementation_pr")),
+        assignment: Some(assignment.clone()),
+        lease: Some(Lease {
+            role: RoleId::new("engineer"),
+            worker: "boot-a".to_string(),
+            claimed_at: ts("2026-05-29T00:00:00Z"),
+            heartbeat_at: ts("2026-05-29T00:05:00Z"),
+            expires_at,
+        }),
+        ..WorkflowMetadata::default()
+    };
+    (assignment, metadata)
+}
+
+fn create_claimed_pull_request(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    metadata: &WorkflowMetadata,
+) -> temper_forge::PullRequest {
+    block_on(forge.create_pull_request(
+        repo,
+        CreatePullRequest {
+            title: "recover abandoned pull request".to_string(),
             body: render_metadata_block(metadata),
+            source: BranchRef {
+                repository_id: repo.clone(),
+                branch: "feature/recovery".to_string(),
+            },
+            target: BranchRef {
+                repository_id: repo.clone(),
+                branch: "main".to_string(),
+            },
             labels: vec![
-                "code".to_string(),
+                "implementation".to_string(),
                 "in-progress".to_string(),
                 "priority-high".to_string(),
             ],
@@ -210,9 +310,27 @@ fn direct_assignment_convergence_preserves_an_already_parked_assignment() {
 fn live_reconciliation_converges_full_issue_assignment_once() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
-    let (_, metadata) = expired_assignment("job-live-recovery", "2026-05-29T00:10:00Z");
+    let (assignment, mut metadata) =
+        expired_assignment("job-live-recovery", "2026-05-29T00:10:00Z");
+    metadata.kind = None;
     let issue = create_claimed_issue(&forge, &repo, &metadata);
     let workflow = workflow();
+    let converger =
+        AssignmentConverger::new(&workflow, &forge, LeasePolicy::new(Duration::minutes(30)));
+    assert_eq!(
+        block_on(converger.validate_current(
+            &repo,
+            temper_workflow::ArtifactSource::Issue {
+                number: issue.number,
+            },
+            &assignment,
+        ))
+        .unwrap(),
+        AssignmentValidation::Valid {
+            kind: ArtifactKindId::new("code"),
+            expires_at: ts("2026-05-29T00:10:00Z"),
+        }
+    );
     let journal = InMemoryJournal::new();
     let worker = worker(&forge, &repo, &workflow, &journal);
 
@@ -236,6 +354,44 @@ fn live_reconciliation_converges_full_issue_assignment_once() {
         block_on(worker.tick(ts("2026-05-29T00:21:00Z"))).unwrap(),
         Progress::unchanged()
     );
+}
+
+#[test]
+fn pull_request_assignment_uses_label_resolved_kind_for_validation_and_convergence() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let (assignment, mut metadata) = expired_pull_request_assignment();
+    metadata.kind = None;
+    let pull_request = create_claimed_pull_request(&forge, &repo, &metadata);
+    let workflow = workflow();
+    let converger =
+        AssignmentConverger::new(&workflow, &forge, LeasePolicy::new(Duration::minutes(30)));
+    let source = temper_workflow::ArtifactSource::PullRequest {
+        number: pull_request.number,
+    };
+
+    assert_eq!(
+        block_on(converger.validate_current(&repo, source, &assignment)).unwrap(),
+        AssignmentValidation::Valid {
+            kind: ArtifactKindId::new("implementation_pr"),
+            expires_at: ts("2026-05-29T00:10:00Z"),
+        }
+    );
+    assert_eq!(
+        block_on(converger.converge(&repo, source, &assignment)).unwrap(),
+        AssignmentConvergenceOutcome::Converged
+    );
+
+    let recovered = block_on(forge.get_pull_request_by_number(&repo, pull_request.number))
+        .unwrap()
+        .unwrap();
+    let mut labels = recovered.labels;
+    labels.sort();
+    assert_eq!(labels, vec!["implementation", "priority-high"]);
+    assert!(recovered.assignees.is_empty());
+    let metadata = parse_metadata_block(&recovered.body).unwrap().unwrap();
+    assert!(metadata.kind.is_none());
+    assert!(metadata.assignment.is_none() && metadata.lease.is_none());
 }
 
 #[test]

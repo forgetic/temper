@@ -8,9 +8,7 @@ use std::error::Error;
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use temper_forge::{
-    CreateComment, Forge, ForgeError, RepositoryId, UpdateIssue, UpdatePullRequest,
-};
+use temper_forge::{Forge, ForgeError, RepositoryId, UpdateIssue, UpdatePullRequest};
 
 use crate::artifact::{ArtifactTarget, NEEDS_HUMAN_LABEL, requires_human_attention};
 use crate::classify::{ArtifactSource, ClassifiedArtifact, Classifier};
@@ -21,8 +19,10 @@ use crate::metadata::{DurableAssignment, WorkflowMetadata, parse_metadata_block}
 use crate::relation::RelationKind;
 use crate::validated::{Effect, ValidatedWorkflow};
 
+mod audit;
 mod observability;
 mod pr;
+use audit::{has_assignment, publish_assignment_recovery_audit};
 use observability::emit_assignment_convergence;
 pub use pr::recover_advanced_pull_request_assignment_from_durable;
 
@@ -196,7 +196,7 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                     Err(error) => Err(error.into()),
                 }
             }
-            ValidatedArtifact::PullRequest => {
+            ValidatedArtifact::PullRequest(_) => {
                 if recover_advanced_pull_request_assignment_from_durable(
                     self.forge,
                     repo,
@@ -239,16 +239,14 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
 
     /// Adds the idempotent attention label/comment used when no assignment can
     /// be safely interpreted. This is also used by startup inventory when the
-    /// metadata block itself is malformed.
+    /// metadata block itself is malformed. A freshly parseable assignment or a
+    /// concurrent artifact update makes an older target-level finding a no-op.
     pub async fn quarantine_target(
         &self,
         repo: &RepositoryId,
         target: ArtifactSource,
         reason: &str,
     ) -> Result<(), AssignmentConvergenceError> {
-        let audit_body = format!(
-            "Startup recovery could not safely converge a durable assignment. The artifact was parked for human inspection.\n\nReason: {reason}\n\n{ASSIGNMENT_RECOVERY_AUDIT_MARKER}"
-        );
         match target {
             ArtifactSource::Issue { number } => {
                 let issue = self
@@ -256,25 +254,26 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                     .get_issue_by_number(repo, number)
                     .await?
                     .ok_or_else(|| ForgeError::NotFound(format!("issue {number}")))?;
+                if has_assignment(&issue.body) {
+                    return Ok(());
+                }
                 if !requires_human_attention(&issue.labels) {
-                    self.forge
+                    match self
+                        .forge
                         .update_issue(
                             &issue.id,
                             UpdateIssue {
                                 add_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
+                                expected_version: Some(issue.version),
                                 ..UpdateIssue::default()
                             },
                         )
-                        .await?;
-                }
-                let comments = self.forge.list_issue_comments(&issue.id).await?;
-                if !comments
-                    .iter()
-                    .any(|comment| comment.body.contains(ASSIGNMENT_RECOVERY_AUDIT_MARKER))
-                {
-                    self.forge
-                        .add_issue_comment(&issue.id, CreateComment { body: audit_body })
-                        .await?;
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(ForgeError::Conflict(_)) => return Ok(()),
+                        Err(error) => return Err(error.into()),
+                    }
                 }
             }
             ArtifactSource::PullRequest { number } => {
@@ -283,35 +282,31 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                     .get_pull_request_by_number(repo, number)
                     .await?
                     .ok_or_else(|| ForgeError::NotFound(format!("pull request {number}")))?;
+                if has_assignment(&pull_request.body) {
+                    return Ok(());
+                }
                 if !requires_human_attention(&pull_request.labels) {
-                    self.forge
+                    match self
+                        .forge
                         .update_pull_request(
                             &pull_request.id,
                             UpdatePullRequest {
                                 add_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
+                                expected_version: Some(pull_request.version),
                                 ..UpdatePullRequest::default()
                             },
                         )
-                        .await?;
-                }
-                let comments = self
-                    .forge
-                    .list_pull_request_comments(&pull_request.id)
-                    .await?;
-                if !comments
-                    .iter()
-                    .any(|comment| comment.body.contains(ASSIGNMENT_RECOVERY_AUDIT_MARKER))
-                {
-                    self.forge
-                        .add_pull_request_comment(
-                            &pull_request.id,
-                            CreateComment { body: audit_body },
-                        )
-                        .await?;
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(ForgeError::Conflict(_)) => return Ok(()),
+                        Err(error) => return Err(error.into()),
+                    }
                 }
             }
         }
-        Ok(())
+        publish_assignment_recovery_audit(self.workflow, self.forge, repo, target, reason, true)
+            .await
     }
 
     async fn quarantine_assignment(
@@ -332,7 +327,8 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
             }
             Err(error) => return Err(error.into()),
         }
-        self.quarantine_target(repo, target, reason).await?;
+        publish_assignment_recovery_audit(self.workflow, self.forge, repo, target, reason, true)
+            .await?;
         Ok(AssignmentConvergenceOutcome::Quarantined)
     }
 
@@ -396,18 +392,7 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                             )));
                         }
                     };
-                let Some(kind) = metadata.kind.as_ref() else {
-                    return Ok(LoadedValidation::Invalid(
-                        "durable assignment is missing workflow kind".to_string(),
-                    ));
-                };
-                if classified.kind != *kind {
-                    return Ok(LoadedValidation::Invalid(format!(
-                        "assigned pull request classifies as `{}` instead of `{kind}`",
-                        classified.kind
-                    )));
-                }
-                (metadata, ValidatedArtifact::PullRequest)
+                (metadata, ValidatedArtifact::PullRequest(classified))
             }
         };
 
@@ -417,18 +402,15 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
         if current != expected {
             return Ok(LoadedValidation::Stale);
         }
-        let contract = match self.contract(target, &metadata, expected) {
+        let resolved_kind = match &artifact {
+            ValidatedArtifact::Issue(classified) | ValidatedArtifact::PullRequest(classified) => {
+                &classified.kind
+            }
+        };
+        let contract = match self.contract(target, resolved_kind, &metadata, expected) {
             Ok(contract) => contract,
             Err(reason) => return Ok(LoadedValidation::Invalid(reason)),
         };
-        if let ValidatedArtifact::Issue(classified) = &artifact {
-            if classified.kind != contract.kind {
-                return Ok(LoadedValidation::Invalid(format!(
-                    "assigned issue classifies as `{}` instead of `{}`",
-                    classified.kind, contract.kind
-                )));
-            }
-        }
         Ok(LoadedValidation::Valid(ValidatedAssignment {
             artifact,
             contract,
@@ -438,16 +420,14 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
     fn contract(
         &self,
         target: ArtifactSource,
+        resolved_kind: &ArtifactKindId,
         metadata: &WorkflowMetadata,
         assignment: &DurableAssignment,
     ) -> Result<AssignmentContract, String> {
         require_nonempty(&assignment.job_id, "job id")?;
         require_nonempty(&assignment.worker_id, "worker id")?;
         require_nonempty(&assignment.daemon_boot_id, "daemon boot id")?;
-        let kind = metadata
-            .kind
-            .clone()
-            .ok_or_else(|| "durable assignment is missing workflow kind".to_string())?;
+        let kind = resolved_kind.clone();
         let declared_kind = self
             .workflow
             .artifact_kind(&kind)
@@ -596,7 +576,7 @@ struct AssignmentContract {
 
 enum ValidatedArtifact {
     Issue(ClassifiedArtifact),
-    PullRequest,
+    PullRequest(ClassifiedArtifact),
 }
 
 enum LoadedValidation {

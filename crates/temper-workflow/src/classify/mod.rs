@@ -15,6 +15,7 @@
 
 mod classifier;
 mod diagnostic;
+mod kind;
 
 use crate::artifact::{ArtifactRef, ArtifactTarget};
 use crate::ids::{ArtifactKindId, StateDimensionId, StateId};

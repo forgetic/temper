@@ -21,8 +21,9 @@ use temper_runner::{
     scan_role_wake,
 };
 use temper_workflow::{
-    ArtifactSource, CompiledWorkflow, RoleId, ValidatedWorkflow, find_pull_request_by_correlation,
-    parse_metadata_block, requires_human_attention,
+    ArtifactKindId, ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow, RoleId,
+    ValidatedWorkflow, find_pull_request_by_correlation, parse_metadata_block,
+    requires_human_attention,
 };
 
 use crate::workflow_meta::implementation_pr_labels;
@@ -92,25 +93,43 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
     }
 }
 
+/// Reconstructs an assignment from a fresh, fully classified Forge snapshot.
+///
+/// `resolved_kind` is the kind returned by durable assignment validation. The
+/// fresh snapshot is classified again through the shared classifier so a label
+/// change between validation and reconstruction fails closed instead of
+/// allowing the two recovery phases to interpret different kind evidence.
 pub async fn recovered_job_from_assignment<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     target: ArtifactSource,
     assignment: &temper_workflow::DurableAssignment,
+    resolved_kind: ArtifactKindId,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
 ) -> Result<WorkItemJob, String> {
-    recovered_job_from_assignment_inner(forge, repo, target, assignment, workflow, compiled, None)
-        .await
+    recovered_job_from_assignment_inner(
+        forge,
+        repo,
+        target,
+        assignment,
+        resolved_kind,
+        workflow,
+        compiled,
+        None,
+    )
+    .await
 }
 
 /// Reconstructs a durable assignment through the same artifact-context service
 /// used for fresh poll and webhook dispatches.
+#[allow(clippy::too_many_arguments)]
 pub async fn recovered_job_from_assignment_with_artifact_context<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     target: ArtifactSource,
     assignment: &temper_workflow::DurableAssignment,
+    resolved_kind: ArtifactKindId,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
     artifact_context: &crate::ArtifactContextBundleService,
@@ -120,6 +139,7 @@ pub async fn recovered_job_from_assignment_with_artifact_context<F: Forge + ?Siz
         repo,
         target,
         assignment,
+        resolved_kind,
         workflow,
         compiled,
         Some(artifact_context),
@@ -133,6 +153,7 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
     repo: &RepositoryId,
     target: ArtifactSource,
     assignment: &temper_workflow::DurableAssignment,
+    resolved_kind: ArtifactKindId,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
     artifact_context: Option<&crate::ArtifactContextBundleService>,
@@ -146,32 +167,25 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
         .clone()
         .filter(|queue| !queue.trim().is_empty())
         .ok_or_else(|| "durable assignment is missing queue".to_string())?;
-    let body = match target {
-        ArtifactSource::Issue { number } => forge
-            .get_issue_by_number(repo, number)
-            .await
-            .map_err(|error| error.to_string())?
-            .map(|issue| issue.body),
-        ArtifactSource::PullRequest { number } => forge
-            .get_pull_request_by_number(repo, number)
-            .await
-            .map_err(|error| error.to_string())?
-            .map(|pull_request| pull_request.body),
+    let (snapshot, classified) = load_recovered_target(forge, repo, target, workflow).await?;
+    if classified.kind != resolved_kind {
+        return Err(format!(
+            "durable assignment resolved kind changed from `{resolved_kind}` to `{}`",
+            classified.kind
+        ));
     }
-    .ok_or_else(|| "durable assignment target no longer exists".to_string())?;
-    let kind = parse_metadata_block(&body)
-        .map_err(|error| error.to_string())?
-        .and_then(|metadata| metadata.kind)
-        .ok_or_else(|| "durable assignment target is missing workflow kind".to_string())?;
     let item = WorkItem {
         queue: temper_workflow::QueueId::new(queue),
         role,
         target,
-        kind,
+        kind: resolved_kind,
     };
-    let repo_label = repo_label(forge, repo)
+    let repository = forge
+        .get_repository(repo)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("durable assignment repository {repo} no longer exists"))?;
+    let repo_label = format!("{}/{}", repository.owner, repository.name);
     let mut job = job_from_work_item(&repo_label, &item);
     match enrich_work_item_job_inner(
         forge,
@@ -182,8 +196,12 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
         compiled,
         true,
         artifact_context,
-        None,
-        None,
+        Some(&repository),
+        Some(TargetedEnrichment {
+            repository: &repository,
+            snapshot: &snapshot,
+            classified: &classified,
+        }),
     )
     .await
     .map_err(|error| error.to_string())?
@@ -212,6 +230,44 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
         return Err("durable assignment coordination key no longer matches target".to_string());
     }
     Ok(job)
+}
+
+async fn load_recovered_target<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    target: ArtifactSource,
+    workflow: &ValidatedWorkflow,
+) -> Result<(TargetedArtifactSnapshot, ClassifiedArtifact), String> {
+    let classifier = Classifier::new(workflow);
+    match target {
+        ArtifactSource::Issue { number } => {
+            let issue = forge
+                .get_issue_by_number(repo, number)
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "durable assignment target no longer exists".to_string())?;
+            let classified = classifier.classify_issue(&issue).map_err(|error| {
+                format!("durable assignment target cannot be classified: {error}")
+            })?;
+            Ok((TargetedArtifactSnapshot::Issue(Box::new(issue)), classified))
+        }
+        ArtifactSource::PullRequest { number } => {
+            let pull_request = forge
+                .get_pull_request_by_number(repo, number)
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "durable assignment target no longer exists".to_string())?;
+            let classified = classifier
+                .classify_pull_request(&pull_request)
+                .map_err(|error| {
+                    format!("durable assignment target cannot be classified: {error}")
+                })?;
+            Ok((
+                TargetedArtifactSnapshot::PullRequest(Box::new(pull_request)),
+                classified,
+            ))
+        }
+    }
 }
 
 /// Adds Forge-backed workspace context to a mapped job.

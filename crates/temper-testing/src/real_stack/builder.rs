@@ -531,6 +531,7 @@ impl HermeticRealStackBuilder {
                 executor,
                 worker: None,
                 recovered: BTreeMap::new(),
+                production_recovered: None,
                 ci_status_monitor: temper_engine::CiStatusMonitor::new(
                     self.ci_missing_grace,
                     clock.capability(),

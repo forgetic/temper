@@ -6,12 +6,13 @@
 //! the classification root to keep each file within the source-size budget.
 
 use super::diagnostic::{ClassificationDiagnostic, ClassificationError};
+use super::kind::resolve_kind_evidence;
 use super::{ArtifactSource, ClassifiedArtifact, ClassifiedRelation};
 use crate::artifact::{ArtifactRef, ArtifactTarget};
 use crate::ids::{ArtifactKindId, StateDimensionId, StateId};
 use crate::metadata::{WorkflowMetadata, parse_metadata_block};
 use crate::relation::RelationKind;
-use crate::validated::{ValidatedArtifactKind, ValidatedWorkflow};
+use crate::validated::ValidatedWorkflow;
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashSet};
 use temper_forge::{Issue, ItemNumber, PullRequest};
@@ -116,7 +117,10 @@ impl<'a> Classifier<'a> {
         };
 
         let label_set: HashSet<&str> = labels.iter().map(String::as_str).collect();
-        let kind = self.resolve_kind(target, &label_set, &metadata, &mut diagnostics);
+        let resolution =
+            resolve_kind_evidence(self.workflow, target, &label_set, metadata.kind.as_ref());
+        diagnostics.extend(resolution.diagnostics);
+        let kind = resolution.kind;
         let states = self.resolve_states(&label_set, kind.as_ref(), &mut diagnostics);
 
         match kind {
@@ -137,113 +141,21 @@ impl<'a> Classifier<'a> {
         }
     }
 
-    /// Resolves the artifact kind. Metadata `kind` is authoritative when set;
-    /// otherwise the kind is inferred from identifying labels.
-    fn resolve_kind(
-        &self,
-        target: ArtifactTarget,
-        labels: &HashSet<&str>,
-        metadata: &WorkflowMetadata,
-        diagnostics: &mut Vec<ClassificationDiagnostic>,
-    ) -> Option<ArtifactKindId> {
-        if let Some(named) = &metadata.kind {
-            return self.resolve_named_kind(target, labels, named, diagnostics);
-        }
-        self.resolve_kind_from_labels(target, labels, diagnostics)
-    }
-
-    fn resolve_named_kind(
-        &self,
-        target: ArtifactTarget,
-        labels: &HashSet<&str>,
-        named: &ArtifactKindId,
-        diagnostics: &mut Vec<ClassificationDiagnostic>,
-    ) -> Option<ArtifactKindId> {
-        let Some(kind) = self.workflow.artifact_kind(named) else {
-            diagnostics.push(ClassificationDiagnostic::UnknownMetadataKind {
-                kind: named.clone(),
-            });
-            return None;
-        };
-        if kind.target != target {
-            diagnostics.push(ClassificationDiagnostic::TargetMismatch {
-                kind: kind.id.clone(),
-                expected: kind.target,
-                actual: target,
-            });
-        }
-        for label in &kind.identifying_labels {
-            if !labels.contains(label.as_str()) {
-                diagnostics.push(ClassificationDiagnostic::MissingIdentifyingLabel {
-                    kind: kind.id.clone(),
-                    label: label.clone(),
-                });
-            }
-        }
-        Some(kind.id.clone())
-    }
-
-    fn resolve_kind_from_labels(
-        &self,
-        target: ArtifactTarget,
-        labels: &HashSet<&str>,
-        diagnostics: &mut Vec<ClassificationDiagnostic>,
-    ) -> Option<ArtifactKindId> {
-        let matches: Vec<&ValidatedArtifactKind> = self
-            .workflow
-            .artifact_kinds()
-            .iter()
-            .filter(|kind| kind.target == target)
-            .filter(|kind| !kind.identifying_labels.is_empty())
-            .filter(|kind| {
-                kind.identifying_labels
-                    .iter()
-                    .all(|label| labels.contains(label.as_str()))
-            })
-            .collect();
-
-        let Some(max) = matches.iter().map(|k| k.identifying_labels.len()).max() else {
-            // No labeled kind matched. If the target declares a default
-            // (catch-all) kind — one with empty identifying labels — classify as
-            // that, so raw human intake (an issue with no labels) is admitted as
-            // a normal work item. Validation guarantees at most one default per
-            // target, so this lookup is unambiguous.
-            if let Some(default) = self.default_kind(target) {
-                return Some(default.id.clone());
-            }
-            diagnostics.push(ClassificationDiagnostic::Unclassified { target });
-            return None;
-        };
-
-        // Prefer the most specific match: the kind requiring the most
-        // identifying labels wins. A tie at the top is genuinely ambiguous.
-        let top: Vec<&ValidatedArtifactKind> = matches
-            .into_iter()
-            .filter(|k| k.identifying_labels.len() == max)
-            .collect();
-
-        if top.len() == 1 {
-            Some(top[0].id.clone())
-        } else {
-            diagnostics.push(ClassificationDiagnostic::AmbiguousArtifactKind {
-                target,
-                candidates: top.iter().map(|k| k.id.clone()).collect(),
-            });
-            None
-        }
-    }
-
-    /// The default (catch-all) artifact kind for `target`, if one is declared.
+    /// Resolves an artifact kind from Forge target, labels, and optional metadata.
     ///
-    /// A default kind is one with no identifying labels: it admits any artifact
-    /// of the target that no more specific labeled kind claims. Validation
-    /// rejects more than one default per target, so the first match is the only
-    /// match.
-    fn default_kind(&self, target: ArtifactTarget) -> Option<&ValidatedArtifactKind> {
-        self.workflow
-            .artifact_kinds()
-            .iter()
-            .find(|kind| kind.target == target && kind.identifying_labels.is_empty())
+    /// Label evidence is always evaluated independently. Metadata, when present,
+    /// is an assertion that must name a declared kind for `target` and agree with
+    /// the label result; it never overrides label specificity or ambiguity. This
+    /// entry point is shared by full classification and recovery callers that
+    /// already parsed durable metadata.
+    pub fn resolve_kind(
+        &self,
+        target: ArtifactTarget,
+        labels: &[String],
+        metadata_kind: Option<&ArtifactKindId>,
+    ) -> Result<ArtifactKindId, ClassificationError> {
+        let label_set: HashSet<&str> = labels.iter().map(String::as_str).collect();
+        resolve_kind_evidence(self.workflow, target, &label_set, metadata_kind).into_result()
     }
 
     fn resolve_relations(

@@ -160,6 +160,7 @@ fn configured_service_populates_normal_wake_and_recovered_dispatches_identically
                 number: code.number,
             },
             &assignment,
+            ArtifactKindId::new("code"),
             workflow.as_ref(),
             compiled.as_ref(),
             service.as_ref(),
