@@ -2232,6 +2232,7 @@ dependencies = [
  "base64",
  "bench-forgejo",
  "chrono",
+ "fs2",
  "jig-core",
  "jig-server",
  "serde",

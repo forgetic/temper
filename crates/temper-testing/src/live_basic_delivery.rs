@@ -14,6 +14,8 @@ mod fake_llm;
 mod handoff;
 mod plan_feature;
 mod process;
+#[cfg(target_os = "linux")]
+mod standalone_shutdown;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,6 +39,10 @@ use process::{
     TemperInitRequest, assert_init_workflow_yaml_matches, convergence_timeout, free_port,
     mint_site_admin_token, populate_repo, read_tail, run_temper_init, spawn_temper_standalone,
     tune_init_config, wait_for_standalone, write_snapshot,
+};
+#[cfg(target_os = "linux")]
+pub use standalone_shutdown::{
+    StandaloneShutdownEvidence, StandaloneShutdownRequest, run_standalone_shutdown_acceptance,
 };
 
 const ENGINEER: &str = "engineer";

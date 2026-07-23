@@ -69,6 +69,7 @@ otel = ["temper-cli/otel"]
 name = "temper"
 version = "0.1.0"
 publish = false
+default-run = "temper"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -122,6 +123,14 @@ fs2 = { workspace = true }
 [[bin]]
 name = "temper"
 path = "src/bin/temper.rs"
+
+# Compiled process fixture injected explicitly by the public standalone
+# shutdown acceptance target. Keeping it as a package target gives the test a
+# CARGO_BIN_EXE path without recursively invoking Cargo.
+[[bin]]
+name = "temper-standalone-shutdown-e2e-fixture"
+path = "crates/temper-testing/src/bin/temper-standalone-descendant-fixture.rs"
+test = false
 
 [lints]
 workspace = true
