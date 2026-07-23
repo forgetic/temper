@@ -510,6 +510,7 @@ impl HermeticRealStackBuilder {
                 executor,
                 worker: None,
                 recovered: BTreeMap::new(),
+                production_recovered: None,
             },
         })
     }
