@@ -12,6 +12,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use temper_forge::{ItemNumber, RepositoryId};
 
+/// Canonical label that parks a Forge artifact for human intervention.
+pub const NEEDS_HUMAN_LABEL: &str = "needs-human";
+
+/// Returns whether automation must leave an artifact untouched until a human
+/// clears its attention state.
+pub fn requires_human_attention(labels: &[String]) -> bool {
+    labels.iter().any(|label| label == NEEDS_HUMAN_LABEL)
+}
+
 /// The Forge artifact type a workflow artifact kind maps to.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

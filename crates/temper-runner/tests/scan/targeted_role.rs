@@ -193,6 +193,44 @@ fn targeted_pr_unions_signal_needs_once_and_emits_subscribers_deterministically(
 }
 
 #[test]
+fn attention_pr_is_excluded_from_broad_and_targeted_role_wakes_before_signals() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_pr(&forge, &repo, &["implementation", "needs-human"]);
+    submit_review(&forge, &repo, number, ReviewDecision::ChangesRequested);
+    seed_ci(&forge, &repo, number, CiJobConclusion::Failure);
+    let workflow = targeted_workflow();
+    let compiled = workflow.compile();
+    let counting = CountingForge::new(forge.clone());
+    let roles = [RoleId::new("reviewer"), RoleId::new("ci_watcher")];
+
+    assert!(
+        block_on(scan_roles_wake(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &roles,
+        ))
+        .expect("broad wake succeeds")
+        .is_empty()
+    );
+    let targeted = targeted_scan(
+        &counting,
+        &repo,
+        ArtifactAddress::pull_request(number),
+        &roles,
+    )
+    .expect("attention pull request still classifies");
+
+    assert!(targeted.work_items.is_empty());
+    assert_eq!(targeted.ci_status, None);
+    assert_eq!(counting.count(CountedForgeOp::ListPullRequestReviews), 0);
+    assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
+}
+
+#[test]
 fn targeted_terminal_prs_skip_ci_without_issue_or_list_fallbacks() {
     for merged in [false, true] {
         let forge = MemoryForge::new();

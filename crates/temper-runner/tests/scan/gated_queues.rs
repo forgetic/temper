@@ -69,6 +69,90 @@ fn merge_conflict_label_pauses_landing_automation_without_clearing_landing() {
 }
 
 #[test]
+fn attention_parks_broad_and_targeted_landing_until_only_that_label_is_cleared() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_pr(&forge, &repo, &["implementation", "landing", "needs-human"]);
+    seed_ci(&forge, &repo, number, CiJobConclusion::Success);
+    // Model a workflow that permits PR attention state so the global barrier,
+    // rather than an unrelated classification diagnostic, is under test.
+    let mut raw: serde_json::Value = serde_json::from_str(FIXTURE).expect("workflow parses");
+    raw["state_dimensions"][1]["states"][2]["artifacts"]
+        .as_array_mut()
+        .expect("needs-human artifact list")
+        .push(serde_json::json!("implementation_pr"));
+    let workflow = serde_json::from_value::<RawWorkflowSpec>(raw)
+        .expect("workflow shape is valid")
+        .validate()
+        .expect("workflow validates");
+    let compiled = workflow.compile();
+    let counting = CountingForge::new(forge.clone());
+
+    assert!(
+        block_on(scan_automated_queues(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+        ))
+        .expect("broad automated scan succeeds")
+        .is_empty()
+    );
+    let loaded = block_on(temper_runner::load_targeted_artifact(
+        &counting,
+        &repo,
+        &workflow,
+        temper_runner::ArtifactAddress::pull_request(number),
+    ))
+    .expect("targeted load succeeds")
+    .expect("pull request classifies");
+    assert!(
+        block_on(temper_runner::targeted_automated_work_items(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            &loaded,
+            ts("2026-05-29T00:00:01Z"),
+        ))
+        .expect("targeted automated scan succeeds")
+        .is_empty()
+    );
+    assert_eq!(
+        counting.count(CountedForgeOp::ListCiJobs),
+        0,
+        "parked candidates stop before delayed green CI is read"
+    );
+
+    let pull_request = block_on(forge.get_pull_request_by_number(&repo, number))
+        .unwrap()
+        .unwrap();
+    block_on(forge.update_pull_request(
+        &pull_request.id,
+        temper_forge::UpdatePullRequest {
+            remove_labels: vec!["needs-human".to_string()],
+            ..temper_forge::UpdatePullRequest::default()
+        },
+    ))
+    .expect("human attention label is cleared");
+
+    assert_eq!(
+        block_on(scan_automated_queues(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:02Z"),
+        ))
+        .expect("ordinary landing scan resumes")
+        .len(),
+        1
+    );
+    assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 1);
+}
+
+#[test]
 fn merged_landing_pr_with_passing_ci_is_not_an_automated_work_item() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);

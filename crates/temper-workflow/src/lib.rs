@@ -107,7 +107,7 @@ pub mod validate;
 mod validate_build;
 pub mod validated;
 
-pub use artifact::{ArtifactRef, ArtifactTarget};
+pub use artifact::{ArtifactRef, ArtifactTarget, NEEDS_HUMAN_LABEL, requires_human_attention};
 pub use assignment_convergence::{
     ASSIGNMENT_RECOVERY_AUDIT_MARKER, AssignmentConvergenceError, AssignmentConvergenceOutcome,
     AssignmentConverger, AssignmentValidation,

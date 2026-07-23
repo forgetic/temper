@@ -448,8 +448,8 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
             .iter()
             .map(|user| UserId::new(user.clone()))
             .collect::<Vec<_>>();
-        let add_labels = (!loaded.labels().iter().any(|label| label == "needs-human"))
-            .then(|| "needs-human".to_string())
+        let add_labels = (!requires_human_attention(loaded.labels()))
+            .then(|| NEEDS_HUMAN_LABEL.to_string())
             .into_iter()
             .collect();
         let remove_labels = loaded

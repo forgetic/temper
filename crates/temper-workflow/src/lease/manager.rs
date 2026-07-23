@@ -10,11 +10,11 @@
 use super::{
     LeaseError, LeasePlanner, LeasePolicy, RecoveredHeartbeatOutcome, RecoveredOwnershipLossReason,
 };
-use crate::ArtifactSource;
 use crate::ids::RoleId;
 use crate::metadata::{
     DurableAssignment, Lease, WorkflowMetadata, parse_metadata_block, replace_metadata_block,
 };
+use crate::{ArtifactSource, NEEDS_HUMAN_LABEL, requires_human_attention};
 use chrono::{DateTime, Utc};
 use temper_forge::{
     Forge, ForgeError, IssueId, PullRequestId, RepositoryId, UpdateIssue, UpdatePullRequest,
