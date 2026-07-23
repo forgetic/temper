@@ -67,8 +67,8 @@ pub use artifact_context::{
     resolve_initial_artifact_context_with_policy,
 };
 pub use ci_status_monitor::{
-    CiStatusMonitor, CiTerminalTransition, CiTerminalVerdict, run_ci_status_monitor_tick,
-    spawn_ci_status_monitor,
+    CiMissingCurrentHeadTransition, CiStatusMonitor, CiStatusTransition, CiTerminalTransition,
+    CiTerminalVerdict, run_ci_status_monitor_tick, spawn_ci_status_monitor,
 };
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{

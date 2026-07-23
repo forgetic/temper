@@ -25,6 +25,12 @@ pub struct CiStatusObservation {
     pub pull_request_number: ItemNumber,
     /// Non-empty current pull-request head SHA.
     pub head_sha: String,
+    /// Whether at least one job identifies the exact current pull-request head.
+    ///
+    /// This distinguishes an empty (or stale-head-only) result from active
+    /// queued/running work without changing the conservative `Pending` gate
+    /// state shared by both cases.
+    pub current_head_jobs_present: bool,
     /// Aggregate state of the latest current-head job per name.
     pub state: CiState,
     /// Time the complete latest-job set became terminal, when every latest job
@@ -40,7 +46,7 @@ pub struct CiStatusObservation {
 /// the exact artifact is checked again before its CI jobs are read. Attention-
 /// marked, staged, terminal, unclassifiable, unrelated, or headless pull
 /// requests are skipped. CI queries are conjunctively scoped to both the pull
-/// non-empty head SHA. This function performs no Forge mutation.
+/// request and its non-empty head SHA. This function performs no Forge mutation.
 pub async fn read_ci_status_observations<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
@@ -104,7 +110,7 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
             continue;
         };
 
-        let jobs = forge
+        let mut jobs = forge
             .list_ci_jobs(
                 repo,
                 CiJobQuery {
@@ -114,16 +120,45 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
                 },
             )
             .await?;
-        let status = CiStatus::from_jobs_for_head(&jobs, Some(&head_sha));
+        // Do not trust a provider to enforce both query filters: stale jobs
+        // belonging only to a previous head are not current-head presence.
+        // Keep this match rule aligned with `CiStatus::from_jobs_for_head` so
+        // accepted full/abbreviated SHA pairs cannot disagree with the gate.
+        let current_head_jobs_present = jobs
+            .iter()
+            .any(|job| sha_identifies_head(&job.commit_sha, &head_sha));
+        jobs.retain(|job| sha_identifies_head(&job.commit_sha, &head_sha));
+        let status = CiStatus::from_jobs(&jobs);
         observations.push(CiStatusObservation {
             pull_request_number: pull_request.number,
             head_sha,
+            current_head_jobs_present,
             state: status.state(),
             completed_at: status.completed_at(),
         });
     }
 
     Ok(observations)
+}
+
+fn sha_identifies_head(job_sha: &str, head_sha: &str) -> bool {
+    let job_sha = job_sha.trim();
+    if job_sha.is_empty() {
+        return false;
+    }
+    if job_sha.eq_ignore_ascii_case(head_sha) {
+        return true;
+    }
+
+    let (shorter, longer) = if job_sha.len() < head_sha.len() {
+        (job_sha, head_sha)
+    } else {
+        (head_sha, job_sha)
+    };
+    shorter.len() >= 7
+        && longer
+            .get(..shorter.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(shorter))
 }
 
 fn relevant_candidate(queues: &[&QueueManifest], classified: &ClassifiedArtifact) -> bool {

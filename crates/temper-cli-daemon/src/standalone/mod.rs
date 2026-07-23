@@ -414,6 +414,8 @@ async fn run_async(
             workflow.clone(),
             compiled.clone(),
             cadence,
+            daemon_config.ci_missing_grace,
+            temper_engine::system_clock(),
         );
     }
     emit_engine_status(banner::ci_poll_backstop(

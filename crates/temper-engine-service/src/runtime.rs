@@ -168,6 +168,8 @@ pub async fn run_async(
             workflow,
             compiled,
             cadence,
+            config.ci_missing_grace,
+            temper_engine::system_clock(),
         );
     }
     spawn_poll(

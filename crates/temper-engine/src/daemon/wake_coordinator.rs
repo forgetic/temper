@@ -52,15 +52,25 @@ impl WakeRequest {
         )
     }
 
-    pub(crate) fn from_ci_poll_transition(transition: crate::CiTerminalTransition) -> Self {
-        Self::from_hint_with_ci(
-            transition.hint,
-            Some(CiWakeFacts {
-                source: CiTriggerSource::CiPoll,
-                verdict: Some(transition.verdict),
-                completed_at: transition.completed_at,
-            }),
-        )
+    pub(crate) fn from_ci_poll_transition(transition: crate::CiStatusTransition) -> Self {
+        match transition {
+            crate::CiStatusTransition::Terminal(transition) => Self::from_hint_with_ci(
+                transition.hint,
+                Some(CiWakeFacts {
+                    source: CiTriggerSource::CiPoll,
+                    verdict: Some(transition.verdict),
+                    completed_at: transition.completed_at,
+                }),
+            ),
+            crate::CiStatusTransition::MissingCurrentHead(transition) => Self::from_hint_with_ci(
+                transition.hint,
+                Some(CiWakeFacts {
+                    source: CiTriggerSource::CiPoll,
+                    verdict: None,
+                    completed_at: None,
+                }),
+            ),
+        }
     }
 
     fn from_hint_with_ci(hint: ChangeHint, ci: Option<CiWakeFacts>) -> Self {

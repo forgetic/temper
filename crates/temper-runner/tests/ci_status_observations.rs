@@ -235,6 +235,7 @@ fn ci_discovery_uses_only_one_open_pull_request_bucket() {
         vec![CiStatusObservation {
             pull_request_number: pull_request.number,
             head_sha: "abcdef0123456789".into(),
+            current_head_jobs_present: false,
             state: CiState::Pending,
             completed_at: None,
         }]
@@ -525,17 +526,6 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
         ),
         ci_job(
             &repo,
-            &stale,
-            "current-queued",
-            "head-current",
-            "build",
-            CiJobStatus::Queued,
-            None,
-            "2026-05-29T00:00:13Z",
-            None,
-        ),
-        ci_job(
-            &repo,
             &rerun,
             "rerun-old",
             "head-rerun",
@@ -570,8 +560,11 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
             .expect("pull request was observed")
     };
     assert_eq!(get(no_jobs.number).state, CiState::Pending);
+    assert!(!get(no_jobs.number).current_head_jobs_present);
     assert_eq!(get(active.number).state, CiState::Pending);
+    assert!(get(active.number).current_head_jobs_present);
     assert_eq!(get(mixed.number).state, CiState::Pending);
+    assert!(get(mixed.number).current_head_jobs_present);
     assert_eq!(get(passed.number).state, CiState::Passed);
     assert_eq!(
         get(passed.number).completed_at,
@@ -589,6 +582,10 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
         "completion comes only from the terminal latest-job set"
     );
     assert_eq!(get(stale.number).state, CiState::Pending);
+    assert!(
+        !get(stale.number).current_head_jobs_present,
+        "jobs belonging only to an old head are explicitly missing for the current head"
+    );
     assert_eq!(get(rerun.number).state, CiState::Failed);
     assert!(
         observed
