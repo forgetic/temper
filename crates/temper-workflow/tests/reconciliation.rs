@@ -224,6 +224,43 @@ fn impossible_label_combination_is_detected_deterministically() {
 }
 
 #[test]
+fn attention_state_suppresses_snapshot_and_journal_recovery() {
+    let workflow = workflow();
+    let policy = DefaultRecoveryPolicy;
+    let target = issue_source(3);
+    let snapshot = ArtifactSnapshot {
+        source: target,
+        labels: vec!["code".into(), "ready".into(), "needs-human".into()],
+        body: leased_body("run-1", "2026-05-29T00:30:00Z"),
+        dependencies: Vec::new(),
+    };
+    let mut record = CommandRecord::planned(
+        CommandId::new("claim-parked"),
+        target,
+        TransitionId::new("claim_code"),
+        RoleId::new("engineer"),
+        vec![
+            WorkflowEffect::RemoveLabel("ready".into()),
+            WorkflowEffect::AddLabel("in-progress".into()),
+        ],
+        ts("2026-05-29T00:00:00Z"),
+    );
+    record.state = CommandState::Applying;
+
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[record],
+        &DependencyStatus::default(),
+        ts("2026-05-29T01:00:00Z"),
+    );
+
+    assert!(
+        report.is_clean(),
+        "attention state must suppress lease, classification, dependency, and journal recovery"
+    );
+}
+
+#[test]
 fn partial_transition_emits_repair_effects() {
     let workflow = workflow();
     let policy = DefaultRecoveryPolicy;

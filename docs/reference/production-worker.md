@@ -4,11 +4,16 @@ In the current two-tier deployment, `temper serve engine` owns webhook intake,
 the dedicated CI-status and full role-feed poll backstops, mechanical cadence,
 and queue scheduling while one or more `temper serve worker` processes long-
 poll it for jobs. `ci_poll_cadence_secs` bounds webhook-less terminal red-repair
-and green-landing detection, while `poll_cadence_secs` remains the full
-correctness/liveness backstop. `mechanical_cadence_secs` alone does not discover
-red engineer repair work. A `ci_failed` queue matches only after every latest-
-per-name job for the current PR head is terminal; a visible failure mixed with
-queued/running work remains pending.
+and green-landing detection. The positive `ci_missing_grace_secs` (300 seconds
+by default) bounds how long no CI run/status for an exact current head may
+remain continuously visible before safe parking becomes actionable. Setting
+`ci_poll_cadence_secs = 0` disables terminal-CI acceleration, missing-current-
+head detection, and missing-CI parking; the grace remains configured and
+visible but inactive. `poll_cadence_secs` remains the full correctness/liveness
+backstop. `mechanical_cadence_secs` alone does not discover red engineer repair
+work. A `ci_failed` queue matches only after every latest-per-name job for the
+current PR head is terminal; a visible failure mixed with queued/running work
+remains pending.
 
 Forgejo webhooks are posted to the
 engine/standalone HTTP surface at `POST /forgejo/webhook` when `[engine]

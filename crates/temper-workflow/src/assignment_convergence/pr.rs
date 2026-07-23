@@ -8,6 +8,7 @@ use super::AssignmentConvergenceError;
 use crate::classify::ArtifactSource;
 use crate::ids::{ArtifactKindId, RoleId};
 use crate::metadata::{DurableAssignment, parse_metadata_block, replace_metadata_block};
+use crate::requires_human_attention;
 use crate::validated::{Effect, ValidatedTransition, ValidatedWorkflow};
 
 /// Recovers a worker-pushed PR head before ordinary assignment rollback.
@@ -45,7 +46,9 @@ pub async fn recover_advanced_pull_request_assignment_from_durable<F: Forge + ?S
         let Some(pull_request) = forge.get_pull_request_by_number(repo, number).await? else {
             return Ok(false);
         };
-        if pull_request.state != PullRequestState::Open {
+        if pull_request.state != PullRequestState::Open
+            || requires_human_attention(&pull_request.labels)
+        {
             return Ok(false);
         }
         let Some(current_head) = pull_request

@@ -38,6 +38,7 @@ pub struct HermeticRealStackBuilder {
     enable_subagents: bool,
     submit_for_pr: SubmitForPrHost,
     apply_grace: Option<Duration>,
+    ci_missing_grace: Duration,
     worker_heartbeat_interval: Duration,
     worker_liveness_limits: temper_worker::WorkerLivenessLimits,
     enable_agent_traces: bool,
@@ -68,6 +69,7 @@ impl HermeticRealStackBuilder {
             enable_subagents: false,
             submit_for_pr: default_submit_for_pr_host(),
             apply_grace: None,
+            ci_missing_grace: Duration::from_secs(300),
             worker_heartbeat_interval: Duration::from_millis(50),
             worker_liveness_limits: Default::default(),
             enable_agent_traces: false,
@@ -167,6 +169,15 @@ impl HermeticRealStackBuilder {
     #[must_use]
     pub fn apply_grace(mut self, apply_grace: Duration) -> Self {
         self.apply_grace = Some(apply_grace);
+        self
+    }
+
+    /// Overrides the grace used by deterministic CI-monitor cadence passes.
+    /// The value is also retained across daemon replacement while each new
+    /// monitor incarnation starts with empty observation history.
+    #[must_use]
+    pub fn ci_missing_grace(mut self, grace: Duration) -> Self {
+        self.ci_missing_grace = grace;
         self
     }
 
@@ -311,6 +322,15 @@ impl HermeticRealStackBuilder {
             Some(apply_grace) => daemon_handle.with_apply_grace(apply_grace),
             None => daemon_handle,
         };
+        let daemon_handle = super::artifact_context::with_wake_execution(
+            daemon_handle,
+            forge.clone(),
+            workflow.clone(),
+            &compiled,
+            &repo_ids,
+            &primary_worker_role.role,
+            &clock,
+        );
         let daemon = Arc::new(daemon_handle);
         let router = Arc::new(DaemonRouter::new(daemon.clone()));
         let activity = Arc::new(HermeticActivityCounters::default());
@@ -497,12 +517,13 @@ impl HermeticRealStackBuilder {
                 coding_config,
                 worker_containment_factory,
                 runner,
-                clock,
+                clock: clock.clone(),
                 hooks,
                 router,
                 trace_collector,
                 trace_journal,
                 apply_grace: self.apply_grace,
+                ci_missing_grace: self.ci_missing_grace,
                 mechanical_journal: temper_workflow::InMemoryJournal::new(),
             },
             components: HermeticComponentHandles {
@@ -511,6 +532,10 @@ impl HermeticRealStackBuilder {
                 worker: None,
                 recovered: BTreeMap::new(),
                 production_recovered: None,
+                ci_status_monitor: temper_engine::CiStatusMonitor::new(
+                    self.ci_missing_grace,
+                    clock.capability(),
+                ),
             },
         })
     }

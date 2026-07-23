@@ -10,7 +10,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ForgeError, RepositoryId, UpdateIssue, UpdatePullRequest};
 
-use crate::artifact::ArtifactTarget;
+use crate::artifact::{ArtifactTarget, NEEDS_HUMAN_LABEL, requires_human_attention};
 use crate::classify::{ArtifactSource, ClassifiedArtifact, Classifier};
 use crate::dependency_state;
 use crate::ids::ArtifactKindId;
@@ -122,6 +122,7 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                 expires_at: validated.contract.expires_at,
             }),
             LoadedValidation::Stale => Ok(AssignmentValidation::Stale),
+            LoadedValidation::Attention => Ok(AssignmentValidation::Quarantined),
             LoadedValidation::Invalid(reason) => {
                 match self
                     .quarantine_assignment(repo, target, expected, &reason)
@@ -157,6 +158,9 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
         let validated = match self.load_validated(repo, target, expected).await? {
             LoadedValidation::Valid(validated) => validated,
             LoadedValidation::Stale => return Ok(AssignmentConvergenceOutcome::Stale),
+            LoadedValidation::Attention => {
+                return Ok(AssignmentConvergenceOutcome::Quarantined);
+            }
             LoadedValidation::Invalid(reason) => {
                 return self
                     .quarantine_assignment(repo, target, expected, &reason)
@@ -253,13 +257,13 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                 if has_assignment(&issue.body) {
                     return Ok(());
                 }
-                if !issue.labels.iter().any(|label| label == "needs-human") {
+                if !requires_human_attention(&issue.labels) {
                     match self
                         .forge
                         .update_issue(
                             &issue.id,
                             UpdateIssue {
-                                add_labels: vec!["needs-human".to_string()],
+                                add_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
                                 expected_version: Some(issue.version),
                                 ..UpdateIssue::default()
                             },
@@ -281,17 +285,13 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                 if has_assignment(&pull_request.body) {
                     return Ok(());
                 }
-                if !pull_request
-                    .labels
-                    .iter()
-                    .any(|label| label == "needs-human")
-                {
+                if !requires_human_attention(&pull_request.labels) {
                     match self
                         .forge
                         .update_pull_request(
                             &pull_request.id,
                             UpdatePullRequest {
-                                add_labels: vec!["needs-human".to_string()],
+                                add_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
                                 expected_version: Some(pull_request.version),
                                 ..UpdatePullRequest::default()
                             },
@@ -343,6 +343,9 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                 let Some(issue) = self.forge.get_issue_by_number(repo, number).await? else {
                     return Ok(LoadedValidation::Stale);
                 };
+                if requires_human_attention(&issue.labels) {
+                    return Ok(LoadedValidation::Attention);
+                }
                 let metadata = match parse_metadata_block(&issue.body) {
                     Ok(Some(metadata)) => metadata,
                     Ok(None) => return Ok(LoadedValidation::Stale),
@@ -368,6 +371,9 @@ impl<'a, F: Forge + ?Sized> AssignmentConverger<'a, F> {
                 else {
                     return Ok(LoadedValidation::Stale);
                 };
+                if requires_human_attention(&pull_request.labels) {
+                    return Ok(LoadedValidation::Attention);
+                }
                 let metadata = match parse_metadata_block(&pull_request.body) {
                     Ok(Some(metadata)) => metadata,
                     Ok(None) => return Ok(LoadedValidation::Stale),
@@ -576,6 +582,7 @@ enum ValidatedArtifact {
 enum LoadedValidation {
     Valid(ValidatedAssignment),
     Stale,
+    Attention,
     Invalid(String),
 }
 

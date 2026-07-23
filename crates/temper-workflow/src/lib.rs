@@ -96,6 +96,7 @@ pub mod journal;
 pub mod lease;
 pub mod load;
 pub mod metadata;
+mod missing_ci;
 pub mod plan;
 mod prompt;
 pub mod reconcile;
@@ -107,7 +108,7 @@ pub mod validate;
 mod validate_build;
 pub mod validated;
 
-pub use artifact::{ArtifactRef, ArtifactTarget};
+pub use artifact::{ArtifactRef, ArtifactTarget, NEEDS_HUMAN_LABEL, requires_human_attention};
 pub use assignment_convergence::{
     ASSIGNMENT_RECOVERY_AUDIT_MARKER, AssignmentConvergenceError, AssignmentConvergenceOutcome,
     AssignmentConverger, AssignmentValidation,
@@ -152,6 +153,7 @@ pub use metadata::{
     global_child_correlation_key, is_heartbeat_only_body_change, parse_metadata_block,
     render_metadata_block, replace_metadata_block, split_metadata_block,
 };
+pub use missing_ci::MissingCiRecoveryState;
 pub use plan::{
     CiState, CiStatus, DependencyReadFailure, DependencyStatus, GateSignals, MechanicalPlan,
     PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember, QueueQuery, ReviewStatus,

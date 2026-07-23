@@ -18,6 +18,10 @@ const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
 /// Dedicated CI-status polling defaults to a short cadence and can be disabled
 /// independently without changing the mandatory role-feed poll backstop.
 const DEFAULT_CI_POLL_CADENCE_SECS: u64 = 60;
+/// Missing current-head CI must remain absent for this long before recovery can
+/// become actionable. Unlike the monitor cadence, this setting is not
+/// disableable.
+const DEFAULT_CI_MISSING_GRACE_SECS: u64 = 300;
 /// Mechanical backstop runs by default. Webhooks are the primary reaction path,
 /// so this level-triggered safety net uses a conservative cadence. Pass
 /// `--mechanical-cadence-secs 0` to disable the mechanical worker entirely.
@@ -31,7 +35,8 @@ pub const USAGE: &str = concat!(
     "--repo <owner/name> [--repo <owner/name> ...] ",
     "--role <role> [--role <role> ...] ",
     "[--workflow <path>] [--poll-cadence-secs <n>] ",
-    "[--ci-poll-cadence-secs <n>] [--mechanical-cadence-secs <n>] ",
+    "[--ci-poll-cadence-secs <n>] [--ci-missing-grace-secs <n>] ",
+    "[--mechanical-cadence-secs <n>] ",
     "[--lease-ttl-secs <n>] ",
     "[--webhook-secret-file <path>] [--daemon-id <id>]\n",
     "  Forgejo connection settings (URL, admin token, optional CI web-UI ",
@@ -48,6 +53,7 @@ pub struct DaemonRunConfig {
     pub workflow_file: Option<PathBuf>,
     pub poll_cadence: Duration,
     pub ci_poll_cadence: Option<Duration>,
+    pub ci_missing_grace: Duration,
     pub mechanical_cadence: Option<Duration>,
     pub lease_ttl: Duration,
     pub webhook_secret_file: Option<PathBuf>,
@@ -124,6 +130,7 @@ struct RawArgs {
     workflow_file: Option<String>,
     poll_cadence_secs: Option<String>,
     ci_poll_cadence_secs: Option<String>,
+    ci_missing_grace_secs: Option<String>,
     mechanical_cadence_secs: Option<String>,
     lease_ttl_secs: Option<String>,
     webhook_secret_file: Option<String>,
@@ -144,6 +151,9 @@ impl RawArgs {
                 "--poll-cadence-secs" => raw.poll_cadence_secs = Some(value_for(&flag, &mut iter)?),
                 "--ci-poll-cadence-secs" => {
                     raw.ci_poll_cadence_secs = Some(value_for(&flag, &mut iter)?)
+                }
+                "--ci-missing-grace-secs" => {
+                    raw.ci_missing_grace_secs = Some(value_for(&flag, &mut iter)?)
                 }
                 "--mechanical-cadence-secs" => {
                     raw.mechanical_cadence_secs = Some(value_for(&flag, &mut iter)?)
@@ -173,6 +183,11 @@ impl RawArgs {
             "--ci-poll-cadence-secs",
             DEFAULT_CI_POLL_CADENCE_SECS,
         )?;
+        let ci_missing_grace = parse_positive_secs(
+            self.ci_missing_grace_secs.as_deref(),
+            "--ci-missing-grace-secs",
+            DEFAULT_CI_MISSING_GRACE_SECS,
+        )?;
         let mechanical_cadence = parse_disableable_secs(
             self.mechanical_cadence_secs.as_deref(),
             "--mechanical-cadence-secs",
@@ -192,6 +207,7 @@ impl RawArgs {
             workflow_file: self.workflow_file.map(PathBuf::from),
             poll_cadence,
             ci_poll_cadence,
+            ci_missing_grace,
             mechanical_cadence,
             lease_ttl,
             webhook_secret_file: self.webhook_secret_file.map(PathBuf::from),

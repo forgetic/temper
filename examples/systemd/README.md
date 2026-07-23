@@ -137,11 +137,16 @@ There is no trigger unit. Forgejo webhooks post to the engine or standalone at
 polling; it is never authoritative data. Keep all three backstops configured:
 
 - `ci_poll_cadence_secs` bounds webhook-less terminal CI detection;
+- positive `ci_missing_grace_secs` bounds how long exact-head CI may remain
+  absent before safe parking is actionable;
 - `poll_cadence_secs` remains the positive full role-feed backstop;
 - `mechanical_cadence_secs` controls automated queue reconciliation.
 
 A `ci_failed` queue match is current-head and latest-per-job-name: every latest
-job must be terminal and at least one must not have succeeded.
+job must be terminal and at least one must not have succeeded. If
+`ci_poll_cadence_secs = 0`, terminal-CI acceleration, missing-current-head
+detection, and missing-CI parking are inactive even though the grace remains
+configured.
 
 ## Install and start
 

@@ -72,6 +72,7 @@ pub struct HermeticDurableWorld {
     pub(crate) trace_collector: TraceCollector,
     pub(crate) trace_journal: Option<temper_engine::AgentTraceJournal>,
     pub(crate) apply_grace: Option<Duration>,
+    pub(crate) ci_missing_grace: Duration,
     pub(crate) mechanical_journal: InMemoryJournal,
 }
 
@@ -83,6 +84,7 @@ pub struct HermeticComponentHandles {
     pub(crate) recovered: BTreeMap<String, HermeticRecoveredClaim>,
     pub(crate) production_recovered:
         Option<BTreeMap<String, temper_engine_service::RecoveredClaim>>,
+    pub(crate) ci_status_monitor: temper_engine::CiStatusMonitor,
 }
 
 pub(crate) struct HermeticRecoveredClaim {
@@ -225,6 +227,8 @@ impl HermeticRealStack {
     fn install_replacement_daemon(&mut self, daemon: Arc<Daemon>) {
         self.router.replace(daemon.clone());
         self.components.daemon = daemon;
+        self.components.ci_status_monitor =
+            temper_engine::CiStatusMonitor::new(self.ci_missing_grace, self.clock.capability());
         let executor = CodingExecutor::new(self.coding_config.clone(), self.runner.clone())
             .with_pr_freshness_guard(Arc::new(DaemonPrFreshnessGuard::new(
                 self.components.daemon.clone(),

@@ -1,10 +1,8 @@
 //! Workflow metadata blocks embedded in Forge artifact bodies.
 //!
-//! Labels are the public Forge projection of workflow state, but some workflow
-//! information has no portable Forge field: the artifact's workflow kind,
-//! parent/produced-PR links, fallback dependency links, idempotency correlation
-//! keys, and claim leases. The workflow layer stores that information in a machine-readable
-//! metadata block embedded in an issue or pull-request body.
+//! Labels are the public Forge projection of workflow state, but portable Forge
+//! fields cannot hold every relation, idempotency key, and claim lease. The
+//! workflow layer stores that information in an embedded metadata block.
 //!
 //! # Format choice
 //!
@@ -49,6 +47,7 @@
 use crate::artifact::ArtifactRef;
 use crate::context::TransitionCompletionAudit;
 use crate::ids::{ArtifactKindId, RoleId};
+use crate::missing_ci::MissingCiRecoveryState;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -117,6 +116,9 @@ pub struct WorkflowMetadata {
     /// must not make the pull request eligible to land.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repaired_head: Option<String>,
+    /// Durable marker distinguishing interrupted parking from unrelated attention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_ci_recovery: Option<MissingCiRecoveryState>,
     /// True while a newly-created child is deliberately hidden from every
     /// dispatch scan. Activation clears this only after the complete sibling
     /// relation graph has been written.

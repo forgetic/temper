@@ -186,6 +186,8 @@ mod basic_delivery;
 mod budget_retry;
 #[path = "hermetic_real_stack/label_only_restart.rs"]
 mod label_only_restart;
+#[path = "hermetic_real_stack/missing_ci_restart.rs"]
+mod missing_ci_restart;
 #[path = "hermetic_real_stack/multi_repo.rs"]
 mod multi_repo;
 #[path = "hermetic_real_stack/ownership_loss.rs"]

@@ -1,5 +1,7 @@
 //! Regression coverage for the narrow CI-gated pull-request observation path.
 
+#[path = "ci_status_observations/interrupted.rs"]
+mod interrupted;
 mod support;
 
 use chrono::{DateTime, Utc};
@@ -15,7 +17,8 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_runner::{CiStatusObservation, read_ci_status_observations};
 use temper_workflow::{
-    ArtifactKindId, CiState, RawWorkflowSpec, WorkflowMetadata, render_metadata_block,
+    ArtifactKindId, CiState, MissingCiRecoveryState, RawWorkflowSpec, WorkflowMetadata,
+    render_metadata_block,
 };
 
 const CI_WORKFLOW: &str = r#"
@@ -235,6 +238,7 @@ fn ci_discovery_uses_only_one_open_pull_request_bucket() {
         vec![CiStatusObservation {
             pull_request_number: pull_request.number,
             head_sha: "abcdef0123456789".into(),
+            current_head_jobs_present: false,
             state: CiState::Pending,
             completed_at: None,
         }]
@@ -253,6 +257,26 @@ fn ci_discovery_uses_only_one_open_pull_request_bucket() {
     ));
     assert_eq!(forge.count(CountedForgeOp::GetPullRequest), 1);
     assert_eq!(forge.count(CountedForgeOp::ListCiJobs), 1);
+    assert_eq!(forge.write_count(), 0);
+}
+
+#[test]
+fn attention_marked_candidate_is_omitted_before_exact_head_or_ci_reads() {
+    let inner = MemoryForge::new();
+    let repo = new_repo(&inner);
+    create_pr(
+        &inner,
+        &repo,
+        &["implementation", "watch", "needs-human"],
+        String::new(),
+        Some("parked-head"),
+    );
+    let forge = CountingForge::new(inner);
+    let workflow = workflow(CI_WORKFLOW);
+
+    assert!(observations(&forge, &repo, &workflow).is_empty());
+    assert_eq!(forge.count(CountedForgeOp::GetPullRequest), 0);
+    assert_eq!(forge.count(CountedForgeOp::ListCiJobs), 0);
     assert_eq!(forge.write_count(), 0);
 }
 
@@ -505,17 +529,6 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
         ),
         ci_job(
             &repo,
-            &stale,
-            "current-queued",
-            "head-current",
-            "build",
-            CiJobStatus::Queued,
-            None,
-            "2026-05-29T00:00:13Z",
-            None,
-        ),
-        ci_job(
-            &repo,
             &rerun,
             "rerun-old",
             "head-rerun",
@@ -550,8 +563,11 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
             .expect("pull request was observed")
     };
     assert_eq!(get(no_jobs.number).state, CiState::Pending);
+    assert!(!get(no_jobs.number).current_head_jobs_present);
     assert_eq!(get(active.number).state, CiState::Pending);
+    assert!(get(active.number).current_head_jobs_present);
     assert_eq!(get(mixed.number).state, CiState::Pending);
+    assert!(get(mixed.number).current_head_jobs_present);
     assert_eq!(get(passed.number).state, CiState::Passed);
     assert_eq!(
         get(passed.number).completed_at,
@@ -569,6 +585,10 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
         "completion comes only from the terminal latest-job set"
     );
     assert_eq!(get(stale.number).state, CiState::Pending);
+    assert!(
+        !get(stale.number).current_head_jobs_present,
+        "jobs belonging only to an old head are explicitly missing for the current head"
+    );
     assert_eq!(get(rerun.number).state, CiState::Failed);
     assert!(
         observed

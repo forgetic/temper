@@ -12,7 +12,7 @@ use temper_forge::{
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_runner::{MechanicalWorker, Progress, Worker};
 use temper_workflow::{
-    ArtifactKindId, ArtifactRef, ArtifactSnapshot, AssignmentConvergenceOutcome,
+    ArtifactKindId, ArtifactRef, ArtifactSnapshot, ArtifactSource, AssignmentConvergenceOutcome,
     AssignmentConverger, AssignmentValidation, CreateIssuesIntent, DurableAssignment,
     InMemoryJournal, Lease, LeasePolicy, RawWorkflowSpec, RoleId, WorkflowMetadata,
     parse_metadata_block, render_metadata_block,
@@ -264,6 +264,46 @@ fn worker<'a>(
         journal,
         LeasePolicy::new(Duration::minutes(30)),
     )
+}
+
+#[test]
+fn direct_assignment_convergence_preserves_an_already_parked_assignment() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let (assignment, metadata) = expired_assignment("job-parked", "2026-05-29T00:10:00Z");
+    let issue = create_claimed_issue(&forge, &repo, &metadata);
+    block_on(forge.update_issue(
+        &issue.id,
+        UpdateIssue {
+            add_labels: vec!["needs-human".to_string()],
+            ..UpdateIssue::default()
+        },
+    ))
+    .expect("issue is parked");
+    let workflow = workflow();
+    let converger =
+        AssignmentConverger::new(&workflow, &forge, LeasePolicy::new(Duration::minutes(30)));
+
+    assert_eq!(
+        block_on(converger.converge(
+            &repo,
+            ArtifactSource::Issue {
+                number: issue.number,
+            },
+            &assignment,
+        ))
+        .expect("parked convergence is inert"),
+        AssignmentConvergenceOutcome::Quarantined
+    );
+    let parked = block_on(forge.get_issue_by_number(&repo, issue.number))
+        .expect("lookup succeeds")
+        .expect("issue remains present");
+    assert!(parked.labels.contains(&"needs-human".to_string()));
+    let parked_metadata = parse_metadata_block(&parked.body)
+        .expect("metadata parses")
+        .expect("metadata remains present");
+    assert_eq!(parked_metadata.assignment.as_ref(), Some(&assignment));
+    assert!(parked_metadata.lease.is_some());
 }
 
 #[test]
