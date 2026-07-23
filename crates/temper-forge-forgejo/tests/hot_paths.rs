@@ -313,6 +313,24 @@ fn correlation_lookup_uses_labelled_state_queries_and_client_side_body_filtering
             )
         ),
     );
+    client.push_response(
+        200,
+        serde_json::json!({
+            "number": 7,
+            "title": "PR 7",
+            "body": body_with_correlation(pr_key),
+            "state": "closed",
+            "merged": true,
+            "merged_at": "2024-03-03T00:00:00Z",
+            "user": {"login": "author"},
+            "head": {"ref": "feature", "sha": "head7"},
+            "base": {"ref": "main", "sha": "base7"},
+            "labels": label_values(&["implementation"]),
+            "created_at": "2024-03-01T00:00:00Z",
+            "updated_at": "2024-03-03T00:00:00Z"
+        })
+        .to_string(),
+    );
 
     let forge = forge(client.clone());
     let workflow = workflow();
@@ -405,8 +423,8 @@ fn correlation_lookup_uses_labelled_state_queries_and_client_side_body_filtering
         })
     );
     assert!(
-        !requests
+        requests
             .iter()
-            .any(|request| request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/7"))
+            .any(|request| { request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/7") })
     );
 }

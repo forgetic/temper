@@ -162,6 +162,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .find_pull_request_by_correlation(repo_id, correlation_key, lookup_labels)
             .await?
         {
+            validate_pull_request_topology(&existing, &input.source, &input.target)?;
             return Ok(EnsureOutcome::Existing(existing));
         }
 
@@ -222,15 +223,56 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .await?)
     }
 
-    /// Finds a pull request whose metadata block carries the correlation key.
+    /// Finds a pull request whose metadata block carries the correlation key,
+    /// then reloads that candidate by number so callers receive fresh branch
+    /// topology rather than a summary-list projection.
     pub async fn find_pull_request_by_correlation(
         &self,
         repo_id: &RepositoryId,
         correlation_key: &str,
         labels: &[String],
     ) -> Result<Option<PullRequest>, ExecutionError> {
-        find_pull_request_by_correlation(self.forge, repo_id, correlation_key, labels).await
+        let Some(candidate) =
+            find_pull_request_by_correlation(self.forge, repo_id, correlation_key, labels).await?
+        else {
+            return Ok(None);
+        };
+        self.forge
+            .get_pull_request_by_number_with_details(
+                repo_id,
+                candidate.number,
+                ItemListDetails::summary(),
+            )
+            .await?
+            .map(Some)
+            .ok_or_else(|| ExecutionError::Backend {
+                message: format!(
+                    "correlated pull request #{} vanished before topology validation",
+                    candidate.number
+                ),
+            })
     }
+}
+
+/// Rejects reuse of an existing pull request whose branches differ from a
+/// freshly resolved create input. Source and target repository identities are
+/// part of the topology so a fork or cross-repository candidate cannot be
+/// silently substituted either.
+pub fn validate_pull_request_topology(
+    existing: &PullRequest,
+    expected_source: &temper_forge::BranchRef,
+    expected_target: &temper_forge::BranchRef,
+) -> Result<(), ExecutionError> {
+    if existing.source == *expected_source && existing.target == *expected_target {
+        return Ok(());
+    }
+    Err(ExecutionError::PullRequestTopologyMismatch {
+        pull_request: existing.number,
+        expected_source: Box::new(expected_source.clone()),
+        expected_target: Box::new(expected_target.clone()),
+        actual_source: Box::new(existing.source.clone()),
+        actual_target: Box::new(existing.target.clone()),
+    })
 }
 
 /// Finds a pull request whose metadata block carries the correlation key.
