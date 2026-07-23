@@ -115,9 +115,11 @@ recursive-empty/direct-child proof and terminal acknowledgement before
 `temper serve standalone` process shutdown is deliberately different. Its one
 absolute `deployment.standalone_shutdown_budget_secs` interval may end in
 `bounded_crash_handoff`: durable assignments and trace spool are retained,
-attempt-owned emergency KILL runs out of band, and the process aborts without
-claiming local quiescence. Replacement startup convergence handles the retained
-work, while the old attempt fence continues to reject result and Forge effects.
+attempt-owned emergency KILL runs out of band, and the process exits immediately
+with distinct status 70 without claiming local quiescence. The core-dump-free
+primitive does not unwind, invoke C/Rust exit handlers or owner drops, or flush
+userspace buffers. Replacement startup convergence handles the retained work,
+while the old attempt fence continues to reject result and Forge effects.
 
 `standalone.shutdown.blocker` correlates the protocol evidence as one of
 `containment`, `terminal_trace_ack`, `result_delivery`, `component_task`, or

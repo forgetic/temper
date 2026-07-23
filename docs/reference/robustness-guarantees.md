@@ -232,8 +232,8 @@ measured once from signal receipt. Daemon claim/result/context/Forge-application
 admission and active attempt fences close before cancellation. Worker join,
 already-admitted daemon operations, trace retention, release of exact proven
 attempts, and HTTP drain all consume the same deadline; the final five seconds
-are reserved for an independent emergency KILL and no-unwind process abort.
-Split workers retain their ordinary proof-based semantics.
+are reserved for an independent emergency KILL and an immediate core-dump-free
+process exit. Split workers retain their ordinary proof-based semantics.
 
 A proven path emits `standalone.shutdown.summary` with
 `disposition=graceful_exit`. A deadline blocker emits bounded/redacted
@@ -241,11 +241,13 @@ A proven path emits `standalone.shutdown.summary` with
 `disposition=bounded_crash_handoff`; the process does not fabricate cleanup,
 terminal-trace acknowledgement, result publication, capacity release, or normal
 assignment release. It retains durable assignment metadata and trace spool,
-uses attempt-owned out-of-band process termination, and exits non-zero. The
-replacement startup stages prior-boot assignments with dispatch closed,
-converges or requeues abandoned work from durable Forge state, rejects old
-attempt results/Forge operations through the existing fences and exact claim
-checks, and forwards retained trace records without reviving the old attempt.
+uses attempt-owned out-of-band process termination, and exits with distinct
+status 70 without unwinding, C/Rust exit handlers, owner drops, userspace buffer
+flushing, or core generation. The replacement startup stages prior-boot
+assignments with dispatch closed, converges or requeues abandoned work from
+durable Forge state, rejects old attempt results/Forge operations through the
+existing fences and exact claim checks, and forwards retained trace records
+without reviving the old attempt.
 
 Blocker kinds are `containment`, `terminal_trace_ack`, `result_delivery`,
 `component_task`, and `registry_state`. Fields include bounded worker/job/

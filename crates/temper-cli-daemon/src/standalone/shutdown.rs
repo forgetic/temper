@@ -13,7 +13,7 @@ use temper_protocol_worker::{ShutdownBlocker, ShutdownBlockerKind, ShutdownEscal
 use temper_worker::{WorkerComponentHandle, WorkerEmergencyShutdownHandle, WorkerShutdownReport};
 
 mod watchdog;
-use watchdog::StandaloneShutdownCoordinator;
+use watchdog::{StandaloneShutdownCoordinator, terminate_for_bounded_crash};
 
 /// One monotonic deadline measured from the instant a termination signal is
 /// actually observed. Cooperative work stops at `emergency_kill_at`; the final
@@ -141,10 +141,12 @@ pub(super) async fn orchestrate(
                 service = "standalone",
                 event = "standalone.shutdown.watchdog_arm_failed",
                 %error,
-                "standalone cannot guarantee its absolute shutdown deadline"
+                "standalone cannot guarantee its absolute shutdown deadline; terminating immediately"
             );
-            emergency.request_emergency_kill();
-            std::process::abort();
+            // Do not synchronously dispatch emergency cleanup here: watchdog
+            // arming has failed, so a blocked dispatch would leave no
+            // independent thread able to enforce the process deadline.
+            terminate_for_bounded_crash();
         }
     };
     tracing::debug!(

@@ -372,6 +372,11 @@ fn units_use_public_serve_commands_and_the_bundled_credentials() {
     let standalone_path = examples.join("temper-standalone.service");
     let engine_path = examples.join("temper-engine.service");
     let worker_path = examples.join("temper-worker@.service");
+    let standalone_unit_source = read(&standalone_path);
+    assert!(
+        standalone_unit_source.contains("core-dump-free"),
+        "standalone unit must document that core generation cannot consume its TimeoutStopSec margin"
+    );
     let standalone = SystemdUnit::parse(&standalone_path);
     let engine = SystemdUnit::parse(&engine_path);
     let worker = SystemdUnit::parse(&worker_path);
@@ -463,6 +468,7 @@ fn units_use_public_serve_commands_and_the_bundled_credentials() {
             "recursive-empty",
             "standalone_shutdown_budget_secs",
             "15-second safety margin",
+            "core-dump-free",
             "KillMode=process",
         ] {
             assert!(

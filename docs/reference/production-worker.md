@@ -181,9 +181,10 @@ interval from signal receipt across daemon admission fencing, attempt
 cancellation/join, already-admitted operations, trace retention, exact joined-
 assignment release, and HTTP drain. The checked standalone unit uses
 `TimeoutStopSec=45s`, keeping systemd strictly outside Temper's deadline with a
-15-second safety margin. When tuning either value, rerun `temper check` and keep
-`TimeoutStopSec` strictly greater than Temper's budget; never configure it at or
-below the budget.
+15-second safety margin. The deadline exit is core-dump-free, so core generation
+cannot consume that margin. When tuning either value, rerun `temper check` and
+keep `TimeoutStopSec` strictly greater than Temper's budget; never configure it
+at or below the budget.
 
 Before cancellation, standalone fences new claims, worker results, result
 application, assignment-scoped Forge context, and active attempts. A complete
@@ -191,7 +192,8 @@ join emits `standalone.shutdown.summary` with `disposition=graceful_exit` and
 releases only exact attempts in the proven worker report. At deadline expiry it
 emits `disposition=bounded_crash_handoff`, retains unproven durable assignments
 and trace spool, drives attempt-owned emergency process termination, and exits
-non-zero without unwinding potentially blocking owner drops. Restart then uses
+with status 70 through a core-dump-free primitive. It does not unwind, run C/Rust
+exit handlers or owner drops, or flush userspace buffers. Restart then uses
 startup assignment staging, orphan/feed convergence, durable-result replay, and
 trace-spool forwarding. Existing fences and exact durable claim checks reject
 late results and Forge operations from the previous process.

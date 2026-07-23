@@ -59,7 +59,8 @@ with `temper config show` after every change.
 `temper-standalone.service` sets `TimeoutStopSec=45s`, strictly greater than the
 30-second internal budget. The explicit 15-second safety margin covers service
 manager scheduling and final process accounting without making systemd the
-normal termination mechanism. If the internal budget is tuned, keep
+normal termination mechanism. Deadline termination is core-dump-free, so core
+generation cannot consume that margin. If the internal budget is tuned, keep
 `TimeoutStopSec` strictly larger (preferably by at least the same margin). Never
 set it at or below Temper's budget.
 
@@ -107,12 +108,13 @@ assignment release, trace retention, and HTTP drain join within the one budget,
 `standalone.shutdown.summary` reports `disposition=graceful_exit` and the
 process exits normally. If proof is still blocked, Temper retains the durable
 assignments and trace spool, reports `disposition=bounded_crash_handoff`, issues
-out-of-band emergency descendant termination, and aborts without unwinding
-blocking owner drops. The non-zero exit lets `Restart=on-failure` start a fresh
-process; startup assignment staging, orphan convergence, outbox/result replay,
-and trace-spool recovery converge the retained work. Deadline expiry is not
-`AttemptQuiesced`, cleanup proof, result publication, or successful assignment
-release.
+out-of-band emergency descendant termination, and immediately exits with the
+distinct non-zero status 70. This core-dump-free primitive does not unwind, run
+Rust owner drops, invoke C/Rust exit handlers, or flush userspace buffers. The
+non-zero exit lets `Restart=on-failure` start a fresh process; startup assignment
+staging, orphan convergence, outbox/result replay, and trace-spool recovery
+converge the retained work. Deadline expiry is not `AttemptQuiesced`, cleanup
+proof, result publication, or successful assignment release.
 
 Inspect `standalone.shutdown.blocker` records before the terminal summary.
 `blocker_kind` is one of `containment`, `terminal_trace_ack`, `result_delivery`,
