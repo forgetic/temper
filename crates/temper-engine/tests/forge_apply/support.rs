@@ -392,6 +392,7 @@ pub(crate) fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob 
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )
@@ -417,6 +418,7 @@ pub(crate) fn open_pr_in_flight_job(repo_path: &str, number: ItemNumber) -> InFl
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )
@@ -463,6 +465,7 @@ pub(crate) fn coordinated_in_flight_job(
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )
@@ -492,6 +495,7 @@ pub(crate) fn triage_in_flight_job(repo_path: &str, number: ItemNumber) -> InFli
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )
@@ -521,6 +525,7 @@ pub(crate) fn review_in_flight_job(repo_path: &str, number: ItemNumber) -> InFli
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )

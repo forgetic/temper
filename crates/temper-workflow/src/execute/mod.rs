@@ -101,7 +101,9 @@ mod signals;
 mod types;
 mod verify;
 
-pub use ensure::{CorrelationLookupPlan, find_pull_request_by_correlation};
+pub use ensure::{
+    CorrelationLookupPlan, find_pull_request_by_correlation, validate_pull_request_topology,
+};
 pub use error::ExecutionError;
 pub use types::{EnsureOutcome, ExecutionReport};
 

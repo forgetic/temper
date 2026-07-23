@@ -29,6 +29,8 @@ mod action_assignment;
 mod artifact_context_dispatch;
 #[path = "feed_tests/attention.rs"]
 mod attention;
+#[path = "feed_tests/guidance.rs"]
+mod guidance;
 #[path = "feed_tests/reconciliation.rs"]
 mod reconciliation;
 #[path = "feed_tests/target_branch.rs"]
@@ -199,6 +201,7 @@ fn maps_issue_work_item_to_daemon_job() {
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         }
     );
@@ -384,175 +387,6 @@ fn enrich_work_item_job_enriches_open_pull_request_artifact_snapshot() {
         assert_eq!(context.action.as_deref(), Some("open_pr"));
         assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
         assert!(context.allowed_verdicts.is_empty());
-    })
-}
-
-#[test]
-fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
-    temper_engine_io::block_on(async move {
-        let forge = MemoryForge::new();
-        let repo = forge
-            .create_repository(CreateRepository {
-                owner: "ai".to_string(),
-                name: "temper".to_string(),
-                default_branch: "main".to_string(),
-                description: None,
-            })
-            .await
-            .expect("repository is created")
-            .id;
-        let source_coordination_key = "pr-for-code-226";
-        let pull_request = forge
-            .create_pull_request(
-                &repo,
-                CreatePullRequest {
-                    title: "Implement #226".to_string(),
-                    body: format!(
-                        "Applied the change.\n\n{}",
-                        render_metadata_block(&WorkflowMetadata {
-                            correlation_key: Some(source_coordination_key.to_string()),
-                            ..WorkflowMetadata::default()
-                        })
-                    ),
-                    source: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "agent/pr-for-code-226".to_string(),
-                    },
-                    target: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "main".to_string(),
-                    },
-                    labels: vec!["implementation".to_string()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("pull request is created");
-        let pull_request = forge
-            .set_pull_request_head(&pull_request.id, Some("abc123".to_string()))
-            .expect("pull request head sha is set");
-
-        // Seed a FAILED CI job on the PR so the feed reads it into guidance.
-        let head_sha = pull_request.head_sha.clone().unwrap_or_default();
-        forge.seed_ci_jobs(
-            &repo,
-            vec![temper_forge::CiJob {
-                id: temper_forge::CiJobId::new("ci-validate-1"),
-                repo_id: repo.clone(),
-                pull_request_id: Some(pull_request.id.clone()),
-                commit_sha: head_sha,
-                name: "validate".to_string(),
-                status: temper_forge::CiJobStatus::Completed,
-                conclusion: Some(temper_forge::CiJobConclusion::Failure),
-                url: Some("https://ci.example.test/jobs/validate".to_string()),
-                created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
-                started_at: None,
-                completed_at: None,
-                updated_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
-            }],
-        );
-
-        // A `pr_ci_failed`-queue member for the implementation PR.
-        let item = WorkItem {
-            queue: QueueId::new("pr_ci_failed"),
-            role: RoleId::new("engineer"),
-            target: ArtifactSource::PullRequest {
-                number: pull_request.number,
-            },
-            kind: ArtifactKindId::new("implementation_pr"),
-        };
-        let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec =
-            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
-        let workflow = workflow
-            .validate()
-            .expect("basic-delivery workflow validates");
-        let compiled = workflow.compile();
-
-        assert_eq!(
-            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
-                .await
-                .expect("enrichment succeeds for ci-failed pull request"),
-            EnrichOutcome::Enriched
-        );
-
-        let context: JobContext =
-            serde_json::from_value(job.job_payload).expect("enriched JobContext parses");
-        assert_eq!(context.action.as_deref(), Some("address_ci_failure"));
-        // Writable checkout of the PR's REAL head branch (not a synthetic one).
-        assert_eq!(
-            context.checkout_capability.as_deref(),
-            Some("pull_request_writable")
-        );
-        let freshness = context
-            .pull_request_freshness
-            .as_ref()
-            .expect("PR-head freshness guard is present");
-        assert_eq!(freshness.queue, "pr_ci_failed");
-        assert_eq!(freshness.queue_condition.as_deref(), Some("ci_failed"));
-        assert_eq!(freshness.pull_request_id, pull_request.id.as_str());
-        assert_eq!(freshness.head_sha, pull_request.head_sha);
-        let workspace = context.workspace.as_ref().expect("manifest present");
-        assert_eq!(workspace.coordination_key, source_coordination_key);
-        let primary = workspace.primary().expect("primary repo present");
-        assert!(primary.is_writable());
-        assert_eq!(
-            primary.branch_hint.as_deref(),
-            Some("agent/pr-for-code-226")
-        );
-        assert_eq!(primary.base_branch, "main");
-        // Guidance surfaces the durable PR handoff plus fresh structured CI gate details.
-        let guidance = context.guidance.expect("ci-failure guidance present");
-        assert!(
-            guidance.contains("Current implementation PR handoff from Forge"),
-            "guidance: {guidance}"
-        );
-        assert!(guidance.contains("Implement #226"), "guidance: {guidance}");
-        assert!(
-            guidance.contains("Applied the change."),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("head_branch: agent/pr-for-code-226"),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("base_branch: main"),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("head_sha: abc123"),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("reason: ci_failed"),
-            "guidance: {guidance}"
-        );
-        assert!(guidance.contains("name: validate"), "guidance: {guidance}");
-        assert!(
-            guidance.contains("status: completed"),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("conclusion: failure"),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("commit_sha: abc123"),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("url: https://ci.example.test/jobs/validate"),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("updated current PR `title`"),
-            "guidance: {guidance}"
-        );
-        assert!(
-            guidance.contains("implementation-report `body`"),
-            "guidance: {guidance}"
-        );
     })
 }
 

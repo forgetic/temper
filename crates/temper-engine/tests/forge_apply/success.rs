@@ -8,8 +8,7 @@ fn engineer_decline_verdicts_route_issue_without_opening_pr() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
-        let workflow = Arc::new(workflow());
-        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
 
         for (verdict, attention_label) in [
             ("needs_architect", "needs-architect"),
@@ -638,6 +637,7 @@ fn pr_freshness_issue_job(
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: Some(freshness),
         },
     )

@@ -7,7 +7,9 @@
 //! carry is derived from the validated workflow's artifact-kind declarations.
 
 use temper_forge::Repository;
-use temper_workflow::{ArtifactKindId, ValidatedWorkflow};
+use temper_workflow::{
+    ArtifactKindId, Effect, TargetBranchPolicy, TransitionId, ValidatedWorkflow,
+};
 
 /// The repository's default branch, falling back to `main` when the Forge
 /// reports a blank default.
@@ -17,6 +19,44 @@ pub(crate) fn default_base_branch(repository: &Repository) -> String {
     } else {
         repository.default_branch.clone()
     }
+}
+
+/// Returns the explicit target-branch policy carried by a transition's PR
+/// create. A transition that omits the policy retains legacy behavior. Mixing
+/// legacy and explicit creates, or declaring conflicting explicit policies, is
+/// rejected at runtime rather than allowing effect order to choose authority.
+pub(crate) fn create_pull_request_target_branch_policy(
+    workflow: &ValidatedWorkflow,
+    transition: &TransitionId,
+) -> Result<Option<TargetBranchPolicy>, String> {
+    let Some(transition) = workflow
+        .transitions()
+        .iter()
+        .find(|candidate| candidate.id == *transition)
+    else {
+        return Err(format!("workflow transition `{transition}` does not exist"));
+    };
+    let policies = transition
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::CreatePullRequest {
+                target_branch_policy,
+                ..
+            } => Some(*target_branch_policy),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let Some(first) = policies.first().copied() else {
+        return Ok(None);
+    };
+    if policies.iter().any(|policy| *policy != first) {
+        return Err(format!(
+            "workflow transition `{}` mixes conflicting or omitted create_pull_request target-branch policies",
+            transition.id
+        ));
+    }
+    Ok(first)
 }
 
 /// The identifying labels of the `implementation_pr` artifact kind — the labels

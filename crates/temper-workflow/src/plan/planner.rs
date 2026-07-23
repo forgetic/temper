@@ -382,6 +382,7 @@ fn to_effect(effect: &Effect) -> WorkflowEffect {
         Effect::CreatePullRequest {
             correlation_key,
             artifact_kind,
+            ..
         } => WorkflowEffect::CreatePullRequest {
             correlation_key: correlation_key.clone(),
             artifact_kind: artifact_kind.clone(),

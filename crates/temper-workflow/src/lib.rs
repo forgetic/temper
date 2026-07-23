@@ -127,6 +127,7 @@ pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, Validatio
 pub use execute::{
     ChildIssueCheckpoint, ChildIssueLifecycleHook, CorrelationLookupPlan, EnsureOutcome,
     ExecutionError, ExecutionReport, Executor, find_pull_request_by_correlation,
+    validate_pull_request_topology,
 };
 pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
@@ -169,7 +170,7 @@ pub use spec::{
     RawArtifactKind, RawEffect, RawExternalTool, RawGate, RawGateCondition, RawIntakeAuthor,
     RawLabel, RawQueue, RawQueueAction, RawQueueAutomation, RawQueueLabelSet, RawRelation, RawRole,
     RawRolePrompt, RawState, RawStateDimension, RawTransition, RawValidationBinding,
-    RawValidationBindingDetail, RawWorkflowSpec,
+    RawValidationBindingDetail, RawWorkflowSpec, TargetBranchPolicy,
 };
 pub use validate::validate;
 pub use validated::{

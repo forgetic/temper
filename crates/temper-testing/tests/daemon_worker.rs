@@ -113,6 +113,7 @@ fn daemon_worker_repairs_ci_failed_pull_request_head() {
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         };
         daemon
@@ -238,6 +239,10 @@ fn daemon_worker_repairs_ci_failed_pull_request_head() {
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: Some("Repair the terminal failed CI head.".to_string()),
+            structured_guidance: Some(temper_protocol_worker::JobGuidance {
+                role_guidance: Some("Repair the terminal failed CI head.".to_string()),
+                ..Default::default()
+            }),
             pull_request_freshness: Some(PullRequestFreshness {
                 repository_id: "repo-acme-service".to_string(),
                 repo: "acme/service".to_string(),

@@ -8,7 +8,7 @@
 use crate::classify::{ArtifactSource, ClassificationError};
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::{PlanDiagnostic, PlanError, Postcondition, WorkflowEffect};
-use temper_forge::ForgeError;
+use temper_forge::{BranchRef, ForgeError, ItemNumber};
 
 /// Why a transition execution failed.
 ///
@@ -56,6 +56,16 @@ pub enum ExecutionError {
     /// A `CreatePullRequest` effect omitted the correlation key needed for
     /// idempotent execution. Reported before any mutation.
     MissingCorrelationKey { effect: WorkflowEffect },
+    /// A correlated pull request exists, but its immutable source/target
+    /// topology differs from the requested create. Reusing it would adopt a PR
+    /// that cannot satisfy the freshly resolved branch contract.
+    PullRequestTopologyMismatch {
+        pull_request: ItemNumber,
+        expected_source: Box<BranchRef>,
+        expected_target: Box<BranchRef>,
+        actual_source: Box<BranchRef>,
+        actual_target: Box<BranchRef>,
+    },
     /// A `CreatePullRequest` effect has no concrete create input bound in the
     /// [`ExecutionContext`](crate::context::ExecutionContext). Reported before
     /// any mutation.
@@ -140,6 +150,24 @@ impl std::fmt::Display for ExecutionError {
             ExecutionError::MissingCorrelationKey { effect } => {
                 write!(formatter, "effect {effect:?} has no correlation key")
             }
+            ExecutionError::PullRequestTopologyMismatch {
+                pull_request,
+                expected_source,
+                expected_target,
+                actual_source,
+                actual_target,
+            } => write!(
+                formatter,
+                "existing pull request #{pull_request} branch topology diverges: expected {}:{} -> {}:{}, found {}:{} -> {}:{}",
+                expected_source.repository_id,
+                expected_source.branch,
+                expected_target.repository_id,
+                expected_target.branch,
+                actual_source.repository_id,
+                actual_source.branch,
+                actual_target.repository_id,
+                actual_target.branch,
+            ),
             ExecutionError::UnresolvedPullRequestCreate {
                 transition,
                 effect_index,

@@ -32,7 +32,8 @@ JSON keeps v1 easy to inspect and fixture-test while preserving message
 semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.action`, `JobContext.checkout_capability`,
 `JobContext.allowed_verdicts`, `JobContext.verdict_contracts`,
-`JobContext.source_metadata`, `JobContext.artifact_context`, `JobResult.verdict`, `JobResult.body`,
+`JobContext.source_metadata`, `JobContext.artifact_context`, legacy
+`JobContext.guidance`, additive `JobContext.structured_guidance`, `JobResult.verdict`, `JobResult.body`,
 `JobResult.children`, and `JobResult.children[].kind` are all optional, and the
 protocol version remains `1`. The `fetch-context`/`context-response`,
 `activity-batch`/`activity-ack`, and daemon-to-worker `cancel-attempts`
@@ -160,13 +161,19 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `action` | string | no | Workflow action (intent-level tool / transition id) this job services, for example `open_pr` or `triage_intake`. |
 | `checkout_capability` | string | no | Checkout capability the worker should prepare: `writable`, `read_only`, `pull_request_read_only`, or `pull_request_writable`. Absent means writable, preserving v1's original behavior. |
 | `allowed_verdicts` | array of strings | no | Verdict vocabulary declared by `action`'s `outcomes` keys, in deterministic order. Empty or absent for a plain coding job. |
-| `verdict_contracts` | object | no | Workflow-derived result requirements keyed by verdict: child cardinality/kinds, required child/source metadata, and required PR text or authored body. Required child metadata must appear non-blank in each child body's `<!-- temper:workflow ... -->` JSON block. |
+| `verdict_contracts` | object | no | Workflow-derived result requirements keyed by verdict: child cardinality/kinds, required child/source metadata, resolved child `target_branch`, and required PR text or authored body. A resolved branch names the exact accepted value, the repository default used for comparison, and whether omission authorizes engine stamping. Older contracts omit this additive requirement. Required child metadata must appear non-blank in each child body's `<!-- temper:workflow ... -->` JSON block. |
 | `source_metadata` | object | no | Parsed assignment-time source metadata used by worker/agent preflight validation. The engine re-reads current Forge state before mutation. |
+| `guidance` | string | no | Legacy v1 free-text prompt guidance retained for existing workers. New daemons flatten every configured guidance category into this string, with category headings where needed. |
+| `structured_guidance` | object | no | Additive lossless prompt guidance for updated workers. `role_guidance` composes the selected role charter and role prompt guidance; `tool_guidance` and `tool_constraints` preserve the applicable declared external tool's instructions; `action_guidance` carries queue-action prose followed by any generated PR-repair details. Updated workers prefer this field when both carriers are present. |
 
 For compatibility, old minimal payloads containing only `role`, `repo`, `queue`,
 and `artifact_kind` remain valid; the enrichment fields are optional. The
-`action`, `checkout_capability`, `allowed_verdicts`, `verdict_contracts`, and
-`source_metadata`, and `artifact_context` additions are also optional, and adding them does not change the protocol version: it remains `1`.
+`action`, `checkout_capability`, `allowed_verdicts`, `verdict_contracts`,
+`source_metadata`, `artifact_context`, `guidance`, and `structured_guidance`
+additions are also optional, and adding them does not change the protocol version: it
+remains `1`. New daemons keep `guidance` in its original string shape and put the
+categorized representation in `structured_guidance`, so v1 readers may ignore the
+new field without encountering a type change.
 The legacy singular `artifact` object is retained unchanged when
 `artifact_context` is present; consumers must not require one carrier to replace
 the other. Readers must ignore unknown fields in the standard payload just as they do for

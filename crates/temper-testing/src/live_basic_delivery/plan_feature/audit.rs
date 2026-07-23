@@ -3,9 +3,7 @@
 use temper_forge_model::{Forge, Issue, UserId};
 
 const MARKER_PREFIX: &str = "temper:comment-key=plan-validation:";
-const EXPECTED_OUTCOME: &str = "validated";
 const EXPECTED_ROLE: &str = "tester";
-const EXPECTED_TRANSITION: &str = "plan_validated_create_landing";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidationAuditEvidence {
@@ -20,11 +18,17 @@ pub struct ValidationAuditEvidence {
     pub coordination_key: String,
 }
 
+pub(super) struct ValidationAuditExpectation<'a> {
+    pub outcome: &'a str,
+    pub summary: &'a str,
+    pub transition: &'a str,
+}
+
 pub(super) async fn validation_audit_evidence(
     forge: &(impl Forge + ?Sized),
     plan: &Issue,
-    expected_summary: &str,
-) -> Result<ValidationAuditEvidence, String> {
+    expected: &[ValidationAuditExpectation<'_>],
+) -> Result<Vec<ValidationAuditEvidence>, String> {
     // This is intentionally the portable ordinary-comments operation used by
     // the Forgejo backend, not a provider database or timeline lookup.
     let comments = forge
@@ -35,25 +39,40 @@ pub(super) async fn validation_audit_evidence(
         .iter()
         .filter(|comment| comment.body.contains(MARKER_PREFIX))
         .collect::<Vec<_>>();
-    if audits.len() != 1 {
+    if audits.len() != expected.len() {
         let ids = audits
             .iter()
             .map(|comment| comment.id.as_str())
             .collect::<Vec<_>>();
         return Err(format!(
-            "coordinating plan #{} must have exactly one ordinary validation-audit comment; found {} with ids {ids:?}",
+            "coordinating plan #{} must have exactly {} ordinary validation-audit comments; found {} with ids {ids:?}",
             plan.number,
+            expected.len(),
             audits.len()
         ));
     }
 
-    let comment = audits[0];
+    audits
+        .into_iter()
+        .zip(expected)
+        .map(|(comment, expected)| parse_audit(comment, expected))
+        .collect()
+}
+
+fn parse_audit(
+    comment: &temper_forge_model::Comment,
+    expected: &ValidationAuditExpectation<'_>,
+) -> Result<ValidationAuditEvidence, String> {
     let body = &comment.body;
-    require_contains(body, "validated outcome", "**Outcome:** `validated`")?;
+    require_contains(
+        body,
+        "validation outcome",
+        &format!("**Outcome:** `{}`", expected.outcome),
+    )?;
     require_contains(
         body,
         "safe validation summary",
-        &format!("**Summary:** {expected_summary}"),
+        &format!("**Summary:** {}", expected.summary),
     )?;
     require_contains(body, "workflow role", "- Workflow role: `tester`")?;
 
@@ -75,9 +94,10 @@ pub(super) async fn validation_audit_evidence(
 
     let job_id = backtick_field(body, "- Job ID: ")?;
     let routed_transition = backtick_field(body, "- Routed transition: ")?;
-    if routed_transition != EXPECTED_TRANSITION {
+    if routed_transition != expected.transition {
         return Err(format!(
-            "validation-audit routed transition mismatch: expected {EXPECTED_TRANSITION:?}, got {routed_transition:?}"
+            "validation-audit routed transition mismatch: expected {:?}, got {routed_transition:?}",
+            expected.transition
         ));
     }
     let coordination_key = backtick_field(body, "- Workspace coordination key: ")?;
@@ -85,8 +105,24 @@ pub(super) async fn validation_audit_evidence(
         return Err("validation-audit workspace coordination key was unavailable".to_string());
     }
 
+    require_valid_marker(comment)?;
+    Ok(ValidationAuditEvidence {
+        comment_id: comment.id.as_str().to_string(),
+        author_id: comment.author_id.as_str().to_string(),
+        outcome: expected.outcome.to_string(),
+        summary: expected.summary.to_string(),
+        workflow_role: EXPECTED_ROLE.to_string(),
+        forge_actor: EXPECTED_ROLE.to_string(),
+        job_id,
+        routed_transition,
+        coordination_key,
+    })
+}
+
+fn require_valid_marker(comment: &temper_forge_model::Comment) -> Result<(), String> {
     let marker_prefix = format!("<!-- {MARKER_PREFIX}");
-    let marker = body
+    let marker = comment
+        .body
         .lines()
         .find(|line| line.starts_with(&marker_prefix))
         .ok_or_else(|| {
@@ -102,7 +138,7 @@ pub(super) async fn validation_audit_evidence(
     let digest = marker_key
         .strip_prefix("assignment-sha256:")
         .unwrap_or_default();
-    if body.matches(MARKER_PREFIX).count() != 1
+    if comment.body.matches(MARKER_PREFIX).count() != 1
         || digest.len() != 64
         || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
@@ -111,18 +147,7 @@ pub(super) async fn validation_audit_evidence(
             comment.id
         ));
     }
-
-    Ok(ValidationAuditEvidence {
-        comment_id: comment.id.as_str().to_string(),
-        author_id: comment.author_id.as_str().to_string(),
-        outcome: EXPECTED_OUTCOME.to_string(),
-        summary: expected_summary.to_string(),
-        workflow_role: EXPECTED_ROLE.to_string(),
-        forge_actor: EXPECTED_ROLE.to_string(),
-        job_id,
-        routed_transition,
-        coordination_key,
-    })
+    Ok(())
 }
 
 fn require_contains(body: &str, field: &str, expected: &str) -> Result<(), String> {

@@ -82,6 +82,90 @@ pub struct JobArtifactSnapshot {
     pub state: String,
 }
 
+/// Structured user-authored and assignment-specific guidance for a workspace job.
+///
+/// New daemons carry this object in the additive `structured_guidance` field so
+/// updated workers can preserve each category all the way to the agent prompt.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobGuidance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_constraints: Vec<String>,
+    /// Queue-action prose plus later assignment-generated repair details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_guidance: Option<String>,
+}
+
+impl JobGuidance {
+    pub fn is_empty(&self) -> bool {
+        self.role_guidance
+            .as_deref()
+            .is_none_or(|guidance| guidance.trim().is_empty())
+            && self
+                .tool_guidance
+                .as_deref()
+                .is_none_or(|guidance| guidance.trim().is_empty())
+            && self.tool_constraints.is_empty()
+            && self
+                .action_guidance
+                .as_deref()
+                .is_none_or(|guidance| guidance.trim().is_empty())
+    }
+
+    /// Maps guidance from an older daemon into the structured role category.
+    pub fn from_legacy(guidance: impl Into<String>) -> Self {
+        Self {
+            role_guidance: Some(guidance.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Flattens all categories for the v1 `guidance` string retained for older
+    /// workers. Category labels preserve the distinctions where the legacy
+    /// reader can only expose one block of prose.
+    pub fn legacy_text(&self) -> Option<String> {
+        let mut sections = Vec::new();
+        if let Some(guidance) = nonblank(self.role_guidance.as_deref()) {
+            sections.push(guidance.to_string());
+        }
+        if let Some(guidance) = nonblank(self.tool_guidance.as_deref()) {
+            sections.push(format!("Tool guidance:\n{guidance}"));
+        }
+        if !self.tool_constraints.is_empty() {
+            sections.push(format!(
+                "Tool constraints:\n{}",
+                self.tool_constraints
+                    .iter()
+                    .map(|constraint| format!("- {constraint}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+        if let Some(guidance) = nonblank(self.action_guidance.as_deref()) {
+            sections.push(format!("Action guidance:\n{guidance}"));
+        }
+        (!sections.is_empty()).then(|| sections.join("\n\n"))
+    }
+
+    /// Appends assignment-generated prose after configured queue-action prose.
+    pub fn append_action_guidance(&mut self, additional: impl AsRef<str>) {
+        let additional = additional.as_ref();
+        self.action_guidance = match self.action_guidance.take() {
+            Some(existing) if !existing.trim().is_empty() => {
+                Some(format!("{existing}\n\n{additional}"))
+            }
+            _ => Some(additional.to_string()),
+        };
+    }
+}
+
+fn nonblank(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
 /// Standard daemon-owned job payload serialized into `Assign.job_payload`.
 ///
 /// It describes the single coordinating artifact (the issue/PR the job
@@ -141,13 +225,41 @@ pub struct JobContext {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub source_metadata: BTreeMap<String, String>,
 
-    /// Extra free-text guidance surfaced to the agent's prompt for this job,
-    /// e.g. the concrete CI failure to fix on a `pull_request_writable` job.
-    /// Absent for ordinary jobs.
+    /// Legacy v1 free-text guidance. New daemons retain this field as a string
+    /// so existing v1 workers can deserialize assignments without an upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guidance: Option<String>,
+
+    /// Additive categorized guidance for updated workers and agents. When both
+    /// carriers are present, updated workers prefer this lossless form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_guidance: Option<JobGuidance>,
 
     /// PR-head freshness guard for in-flight `pull_request_writable` jobs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request_freshness: Option<PullRequestFreshness>,
+}
+
+impl JobContext {
+    /// Sets both the legacy and structured carriers for a new assignment.
+    pub fn set_guidance(&mut self, guidance: JobGuidance) {
+        if guidance.is_empty() {
+            self.guidance = None;
+            self.structured_guidance = None;
+        } else {
+            self.guidance = guidance.legacy_text();
+            self.structured_guidance = Some(guidance);
+        }
+    }
+
+    /// Appends generated action prose and refreshes the legacy projection.
+    pub fn append_action_guidance(&mut self, additional: impl AsRef<str>) {
+        let mut guidance = self
+            .structured_guidance
+            .take()
+            .or_else(|| self.guidance.take().map(JobGuidance::from_legacy))
+            .unwrap_or_default();
+        guidance.append_action_guidance(additional);
+        self.set_guidance(guidance);
+    }
 }

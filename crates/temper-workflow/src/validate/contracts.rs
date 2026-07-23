@@ -7,7 +7,9 @@
 //! source-size budget.
 
 use crate::diagnostics::Diagnostic;
-use crate::spec::{RawEffect, RawQueueAutomation, RawTransition, RawWorkflowSpec};
+use crate::spec::{
+    RawEffect, RawQueueAutomation, RawTransition, RawWorkflowSpec, TargetBranchPolicy,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Checks duplicate external tool ids within each role declaration.
@@ -209,6 +211,43 @@ pub(super) fn check_create_pull_request_artifact_kind_targets(
                     transition: transition.id.clone(),
                     artifact_kind: artifact_kind.clone(),
                     target: target.to_string(),
+                });
+            }
+        }
+    }
+}
+
+/// Checks that target-branch policy semantics are supported by their effect.
+///
+/// Child creation can derive, inherit, or explicitly select the repository
+/// default. Pull-request creation consumes a branch and can require it to be
+/// non-default or explicitly permit repository-default/same-branch behavior.
+pub(super) fn check_target_branch_policy_contract(
+    spec: &RawWorkflowSpec,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for transition in &spec.transitions {
+        for effect in &transition.effects {
+            let unsupported = match effect {
+                RawEffect::CreateIssues {
+                    target_branch_policy: Some(TargetBranchPolicy::NonDefault),
+                    ..
+                } => Some(("create_issues", TargetBranchPolicy::NonDefault)),
+                RawEffect::CreatePullRequest {
+                    target_branch_policy:
+                        Some(
+                            policy @ (TargetBranchPolicy::DerivedFeatureBranch
+                            | TargetBranchPolicy::Inherit),
+                        ),
+                    ..
+                } => Some(("create_pull_request", *policy)),
+                _ => None,
+            };
+            if let Some((effect, policy)) = unsupported {
+                diagnostics.push(Diagnostic::UnsupportedTargetBranchPolicy {
+                    transition: transition.id.clone(),
+                    effect: effect.to_string(),
+                    policy,
                 });
             }
         }

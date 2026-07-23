@@ -249,6 +249,7 @@ fn pr_repair_in_flight_job(
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: Some(temper_protocol_worker::PullRequestFreshness {
                 repository_id: repo.as_str().to_string(),
                 repo: repo_path.to_string(),

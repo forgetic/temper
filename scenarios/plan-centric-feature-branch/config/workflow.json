@@ -6,7 +6,7 @@
       "id": "architect",
       "charter": "Own product feature shaping. Classify feature issues as config-only or hard-code work; for hard-code work create a durable plan issue, then decompose that plan into dependency-linked code issues targeting a feature branch.",
       "prompt": {
-        "guidance": "For feature_planning, decide whether the request is config-only or requires repository hard-code changes. Use verdict config_only only when no repository code PR is required. Use verdict needs_plan for hard-code work and create exactly one child issue of kind plan. The plan body must preserve the product context, define a feature branch such as feature/<issue>-short-slug, and include valid workflow metadata with target_branch set to that branch. For decompose_plan, use verdict children_ready and create engineer-sized child issues of kind code. Put dependency slugs in depends_on for sequential work; blocked children should carry the blocked label and depend on earlier slugs. Child code issue bodies should normally omit target_branch so Temper inherits it from the plan. Do not create hard-code work directly from the feature issue; route it through the plan issue."
+        "guidance": "For feature_planning, decide whether the request is config-only or requires repository hard-code changes. Use verdict config_only only when no repository code PR is required. Use verdict needs_plan for hard-code work and create exactly one child issue of kind plan. The plan body must preserve the product context and should omit target_branch so Temper can stamp the deterministic agent/pr-for-feature-<feature-number> branch declared by the workflow policy; never select the repository default from artifact metadata. For decompose_plan, use verdict children_ready and create engineer-sized child issues of kind code. Put dependency slugs in depends_on for sequential work; blocked children should carry the blocked label and depend on earlier slugs. Child code issue bodies should normally omit target_branch so Temper inherits it from the plan. Do not create hard-code work directly from the feature issue; route it through the plan issue."
       },
       "external_tools": [
         {
@@ -316,7 +316,7 @@
       "artifact": "feature",
       "roles": ["architect"],
       "effects": [
-        { "kind": "create_issues", "correlation_key": "feature-plan", "record_parent_dependencies": true, "min_children": 1, "max_children": 1, "required_child_metadata": ["target_branch"] },
+        { "kind": "create_issues", "correlation_key": "feature-plan", "record_parent_dependencies": true, "min_children": 1, "max_children": 1, "required_child_metadata": ["target_branch"], "target_branch_policy": "derived_feature_branch" },
         { "kind": "add_label", "label": "planned" },
         { "kind": "set_assignee", "role": "architect" }
       ]
@@ -348,7 +348,7 @@
       "artifact": "plan",
       "roles": ["architect"],
       "effects": [
-        { "kind": "create_issues", "correlation_key": "plan-children", "record_parent_dependencies": true },
+        { "kind": "create_issues", "correlation_key": "plan-children", "record_parent_dependencies": true, "target_branch_policy": "inherit" },
         { "kind": "remove_label", "label": "ready" },
         { "kind": "add_label", "label": "in-progress" },
         { "kind": "set_assignee", "role": "architect" }
@@ -383,7 +383,7 @@
         { "kind": "remove_label", "label": "ready" },
         { "kind": "add_label", "label": "in-progress" },
         { "kind": "set_assignee", "role": "engineer" },
-        { "kind": "create_pull_request" }
+        { "kind": "create_pull_request", "target_branch_policy": "non_default" }
       ]
     },
     {
@@ -456,7 +456,7 @@
       "artifact": "plan",
       "roles": ["tester"],
       "effects": [
-        { "kind": "create_pull_request", "artifact_kind": "feature_landing_pr" },
+        { "kind": "create_pull_request", "artifact_kind": "feature_landing_pr", "target_branch_policy": "non_default" },
         { "kind": "remove_label", "label": "needs-validation" },
         { "kind": "add_label", "label": "validated" },
         { "kind": "set_assignee", "role": "tester" }
@@ -467,7 +467,7 @@
       "artifact": "plan",
       "roles": ["tester"],
       "effects": [
-        { "kind": "create_issues", "correlation_key": "validation-followup", "record_parent_dependencies": true },
+        { "kind": "create_issues", "correlation_key": "validation-followup", "record_parent_dependencies": true, "target_branch_policy": "inherit" },
         { "kind": "remove_label", "label": "needs-validation" },
         { "kind": "add_label", "label": "in-progress" },
         { "kind": "set_assignee", "role": "tester" }

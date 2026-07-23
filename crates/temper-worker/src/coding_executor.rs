@@ -20,7 +20,7 @@ mod outcome;
 mod session;
 mod verdict;
 
-use context::build_workspace_context;
+use context::{build_workspace_context, effective_job_guidance};
 use outcome::{WritableOutcomeRequest, writable_outcome};
 use session::{attach_agent_session, persist_after_success};
 use verdict::verdict_only_outcome;
@@ -137,6 +137,7 @@ async fn execute<R: AgentRunner>(
         verdict_contracts,
         source_metadata,
         guidance,
+        structured_guidance,
         pull_request_freshness,
     } = context;
     if assignment_trace_context.is_some()
@@ -158,6 +159,7 @@ async fn execute<R: AgentRunner>(
         }
     }
 
+    let guidance = effective_job_guidance(structured_guidance, guidance);
     let manifest = match require_enriched_field(manifest, "workspace") {
         Ok(manifest) => manifest,
         Err(outcome) => return outcome,
@@ -239,7 +241,7 @@ async fn execute<R: AgentRunner>(
         &allowed_verdicts,
         &verdict_contracts,
         &source_metadata,
-        guidance.as_deref(),
+        guidance.as_ref(),
         pull_request_freshness.as_ref(),
         trace_context,
     );

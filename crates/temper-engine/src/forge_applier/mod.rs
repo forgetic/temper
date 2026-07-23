@@ -12,10 +12,10 @@
 //! application is enabled.
 //!
 //! The implementation is split by responsibility across child modules:
-//! [`success`] (PR opening), [`failure`] (audit + attention), [`verdict`],
-//! [`verdict_children`], and [`verdict_pr`] (routed transitions and their runtime
-//! bindings), [`resolve`] (Forge artifact lookups), and [`progress`] (the trait
-//! impl).
+//! [`success`] (PR opening), [`pr_reuse`] (existing PR topology validation),
+//! [`failure`] (audit + attention), [`verdict`], [`verdict_children`], and
+//! [`verdict_pr`] (routed transitions and their runtime bindings), [`resolve`]
+//! (Forge artifact lookups), and [`progress`] (the trait impl).
 
 mod body_merge;
 mod body_update;
@@ -23,6 +23,7 @@ mod claim;
 mod coordinated;
 mod failure;
 mod pr_repair;
+mod pr_reuse;
 mod progress;
 mod resolve;
 mod success;

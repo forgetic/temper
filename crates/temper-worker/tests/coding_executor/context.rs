@@ -87,6 +87,64 @@ fn w3c_trace_context_propagates_from_assignment_to_agent_workspace() {
 }
 
 #[test]
+fn structured_job_guidance_is_copied_to_agent_workspace_context() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
+        let mut assignment = assign("agent/pr-for-code-guidance", "guidance-7");
+        assignment.job_payload["guidance"] = json!(
+            "role charter\n\nrole prompt\n\nTool guidance:\ncoding workspace guidance\n\nTool constraints:\n- workspace constraint\n- result constraint\n\nAction guidance:\nqueue action"
+        );
+        assignment.job_payload["structured_guidance"] = json!({
+            "role_guidance": "role charter\n\nrole prompt",
+            "tool_guidance": "coding workspace guidance",
+            "tool_constraints": ["workspace constraint", "result constraint"],
+            "action_guidance": "queue action"
+        });
+
+        expect_success(executor.execute(assignment).await);
+
+        let guidance = agent.captured_context().guidance;
+        assert_eq!(
+            guidance.role_guidance.as_deref(),
+            Some("role charter\n\nrole prompt")
+        );
+        assert_eq!(
+            guidance.tool_guidance.as_deref(),
+            Some("coding workspace guidance")
+        );
+        assert_eq!(
+            guidance.tool_constraints,
+            vec!["workspace constraint", "result constraint"]
+        );
+        assert_eq!(guidance.action_guidance.as_deref(), Some("queue action"));
+    });
+}
+
+#[test]
+fn legacy_free_text_job_guidance_remains_agent_role_guidance() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
+        let mut assignment = assign("agent/pr-for-code-legacy-guidance", "legacy-guidance-7");
+        assignment.job_payload["guidance"] = json!("legacy repair instructions");
+
+        expect_success(executor.execute(assignment).await);
+
+        let guidance = agent.captured_context().guidance;
+        assert_eq!(
+            guidance.role_guidance.as_deref(),
+            Some("legacy repair instructions")
+        );
+        assert_eq!(guidance.action_guidance, None);
+        assert_eq!(guidance.tool_guidance, None);
+        assert!(guidance.tool_constraints.is_empty());
+    });
+}
+
+#[test]
 fn context_shape_matches_temper_coding_agent_contract() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
@@ -226,6 +284,7 @@ fn assert_workspace_context(context: &WorkspaceContext, expected: ExpectedWorksp
     assert_eq!(context.guidance.role_guidance, None);
     assert_eq!(context.guidance.tool_guidance, None);
     assert!(context.guidance.tool_constraints.is_empty());
+    assert_eq!(context.guidance.action_guidance, None);
 
     let inner: Value =
         serde_json::from_str(&context.work_item.context).expect("inner work item JSON parses");

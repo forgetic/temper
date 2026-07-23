@@ -42,6 +42,7 @@ pub(crate) fn plan_feature_in_flight_job(repo_path: &str, number: ItemNumber) ->
             verdict_contracts: Default::default(),
             source_metadata: Default::default(),
             guidance: None,
+            structured_guidance: None,
             pull_request_freshness: None,
         },
     )
@@ -161,9 +162,10 @@ fn needs_plan_with_exact_plan_child_applies() {
         let issue = create_feature_issue(&forge, &repo).await;
         let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
         let job = plan_feature_in_flight_job("acme/service", issue);
+        let expected_branch = format!("agent/pr-for-feature-{}", issue.get());
         let plan_body = body_with_target_branch(
             "Implement the feature through a dedicated branch.",
-            "feature/208-verdict-contracts",
+            &expected_branch,
         );
         let mut plan = job_child("feature-plan", "Plan the feature", &plan_body, &[]);
         plan.kind = Some("plan".to_string());
@@ -186,7 +188,7 @@ fn needs_plan_with_exact_plan_child_applies() {
         assert_eq!(metadata.kind, Some(ArtifactKindId::new("plan")));
         assert_eq!(
             metadata.target_branch.as_deref(),
-            Some("feature/208-verdict-contracts")
+            Some(expected_branch.as_str())
         );
     })
 }

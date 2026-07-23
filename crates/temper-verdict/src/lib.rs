@@ -13,6 +13,25 @@ use serde::{Deserialize, Serialize};
 
 pub use validation::{VerdictValidationError, validate_verdict_result};
 
+/// An engine-resolved target branch that every child product must use.
+///
+/// This is deliberately a resolved wire contract rather than a workflow policy:
+/// agents and workers do not need workflow vocabulary in order to enforce the
+/// exact value selected from fresh engine state. Older contexts omit the field.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TargetBranchRequirement {
+    /// Exact branch value accepted in explicitly authored child metadata.
+    pub expected: String,
+    /// Repository default observed while resolving the policy. Keeping it in the
+    /// contract lets every validation tier identify an accidental default branch
+    /// rather than reporting only a generic mismatch.
+    pub repository_default: String,
+    /// Whether the child may omit `target_branch` so the engine can stamp
+    /// [`Self::expected`] at the mutation boundary.
+    #[serde(default)]
+    pub allow_omission: bool,
+}
+
 /// Requirements for one workflow-declared verdict's terminal result.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct VerdictContract {
@@ -25,6 +44,10 @@ pub struct VerdictContract {
     /// Non-blank workflow metadata keys required in every authored child body.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_child_metadata: Vec<String>,
+    /// Exact child branch resolved by the engine from a typed workflow policy.
+    /// Absence preserves the legacy metadata contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_branch: Option<TargetBranchRequirement>,
     #[serde(default)]
     pub requires_pr_title: bool,
     #[serde(default)]
