@@ -82,16 +82,24 @@ pub(crate) fn poll_backstop(cadence: Duration, roles: &[String], repo_count: usi
     )
 }
 
-/// Renders the dedicated CI-status poll cadence, including the explicit
-/// disabled state, so operators can distinguish it from both the full role
-/// poll and the mechanical backstop.
-pub(crate) fn ci_poll_backstop(cadence: Option<Duration>, repo_count: usize) -> String {
+/// Renders the dedicated CI-status poll cadence and missing-current-head grace.
+/// The disabled state explains that a configured grace does not activate
+/// missing-CI detection or parking by itself.
+pub(crate) fn ci_poll_backstop(
+    cadence: Option<Duration>,
+    missing_grace: Duration,
+    repo_count: usize,
+) -> String {
     match cadence {
         Some(cadence) => format!(
-            "CI-status poll backstop every {} (CI-gated pull requests across {repo_count} repos)",
-            humanize_secs(cadence)
+            "CI-status poll backstop every {} (CI-gated pull requests across {repo_count} repos; missing-current-head grace {})",
+            humanize_secs(cadence),
+            humanize_secs(missing_grace)
         ),
-        None => "CI-status poll backstop disabled".to_string(),
+        None => format!(
+            "CI-status poll backstop disabled (missing-current-head detection and parking inactive; configured grace {})",
+            humanize_secs(missing_grace)
+        ),
     }
 }
 
@@ -246,14 +254,14 @@ mod tests {
     }
 
     #[test]
-    fn ci_poll_backstop_reports_effective_cadence_or_disabled() {
+    fn ci_poll_backstop_reports_effective_cadence_grace_and_disabled_state() {
         assert_eq!(
-            ci_poll_backstop(Some(Duration::from_secs(60)), 2),
-            "CI-status poll backstop every 60s (CI-gated pull requests across 2 repos)"
+            ci_poll_backstop(Some(Duration::from_secs(60)), Duration::from_secs(300), 2),
+            "CI-status poll backstop every 60s (CI-gated pull requests across 2 repos; missing-current-head grace 300s)"
         );
         assert_eq!(
-            ci_poll_backstop(None, 2),
-            "CI-status poll backstop disabled"
+            ci_poll_backstop(None, Duration::from_secs(45), 2),
+            "CI-status poll backstop disabled (missing-current-head detection and parking inactive; configured grace 45s)"
         );
     }
 

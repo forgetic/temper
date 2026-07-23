@@ -259,7 +259,8 @@ pub(crate) fn submit_pull_request_review(
 }
 
 pub(crate) fn list_comments(forge: &MemoryForge, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
-    let inner = forge.lock();
+    let mut inner = forge.lock();
+    inner.faults.take(FaultOp::ListPullRequestComments)?;
     inner
         .state
         .find_pull_request(id)
@@ -275,6 +276,7 @@ pub(crate) fn add_comment(
     input: CreateComment,
 ) -> ForgeResult<Comment> {
     let mut inner = forge.lock();
+    inner.faults.take(FaultOp::AddPullRequestComment)?;
     inner
         .state
         .find_pull_request(id)

@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command as StdCommand, Stdio as StdStdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -147,6 +147,19 @@ fn wait_for_cleanup(config: &StdioMcpServerConfig, pids: &[u32]) {
     }
 }
 
+async fn wait_for_pid(path: &Path, description: &str) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(value) = fs::read_to_string(path) {
+            if let Ok(pid) = value.trim().parse() {
+                return pid;
+            }
+        }
+        assert!(Instant::now() < deadline, "{description} was not published");
+        temper_agent_io::sleep_for(Duration::from_millis(5)).await;
+    }
+}
+
 #[test]
 fn containment_identity_never_uses_mcp_command_or_arguments() {
     let config = StdioMcpServerConfig::new(
@@ -232,16 +245,16 @@ fn cancellation_reaps_the_mcp_server_grandchild_group() {
             .await
             .expect("connect fake MCP server");
         let server_pid = client.child_id();
-        let outcome = temper_agent_io::timeout(
-            Duration::from_millis(100),
-            client.call_tool("hang", json!({}), Duration::from_secs(30)),
-        )
-        .await;
+        let call = Box::pin(client.call_tool("hang", json!({}), Duration::from_secs(30)));
+        let published_pid = Box::pin(wait_for_pid(&pid_path, "grandchild pid"));
+        let (grandchild_pid, call) = match futures::future::select(call, published_pid).await {
+            futures::future::Either::Left((result, _)) => {
+                panic!("MCP call completed before grandchild started: {result:?}")
+            }
+            futures::future::Either::Right((pid, call)) => (pid, call),
+        };
+        let outcome = temper_agent_io::timeout(Duration::from_millis(100), call).await;
         assert!(outcome.is_err());
-        let grandchild_pid: u32 = fs::read_to_string(&pid_path)
-            .expect("grandchild pid")
-            .parse()
-            .expect("numeric pid");
         wait_for_cleanup(&config, &[server_pid, grandchild_pid]);
     });
 }

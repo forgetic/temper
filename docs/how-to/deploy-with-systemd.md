@@ -188,9 +188,12 @@ http://<engine-or-standalone-host>:<port>/forgejo/webhook
 Use the configured webhook credential and enable issue, pull-request,
 review/status/CI, label, and push events. Webhooks are wake hints only; the
 engine always reloads Forge state. `ci_poll_cadence_secs` bounds webhook-less
-terminal CI detection, `poll_cadence_secs` remains the full liveness/correctness
-backstop, and `mechanical_cadence_secs` does not replace either. Do not install
-a separate trigger service.
+terminal CI detection, while the positive `ci_missing_grace_secs` bounds how
+long an exact current head may have no matching CI before safe parking becomes
+actionable. If `ci_poll_cadence_secs = 0`, both missing-CI detection and parking
+are inactive even though the grace remains configured. `poll_cadence_secs`
+remains the full liveness/correctness backstop, and `mechanical_cadence_secs`
+does not replace either. Do not install a separate trigger service.
 
 See `examples/systemd/` for the checked config, workflow, credentials, and all
 three unit contracts.

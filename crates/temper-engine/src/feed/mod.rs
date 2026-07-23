@@ -22,7 +22,7 @@ use temper_runner::{
 };
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, RoleId, ValidatedWorkflow, find_pull_request_by_correlation,
-    parse_metadata_block,
+    parse_metadata_block, requires_human_attention,
 };
 
 use crate::workflow_meta::implementation_pr_labels;
@@ -278,7 +278,7 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     // Deterministic failures are durably parked with this engine-owned
     // attention label. Exclude it before any custom queue/action can dispatch
     // the unchanged artifact again.
-    if artifact.labels.iter().any(|label| label == "needs-human") {
+    if requires_human_attention(&artifact.labels) {
         return Ok(EnrichOutcome::SkipAttentionArtifact);
     }
 

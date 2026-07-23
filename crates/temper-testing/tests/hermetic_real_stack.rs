@@ -184,6 +184,8 @@ mod artifact_context;
 mod basic_delivery;
 #[path = "hermetic_real_stack/budget_retry.rs"]
 mod budget_retry;
+#[path = "hermetic_real_stack/missing_ci_restart.rs"]
+mod missing_ci_restart;
 #[path = "hermetic_real_stack/multi_repo.rs"]
 mod multi_repo;
 #[path = "hermetic_real_stack/ownership_loss.rs"]

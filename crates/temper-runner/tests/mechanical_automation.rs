@@ -301,6 +301,25 @@ fn add_pull_request_label(
     .expect("pull request label added");
 }
 
+fn remove_pull_request_label(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    label: &str,
+) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    block_on(forge.update_pull_request(
+        &pull_request.id,
+        UpdatePullRequest {
+            remove_labels: vec![label.to_string()],
+            ..UpdatePullRequest::default()
+        },
+    ))
+    .expect("pull request label removed");
+}
+
 fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
     let mut labels = block_on(forge.get_issue_by_number(repo, number))
         .expect("lookup succeeds")
@@ -467,6 +486,55 @@ fn targeted_ci_wake_lands_pr_without_terminal_list_queries() {
     );
     assert!(counted.issue_candidate_queries().is_empty());
     assert!(counted.pull_request_candidate_queries().is_empty());
+}
+
+#[test]
+fn attention_parks_broad_and_targeted_mechanical_landing_until_cleared() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let parked = create_pull_request(
+        &forge,
+        &repo,
+        &["implementation", "landing", "approved", "needs-human"],
+    );
+    let counted = CountingForge::new(forge.clone());
+    let workflow = workflow_from_json(AUTOMATED_PR_WORKFLOW);
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("broad tick succeeds"),
+        Progress::unchanged()
+    );
+    assert_eq!(
+        block_on(worker.tick_artifact(
+            ts("2026-05-29T00:00:01Z"),
+            parked,
+            HintArtifactKind::PullRequest,
+            ChangeKind::Ci,
+        ))
+        .expect("targeted tick succeeds"),
+        Progress::unchanged()
+    );
+    assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 0);
+    assert_eq!(
+        pull_request_state(&forge, &repo, parked),
+        PullRequestState::Open
+    );
+
+    remove_pull_request_label(&forge, &repo, parked, "needs-human");
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:00:02Z"))).expect("landing resumes"),
+        Progress {
+            changed: true,
+            actions: 1,
+        }
+    );
+    assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
+    assert_eq!(
+        pull_request_state(&forge, &repo, parked),
+        PullRequestState::Merged
+    );
 }
 
 #[test]

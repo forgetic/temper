@@ -63,19 +63,35 @@ fn observation(
     CiStatusObservation {
         pull_request_number: ItemNumber::new(number),
         head_sha: head_sha.to_string(),
+        current_head_jobs_present: true,
         state,
         completed_at: completed_at.map(timestamp),
     }
 }
 
+fn monitor() -> CiStatusMonitor {
+    CiStatusMonitor::new(
+        Duration::from_secs(300),
+        Arc::new(|| timestamp("2026-07-21T10:00:00Z")),
+    )
+}
+
+fn terminal_transition(transition: &CiStatusTransition) -> &CiTerminalTransition {
+    let CiStatusTransition::Terminal(transition) = transition else {
+        panic!("expected terminal transition, got {transition:?}");
+    };
+    transition
+}
+
 fn assert_exact_transition(
-    transition: &CiTerminalTransition,
+    transition: &CiStatusTransition,
     repository: &RepositoryTarget,
     number: u64,
     head_sha: &str,
     verdict: CiTerminalVerdict,
     completed_at: Option<&str>,
 ) {
+    let transition = terminal_transition(transition);
     assert_eq!(
         transition.hint,
         ChangeHint::pull_request(
@@ -99,7 +115,7 @@ fn assert_exact_transition(
 #[test]
 fn pending_to_failed_and_pending_to_passed_emit_typed_transitions() {
     let repository = target("repo-1", "acme", "service");
-    let mut monitor = CiStatusMonitor::new();
+    let mut monitor = monitor();
 
     assert!(
         monitor
@@ -153,7 +169,7 @@ fn pending_to_failed_and_pending_to_passed_emit_typed_transitions() {
 fn first_seen_terminal_emits_and_identical_terminal_is_suppressed() {
     let repository = target("repo-1", "acme", "service");
     let terminal = observation(7, "head-1", CiState::Failed, Some("2026-07-21T11:00:00Z"));
-    let mut monitor = CiStatusMonitor::new();
+    let mut monitor = monitor();
 
     let first = monitor.observe_repository_snapshot(&repository, vec![terminal.clone()]);
     assert_eq!(first.len(), 1);
@@ -175,7 +191,7 @@ fn first_seen_terminal_emits_and_identical_terminal_is_suppressed() {
 #[test]
 fn failed_rerun_can_move_through_pending_to_passed_on_same_head() {
     let repository = target("repo-1", "acme", "service");
-    let mut monitor = CiStatusMonitor::new();
+    let mut monitor = monitor();
 
     assert!(
         monitor
@@ -189,7 +205,10 @@ fn failed_rerun_can_move_through_pending_to_passed_on_same_head() {
         &repository,
         vec![observation(7, "head-1", CiState::Failed, None)],
     );
-    assert_eq!(failed[0].verdict, CiTerminalVerdict::Failed);
+    assert_eq!(
+        terminal_transition(&failed[0]).verdict,
+        CiTerminalVerdict::Failed
+    );
     assert!(
         monitor
             .observe_repository_snapshot(
@@ -203,7 +222,10 @@ fn failed_rerun_can_move_through_pending_to_passed_on_same_head() {
         vec![observation(7, "head-1", CiState::Passed, None)],
     );
     assert_eq!(passed.len(), 1);
-    assert_eq!(passed[0].verdict, CiTerminalVerdict::Passed);
+    assert_eq!(
+        terminal_transition(&passed[0]).verdict,
+        CiTerminalVerdict::Passed
+    );
 
     // A direct terminal change is also a transition when a short rerun
     // starts and finishes entirely between snapshots.
@@ -212,13 +234,16 @@ fn failed_rerun_can_move_through_pending_to_passed_on_same_head() {
         vec![observation(7, "head-1", CiState::Failed, None)],
     );
     assert_eq!(failed_again.len(), 1);
-    assert_eq!(failed_again[0].verdict, CiTerminalVerdict::Failed);
+    assert_eq!(
+        terminal_transition(&failed_again[0]).verdict,
+        CiTerminalVerdict::Failed
+    );
 }
 
 #[test]
 fn a_new_head_is_observed_independently_and_supersedes_the_old_head() {
     let repository = target("repo-1", "acme", "service");
-    let mut monitor = CiStatusMonitor::new();
+    let mut monitor = monitor();
 
     assert_eq!(
         monitor
@@ -234,7 +259,7 @@ fn a_new_head_is_observed_independently_and_supersedes_the_old_head() {
         vec![observation(7, "head-new", CiState::Passed, None)],
     );
     assert_eq!(new_head.len(), 1);
-    assert_eq!(new_head[0].head_sha, "head-new");
+    assert_eq!(terminal_transition(&new_head[0]).head_sha, "head-new");
     assert_eq!(monitor.observations.len(), 1);
     assert!(
         monitor
@@ -256,7 +281,7 @@ fn a_new_head_is_observed_independently_and_supersedes_the_old_head() {
 fn successful_snapshots_prune_absent_pull_requests_and_superseded_heads() {
     let repository = target("repo-1", "acme", "service");
     let other = target("repo-2", "acme", "other");
-    let mut monitor = CiStatusMonitor::new();
+    let mut monitor = monitor();
     monitor.observe_repository_snapshot(
         &repository,
         vec![
@@ -398,6 +423,7 @@ fn terminal_job(
 }
 
 mod cadence;
+mod missing;
 
 #[test]
 fn failed_repository_read_preserves_state_and_does_not_stop_other_repositories() {
@@ -428,7 +454,7 @@ fn failed_repository_read_preserves_state_and_does_not_stop_other_repositories()
         RepositorySet::new(vec![second_repository.clone(), first_repository.clone()]);
     let workflow = workflow();
     let compiled = workflow.compile();
-    let mut monitor = CiStatusMonitor::new();
+    let mut monitor = monitor();
 
     let initial = block_on(run_ci_status_monitor_tick(
         &mut monitor,
@@ -438,11 +464,9 @@ fn failed_repository_read_preserves_state_and_does_not_stop_other_repositories()
         &compiled,
     ));
     assert_eq!(initial.len(), 2);
-    assert!(
-        initial
-            .iter()
-            .all(|transition| transition.verdict == CiTerminalVerdict::Failed)
-    );
+    assert!(initial.iter().all(|transition| {
+        terminal_transition(transition).verdict == CiTerminalVerdict::Failed
+    }));
 
     forge.seed_ci_jobs(
         &second_repository.id,

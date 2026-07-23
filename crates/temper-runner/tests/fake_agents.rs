@@ -346,7 +346,7 @@ fn owner_fake_handles_owner_and_alignment_queues() {
 }
 
 #[test]
-fn human_fake_clears_human_flag() {
+fn human_role_cannot_bypass_manual_attention_clear() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
     let design = create_issue(&forge, &repo, &["design", "needs-human"], "design", "");
@@ -363,18 +363,12 @@ fn human_fake_clears_human_flag() {
         runner_config().execution_context(&RoleId::new("human")),
     );
 
-    assert_eq!(
-        tick(&worker),
-        Progress {
-            changed: true,
-            actions: 1
-        }
-    );
+    assert_eq!(tick(&worker), Progress::unchanged());
 
     let issue = block_on(forge.get_issue_by_number(&repo, design))
         .expect("lookup succeeds")
         .expect("issue exists");
-    assert_eq!(labels(issue.labels), vec!["design"]);
+    assert_eq!(labels(issue.labels), vec!["design", "needs-human"]);
 }
 
 #[test]

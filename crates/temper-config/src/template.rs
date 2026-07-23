@@ -54,6 +54,10 @@ poll_cadence_secs = 300
 # landing detection. Omit for the 60-second default; set 0 to disable. The
 # general role poll above remains the full correctness/liveness backstop.
 ci_poll_cadence_secs = 60
+# Missing current-head CI must remain absent for this positive grace period
+# before it is actionable. When the CI-status poll is disabled, missing-CI
+# detection and parking are inactive even though this value remains configured.
+ci_missing_grace_secs = 300
 # Mechanical backstop (label transitions / PR landing). On by default; it does
 # not discover red engineer repair work. Omit for the default cadence; set 0 to
 # disable.

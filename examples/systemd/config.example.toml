@@ -31,8 +31,12 @@ repos = ["acme/service"]
 roles = ["architect", "engineer", "reviewer"]
 poll_cadence_secs = 300
 # Dedicated polling for terminal CI changes when Actions-completion webhooks are
-# unavailable. Set 0 to disable; poll_cadence_secs remains the full backstop.
+# unavailable. Set 0 to disable terminal-CI and missing-current-head detection;
+# poll_cadence_secs remains the full backstop.
 ci_poll_cadence_secs = 60
+# Positive grace before continuously missing exact-head CI becomes actionable.
+# This remains configured but inactive when ci_poll_cadence_secs is 0.
+ci_missing_grace_secs = 300
 mechanical_cadence_secs = 120
 lease_ttl_secs = 300
 forge_token = "engine-forge-token"

@@ -4,7 +4,9 @@
 
 use temper_forge::{Forge, PullRequestQuery, PullRequestState, RepositoryId};
 use temper_runner::{ScanError, WorkItem};
-use temper_workflow::{ArtifactSource, RoleId, ValidatedWorkflow, parse_metadata_block};
+use temper_workflow::{
+    ArtifactSource, RoleId, ValidatedWorkflow, parse_metadata_block, requires_human_attention,
+};
 
 use super::recover_advanced_pull_request_assignment;
 
@@ -56,7 +58,7 @@ pub(super) async fn recover_advanced_pull_request_assignments_for_roles<F: Forge
                 continue;
             }
         };
-        if metadata.staged {
+        if metadata.staged || requires_human_attention(&pull_request.labels) {
             continue;
         }
         let Some(assignment) = metadata.assignment.as_ref() else {

@@ -8,10 +8,11 @@ use skein::runtime::RuntimeHandle;
 
 use temper_engine::{MechanicalBackstopConfig, MechanicalScope, run_mechanical_backstop_tick};
 use temper_forge_model::{
-    CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus, Forge, ItemNumber,
+    ChangeKind, CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus, Forge, HintArtifactKind,
+    ItemNumber, RepositoryPath,
 };
 use temper_protocol_agent::AgentSessionState;
-use temper_runner::{Progress, RepositorySet, RepositoryTarget};
+use temper_runner::{ArtifactAddress, Progress, RepositorySet, RepositoryTarget};
 use temper_worker::{
     WorkerLivenessLimits, start_worker_with_transport_and_hook_and_trace_collector,
 };
@@ -112,10 +113,56 @@ impl HermeticRealStack {
             .map_err(|error| format!("load worker result outbox: {error}"))
     }
 
+    /// Runs one deterministic CI-monitor cadence pass using the fixture's
+    /// virtual wall clock and current daemon incarnation. Any emitted edge is
+    /// submitted through the production bounded wake coordinator.
+    pub async fn run_ci_status_monitor_cadence(&mut self) -> Result<usize, String> {
+        let repositories = self.repository_set();
+        let forge = Arc::clone(&self.world.forge);
+        let workflow = Arc::clone(&self.world.workflow);
+        let compiled = self.world.compiled.clone();
+        let transitions = temper_engine::run_ci_status_monitor_tick(
+            &mut self.components.ci_status_monitor,
+            forge.as_ref(),
+            &repositories,
+            workflow.as_ref(),
+            &compiled,
+        )
+        .await;
+        let count = transitions.len();
+        for transition in transitions {
+            self.components.daemon.submit_ci_poll_transition(transition);
+        }
+        Ok(count)
+    }
+
     /// Runs one production mechanical reconciliation pass over the durable
     /// primary repository. Restart scenarios call this while the replacement
     /// daemon's dispatch barrier is still closed to model startup ordering.
     pub async fn reconcile_startup_mechanical(&self) -> Result<Progress, String> {
+        self.reconcile_mechanical(&MechanicalScope::All).await
+    }
+
+    /// Runs one exact production mechanical CI pass for a pull request.
+    pub async fn reconcile_targeted_ci_mechanical(
+        &self,
+        number: ItemNumber,
+    ) -> Result<Progress, String> {
+        let repository = self
+            .forge
+            .get_repository(&self.primary_repo_id)
+            .await
+            .map_err(|error| format!("load primary repository: {error}"))?
+            .ok_or_else(|| "primary repository disappeared".to_string())?;
+        self.reconcile_mechanical(&MechanicalScope::Targeted(vec![(
+            RepositoryPath::new(repository.owner, repository.name),
+            ArtifactAddress::new(HintArtifactKind::PullRequest, number),
+            ChangeKind::Ci,
+        )]))
+        .await
+    }
+
+    async fn reconcile_mechanical(&self, scope: &MechanicalScope) -> Result<Progress, String> {
         let repository = self
             .forge
             .get_repository(&self.primary_repo_id)
@@ -137,10 +184,24 @@ impl HermeticRealStack {
                 pull_request_merge_observer: None,
             },
             std::slice::from_ref(&self.mechanical_journal),
-            &MechanicalScope::All,
+            scope,
         )
         .await
         .map_err(|error| format!("startup mechanical reconciliation: {error}"))
+    }
+
+    fn repository_set(&self) -> RepositorySet {
+        RepositorySet::new(
+            self.repo_ids
+                .iter()
+                .map(|(path, id)| {
+                    let (owner, name) = path
+                        .split_once('/')
+                        .expect("hermetic repository path is owner/name");
+                    RepositoryTarget::new(id.clone(), RepositoryPath::new(owner, name))
+                })
+                .collect(),
+        )
     }
 
     /// Adds one deterministic native CI observation for an exact PR head while

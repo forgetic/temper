@@ -35,7 +35,10 @@ mod verdict_pr;
 
 use std::sync::Arc;
 
-use temper_workflow::{ChildIssueLifecycleHook, CompiledWorkflow, ValidatedWorkflow};
+use temper_workflow::{
+    ChildIssueLifecycleHook, CompiledWorkflow, NEEDS_HUMAN_LABEL, ValidatedWorkflow,
+    requires_human_attention,
+};
 
 use temper_forge::Forge;
 
@@ -56,7 +59,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             forge,
             workflow,
             compiled,
-            attention_labels: vec!["needs-human".to_string()],
+            attention_labels: vec![NEEDS_HUMAN_LABEL.to_string()],
             child_issue_hook: None,
         }
     }
@@ -77,12 +80,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .filter(|label| !label.is_empty())
             .collect::<Vec<_>>();
         self.attention_labels = labels;
-        if !self
-            .attention_labels
-            .iter()
-            .any(|label| label == "needs-human")
-        {
-            self.attention_labels.push("needs-human".to_string());
+        if !requires_human_attention(&self.attention_labels) {
+            self.attention_labels.push(NEEDS_HUMAN_LABEL.to_string());
         }
         self
     }

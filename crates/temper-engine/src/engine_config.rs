@@ -113,6 +113,7 @@ mod tests {
             workflow_file: None,
             poll_cadence: Duration::from_secs(30),
             ci_poll_cadence: Some(Duration::from_secs(60)),
+            ci_missing_grace: Duration::from_secs(300),
             mechanical_cadence: Some(Duration::from_secs(120)),
             lease_ttl: Duration::from_secs(300),
             webhook_secret_file: None,

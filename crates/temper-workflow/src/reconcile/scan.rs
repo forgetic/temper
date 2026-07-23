@@ -8,6 +8,7 @@
 
 use super::finding::{ReconcileFinding, ReconcileReport, RecoveryAction, RecoveryPolicy};
 use super::{ArtifactSnapshot, Reconciler};
+use crate::artifact::requires_human_attention;
 use crate::classify::{
     ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
 };
@@ -41,9 +42,10 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         let classifier = Classifier::new(self.workflow);
 
         for snapshot in snapshots {
-            // A fan-out child remains completely mechanically inert until the
-            // create intent clears staging after all sibling/parent wiring.
-            if snapshot_is_staged(snapshot) {
+            // Staged fan-out children and artifacts parked for human attention
+            // are mechanically inert in targeted, bounded, broad, and deep
+            // audit reconciliation alike.
+            if snapshot_is_mechanically_inert(snapshot) {
                 continue;
             }
             self.scan_lease(snapshot, now, &mut report);
@@ -234,7 +236,7 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         let snapshot = snapshots
             .iter()
             .find(|snapshot| snapshot.source == record.target);
-        if snapshot.is_some_and(snapshot_is_staged) {
+        if snapshot.is_some_and(snapshot_is_mechanically_inert) {
             return;
         }
 
@@ -283,11 +285,12 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
     }
 }
 
-fn snapshot_is_staged(snapshot: &ArtifactSnapshot) -> bool {
-    parse_metadata_block(&snapshot.body)
-        .ok()
-        .flatten()
-        .is_some_and(|metadata| metadata.staged)
+fn snapshot_is_mechanically_inert(snapshot: &ArtifactSnapshot) -> bool {
+    requires_human_attention(&snapshot.labels)
+        || parse_metadata_block(&snapshot.body)
+            .ok()
+            .flatten()
+            .is_some_and(|metadata| metadata.staged)
 }
 
 /// Returns `true` when an effect's result is not yet visible in `labels`.

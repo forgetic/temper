@@ -29,6 +29,7 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
          [engine]\n\
          forge_token = \"forge-engine-token\"\n\
          webhook_secret = \"webhook-secret\"\n\
+         ci_missing_grace_secs = 41\n\
          repos = [\"ai/temper\"]\n\
          roles = [\"engineer\"]\n\
          [worker]\n\
@@ -97,6 +98,7 @@ fn config_show_includes_target_pools_and_agent_profiles_without_secret_values() 
         stdout.contains("webhook_secret = webhook-secret (available)"),
         "{stdout}"
     );
+    assert!(stdout.contains("ci_missing_grace = 41s"), "{stdout}");
     assert!(stdout.contains("pools        = 1"), "{stdout}");
     assert!(
         stdout.contains("engineers: roles=[engineer], repos=[ai/temper]"),
