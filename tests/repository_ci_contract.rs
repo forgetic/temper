@@ -40,8 +40,8 @@ fn repository_ci_bounds_parallel_rust_builds_on_shared_host() {
     assert!(
         validate_job
             .lines()
-            .any(|line| line.trim() == "CARGO_BUILD_JOBS: \"4\""),
-        "the no-swap shared runner must bound parallel rustc/linker processes"
+            .any(|line| line.trim() == "CARGO_BUILD_JOBS: \"2\""),
+        "the shared runner must preserve memory and linker disk headroom"
     );
 }
 

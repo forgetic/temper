@@ -35,10 +35,12 @@ jobs:
     runs-on: host
     # The shared runner has no swap. An all-targets cold build can otherwise
     # launch enough rustc/linker processes to OOM the runner and strand the job.
+    # Keep the bound at two: concurrently linked test binaries also need enough
+    # temporary disk headroom for mold to finish on the shared runner.
     # Its system /tmp is also a small tmpfs shared with other workspaces, so the
     # first post-checkout step moves scratch data to disk-backed /var/tmp.
     env:
-      CARGO_BUILD_JOBS: "4"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - name: Checkout
         # Bypass the default action mirror so a data.forgejo.org outage cannot
