@@ -110,12 +110,12 @@ pub async fn stage_startup_assignments(
         let Some(assignment) = metadata.assignment else {
             continue;
         };
-        let expires_at = match converger
+        let (resolved_kind, expires_at) = match converger
             .validate_current(&repo, target, &assignment)
             .await
             .map_err(|error| error.to_string())?
         {
-            AssignmentValidation::Valid { expires_at, .. } => expires_at,
+            AssignmentValidation::Valid { kind, expires_at } => (kind, expires_at),
             AssignmentValidation::Stale | AssignmentValidation::Quarantined => continue,
         };
         let job_id = assignment
@@ -148,6 +148,7 @@ pub async fn stage_startup_assignments(
                 &repo,
                 target,
                 &assignment,
+                resolved_kind,
                 workflow,
                 compiled,
                 service,
@@ -159,6 +160,7 @@ pub async fn stage_startup_assignments(
                 &repo,
                 target,
                 &assignment,
+                resolved_kind,
                 workflow,
                 compiled,
             )
