@@ -18,6 +18,7 @@ mod filesystem;
 mod forwarding_index;
 mod inventory;
 mod operation_counts;
+mod reclamation;
 mod recovery;
 pub(super) use filesystem::{repair_private_dir, repair_spool_root_permissions, sync_file_data};
 use filesystem::{repair_run_permissions, sync_directory, sync_file_all};
@@ -32,6 +33,11 @@ use operation_counts::*;
 #[cfg(test)]
 pub(super) use operation_counts::{
     TraceSpoolOperationCounts, reset_spool_operation_counts, spool_operation_counts,
+};
+pub use reclamation::TraceReclamationReport;
+#[cfg(test)]
+pub(super) use reclamation::{
+    ReclamationFault, TERMINALIZATION_MARKER_FILE, set_reclamation_fault,
 };
 use recovery::{recover_compacted_marker, recover_run_with_offsets_locked, recover_spool_metadata};
 pub(super) use recovery::{recover_forwarding_run, recover_run};

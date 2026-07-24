@@ -76,13 +76,13 @@ impl Drop for TraceRunOwnershipClaim {
     }
 }
 
-enum OwnershipInspection {
+pub(super) enum OwnershipInspection {
     Protected,
     Claimed(TraceRunOwnershipClaim),
     Invalid,
 }
 
-enum ValidRunState {
+pub(super) enum ValidRunState {
     NonTerminal(TraceManifestV1),
     Terminal(TraceManifestV1),
     Compacted(TraceManifestV1),
@@ -235,7 +235,7 @@ fn inventory_active_entry(
     }
 }
 
-fn inspect_ownership(
+pub(super) fn inspect_ownership(
     run_dir: &Path,
     run_id: Option<&str>,
     coordination: &TraceCoordination,
@@ -264,7 +264,7 @@ fn inspect_ownership(
     }
 }
 
-fn inspect_valid_run(run_dir: &Path) -> Result<ValidRunState, ()> {
+pub(super) fn inspect_valid_run(run_dir: &Path) -> Result<ValidRunState, ()> {
     validate_run_file_types(run_dir)?;
     let manifest: TraceManifestV1 = read_regular_json(&run_dir.join("manifest.json"))?;
     validate_manifest(&manifest).map_err(|_| ())?;
@@ -367,6 +367,7 @@ fn validate_run_file_types(run_dir: &Path) -> Result<(), ()> {
                 | ".spool.lock"
                 | RUN_OWNERSHIP_LOCK_FILE
                 | FORWARDING_INDEX_FILE
+                | super::reclamation::TERMINALIZATION_MARKER_FILE
         ) || !metadata.file_type().is_file()
             || metadata.file_type().is_symlink()
         {
@@ -395,7 +396,7 @@ fn read_regular_bytes(path: &Path) -> Result<Vec<u8>, ()> {
     fs::read(path).map_err(|_| ())
 }
 
-fn is_directory_without_symlink(path: &Path) -> bool {
+pub(super) fn is_directory_without_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .is_ok_and(|metadata| metadata.file_type().is_dir() && !metadata.file_type().is_symlink())
 }
