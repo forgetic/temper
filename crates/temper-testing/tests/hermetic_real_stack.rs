@@ -192,6 +192,8 @@ mod missing_ci_restart;
 mod multi_repo;
 #[path = "hermetic_real_stack/ownership_loss.rs"]
 mod ownership_loss;
+#[path = "hermetic_real_stack/repair_metadata_lifecycle.rs"]
+mod repair_metadata_lifecycle;
 #[path = "hermetic_real_stack/restart_acceptance.rs"]
 mod restart_acceptance;
 #[path = "hermetic_real_stack/restart_cancellation.rs"]

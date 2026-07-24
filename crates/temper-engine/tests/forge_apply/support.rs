@@ -20,9 +20,10 @@ pub(crate) use temper_protocol_worker::{
 };
 pub(crate) use temper_worker_registry::InFlightJob;
 pub(crate) use temper_workflow::{
-    ArtifactKindId, ArtifactRef, ArtifactSource, ArtifactTarget, DurableAssignment, LeaseManager,
-    LeasePolicy, RawArtifactKind, RawLabel, RawWorkflowSpec, RoleId, ValidatedWorkflow,
-    WorkflowMetadata, global_child_correlation_key, parse_metadata_block, render_metadata_block,
+    ArtifactKindId, ArtifactRef, ArtifactSource, ArtifactTarget, DurableAssignment, Lease,
+    LeaseManager, LeasePolicy, RawArtifactKind, RawLabel, RawWorkflowSpec, RoleId,
+    ValidatedWorkflow, WorkflowMetadata, global_child_correlation_key, inspect_metadata_blocks,
+    parse_metadata_block, render_metadata_block,
 };
 
 thread_local! {
