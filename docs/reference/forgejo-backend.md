@@ -326,13 +326,18 @@ attempt and mapped to portable `CiJob`s. REST task conclusion/reason fields and
 the run plus latest-attempt identities are retained when present.
 Machine-readable task/run reasons can refine a broad failure into an explicit
 infrastructure category; arbitrary reason prose is retained for diagnostics but
-never guessed into a category. A combined status/result vocabulary maps success,
-ordinary failure, cancellation, interruption, timeout, runner loss, startup
-failure, action-required, neutral, and skipped explicitly. A task known to be
-terminal through a completed task or run but carrying an unrecognized result
+never guessed into a category. An explicit task `conclusion: failure` is the
+trustworthy evidence required for ordinary source/test `failure`. Forgejo also
+uses a status-only `failure` when execution is terminalized after runner loss,
+including the captured run #591/task 3385 shape, so bare `status: failure`
+without a conclusion or specific machine reason maps to terminal `unknown` and
+requires recovery rather than writable repair. Success, cancellation,
+interruption, timeout, runner loss, startup failure, action-required, neutral,
+and skipped retain their explicit categories. A task known to be terminal
+through a completed task or run but carrying an unrecognized result likewise
 maps to terminal `unknown`; the parent run's failure does not manufacture an
-ordinary job failure. Printable raw evidence is control-sanitized and bounded to
-256 UTF-8 bytes.
+ordinary job failure. Logs and output cadence are not classification evidence.
+Printable raw evidence is control-sanitized and bounded to 256 UTF-8 bytes.
 
 A non-empty `CiJobQuery.commit_sha` changes this to strict commit ownership,
 including when `pull_request_id` is also present. The run must expose a matching

@@ -106,6 +106,26 @@ fn running_attempt(stack: &HermeticRealStack, head: &str, attempt: &str) -> Herm
     )
 }
 
+fn ambiguous_forgejo_failure_attempt(
+    stack: &HermeticRealStack,
+    head: &str,
+    attempt: &str,
+) -> HermeticCiAttempt {
+    let completed = stack.clock().now() + chrono::Duration::minutes(17);
+    let mut job = HermeticCiJobSpec::new(
+        "validate",
+        CiJobStatus::Completed,
+        Some(CiJobConclusion::Unknown),
+    );
+    job.provider_conclusion = Some("failure".to_string());
+    HermeticCiAttempt::new(head, RUN_ID, attempt).job(job.url(RUN_URL).timestamps(
+        completed - chrono::Duration::minutes(32),
+        Some(completed - chrono::Duration::minutes(31)),
+        Some(completed),
+        completed,
+    ))
+}
+
 fn runner_lost_attempt(stack: &HermeticRealStack, head: &str, attempt: &str) -> HermeticCiAttempt {
     let completed = stack.clock().now() + chrono::Duration::minutes(17);
     HermeticCiAttempt::new(head, RUN_ID, attempt).job(

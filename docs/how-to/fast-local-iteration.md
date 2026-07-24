@@ -61,7 +61,7 @@ cargo dev-test-e2e-capstones
 ```
 
 This runs only the two ignored capstone tests named in the `e2e-capstones`
-nextest profile: daemon CI red→green convergence and `temper init --apply`.
+nextest profile: daemon status-only CI recovery and `temper init --apply`.
 The shorter `cargo dev-test-e2e` shorthand points at this same capstone lane.
 The former root `temper run` live scenarios were deleted because `temper-testing`
 now covers the implementation-PR handoff and provider server-error retry/requeue

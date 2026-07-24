@@ -146,6 +146,7 @@ mod tests {
                 LiveJobDto {
                     name: "build".to_string(),
                     status: "failure".to_string(),
+                    conclusion: "failure".to_string(),
                     ..Default::default()
                 },
                 LiveJobDto {

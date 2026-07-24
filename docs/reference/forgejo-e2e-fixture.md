@@ -86,23 +86,25 @@ environment, never argv.
 
 The committed workflow runs on `host` and reads the commit message for
 `GITHUB_SHA` through Forgejo's commit API. A PR head without `[ci-pass]` fails;
-the engineer's fix commit includes `[ci-pass]`, producing a passing run on a new
-head SHA. This avoids `actions/checkout` and lets fail-then-pass scenarios assert
-two verdicts on two SHAs of the same head branch.
+a repair commit can include `[ci-pass]`, producing a passing run on a new head
+SHA. This avoids `actions/checkout`. The daemon live capstone intentionally
+leaves the status-only failing head unchanged; explicit fail-then-pass routing
+is covered against the hermetic forge, which can supply a typed conclusion.
 
 Forgejo 7.0.x does not emit Actions-completion repository webhooks. The daemon
 fixture therefore sets `ci_poll_cadence_secs = 1` while retaining deliberately
 long 600-second `poll_cadence_secs` and `mechanical_cadence_secs` values. The
-short dedicated monitor emits exact PR CI hints: terminal red evaluates
-`pr_ci_failed` for the engineer, and terminal green runs targeted mechanical
-landing. Convergence before either broad fallback proves the dedicated path.
+short dedicated monitor emits exact PR CI hints: explicit terminal failure may
+evaluate `pr_ci_failed`, terminal green runs targeted mechanical landing, and
+status-only failure remains recovery-required. Convergence before either broad
+fallback proves the dedicated path.
 
-`ci_poll_cadence_secs` bounds webhook-less red-repair and green-landing
-detection; `poll_cadence_secs` remains the full correctness/liveness backstop.
-A mechanical cadence alone does not discover red engineer work. The CI
-aggregate is latest-per-name for the current head, so `ci_failed` requires every
-latest job to be terminal; a failed job mixed with queued or running work stays
-pending.
+`ci_poll_cadence_secs` bounds webhook-less terminal-CI detection;
+`poll_cadence_secs` remains the full correctness/liveness backstop. A mechanical
+cadence alone does not discover role-owned work. The CI aggregate is
+latest-per-name for the current head, so `ci_failed` requires explicit ordinary
+failure evidence after every latest job is terminal; a terminal job mixed with
+queued or running work stays pending.
 
 ## PR head preparation
 
@@ -116,8 +118,9 @@ Recreating the branch or prep file is tolerated, making the step idempotent.
 
 Scenario diagnostics identify the dedicated `ci_poll` trigger and print each
 PR head plus its CI jobs. Timeout panics also include daemon and worker log tails,
-runner status/log tail, and the stalled assertion. The red→green capstone counts
-`pr_ci_failed` worker assignments and requires exactly one.
+runner status/log tail, and the stalled assertion. The ambiguous-failure
+capstone counts `pr_ci_failed` worker assignments and requires zero while the
+provider job still owns the unchanged PR head.
 
 The server config must allow loopback webhook targets:
 `[webhook] ALLOWED_HOST_LIST = 127.0.0.1,localhost`. If hooks register but no

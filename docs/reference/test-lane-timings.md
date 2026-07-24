@@ -35,7 +35,7 @@ The all/manual e2e lane is intentionally outside that target.
 
 `cargo nextest list --workspace --run-ignored only -P e2e-capstones` listed:
 
-- `temper::daemon_forgejo_e2e daemon_forgejo_ci_fails_then_passes_converges`
+- `temper::daemon_forgejo_e2e daemon_forgejo_bare_failure_requires_recovery`
 - `temper::init_forgejo_e2e init_forgejo_drives_a_working_setup`
 
 `cargo nextest list --workspace --run-ignored only -P e2e` now lists 17 ignored

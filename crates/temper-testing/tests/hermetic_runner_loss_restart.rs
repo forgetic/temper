@@ -19,6 +19,58 @@ const RUN_ID: &str = "591";
 const RUN_URL: &str = "https://forge.example/acme/service/actions/runs/591";
 
 #[test]
+fn bare_forgejo_failure_never_dispatches_writable_repair_or_changes_head() {
+    temper_engine_io::block_on_with(|cx, handle| async move {
+        let mut stack = runner_loss_stack_builder()
+            .issue(HermeticIssueSpec::ready_code(
+                "Ambiguous Forgejo failure",
+                "Treat a status-only provider failure as recovery-required.",
+            ))
+            .fake_model_response(FakeModelResponse::write_file(
+                "service/RECOVERY.md",
+                "initial implementation\n",
+                "Created the ambiguous-failure fixture implementation.",
+            ))
+            .build(&handle)
+            .await
+            .expect("ambiguous-failure world builds");
+        let (pull, head, branch) = open_initial_pull(&cx, &handle, &mut stack).await;
+        let original_log = stack
+            .origin_log_subjects(stack.primary_repo_path(), &branch, 8)
+            .expect("initial branch log");
+
+        let jobs = stack
+            .seed_ci_attempt(
+                pull.number,
+                ambiguous_forgejo_failure_attempt(&stack, &head, "1"),
+            )
+            .await
+            .expect("run #591 status-only failure is visible");
+        let status = CiStatus::from_jobs(&jobs);
+        assert!(status.is_recovery_required());
+        assert!(!status.is_failed());
+        assert_eq!(
+            jobs[0].conclusion,
+            Some(CiJobConclusion::Unknown),
+            "status-only failure has no ordinary-failure evidence"
+        );
+        assert_eq!(jobs[0].provider_conclusion.as_deref(), Some("failure"));
+        assert_eq!(jobs[0].provider_reason, None);
+
+        assert_eq!(
+            stack
+                .enqueue_scanned_role_work_for_role("engineer", stack.clock().now())
+                .await
+                .expect("ambiguous terminal CI scan"),
+            0,
+            "ambiguous terminalization must not dispatch a writable repair worker"
+        );
+        assert_eq!(stack.persisted_session_count().unwrap(), 1);
+        assert_unchanged_head_and_history(&stack, &pull, &head, &branch, &original_log).await;
+    });
+}
+
+#[test]
 fn runner_loss_restart_retry_pending_then_pass_preserves_the_exact_head() {
     temper_engine_io::block_on_with(|cx, handle| async move {
         let mut stack = runner_loss_stack_builder()
