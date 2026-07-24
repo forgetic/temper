@@ -97,6 +97,15 @@ The Forge interface has no CI-job creation operation. Seed jobs directly with
 jobs for that repository. This mirrors `FilesystemForge::seed_ci_jobs`, which
 writes the filesystem backend's `ci_jobs.json` fixture.
 
+Exact-attempt retry defaults to typed `unsupported`. Tests select deterministic
+`accepted`, `unsupported`, or `uncertain` behavior with
+`MemoryForge::set_ci_retry_outcome`; accepted request receipts are shared by
+clones and make an exact duplicate `already_observed`. Every call still validates
+the current PR head and seeded run/attempt job fingerprint. Recorded requests
+are available through `ci_retry_requests`. A `RetryCiAttempt` fault maps to typed
+`uncertain`, modelling loss of the operation response rather than a source
+mutation.
+
 ## Fault-injection hook
 
 Because there is no durable store to corrupt, the backend exposes a small,
@@ -110,9 +119,10 @@ deterministic fault hook so backend error paths stay testable:
 `op` is a `FaultOp` value. The fault-aware operations are the mutating and load
 operations the workflow runtime exercises: `ListIssues`, `CreateIssue`,
 `GetIssueByNumber`, `UpdateIssue`, `ListPullRequests`, `CreatePullRequest`,
-`GetPullRequestByNumber`, `UpdatePullRequest`, and `MergePullRequest`. Other
-`Forge` methods ignore the hook. Faults fire before any state mutation, so an
-armed fault never leaves a partial change behind.
+`GetPullRequestByNumber`, `UpdatePullRequest`, `RetryCiAttempt`, and
+`MergePullRequest`. Other `Forge` methods ignore the hook. Retry faults become a
+typed uncertain outcome; other faults fire before state mutation and return the
+configured Forge error.
 
 ## Consistency guarantees
 

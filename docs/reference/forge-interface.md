@@ -32,7 +32,7 @@ The `temper_forge::Forge` trait exposes asynchronous operations for:
 - comments
 - pull-request reviewer requests and review events
 - pull-request merges
-- CI job reads
+- CI job reads and exact-attempt retry requests
 
 All methods are asynchronous because remote providers are expected. Local
 implementations may use synchronous internals behind the async trait. Portable

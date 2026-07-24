@@ -25,7 +25,10 @@ use crate::ids::{
 };
 use crate::types::{ActionRunDto, ActionTaskDto};
 use crate::{ForgejoForge, HttpClient};
-use temper_forge_model::{CiJob, CiJobId, CiJobQuery, ForgeError, ForgeResult, RepositoryId};
+use temper_forge_model::{
+    CiJob, CiJobId, CiJobQuery, CiRetryOutcome, CiRetryRejection, CiRetryRequest, ForgeError,
+    ForgeResult, RepositoryId,
+};
 
 pub(crate) use jobs::map_status_evidence;
 use jobs::{latest_attempt, sort_jobs, task_to_job};
@@ -175,6 +178,23 @@ impl<C: HttpClient> ForgejoForge<C> {
         }
         sort_jobs(&mut jobs, query);
         Ok(jobs)
+    }
+
+    /// Reports exact-attempt retry as unsupported for Forgejo.
+    ///
+    /// Forgejo Actions rerun endpoints and attempt semantics vary by release,
+    /// while the supported web-UI surface is read-only and version-sensitive.
+    /// We still validate repository/PR coordinates locally, then fail closed;
+    /// no source mutation or guessed HTTP endpoint is used.
+    pub async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {
+        let repo = parse_repository_id(request.repo_id())?;
+        let (pull_repo, _) = parse_pull_request_id(request.pull_request_id())?;
+        if repo != pull_repo {
+            return Ok(CiRetryOutcome::Rejected(
+                CiRetryRejection::RepositoryMismatch,
+            ));
+        }
+        Ok(CiRetryOutcome::Unsupported)
     }
 
     /// Looks up a single CI job through the web-UI read path (REST fallback).

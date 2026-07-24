@@ -39,6 +39,7 @@ The current implementation supports:
 - `add_pull_request_comment`
 - `merge_pull_request`
 - `list_ci_jobs`
+- `retry_ci_attempt`
 - `get_ci_job`
 
 `get_user` only resolves the handle's effective current user because the Forge interface does not yet include user creation or listing.
@@ -110,6 +111,14 @@ Pull-request comments are stored in `repositories/<repo-id>/pull_requests/<pull-
 Pull-request reviews are stored in `repositories/<repo-id>/pull_requests/<pull-request-id>/reviews.json` as serialized Forge `PullRequestReview` records. Review IDs are deterministic strings of the form `review-<pull-request-id>-<16-digit-number>`. Review numbers are pull-request-scoped, start at `1`, and use the next value above the highest stored review number. New reviews use the current user as `reviewer_id`; `submitted_at` is the logical-clock timestamp. Submitting a review advances `clock_tick` by one second and does not modify the stored pull-request record.
 
 CI jobs are stored in `repositories/<repo-id>/ci_jobs.json` as serialized Forge `CiJob` records. The Forge interface has no CI job creation operation, so tests and local scenarios seed this file with deterministic fixture records, usually through `FilesystemForge::seed_ci_jobs(repo_id, jobs)`, which replaces the repository's stored jobs. CI job IDs are fixture-provided opaque IDs. Stored CI jobs must belong to the repository, have non-empty names and commit SHAs, and not duplicate IDs within the repository. CI job timestamps come from the fixture record. Typed terminal evidence and opaque run/attempt identity round-trip unchanged; legacy records that omit `provider_conclusion`, `provider_reason`, `run_id`, and `attempt` deserialize those fields as absent.
+
+Exact-attempt retry is a deterministic test surface configured with
+`FilesystemForge::set_ci_retry_outcome`. Its selected outcome, request log, and
+accepted-request receipts live in root-level `ci_retry.json`, so a reopened
+backend can reconcile an exact duplicate as `already_observed`. The operation
+always validates the current stored PR head and exact run/attempt job fingerprint
+before returning the configured `accepted`, `unsupported`, or `uncertain`
+outcome; it never changes source records.
 
 ## Local change hints
 

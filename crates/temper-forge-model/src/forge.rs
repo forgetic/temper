@@ -1,9 +1,9 @@
 use crate::ids::{CiJobId, IssueId, ItemNumber, PullRequestId, RepositoryId, UserId};
 use crate::model::{
-    CiJob, CiJobStatus, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Issue, IssueState, Label, MergePullRequest,
-    MergeRecord, PullRequest, PullRequestReview, PullRequestState, Repository, RepositoryPath,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User,
+    CiJob, CiJobStatus, CiRetryOutcome, CiRetryRequest, Comment, CreateComment, CreateIssue,
+    CreatePullRequest, CreatePullRequestReview, CreateRepository, Issue, IssueState, Label,
+    MergePullRequest, MergeRecord, PullRequest, PullRequestReview, PullRequestState, Repository,
+    RepositoryPath, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -587,6 +587,15 @@ pub trait Forge: Send + Sync {
         repo_id: &RepositoryId,
         query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>>;
+
+    /// Requests a provider retry of exactly one freshly observed CI attempt.
+    ///
+    /// The repository, pull request, current head, run, attempt, and latest job
+    /// fingerprint are all mandatory fences. Implementations must revalidate
+    /// them before mutation and fail closed with a typed outcome when retry is
+    /// unavailable, stale, rejected, or uncertain. A retry must never mutate
+    /// source control merely to create a new run.
+    async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome>;
 
     /// Looks up a CI job by stable backend identifier.
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>>;

@@ -1,10 +1,65 @@
 use crate::FilesystemForge;
 use crate::lists::sort_ci_jobs_by_name;
 use crate::validation::validate_stored_ci_jobs;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use temper_forge_model::{ChangeKind, CiJob, CiJobId, ForgeError, ForgeResult, RepositoryId};
+use temper_forge_model::{
+    ChangeKind, CiJob, CiJobId, CiRetryOutcome, CiRetryRequest, ForgeError, ForgeResult,
+    RepositoryId,
+};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct CiRetryFixture {
+    pub(crate) outcome: CiRetryOutcome,
+    #[serde(default)]
+    pub(crate) requests: Vec<CiRetryRequest>,
+    #[serde(default)]
+    pub(crate) accepted: Vec<CiRetryRequest>,
+}
+
+impl Default for CiRetryFixture {
+    fn default() -> Self {
+        Self {
+            outcome: CiRetryOutcome::Unsupported,
+            requests: Vec::new(),
+            accepted: Vec::new(),
+        }
+    }
+}
 
 impl FilesystemForge {
+    /// Selects the deterministic exact-attempt retry outcome for this fixture.
+    /// The setting and accepted-request receipts are durable across reopened
+    /// handles, allowing restart tests to reconcile uncertain operations.
+    pub fn set_ci_retry_outcome(&self, outcome: CiRetryOutcome) -> ForgeResult<()> {
+        let _guard = self.write_lock()?;
+        let mut fixture = self.read_ci_retry_fixture()?;
+        fixture.outcome = outcome;
+        self.write_json(&self.ci_retry_fixture_file(), &fixture)
+    }
+
+    /// Returns exact-attempt retry requests in call order.
+    pub fn ci_retry_requests(&self) -> ForgeResult<Vec<CiRetryRequest>> {
+        Ok(self.read_ci_retry_fixture()?.requests)
+    }
+
+    pub(crate) fn read_ci_retry_fixture(&self) -> ForgeResult<CiRetryFixture> {
+        let path = self.ci_retry_fixture_file();
+        if path.exists() {
+            self.read_json(&path)
+        } else {
+            Ok(CiRetryFixture::default())
+        }
+    }
+
+    pub(crate) fn write_ci_retry_fixture(&self, fixture: &CiRetryFixture) -> ForgeResult<()> {
+        self.write_json(&self.ci_retry_fixture_file(), fixture)
+    }
+
+    fn ci_retry_fixture_file(&self) -> PathBuf {
+        self.root().join("ci_retry.json")
+    }
+
     /// Seeds CI jobs for a repository, replacing any previously stored jobs.
     ///
     /// The Forge interface has no CI job creation operation. Tests and local

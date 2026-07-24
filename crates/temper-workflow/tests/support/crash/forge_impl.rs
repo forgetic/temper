@@ -430,6 +430,24 @@ impl<F: Forge> Forge for CrashForge<F> {
         Ok(result)
     }
 
+    async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {
+        let n = self.tick(ForgeOp::RetryCiAttempt);
+        if self
+            .guard(ForgeOp::RetryCiAttempt, n, FaultPoint::Before)
+            .is_err()
+        {
+            return Ok(CiRetryOutcome::Uncertain);
+        }
+        let result = self.inner.retry_ci_attempt(request).await?;
+        if self
+            .guard(ForgeOp::RetryCiAttempt, n, FaultPoint::After)
+            .is_err()
+        {
+            return Ok(CiRetryOutcome::Uncertain);
+        }
+        Ok(result)
+    }
+
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
         self.inner.get_ci_job(id).await
     }

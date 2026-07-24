@@ -34,8 +34,8 @@ use crate::state::State;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use temper_forge_model::{
-    CiJob, ForgeError, ForgeResult, PullRequest, PullRequestId, RepoPermission, RepositoryId, User,
-    WebhookSpec,
+    CiJob, CiRetryOutcome, CiRetryRequest, ForgeError, ForgeResult, PullRequest, PullRequestId,
+    RepoPermission, RepositoryId, User, WebhookSpec,
 };
 
 pub use crate::fault::FaultOp;
@@ -47,6 +47,9 @@ pub(crate) struct Inner {
     pub(crate) state: State,
     pub(crate) faults: FaultStore,
     pub(crate) hints: HintBus,
+    pub(crate) ci_retry_outcome: CiRetryOutcome,
+    pub(crate) ci_retry_requests: Vec<CiRetryRequest>,
+    pub(crate) accepted_ci_retries: Vec<CiRetryRequest>,
 }
 
 /// In-memory [`Forge`](temper_forge_model::Forge) backend.
@@ -73,6 +76,9 @@ impl MemoryForge {
                 state: State::new(user),
                 faults: FaultStore::default(),
                 hints: HintBus::default(),
+                ci_retry_outcome: CiRetryOutcome::Unsupported,
+                ci_retry_requests: Vec::new(),
+                accepted_ci_retries: Vec::new(),
             })),
             current_user: None,
         }
@@ -94,9 +100,10 @@ impl MemoryForge {
     /// Arms a one-shot backend fault for the next call to `op`.
     ///
     /// The next invocation of `op` returns
-    /// [`ForgeError::Backend`](temper_forge_model::ForgeError::Backend) with `message`
-    /// before touching any state; later calls proceed normally. Arming the same
-    /// op again queues another fault.
+    /// [`ForgeError::Backend`](temper_forge_model::ForgeError::Backend) before
+    /// touching state; CI retry instead maps the injected delivery fault to the
+    /// portable [`CiRetryOutcome::Uncertain`]. Later calls proceed normally.
+    /// Arming the same op again queues another fault.
     pub fn fail_next(&self, op: FaultOp, message: impl Into<String>) {
         self.lock().faults.arm(op, message.into());
     }
@@ -132,6 +139,18 @@ impl MemoryForge {
         let mut inner = self.lock();
         inner.state.set_ci_jobs(repo_id, jobs);
         inner.publish_repo_hint(repo_id, temper_forge_model::ChangeKind::Ci);
+    }
+
+    /// Selects the deterministic outcome returned by exact-attempt CI retry.
+    /// Accepted requests are remembered so an exact duplicate returns
+    /// [`CiRetryOutcome::AlreadyObserved`].
+    pub fn set_ci_retry_outcome(&self, outcome: CiRetryOutcome) {
+        self.lock().ci_retry_outcome = outcome;
+    }
+
+    /// Returns exact-attempt retry requests in call order.
+    pub fn ci_retry_requests(&self) -> Vec<CiRetryRequest> {
+        self.lock().ci_retry_requests.clone()
     }
 
     /// Sets a pull request's current head SHA in the memory backend.
