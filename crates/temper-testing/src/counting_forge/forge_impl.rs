@@ -455,6 +455,15 @@ impl<F: Forge> Forge for CountingForge<F> {
         .await
     }
 
+    async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {
+        self.record_ci_retry_request(&request);
+        self.perform(
+            CountedForgeOp::RetryCiAttempt,
+            self.inner.retry_ci_attempt(request),
+        )
+        .await
+    }
+
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
         self.perform(CountedForgeOp::GetCiJob, self.inner.get_ci_job(id))
             .await

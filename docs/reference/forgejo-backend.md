@@ -389,3 +389,10 @@ filtering and sorting remain in the common list path, and cancelled superseded
 runs are dropped. Empty and queued/running reads are never eligible for terminal
 cache reuse; cached ownership uses the same safe SHA comparison. See
 [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
+
+Exact-attempt retry is deliberately `unsupported` on Forgejo. Actions rerun
+routes and attempt semantics vary across supported releases, and the 7.0.x
+web-UI fallback is a version-sensitive read surface rather than a verified
+mutation contract. The backend validates that the portable repository and PR
+IDs name the same Forgejo repository, then fails closed without HTTP. It never
+guesses a REST/UI endpoint and never writes a commit or ref to trigger CI.

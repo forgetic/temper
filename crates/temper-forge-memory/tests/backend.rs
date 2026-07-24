@@ -12,11 +12,12 @@ use std::time::Duration;
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_forge_model::{
     BranchRef, CandidateLabelSelection, CandidateLifecycle, ChangeSource, ChangeSourceEvent, CiJob,
-    CiJobQuery, CiJobStatus, CreateComment, CreateIssue, CreatePullRequest, CreateRepository,
-    Forge, ForgeError, IssueCandidateQuery, IssueQuery, IssueState, ItemListDetails, ItemNumber,
-    ItemSort, ItemSortField, MergeMethod, MergePullRequest, PullRequestCandidateQuery,
-    PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId, RepositoryPath,
-    SortDirection, UpdateIssue, UpdatePullRequest, UpsertLabel, UserId, Version,
+    CiJobConclusion, CiJobQuery, CiJobStatus, CiRetryOutcome, CiRetryRequest, CreateComment,
+    CreateIssue, CreatePullRequest, CreateRepository, Forge, ForgeError, IssueCandidateQuery,
+    IssueQuery, IssueState, ItemListDetails, ItemNumber, ItemSort, ItemSortField, MergeMethod,
+    MergePullRequest, PullRequestCandidateQuery, PullRequestQuery, PullRequestState,
+    PullRequestUpdateState, RepositoryId, RepositoryPath, SortDirection, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, UserId, Version,
 };
 
 struct NoopWake;
@@ -718,6 +719,64 @@ fn ci_jobs_can_be_seeded_filtered_and_looked_up() {
         block_on(forge.get_ci_job(&temper_forge_model::CiJobId::new("ci-1"))).unwrap(),
         Some(job)
     );
+}
+
+#[test]
+fn exact_ci_retry_has_deterministic_supported_uncertain_and_idempotent_behavior() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let pull_request = block_on(forge.create_pull_request(&repo, pr_input(&repo, &[]))).unwrap();
+    forge
+        .set_pull_request_head(&pull_request.id, Some("head-1".into()))
+        .unwrap();
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp(10, 0).unwrap();
+    let job = CiJob {
+        id: temper_forge_model::CiJobId::new("ci-retry-1"),
+        repo_id: repo.clone(),
+        pull_request_id: Some(pull_request.id.clone()),
+        commit_sha: "head-1".into(),
+        name: "validate".into(),
+        status: CiJobStatus::Completed,
+        conclusion: Some(CiJobConclusion::RunnerLost),
+        provider_conclusion: Some("runner_lost".into()),
+        provider_reason: Some("runner disconnected".into()),
+        run_id: Some("run-9".into()),
+        attempt: Some("2".into()),
+        url: None,
+        created_at: now,
+        started_at: Some(now),
+        completed_at: Some(now),
+        updated_at: now,
+    };
+    forge.seed_ci_jobs(&repo, vec![job.clone()]);
+    let request =
+        CiRetryRequest::new(repo, pull_request.id, "head-1", "run-9", "2", &[job]).unwrap();
+
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request.clone())).unwrap(),
+        CiRetryOutcome::Unsupported
+    );
+    forge.set_ci_retry_outcome(CiRetryOutcome::Uncertain);
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request.clone())).unwrap(),
+        CiRetryOutcome::Uncertain
+    );
+    forge.set_ci_retry_outcome(CiRetryOutcome::Accepted);
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request.clone())).unwrap(),
+        CiRetryOutcome::Accepted
+    );
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request.clone())).unwrap(),
+        CiRetryOutcome::AlreadyObserved
+    );
+
+    forge.fail_next(FaultOp::RetryCiAttempt, "response lost after dispatch");
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request)).unwrap(),
+        CiRetryOutcome::Uncertain
+    );
+    assert_eq!(forge.ci_retry_requests().len(), 4);
 }
 
 #[test]

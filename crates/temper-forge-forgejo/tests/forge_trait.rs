@@ -13,9 +13,12 @@
 
 mod support;
 
-use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
+use support::{MockHttpClient, OWNER, REPO, block_on, forge, pull_id, repo_id};
 use temper_forge_forgejo::{EngineHttpClient, ForgejoForge};
-use temper_forge_model::{Forge, IssueState, ItemNumber, ItemNumberNamespace, UserId};
+use temper_forge_model::{
+    CiJob, CiJobConclusion, CiJobId, CiJobStatus, CiRetryOutcome, CiRetryRequest, Forge,
+    IssueState, ItemNumber, ItemNumberNamespace, UserId,
+};
 use temper_workflow::{Executor, ValidatedWorkflow};
 
 #[test]
@@ -24,6 +27,38 @@ fn advertises_shared_item_number_namespace() {
     let forge: &dyn Forge = &backend;
 
     assert_eq!(forge.item_number_namespace(), ItemNumberNamespace::Shared);
+}
+
+#[test]
+fn ci_retry_fails_closed_without_guessing_a_forgejo_endpoint() {
+    let client = MockHttpClient::new();
+    let backend = forge(client.clone());
+    let now = chrono::DateTime::UNIX_EPOCH;
+    let job = CiJob {
+        id: CiJobId::new("forgejo:acme/widgets:actions:12:0:300"),
+        repo_id: repo_id(),
+        pull_request_id: Some(pull_id(5)),
+        commit_sha: "abc123".into(),
+        name: "validate".into(),
+        status: CiJobStatus::Completed,
+        conclusion: Some(CiJobConclusion::RunnerLost),
+        provider_conclusion: Some("runner_lost".into()),
+        provider_reason: None,
+        run_id: Some("12".into()),
+        attempt: Some("2".into()),
+        url: None,
+        created_at: now,
+        started_at: Some(now),
+        completed_at: Some(now),
+        updated_at: now,
+    };
+    let request = CiRetryRequest::new(repo_id(), pull_id(5), "abc123", "12", "2", &[job]).unwrap();
+
+    assert_eq!(
+        block_on(backend.retry_ci_attempt(request)).unwrap(),
+        CiRetryOutcome::Unsupported
+    );
+    assert_eq!(client.call_count(), 0);
 }
 
 #[test]

@@ -15,8 +15,9 @@ use crate::types::{WorkflowJobDto, WorkflowJobsEnvelopeDto, WorkflowRunsEnvelope
 use crate::{GitHubForge, HttpClient, HttpMethod};
 use chrono::{DateTime, Utc};
 use temper_forge_model::{
-    CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobSortField, CiJobStatus, ForgeResult,
-    PullRequestId, RepositoryId, SortDirection, sanitize_ci_provider_evidence,
+    CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobSortField, CiJobStatus, CiRetryOutcome,
+    CiRetryRejection, CiRetryRequest, ForgeResult, PullRequestId, RepositoryId, SortDirection,
+    sanitize_ci_provider_evidence,
 };
 
 impl<C: HttpClient> GitHubForge<C> {
@@ -99,6 +100,136 @@ impl<C: HttpClient> GitHubForge<C> {
         }
         sort_jobs(&mut jobs, &query);
         Ok(jobs)
+    }
+
+    /// Retries exactly one GitHub Actions workflow-run attempt.
+    ///
+    /// GitHub's documented `POST /actions/runs/{run_id}/rerun` endpoint is used
+    /// only after fresh PR, run, attempt, head, and latest-job-set reads match
+    /// the portable request. The POST is sent once: transport/5xx outcomes are
+    /// uncertain and must be reconciled by a later authoritative read.
+    pub async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {
+        let repo = parse_repository_id(request.repo_id())?;
+        let (pull_repo, pull_number) = parse_pull_request_id(request.pull_request_id())?;
+        if pull_repo != repo {
+            return Ok(CiRetryOutcome::Rejected(
+                CiRetryRejection::RepositoryMismatch,
+            ));
+        }
+
+        let pull = match self.fetch_pull_request(&pull_repo, pull_number).await {
+            Ok(Some(pull)) => pull,
+            Ok(None) => {
+                return Ok(CiRetryOutcome::Rejected(
+                    CiRetryRejection::PullRequestMismatch,
+                ));
+            }
+            Err(_) => return Ok(CiRetryOutcome::Uncertain),
+        };
+        if pull.head_sha.as_deref() != Some(request.head_sha()) {
+            return Ok(CiRetryOutcome::Rejected(CiRetryRejection::HeadChanged));
+        }
+
+        let run_id = match request.run_id().parse::<u64>() {
+            Ok(run_id) if run_id > 0 => run_id,
+            _ => return Ok(CiRetryOutcome::Rejected(CiRetryRejection::RunChanged)),
+        };
+        let expected_attempt = match request.attempt().parse::<u64>() {
+            Ok(attempt) if attempt > 0 => attempt,
+            _ => {
+                return Ok(CiRetryOutcome::Rejected(CiRetryRejection::AttemptChanged));
+            }
+        };
+        let run_path = format!("/repos/{}/actions/runs/{run_id}", repo.path_segment());
+        let run_response = match self
+            .request_optional(
+                "get workflow run for retry",
+                HttpMethod::Get,
+                &run_path,
+                Vec::new(),
+                None,
+            )
+            .await
+        {
+            Ok(Some(response)) => response,
+            // A provider version without the exact-run read cannot prove the
+            // attempt fence and is therefore unsupported, not stale.
+            Ok(None) => return Ok(CiRetryOutcome::Unsupported),
+            Err(_) => return Ok(CiRetryOutcome::Uncertain),
+        };
+        let run: crate::types::WorkflowRunDto =
+            match Self::decode("get workflow run for retry", &run_response) {
+                Ok(run) => run,
+                Err(_) => return Ok(CiRetryOutcome::Uncertain),
+            };
+        if run.id == 0 || run.head_sha.is_empty() || run.run_attempt == 0 {
+            return Ok(CiRetryOutcome::Unsupported);
+        }
+        if run.id != run_id || run.head_sha != request.head_sha() {
+            return Ok(CiRetryOutcome::Rejected(CiRetryRejection::RunChanged));
+        }
+        if run.run_attempt > expected_attempt {
+            return Ok(CiRetryOutcome::AlreadyObserved);
+        }
+        if run.run_attempt != expected_attempt {
+            return Ok(CiRetryOutcome::Rejected(CiRetryRejection::AttemptChanged));
+        }
+
+        let jobs_path = format!("{run_path}/jobs");
+        let dtos = match self
+            .list_all_wrapped(
+                "list workflow jobs for retry",
+                &jobs_path,
+                Vec::new(),
+                |envelope: WorkflowJobsEnvelopeDto| envelope.jobs,
+            )
+            .await
+        {
+            Ok(jobs) => jobs,
+            Err(_) => return Ok(CiRetryOutcome::Uncertain),
+        };
+        let jobs = dtos
+            .into_iter()
+            .map(|dto| {
+                map_workflow_job(
+                    &repo,
+                    request.repo_id(),
+                    Some(request.pull_request_id().clone()),
+                    Some(&run),
+                    dto,
+                )
+            })
+            .collect::<Vec<_>>();
+        if !request.matches_jobs(&jobs) {
+            return Ok(CiRetryOutcome::Rejected(CiRetryRejection::JobSetChanged));
+        }
+        if !jobs.iter().any(|job| {
+            job.status == CiJobStatus::Completed
+                && !matches!(job.conclusion, Some(CiJobConclusion::Success))
+        }) {
+            return Ok(CiRetryOutcome::Rejected(CiRetryRejection::RunNotRetryable));
+        }
+
+        let response = match self
+            .send(
+                HttpMethod::Post,
+                format!("{run_path}/rerun"),
+                Vec::new(),
+                None,
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => return Ok(CiRetryOutcome::Uncertain),
+        };
+        Ok(match response.status {
+            200..=299 => CiRetryOutcome::Accepted,
+            // The rerun endpoint is absent on unsupported GitHub Enterprise
+            // versions. Do not fall back to source or ref mutations.
+            404 | 410 => CiRetryOutcome::Unsupported,
+            500..=599 => CiRetryOutcome::Uncertain,
+            _ => CiRetryOutcome::Rejected(CiRetryRejection::ProviderRejected),
+        })
     }
 
     /// Looks up a CI job by stable backend identifier

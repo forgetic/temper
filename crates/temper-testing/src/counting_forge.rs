@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Mutex;
 use temper_forge_model::{
-    CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue,
-    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace,
-    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CiJob, CiJobId, CiJobQuery, CiRetryOutcome, CiRetryRequest, Comment, CreateComment,
+    CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeError,
+    ForgeResult, Issue, IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber,
+    ItemNumberNamespace, Label, MergePullRequest, MergeRecord, PullRequest,
+    PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview, Repository,
+    RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 use operation_log::ForgeOperationLog;
@@ -51,6 +52,7 @@ pub enum CountedForgeOp {
     ListPullRequestComments,
     AddPullRequestComment,
     MergePullRequest,
+    RetryCiAttempt,
     ListCiJobs,
     GetCiJob,
 }
@@ -92,6 +94,7 @@ pub struct CountingForge<F: Forge> {
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
     pull_request_candidate_queries: Mutex<Vec<PullRequestCandidateQuery>>,
     ci_job_queries: Mutex<Vec<CiJobQuery>>,
+    ci_retry_requests: Mutex<Vec<CiRetryRequest>>,
     exact_issue_reads: Mutex<Vec<ExactIssueRead>>,
     exact_pull_request_reads: Mutex<Vec<ExactPullRequestRead>>,
 }
@@ -113,6 +116,7 @@ impl<F: Forge> CountingForge<F> {
             pull_request_queries: Mutex::new(Vec::new()),
             pull_request_candidate_queries: Mutex::new(Vec::new()),
             ci_job_queries: Mutex::new(Vec::new()),
+            ci_retry_requests: Mutex::new(Vec::new()),
             exact_issue_reads: Mutex::new(Vec::new()),
             exact_pull_request_reads: Mutex::new(Vec::new()),
         }
@@ -247,6 +251,13 @@ impl<F: Forge> CountingForge<F> {
             .clone()
     }
 
+    pub fn ci_retry_requests(&self) -> Vec<CiRetryRequest> {
+        self.ci_retry_requests
+            .lock()
+            .expect("CI retry requests mutex")
+            .clone()
+    }
+
     pub fn exact_issue_reads(&self) -> Vec<ExactIssueRead> {
         self.exact_issue_reads
             .lock()
@@ -349,6 +360,13 @@ impl<F: Forge> CountingForge<F> {
             .lock()
             .expect("CI job query mutex")
             .push(query.clone());
+    }
+
+    fn record_ci_retry_request(&self, request: &CiRetryRequest) {
+        self.ci_retry_requests
+            .lock()
+            .expect("CI retry requests mutex")
+            .push(request.clone());
     }
 
     fn project_pull_request(&self, mut pull_request: PullRequest) -> PullRequest {

@@ -22,12 +22,13 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use temper_forge::{
-    CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue,
-    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace,
-    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CiJob, CiJobId, CiJobQuery, CiRetryOutcome, CiRetryRequest, Comment, CreateComment,
+    CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeError,
+    ForgeResult, Issue, IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber,
+    ItemNumberNamespace, Label, MergePullRequest, MergeRecord, PullRequest,
+    PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview, Repository,
+    RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 mod forge_impl;
@@ -55,6 +56,7 @@ pub enum ForgeOp {
     AddPullRequestComment,
     ListPullRequestReviews,
     ListCiJobs,
+    RetryCiAttempt,
     MergePullRequest,
 }
 

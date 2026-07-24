@@ -63,6 +63,15 @@ Ids are opaque to workflow code; only the backend parses them:
   preserved but never reclassified. The adapter also retains bounded,
   control-sanitized raw conclusion/reason evidence and opaque run/attempt ids;
   it never turns an unknown completed result into ordinary failure.
+  `retry_ci_attempt` supports only GitHub's documented
+  `POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun` endpoint. It first
+  re-reads the exact PR head, run attempt, and latest jobs and compares the
+  complete portable fingerprint. A higher `run_attempt` is `already_observed`;
+  changed coordinates are rejected. The POST is issued once with no body.
+  Endpoint `404`/`410` (including older Enterprise versions) is typed
+  `unsupported`, explicit non-success client responses are rejected, and
+  transport/`5xx` completion is `uncertain` for later read reconciliation.
+  There is no commit/ref fallback.
 - **Optimistic concurrency.** Best-effort, identical to the Forgejo backend:
   a portable `Version` is derived from the response `ETag` (or the weak
   `updated_at` fallback) per artifact, and conditional writes re-read and
