@@ -67,7 +67,8 @@ pub use stack::{
     ResultTappingTransport,
 };
 pub use types::{
-    FakeModelResponse, FakeModelWrite, HermeticIssueSpec, HermeticRepoSpec, WorkerRoleSpec,
+    FakeModelResponse, FakeModelWrite, HermeticCiAttempt, HermeticCiJobSpec, HermeticIssueSpec,
+    HermeticRepoSpec, WorkerRoleSpec,
 };
 
 pub(crate) const DEFAULT_NOW: &str = "2026-05-29T00:00:00Z";

@@ -35,6 +35,7 @@ is supplied explicitly, so the suite is reproducible.
 | Two acquirers that both observe "no lease" cannot both win: lease acquisition is a compare-and-swap, so the loser observes a conflict | `two_no_lease_acquirers_cannot_both_win_the_same_claim`, `interleaved_acquirers_cannot_both_win_the_same_unclaimed_issue` |
 | A merge is not authorized, and the pull request is not merged, until native review approval and current-head CI gates pass; once gated, it merges and projects `landed`/`alignment` | `a_merge_is_not_authorized_until_review_and_ci_gates_pass` |
 | After merge-conflict repair advances a PR head, old green CI cannot authorize landing: absent, queued, and running repaired-head CI all keep the PR open across mechanical ticks; only a later repaired-head success lands it, while preserving the existing approval without a second review request | `reference_conflict_resolution_requires_fresh_ci_but_no_second_review` (`temper-runner/tests/mechanical_merge_conflict.rs`) |
+| A running exact-head job that terminalizes as runner-lost after daemon replacement never dispatches writable repair; exact retry, newer pending/pass or ordinary-failure routing, read-only diagnosis, and one actionable park converge across duplicate/reordered hints and every durable side-effect boundary without changing the PR head | `hermetic_runner_loss_restart.rs` (`runner_loss_*`, `unsupported_retry_*`, `accepted_retry_*`) |
 | Mechanical landing does not bypass gates: a PR with `landing` and green CI but no native approval stays open | `reference_landing_pr_without_approval_does_not_merge_even_when_ci_passes` |
 | The gate mechanism blocks a merge until native CI conclusions plus native review approval both pass | `the_merge_gate_mechanism_requires_ci_and_review_together`, `ci_gate_reads_native_ci_job_conclusions` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
@@ -142,9 +143,12 @@ daemon exercises reconnect behavior rather than rebuilding test state.
 Components expose abrupt stop/join controls, and restart scenarios synchronize at
 named one-shot channel barriers: assignment claim commit, worker push, result
 application start/completion, child create/wire/activation, and recovery-barrier
-opening. Lease time uses the supplied mutable wall clock; engine timers are
-advanced through their explicit runtime clock. Correctness assertions therefore
-do not infer progress from arbitrary sleeps.
+opening. Interrupted-CI acceptance additionally uses explicit run/attempt job
+fixtures plus deterministic Forge fault boundaries at retry publication,
+read-only diagnostic claim, attention-label installation, audit publication,
+and marker cleanup. Lease time uses the supplied mutable wall clock; engine
+timers are advanced through their explicit runtime clock. Correctness assertions
+therefore do not infer progress from arbitrary sleeps.
 
 Recovery ordering is: complete durable child intents; inventory assignments with
 dispatch closed; accept only exact worker/job heartbeat reattachment; converge
@@ -156,7 +160,10 @@ Dirty checkouts preserve local commits and tracked/untracked edits before moving
 to the current target. Successful replay retains the edits; ambiguous replay
 creates one stable quarantine manifest with recovery refs and commands. PR
 repair similarly converges monotonically: `repaired_head` rejects stale CI and
-suppresses repeated repair until current-head CI succeeds.
+suppresses repeated repair until current-head CI succeeds. Interrupted-CI
+recovery is a separate monotonic sequence: authoritative reads can supersede it
+with a newer pending/pass/ordinary-failure state, while retry, diagnosis, and
+parking themselves never edit files, create commits, or change the PR head.
 
 ## Worker liveness, result durability, and live claim convergence
 

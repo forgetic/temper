@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use jig_core::{Reply, Script, StopReason, Turn};
 use serde_json::json;
+use temper_forge_model::{CiJobConclusion, CiJobStatus};
 
 use super::DEFAULT_WORKER_ID;
 
@@ -126,6 +128,18 @@ impl WorkerRoleSpec {
         }
     }
 
+    /// Read-only CI diagnostician used by interrupted-attempt recovery tests.
+    pub fn ci_diagnostician() -> Self {
+        Self {
+            role: "ci_diagnostician".to_string(),
+            worker_id: DEFAULT_WORKER_ID.to_string(),
+            git_user: "Hermetic CI Diagnostician".to_string(),
+            git_email: "ci-diagnostician@example.test".to_string(),
+            git_token: "test-token".to_string(),
+            max_concurrent_jobs: 1,
+        }
+    }
+
     /// Overrides the worker id that registers with the daemon.
     #[must_use]
     pub fn worker_id(mut self, worker_id: impl Into<String>) -> Self {
@@ -151,6 +165,111 @@ impl WorkerRoleSpec {
     #[must_use]
     pub fn max_concurrent_jobs(mut self, max_concurrent_jobs: u32) -> Self {
         self.max_concurrent_jobs = max_concurrent_jobs;
+        self
+    }
+}
+
+/// One provider attempt retained by the hermetic real-stack CI fixture.
+///
+/// Seeding a newer attempt retains earlier attempts. Seeding the same
+/// run/attempt/job name updates that provider job in place, allowing restart
+/// tests to model delayed terminalization without manufacturing duplicate jobs.
+#[derive(Clone, Debug)]
+pub struct HermeticCiAttempt {
+    pub head_sha: String,
+    pub run_id: String,
+    pub attempt: String,
+    pub jobs: Vec<HermeticCiJobSpec>,
+}
+
+impl HermeticCiAttempt {
+    pub fn new(
+        head_sha: impl Into<String>,
+        run_id: impl Into<String>,
+        attempt: impl Into<String>,
+    ) -> Self {
+        Self {
+            head_sha: head_sha.into(),
+            run_id: run_id.into(),
+            attempt: attempt.into(),
+            jobs: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn job(mut self, job: HermeticCiJobSpec) -> Self {
+        self.jobs.push(job);
+        self
+    }
+}
+
+/// One named job observation within a [`HermeticCiAttempt`].
+#[derive(Clone, Debug)]
+pub struct HermeticCiJobSpec {
+    pub name: String,
+    pub status: CiJobStatus,
+    pub conclusion: Option<CiJobConclusion>,
+    pub provider_conclusion: Option<String>,
+    pub provider_reason: Option<String>,
+    pub url: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl HermeticCiJobSpec {
+    pub fn new(
+        name: impl Into<String>,
+        status: CiJobStatus,
+        conclusion: Option<CiJobConclusion>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            status,
+            conclusion,
+            provider_conclusion: None,
+            provider_reason: None,
+            url: None,
+            created_at: None,
+            started_at: None,
+            completed_at: None,
+            updated_at: None,
+        }
+    }
+
+    /// Adds the bounded provider evidence represented by this observation.
+    #[must_use]
+    pub fn provider_evidence(
+        mut self,
+        conclusion: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        self.provider_conclusion = Some(conclusion.into());
+        self.provider_reason = Some(reason.into());
+        self
+    }
+
+    #[must_use]
+    pub fn url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
+    }
+
+    /// Supplies provider timestamps. Optional start/completion values preserve
+    /// the distinction between queued, running-after-tests-started, and terminal.
+    #[must_use]
+    pub fn timestamps(
+        mut self,
+        created_at: DateTime<Utc>,
+        started_at: Option<DateTime<Utc>>,
+        completed_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        self.created_at = Some(created_at);
+        self.started_at = started_at;
+        self.completed_at = completed_at;
+        self.updated_at = Some(updated_at);
         self
     }
 }
