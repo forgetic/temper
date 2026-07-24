@@ -62,8 +62,10 @@ impl CiCompletedFacts {
     pub(crate) fn terminal_verdict(&self) -> Option<crate::CiTerminalVerdict> {
         match self.conclusion.as_str() {
             "success" | "passed" => Some(crate::CiTerminalVerdict::Passed),
-            "failure" | "failed" | "cancelled" | "timed_out" | "action_required" => {
-                Some(crate::CiTerminalVerdict::Failed)
+            "failure" | "failed" => Some(crate::CiTerminalVerdict::Failed),
+            "cancelled" | "canceled" | "interrupted" | "timed_out" | "timeout" | "runner_lost"
+            | "startup_failure" | "action_required" | "neutral" | "skipped" | "unknown" => {
+                Some(crate::CiTerminalVerdict::RecoveryRequired)
             }
             _ => None,
         }
@@ -388,6 +390,38 @@ mod tests {
                 completed_at: None,
             })
         );
+    }
+
+    #[test]
+    fn webhook_terminal_categories_do_not_turn_interruptions_into_failures() {
+        let facts = |conclusion: &str| CiCompletedFacts {
+            pr_number: 19,
+            conclusion: conclusion.to_string(),
+            duration_ms: 0,
+            completed_at: None,
+        };
+
+        assert_eq!(
+            facts("failure").terminal_verdict(),
+            Some(crate::CiTerminalVerdict::Failed)
+        );
+        for conclusion in [
+            "cancelled",
+            "interrupted",
+            "timed_out",
+            "runner_lost",
+            "startup_failure",
+            "action_required",
+            "neutral",
+            "skipped",
+            "unknown",
+        ] {
+            assert_eq!(
+                facts(conclusion).terminal_verdict(),
+                Some(crate::CiTerminalVerdict::RecoveryRequired),
+                "{conclusion}"
+            );
+        }
     }
 
     #[test]

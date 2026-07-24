@@ -36,10 +36,26 @@ CI status comes from `list_ci_jobs`, queried with both the PR identity and head
 SHA when the backend supplies one. Those filters are conjunctive, and the
 runtime independently verifies each returned job's non-empty commit SHA against
 the head before aggregation so stale provider results cannot satisfy a gate.
-For that current head, jobs are reduced to the latest job per name. `ci_failed`
-matches only when that set is non-empty, every latest job is terminal, and at
-least one conclusion is non-success. A visible failure mixed with a queued or
-running latest job remains pending; it is not eligible for repair yet.
+For that current head, jobs are reduced to the latest job per name. The aggregate
+is terminal only after every latest job is terminal. `ci_passed` then requires
+every conclusion to be explicit success. `ci_failed` is narrower than “red”: it
+matches only when at least one latest job explicitly reports the ordinary
+`failure` category, which is actionable as a source/build/test repair.
+Cancellation, interruption, timeout, runner loss, startup failure,
+action-required, neutral/skipped, unknown, and completed jobs without a typed
+conclusion instead satisfy `ci_recovery_required`. They remain ineligible to
+land, but cannot enter an ordinary writable code-repair queue. A visible terminal
+job mixed with a queued or running latest job remains pending.
+
+Terminal aggregates retain deterministic structured evidence for every latest
+job: typed and provider conclusions, bounded provider reason, job/run/attempt
+identity, commit SHA, URL, and timestamps. Narrow CI observations, exact-head
+monitor transitions, wake coalescing, targeted re-reads, freshness checks, and
+completion observability preserve the recovery-required state. Poll/read results
+are authoritative; webhook facts only accelerate an exact-target re-read and a
+stale or duplicate webhook cannot replace a newer pending, passing, failing,
+recovery-required, or changed-head read. A visible recovery-required current-head
+job is present CI, not a missing-current-head run.
 Review status comes from requested reviewers plus native review events; the
 portable review aggregate is not head-SHA-scoped.
 

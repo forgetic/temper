@@ -415,8 +415,11 @@ detection and parking are inactive while the grace remains configured. The role
 poll is the full correctness/liveness fallback; the mechanical cadence does not
 discover `pr_ci_failed` engineer work. Structured `ci.completed` records identify
 `trigger.source=webhook|ci_poll`, numeric `ci.detection_latency_ms`, and the
-selected `queue`/`role` when red CI enqueues repair work. The aggregate stays
-pending until every latest-per-name job on the current head is terminal.
+selected `queue`/`role` when ordinary red CI enqueues repair work. Their
+`conclusion` distinguishes `failure` from `recovery_required`; the latter stays
+red for landing but does not select writable source repair. The aggregate stays
+pending until every latest-per-name job on the current head is terminal, and
+poll/read observations override webhook acceleration facts.
 
 ```text
 $ journalctl -u temper -o short-iso

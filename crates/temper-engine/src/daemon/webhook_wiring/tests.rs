@@ -220,6 +220,7 @@ fn coordinated_ci_observability_preserves_webhook_and_poll_provenance() {
                 CiWakeFacts {
                     source,
                     verdict: Some(crate::CiTerminalVerdict::Failed),
+                    terminal_evidence: Vec::new(),
                     completed_at: Some(completed_at.parse().unwrap()),
                     recovery: None,
                 },

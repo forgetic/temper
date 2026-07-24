@@ -23,6 +23,7 @@ pub(super) fn gate_condition_satisfied(
             .all(|relation| signals.dependencies().is_landed(&relation.target)),
         GateCondition::CiPassed => signals.ci().is_passed(),
         GateCondition::CiFailed => signals.ci().is_failed(),
+        GateCondition::CiRecoveryRequired => signals.ci().is_recovery_required(),
         GateCondition::ReviewApproved => signals.review().is_approved(),
         GateCondition::ReviewChangesRequested => signals.review().has_changes_requested(),
     }

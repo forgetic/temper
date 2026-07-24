@@ -408,6 +408,7 @@ fn check_condition(
         RawGateCondition::DependenciesResolved
         | RawGateCondition::CiPassed
         | RawGateCondition::CiFailed
+        | RawGateCondition::CiRecoveryRequired
         | RawGateCondition::ReviewApproved
         | RawGateCondition::ReviewChangesRequested => {}
     }

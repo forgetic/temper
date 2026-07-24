@@ -235,6 +235,21 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
             item.target
         )));
     };
+    let queue = compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == item.queue.as_str());
+    if queue.is_some_and(|queue| {
+        matches!(
+            queue.condition.as_ref(),
+            Some(GateCondition::CiRecoveryRequired)
+        )
+    }) {
+        return Err(invalid_workflow_scan(format!(
+            "queue `{}` routes recovery-required CI through forbidden pull_request_writable code-repair checkout",
+            item.queue.as_str()
+        )));
+    }
     let pull_request = match preloaded {
         Some(pull_request) => pull_request.clone(),
         None => forge
@@ -292,7 +307,7 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
         &head_branch,
         &base_branch,
     )
-    .await;
+    .await?;
     append_guidance(context, guidance);
     Ok(())
 }
@@ -335,6 +350,7 @@ fn condition_token(condition: &GateCondition) -> Option<String> {
     let token = match condition {
         GateCondition::CiPassed => "ci_passed",
         GateCondition::CiFailed => "ci_failed",
+        GateCondition::CiRecoveryRequired => "ci_recovery_required",
         GateCondition::ReviewApproved => "review_approved",
         GateCondition::ReviewChangesRequested => "review_changes_requested",
         GateCondition::DependenciesResolved

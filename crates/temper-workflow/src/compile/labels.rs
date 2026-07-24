@@ -211,7 +211,9 @@ fn gate_condition_label<'a>(
         GateCondition::DependenciesResolved => None,
         // Reads native CI conclusions, not a label, so it tracks no label
         // usage (see ADR 0014).
-        GateCondition::CiPassed | GateCondition::CiFailed => None,
+        GateCondition::CiPassed | GateCondition::CiFailed | GateCondition::CiRecoveryRequired => {
+            None
+        }
         GateCondition::ReviewApproved | GateCondition::ReviewChangesRequested => None,
     }
 }

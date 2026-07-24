@@ -11,8 +11,9 @@ use temper_forge::{
 };
 use temper_workflow::plan::matches_queue_cheap;
 use temper_workflow::{
-    CiState, CiStatus, ClassifiedArtifact, Classifier, CompiledWorkflow, NEEDS_HUMAN_LABEL,
-    QueueManifest, ValidatedWorkflow, parse_metadata_block, requires_human_attention,
+    CiState, CiStatus, CiTerminalEvidence, ClassifiedArtifact, Classifier, CompiledWorkflow,
+    NEEDS_HUMAN_LABEL, QueueManifest, ValidatedWorkflow, parse_metadata_block,
+    requires_human_attention,
 };
 
 use super::ScanError;
@@ -36,6 +37,8 @@ pub struct CiStatusObservation {
     /// Time the complete latest-job set became terminal, when every latest job
     /// supplied a completion timestamp.
     pub completed_at: Option<DateTime<Utc>>,
+    /// Structured latest-job terminal evidence for routing and recovery context.
+    pub terminal_evidence: Vec<CiTerminalEvidence>,
 }
 
 /// Reads current-head CI observations for open pull requests relevant to exact
@@ -146,6 +149,7 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
             current_head_jobs_present,
             state: status.state(),
             completed_at: status.completed_at(),
+            terminal_evidence: status.terminal_evidence().to_vec(),
         });
     }
 

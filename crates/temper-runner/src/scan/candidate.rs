@@ -77,7 +77,11 @@ pub(crate) fn ci_pull_request_queues<'a>(
         .filter(|queue| {
             matches!(
                 queue.condition.as_ref(),
-                Some(GateCondition::CiPassed | GateCondition::CiFailed)
+                Some(
+                    GateCondition::CiPassed
+                        | GateCondition::CiFailed
+                        | GateCondition::CiRecoveryRequired
+                )
             ) && queue_targets(workflow, queue).contains(&ArtifactTarget::PullRequest)
         })
         .collect()

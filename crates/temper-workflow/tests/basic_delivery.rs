@@ -505,6 +505,15 @@ fn failed_ci_routes_back_to_the_engineer() {
             .contains(&QueueId::new("pr_ci_failed"))
     );
 
+    // Recovery-required terminal CI remains red for landing but does not enter
+    // the writable source-repair queue.
+    let recovery_required = GateSignals::new().with_ci(CiStatus::recovery_required());
+    assert!(
+        !planner
+            .matching_queues_with(&failed, &recovery_required)
+            .contains(&QueueId::new("pr_ci_failed"))
+    );
+
     // The engineer can act on it via `address_ci_failure`. The transition has
     // no ordinary effects because PR repair publication records the new head.
     let respond = planner

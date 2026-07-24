@@ -413,6 +413,7 @@ fn ci_provenance_coalesces_by_source_priority_in_both_orders() {
                 hint,
                 head_sha: "head-627".to_string(),
                 verdict: CiTerminalVerdict::Passed,
+                terminal_evidence: Vec::new(),
                 completed_at: Some("2026-07-21T10:00:01Z".parse().unwrap()),
             },
         ));
@@ -461,6 +462,7 @@ fn role_broad_scope_retains_only_bounded_ci_provenance() {
             hint: ChangeHint::pull_request(repository.clone(), ItemNumber::new(44), ChangeKind::Ci),
             head_sha: "head-44".to_string(),
             verdict: CiTerminalVerdict::Failed,
+            terminal_evidence: Vec::new(),
             completed_at: None,
         })),
         false,

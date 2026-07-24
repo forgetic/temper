@@ -125,7 +125,7 @@ pub fn queue_after_transition<'a>(
 ///
 /// Produces the `ci_gate=<state> dependency_gate=<state>` field the human line
 /// carries (§7: `gates: ci_gate=pending dependency_gate=ok`). CI maps to
-/// `ok`/`failed`/`pending`; the dependency gate is `ok` unless a fresh read of a
+/// `ok`/`failed`/`recovery_required`/`pending`; the dependency gate is `ok` unless a fresh read of a
 /// prerequisite failed (in which case it is `pending`, the conservative
 /// not-yet-landed verdict). Only the two gates §7 shows are rendered.
 pub fn gate_summary(signals: &GateSignals) -> String {
@@ -133,6 +133,8 @@ pub fn gate_summary(signals: &GateSignals) -> String {
         "ok"
     } else if signals.ci().is_failed() {
         "failed"
+    } else if signals.ci().is_recovery_required() {
+        "recovery_required"
     } else {
         "pending"
     };
