@@ -243,6 +243,8 @@ impl JobExecutor for ControllableExecutor {
                     return JobOutcome::Failure {
                         class: temper_protocol_worker::FailureClass::Canceled,
                         message: "controlled Forge future cancelled".to_string(),
+                        model_failure: None,
+                        session_recovery: None,
                     };
                 }
                 executor.record(|state| {

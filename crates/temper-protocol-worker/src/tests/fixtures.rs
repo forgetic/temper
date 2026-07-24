@@ -71,6 +71,7 @@ fn fixtures_round_trip_and_match_variants() {
             | ("heartbeat", WorkerProtocolMessage::Heartbeat(_))
             | ("cancel-attempts", WorkerProtocolMessage::CancelAttempts(_))
             | ("result", WorkerProtocolMessage::Result(_))
+            | ("result-model-failure", WorkerProtocolMessage::Result(_))
             | ("result-verdict", WorkerProtocolMessage::Result(_))
             | ("result-verdict-children", WorkerProtocolMessage::Result(_))
             | ("release", WorkerProtocolMessage::Release(_))

@@ -33,7 +33,7 @@ use temper_agent::{AuthChoice, DEFAULT_MAX_ITERATIONS};
 use temper_protocol_activity::{ACTIVITY_ADDRESS_FLAG, TRACE_POLICY_FLAG};
 use temper_protocol_agent::{
     AGENT_LIFECYCLE_ADDRESS_FLAG, FORGE_CONTEXT_ADDRESS_FLAG, RUNTIME_LIMITS_FLAG,
-    SUBMIT_FOR_PR_ADDRESS_FLAG, TOOL_CONFIG_FLAG,
+    SUBMIT_FOR_PR_ADDRESS_FLAG, TERMINAL_OUTPUT_FLAG, TOOL_CONFIG_FLAG,
 };
 
 /// The fully-parsed agent command line. Every field originates from a flag; the
@@ -64,6 +64,8 @@ pub(crate) struct Options {
     /// Dedicated first-party lifecycle endpoint. It is deliberately separate
     /// from optional activity tracing.
     pub(crate) lifecycle_address: Option<String>,
+    /// Optional worker-private typed terminal diagnostic destination.
+    pub(crate) terminal_output: Option<PathBuf>,
     /// Optional worker-written non-secret tool config JSON (`--tool-config`).
     pub(crate) tool_config: Option<PathBuf>,
     /// Optional worker-written complete operation limits (`--runtime-limits`).
@@ -91,6 +93,7 @@ impl Options {
         let mut forge_context_address = None;
         let mut activity_address = None;
         let mut lifecycle_address = None;
+        let mut terminal_output = None;
         let mut tool_config = None;
         let mut runtime_limits = None;
         let mut trace_policy = None;
@@ -121,6 +124,9 @@ impl Options {
                 }
                 flag if flag == AGENT_LIFECYCLE_ADDRESS_FLAG => {
                     lifecycle_address = Some(value(&mut iter, AGENT_LIFECYCLE_ADDRESS_FLAG)?)
+                }
+                flag if flag == TERMINAL_OUTPUT_FLAG => {
+                    terminal_output = Some(PathBuf::from(value(&mut iter, TERMINAL_OUTPUT_FLAG)?))
                 }
                 flag if flag == TOOL_CONFIG_FLAG => {
                     tool_config = Some(PathBuf::from(value(&mut iter, TOOL_CONFIG_FLAG)?))
@@ -164,6 +170,7 @@ impl Options {
             forge_context_address,
             activity_address,
             lifecycle_address,
+            terminal_output,
             tool_config,
             runtime_limits,
             trace_policy,
@@ -175,7 +182,7 @@ impl Options {
 }
 
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
-[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--activity-address <ADDR>] [--agent-lifecycle-address <ADDR>] [--tool-config <FILE>] [--runtime-limits <FILE>] [--trace-policy <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
+[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--activity-address <ADDR>] [--agent-lifecycle-address <ADDR>] [--terminal-output <FILE>] [--tool-config <FILE>] [--runtime-limits <FILE>] [--trace-policy <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
 --workspace (default cwd), writes the result to --result";
@@ -231,6 +238,7 @@ mod tests {
         assert!(USAGE.contains("--trace-policy <FILE>"));
         assert!(USAGE.contains("--activity-address <ADDR>"));
         assert!(USAGE.contains("--agent-lifecycle-address <ADDR>"));
+        assert!(USAGE.contains("--terminal-output <FILE>"));
         assert!(USAGE.contains("TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON"));
     }
 
@@ -245,6 +253,7 @@ mod tests {
         assert!(options.forge_context_address.is_none());
         assert!(options.activity_address.is_none());
         assert!(options.lifecycle_address.is_none());
+        assert!(options.terminal_output.is_none());
         assert!(options.tool_config.is_none());
         assert!(options.runtime_limits.is_none());
         assert!(options.trace_policy.is_none());
@@ -287,6 +296,8 @@ mod tests {
             "127.0.0.1:34567",
             "--agent-lifecycle-address",
             "127.0.0.1:45678",
+            "--terminal-output",
+            "/terminal.json",
             "--tool-config",
             "/tools.json",
             "--runtime-limits",
@@ -329,6 +340,10 @@ mod tests {
         assert_eq!(
             options.lifecycle_address.as_deref(),
             Some("127.0.0.1:45678")
+        );
+        assert_eq!(
+            options.terminal_output,
+            Some(PathBuf::from("/terminal.json"))
         );
         assert_eq!(options.tool_config, Some(PathBuf::from("/tools.json")));
         assert_eq!(

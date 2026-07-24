@@ -1,0 +1,32 @@
+{
+  "protocol_version": 1,
+  "type": "result",
+  "worker_id": "worker-1",
+  "job_id": "job-748",
+  "attempt_id": "attempt-748",
+  "status": "failure",
+  "failure": {
+    "class": "transient",
+    "message": "model call failed",
+    "model_failure": {
+      "provider": "openai-codex",
+      "model": "gpt-safe",
+      "category": "rate_limit",
+      "retryable": true,
+      "http_status": 429,
+      "provider_request_id": "req_748",
+      "provider_error_code": "rate_limit",
+      "message": "Provider rate limit reached.",
+      "detail_redacted": false
+    },
+    "session_recovery": {
+      "attempt_id": "attempt-748",
+      "failure_epoch": 1,
+      "failure_count": 3,
+      "action": "rotate_session",
+      "current_session_id": "session-old",
+      "new_session_id": "session-new",
+      "evidence_location": ".temper-agent-session/state.json"
+    }
+  }
+}

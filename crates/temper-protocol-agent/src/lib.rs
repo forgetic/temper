@@ -22,8 +22,10 @@
 //!   operations when the worker configured a fetch host. The worker services
 //!   per-run local request/response channels; Forge credentials and assignment
 //!   identity never enter the child protocol.
-//! - **Outbound result (agent → worker), terminal:** a [`WorkspaceResult`]
-//!   written to the file named by the agent's `--result` flag.
+//! - **Outbound terminal (agent → worker):** a [`WorkspaceResult`] written to
+//!   the file named by the agent's `--result` flag, or, for recognized
+//!   first-party model failures without a workspace result, a bounded
+//!   [`AgentTerminalOutputV1`] written to the private `--terminal-output` path.
 
 use std::collections::BTreeMap;
 
@@ -59,6 +61,11 @@ pub use lifecycle::{
 mod submit;
 pub use submit::{
     SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse,
+};
+mod terminal;
+pub use terminal::{
+    AGENT_TERMINAL_PROTOCOL_VERSION, AgentTerminalOutputV1, MAX_AGENT_TERMINAL_OUTPUT_BYTES,
+    TERMINAL_OUTPUT_FLAG,
 };
 
 /// Wire-format version. Bumped on any breaking change to the context, result,

@@ -33,10 +33,10 @@ use temper_protocol_activity::{
     ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, TRACE_POLICY_FLAG,
 };
 use temper_protocol_agent::{
-    AGENT_LIFECYCLE_ADDRESS_FLAG, AgentRuntimeLimitsV1, AgentToolConfig,
-    FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, RUNTIME_LIMITS_FLAG,
-    SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest, SubmitForPrResponse, TOOL_CONFIG_FLAG,
-    WorkspaceContext,
+    AGENT_LIFECYCLE_ADDRESS_FLAG, AgentRuntimeLimitsV1, AgentTerminalOutputV1, AgentToolConfig,
+    FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextResponse, MAX_AGENT_TERMINAL_OUTPUT_BYTES,
+    RUNTIME_LIMITS_FLAG, SUBMIT_FOR_PR_ADDRESS_FLAG, SubmitForPrRequest, SubmitForPrResponse,
+    TERMINAL_OUTPUT_FLAG, TOOL_CONFIG_FLAG, WorkspaceContext,
 };
 
 use crate::agent_runner::{

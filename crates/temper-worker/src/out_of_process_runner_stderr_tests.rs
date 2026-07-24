@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use temper_protocol_agent::{
-    ArtifactContextBundle, ArtifactReference, ArtifactRepository, ArtifactSnapshot, ArtifactType,
-    WorkspaceResult,
+    AgentRuntimeLimitsV1, ArtifactContextBundle, ArtifactReference, ArtifactRepository,
+    ArtifactSnapshot, ArtifactType, WorkspaceResult,
 };
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -77,6 +77,126 @@ printf '%s' '{"summary":"exact summary","body":"exact body"}' > "$result"
 }
 
 #[test]
+fn terminal_file_consumer_is_first_party_bounded_and_fail_closed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("terminal.json");
+    std::fs::write(
+        &path,
+        r#"{"protocol_version":1,"model_failure":{"provider":"openai-codex","model":"gpt-safe","category":"timeout","retryable":true,"http_status":504,"message":"Model request timed out.","detail_redacted":false}}"#,
+    )
+    .expect("write terminal fixture");
+
+    let diagnostic = super::managed_run::first_party_terminal_model_failure(true, &path)
+        .expect("valid first-party terminal is consumed");
+    assert_eq!(diagnostic.provider, "openai-codex");
+    assert_eq!(diagnostic.http_status, Some(504));
+    assert!(diagnostic.retryable);
+    assert_eq!(
+        super::managed_run::first_party_terminal_model_failure(false, &path),
+        None,
+        "third-party commands never consume the carrier"
+    );
+
+    std::fs::write(
+        &path,
+        r#"{"protocol_version":1,"model_failure":{"provider":"openai-codex","model":"gpt-safe","category":"provider","retryable":false,"message":"authorization: Bearer SECRET-SENTINEL-748","detail_redacted":false}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        super::managed_run::first_party_terminal_model_failure(true, &path),
+        None,
+        "unsafe provider content is malformed terminal evidence"
+    );
+
+    std::fs::write(
+        &path,
+        vec![b'x'; temper_protocol_agent::MAX_AGENT_TERMINAL_OUTPUT_BYTES + 1],
+    )
+    .unwrap();
+    assert_eq!(
+        super::managed_run::first_party_terminal_model_failure(true, &path),
+        None,
+        "oversized terminal files are not read"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn first_party_nonzero_exit_consumes_valid_typed_terminal_before_generic_fallback() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = agent_script(
+        temp.path(),
+        "typed-failure-agent.sh",
+        r#"
+printf 'provider prose SECRET-SENTINEL-748 authorization: Bearer token\n' >&2
+cat > "$terminal" <<'JSON'
+{"protocol_version":1,"model_failure":{"provider":"openai-codex","model":"gpt-safe","category":"response","retryable":false,"http_status":502,"provider_request_id":"req_748","provider_error_code":"malformed_stream","message":"Provider returned a malformed stream.","detail_redacted":false}}
+JSON
+exit 2
+"#,
+    );
+    let context = super::tests::test_context();
+    let cwd = temp.path().to_path_buf();
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()));
+
+    let error =
+        temper_worker_io::block_on(
+            async move { runner.run("typed-failure-job", &context, &cwd).await },
+        )
+        .expect_err("typed first-party failure");
+
+    assert_eq!(error.class, temper_protocol_worker::FailureClass::Transient);
+    let diagnostic = error
+        .model_failure
+        .unwrap_or_else(|| panic!("typed model failure missing: {}", error.message));
+    assert_eq!(diagnostic.provider, "openai-codex");
+    assert_eq!(diagnostic.model, "gpt-safe");
+    assert_eq!(diagnostic.http_status, Some(502));
+    assert_eq!(diagnostic.provider_request_id.as_deref(), Some("req_748"));
+    assert_eq!(
+        diagnostic.provider_error_code.as_deref(),
+        Some("malformed_stream")
+    );
+    assert!(!diagnostic.retryable);
+    assert!(
+        !serde_json::to_string(&diagnostic)
+            .unwrap()
+            .contains("SECRET-SENTINEL-748"),
+        "stderr must never populate typed model fields"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn malformed_first_party_terminal_retains_generic_nonzero_exit_behavior() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = agent_script(
+        temp.path(),
+        "unsafe-terminal-agent.sh",
+        r#"
+cat > "$terminal" <<'JSON'
+{"protocol_version":1,"model_failure":{"provider":"openai-codex","model":"gpt-safe","category":"provider","retryable":false,"message":"authorization: Bearer SECRET-SENTINEL-748","detail_redacted":false}}
+JSON
+exit 2
+"#,
+    );
+    let context = super::tests::test_context();
+    let cwd = temp.path().to_path_buf();
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()));
+
+    let error = temper_worker_io::block_on(async move {
+        runner.run("malformed-terminal-job", &context, &cwd).await
+    })
+    .expect_err("unsafe terminal is rejected");
+
+    assert_eq!(error.class, temper_protocol_worker::FailureClass::Transient);
+    assert_eq!(error.model_failure, None);
+    assert!(error.message.contains("status 2"));
+}
+
+#[test]
 #[cfg(unix)]
 fn failing_child_streams_diagnostics_and_returns_bounded_tail() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -119,6 +239,10 @@ exit 17
 
 fn assert_failure_tail(error: AgentRunError) {
     assert_eq!(error.class, temper_protocol_worker::FailureClass::Transient);
+    assert_eq!(
+        error.model_failure, None,
+        "third-party stderr must not synthesize typed evidence"
+    );
     assert!(error.message.contains("status 17"), "{}", error.message);
     assert!(
         error.message.contains("final failure marker"),
@@ -165,11 +289,13 @@ fn agent_script(dir: &Path, name: &str, body: &str) -> PathBuf {
         r#"#!/bin/sh
 set -eu
 result=""
+terminal=""
 while [ "$#" -gt 0 ]; do
   arg="$1"; shift
   case "$arg" in
     --result) result="$1"; shift ;;
-    --context|--workspace|--submit-for-pr-address|--forge-context-address|--tool-config) shift ;;
+    --terminal-output) terminal="$1"; shift ;;
+    --context|--workspace|--submit-for-pr-address|--forge-context-address|--tool-config|--runtime-limits|--agent-lifecycle-address) shift ;;
   esac
 done
 {body}

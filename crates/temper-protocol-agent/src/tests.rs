@@ -295,6 +295,56 @@ fn submit_for_pr_response_carries_structured_gate_data() {
 }
 
 #[test]
+fn first_party_terminal_output_is_closed_bounded_and_validated() {
+    use temper_protocol_activity::{ModelFailureCategoryV1, ModelFailureV1};
+
+    let output = AgentTerminalOutputV1::model_failure(ModelFailureV1 {
+        provider: "openai-codex".to_string(),
+        model: "gpt-safe".to_string(),
+        category: ModelFailureCategoryV1::RateLimit,
+        retryable: true,
+        http_status: Some(429),
+        provider_request_id: Some("req_748".to_string()),
+        provider_error_code: Some("rate_limit".to_string()),
+        message: "Provider rate limit reached.".to_string(),
+        detail_redacted: false,
+    });
+    output.validate().expect("terminal output validates");
+    let value = serde_json::to_value(&output).expect("terminal output serializes");
+    assert_eq!(value["protocol_version"], AGENT_TERMINAL_PROTOCOL_VERSION);
+    assert_eq!(value["model_failure"]["category"], "rate_limit");
+    let decoded: AgentTerminalOutputV1 =
+        serde_json::from_value(value.clone()).expect("terminal output round trips");
+    assert_eq!(decoded, output);
+
+    let mut with_stderr = value;
+    with_stderr["stderr"] = serde_json::json!("authorization: Bearer secret");
+    assert!(serde_json::from_value::<AgentTerminalOutputV1>(with_stderr).is_err());
+    assert_eq!(TERMINAL_OUTPUT_FLAG, "--terminal-output");
+}
+
+#[test]
+fn terminal_output_rejects_unsafe_provider_content() {
+    use temper_protocol_activity::{ModelFailureCategoryV1, ModelFailureV1};
+
+    let output = AgentTerminalOutputV1 {
+        protocol_version: AGENT_TERMINAL_PROTOCOL_VERSION,
+        model_failure: ModelFailureV1 {
+            provider: "openai-codex".to_string(),
+            model: "gpt-safe".to_string(),
+            category: ModelFailureCategoryV1::Provider,
+            retryable: false,
+            http_status: Some(500),
+            provider_request_id: None,
+            provider_error_code: None,
+            message: "authorization: Bearer SECRET-SENTINEL-748".to_string(),
+            detail_redacted: false,
+        },
+    };
+    assert!(output.validate().is_err());
+}
+
+#[test]
 fn workspace_result_omits_empty_optionals_on_the_wire() {
     let result = WorkspaceResult {
         summary: Some("did the thing".to_string()),

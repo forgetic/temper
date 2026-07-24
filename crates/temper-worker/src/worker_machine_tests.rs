@@ -301,6 +301,8 @@ fn job_finished_reports_result_frees_capacity_and_repolls() {
         JobOutcome::Failure {
             class: temper_protocol_worker::FailureClass::Permanent,
             message: "nope".to_string(),
+            model_failure: None,
+            session_recovery: None,
         },
     );
     let record_requests = run(
@@ -360,6 +362,8 @@ fn recovered_outbox_replays_with_backoff_and_compacts_only_matching_release() {
         JobOutcome::Failure {
             class: temper_protocol_worker::FailureClass::Transient,
             message: "retry me".to_string(),
+            model_failure: None,
+            session_recovery: None,
         },
     );
     let entry = ResultOutboxEntry::from_result(result).unwrap();
