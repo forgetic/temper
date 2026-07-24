@@ -271,7 +271,7 @@ fn validate_forwarding_suffix(
     validate_event_identities_and_terminal(&metadata.manifest, events)
 }
 
-fn recover_referenced_blobs(
+pub(super) fn recover_referenced_blobs(
     run_dir: &Path,
     events: &[AgentRunEventV1],
 ) -> Result<Vec<BlobAttachmentV1>, TraceError> {

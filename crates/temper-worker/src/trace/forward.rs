@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use temper_protocol_activity::{ACTIVITY_PROTOCOL_VERSION, AgentActivityBatch, AgentRunEventV1};
 
 use super::{
-    ForwardingAcknowledgementBoundary, RecoveredForwardingRun, RecoveredTraceRun, TraceCollector,
-    TraceError, acknowledge_forwarded_run, acknowledge_recovered_run, event_blob_references,
-    read_acknowledged_sequence, read_dir, recover_forwarding_run, repair_spool_root_permissions,
+    ForwardingAcknowledgementBoundary, RecoveredForwardingRun, RecoveredTraceRun,
+    TRACE_QUARANTINE_DIR, TraceCollector, TraceError, acknowledge_forwarded_run,
+    acknowledge_recovered_run, event_blob_references, read_acknowledged_sequence, read_dir,
+    recover_forwarding_run, repair_spool_root_permissions,
 };
 
 pub(super) struct ForwardingBatch {
@@ -188,7 +189,12 @@ impl TraceCollector {
         let mut run_dirs = read_dir(root)?
             .filter_map(Result::ok)
             .filter_map(|entry| match entry.file_type() {
-                Ok(file_type) if file_type.is_dir() => Some(entry.path()),
+                Ok(file_type)
+                    if file_type.is_dir()
+                        && entry.file_name().to_str() != Some(TRACE_QUARANTINE_DIR) =>
+                {
+                    Some(entry.path())
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();

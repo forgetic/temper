@@ -564,6 +564,7 @@ fn spool_directories_and_files_are_owner_only() {
     assert_eq!(mode(&root), 0o700);
     assert_eq!(mode(run.spool_dir()), 0o700);
     assert_eq!(mode(&run.spool_dir().join("blobs")), 0o700);
+    assert_eq!(mode(&run.spool_dir().join(".owner.lock")), 0o600);
     assert_eq!(mode(&run.spool_dir().join("manifest.json")), 0o600);
     assert_eq!(mode(&run.spool_dir().join("events.jsonl")), 0o600);
     assert_eq!(mode(&run.spool_dir().join("acknowledgement.json")), 0o600);

@@ -54,6 +54,7 @@ pub(super) fn repair_run_permissions(run_dir: &Path) -> Result<(), TraceError> {
     repair_private_dir(run_dir)?;
     for name in [
         ".spool.lock",
+        ".owner.lock",
         "manifest.json",
         "events.jsonl",
         "acknowledgement.json",
