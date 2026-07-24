@@ -543,3 +543,62 @@ fn actions_unavailable_is_an_error() {
     let result = block_on(forge.list_ci_jobs(&repo_id(), CiJobQuery::default()));
     assert!(result.is_err());
 }
+
+#[test]
+fn terminal_evidence_is_typed_bounded_and_attempt_identified() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        json!({
+            "workflow_runs": [{
+                "id": 900,
+                "index_in_repo": 40,
+                "run_number": 40,
+                "run_attempt": 3,
+                "status": "completed",
+                "conclusion": "runner_lost",
+                "event": "push",
+                "head_sha": "abcdef1234567",
+                "created_at": "2024-03-01T00:00:00Z"
+            }]
+        })
+        .to_string(),
+    );
+    client.push_response(
+        200,
+        json!({
+            "workflow_runs": [{
+                "id": 901,
+                "run_number": 40,
+                "run_attempt": 4,
+                "name": "build",
+                "status": "completed",
+                "conclusion": "RUNNER_LOST",
+                "failure_reason": format!("runner disconnected\n{}", "x".repeat(400)),
+                "head_sha": "abcdef1234567",
+                "created_at": "2024-03-01T00:00:00Z"
+            }]
+        })
+        .to_string(),
+    );
+
+    let jobs = block_on(forge(client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some("abcdef1234567".to_string()),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+
+    let job = &jobs[0];
+    assert_eq!(job.conclusion, Some(CiJobConclusion::RunnerLost));
+    assert_eq!(job.provider_conclusion.as_deref(), Some("RUNNER_LOST"));
+    assert!(
+        job.provider_reason.as_ref().unwrap().len()
+            <= temper_forge_model::MAX_CI_PROVIDER_EVIDENCE_BYTES
+    );
+    assert!(!job.provider_reason.as_ref().unwrap().contains('\n'));
+    assert_eq!(job.run_id.as_deref(), Some("900"));
+    assert_eq!(job.attempt.as_deref(), Some("4"));
+}

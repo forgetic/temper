@@ -122,9 +122,10 @@ List reads inspect at most 20 run ids in Actions-page order, newest first, and
 continue to the end of that window after an unreadable run. The ordering is also
 the trust rule:
 
-- readable target jobs observed before the first unreadable run are retained;
-  therefore a newer matching success remains valid when only older history is
-  unreadable;
+- readable target jobs observed before the first unreadable run are retained,
+  including provider-reported cancellation and other non-success terminal
+  categories; therefore a newer matching success remains valid when only older
+  history is unreadable;
 - after the first unreadable run, matching jobs from older runs are inspected
   but omitted, because the unknown newer run could supersede them;
 - if the unreadable boundary precedes the first readable target match, or every
@@ -135,8 +136,8 @@ An empty result means pending to the workflow gate. The existing CI read cache
 never reuses empty or otherwise non-terminal results, so a degraded empty result
 is fetched again on the next call. A returned terminal result for the explicit
 head keeps the existing terminal cache behavior. Explicit SHA ownership, PR
-filtering, cancelled-run exclusion, query filtering/sorting, and the portable
-`Forge` interface are unchanged.
+filtering, terminal-category preservation, query filtering/sorting, and the
+portable `Forge` interface are unchanged.
 
 Each degraded list read emits exactly one warning. It represents the newest
 unreadable run and includes repository, run, job, final status, retry count,
@@ -151,11 +152,14 @@ detailed, secret-free `ForgeError::Backend` after the same one-shot recovery.
 ### Best-effort, version-sensitive
 
 The web-UI HTML/JSON shapes are not a stable contract. The read path tolerates
-missing fields (an unknown/absent status maps to `Queued`), exposes no per-job
-timestamps (jobs share the unix epoch), and reuses the run id as the encoded
-`task_id` because the UI exposes no stable task id. Infrastructure-wide
-failures remain portable `ForgeError`s. Per-run HTTP failures follow the
-newest-first trust boundary above and never guess a pass/fail verdict.
+missing fields. Missing job status remains queued when the run is also
+non-terminal; an explicitly terminal but unrecognized job/run result maps to
+portable terminal `unknown`. The adapter exposes no per-job timestamps (jobs
+share the unix epoch), retains bounded provider conclusion/reason text plus the
+run and attempt identity, and reuses the run id as the encoded `task_id` because
+the UI exposes no stable task id. Infrastructure-wide failures remain portable
+`ForgeError`s. Per-run HTTP failures follow the newest-first trust boundary
+above and never guess a pass/fail verdict.
 
 ## Consequences
 

@@ -1,11 +1,13 @@
 //! Mapping a run's live-view jobs into portable [`CiJob`]s.
 
 use super::dto::LiveRunDto;
-use crate::ci::map_status;
+use crate::ci::map_status_evidence;
 use crate::ci_match::{Target, sha_matches};
 use crate::ids::{CiJobCoord, RepoCoord, format_ci_job_id};
 use chrono::{DateTime, Utc};
-use temper_forge_model::{CiJob, CiJobStatus, PullRequestId, RepositoryId};
+use temper_forge_model::{
+    CiJob, CiJobStatus, PullRequestId, RepositoryId, sanitize_ci_provider_evidence,
+};
 
 /// Maps a run's live-view jobs to portable [`CiJob`]s.
 pub(super) fn live_run_to_jobs(
@@ -29,7 +31,14 @@ pub(super) fn live_run_to_jobs(
         .iter()
         .enumerate()
         .map(|(index, job)| {
-            let (status, conclusion) = map_status(&job.status);
+            let (status, conclusion) = map_status_evidence(
+                &job.status,
+                &job.conclusion,
+                &job.reason,
+                &live.status,
+                &live.conclusion,
+                &live.reason,
+            );
             let name = if job.name.is_empty() {
                 format!("job-{index}")
             } else {
@@ -53,6 +62,32 @@ pub(super) fn live_run_to_jobs(
             // ordering rather than a shared epoch that would tie every run.
             let run_time = run_ordering_time(run);
             let completed_at = (status == CiJobStatus::Completed).then_some(run_time);
+            let provider_conclusion = (status == CiJobStatus::Completed)
+                .then(|| {
+                    let job_status = (!matches!(
+                        job.status.trim().to_ascii_lowercase().as_str(),
+                        "completed" | "complete" | "done" | "finished"
+                    ))
+                    .then_some(job.status.as_str())
+                    .unwrap_or_default();
+                    [
+                        job.conclusion.as_str(),
+                        job_status,
+                        live.conclusion.as_str(),
+                        live.status.as_str(),
+                        job.status.as_str(),
+                    ]
+                    .into_iter()
+                    .find_map(sanitize_ci_provider_evidence)
+                })
+                .flatten();
+            let provider_reason = (status == CiJobStatus::Completed)
+                .then(|| {
+                    [job.reason.as_str(), live.reason.as_str()]
+                        .into_iter()
+                        .find_map(sanitize_ci_provider_evidence)
+                })
+                .flatten();
             CiJob {
                 id: format_ci_job_id(&coord),
                 repo_id: repo_id.clone(),
@@ -61,6 +96,12 @@ pub(super) fn live_run_to_jobs(
                 name,
                 status,
                 conclusion,
+                provider_conclusion,
+                provider_reason,
+                run_id: Some(run.to_string()),
+                // The compatibility route is explicitly attempt-qualified with
+                // attempt 1; newer live payloads may expose a later attempt.
+                attempt: Some(live.attempt.max(1).to_string()),
                 url: None,
                 created_at: run_time,
                 started_at: None,
@@ -90,7 +131,7 @@ fn epoch() -> DateTime<Utc> {
 mod tests {
     use super::*;
     use crate::ci_ui::dto::{LiveBranchDto, LiveCommitDto, LiveJobDto, LiveRunDto};
-    use temper_forge_model::CiJobConclusion;
+    use temper_forge_model::{CiJobConclusion, MAX_CI_PROVIDER_EVIDENCE_BYTES};
 
     #[test]
     fn live_run_maps_jobs_to_portable_status() {
@@ -98,14 +139,19 @@ mod tests {
         let repo_id = RepositoryId::new("forgejo:acme/widgets");
         let live = LiveRunDto {
             status: "failure".to_string(),
+            conclusion: String::new(),
+            reason: "runner returned\nexit 1".to_string(),
+            attempt: 2,
             jobs: vec![
                 LiveJobDto {
                     name: "build".to_string(),
                     status: "failure".to_string(),
+                    ..Default::default()
                 },
                 LiveJobDto {
                     name: String::new(),
                     status: "running".to_string(),
+                    ..Default::default()
                 },
             ],
             commit: LiveCommitDto {
@@ -124,15 +170,25 @@ mod tests {
         assert_eq!(jobs[0].name, "build");
         assert_eq!(jobs[0].status, CiJobStatus::Completed);
         assert_eq!(jobs[0].conclusion, Some(CiJobConclusion::Failure));
+        assert_eq!(jobs[0].provider_conclusion.as_deref(), Some("failure"));
+        assert_eq!(
+            jobs[0].provider_reason.as_deref(),
+            Some("runner returned exit 1")
+        );
+        assert!(jobs[0].provider_reason.as_ref().unwrap().len() <= MAX_CI_PROVIDER_EVIDENCE_BYTES);
+        assert_eq!(jobs[0].run_id.as_deref(), Some("1"));
+        assert_eq!(jobs[0].attempt.as_deref(), Some("2"));
         assert_eq!(jobs[0].id.as_str(), "forgejo:acme/widgets:actions:1:0:1");
         assert_eq!(jobs[0].commit_sha, "c456eec18b");
         assert_eq!(
             jobs[0].pull_request_id.as_ref().unwrap().as_str(),
             "forgejo:acme/widgets:pull:7"
         );
-        // Fallback job name and running status.
+        // An explicit non-terminal per-job state wins over the terminal parent;
+        // providers may expose a partially updated run while jobs still move.
         assert_eq!(jobs[1].name, "job-1");
         assert_eq!(jobs[1].status, CiJobStatus::Running);
         assert_eq!(jobs[1].conclusion, None);
+        assert_eq!(jobs[1].provider_conclusion, None);
     }
 }

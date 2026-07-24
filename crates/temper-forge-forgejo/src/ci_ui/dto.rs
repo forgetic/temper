@@ -21,11 +21,14 @@ pub(super) struct LiveStateDto {
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct LiveRunDto {
-    // Decoded for provider-shape fidelity; the portable verdict is derived from
-    // the per-job statuses, so the run-level status is not read directly.
     #[serde(default)]
-    #[allow(dead_code)]
     pub(super) status: String,
+    #[serde(default)]
+    pub(super) conclusion: String,
+    #[serde(default, alias = "failureReason", alias = "failure_reason")]
+    pub(super) reason: String,
+    #[serde(default, alias = "runAttempt", alias = "run_attempt")]
+    pub(super) attempt: u64,
     #[serde(default)]
     pub(super) jobs: Vec<LiveJobDto>,
     #[serde(default)]
@@ -38,6 +41,10 @@ pub(super) struct LiveJobDto {
     pub(super) name: String,
     #[serde(default)]
     pub(super) status: String,
+    #[serde(default)]
+    pub(super) conclusion: String,
+    #[serde(default, alias = "failureReason", alias = "failure_reason")]
+    pub(super) reason: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -61,11 +68,14 @@ mod tests {
     #[test]
     fn live_view_decodes_nested_state() {
         let dto: LiveViewDto = serde_json::from_str(
-            r#"{"state":{"run":{"status":"success","jobs":[{"name":"build","status":"success"}],
-               "commit":{"shortSHA":"abc1234"}}},"logs":{}}"#,
+            r#"{"state":{"run":{"status":"completed","conclusion":"failure","runAttempt":2,
+               "jobs":[{"name":"build","status":"completed","conclusion":"failure",
+               "failureReason":"exit 1"}],"commit":{"shortSHA":"abc1234"}}},"logs":{}}"#,
         )
         .unwrap();
         assert_eq!(dto.state.run.jobs.len(), 1);
+        assert_eq!(dto.state.run.attempt, 2);
+        assert_eq!(dto.state.run.jobs[0].reason, "exit 1");
         assert_eq!(dto.state.run.commit.short_sha, "abc1234");
     }
 }

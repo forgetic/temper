@@ -95,7 +95,12 @@ Required methods:
 - `get_ci_job`
 
 CI jobs are associated with a repository, a commit SHA, and optionally a pull
-request. Status is `queued`, `running`, or `completed`; completed jobs may carry
-a conclusion such as `success`, `failure`, or `cancelled`. Populated
+request. Status is `queued`, `running`, or `completed`. Completed jobs carry a
+typed category: success, ordinary failure, cancellation, interruption, timeout,
+runner loss, startup failure, action-required, neutral, skipped, or unknown
+terminalization. Unknown terminalization remains completed and is not evidence
+of an ordinary source/test failure. Sanitized provider conclusion/reason strings
+and opaque run/attempt identities are retained when the provider exposes them;
+all four fields are optional for backward-compatible stored records. Populated
 `CiJobQuery` filters are conjunctive, so a query containing both pull-request ID
 and commit SHA returns only jobs satisfying both constraints.

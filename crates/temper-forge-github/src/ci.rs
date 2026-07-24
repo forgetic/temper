@@ -16,7 +16,7 @@ use crate::{GitHubForge, HttpClient, HttpMethod};
 use chrono::{DateTime, Utc};
 use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobSortField, CiJobStatus, ForgeResult,
-    PullRequestId, RepositoryId, SortDirection,
+    PullRequestId, RepositoryId, SortDirection, sanitize_ci_provider_evidence,
 };
 
 impl<C: HttpClient> GitHubForge<C> {
@@ -84,7 +84,13 @@ impl<C: HttpClient> GitHubForge<C> {
                 )
                 .await?;
             for dto in dtos {
-                jobs.push(map_workflow_job(&repo, repo_id, pr_id.clone(), dto));
+                jobs.push(map_workflow_job(
+                    &repo,
+                    repo_id,
+                    pr_id.clone(),
+                    Some(&run),
+                    dto,
+                ));
             }
         }
 
@@ -112,7 +118,13 @@ impl<C: HttpClient> GitHubForge<C> {
         };
         let dto: WorkflowJobDto = Self::decode("get ci job", &response)?;
         let repo_id = crate::ids::format_repository_id(&coord.repo);
-        Ok(Some(map_workflow_job(&coord.repo, &repo_id, None, dto)))
+        Ok(Some(map_workflow_job(
+            &coord.repo,
+            &repo_id,
+            None,
+            None,
+            dto,
+        )))
     }
 }
 
@@ -124,14 +136,37 @@ fn map_workflow_job(
     repo: &RepoCoord,
     repo_id: &RepositoryId,
     pull_request_id: Option<PullRequestId>,
+    run: Option<&crate::types::WorkflowRunDto>,
     dto: WorkflowJobDto,
 ) -> CiJob {
     let status = map_job_status(&dto.status);
-    let conclusion = if status == CiJobStatus::Completed {
-        dto.conclusion.as_deref().and_then(map_job_conclusion)
-    } else {
-        None
-    };
+    let conclusion = (status == CiJobStatus::Completed)
+        .then(|| map_job_terminal_evidence(dto.conclusion.as_deref(), dto.reason.as_deref()));
+    let provider_conclusion = (status == CiJobStatus::Completed)
+        .then(|| {
+            dto.conclusion
+                .as_deref()
+                .and_then(sanitize_ci_provider_evidence)
+        })
+        .flatten();
+    let provider_reason = (status == CiJobStatus::Completed)
+        .then(|| {
+            dto.reason
+                .as_deref()
+                .and_then(sanitize_ci_provider_evidence)
+        })
+        .flatten();
+    let run_id = [dto.run_id, run.map(|run| run.id).unwrap_or_default()]
+        .into_iter()
+        .find(|value| *value > 0)
+        .map(|value| value.to_string());
+    let attempt = [
+        dto.run_attempt,
+        run.map(|run| run.run_attempt).unwrap_or_default(),
+    ]
+    .into_iter()
+    .find(|value| *value > 0)
+    .map(|value| value.to_string());
     let created_at = dto
         .created_at
         .or(dto.started_at)
@@ -154,6 +189,10 @@ fn map_workflow_job(
         name: dto.name,
         status,
         conclusion,
+        provider_conclusion,
+        provider_reason,
+        run_id,
+        attempt,
         url: dto.html_url.filter(|url| !url.is_empty()),
         created_at,
         started_at: dto.started_at,
@@ -178,19 +217,48 @@ fn map_job_status(status: &str) -> CiJobStatus {
     }
 }
 
-/// Maps a GitHub job conclusion string to the portable [`CiJobConclusion`].
+/// Maps a GitHub job conclusion string to the portable typed terminal category.
 ///
-/// `startup_failure` and `action_required` count as failures (the job did not
-/// succeed and will not without intervention); `stale` maps to `Neutral`.
-/// Unknown conclusions map to `None` rather than guessing.
-fn map_job_conclusion(conclusion: &str) -> Option<CiJobConclusion> {
+/// GitHub's distinct `startup_failure`, `action_required`, and `stale`
+/// conclusions remain distinct. An unrecognized value is terminal-unknown; it
+/// is never converted into an ordinary failure.
+fn map_job_conclusion(conclusion: &str) -> CiJobConclusion {
+    known_job_conclusion(conclusion).unwrap_or(CiJobConclusion::Unknown)
+}
+
+fn map_job_terminal_evidence(conclusion: Option<&str>, reason: Option<&str>) -> CiJobConclusion {
+    let primary = conclusion.map(map_job_conclusion);
+    let reason = reason.and_then(known_job_conclusion);
+    match primary {
+        // A broad failure/unknown conclusion can be refined by an explicit,
+        // machine-readable reason without classifying arbitrary prose.
+        Some(CiJobConclusion::Failure | CiJobConclusion::Unknown) => reason
+            .filter(|category| {
+                !matches!(
+                    category,
+                    CiJobConclusion::Failure | CiJobConclusion::Unknown
+                )
+            })
+            .or(primary)
+            .unwrap_or(CiJobConclusion::Unknown),
+        Some(category) => category,
+        None => reason.unwrap_or(CiJobConclusion::Unknown),
+    }
+}
+
+fn known_job_conclusion(conclusion: &str) -> Option<CiJobConclusion> {
     match conclusion.trim().to_lowercase().as_str() {
         "success" => Some(CiJobConclusion::Success),
-        "failure" | "startup_failure" | "action_required" => Some(CiJobConclusion::Failure),
+        "failure" => Some(CiJobConclusion::Failure),
         "cancelled" => Some(CiJobConclusion::Cancelled),
-        "skipped" => Some(CiJobConclusion::Skipped),
+        "interrupted" | "stale" => Some(CiJobConclusion::Interrupted),
         "timed_out" => Some(CiJobConclusion::TimedOut),
-        "neutral" | "stale" => Some(CiJobConclusion::Neutral),
+        "runner_lost" => Some(CiJobConclusion::RunnerLost),
+        "startup_failure" => Some(CiJobConclusion::StartupFailure),
+        "action_required" => Some(CiJobConclusion::ActionRequired),
+        "neutral" => Some(CiJobConclusion::Neutral),
+        "skipped" => Some(CiJobConclusion::Skipped),
+        "unknown" => Some(CiJobConclusion::Unknown),
         _ => None,
     }
 }
@@ -233,40 +301,33 @@ mod tests {
     }
 
     #[test]
-    fn job_conclusion_mapping() {
+    fn job_conclusion_mapping_covers_every_terminal_category() {
+        let cases = [
+            ("success", CiJobConclusion::Success),
+            ("failure", CiJobConclusion::Failure),
+            ("cancelled", CiJobConclusion::Cancelled),
+            ("interrupted", CiJobConclusion::Interrupted),
+            ("stale", CiJobConclusion::Interrupted),
+            ("timed_out", CiJobConclusion::TimedOut),
+            ("runner_lost", CiJobConclusion::RunnerLost),
+            ("startup_failure", CiJobConclusion::StartupFailure),
+            ("action_required", CiJobConclusion::ActionRequired),
+            ("neutral", CiJobConclusion::Neutral),
+            ("skipped", CiJobConclusion::Skipped),
+            ("mystery", CiJobConclusion::Unknown),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(map_job_conclusion(raw), expected, "raw conclusion {raw}");
+        }
         assert_eq!(
-            map_job_conclusion("success"),
-            Some(CiJobConclusion::Success)
+            map_job_terminal_evidence(Some("failure"), Some("runner_lost")),
+            CiJobConclusion::RunnerLost,
+            "a machine-readable provider reason refines a broad failure"
         );
         assert_eq!(
-            map_job_conclusion("failure"),
-            Some(CiJobConclusion::Failure)
+            map_job_terminal_evidence(Some("failure"), Some("runner disconnected")),
+            CiJobConclusion::Failure,
+            "human prose is preserved as evidence but not reclassified"
         );
-        assert_eq!(
-            map_job_conclusion("startup_failure"),
-            Some(CiJobConclusion::Failure)
-        );
-        assert_eq!(
-            map_job_conclusion("action_required"),
-            Some(CiJobConclusion::Failure)
-        );
-        assert_eq!(
-            map_job_conclusion("cancelled"),
-            Some(CiJobConclusion::Cancelled)
-        );
-        assert_eq!(
-            map_job_conclusion("skipped"),
-            Some(CiJobConclusion::Skipped)
-        );
-        assert_eq!(
-            map_job_conclusion("timed_out"),
-            Some(CiJobConclusion::TimedOut)
-        );
-        assert_eq!(
-            map_job_conclusion("neutral"),
-            Some(CiJobConclusion::Neutral)
-        );
-        assert_eq!(map_job_conclusion("stale"), Some(CiJobConclusion::Neutral));
-        assert_eq!(map_job_conclusion("mystery"), None);
     }
 }
