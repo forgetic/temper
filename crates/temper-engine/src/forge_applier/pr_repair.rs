@@ -6,14 +6,13 @@ use temper_forge::{
     Forge, ForgeError, PullRequest, PullRequestState, RequestReviewers, UpdatePullRequest, UserId,
 };
 use temper_protocol_worker::{JobContext, JobResult};
-use temper_runner::implementation_pr_body_from_report_or_summary;
-use temper_workflow::{
-    ArtifactKindId, Effect, WorkflowMetadata, parse_metadata_block, replace_metadata_block,
-};
+use temper_runner::implementation_pr_prose_from_report_or_summary;
+use temper_workflow::Effect;
 
 use crate::InFlightJob;
 use crate::applier::ApplyOutcome;
 use crate::forge_applier::ForgeApplier;
+use crate::forge_applier::body_merge::{body_with_canonical_metadata, canonical_snapshot_body};
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
     /// Publishes an in-place PR repair as a monotonic, conditional workflow
@@ -101,15 +100,18 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             {
                 return ApplyOutcome::Stale;
             }
-            let mut metadata = match parse_metadata_block(&pull_request.body) {
-                Ok(metadata) => metadata.unwrap_or_default(),
+            let snapshot = match canonical_snapshot_body(&pull_request.body) {
+                Ok(snapshot) => snapshot,
                 Err(error) => {
                     return ApplyOutcome::Rejected {
                         class: temper_protocol_worker::FailureClass::Protocol,
-                        reason: format!("invalid pull-request workflow metadata: {error}"),
+                        reason: format!(
+                            "could not determine canonical pull-request workflow metadata from the fresh Forge snapshot: {error}"
+                        ),
                     };
                 }
             };
+            let mut metadata = snapshot.metadata.clone().unwrap_or_default();
             let Some(assignment) = metadata.assignment.as_ref() else {
                 return ApplyOutcome::Stale;
             };
@@ -122,21 +124,14 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             ) {
                 return ApplyOutcome::Stale;
             }
-            if metadata.repaired_head.as_deref() == Some(reported_head) {
+            if metadata.repaired_head.as_deref() == Some(reported_head) && snapshot.block_count == 1
+            {
                 return ApplyOutcome::Applied;
             }
 
             let mutation = transition.mutation(job, current_role_user.as_ref());
             metadata.repaired_head = Some(reported_head.to_string());
-            let body = match replace_metadata_block(&pull_request.body, &metadata) {
-                Ok(body) => body,
-                Err(error) => {
-                    return ApplyOutcome::Rejected {
-                        class: temper_protocol_worker::FailureClass::Protocol,
-                        reason: format!("could not persist repaired-head metadata: {error}"),
-                    };
-                }
-            };
+            let body = body_with_canonical_metadata(&snapshot, &metadata);
             match self
                 .forge
                 .update_pull_request(
@@ -224,26 +219,21 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .and_then(non_blank)
             .map(str::to_string)
             .unwrap_or_else(|| pull_request.title.clone());
-        let metadata = parse_metadata_block(&pull_request.body)
-            .ok()
-            .flatten()
-            .unwrap_or_else(default_implementation_pr_metadata);
         let fallback_intro = format!(
             "Workspace-produced update for pull request #{}.",
             pull_request.number
         );
-        let desired_body = implementation_pr_body_from_report_or_summary(
+        let desired_prose = implementation_pr_prose_from_report_or_summary(
             result.body.as_deref(),
             &fallback_intro,
             result.summary.as_deref().unwrap_or_default(),
-            &metadata,
         );
         let _ = self
-            .update_implementation_pr_handoff(
+            .update_pull_request_repair_handoff_parts(
                 job,
                 pull_request,
                 &desired_title,
-                &desired_body,
+                &desired_prose,
                 "pull request repair",
             )
             .await;
@@ -384,11 +374,4 @@ fn repair_role_user(
 fn non_blank(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
-}
-
-fn default_implementation_pr_metadata() -> WorkflowMetadata {
-    WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("implementation_pr")),
-        ..WorkflowMetadata::default()
-    }
 }

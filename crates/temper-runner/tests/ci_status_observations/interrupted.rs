@@ -38,7 +38,7 @@ fn interrupted_missing_ci_parking_is_observed_only_for_its_exact_head() {
     let observed = observations(&forge, &repo, &workflow);
     assert_eq!(observed.len(), 1);
     assert_eq!(observed[0].head_sha, "recovering-head");
-    assert!(!observed[0].current_head_jobs_present);
+    assert!(!observed[0].current_head_ci_present);
     assert_eq!(forge.count(CountedForgeOp::GetPullRequest), 2);
     assert_eq!(forge.count(CountedForgeOp::ListCiJobs), 1);
     assert_eq!(forge.write_count(), 0);
@@ -76,7 +76,7 @@ fn interrupted_terminal_observation_is_present_recovery_required_with_evidence()
 
     assert_eq!(observed.len(), 1);
     let observation = &observed[0];
-    assert!(observation.current_head_jobs_present);
+    assert!(observation.current_head_ci_present);
     assert_eq!(observation.state, CiState::RecoveryRequired);
     assert_eq!(observation.terminal_evidence.len(), 1);
     let evidence = &observation.terminal_evidence[0];

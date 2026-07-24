@@ -714,11 +714,34 @@ fn ci_jobs_can_be_seeded_filtered_and_looked_up() {
     ))
     .unwrap();
     assert!(none.is_empty());
+    let filtered = block_on(forge.list_ci_jobs_with_presence(
+        &repo,
+        CiJobQuery {
+            status: Some(CiJobStatus::Running),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(filtered.matching_ci_present());
+    assert!(filtered.jobs().is_empty());
 
     assert_eq!(
         block_on(forge.get_ci_job(&temper_forge_model::CiJobId::new("ci-1"))).unwrap(),
         Some(job)
     );
+
+    forge.seed_ci_jobs(&repo, Vec::new());
+    forge.seed_ci_run(&repo, None, "queued-head");
+    let queued = block_on(forge.list_ci_jobs_with_presence(
+        &repo,
+        CiJobQuery {
+            commit_sha: Some("queued-head".into()),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(queued.matching_ci_present());
+    assert!(queued.jobs().is_empty());
 }
 
 #[test]

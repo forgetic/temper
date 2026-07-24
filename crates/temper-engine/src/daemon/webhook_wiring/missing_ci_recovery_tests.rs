@@ -310,10 +310,21 @@ fn changed_head_and_closed_or_non_ci_gated_prs_are_suppressed() {
 }
 
 #[test]
-fn any_queued_running_or_terminal_current_head_job_suppresses_parking() {
+fn any_current_head_run_or_job_suppresses_parking() {
     temper_engine_io::block_on(async move {
         assert!(sha_identifies_head(&HEAD[..8], HEAD));
         assert!(!sha_identifies_head(&OLD_HEAD[..8], HEAD));
+
+        let fixture = Fixture::new().await;
+        fixture
+            .forge
+            .seed_ci_run(&fixture.repository.id, Some(&fixture.pull_request.id), HEAD);
+        assert_eq!(
+            fixture.recover().await,
+            MissingCiRecoveryOutcome::Suppressed
+        );
+        fixture.assert_unmutated().await;
+
         for status in [
             CiJobStatus::Queued,
             CiJobStatus::Running,

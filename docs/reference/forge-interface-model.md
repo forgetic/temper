@@ -112,6 +112,13 @@ identities used to distinguish the latest execution attempt. These additive
 fields default to absent so existing serialized filesystem records remain
 readable.
 
+`list_ci_jobs_with_presence` returns the same filtered jobs plus a separate
+`matching_ci_present` fact. The fact applies the repository, pull-request, and
+commit ownership scope, but not the job-status filter. It can therefore be true
+while the job list is empty: hosted providers may register a workflow run before
+runner capacity materializes any jobs. Callers detecting missing CI must use this
+fact rather than infer run absence from an empty job list.
+
 ### Body substring filter
 
 Issue and pull-request queries carry `body_contains`, an optional exact

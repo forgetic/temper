@@ -6,8 +6,9 @@ Accepted.
 
 ## Context
 
-The workflow engine reads CI through `Forge::list_ci_jobs`/`get_ci_job`. The
-Forgejo backend implements those against the Actions REST endpoints
+The workflow engine reads CI through `Forge::list_ci_jobs`,
+`list_ci_jobs_with_presence`, and `get_ci_job`. The Forgejo backend implements
+those against the Actions REST endpoints
 (`GET /repos/{owner}/{repo}/actions/runs` + `/actions/tasks`).
 
 **Forgejo 7.0.12 — the version this e2e effort targets — does not serve those
@@ -86,7 +87,7 @@ formatted into errors or logs, matching the existing token-redaction guarantee.
 
 ### REST-first, web-UI fallback
 
-`list_ci_jobs`/`get_ci_job` prefer REST so a newer server keeps the richer path:
+CI listing and `get_ci_job` prefer REST so a newer server keeps the richer path:
 
 1. Try `GET …/actions/runs`. A `403`/`404` (REST absent, as on 7.0.x, or
    otherwise unavailable) → fall back to the web UI. Forgejo 15.0.3 normally
@@ -132,12 +133,15 @@ the trust rule:
   recent run is unreadable, the list returns `Ok([])` rather than stale evidence
   or a repository-wide error.
 
-An empty result means pending to the workflow gate. The existing CI read cache
-never reuses empty or otherwise non-terminal results, so a degraded empty result
-is fetched again on the next call. A returned terminal result for the explicit
-head keeps the existing terminal cache behavior. Explicit SHA ownership, PR
-filtering, terminal-category preservation, query filtering/sorting, and the
-portable `Forge` interface are unchanged.
+An empty job result means pending to the workflow gate. A readable matching run
+also sets `CiJobListing::matching_ci_present` even when it has not materialized
+jobs yet; missing-CI recovery therefore does not confuse ordinary runner queueing
+with run absence. The existing CI read cache never reuses empty or otherwise
+non-terminal job results, so a degraded empty result is fetched again on the
+next call. A returned terminal result for the explicit head keeps the existing
+terminal cache behavior. Explicit SHA ownership, PR filtering,
+terminal-category preservation, cancelled-run exclusion, query filtering/sorting,
+and the portable `Forge` interface are unchanged.
 
 Each degraded list read emits exactly one warning. It represents the newest
 unreadable run and includes repository, run, job, final status, retry count,
@@ -167,9 +171,9 @@ above and never guess a pass/fail verdict.
   same technique the production tooling relies on; the real `forgejo-runner`
   remains the producer.
 - `temper-forge` stays backend-agnostic: this is entirely inside
-  `temper-forge-forgejo`, behind the unchanged `list_ci_jobs`/`get_ci_job`
-  signatures. The web-UI requests bypass `build_request` (no `/api/v1` prefix, no
-  token header, cookie auth, form bodies) through the raw `HttpClient` seam.
+  `temper-forge-forgejo`, behind the portable CI listing and `get_ci_job`
+  operations. The web-UI requests bypass `build_request` (no `/api/v1` prefix,
+  no token header, cookie auth, form bodies) through the raw `HttpClient` seam.
 - A new credential requirement: CI reads on a REST-less server need the web-UI
   password; everything else needs only the token. This is documented in
   `docs/reference/forgejo-backend.md`.

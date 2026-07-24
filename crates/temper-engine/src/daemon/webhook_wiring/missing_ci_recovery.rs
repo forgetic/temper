@@ -81,8 +81,8 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
         return suppress(repository, address, intent, "current_head_changed");
     }
 
-    let jobs = match forge
-        .list_ci_jobs(
+    let listing = match forge
+        .list_ci_jobs_with_presence(
             &repository.id,
             CiJobQuery {
                 pull_request_id: Some(pull_request.id.clone()),
@@ -92,21 +92,23 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
         )
         .await
     {
-        Ok(jobs) => jobs,
+        Ok(listing) => listing,
         Err(error) => {
             return retry(
                 repository,
                 address,
                 intent,
-                format!("current_head_jobs_read_failed: {error}"),
+                format!("current_head_ci_read_failed: {error}"),
             );
         }
     };
-    if jobs.iter().any(|job| {
-        job.pull_request_id.as_ref() == Some(&pull_request.id)
-            && sha_identifies_head(&job.commit_sha, current_head)
-    }) {
-        return suppress(repository, address, intent, "current_head_job_visible");
+    if listing.matching_ci_present()
+        || listing.jobs().iter().any(|job| {
+            job.pull_request_id.as_ref() == Some(&pull_request.id)
+                && sha_identifies_head(&job.commit_sha, current_head)
+        })
+    {
+        return suppress(repository, address, intent, "current_head_ci_visible");
     }
 
     let parsed_metadata = match parse_metadata_block(&pull_request.body) {

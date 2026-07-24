@@ -168,23 +168,67 @@ fn pull_request_writable_success_refreshes_same_pr_handoff_without_opening_anoth
             assignment_pr_head: Some(assignment_head.to_string()),
             ..DurableAssignment::default()
         });
+        // Reproduce a partially published repair: the first block already has
+        // the committed head while a stale second block still needs cleanup.
+        claimed_metadata.repaired_head = Some("abc123".to_string());
+        let stale_snapshot_metadata = WorkflowMetadata {
+            kind: Some(ArtifactKindId::new("stale-kind")),
+            parents: vec![ArtifactRef::same_repo(ItemNumber::new(999))],
+            correlation_key: Some("stale-snapshot-correlation".to_string()),
+            repaired_head: Some("stale-snapshot-head".to_string()),
+            lease: Some(Lease {
+                role: RoleId::new("engineer"),
+                worker: "stale-snapshot-worker".to_string(),
+                claimed_at: ts("2026-07-23T00:00:00Z"),
+                heartbeat_at: ts("2026-07-23T00:01:00Z"),
+                expires_at: ts("2026-07-23T00:30:00Z"),
+            }),
+            assignment: Some(DurableAssignment {
+                job_id: Some("stale-snapshot-job".to_string()),
+                attempt_id: Some("stale-snapshot-attempt".to_string()),
+                daemon_boot_id: Some("stale-snapshot-boot".to_string()),
+                ..DurableAssignment::default()
+            }),
+            ..WorkflowMetadata::default()
+        };
         forge
             .update_pull_request(
                 &pull_request.id,
                 UpdatePullRequest {
                     body: Some(format!(
-                        "Old repair report.\n\n{}",
-                        render_metadata_block(&claimed_metadata)
+                        "Old repair report.\n\n{}\n\nStale duplicate state.\n\n{}",
+                        render_metadata_block(&claimed_metadata),
+                        render_metadata_block(&stale_snapshot_metadata)
                     )),
                     ..UpdatePullRequest::default()
                 },
             )
             .await
-            .expect("durable assignment is seeded");
+            .expect("durable assignment and duplicate metadata are seeded");
         forge
             .set_pull_request_head(&pull_request.id, Some("abc123".to_string()))
             .expect("worker push advances the PR head");
         let repair_report = "# Implementation report\n\nFixed the failing PR feedback.";
+        let stale_result_metadata = WorkflowMetadata {
+            kind: Some(ArtifactKindId::new("result-supplied-kind")),
+            parents: vec![ArtifactRef::same_repo(ItemNumber::new(777))],
+            correlation_key: Some("result-supplied-correlation".to_string()),
+            repaired_head: Some("result-supplied-head".to_string()),
+            lease: Some(Lease {
+                role: RoleId::new("engineer"),
+                worker: "result-supplied-worker".to_string(),
+                claimed_at: ts("2026-07-23T01:00:00Z"),
+                heartbeat_at: ts("2026-07-23T01:01:00Z"),
+                expires_at: ts("2026-07-23T01:30:00Z"),
+            }),
+            assignment: Some(DurableAssignment {
+                job_id: Some("result-supplied-job".to_string()),
+                attempt_id: Some("result-supplied-attempt".to_string()),
+                daemon_boot_id: Some("result-supplied-boot".to_string()),
+                ..DurableAssignment::default()
+            }),
+            ..WorkflowMetadata::default()
+        };
         let mut result = success_result(
             "worker-a",
             &job.job_id,
@@ -193,9 +237,15 @@ fn pull_request_writable_success_refreshes_same_pr_handoff_without_opening_anoth
             "fixed pr feedback",
         );
         result.title = Some("Refresh PR after feedback".to_string());
-        result.body = Some(repair_report.to_string());
+        result.body = Some(format!(
+            "{repair_report}\n\n{}",
+            render_metadata_block(&stale_result_metadata)
+        ));
 
-        applier.apply(job, result).await;
+        assert_eq!(
+            applier.apply(job.clone(), result.clone()).await,
+            temper_engine::ApplyOutcome::Applied
+        );
 
         let pulls = forge
             .list_pull_requests(&repo, PullRequestQuery::default())
@@ -207,16 +257,67 @@ fn pull_request_writable_success_refreshes_same_pr_handoff_without_opening_anoth
         assert_eq!(pull.title, "Refresh PR after feedback");
         assert!(pull.body.starts_with(repair_report));
         assert!(!pull.body.contains("Old repair report"));
+        assert_eq!(
+            inspect_metadata_blocks(&pull.body)
+                .expect("published body is structurally valid")
+                .block_count(),
+            1,
+            "repair publication must leave one canonical managed block"
+        );
+        for stale in [
+            "stale-snapshot-correlation",
+            "stale-snapshot-head",
+            "stale-snapshot-worker",
+            "stale-snapshot-attempt",
+            "stale-snapshot-boot",
+            "result-supplied-correlation",
+            "result-supplied-head",
+            "result-supplied-worker",
+            "result-supplied-attempt",
+            "result-supplied-boot",
+        ] {
+            assert!(
+                !pull.body.contains(stale),
+                "stale snapshot or result authority escaped into the handoff: {stale}"
+            );
+        }
         let published_metadata = parse_metadata_block(&pull.body)
             .expect("metadata parses")
             .expect("metadata remains");
         assert_eq!(published_metadata.repaired_head.as_deref(), Some("abc123"));
         assert_eq!(published_metadata.assignment, claimed_metadata.assignment);
+        assert_eq!(published_metadata.kind, claimed_metadata.kind);
+        assert_eq!(published_metadata.parents, claimed_metadata.parents);
+        assert_eq!(
+            published_metadata.correlation_key,
+            claimed_metadata.correlation_key
+        );
         assert_eq!(
             pull.labels,
             vec!["implementation".to_string(), "needs-reviewer".to_string()]
         );
         assert_eq!(pull.requested_reviewers, vec![UserId::new("reviewer")]);
+
+        let body_after_first_delivery = pull.body.clone();
+        let version_after_first_delivery = pull.version;
+        assert_eq!(
+            applier.apply(job, result).await,
+            temper_engine::ApplyOutcome::Applied,
+            "repeated delivery is idempotent"
+        );
+        let replayed = forge
+            .get_pull_request(&pull.id)
+            .await
+            .expect("replayed PR reload succeeds")
+            .expect("replayed PR remains");
+        assert_eq!(replayed.body, body_after_first_delivery);
+        assert_eq!(replayed.version, version_after_first_delivery);
+        assert_eq!(
+            inspect_metadata_blocks(&replayed.body)
+                .unwrap()
+                .block_count(),
+            1
+        );
     })
 }
 

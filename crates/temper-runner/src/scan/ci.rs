@@ -26,12 +26,13 @@ pub struct CiStatusObservation {
     pub pull_request_number: ItemNumber,
     /// Non-empty current pull-request head SHA.
     pub head_sha: String,
-    /// Whether at least one job identifies the exact current pull-request head.
+    /// Whether provider evidence identifies CI for the exact current PR head.
     ///
-    /// This distinguishes an empty (or stale-head-only) result from active
-    /// queued/running work without changing the conservative `Pending` gate
-    /// state shared by both cases.
-    pub current_head_jobs_present: bool,
+    /// This includes a registered workflow run that is still waiting for a
+    /// runner and has not materialized jobs yet. It distinguishes genuinely
+    /// missing CI from active pending work without changing their shared
+    /// conservative `Pending` gate state.
+    pub current_head_ci_present: bool,
     /// Aggregate state of the latest current-head job per name.
     pub state: CiState,
     /// Time the complete latest-job set became terminal, when every latest job
@@ -120,8 +121,8 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
             continue;
         }
 
-        let mut jobs = forge
-            .list_ci_jobs(
+        let listing = forge
+            .list_ci_jobs_with_presence(
                 repo,
                 CiJobQuery {
                     pull_request_id: Some(pull_request.id),
@@ -130,19 +131,18 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
                 },
             )
             .await?;
-        // Do not trust a provider to enforce both query filters: stale jobs
-        // belonging only to a previous head are not current-head presence.
-        // Keep this match rule aligned with `CiStatus::from_jobs_for_head` so
-        // accepted full/abbreviated SHA pairs cannot disagree with the gate.
-        let current_head_jobs_present = jobs
-            .iter()
-            .any(|job| sha_identifies_head(&job.commit_sha, &head_sha));
+        let current_head_ci_present = listing.matching_ci_present();
+        let mut jobs = listing.into_jobs();
+        // The listing's presence fact is contractually scoped to this query.
+        // Independently recheck returned job SHAs before aggregation so stale
+        // jobs cannot affect the verdict. Keep this match rule aligned with
+        // `CiStatus::from_jobs_for_head` for full/abbreviated SHA pairs.
         jobs.retain(|job| sha_identifies_head(&job.commit_sha, &head_sha));
         let status = CiStatus::from_jobs(&jobs);
         observations.push(CiStatusObservation {
             pull_request_number: pull_request.number,
             head_sha,
-            current_head_jobs_present,
+            current_head_ci_present,
             state: status.state(),
             completed_at: status.completed_at(),
             terminal_evidence: status.terminal_evidence().to_vec(),

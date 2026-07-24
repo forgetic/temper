@@ -32,7 +32,8 @@ instance:
 - a logical `clock_tick` starting at `0`.
 - a repository-id counter starting at `1`.
 - in-memory collections of repositories, labels, issues, pull requests, issue
-  comments, pull-request comments, pull-request reviews, and CI jobs;
+  comments, pull-request comments, pull-request reviews, CI jobs, and explicit
+  queued CI-run fixtures;
   dependency item numbers live on the issue and pull-request records, and
   requested reviewers live on pull-request records.
 
@@ -96,6 +97,11 @@ The Forge interface has no CI-job creation operation. Seed jobs directly with
 `MemoryForge::seed_ci_jobs(repo_id, jobs)`, which replaces any previously seeded
 jobs for that repository. This mirrors `FilesystemForge::seed_ci_jobs`, which
 writes the filesystem backend's `ci_jobs.json` fixture.
+
+`MemoryForge::seed_ci_run(repo_id, pull_request_id, commit_sha)` records matching
+CI presence without adding jobs. It models the provider interval after a run is
+registered but before runner capacity assigns its first task, allowing missing-CI
+recovery tests to distinguish that state from genuine absence.
 
 Exact-attempt retry defaults to typed `unsupported`. Tests select deterministic
 `accepted`, `unsupported`, or `uncertain` behavior with

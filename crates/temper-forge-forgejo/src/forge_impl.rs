@@ -12,10 +12,10 @@
 
 use crate::{ForgejoForge, HttpClient};
 use temper_forge_model::{
-    CiJob, CiJobId, CiJobQuery, CiRetryOutcome, CiRetryRequest, Comment, CreateComment,
-    CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeResult,
-    Issue, IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber,
-    ItemNumberNamespace, Label, MergePullRequest, MergeRecord, PullRequest,
+    CiJob, CiJobId, CiJobListing, CiJobQuery, CiRetryOutcome, CiRetryRequest, Comment,
+    CreateComment, CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository,
+    Forge, ForgeResult, Issue, IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails,
+    ItemNumber, ItemNumberNamespace, Label, MergePullRequest, MergeRecord, PullRequest,
     PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview, Repository,
     RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
     UpdatePullRequest, UpsertLabel, User, UserId,
@@ -275,6 +275,14 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>> {
         self.list_ci_jobs(repo_id, query).await
+    }
+
+    async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing> {
+        self.list_ci_jobs_with_presence(repo_id, query).await
     }
 
     async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {

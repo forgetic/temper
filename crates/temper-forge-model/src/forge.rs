@@ -1,9 +1,10 @@
 use crate::ids::{CiJobId, IssueId, ItemNumber, PullRequestId, RepositoryId, UserId};
 use crate::model::{
-    CiJob, CiJobStatus, CiRetryOutcome, CiRetryRequest, Comment, CreateComment, CreateIssue,
-    CreatePullRequest, CreatePullRequestReview, CreateRepository, Issue, IssueState, Label,
-    MergePullRequest, MergeRecord, PullRequest, PullRequestReview, PullRequestState, Repository,
-    RepositoryPath, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User,
+    CiJob, CiJobListing, CiJobStatus, CiRetryOutcome, CiRetryRequest, Comment, CreateComment,
+    CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository, Issue, IssueState,
+    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestReview, PullRequestState,
+    Repository, RepositoryPath, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel,
+    User,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -587,6 +588,18 @@ pub trait Forge: Send + Sync {
         repo_id: &RepositoryId,
         query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>>;
+
+    /// Lists CI jobs and separately reports matching provider CI presence.
+    ///
+    /// The presence bit uses the query's repository, pull-request, and commit
+    /// ownership filters, but is independent of its job-status filter. It may be
+    /// true with no returned jobs when a provider has registered a workflow run
+    /// that is still waiting for a runner to materialize its jobs.
+    async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing>;
 
     /// Requests a provider retry of exactly one freshly observed CI attempt.
     ///

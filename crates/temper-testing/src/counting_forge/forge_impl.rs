@@ -455,6 +455,19 @@ impl<F: Forge> Forge for CountingForge<F> {
         .await
     }
 
+    async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing> {
+        self.record_ci_job_query(&query);
+        self.perform(
+            CountedForgeOp::ListCiJobs,
+            self.inner.list_ci_jobs_with_presence(repo_id, query),
+        )
+        .await
+    }
+
     async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {
         self.record_ci_retry_request(&request);
         self.perform(

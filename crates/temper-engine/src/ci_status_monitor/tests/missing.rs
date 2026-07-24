@@ -8,7 +8,7 @@ fn missing_observation(number: u64, head_sha: &str) -> CiStatusObservation {
     CiStatusObservation {
         pull_request_number: ItemNumber::new(number),
         head_sha: head_sha.to_string(),
-        current_head_jobs_present: false,
+        current_head_ci_present: false,
         state: CiState::Pending,
         completed_at: None,
         terminal_evidence: Vec::new(),
@@ -161,6 +161,48 @@ fn head_change_resets_missing_window_and_transition_names_the_new_head() {
         timestamp("2026-07-21T10:05:00Z")
     );
     assert_eq!(monitor.observations.len(), 1);
+}
+
+#[test]
+fn queued_current_head_run_without_jobs_never_ages_as_missing() {
+    let forge = MemoryForge::new();
+    let repository = create_repository(&forge, "queued-run");
+    let pull_request = create_pull_request(&forge, &repository, "head-queued");
+    forge.seed_ci_run(&repository.id, Some(&pull_request.id), "head-queued");
+    let repositories = RepositorySet::new(vec![repository]);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let (mut monitor, now) = controlled_monitor("2026-07-21T12:00:00Z", Duration::from_secs(300));
+
+    assert!(
+        block_on(run_ci_status_monitor_tick(
+            &mut monitor,
+            &forge,
+            &repositories,
+            &workflow,
+            &compiled,
+        ))
+        .is_empty()
+    );
+    *now.lock().expect("test clock") = timestamp("2026-07-21T13:00:00Z");
+    assert!(
+        block_on(run_ci_status_monitor_tick(
+            &mut monitor,
+            &forge,
+            &repositories,
+            &workflow,
+            &compiled,
+        ))
+        .is_empty(),
+        "registered current-head CI remains pending beyond the missing grace"
+    );
+    assert!(matches!(
+        monitor.observations.values().next(),
+        Some(RecordedObservation::Present {
+            state: CiState::Pending,
+            ..
+        })
+    ));
 }
 
 #[test]

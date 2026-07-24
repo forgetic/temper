@@ -92,6 +92,7 @@ and unmerged becomes a typed workflow-routable merge conflict.
 Required methods:
 
 - `list_ci_jobs`
+- `list_ci_jobs_with_presence`
 - `get_ci_job`
 - `retry_ci_attempt`
 
@@ -105,6 +106,12 @@ and opaque run/attempt identities are retained when the provider exposes them;
 all four fields are optional for backward-compatible stored records. Populated
 `CiJobQuery` filters are conjunctive, so a query containing both pull-request ID
 and commit SHA returns only jobs satisfying both constraints.
+
+`list_ci_jobs_with_presence` also reports whether provider evidence matched CI
+for the query ownership scope. That fact remains true when a workflow run is
+registered but has no assigned jobs yet, and is independent of a job-status
+filter that removes every returned job. `list_ci_jobs` remains the jobs-only
+convenience operation for callers that do not reason about missing CI.
 
 ## Exact-attempt CI retry
 

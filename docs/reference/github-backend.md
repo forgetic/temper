@@ -55,15 +55,16 @@ Ids are opaque to workflow code; only the backend parses them:
 - **CI.** `list_ci_jobs` narrows Actions runs provider-side with the
   `head_sha` query parameter (resolved from the pull request's head when a
   PR id is given), then expands each run's latest-attempt jobs.
-  `get_ci_job` reads `/actions/jobs/{job_id}` directly. Actions conclusions keep
-  startup failure, action-required, stale/interrupted, timeout, cancellation,
-  neutral, skipped, ordinary failure, runner loss (when explicitly supplied),
-  and unknown terminalization distinct. A machine-readable reason can refine a
-  broad failure into an explicit terminal category; arbitrary reason prose is
-  preserved but never reclassified. The adapter also retains bounded,
-  control-sanitized raw conclusion/reason evidence and opaque run/attempt ids;
-  it never turns an unknown completed result into ordinary failure.
-  `retry_ci_attempt` supports only GitHub's documented
+  `list_ci_jobs_with_presence` preserves a matching run as present even before
+  GitHub materializes jobs, and `get_ci_job` reads `/actions/jobs/{job_id}`
+  directly. Actions conclusions keep startup failure, action-required,
+  stale/interrupted, timeout, cancellation, neutral, skipped, ordinary failure,
+  runner loss (when explicitly supplied), and unknown terminalization distinct.
+  A machine-readable reason can refine a broad failure into an explicit terminal
+  category; arbitrary reason prose is preserved but never reclassified. The
+  adapter also retains bounded, control-sanitized raw conclusion/reason evidence
+  and opaque run/attempt ids; it never turns an unknown completed result into
+  ordinary failure. `retry_ci_attempt` supports only GitHub's documented
   `POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun` endpoint. It first
   re-reads the exact PR head, run attempt, and latest jobs and compares the
   complete portable fingerprint. A higher `run_attempt` is `already_observed`;

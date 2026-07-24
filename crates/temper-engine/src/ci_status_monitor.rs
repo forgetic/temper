@@ -3,7 +3,7 @@
 //! Ephemeral, head-aware CI transition monitoring.
 //!
 //! The runner owns authoritative current-head aggregation and distinguishes a
-//! genuinely missing current-head job set from active pending work. This module
+//! genuinely missing current-head CI from active pending work. This module
 //! remembers successful observations long enough to turn terminal edges and an
 //! uninterrupted, grace-aged missing interval into exact daemon wake hints. The
 //! general role poll remains the durable liveness backstop.
@@ -153,7 +153,7 @@ impl CiStatusMonitor {
                 head_sha: observation.head_sha.clone(),
             };
             let prior = self.observations.get(&key).cloned();
-            let recorded = if observation.current_head_jobs_present {
+            let recorded = if observation.current_head_ci_present {
                 let current = RecordedObservation::Present {
                     state: observation.state,
                     terminal_evidence: observation.terminal_evidence.clone(),
@@ -183,7 +183,7 @@ impl CiStatusMonitor {
                             head_sha = %observation.head_sha,
                             first_observed_at = %now,
                             grace_secs = self.missing_grace.as_secs(),
-                            "CI status monitor first observed missing current-head jobs"
+                            "CI status monitor first observed missing current-head CI"
                         );
                         now
                     }
