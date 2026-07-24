@@ -71,7 +71,10 @@ Ids are opaque to workflow code; only the backend parses them:
   Endpoint `404`/`410` (including older Enterprise versions) is typed
   `unsupported`, explicit non-success client responses are rejected, and
   transport/`5xx` completion is `uncertain` for later read reconciliation.
-  There is no commit/ref fallback.
+  Temper never blindly repeats that uncertain boundary: a newer pending attempt
+  reconciles it, while unchanged evidence proceeds to the configured read-only
+  diagnostic or actionable park after the bounded grace. There is no commit/ref
+  fallback.
 - **Optimistic concurrency.** Best-effort, identical to the Forgejo backend:
   a portable `Version` is derived from the response `ETag` (or the weak
   `updated_at` fallback) per artifact, and conditional writes re-read and

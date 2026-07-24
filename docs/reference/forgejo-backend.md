@@ -396,3 +396,7 @@ web-UI fallback is a version-sensitive read surface rather than a verified
 mutation contract. The backend validates that the portable repository and PR
 IDs name the same Forgejo repository, then fails closed without HTTP. It never
 guesses a REST/UI endpoint and never writes a commit or ref to trigger CI.
+Operators should configure the workflow's `pull_request_read_only` interruption
+diagnostic when available; otherwise Temper parks the PR with the exact
+head/run/attempt, provider evidence, URLs, timestamps, and unsupported retry
+outcome required for a safe manual retrigger.

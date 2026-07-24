@@ -177,7 +177,21 @@ effect boundary. Otherwise recovery proceeds in this fixed order:
 
 Missing-current-head recovery remains independent because it has no provider
 attempt to retry. Both paths preserve unrelated labels and defer to live or
-ambiguous assignment ownership.
+ambiguous assignment ownership. An interrupted-attempt park is recognizable by
+`needs-human` plus one `interrupted_ci_recovery:<fingerprint>` comment; a
+missing-current-head park instead uses its `missing_current_head_ci:<head>` key
+and states that no matching run exists.
+
+For an interrupted-attempt park, the operator must use the comment as the
+remediation checklist: confirm repository and current head; inspect every linked
+job and its typed/provider reason and timestamps; repair runner/provider
+infrastructure; then retrigger that exact head using a supported provider
+operation. Keep `needs-human` while no newer exact-head attempt is visible.
+After a newer queued/running attempt appears, or after independently confirming
+that automation may resume, clear `needs-human`; do not amend, empty-commit, or
+force-push merely to manufacture a run. An explicit ordinary failure on the
+newer attempt is different evidence and may enter the normal writable repair
+queue.
 
 ## Repaired-PR convergence
 

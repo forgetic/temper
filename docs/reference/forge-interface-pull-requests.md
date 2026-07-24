@@ -139,3 +139,15 @@ Capability detection fails closed. A backend must report `unsupported` rather
 than guessing an undocumented endpoint or using a UI/read fallback for writes.
 No implementation may create an empty commit, force-push, update a ref, or make
 any other source mutation to trigger CI.
+
+Current provider support is intentionally narrow:
+
+| Backend | Exact-attempt retry | Fallback behavior |
+| --- | --- | --- |
+| GitHub | Supported through the documented Actions run rerun endpoint after exact head/attempt/job-set revalidation | `404`/`410` is unsupported; transport/`5xx` is uncertain and is not blindly repeated |
+| Forgejo | Unsupported on all supported versions | Use a configured read-only diagnostic or park with evidence; the web-UI CI adapter is read-only |
+| Memory/filesystem | Deterministic test outcome / unsupported reference behavior | Never mutate commits or refs |
+
+Provider support decides only whether the first bounded action can be attempted.
+Unsupported, rejected, uncertain, and exhausted outcomes retain the same typed
+terminal evidence for diagnostic fallback and parking.

@@ -20,6 +20,7 @@ use temper_worker::{
 use super::git::{git_output_raw, git_output_trim, path_str};
 use super::runner::HermeticActivitySnapshot;
 use super::stack::HermeticRealStack;
+use super::types::HermeticCiAttempt;
 
 impl HermeticRealStack {
     /// Starts the real worker loop once and retains explicit crash/join control.
@@ -204,6 +205,103 @@ impl HermeticRealStack {
         )
     }
 
+    /// Adds a complete provider attempt for one exact PR head while retaining
+    /// earlier attempts. A repeated run/attempt/job name updates that job in
+    /// place, so delayed terminalization has one stable provider job identity.
+    pub async fn seed_ci_attempt(
+        &self,
+        number: ItemNumber,
+        attempt: HermeticCiAttempt,
+    ) -> Result<Vec<CiJob>, String> {
+        if attempt.head_sha.trim().is_empty()
+            || attempt.run_id.trim().is_empty()
+            || attempt.attempt.trim().is_empty()
+            || attempt.jobs.is_empty()
+        {
+            return Err(
+                "hermetic CI attempt requires a head, run, attempt, and at least one job"
+                    .to_string(),
+            );
+        }
+        let pull_request = self
+            .forge
+            .get_pull_request_by_number(&self.primary_repo_id, number)
+            .await
+            .map_err(|error| format!("load pull request #{number}: {error}"))?
+            .ok_or_else(|| format!("pull request #{number} does not exist"))?;
+        if pull_request.head_sha.as_deref() != Some(attempt.head_sha.as_str()) {
+            return Err(format!(
+                "attempt head `{}` does not own pull request #{number} current head {:?}",
+                attempt.head_sha, pull_request.head_sha
+            ));
+        }
+        let mut inventory = self
+            .forge
+            .list_ci_jobs(&self.primary_repo_id, CiJobQuery::default())
+            .await
+            .map_err(|error| format!("list CI jobs: {error}"))?;
+        let mut seeded = Vec::with_capacity(attempt.jobs.len());
+        for job in attempt.jobs {
+            let existing_id = inventory
+                .iter()
+                .find(|candidate| {
+                    candidate.pull_request_id.as_ref() == Some(&pull_request.id)
+                        && candidate.commit_sha == attempt.head_sha
+                        && candidate.run_id.as_deref() == Some(attempt.run_id.as_str())
+                        && candidate.attempt.as_deref() == Some(attempt.attempt.as_str())
+                        && candidate.name == job.name
+                })
+                .map(|candidate| candidate.id.clone());
+            inventory.retain(|candidate| {
+                candidate.pull_request_id.as_ref() != Some(&pull_request.id)
+                    || candidate.commit_sha != attempt.head_sha
+                    || candidate.run_id.as_deref() != Some(attempt.run_id.as_str())
+                    || candidate.attempt.as_deref() != Some(attempt.attempt.as_str())
+                    || candidate.name != job.name
+            });
+            let index = inventory.len() + 1;
+            let fallback = self.clock.now() + chrono::Duration::seconds(index as i64);
+            let updated_at = job.updated_at.unwrap_or(fallback);
+            let created_at = job.created_at.unwrap_or(updated_at);
+            let started_at = job
+                .started_at
+                .or((job.status != CiJobStatus::Queued).then_some(updated_at));
+            let completed_at = job
+                .completed_at
+                .or((job.status == CiJobStatus::Completed).then_some(updated_at));
+            let observation = CiJob {
+                id: existing_id.unwrap_or_else(|| {
+                    CiJobId::new(format!(
+                        "hermetic-ci-{}-{}-{}-{}-{index}",
+                        self.primary_repo_id.as_str(),
+                        number.get(),
+                        attempt.run_id,
+                        attempt.attempt,
+                    ))
+                }),
+                repo_id: self.primary_repo_id.clone(),
+                pull_request_id: Some(pull_request.id.clone()),
+                commit_sha: attempt.head_sha.clone(),
+                name: job.name,
+                status: job.status,
+                conclusion: job.conclusion,
+                provider_conclusion: job.provider_conclusion,
+                provider_reason: job.provider_reason,
+                run_id: Some(attempt.run_id.clone()),
+                attempt: Some(attempt.attempt.clone()),
+                url: job.url,
+                created_at,
+                started_at,
+                completed_at,
+                updated_at,
+            };
+            inventory.push(observation.clone());
+            seeded.push(observation);
+        }
+        self.forge.seed_ci_jobs(&self.primary_repo_id, inventory);
+        Ok(seeded)
+    }
+
     /// Adds one deterministic native CI observation for an exact PR head while
     /// retaining prior observations in the MemoryForge fixture.
     pub async fn seed_ci_for_head(
@@ -249,6 +347,29 @@ impl HermeticRealStack {
             updated_at: now,
         });
         self.forge.seed_ci_jobs(&self.primary_repo_id, jobs);
+        Ok(())
+    }
+
+    /// Publishes the provider-style read-only pull-request head ref in the
+    /// primary bare origin. Writable PR repair checks out the source branch,
+    /// while read-only diagnostic jobs intentionally fetch this immutable PR
+    /// snapshot just like hosted Forge checkouts do.
+    pub fn publish_pull_request_head_ref(
+        &self,
+        number: ItemNumber,
+        head_sha: &str,
+    ) -> Result<(), String> {
+        if head_sha.trim().is_empty() {
+            return Err("pull-request head ref requires a non-empty SHA".to_string());
+        }
+        let origin = self.origin(self.primary_repo_path())?;
+        git_output_trim(&[
+            "-C",
+            path_str(origin)?,
+            "update-ref",
+            &format!("refs/pull/{}/head", number.get()),
+            head_sha,
+        ])?;
         Ok(())
     }
 

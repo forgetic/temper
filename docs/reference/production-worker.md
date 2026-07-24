@@ -23,6 +23,29 @@ and standalone daemon wording below remains useful for legacy or test-only
 operation, but operator-facing docs should prefer `serve engine` / `serve
 worker`.
 
+## Operating an interrupted-CI park
+
+A provider-reported cancellation, interruption, timeout, runner loss, startup
+failure, action-required, neutral/skipped result, or unknown terminalization
+stays red but does not enter writable repair. Temper first attempts only the
+backend's verified exact-attempt retry capability (GitHub supports it; Forgejo
+does not), then at most one configured read-only diagnostic. If those paths are
+unsupported or exhausted, the PR receives `needs-human` and one deduplicated
+comment.
+
+Before remediation, verify the comment names the PR's current head and includes
+run/attempt, latest job IDs and URLs, created/started/completed/updated times,
+typed and provider conclusion/reason, provider retry outcome, and diagnostic
+outcome. Missing any of that evidence is a reason to leave the PR parked rather
+than infer a source failure. Inspect and restore runner/provider infrastructure,
+then retrigger CI for that exact head through the provider. Keep the attention
+label until a newer exact-head attempt is visible; clear it only to resume
+automation after that verification. Do not push an empty commit, rewrite the PR
+head, or edit CI workflow/test scripts to manufacture liveness. A newer explicit
+ordinary test/build failure is the only result that belongs in the writable CI
+repair route. A comment saying no current-head run exists is instead the
+separate missing-current-head recovery case and has no run/attempt to retry.
+
 This page records the operator-visible knobs on the Forgejo `temper-worker`
 binary. The deployable entrypoint lives in the root `temper` package and
 delegates to `crates/temper-worker`; its legacy/internal wake socket support is

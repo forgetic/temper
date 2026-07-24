@@ -88,6 +88,19 @@ instead `ci_recovery_required`. Those results stay red without dispatching
 writable source repair. A visible terminal job alongside any queued or running
 latest job remains pending.
 
+A current-head run that later terminalizes because its runner disappeared is
+**not** missing-current-head CI. For a freshly revalidated
+`ci_recovery_required` aggregate, the wake executor persists the exact
+repository/PR/head/run/attempt/latest-job fingerprint, then advances one bounded
+sequence: verified provider retry, one separately configured read-only
+diagnostic, or actionable parking. Every action is preceded by a new exact-head
+read. A newer pending attempt, pass, ordinary failure, head change, or closed PR
+suppresses stale interruption work. Durable side-effect markers make duplicate
+or reordered webhook/poll observations and daemon replacement safe at retry,
+diagnostic assignment, attention-label, audit, and marker-cleanup boundaries.
+The recovery path never changes a ref or creates a commit merely to obtain a new
+run.
+
 ### Layering
 
 ```

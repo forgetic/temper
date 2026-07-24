@@ -55,7 +55,12 @@ publish exactly one workflow-configured `pull_request_read_only` diagnostic
 assignment with explicit verdicts. No configured diagnostic, or its completion,
 converges to one `needs-human` barrier and fingerprint-keyed evidence audit.
 Every boundary re-reads the exact current head, and marker/assignment CAS state
-makes duplicate webhooks, polling, and daemon replacement idempotent. See
+makes duplicate webhooks, polling, and daemon replacement idempotent. Recovery
+does not derive a verdict from an event, a quiet log, or prior passing output:
+only the authoritative latest attempt can become pending, passed, ordinary
+failed, or recovery-required. The PR head remains unchanged throughout retry,
+diagnosis, and parking; only a later independently observed ordinary failure
+may enter the existing writable repair route and produce a repaired head. See
 [workflow recovery](workflow-recovery.md#interrupted-current-head-ci-recovery).
 
 Terminal aggregates retain deterministic structured evidence for every latest
