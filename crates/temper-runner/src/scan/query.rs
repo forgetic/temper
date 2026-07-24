@@ -129,7 +129,11 @@ pub(super) async fn targeted_role_inner<F: Forge + ?Sized>(
     let artifacts =
         targeted_artifacts(forge, repo, workflow, &queues, snapshot, classified, false).await?;
     let ci_status = needs_ci
-        .then(|| artifacts.first().map(|artifact| *artifact.signals.ci()))
+        .then(|| {
+            artifacts
+                .first()
+                .map(|artifact| artifact.signals.ci().clone())
+        })
         .flatten();
     Ok((
         work_items_for_roles(&queues, &artifacts, now, roles),
@@ -436,6 +440,15 @@ fn emit_pr_gate_evaluated(
             CiState::Failed => emit_ci_completed(CiCompleted {
                 item: &item,
                 conclusion: "failure",
+                duration_ms: 0,
+                trigger_source: None,
+                detection_latency_ms: None,
+                queue: None,
+                role: None,
+            }),
+            CiState::RecoveryRequired => emit_ci_completed(CiCompleted {
+                item: &item,
+                conclusion: "recovery_required",
                 duration_ms: 0,
                 trigger_source: None,
                 detection_latency_ms: None,

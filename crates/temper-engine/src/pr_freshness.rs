@@ -99,6 +99,9 @@ async fn check_pull_request_freshness_inner<F: Forge + ?Sized>(
 
     match check.queue_condition.as_deref() {
         Some("ci_failed") => ci_failed_still_holds(forge, &repo, check, &pull_request).await,
+        Some("ci_recovery_required") => {
+            ci_recovery_required_still_holds(forge, &repo, check, &pull_request).await
+        }
         Some("review_changes_requested") => {
             review_changes_requested_still_holds(forge, check, &pull_request).await
         }
@@ -148,6 +151,26 @@ async fn ci_failed_still_holds<F: Forge + ?Sized>(
         Ok(status) if status.is_failed() => PullRequestFreshnessResponse::fresh(),
         Ok(status) => PullRequestFreshnessResponse::stale(format!(
             "pull request #{} current-head CI is {:?}, not failed",
+            check.number,
+            status.state()
+        )),
+        Err(error) => PullRequestFreshnessResponse::unavailable(format!(
+            "read CI for pull request #{}: {error}",
+            check.number
+        )),
+    }
+}
+
+async fn ci_recovery_required_still_holds<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    check: &PullRequestFreshness,
+    pull_request: &temper_forge::PullRequest,
+) -> PullRequestFreshnessResponse {
+    match current_ci_status(forge, repo, pull_request).await {
+        Ok(status) if status.is_recovery_required() => PullRequestFreshnessResponse::fresh(),
+        Ok(status) => PullRequestFreshnessResponse::stale(format!(
+            "pull request #{} current-head CI is {:?}, not recovery-required",
             check.number,
             status.state()
         )),
@@ -364,6 +387,28 @@ mod tests {
             let response = check_pull_request_freshness(&forge, &check(&repo, &pr)).await;
 
             assert_eq!(response.status, PullRequestFreshnessStatus::Fresh);
+        });
+    }
+
+    #[test]
+    fn interrupted_ci_is_stale_for_ci_failed_but_fresh_for_recovery_required() {
+        temper_engine_io::block_on(async {
+            let (forge, repo, pr) = setup().await;
+            forge.seed_ci_jobs(&repo, vec![ci_job(&repo, &pr, CiJobConclusion::RunnerLost)]);
+
+            let failed_response = check_pull_request_freshness(&forge, &check(&repo, &pr)).await;
+            assert_eq!(failed_response.status, PullRequestFreshnessStatus::Stale);
+            assert!(
+                failed_response
+                    .reason
+                    .unwrap()
+                    .contains("RecoveryRequired, not failed")
+            );
+
+            let mut recovery_check = check(&repo, &pr);
+            recovery_check.queue_condition = Some("ci_recovery_required".to_string());
+            let recovery_response = check_pull_request_freshness(&forge, &recovery_check).await;
+            assert_eq!(recovery_response.status, PullRequestFreshnessStatus::Fresh);
         });
     }
 

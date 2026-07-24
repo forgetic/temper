@@ -134,6 +134,26 @@ be absent for a queue to match. Use `excluded_labels` for temporary blockers
 that should pause a durable handoff queue without removing the handoff label
 itself (for example, keep `landing` while `merge-conflict` routes repair work).
 
+## Native gate conditions
+
+Runtime signal conditions are read fresh from the Forge and are never projected
+as workflow labels:
+
+| Condition | Meaning |
+| --- | --- |
+| `dependencies_resolved` | Every dependency relation target has landed. |
+| `ci_passed` | Every latest current-head CI job is terminal with explicit success. |
+| `ci_failed` | Every latest current-head job is terminal and at least one has explicit ordinary `failure` evidence suitable for source repair. |
+| `ci_recovery_required` | Every latest current-head job is terminal and red, but none has ordinary failure evidence; cancellation, interruption, timeout, runner loss, startup failure, action-required, neutral/skipped, and unknown results use this route. |
+| `review_approved` | The native pull-request review aggregate is approved. |
+| `review_changes_requested` | A reviewer's latest native decision requests changes. |
+
+Only `ci_passed` can satisfy a landing gate. `ci_failed` and
+`ci_recovery_required` are mutually exclusive routing signals. A
+recovery-required result must use a diagnostic/retry action with a non-code-repair
+checkout contract; `pull_request_writable` is rejected for that condition so it
+cannot inherit guidance requiring a source change.
+
 ## Queue role-worker actions
 
 A queue may declare `actions` entries that bind matched role work to a concrete

@@ -197,10 +197,12 @@ pub enum RawGateCondition {
     /// conclusions (see ADR 0014); the condition references the artifact's CI,
     /// so it carries no payload.
     CiPassed,
-    /// The artifact's native CI must have completed with a non-success result.
-    /// The runtime computes this from the same Forge `CiJob` data as
-    /// [`RawGateCondition::CiPassed`].
+    /// The artifact's native CI must contain an explicit ordinary source,
+    /// build, or test failure. Non-repairable terminal results do not satisfy it.
     CiFailed,
+    /// The artifact's native CI must be terminal and red without any explicit
+    /// ordinary failure evidence, so provider recovery or diagnosis is required.
+    CiRecoveryRequired,
     /// The pull request's native review aggregate must be approved.
     ReviewApproved,
     /// Some reviewer's latest native review decision must request changes.

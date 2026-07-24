@@ -36,5 +36,5 @@ pub use queue::{
     QueueMember, QueueQuery, matches_queue, matches_queue_cheap, matches_queue_condition,
     matches_queue_with, queue_active,
 };
-pub use signals::{CiState, CiStatus, GateSignals, ReviewStatus, SignalNeeds};
+pub use signals::{CiState, CiStatus, CiTerminalEvidence, GateSignals, ReviewStatus, SignalNeeds};
 pub use types::{Postcondition, TransitionPlan, WorkflowEffect};

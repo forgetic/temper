@@ -475,11 +475,14 @@ fn emit_ci_wake_observation(
     if address.kind != HintArtifactKind::PullRequest {
         return;
     }
-    let fresh_verdict = fresh_status.and_then(|status| match status.state() {
-        CiState::Passed => Some(crate::CiTerminalVerdict::Passed),
-        CiState::Failed => Some(crate::CiTerminalVerdict::Failed),
-        CiState::Pending => None,
-    });
+    let fresh_verdict = fresh_status
+        .as_ref()
+        .and_then(|status| match status.state() {
+            CiState::Passed => Some(crate::CiTerminalVerdict::Passed),
+            CiState::Failed => Some(crate::CiTerminalVerdict::Failed),
+            CiState::RecoveryRequired => Some(crate::CiTerminalVerdict::RecoveryRequired),
+            CiState::Pending => None,
+        });
     // A fresh pending aggregate means the terminal edge was superseded by a
     // rerun before execution; do not report the stale terminal verdict.
     if fresh_status.is_some() && fresh_verdict.is_none() {
@@ -489,6 +492,7 @@ fn emit_ci_wake_observation(
         return;
     };
     let completed_at = fresh_status
+        .as_ref()
         .and_then(|status| status.completed_at())
         .or(facts.completed_at);
     let detection_latency_ms = completed_at.map(|completed_at| {
@@ -511,6 +515,7 @@ fn emit_ci_wake_observation(
         conclusion: match verdict {
             crate::CiTerminalVerdict::Passed => "success",
             crate::CiTerminalVerdict::Failed => "failure",
+            crate::CiTerminalVerdict::RecoveryRequired => "recovery_required",
         },
         duration_ms: 0,
         trigger_source: Some(facts.source.as_str()),

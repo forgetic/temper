@@ -47,6 +47,7 @@ impl WakeRequest {
             Some(CiWakeFacts {
                 source: CiTriggerSource::Webhook,
                 verdict,
+                terminal_evidence: Vec::new(),
                 completed_at,
                 recovery: None,
             }),
@@ -60,6 +61,7 @@ impl WakeRequest {
                 Some(CiWakeFacts {
                     source: CiTriggerSource::CiPoll,
                     verdict: Some(transition.verdict),
+                    terminal_evidence: transition.terminal_evidence,
                     completed_at: transition.completed_at,
                     recovery: None,
                 }),
@@ -69,6 +71,7 @@ impl WakeRequest {
                 Some(CiWakeFacts {
                     source: CiTriggerSource::CiPoll,
                     verdict: None,
+                    terminal_evidence: Vec::new(),
                     completed_at: None,
                     recovery: Some(MissingCiRecoveryIntent {
                         expected_head_sha: transition.head_sha,

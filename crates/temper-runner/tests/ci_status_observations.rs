@@ -245,6 +245,7 @@ fn ci_discovery_uses_only_one_open_pull_request_bucket() {
             current_head_jobs_present: false,
             state: CiState::Pending,
             completed_at: None,
+            terminal_evidence: Vec::new(),
         }]
     );
     assert_eq!(forge.count(CountedForgeOp::ListIssueCandidates), 0);

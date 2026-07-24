@@ -11,6 +11,7 @@ fn missing_observation(number: u64, head_sha: &str) -> CiStatusObservation {
         current_head_jobs_present: false,
         state: CiState::Pending,
         completed_at: None,
+        terminal_evidence: Vec::new(),
     }
 }
 
