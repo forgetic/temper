@@ -23,7 +23,7 @@ fn task_with_head(
     status: &str,
     head_sha: &str,
 ) -> serde_json::Value {
-    json!({
+    let mut task = json!({
         "id": id,
         "run_number": run_number,
         "name": name,
@@ -31,7 +31,14 @@ fn task_with_head(
         "head_sha": head_sha,
         "html_url": "https://forge.example.com/acme/widgets/actions/runs/10/jobs/0",
         "created_at": "2024-01-02T03:04:05Z",
-    })
+    });
+    if status == "failure" {
+        // Ordinary failure fixtures carry the provider's explicit result. A
+        // status-only failure is covered separately by the captured run #591
+        // payload and must remain ambiguous.
+        task["conclusion"] = json!("failure");
+    }
+    task
 }
 
 #[test]

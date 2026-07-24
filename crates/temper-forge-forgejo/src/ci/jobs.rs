@@ -68,11 +68,12 @@ pub(crate) fn map_status(status: &str) -> (CiJobStatus, Option<CiJobConclusion>)
 
 /// Maps separate job and run state/conclusion/reason fields.
 ///
-/// Job-specific terminal evidence wins. A terminal run makes an absent or
+/// Job-specific terminal evidence wins. An explicit job conclusion is trusted,
+/// but Forgejo's bare `failure` status is ambiguous: the provider also uses it
+/// when execution infrastructure disappears. A terminal run makes an absent or
 /// unrecognized job state terminal too, but a run-level ordinary failure is
-/// deliberately projected as `Unknown`: an aggregate failure does not prove
-/// that this job reported a source/test failure. Explicit run-wide categories
-/// such as cancellation or runner loss can be retained without that inference.
+/// likewise projected as `Unknown`. Explicit infrastructure categories can be
+/// retained without guessing from provider prose or quiet logs.
 pub(crate) fn map_status_evidence(
     status: &str,
     conclusion: &str,
@@ -125,28 +126,35 @@ pub(crate) fn map_status_evidence(
 }
 
 fn category_from_evidence(status: &str, conclusion: &str, reason: &str) -> Option<CiJobConclusion> {
-    let conclusion_present = !conclusion.trim().is_empty();
-    let primary = if conclusion_present {
+    let explicit_conclusion = !conclusion.trim().is_empty();
+    let primary = if explicit_conclusion {
         terminal_category(conclusion)
     } else {
         terminal_category(status)
     };
-    let reason = terminal_category(reason);
+    let specific_reason = terminal_category(reason).filter(|category| {
+        !matches!(
+            category,
+            CiJobConclusion::Failure | CiJobConclusion::Unknown
+        )
+    });
     match primary {
-        // A broad failure/unknown plus a machine-readable terminal reason is an
-        // explicit provider fact. Arbitrary human prose never enters this map.
-        Some(CiJobConclusion::Failure | CiJobConclusion::Unknown) => reason
-            .filter(|category| {
-                !matches!(
-                    category,
-                    CiJobConclusion::Failure | CiJobConclusion::Unknown
-                )
-            })
-            .or(primary),
+        // A broad explicit conclusion plus a machine-readable terminal reason
+        // can retain the provider's more specific category. Arbitrary human
+        // prose never enters this map.
+        Some(CiJobConclusion::Failure | CiJobConclusion::Unknown) if explicit_conclusion => {
+            specific_reason.or(primary)
+        }
+        // A status-only failure is not ordinary source/test-failure evidence.
+        // Forgejo used this exact payload when run #591 lost its runner, so it
+        // must enter recovery rather than writable repair.
+        Some(CiJobConclusion::Failure | CiJobConclusion::Unknown) => {
+            specific_reason.or(Some(CiJobConclusion::Unknown))
+        }
         Some(_) => primary,
-        // An unrecognized explicit conclusion did not fall back to the broad
-        // status above; only a recognized reason may refine it.
-        None => reason,
+        // An unrecognized explicit conclusion does not fall back to status.
+        // Only a recognized, specific machine reason may refine it.
+        None => specific_reason,
     }
 }
 
@@ -395,10 +403,9 @@ mod tests {
     }
 
     #[test]
-    fn status_mapping_covers_every_terminal_category() {
+    fn status_mapping_covers_every_terminal_category_conservatively() {
         let cases = [
             ("success", CiJobConclusion::Success),
-            ("failure", CiJobConclusion::Failure),
             ("cancelled", CiJobConclusion::Cancelled),
             ("interrupted", CiJobConclusion::Interrupted),
             ("timed_out", CiJobConclusion::TimedOut),
@@ -416,6 +423,20 @@ mod tests {
                 "raw status {raw}"
             );
         }
+        assert_eq!(
+            map_status("failure"),
+            (CiJobStatus::Completed, Some(CiJobConclusion::Unknown)),
+            "a bare Forgejo failure status is ambiguous"
+        );
+        assert_eq!(
+            map_status("failed"),
+            (CiJobStatus::Completed, Some(CiJobConclusion::Unknown))
+        );
+        assert_eq!(
+            map_status_evidence("failure", "failure", "", "", "", ""),
+            (CiJobStatus::Completed, Some(CiJobConclusion::Failure)),
+            "an explicit provider conclusion preserves ordinary failure"
+        );
         assert_eq!(map_status("running"), (CiJobStatus::Running, None));
         assert_eq!(map_status("queued"), (CiJobStatus::Queued, None));
         assert_eq!(map_status("mystery"), (CiJobStatus::Queued, None));
@@ -442,6 +463,11 @@ mod tests {
             map_status_evidence("failure", "", "runner_lost", "", "", ""),
             (CiJobStatus::Completed, Some(CiJobConclusion::RunnerLost)),
             "a machine-readable provider reason refines a broad failure"
+        );
+        assert_eq!(
+            map_status_evidence("completed", "", "failure", "", "", ""),
+            (CiJobStatus::Completed, Some(CiJobConclusion::Unknown)),
+            "a broad reason is not explicit ordinary-failure evidence"
         );
     }
 }
