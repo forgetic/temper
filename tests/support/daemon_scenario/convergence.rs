@@ -28,17 +28,72 @@ pub(super) fn drive_variant(
             block_on(assert_converged(forge, provisioned, engineer, issue, 1))
         }),
         "deferred" => {
-            // The worker withholds the marker on the implementation head. The
-            // dedicated CI poll must observe its terminal failure, enqueue the
-            // PR-targeted engineer repair, observe the repair head turn green,
-            // and land it. No driver-side sentinel push is allowed here: final
-            // convergence therefore proves the real repair assignment path.
+            // Forgejo 7 reports the runner-produced red job only as bare
+            // `status: failure`. The dedicated CI poll must retain that as
+            // recovery-required without dispatching writable repair or landing.
             poll_until(deadline, || {
-                block_on(assert_converged(forge, provisioned, engineer, issue, 2))
+                block_on(assert_ambiguous_failure_observed(
+                    forge,
+                    provisioned,
+                    engineer,
+                    issue,
+                ))
             })
         }
         other => panic!("unknown ci_sentinel variant '{other}'"),
     }
+}
+
+/// Observes a real Forgejo status-only failure without accepting a fabricated
+/// ordinary failure verdict. The provider's abbreviated job SHA must still own
+/// the unchanged current PR head.
+pub(super) async fn assert_ambiguous_failure_observed(
+    forge: &ForgejoForge,
+    provisioned: &Provisioned,
+    engineer: &RoleIdentity,
+    issue: ItemNumber,
+) -> Result<(), String> {
+    let pull_request = implementation_pr(forge, provisioned, issue).await?;
+    if pull_request.author_id != UserId::new(engineer.user.clone()) {
+        return Err(format!(
+            "implementation PR #{} was authored by {:?}, not the engineer role identity",
+            pull_request.number, pull_request.author_id
+        ));
+    }
+    if pull_request.state != PullRequestState::Open {
+        return Err(format!(
+            "ambiguous CI must leave implementation PR #{} open (state {:?})",
+            pull_request.number, pull_request.state
+        ));
+    }
+    if pull_request.labels.iter().any(|label| label == "landed") {
+        return Err("ambiguous CI incorrectly satisfied landing".to_string());
+    }
+
+    let jobs = completed_ci_jobs(forge, provisioned, &pull_request).await?;
+    let latest = jobs
+        .last()
+        .ok_or("status-only CI has not reached a terminal result")?;
+    if latest.conclusion != Some(CiJobConclusion::Unknown) {
+        return Err(format!(
+            "status-only Forgejo failure mapped to {:?}, not Unknown",
+            latest.conclusion
+        ));
+    }
+    if !CiStatus::from_jobs(&jobs).is_recovery_required() {
+        return Err("status-only Forgejo failure is not recovery-required".to_string());
+    }
+    let head = pull_request
+        .head_sha
+        .as_deref()
+        .ok_or("implementation PR has no provider head SHA")?;
+    if !head.starts_with(&latest.commit_sha) && !latest.commit_sha.starts_with(head) {
+        return Err(format!(
+            "terminal job SHA {:?} does not own current PR head {head:?}",
+            latest.commit_sha
+        ));
+    }
+    Ok(())
 }
 
 /// Full convergence: one merged engineer-authored implementation PR correlated

@@ -11,22 +11,23 @@
 //! It starts a cached [`ForgejoServer`] + [`ForgejoRunner`] (host mode, no
 //! containers). The cached repo's `.forgejo/workflows/ci.yml` fails on a head
 //! with no `[ci-pass]` marker; the committed `main` head has none. The test then
-//! drives a real [`ForgejoForge`] configured with web-UI credentials. Because Forgejo 7.0.12
-//! does not serve `actions/runs` over REST, `list_ci_jobs` transparently falls
-//! back to the password/web-UI read path (ADR 0019), logging in and reading the
-//! run's live-view JSON. The test polls until a `CiJob` with a `Failure`
-//! conclusion comes back — proving the read path works end to end against a real
-//! runner-produced verdict.
+//! drives a real [`ForgejoForge`] configured with web-UI credentials. Because
+//! Forgejo 7.0.12 does not serve `actions/runs` over REST, `list_ci_jobs`
+//! transparently falls back to the password/web-UI read path (ADR 0019), logging
+//! in and reading the run's live-view JSON. That payload supplies only a bare
+//! `status: failure`, so the test proves the real provider shape maps to terminal
+//! `Unknown` rather than inventing an ordinary source/test failure.
 
 use std::time::{Duration, Instant};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_forge_model::{CiJobConclusion, CiJobQuery, CiJobStatus};
 use temper_testing::forgejo_server::{ForgejoRunner, start_cached_provisioned_server};
 use temper_testing::runner_config;
+use temper_workflow::CiStatus;
 
 #[test]
 #[ignore = "boots a real Forgejo + host-mode runner; run with --ignored"]
-fn list_ci_jobs_reads_failure_through_web_ui() {
+fn list_ci_jobs_treats_status_only_failure_as_ambiguous() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
         // polling; boot it on a blocking thread so that nested runtime lives and dies
@@ -57,13 +58,14 @@ fn list_ci_jobs_reads_failure_through_web_ui() {
         let forge = ForgejoForge::new(config);
 
         // The workflow commit on `main` triggers a push run that fails (`test -f
-        // ci-ok` with no sentinel). Poll until the web-UI read path returns a failed
-        // job. A real host CI job takes seconds; allow generous slack for cold start.
+        // ci-ok` with no sentinel). Poll until the web-UI read path returns the
+        // status-only terminal job. A real host CI job takes seconds; allow generous
+        // slack for cold start.
         let deadline = Instant::now() + Duration::from_secs(180);
         // Most recent observation, surfaced in the timeout panic for diagnosis.
         let mut last = String::from("(no jobs yet)");
         let _ = &last;
-        let failing = loop {
+        let ambiguous = loop {
             match forge
                 .list_ci_jobs(&provisioned.repository, CiJobQuery::default())
                 .await
@@ -77,7 +79,7 @@ fn list_ci_jobs_reads_failure_through_web_ui() {
                     );
                     if let Some(job) = jobs.iter().find(|job| {
                         job.status == CiJobStatus::Completed
-                            && job.conclusion == Some(CiJobConclusion::Failure)
+                            && job.conclusion == Some(CiJobConclusion::Unknown)
                     }) {
                         break Some(job.clone());
                     }
@@ -92,16 +94,17 @@ fn list_ci_jobs_reads_failure_through_web_ui() {
             temper_engine_io::runtime::sleep_for(&cx, Duration::from_secs(3)).await;
         };
 
-        let job = failing.unwrap_or_else(|| {
+        let job = ambiguous.unwrap_or_else(|| {
             panic!(
-                "expected a Failure CI job read through the web UI; last observation: {last}; \
-             runner running={}, log: {}",
+                "expected an ambiguous terminal CI job through the web UI; last observation: \
+                 {last}; runner running={}, log: {}",
                 runner.is_running(),
                 runner.log_tail()
             )
         });
         assert_eq!(job.status, CiJobStatus::Completed);
-        assert_eq!(job.conclusion, Some(CiJobConclusion::Failure));
+        assert_eq!(job.conclusion, Some(CiJobConclusion::Unknown));
+        assert!(CiStatus::from_jobs(std::slice::from_ref(&job)).is_recovery_required());
 
         // Tear down explicitly so any panic in drop surfaces here, not at unwind.
         drop(runner);
