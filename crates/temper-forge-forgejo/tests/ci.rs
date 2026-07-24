@@ -287,7 +287,7 @@ fn combined_pr_and_commit_returns_only_current_queued_rest_jobs() {
 }
 
 #[test]
-fn combined_pr_and_commit_with_registered_current_run_but_no_tasks_is_empty() {
+fn combined_pr_and_commit_preserves_registered_run_without_tasks() {
     let client = MockHttpClient::new();
     client.push_response(
         200,
@@ -341,7 +341,7 @@ fn combined_pr_and_commit_with_registered_current_run_but_no_tasks_is_empty() {
         .to_string(),
     );
 
-    let jobs = block_on(forge(client).list_ci_jobs(
+    let listing = block_on(forge(client).list_ci_jobs_with_presence(
         &repo_id(),
         CiJobQuery {
             pull_request_id: Some(pull_id(7)),
@@ -351,7 +351,11 @@ fn combined_pr_and_commit_with_registered_current_run_but_no_tasks_is_empty() {
     ))
     .unwrap();
 
-    assert!(jobs.is_empty(), "a taskless current run remains pending");
+    assert!(listing.matching_ci_present());
+    assert!(
+        listing.jobs().is_empty(),
+        "a taskless current run remains pending"
+    );
 }
 
 #[test]

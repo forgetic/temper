@@ -63,7 +63,7 @@ fn observation(
     CiStatusObservation {
         pull_request_number: ItemNumber::new(number),
         head_sha: head_sha.to_string(),
-        current_head_jobs_present: true,
+        current_head_ci_present: true,
         state,
         completed_at: completed_at.map(timestamp),
     }

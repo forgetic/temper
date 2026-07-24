@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Mutex;
 use temper_forge_model::{
-    CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue,
-    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace,
-    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CiJob, CiJobId, CiJobListing, CiJobQuery, Comment, CreateComment, CreateIssue,
+    CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult,
+    Issue, IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber,
+    ItemNumberNamespace, Label, MergePullRequest, MergeRecord, PullRequest,
+    PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview, Repository,
+    RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 use operation_log::ForgeOperationLog;

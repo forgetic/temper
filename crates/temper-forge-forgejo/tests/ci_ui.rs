@@ -416,7 +416,7 @@ fn web_ui_taskless_current_run_does_not_cache_old_terminal_result() {
     )));
 
     let forge = forge_with_web_ui(client.clone());
-    let first = block_on(forge.list_ci_jobs(
+    let first = block_on(forge.list_ci_jobs_with_presence(
         &repo_id(),
         CiJobQuery {
             pull_request_id: Some(pull_id(7)),
@@ -425,7 +425,11 @@ fn web_ui_taskless_current_run_does_not_cache_old_terminal_result() {
         },
     ))
     .unwrap();
-    assert!(first.is_empty(), "a taskless current run remains pending");
+    assert!(first.matching_ci_present());
+    assert!(
+        first.jobs().is_empty(),
+        "a taskless current run remains pending"
+    );
 
     let second = block_on(forge.list_ci_jobs(
         &repo_id(),

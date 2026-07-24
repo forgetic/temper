@@ -14,7 +14,9 @@
 //! return a backend error or optimistic-concurrency conflict so failure paths
 //! stay exercisable. CI jobs have no create operation in the Forge
 //! interface, so [`MemoryForge::seed_ci_jobs`] seeds them directly, mirroring how
-//! the filesystem backend seeds its `ci_jobs.json` fixture. [`MemoryForge::as_user`]
+//! the filesystem backend seeds its `ci_jobs.json` fixture. Tests that need the
+//! earlier run-registered/job-unassigned state use [`MemoryForge::seed_ci_run`].
+//! [`MemoryForge::as_user`]
 //! creates another handle over the same store with a different current-user
 //! identity, matching the per-process identity seam used by runner tests.
 
@@ -131,6 +133,21 @@ impl MemoryForge {
     pub fn seed_ci_jobs(&self, repo_id: &RepositoryId, jobs: Vec<CiJob>) {
         let mut inner = self.lock();
         inner.state.set_ci_jobs(repo_id, jobs);
+        inner.publish_repo_hint(repo_id, temper_forge_model::ChangeKind::Ci);
+    }
+
+    /// Seeds provider evidence for a CI run before any job is assigned.
+    ///
+    /// This models hosted CI systems that register a PR/head run immediately but
+    /// materialize jobs only when runner capacity becomes available.
+    pub fn seed_ci_run(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: Option<&PullRequestId>,
+        commit_sha: &str,
+    ) {
+        let mut inner = self.lock();
+        inner.state.add_ci_run(repo_id, pull_request_id, commit_sha);
         inner.publish_repo_hint(repo_id, temper_forge_model::ChangeKind::Ci);
     }
 

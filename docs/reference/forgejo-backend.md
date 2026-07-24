@@ -331,8 +331,10 @@ branches, and the separately fetched PR head cannot widen the query. Exact SHAs
 and full/abbreviated pairs of at least seven characters match. Missing provider
 SHA evidence is conservative: the run/job is omitted, and the query SHA is never
 copied into a job to manufacture ownership. A matching current run contributes
-queued or running tasks with its provider commit SHA; a registered run with no
-tasks contributes no jobs and therefore remains pending.
+queued or running tasks with its provider commit SHA. A registered run with no
+tasks contributes no jobs but sets `CiJobListing::matching_ci_present`, so the
+gate remains pending without the missing-CI monitor mistaking runner queueing
+for an absent run.
 
 Forgejo 7.0.x lacks those REST run/task endpoints. If web-UI credentials are
 configured, the backend logs in with the version-appropriate cookie/CSRF

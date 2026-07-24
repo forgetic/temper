@@ -61,8 +61,9 @@ webhooks; it does not bypass fresh-state reads or mutation serialization.
 The positive `ci_missing_grace_secs` setting (300 seconds by default) bounds
 how long an exact current head may have no matching CI run/status before that
 absence becomes actionable. Missing observations must remain continuous for the
-same head throughout the grace period; current-head queued, running, or terminal
-CI clears them. The recovery path re-reads current state and can park an
+same head throughout the grace period; a registered current-head run clears them
+even before runner capacity materializes jobs, as do queued, running, or terminal
+jobs. The recovery path re-reads current state and can park an
 unchanged, unowned CI-gated PR for human attention. It does not manufacture a CI
 verdict or perform a provider-specific CI operation.
 

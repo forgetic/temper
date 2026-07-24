@@ -55,7 +55,9 @@ Ids are opaque to workflow code; only the backend parses them:
 - **CI.** `list_ci_jobs` narrows Actions runs provider-side with the
   `head_sha` query parameter (resolved from the pull request's head when a
   PR id is given), then expands each run's latest-attempt jobs.
-  `get_ci_job` reads `/actions/jobs/{job_id}` directly.
+  `list_ci_jobs_with_presence` preserves a matching run as present even before
+  GitHub materializes jobs, and `get_ci_job` reads `/actions/jobs/{job_id}`
+  directly.
 - **Optimistic concurrency.** Best-effort, identical to the Forgejo backend:
   a portable `Version` is derived from the response `ETag` (or the weak
   `updated_at` fallback) per artifact, and conditional writes re-read and

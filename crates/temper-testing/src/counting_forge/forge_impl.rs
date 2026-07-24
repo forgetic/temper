@@ -455,6 +455,19 @@ impl<F: Forge> Forge for CountingForge<F> {
         .await
     }
 
+    async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing> {
+        self.record_ci_job_query(&query);
+        self.perform(
+            CountedForgeOp::ListCiJobs,
+            self.inner.list_ci_jobs_with_presence(repo_id, query),
+        )
+        .await
+    }
+
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
         self.perform(CountedForgeOp::GetCiJob, self.inner.get_ci_job(id))
             .await
