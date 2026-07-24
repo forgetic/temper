@@ -48,6 +48,7 @@ pub(crate) struct State {
     pull_request_comments: BTreeMap<String, Vec<Comment>>,
     pull_request_reviews: BTreeMap<String, Vec<temper_forge_model::PullRequestReview>>,
     ci_jobs: BTreeMap<String, Vec<CiJob>>,
+    ci_runs: BTreeMap<String, BTreeSet<(Option<String>, String)>>,
     provisioned_users: BTreeMap<String, MemUser>,
     tokens: BTreeMap<String, Vec<String>>,
     token_counters: BTreeMap<String, u64>,
@@ -74,6 +75,7 @@ impl State {
             pull_request_comments: BTreeMap::new(),
             pull_request_reviews: BTreeMap::new(),
             ci_jobs: BTreeMap::new(),
+            ci_runs: BTreeMap::new(),
             provisioned_users: BTreeMap::new(),
             tokens: BTreeMap::new(),
             token_counters: BTreeMap::new(),
@@ -273,6 +275,35 @@ impl State {
 
     pub(crate) fn set_ci_jobs(&mut self, repo_id: &RepositoryId, jobs: Vec<CiJob>) {
         self.ci_jobs.insert(repo_id.as_str().to_string(), jobs);
+    }
+
+    pub(crate) fn add_ci_run(
+        &mut self,
+        repo_id: &RepositoryId,
+        pull_request_id: Option<&PullRequestId>,
+        commit_sha: &str,
+    ) {
+        self.ci_runs
+            .entry(repo_id.as_str().to_string())
+            .or_default()
+            .insert((
+                pull_request_id.map(|id| id.as_str().to_string()),
+                commit_sha.to_string(),
+            ));
+    }
+
+    pub(crate) fn ci_run_matches(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: Option<&PullRequestId>,
+        commit_sha: Option<&str>,
+    ) -> bool {
+        self.ci_runs.get(repo_id.as_str()).is_some_and(|runs| {
+            runs.iter().any(|(run_pull_request, run_commit)| {
+                pull_request_id.is_none_or(|id| run_pull_request.as_deref() == Some(id.as_str()))
+                    && commit_sha.is_none_or(|sha| run_commit == sha)
+            })
+        })
     }
 
     /// Finds a CI job by id across every repository.

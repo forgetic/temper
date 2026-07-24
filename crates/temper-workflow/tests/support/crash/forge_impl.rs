@@ -430,6 +430,21 @@ impl<F: Forge> Forge for CrashForge<F> {
         Ok(result)
     }
 
+    async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing> {
+        let n = self.tick(ForgeOp::ListCiJobs);
+        self.guard(ForgeOp::ListCiJobs, n, FaultPoint::Before)?;
+        let result = self
+            .inner
+            .list_ci_jobs_with_presence(repo_id, query)
+            .await?;
+        self.guard(ForgeOp::ListCiJobs, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
         self.inner.get_ci_job(id).await
     }

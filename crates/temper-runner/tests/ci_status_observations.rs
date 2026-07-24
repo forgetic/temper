@@ -238,7 +238,7 @@ fn ci_discovery_uses_only_one_open_pull_request_bucket() {
         vec![CiStatusObservation {
             pull_request_number: pull_request.number,
             head_sha: "abcdef0123456789".into(),
-            current_head_jobs_present: false,
+            current_head_ci_present: false,
             state: CiState::Pending,
             completed_at: None,
         }]
@@ -342,6 +342,14 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
         String::new(),
         Some("head-no-jobs"),
     );
+    let queued_run = create_pr(
+        &inner,
+        &repo,
+        &["implementation", "watch"],
+        String::new(),
+        Some("head-queued-run"),
+    );
+    inner.seed_ci_run(&repo, Some(&queued_run.id), "head-queued-run");
     let active = create_pr(
         &inner,
         &repo,
@@ -555,7 +563,7 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
     let workflow = workflow(CI_WORKFLOW);
 
     let observed = observations(&forge, &repo, &workflow);
-    assert_eq!(observed.len(), 8);
+    assert_eq!(observed.len(), 9);
     let get = |number: ItemNumber| {
         observed
             .iter()
@@ -563,11 +571,13 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
             .expect("pull request was observed")
     };
     assert_eq!(get(no_jobs.number).state, CiState::Pending);
-    assert!(!get(no_jobs.number).current_head_jobs_present);
+    assert!(!get(no_jobs.number).current_head_ci_present);
+    assert_eq!(get(queued_run.number).state, CiState::Pending);
+    assert!(get(queued_run.number).current_head_ci_present);
     assert_eq!(get(active.number).state, CiState::Pending);
-    assert!(get(active.number).current_head_jobs_present);
+    assert!(get(active.number).current_head_ci_present);
     assert_eq!(get(mixed.number).state, CiState::Pending);
-    assert!(get(mixed.number).current_head_jobs_present);
+    assert!(get(mixed.number).current_head_ci_present);
     assert_eq!(get(passed.number).state, CiState::Passed);
     assert_eq!(
         get(passed.number).completed_at,
@@ -586,7 +596,7 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
     );
     assert_eq!(get(stale.number).state, CiState::Pending);
     assert!(
-        !get(stale.number).current_head_jobs_present,
+        !get(stale.number).current_head_ci_present,
         "jobs belonging only to an old head are explicitly missing for the current head"
     );
     assert_eq!(get(rerun.number).state, CiState::Failed);
@@ -597,7 +607,7 @@ fn observations_preserve_current_head_latest_attempt_semantics() {
             .all(|observation| observation.completed_at.is_none())
     );
 
-    assert_eq!(forge.count(CountedForgeOp::ListCiJobs), 8);
+    assert_eq!(forge.count(CountedForgeOp::ListCiJobs), 9);
     for query in forge.ci_job_queries() {
         assert!(query.pull_request_id.is_some());
         assert!(query.commit_sha.as_ref().is_some_and(|sha| !sha.is_empty()));

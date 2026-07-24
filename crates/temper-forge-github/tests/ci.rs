@@ -63,6 +63,25 @@ fn pull_json(number: u64, head_sha: &str) -> String {
 }
 
 #[test]
+fn queued_matching_run_is_present_before_jobs_are_assigned() {
+    let client = MockHttpClient::new();
+    client.push_response(200, runs_envelope(12, "abc123"));
+    client.push_response(200, r#"{"total_count":0,"jobs":[]}"#);
+
+    let listing = block_on(forge(client).list_ci_jobs_with_presence(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some("abc123".to_string()),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert!(listing.matching_ci_present());
+    assert!(listing.jobs().is_empty());
+}
+
+#[test]
 fn list_ci_jobs_by_commit_narrows_runs_with_head_sha() {
     let client = MockHttpClient::new();
     client.push_response(200, runs_envelope(12, "abc123"));

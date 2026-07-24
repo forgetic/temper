@@ -39,6 +39,7 @@ The current implementation supports:
 - `add_pull_request_comment`
 - `merge_pull_request`
 - `list_ci_jobs`
+- `list_ci_jobs_with_presence`
 - `get_ci_job`
 
 `get_user` only resolves the handle's effective current user because the Forge interface does not yet include user creation or listing.
@@ -149,7 +150,7 @@ The requested field and direction are applied first. Ties are broken by owner/na
 
 `merge_pull_request` returns `ForgeError::NotFound` when the target pull request is missing. It supports all current `MergeMethod` values, records the current user as `merged_by`, and stores the requested method. It returns `ForgeError::Conflict` when the pull request is closed or already merged. `commit_title` and `commit_body` are accepted but not persisted because `MergeRecord` has no portable fields for them.
 
-`list_ci_jobs` supports `CiJobQuery` filters for pull-request ID, commit SHA, and status. Populated filters compose conjunctively, so pull-request ID plus commit SHA requires each returned job to satisfy both. Without a requested sort, CI jobs are sorted by name ascending, then CI job ID. `CiJobSort` supports name, creation time, and update time with the requested direction; ties use name ascending, then CI job ID. `list_ci_jobs` returns `ForgeError::NotFound` when the target repository is missing. `get_ci_job` returns `Ok(None)` when the job is not found and `ForgeError::Backend` when duplicate CI job IDs exist across stored repositories.
+`list_ci_jobs` supports `CiJobQuery` filters for pull-request ID, commit SHA, and status. Populated filters compose conjunctively, so pull-request ID plus commit SHA requires each returned job to satisfy both. Without a requested sort, CI jobs are sorted by name ascending, then CI job ID. `CiJobSort` supports name, creation time, and update time with the requested direction; ties use name ascending, then CI job ID. `list_ci_jobs_with_presence` reports matching CI when at least one stored job satisfies the ownership filters, independently of the status filter; this backend has no separate run store. Both list operations return `ForgeError::NotFound` when the target repository is missing. `get_ci_job` returns `Ok(None)` when the job is not found and `ForgeError::Backend` when duplicate CI job IDs exist across stored repositories.
 
 ## Unsupported operations
 

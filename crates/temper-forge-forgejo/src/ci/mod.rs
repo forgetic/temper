@@ -25,7 +25,9 @@ use crate::ids::{
 };
 use crate::types::{ActionRunDto, ActionTaskDto};
 use crate::{ForgejoForge, HttpClient};
-use temper_forge_model::{CiJob, CiJobId, CiJobQuery, ForgeError, ForgeResult, RepositoryId};
+use temper_forge_model::{
+    CiJob, CiJobId, CiJobListing, CiJobQuery, ForgeError, ForgeResult, RepositoryId,
+};
 
 pub(crate) use jobs::map_status;
 use jobs::{latest_attempt, sort_jobs, task_to_job};
@@ -42,6 +44,18 @@ impl<C: HttpClient> ForgejoForge<C> {
         repo_id: &RepositoryId,
         query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>> {
+        Ok(self
+            .list_ci_jobs_with_presence(repo_id, query)
+            .await?
+            .into_jobs())
+    }
+
+    /// Lists CI jobs while preserving matching run presence before task assignment.
+    pub async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing> {
         let repo = parse_repository_id(repo_id)?;
         let mut target = Target::default();
         if let Some(pr_id) = &query.pull_request_id {
@@ -90,7 +104,7 @@ impl<C: HttpClient> ForgejoForge<C> {
                     .list_ci_jobs_via_web_ui(repo_id, &repo, &target, &query)
                     .await;
             }
-            return Ok(Vec::new());
+            return Ok(CiJobListing::new(Vec::new(), false));
         }
         sort_runs(&mut matched);
 
@@ -113,7 +127,7 @@ impl<C: HttpClient> ForgejoForge<C> {
             jobs.retain(|job| job.status == status);
         }
         sort_jobs(&mut jobs, &query);
-        Ok(jobs)
+        Ok(CiJobListing::new(jobs, true))
     }
 
     /// Reads CI jobs through the web UI, applying the query's status/sort.
@@ -127,7 +141,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         repo: &RepoCoord,
         target: &Target,
         query: &CiJobQuery,
-    ) -> ForgeResult<Vec<CiJob>> {
+    ) -> ForgeResult<CiJobListing> {
         let Some(credentials) = self.config().web_ui.as_ref() else {
             return Err(ForgeError::Backend(
                 "list Forgejo Actions runs: Forgejo Actions unavailable over REST and no \
@@ -149,7 +163,7 @@ impl<C: HttpClient> ForgejoForge<C> {
                     jobs.retain(|job| job.status == status);
                 }
                 sort_jobs(&mut jobs, query);
-                return Ok(jobs);
+                return Ok(CiJobListing::new(jobs, true));
             }
         }
 
@@ -160,15 +174,16 @@ impl<C: HttpClient> ForgejoForge<C> {
             "read_ci_jobs_via_web_ui",
         );
         let raw = crate::ci_ui::read_ci_jobs(self, credentials, repo, repo_id, target).await?;
+        let matching_ci_present = raw.matching_ci_present();
         if let Some(key) = cache_key {
-            self.ci_read_cache().store(key, raw.clone());
+            self.ci_read_cache().store(key, raw.jobs().to_vec());
         }
-        let mut jobs = raw;
+        let mut jobs = raw.into_jobs();
         if let Some(status) = query.status {
             jobs.retain(|job| job.status == status);
         }
         sort_jobs(&mut jobs, query);
-        Ok(jobs)
+        Ok(CiJobListing::new(jobs, matching_ci_present))
     }
 
     /// Looks up a single CI job through the web-UI read path (REST fallback).

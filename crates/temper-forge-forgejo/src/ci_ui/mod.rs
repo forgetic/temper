@@ -35,7 +35,7 @@ use crate::ids::{CiJobCoord, RepoCoord};
 use crate::{ForgejoForge, HttpClient};
 use map::live_run_to_jobs;
 use session::{LiveViewOutcome, LiveViewUnreadable, WebUiClient};
-use temper_forge_model::{CiJob, ForgeResult, RepositoryId};
+use temper_forge_model::{CiJob, CiJobListing, ForgeResult, RepositoryId};
 
 /// Most-recent runs scraped per read. The Actions page lists runs newest-first,
 /// and a CI read only ever cares about the target's current head — the latest
@@ -61,7 +61,7 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
     repo: &RepoCoord,
     repo_id: &RepositoryId,
     target: &Target,
-) -> ForgeResult<Vec<CiJob>> {
+) -> ForgeResult<CiJobListing> {
     let mut client = WebUiClient::new(forge, credentials);
     client.login().await?;
     let mut run_ids = client.discover_run_ids(repo).await?;
@@ -74,6 +74,7 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
     }
 
     let mut jobs = Vec::new();
+    let mut matching_ci_present = false;
     let mut first_unreadable = None;
     let mut unreadable_count = 0usize;
     for run in run_ids {
@@ -100,6 +101,7 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
         if !matches {
             continue;
         }
+        matching_ci_present = true;
         // Runs are discovered newest-first. Once one cannot be read, an older
         // matching run may have been superseded by that unknown run and cannot
         // establish a verdict. Keep evidence already established on the newer
@@ -132,7 +134,7 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
             },
         );
     }
-    Ok(jobs)
+    Ok(CiJobListing::new(jobs, matching_ci_present))
 }
 
 /// Emits one bounded, secret-free summary for a list read containing one or

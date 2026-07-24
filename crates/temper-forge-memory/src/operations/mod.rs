@@ -18,12 +18,12 @@ mod repositories;
 use crate::MemoryForge;
 use async_trait::async_trait;
 use temper_forge_model::{
-    CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueCandidateQuery,
-    IssueId, IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord,
-    PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview,
-    Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, User, UserId,
+    CiJob, CiJobId, CiJobListing, CiJobQuery, Comment, CreateComment, CreateIssue,
+    CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue,
+    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest,
+    MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery,
+    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
+    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait]
@@ -294,6 +294,14 @@ impl Forge for MemoryForge {
         query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>> {
         ci::list_ci_jobs(self, repo_id, query)
+    }
+
+    async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing> {
+        ci::list_ci_jobs_with_presence(self, repo_id, query)
     }
 
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {

@@ -15,8 +15,8 @@ use crate::types::{WorkflowJobDto, WorkflowJobsEnvelopeDto, WorkflowRunsEnvelope
 use crate::{GitHubForge, HttpClient, HttpMethod};
 use chrono::{DateTime, Utc};
 use temper_forge_model::{
-    CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobSortField, CiJobStatus, ForgeResult,
-    PullRequestId, RepositoryId, SortDirection,
+    CiJob, CiJobConclusion, CiJobId, CiJobListing, CiJobQuery, CiJobSortField, CiJobStatus,
+    ForgeResult, PullRequestId, RepositoryId, SortDirection,
 };
 
 impl<C: HttpClient> GitHubForge<C> {
@@ -32,6 +32,18 @@ impl<C: HttpClient> GitHubForge<C> {
         repo_id: &RepositoryId,
         query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>> {
+        Ok(self
+            .list_ci_jobs_with_presence(repo_id, query)
+            .await?
+            .into_jobs())
+    }
+
+    /// Lists jobs while preserving matching workflow-run presence.
+    pub async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing> {
         let repo = parse_repository_id(repo_id)?;
 
         let mut head_sha = query.commit_sha.clone().filter(|commit| !commit.is_empty());
@@ -41,14 +53,14 @@ impl<C: HttpClient> GitHubForge<C> {
             pr_id = Some(id.clone());
             let Some(pull) = self.fetch_pull_request(&pr_repo, number).await? else {
                 // No pull request means no runs can match it.
-                return Ok(Vec::new());
+                return Ok(CiJobListing::new(Vec::new(), false));
             };
             if head_sha.is_none() {
                 match pull.head_sha {
                     Some(sha) if !sha.is_empty() => head_sha = Some(sha),
                     // Without a head SHA, runs cannot be tied to the pull
                     // request; report no jobs rather than guessing.
-                    _ => return Ok(Vec::new()),
+                    _ => return Ok(CiJobListing::new(Vec::new(), false)),
                 }
             }
         }
@@ -66,6 +78,7 @@ impl<C: HttpClient> GitHubForge<C> {
                 |envelope: WorkflowRunsEnvelopeDto| envelope.workflow_runs,
             )
             .await?;
+        let matching_ci_present = !runs.is_empty();
 
         let mut jobs = Vec::new();
         for run in runs {
@@ -92,7 +105,7 @@ impl<C: HttpClient> GitHubForge<C> {
             jobs.retain(|job| job.status == status);
         }
         sort_jobs(&mut jobs, &query);
-        Ok(jobs)
+        Ok(CiJobListing::new(jobs, matching_ci_present))
     }
 
     /// Looks up a CI job by stable backend identifier

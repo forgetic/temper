@@ -92,6 +92,7 @@ and unmerged becomes a typed workflow-routable merge conflict.
 Required methods:
 
 - `list_ci_jobs`
+- `list_ci_jobs_with_presence`
 - `get_ci_job`
 
 CI jobs are associated with a repository, a commit SHA, and optionally a pull
@@ -99,3 +100,9 @@ request. Status is `queued`, `running`, or `completed`; completed jobs may carry
 a conclusion such as `success`, `failure`, or `cancelled`. Populated
 `CiJobQuery` filters are conjunctive, so a query containing both pull-request ID
 and commit SHA returns only jobs satisfying both constraints.
+
+`list_ci_jobs_with_presence` also reports whether provider evidence matched CI
+for the query ownership scope. That fact remains true when a workflow run is
+registered but has no assigned jobs yet, and is independent of a job-status
+filter that removes every returned job. `list_ci_jobs` remains the jobs-only
+convenience operation for callers that do not reason about missing CI.

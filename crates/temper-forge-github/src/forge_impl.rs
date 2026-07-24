@@ -12,12 +12,12 @@
 
 use crate::{GitHubForge, HttpClient};
 use temper_forge_model::{
-    CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
-    ItemListDetails, ItemNumber, ItemNumberNamespace, Label, MergePullRequest, MergeRecord,
-    PullRequest, PullRequestId, PullRequestQuery, PullRequestReview, Repository, RepositoryId,
-    RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel,
-    User, UserId,
+    CiJob, CiJobId, CiJobListing, CiJobQuery, Comment, CreateComment, CreateIssue,
+    CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue,
+    IssueId, IssueQuery, ItemListDetails, ItemNumber, ItemNumberNamespace, Label, MergePullRequest,
+    MergeRecord, PullRequest, PullRequestId, PullRequestQuery, PullRequestReview, Repository,
+    RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait::async_trait]
@@ -236,6 +236,14 @@ impl<C: HttpClient> Forge for GitHubForge<C> {
         query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>> {
         self.list_ci_jobs(repo_id, query).await
+    }
+
+    async fn list_ci_jobs_with_presence(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<CiJobListing> {
+        self.list_ci_jobs_with_presence(repo_id, query).await
     }
 
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
