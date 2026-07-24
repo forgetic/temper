@@ -16,11 +16,13 @@ use crate::workspace::{
 
 mod context;
 mod execution;
+mod failure;
 mod outcome;
 mod session;
 mod verdict;
 
 use context::{build_workspace_context, effective_job_guidance};
+use failure::{failure, failure_with_evidence};
 use outcome::{WritableOutcomeRequest, writable_outcome};
 use session::{attach_agent_session, persist_after_success};
 use verdict::verdict_only_outcome;
@@ -288,8 +290,12 @@ async fn execute<R: AgentRunner>(
         .await
     {
         Ok(output) => output,
-        Err(AgentRunError { class, message }) => {
-            return failure(class, message);
+        Err(AgentRunError {
+            class,
+            message,
+            model_failure,
+        }) => {
+            return failure_with_evidence(class, message, model_failure);
         }
     };
 
@@ -586,13 +592,6 @@ fn cancelled_attempt() -> JobOutcome {
         FailureClass::Transient,
         "job attempt was cancelled by the worker watchdog",
     )
-}
-
-fn failure(class: FailureClass, message: impl Into<String>) -> JobOutcome {
-    JobOutcome::Failure {
-        class,
-        message: message.into(),
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

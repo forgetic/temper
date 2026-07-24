@@ -66,6 +66,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         result.failure = Some(Failure {
             class: FailureClass::Protocol,
             message: reason,
+            model_failure: None,
+            session_recovery: None,
         });
         self.apply_failure(job, result).await
     }

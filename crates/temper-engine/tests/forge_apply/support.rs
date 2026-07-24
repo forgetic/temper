@@ -294,6 +294,8 @@ pub(crate) fn failure_result(
         failure: failure_class.map(|class| Failure {
             class,
             message: message.to_string(),
+            model_failure: None,
+            session_recovery: None,
         }),
         summary: Some("failed".to_string()),
         details: None,

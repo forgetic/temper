@@ -196,6 +196,7 @@ impl OutOfProcessRunner {
             .map_err(|error| AgentRunError::transient(format!("create agent temp dir: {error}")))?;
         let context_path = temp.path().join("context.json");
         let result_path = temp.path().join("result.json");
+        let terminal_output_path = temp.path().join("terminal-output.json");
         let context_bytes = serde_json::to_vec_pretty(context).map_err(|error| {
             AgentRunError::transient(format!("serialize agent context: {error}"))
         })?;
@@ -256,6 +257,9 @@ impl OutOfProcessRunner {
             &result_path,
             tool_config_path.as_deref(),
             runtime_limits_path.as_deref(),
+            self.runtime_limits
+                .is_some()
+                .then_some(terminal_output_path.as_path()),
             trace_policy_path.as_deref(),
             lifecycle_endpoint
                 .as_ref()
@@ -653,9 +657,17 @@ impl OutOfProcessRunner {
         match status_code {
             Some(0) => {}
             Some(code) => {
-                return Err(AgentRunError::transient(format!(
-                    "agent command exited with status {code}; stderr tail: {stderr_tail}"
-                )));
+                let generic_message =
+                    format!("agent command exited with status {code}; stderr tail: {stderr_tail}");
+                if let Some(model_failure) = first_party_terminal_model_failure(
+                    self.runtime_limits.is_some(),
+                    &terminal_output_path,
+                ) {
+                    return Err(
+                        AgentRunError::transient(generic_message).with_model_failure(model_failure)
+                    );
+                }
+                return Err(AgentRunError::transient(generic_message));
             }
             None => {
                 return Err(AgentRunError::transient(format!(
@@ -687,6 +699,26 @@ impl OutOfProcessRunner {
             accepted_submit: fence.is_open().then(|| accepted_submit.latest()).flatten(),
         })
     }
+}
+
+pub(super) fn first_party_terminal_model_failure(
+    first_party: bool,
+    path: &Path,
+) -> Option<temper_protocol_activity::ModelFailureV1> {
+    if !first_party {
+        return None;
+    }
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file()
+        || metadata.len() > u64::try_from(MAX_AGENT_TERMINAL_OUTPUT_BYTES).unwrap_or(u64::MAX)
+    {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let mut output: AgentTerminalOutputV1 = serde_json::from_slice(&bytes).ok()?;
+    output.validate().ok()?;
+    output.model_failure.normalize();
+    Some(output.model_failure)
 }
 
 fn bounded_forge_future(

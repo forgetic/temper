@@ -54,6 +54,8 @@ fn terminal_result(job_id: &str) -> temper_protocol_worker::JobResult {
         JobOutcome::Failure {
             class: temper_protocol_worker::FailureClass::Permanent,
             message: "finished".to_string(),
+            model_failure: None,
+            session_recovery: None,
         },
     )
 }

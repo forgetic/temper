@@ -181,6 +181,8 @@ mod tests {
             "failure": Failure {
                 class: FailureClass::Permanent,
                 message: "configured failure".to_string(),
+                model_failure: None,
+                session_recovery: None,
             },
             "verdict": null,
             "body": null,

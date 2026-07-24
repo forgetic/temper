@@ -17,7 +17,7 @@ use super::shutdown::AssignmentAttemptIdentity;
 impl DaemonMachine {
     pub(super) fn handle_result(
         &mut self,
-        result: JobResult,
+        mut result: JobResult,
         auth: Option<WorkerAuth>,
         responder: HttpResponder,
     ) -> Vec<DaemonRequest> {
@@ -43,6 +43,11 @@ impl DaemonMachine {
             }
             Ok(None) => {}
         }
+
+        // The authenticated worker is still a protocol trust boundary. Keep
+        // model diagnostics canonical and drop malformed or attempt-mismatched
+        // session evidence before logging, replay comparison, or durability.
+        result.normalize_failure_evidence();
 
         let key = AttemptKey::from_result(&result);
 

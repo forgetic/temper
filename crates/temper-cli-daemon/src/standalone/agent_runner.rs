@@ -574,7 +574,12 @@ fn classify_coding_agent_error(
     worker_cancellation_requested: bool,
 ) -> AgentRunError {
     let class = coding_agent_failure_class(&error, worker_cancellation_requested);
-    AgentRunError::new(class, error.to_string())
+    let model_failure = coding_agent_model_failure(&error);
+    let worker_error = AgentRunError::new(class, error.to_string());
+    match model_failure {
+        Some(model_failure) => worker_error.with_model_failure(model_failure),
+        None => worker_error,
+    }
 }
 
 fn coding_agent_failure_class(

@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 
 use temper_agent::{
     AgentActivityConfig, AgentContainmentContext, CodingAgentError, ContainmentScope,
-    run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
+    protocol_model_failure, run_coding_agent_native_with_totals_tool_config_hosts_and_containment,
 };
-use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
+use temper_protocol_agent::{AgentTerminalOutputV1, WorkspaceContext, WorkspaceResult};
 
 use crate::config::AgentConfig;
 
@@ -28,11 +28,17 @@ pub(crate) fn drive(
     context: WorkspaceContext,
     cwd: PathBuf,
     result_path: String,
+    terminal_output_path: Option<String>,
 ) -> Result<(), String> {
-    let result =
-        drive_coding_loop(&config, &context, &cwd).map_err(|error| describe_agent_error(&error))?;
-
-    write_result(&result_path, &result)
+    match drive_coding_loop(&config, &context, &cwd) {
+        Ok(result) => write_result(&result_path, &result),
+        Err(error) => {
+            if let Some(path) = terminal_output_path.as_deref() {
+                write_terminal_failure(path, &error)?;
+            }
+            Err(describe_agent_error(&error))
+        }
+    }
 }
 
 /// Runs the native coding loop on the async runtime.
@@ -97,6 +103,24 @@ fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), Strin
         .map_err(|error| format!("write result file {result_path}: {error}"))
 }
 
+/// Writes only the closed, bounded first-party terminal carrier. Non-model
+/// failures intentionally leave no carrier for the worker to consume.
+fn write_terminal_failure(path: &str, error: &CodingAgentError) -> Result<(), String> {
+    let diagnostic = match error {
+        CodingAgentError::ModelFailure(diagnostic)
+        | CodingAgentError::ModelUnavailable { diagnostic, .. } => diagnostic,
+        _ => return Ok(()),
+    };
+    let output = AgentTerminalOutputV1::model_failure(protocol_model_failure(diagnostic.as_ref()));
+    output
+        .validate()
+        .map_err(|error| format!("validate terminal model failure: {error}"))?;
+    let bytes = serde_json::to_vec_pretty(&output)
+        .map_err(|error| format!("serialize terminal model failure: {error}"))?;
+    std::fs::write(path, bytes)
+        .map_err(|error| format!("write terminal output file {path}: {error}"))
+}
+
 /// Renders a coding-agent error for stderr. The worker re-derives the
 /// transient/permanent class from the process exit (non-zero ⇒ transient) plus
 /// a missing result file (⇒ permanent); the message here is for humans.
@@ -142,6 +166,48 @@ mod tests {
     }
 
     #[test]
+    fn first_party_model_error_writes_only_bounded_terminal_diagnostic() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("terminal.json");
+        let error = CodingAgentError::ModelFailure(Box::new(
+            temper_agent::ModelFailureDiagnostic::redacted_unknown(
+                "openai-codex",
+                "gpt-test",
+                false,
+            ),
+        ));
+
+        write_terminal_failure(path.to_str().unwrap(), &error).expect("terminal output writes");
+
+        let output: AgentTerminalOutputV1 =
+            serde_json::from_slice(&std::fs::read(path).expect("terminal output is readable"))
+                .expect("terminal output parses");
+        output.validate().expect("terminal output validates");
+        assert_eq!(output.model_failure.provider, "openai-codex");
+        assert_eq!(output.model_failure.model, "gpt-test");
+        assert!(!output.model_failure.retryable);
+        let wire = serde_json::to_string(&output).unwrap();
+        for forbidden in ["prompt", "raw_response", "credentials", "stderr"] {
+            assert!(
+                !wire.contains(forbidden),
+                "terminal carrier leaked {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_model_error_does_not_create_terminal_carrier() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("terminal.json");
+        write_terminal_failure(
+            path.to_str().unwrap(),
+            &CodingAgentError::BudgetExhausted { max_iterations: 7 },
+        )
+        .expect("non-model failure is ignored");
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn drive_passes_tool_config_to_native_loop() {
         let temp = tempfile::tempdir().expect("tempdir");
         let result_path = temp.path().join("result.json");
@@ -163,6 +229,7 @@ mod tests {
             workspace_context("engineer"),
             temp.path().to_path_buf(),
             result_path.display().to_string(),
+            None,
         )
         .expect_err("required codebase-memory startup failure aborts session");
 

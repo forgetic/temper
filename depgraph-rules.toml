@@ -116,7 +116,7 @@ temper-worker = ["temper-process-containment", "temper-protocol-activity", "temp
 # Never depends on a worker- or engine-implementation crate (rule 3).
 # ===========================================================================
 temper-agent-io = []
-temper-protocol-agent = ["temper-protocol-context", "temper-verdict"]
+temper-protocol-agent = ["temper-protocol-activity", "temper-protocol-context", "temper-verdict"]
 # Shared OS leaf used by the agent shell's managed process tools; it has no
 # worker/engine dependency and keeps unsafe platform containment out of core.
 temper-agent-core = ["temper-agent-io", "temper-process-containment"]

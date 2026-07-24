@@ -163,6 +163,8 @@ mod tests {
             failure: failure_class.map(|class| Failure {
                 class,
                 message: "worker failed".to_string(),
+                model_failure: None,
+                session_recovery: None,
             }),
             summary: None,
             details: None,

@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use temper_protocol_activity::ModelFailureV1;
 use temper_protocol_agent::{
     AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleEventV1, AgentLifecycleFrameV1,
     AgentLifecycleScopeV1, SubmitForPrRequest, SubmitForPrResponse, WorkspaceContext,
@@ -469,6 +470,8 @@ async fn run_fenced<F: Future>(
 pub struct AgentRunError {
     pub class: FailureClass,
     pub message: String,
+    /// Canonical model diagnostic retained independently of activity tracing.
+    pub model_failure: Option<ModelFailureV1>,
 }
 
 impl AgentRunError {
@@ -476,7 +479,15 @@ impl AgentRunError {
         Self {
             class,
             message: message.into(),
+            model_failure: None,
         }
+    }
+
+    /// Attaches and canonicalizes an authoritative first-party model failure.
+    pub fn with_model_failure(mut self, mut model_failure: ModelFailureV1) -> Self {
+        model_failure.normalize();
+        self.model_failure = Some(model_failure);
+        self
     }
 
     /// A transient failure: retrying later may succeed (provider/transport

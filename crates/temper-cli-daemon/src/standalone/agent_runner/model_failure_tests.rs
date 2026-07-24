@@ -84,6 +84,10 @@ fn typed_model_failures_survive_terminal_selection_before_worker_conversion() {
 
         let worker_error = classify_coding_agent_error(error, false);
         assert_eq!(worker_error.class, FailureClass::Transient);
+        let carried = worker_error
+            .model_failure
+            .expect("worker error retains model failure");
+        assert_eq!(carried.category, category);
         assert!(worker_error.message.contains(category.as_str()));
         assert!(!worker_error.message.contains("SECRET-SENTINEL-532"));
     }
@@ -149,5 +153,10 @@ fn model_unavailable_diagnostics_survive_terminal_selection_before_worker_conver
         };
         let worker_error = classify_coding_agent_error(error, false);
         assert_eq!(worker_error.class, FailureClass::Transient);
+        let carried = worker_error
+            .model_failure
+            .expect("worker error retains unavailable diagnostic");
+        assert_eq!(carried.category, expected_category);
+        assert_eq!(carried.provider_request_id.as_deref(), Some(request_id));
     }
 }

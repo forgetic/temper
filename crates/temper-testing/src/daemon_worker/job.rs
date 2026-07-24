@@ -69,6 +69,8 @@ pub(super) async fn execute_job(
             failure: Some(Failure {
                 class: error.class,
                 message: error.message,
+                model_failure: None,
+                session_recovery: None,
             }),
             summary: None,
             details: None,

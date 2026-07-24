@@ -27,6 +27,7 @@ mod context;
 mod job;
 mod lifecycle;
 mod message;
+mod recovery;
 mod result;
 mod shutdown;
 mod workspace;
@@ -50,6 +51,10 @@ pub use lifecycle::{
     MAX_ACTIVE_OPERATION_SUMMARIES, ProtocolError, Release, ReleaseDisposition,
 };
 pub use message::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
+pub use recovery::{
+    MAX_SESSION_RECOVERY_EVIDENCE_LOCATION_BYTES, MAX_SESSION_RECOVERY_ID_BYTES,
+    SessionRecoveryActionV1, SessionRecoveryEvidenceV1,
+};
 pub use result::{Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus};
 pub use shutdown::{
     MAX_SHUTDOWN_BLOCKERS, MAX_SHUTDOWN_IDENTIFIER_BYTES, MAX_SHUTDOWN_ROOT_BYTES,
