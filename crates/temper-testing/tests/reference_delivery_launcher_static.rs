@@ -40,6 +40,7 @@ fn bundled_reference_delivery_fixture_keeps_review_gated_shape() {
         role_ids(&workflow),
         BTreeSet::from([
             "architect",
+            "ci_diagnostician",
             "engineer",
             "human",
             "mechanical",
@@ -89,9 +90,23 @@ fn reference_delivery_runner_binds_served_roles_but_not_mechanical() {
 
     assert_eq!(
         bound_roles,
-        BTreeSet::from(["architect", "engineer", "human", "owner", "reviewer"])
+        BTreeSet::from([
+            "architect",
+            "ci_diagnostician",
+            "engineer",
+            "human",
+            "owner",
+            "reviewer"
+        ])
     );
-    for role in ["architect", "engineer", "human", "owner", "reviewer"] {
+    for role in [
+        "architect",
+        "ci_diagnostician",
+        "engineer",
+        "human",
+        "owner",
+        "reviewer",
+    ] {
         let binding = config
             .role_binding(&RoleId::new(role))
             .expect("queue-subscribing role is bound");

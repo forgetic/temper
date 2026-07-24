@@ -150,9 +150,29 @@ as workflow labels:
 
 Only `ci_passed` can satisfy a landing gate. `ci_failed` and
 `ci_recovery_required` are mutually exclusive routing signals. A
-recovery-required result must use a diagnostic/retry action with a non-code-repair
-checkout contract; `pull_request_writable` is rejected for that condition so it
-cannot inherit guidance requiring a source change.
+recovery-required result may omit role work entirely (the engine then parks it),
+or configure exactly one diagnostic/retry action. A configured action must use
+`pull_request_read_only` explicitly and its transition must declare at least one
+verdict outcome; writable, inferred, or no-verdict actions are rejected so the
+diagnostic cannot inherit guidance requiring a source change. The bundled
+workflows use this shape:
+
+```json
+{
+  "id": "pr_ci_recovery",
+  "artifact": "implementation_pr",
+  "condition": { "kind": "ci_recovery_required" },
+  "actions": [{
+    "role": "ci_diagnostician",
+    "action": "diagnose_interrupted_ci",
+    "checkout": "pull_request_read_only"
+  }]
+}
+```
+
+The engine still owns the provider retry and final `needs-human` audit; the
+read-only action receives structured interruption evidence and returns only its
+declared diagnostic verdict.
 
 ## Queue role-worker actions
 
@@ -205,7 +225,9 @@ Validation rejects or diagnoses:
 - artifact/state mismatches, including labels illegal for an artifact kind;
 - queue role-worker actions whose role/action/artifact is missing, unauthorized,
   incompatible with the queue's artifact kinds, declares an unsupported checkout
-  capability, or binds a writable PR repair to an unsupported effect;
+  capability, binds a writable PR repair to an unsupported effect, or configures
+  `ci_recovery_required` work without explicit `pull_request_read_only` checkout
+  and verdict outcomes;
 - queue automation whose actor/transition/fallback is missing, unauthorized, or
   incompatible with the queue's artifact kinds;
 - `create_pull_request.artifact_kind` values that are undeclared or name a

@@ -21,6 +21,7 @@ mod missing_ci_recovery;
 use self::missing_ci_recovery::{MissingCiRecoveryOutcome, recover_missing_current_head_ci};
 
 use crate::RoleFeedTarget;
+use crate::interrupted_ci_recovery::{InterruptedCiRecoveryOutcome, recover_interrupted_ci};
 use crate::lease_applier::WallClock;
 use crate::webhook::WebhookConfig;
 
@@ -309,6 +310,33 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
 
         let mut failures = Vec::new();
         let now = (self.clock)();
+
+        // A recovery-required terminal result is not ordinary role work. It
+        // first advances the exact-attempt provider/diagnostic recovery state;
+        // only `DispatchDiagnostic` may flow into the role feed below.
+        for (address, facts) in &ci_facts {
+            if facts.verdict != Some(crate::CiTerminalVerdict::RecoveryRequired) {
+                continue;
+            }
+            if let InterruptedCiRecoveryOutcome::Retryable { reason } = recover_interrupted_ci(
+                self.forge.as_ref(),
+                &repository,
+                self.workflow.as_ref(),
+                self.compiled.as_ref(),
+                now,
+                *address,
+            )
+            .await
+            {
+                return WakeOutcome::Failed {
+                    reason: format!(
+                        "interrupted-CI recovery remains incomplete for {}#{}: {reason}",
+                        artifact_kind(address.kind),
+                        address.number
+                    ),
+                };
+            }
+        }
 
         // A missing-CI wake is only an intent. Revalidate and, when still safe,
         // install the attention barrier before mechanical or role work can act

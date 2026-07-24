@@ -31,12 +31,12 @@ fn bundled_basic_delivery_fixture_is_the_minimal_agent_shape() {
     assert_eq!(workflow.name(), "basic-delivery");
     assert_eq!(
         role_ids(&workflow),
-        BTreeSet::from(["architect", "engineer", "mechanical"])
+        BTreeSet::from(["architect", "ci_diagnostician", "engineer", "mechanical"])
     );
     assert_eq!(
         queue_served_roles(&workflow),
-        BTreeSet::from(["architect", "engineer"]),
-        "mechanical is an automation authority, not a role worker"
+        BTreeSet::from(["architect", "ci_diagnostician", "engineer"]),
+        "mechanical is an automation authority; the CI diagnostician is a read-only role worker"
     );
     assert!(matches!(
         workflow.intake_author(),
@@ -65,8 +65,11 @@ fn basic_delivery_runner_binds_only_queue_subscribing_roles() {
         .map(|binding| binding.role.as_str())
         .collect();
 
-    assert_eq!(bound_roles, BTreeSet::from(["architect", "engineer"]));
-    for role in ["architect", "engineer"] {
+    assert_eq!(
+        bound_roles,
+        BTreeSet::from(["architect", "ci_diagnostician", "engineer"])
+    );
+    for role in ["architect", "ci_diagnostician", "engineer"] {
         let binding = config
             .role_binding(&RoleId::new(role))
             .expect("queue-subscribing role is bound");

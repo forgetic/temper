@@ -19,6 +19,7 @@ use super::{DependencyStatus, queue::QueueQuery};
 use crate::ids::TransitionId;
 use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use temper_forge::{CiJob, CiJobConclusion, CiJobId, CiJobStatus, PullRequestReviewStatus};
 
@@ -162,7 +163,7 @@ pub enum CiState {
 /// Provider-specific text is already sanitized and bounded by the Forge model.
 /// The typed conclusion remains authoritative for routing; the original text and
 /// opaque run/attempt identity are retained for recovery and diagnostics.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CiTerminalEvidence {
     /// Provider-scoped job identity.
     pub job_id: CiJobId,
@@ -326,6 +327,34 @@ impl CiStatus {
             jobs.iter()
                 .filter(|job| sha_identifies_head(&job.commit_sha, head_sha)),
         )
+    }
+
+    /// Returns the same deterministic latest-per-name job set used by CI
+    /// aggregation, optionally fenced to an exact/full-or-abbreviated head.
+    pub fn latest_jobs_for_head(jobs: &[CiJob], head_sha: Option<&str>) -> Vec<CiJob> {
+        let head_sha = head_sha.map(str::trim).filter(|sha| !sha.is_empty());
+        let mut latest: HashMap<&str, &CiJob> = HashMap::new();
+        for job in jobs
+            .iter()
+            .filter(|job| head_sha.is_none_or(|head| sha_identifies_head(&job.commit_sha, head)))
+        {
+            latest
+                .entry(job.name.as_str())
+                .and_modify(|current| {
+                    if job.created_at >= current.created_at {
+                        *current = job;
+                    }
+                })
+                .or_insert(job);
+        }
+        let mut latest = latest.into_values().cloned().collect::<Vec<_>>();
+        latest.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.created_at.cmp(&right.created_at))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        latest
     }
 
     fn from_job_iter<'a>(jobs: impl IntoIterator<Item = &'a CiJob>) -> Self {

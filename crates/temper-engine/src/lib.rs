@@ -37,6 +37,7 @@ pub mod daemon;
 pub mod engine_config;
 pub mod feed;
 pub mod forge_applier;
+mod interrupted_ci_recovery;
 pub mod lease_applier;
 pub mod mechanical;
 pub mod pr_freshness;

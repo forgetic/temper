@@ -83,6 +83,41 @@ fn queue_action_contract_is_validated() {
 }
 
 #[test]
+fn recovery_required_action_requires_read_only_pr_checkout_and_verdicts() {
+    let mut spec = valid_spec();
+    spec.queues[0].condition = Some(RawGateCondition::CiRecoveryRequired);
+    spec.queues[0].actions.push(RawQueueAction {
+        role: "engineer".to_string(),
+        action: "claim_code".to_string(),
+        checkout: Some("pull_request_writable".to_string()),
+        ..RawQueueAction::default()
+    });
+
+    let errors = spec
+        .validate()
+        .expect_err("recovery action must be a verdict-driven read-only diagnostic");
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueActionUnsafeCiRecoveryCheckout {
+                queue: "code_ready".to_string(),
+                role: "engineer".to_string(),
+                action: "claim_code".to_string(),
+                checkout: Some("pull_request_writable".to_string()),
+            })
+    );
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueActionCiRecoveryMissingOutcomes {
+                queue: "code_ready".to_string(),
+                role: "engineer".to_string(),
+                action: "claim_code".to_string(),
+            })
+    );
+}
+
+#[test]
 fn pull_request_writable_action_rejects_non_publishable_effects() {
     let mut spec = valid_spec();
     spec.artifact_kinds[1].target = ArtifactTarget::PullRequest;

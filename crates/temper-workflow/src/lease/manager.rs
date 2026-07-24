@@ -58,6 +58,62 @@ impl LoadedLease {
         }
     }
 
+    fn metadata_with_diagnostic_job(
+        &self,
+        assignment: &DurableAssignment,
+    ) -> Result<WorkflowMetadata, LeaseError> {
+        let mut metadata = self.metadata().clone();
+        let Some(recovery) = metadata.interrupted_ci_recovery.as_mut() else {
+            return Ok(metadata);
+        };
+        let Some(diagnostic) = recovery.diagnostic.as_mut() else {
+            return Ok(metadata);
+        };
+        let matches = assignment.queue.as_deref() == Some(diagnostic.queue.as_str())
+            && assignment.role.as_ref() == Some(&diagnostic.role)
+            && assignment.action.as_deref() == Some(diagnostic.action.as_str());
+        if !matches {
+            return Ok(metadata);
+        }
+        let job_id = assignment
+            .job_id
+            .as_deref()
+            .filter(|job_id| !job_id.trim().is_empty())
+            .ok_or_else(|| LeaseError::MalformedMetadata {
+                reason: "interrupted-CI diagnostic assignment job id is required".to_string(),
+            })?;
+        match diagnostic.job_id.as_deref() {
+            None => diagnostic.job_id = Some(job_id.to_string()),
+            Some(current) => {
+                // An existing assignment with this identity was handled as an
+                // idempotent claim before this helper. With no assignment
+                // present, any persisted diagnostic job id is an exhausted
+                // publication fence, including the same deterministic id.
+                return Err(LeaseError::AssignmentConflict {
+                    job_id: current.to_string(),
+                });
+            }
+        }
+        Ok(metadata)
+    }
+
+    fn metadata_with_rolled_back_diagnostic(
+        &self,
+        expected: &DurableAssignment,
+    ) -> WorkflowMetadata {
+        let mut metadata = self.metadata().clone();
+        if let Some(diagnostic) = metadata
+            .interrupted_ci_recovery
+            .as_mut()
+            .and_then(|recovery| recovery.diagnostic.as_mut())
+        {
+            if diagnostic.job_id.as_deref() == expected.job_id.as_deref() {
+                diagnostic.job_id = None;
+            }
+        }
+        metadata
+    }
+
     /// The version token captured when the artifact was loaded.
     fn version(&self) -> Version {
         match self {
@@ -337,9 +393,28 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         mutation: AssignmentMutation,
         target: ArtifactSource,
     ) -> Result<(), LeaseError> {
-        let (body, mut metadata) = match loaded {
-            LoadedLease::Issue { body, metadata, .. }
-            | LoadedLease::PullRequest { body, metadata, .. } => (body, metadata.clone()),
+        self.write_assignment_with_metadata(
+            loaded,
+            loaded.metadata().clone(),
+            assignment,
+            lease,
+            mutation,
+            target,
+        )
+        .await
+    }
+
+    async fn write_assignment_with_metadata(
+        &self,
+        loaded: &LoadedLease,
+        mut metadata: WorkflowMetadata,
+        assignment: Option<DurableAssignment>,
+        lease: Option<Lease>,
+        mutation: AssignmentMutation,
+        target: ArtifactSource,
+    ) -> Result<(), LeaseError> {
+        let body = match loaded {
+            LoadedLease::Issue { body, .. } | LoadedLease::PullRequest { body, .. } => body,
         };
         metadata.assignment = assignment;
         metadata.lease = lease;

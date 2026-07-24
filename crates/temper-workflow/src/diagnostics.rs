@@ -4,10 +4,12 @@
 //! one. A [`Diagnostic`] describes a single problem; [`ValidationErrors`] is the
 //! error type returned when at least one error-severity diagnostic is present.
 
-use std::error::Error;
 use std::fmt;
 
 use crate::spec::TargetBranchPolicy;
+
+mod errors;
+pub use errors::ValidationErrors;
 
 /// Severity of a diagnostic.
 ///
@@ -273,6 +275,19 @@ pub enum Diagnostic {
         action: String,
         checkout: String,
     },
+    /// A recovery-required CI action could inherit source mutation authority.
+    QueueActionUnsafeCiRecoveryCheckout {
+        queue: String,
+        role: String,
+        action: String,
+        checkout: Option<String>,
+    },
+    /// A recovery-required CI diagnostic omitted its explicit result contract.
+    QueueActionCiRecoveryMissingOutcomes {
+        queue: String,
+        role: String,
+        action: String,
+    },
     /// A writable pull-request action contains an effect that its monotonic
     /// repair publication path cannot safely apply.
     QueueActionUnsupportedPullRequestRepairEffect {
@@ -354,6 +369,8 @@ impl Diagnostic {
             | Diagnostic::QueueActionArtifactMismatch { .. }
             | Diagnostic::QueueActionFilterArtifactMismatch { .. }
             | Diagnostic::QueueActionInvalidCheckout { .. }
+            | Diagnostic::QueueActionUnsafeCiRecoveryCheckout { .. }
+            | Diagnostic::QueueActionCiRecoveryMissingOutcomes { .. }
             | Diagnostic::QueueActionUnsupportedPullRequestRepairEffect { .. }
             | Diagnostic::ValidationBindingActionUnauthorized { .. }
             | Diagnostic::ValidationBindingActionArtifactMismatch { .. }
@@ -469,6 +486,24 @@ impl fmt::Display for Diagnostic {
                 formatter,
                 "action assignment for role `{role}` on queue `{queue}` uses action `{action}` with unsupported checkout capability `{checkout}`"
             ),
+            Diagnostic::QueueActionUnsafeCiRecoveryCheckout {
+                queue,
+                role,
+                action,
+                checkout,
+            } => write!(
+                formatter,
+                "action assignment for role `{role}` on recovery-required CI queue `{queue}` uses action `{action}` with checkout `{}`; it must explicitly use `pull_request_read_only`",
+                checkout.as_deref().unwrap_or("<omitted>")
+            ),
+            Diagnostic::QueueActionCiRecoveryMissingOutcomes {
+                queue,
+                role,
+                action,
+            } => write!(
+                formatter,
+                "action assignment for role `{role}` on recovery-required CI queue `{queue}` uses action `{action}` without an explicit verdict outcome contract"
+            ),
             Diagnostic::QueueActionUnsupportedPullRequestRepairEffect {
                 queue,
                 role,
@@ -545,47 +580,3 @@ impl fmt::Display for Diagnostic {
         }
     }
 }
-
-/// Collection of diagnostics returned when validation fails.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ValidationErrors {
-    diagnostics: Vec<Diagnostic>,
-}
-
-impl ValidationErrors {
-    /// Creates a collection from diagnostics. Intended for use by validation.
-    pub(crate) fn new(diagnostics: Vec<Diagnostic>) -> Self {
-        Self { diagnostics }
-    }
-
-    /// Returns the collected diagnostics.
-    pub fn diagnostics(&self) -> &[Diagnostic] {
-        &self.diagnostics
-    }
-
-    /// Returns the number of diagnostics.
-    pub fn len(&self) -> usize {
-        self.diagnostics.len()
-    }
-
-    /// Returns `true` if there are no diagnostics.
-    pub fn is_empty(&self) -> bool {
-        self.diagnostics.is_empty()
-    }
-}
-
-impl fmt::Display for ValidationErrors {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "workflow validation failed with {} diagnostic(s)",
-            self.diagnostics.len()
-        )?;
-        for diagnostic in &self.diagnostics {
-            write!(formatter, "\n  - {diagnostic}")?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for ValidationErrors {}
