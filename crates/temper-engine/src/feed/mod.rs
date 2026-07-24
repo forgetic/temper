@@ -9,7 +9,10 @@ mod recovery;
 mod targeted;
 mod workspace;
 
-use self::action_assignment::{enrich_job_context_from_workflow, enrich_pull_request_writable_job};
+use self::action_assignment::{
+    enrich_interrupted_ci_diagnostic_job, enrich_job_context_from_workflow,
+    enrich_pull_request_writable_job,
+};
 use self::targeted::TargetedEnrichment;
 use std::collections::BTreeSet;
 
@@ -26,6 +29,7 @@ use temper_workflow::{
     requires_human_attention,
 };
 
+use crate::interrupted_ci_recovery::{InterruptedCiRecoveryOutcome, recover_interrupted_ci};
 use crate::workflow_meta::implementation_pr_labels;
 use workspace::{
     build_workspace_manifest, enforce_issue_workspace_target_branch_policy, target_number,
@@ -381,6 +385,17 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     enrich_job_context_from_workflow(item, workflow, compiled, &repository, &mut context)?;
     enforce_issue_workspace_target_branch_policy(item, workflow, &mut context)?;
 
+    if item_is_interrupted_ci_recovery(item, compiled) {
+        let preloaded = targeted
+            .as_ref()
+            .and_then(|targeted| match targeted.snapshot {
+                TargetedArtifactSnapshot::PullRequest(pull_request) => Some(pull_request.as_ref()),
+                TargetedArtifactSnapshot::Issue(_) => None,
+            });
+        enrich_interrupted_ci_diagnostic_job(forge, repo, item, compiled, &mut context, preloaded)
+            .await?;
+    }
+
     let action = context.action.as_deref().ok_or_else(|| {
         ScanError::InvalidWorkflow("enriched job is missing a selected action".to_string())
     })?;
@@ -434,6 +449,54 @@ pub(crate) enum EnrichOutcome {
     SkipTerminalArtifact,
     SkipAttentionArtifact,
     SkipExistingPullRequest,
+}
+
+pub(crate) fn item_is_interrupted_ci_recovery(
+    item: &WorkItem,
+    compiled: &CompiledWorkflow,
+) -> bool {
+    matches!(item.target, ArtifactSource::PullRequest { .. })
+        && compiled.queues().iter().any(|queue| {
+            queue.id == item.queue
+                && matches!(
+                    queue.condition.as_ref(),
+                    Some(temper_workflow::GateCondition::CiRecoveryRequired)
+                )
+        })
+}
+
+pub(crate) async fn prepare_interrupted_ci_recovery_item<F: Forge + ?Sized>(
+    forge: &F,
+    repository: &temper_forge::Repository,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: chrono::DateTime<chrono::Utc>,
+    item: &WorkItem,
+) -> Result<bool, ScanError> {
+    if !item_is_interrupted_ci_recovery(item, compiled) {
+        return Ok(true);
+    }
+    let ArtifactSource::PullRequest { number } = item.target else {
+        return Ok(false);
+    };
+    match recover_interrupted_ci(
+        forge,
+        repository,
+        workflow,
+        compiled,
+        now,
+        temper_runner::ArtifactAddress::pull_request(number),
+    )
+    .await
+    {
+        InterruptedCiRecoveryOutcome::DispatchDiagnostic => Ok(true),
+        InterruptedCiRecoveryOutcome::Retryable { reason } => {
+            Err(ScanError::Forge(ForgeError::Backend(reason)))
+        }
+        InterruptedCiRecoveryOutcome::Waiting
+        | InterruptedCiRecoveryOutcome::Suppressed
+        | InterruptedCiRecoveryOutcome::Parked => Ok(false),
+    }
 }
 
 fn is_writable_issue_job(item: &WorkItem, context: &JobContext) -> bool {
@@ -620,7 +683,11 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
     mode: RoleFeedMode,
 ) -> Result<usize, ScanError> {
     recover_advanced_pull_request_assignments(daemon, forge, repo, workflow, role).await?;
-    let repo_label = repo_label(forge, repo).await?;
+    let repository = forge
+        .get_repository(repo)
+        .await?
+        .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?;
+    let repo_label = format!("{}/{}", repository.owner, repository.name);
     let items: Vec<WorkItem> = match mode {
         RoleFeedMode::Normal => scan_role(forge, repo, workflow, compiled, now, role).await?,
         RoleFeedMode::Wake => scan_role_wake(forge, repo, workflow, compiled, now, role).await?,
@@ -628,6 +695,11 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
     let mut enqueued = 0;
     let mut current_job_ids = BTreeSet::new();
     for item in &items {
+        if !prepare_interrupted_ci_recovery_item(forge, &repository, workflow, compiled, now, item)
+            .await?
+        {
+            continue;
+        }
         let mut job = job_from_work_item(&repo_label, item);
         match enrich_work_item_job_inner(
             forge,
@@ -638,7 +710,7 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
             compiled,
             false,
             daemon.artifact_context.as_deref(),
-            None,
+            Some(&repository),
             None,
         )
         .await
@@ -673,18 +745,6 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
         .reconcile_pending_role_jobs(&repo_label, role.as_str(), current_job_ids)
         .await;
     Ok(enqueued)
-}
-
-/// Resolves the `owner/name` protocol repo label for a scanned `RepositoryId`.
-async fn repo_label<F: Forge + ?Sized>(
-    forge: &F,
-    repo: &RepositoryId,
-) -> Result<String, ScanError> {
-    let repository = forge
-        .get_repository(repo)
-        .await?
-        .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?;
-    Ok(format!("{}/{}", repository.owner, repository.name))
 }
 
 #[cfg(test)]

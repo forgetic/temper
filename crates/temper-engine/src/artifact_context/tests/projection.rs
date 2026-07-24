@@ -79,6 +79,7 @@ fn large_bookkeeping_metadata(
         }),
         repaired_head: Some(payload.into()),
         missing_ci_recovery: None,
+        interrupted_ci_recovery: None,
         staged: true,
         create_issue_intents: child
             .map(|(repository_id, number, title)| {

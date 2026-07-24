@@ -2,6 +2,8 @@
 
 //! Lease-gated [`ResultApplier`] decorator and the daemon wall-clock seam.
 
+mod interrupted_ci;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -84,6 +86,11 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         if self.is_revoked(&job) {
             return ClaimOutcome::Stale {
                 reason: "exact assignment attempt was already revoked in this process".to_string(),
+            };
+        }
+        if self.interrupted_ci_diagnostic_already_published(&job).await {
+            return ClaimOutcome::Stale {
+                reason: "interrupted-CI diagnostic was already published or exhausted".to_string(),
             };
         }
         if let Some(outcome) = self.validate_claim_freshness(&job).await {

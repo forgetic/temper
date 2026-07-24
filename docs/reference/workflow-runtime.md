@@ -47,6 +47,17 @@ conclusion instead satisfy `ci_recovery_required`. They remain ineligible to
 land, but cannot enter an ordinary writable code-repair queue. A visible terminal
 job mixed with a queued or running latest job remains pending.
 
+For a freshly revalidated recovery-required attempt, the engine persists an
+exact repository/PR/head/run/attempt/job-set marker before side effects. It
+requests one supported provider retry and waits for a newer attempt; uncertain
+requests are never repeated. Unsupported, rejected, or exhausted retry may
+publish exactly one workflow-configured `pull_request_read_only` diagnostic
+assignment with explicit verdicts. No configured diagnostic, or its completion,
+converges to one `needs-human` barrier and fingerprint-keyed evidence audit.
+Every boundary re-reads the exact current head, and marker/assignment CAS state
+makes duplicate webhooks, polling, and daemon replacement idempotent. See
+[workflow recovery](workflow-recovery.md#interrupted-current-head-ci-recovery).
+
 Terminal aggregates retain deterministic structured evidence for every latest
 job: typed and provider conclusions, bounded provider reason, job/run/attempt
 identity, commit SHA, URL, and timestamps. Narrow CI observations, exact-head

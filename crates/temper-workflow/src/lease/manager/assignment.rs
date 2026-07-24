@@ -53,8 +53,10 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
             .collect();
         request.assignment.assigned_at = Some(now);
         request.assignment.expires_at = Some(lease.expires_at);
-        self.write_assignment(
+        let metadata = loaded.metadata_with_diagnostic_job(&request.assignment)?;
+        self.write_assignment_with_metadata(
             &loaded,
+            metadata,
             Some(request.assignment.clone()),
             Some(lease),
             request.mutation,
@@ -174,8 +176,19 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
             .filter(|user| !pre_assignees.contains(user))
             .cloned()
             .collect();
-        self.write_assignment(
+        // Only the immediate unpublished-claim rollback may reopen an
+        // interrupted-CI diagnostic publication boundary. Snapshot rollback is
+        // abandoned-assignment convergence: the assignment may already have
+        // reached a worker before its lease expired, so retain the durable job
+        // id and let recovery park rather than dispatching it again.
+        let metadata = if snapshot_match {
+            loaded.metadata().clone()
+        } else {
+            loaded.metadata_with_rolled_back_diagnostic(expected)
+        };
+        self.write_assignment_with_metadata(
             &loaded,
+            metadata,
             None,
             None,
             AssignmentMutation {

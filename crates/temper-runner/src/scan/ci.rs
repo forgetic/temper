@@ -115,11 +115,7 @@ pub async fn read_ci_status_observations<F: Forge + ?Sized>(
             continue;
         };
         if requires_human_attention(&pull_request.labels)
-            && classified
-                .metadata
-                .missing_ci_recovery
-                .as_ref()
-                .is_none_or(|recovery| recovery.head_sha != head_sha)
+            && !ci_recovery_matches_head(&classified, &head_sha)
         {
             continue;
         }
@@ -163,7 +159,9 @@ fn classify_ci_candidate(
     let recovering = parse_metadata_block(&pull_request.body)
         .ok()
         .flatten()
-        .is_some_and(|metadata| metadata.missing_ci_recovery.is_some());
+        .is_some_and(|metadata| {
+            metadata.missing_ci_recovery.is_some() || metadata.interrupted_ci_recovery.is_some()
+        });
     let mut candidate = pull_request.clone();
     if recovering {
         candidate.labels.retain(|label| label != NEEDS_HUMAN_LABEL);
@@ -171,6 +169,19 @@ fn classify_ci_candidate(
     Classifier::new(workflow)
         .classify_pull_request(&candidate)
         .ok()
+}
+
+fn ci_recovery_matches_head(classified: &ClassifiedArtifact, head_sha: &str) -> bool {
+    classified
+        .metadata
+        .missing_ci_recovery
+        .as_ref()
+        .is_some_and(|recovery| recovery.head_sha == head_sha)
+        || classified
+            .metadata
+            .interrupted_ci_recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.head_sha == head_sha)
 }
 
 fn sha_identifies_head(job_sha: &str, head_sha: &str) -> bool {
@@ -197,7 +208,8 @@ fn relevant_candidate(queues: &[&QueueManifest], classified: &ClassifiedArtifact
     if classified.metadata.staged {
         return false;
     }
-    let recovering = classified.metadata.missing_ci_recovery.is_some();
+    let recovering = classified.metadata.missing_ci_recovery.is_some()
+        || classified.metadata.interrupted_ci_recovery.is_some();
     if requires_human_attention(&classified.labels) && !recovering {
         return false;
     }
