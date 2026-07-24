@@ -109,7 +109,8 @@ pub use temper_protocol_worker::{ShutdownBlocker, ShutdownBlockerKind, ShutdownE
 pub use trace::{
     ActivityEndpoint, DirtyTraceRun, DirtyTraceRuns, MAX_CHILD_ACTIVITY_FRAME_BYTES,
     MAX_CHILD_ACTIVITY_RECORD_BYTES, RecoveredTraceRun, TraceCollector, TraceCoordinationSnapshot,
-    TraceError, TraceManifestV1, TraceRun, WORKER_SPOOL_RUN_CAPACITY,
+    TraceError, TraceManifestV1, TraceRun, TraceSpoolEntry, TraceSpoolInventory, TraceSpoolOutcome,
+    TraceSpoolOutcomeCounts, WORKER_SPOOL_RUN_CAPACITY,
 };
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{
