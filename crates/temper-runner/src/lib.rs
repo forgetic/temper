@@ -120,7 +120,7 @@ pub use worker::{
 };
 pub use workspace_request::{
     implementation_pr_body, implementation_pr_body_from_report_or_summary,
-    implementation_pr_pull_request_input, implementation_pr_pull_request_input_with_handoff,
-    implementation_pr_report_body, implementation_pr_title, pr_branch_hint, pr_correlation_key,
-    workspace_content_key,
+    implementation_pr_prose_from_report_or_summary, implementation_pr_pull_request_input,
+    implementation_pr_pull_request_input_with_handoff, implementation_pr_report_body,
+    implementation_pr_title, pr_branch_hint, pr_correlation_key, workspace_content_key,
 };

@@ -134,26 +134,31 @@ pub fn implementation_pr_pull_request_input_with_handoff(
 /// Renders the shared fallback implementation PR body for older agents that
 /// only provide a summary.
 pub fn implementation_pr_body(intro: &str, summary: &str, metadata: &WorkflowMetadata) -> String {
-    let intro = sanitize_authored_report(intro);
-    let summary = sanitize_authored_report(summary);
-    let summary = summary.trim();
-    format!(
-        "{}\n\nSummary: {}\n\n{}",
-        intro.trim(),
-        if summary.is_empty() {
-            "(none)"
-        } else {
-            summary
-        },
-        render_metadata_block(metadata)
-    )
+    let prose = implementation_pr_fallback_prose(intro, summary);
+    implementation_pr_body_from_sanitized_prose(&prose, metadata)
 }
 
 /// Renders an agent-authored implementation PR report body plus the Temper
 /// workflow metadata block.
 pub fn implementation_pr_report_body(report: &str, metadata: &WorkflowMetadata) -> String {
     let report = sanitize_authored_report(report);
-    implementation_pr_report_body_from_sanitized(&report, metadata)
+    implementation_pr_body_from_sanitized_prose(&report, metadata)
+}
+
+/// Returns only the sanitized, agent-authored portion of an implementation PR
+/// handoff. Managed workflow metadata is intentionally a separate input so
+/// callers updating an existing artifact can derive authority from a fresh
+/// Forge snapshot instead of a worker result.
+pub fn implementation_pr_prose_from_report_or_summary(
+    report_body: Option<&str>,
+    fallback_intro: &str,
+    fallback_summary: &str,
+) -> String {
+    let report = report_body.map(sanitize_authored_report);
+    match report.as_deref().and_then(non_blank) {
+        Some(report) => report.to_string(),
+        None => implementation_pr_fallback_prose(fallback_intro, fallback_summary),
+    }
 }
 
 pub fn implementation_pr_body_from_report_or_summary(
@@ -162,22 +167,35 @@ pub fn implementation_pr_body_from_report_or_summary(
     fallback_summary: &str,
     metadata: &WorkflowMetadata,
 ) -> String {
-    let report = report_body.map(sanitize_authored_report);
-    match report.as_deref().and_then(non_blank) {
-        Some(report) => implementation_pr_report_body_from_sanitized(report, metadata),
-        None => implementation_pr_body(fallback_intro, fallback_summary, metadata),
-    }
+    let prose = implementation_pr_prose_from_report_or_summary(
+        report_body,
+        fallback_intro,
+        fallback_summary,
+    );
+    implementation_pr_body_from_sanitized_prose(&prose, metadata)
 }
 
-fn implementation_pr_report_body_from_sanitized(
-    report: &str,
-    metadata: &WorkflowMetadata,
-) -> String {
-    let report = report.trim();
-    if report.is_empty() {
+fn implementation_pr_fallback_prose(intro: &str, summary: &str) -> String {
+    let intro = sanitize_authored_report(intro);
+    let summary = sanitize_authored_report(summary);
+    let summary = summary.trim();
+    format!(
+        "{}\n\nSummary: {}",
+        intro.trim(),
+        if summary.is_empty() {
+            "(none)"
+        } else {
+            summary
+        }
+    )
+}
+
+fn implementation_pr_body_from_sanitized_prose(prose: &str, metadata: &WorkflowMetadata) -> String {
+    let prose = prose.trim();
+    if prose.is_empty() {
         render_metadata_block(metadata)
     } else {
-        format!("{}\n\n{}", report, render_metadata_block(metadata))
+        format!("{}\n\n{}", prose, render_metadata_block(metadata))
     }
 }
 
