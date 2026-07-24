@@ -7,10 +7,9 @@
 //!    webhook route, role-token routing) plus the deterministic wire-protocol
 //!    worker converge one seeded intake issue into a merged, engineer-authored
 //!    implementation PR with green real CI and a closed source issue.
-//! 2. **CI red→green** — real forgejo-runner CI fails the first head, the
-//!    dedicated CI-status poll enqueues exactly one engineer repair, that repair
-//!    pushes a marker-bearing green head, and the same targeted CI wake path
-//!    lands it before either broad fallback cadence.
+//! 2. **Ambiguous CI failure** — real Forgejo 7 Actions returns a status-only
+//!    terminal failure; the dedicated CI poll keeps the gate red without
+//!    dispatching writable repair or advancing the PR head.
 //!
 //! Each ignored test owns its Forgejo server, host-mode runner, daemon, worker,
 //! and scenario repository; drop cleanup kills children on panic.
@@ -33,10 +32,10 @@ fn daemon_forgejo_happy_path_converges() {
     run_daemon_variant(Variant::happy_path());
 }
 
-// Guards real-Actions red→green routing: terminal red must enqueue one engineer
-// repair, and terminal green must land through the dedicated CI-status wake.
+// Guards real Actions ambiguous-failure routing: a terminal status-only failure
+// must not enqueue an engineer repair, synthesize a new head, or satisfy landing.
 #[test]
 #[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn daemon_forgejo_ci_fails_then_passes_converges() {
-    run_daemon_variant(Variant::ci_fails_then_passes());
+fn daemon_forgejo_bare_failure_requires_recovery() {
+    run_daemon_variant(Variant::ambiguous_ci_failure());
 }

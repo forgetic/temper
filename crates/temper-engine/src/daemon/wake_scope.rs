@@ -62,6 +62,7 @@ impl MissingCiRecoveryIntent {
 pub(crate) struct CiWakeFacts {
     pub(crate) source: CiTriggerSource,
     pub(crate) verdict: Option<CiTerminalVerdict>,
+    pub(crate) terminal_evidence: Vec<temper_workflow::CiTerminalEvidence>,
     pub(crate) completed_at: Option<DateTime<Utc>>,
     pub(crate) recovery: Option<MissingCiRecoveryIntent>,
 }
@@ -74,10 +75,20 @@ impl CiWakeFacts {
             (None, Some(incoming)) => Some(incoming),
             (None, None) => None,
         };
-        let self_terminal = (self.source, self.verdict, self.completed_at);
-        let incoming_terminal = (incoming.source, incoming.verdict, incoming.completed_at);
-        let (source, verdict, completed_at) =
-            if terminal_facts_key(incoming_terminal) > terminal_facts_key(self_terminal) {
+        let self_terminal = (
+            self.source,
+            self.verdict,
+            self.completed_at,
+            self.terminal_evidence,
+        );
+        let incoming_terminal = (
+            incoming.source,
+            incoming.verdict,
+            incoming.completed_at,
+            incoming.terminal_evidence,
+        );
+        let (source, verdict, completed_at, terminal_evidence) =
+            if terminal_facts_key(&incoming_terminal) > terminal_facts_key(&self_terminal) {
                 incoming_terminal
             } else {
                 self_terminal
@@ -85,6 +96,7 @@ impl CiWakeFacts {
         Self {
             source,
             verdict,
+            terminal_evidence,
             completed_at,
             recovery,
         }
@@ -92,10 +104,11 @@ impl CiWakeFacts {
 }
 
 fn terminal_facts_key(
-    facts: (
+    facts: &(
         CiTriggerSource,
         Option<CiTerminalVerdict>,
         Option<DateTime<Utc>>,
+        Vec<temper_workflow::CiTerminalEvidence>,
     ),
 ) -> (bool, CiTriggerSource, Option<DateTime<Utc>>, u8) {
     (
@@ -109,8 +122,9 @@ fn terminal_facts_key(
 fn verdict_priority(verdict: Option<CiTerminalVerdict>) -> u8 {
     match verdict {
         None => 0,
-        Some(CiTerminalVerdict::Failed) => 1,
-        Some(CiTerminalVerdict::Passed) => 2,
+        Some(CiTerminalVerdict::RecoveryRequired) => 1,
+        Some(CiTerminalVerdict::Failed) => 2,
+        Some(CiTerminalVerdict::Passed) => 3,
     }
 }
 

@@ -19,7 +19,7 @@ use temper_workflow::{
 
 use super::{
     EnrichOutcome, WorkItemJob, enrich_work_item_job_inner, enrichment_failure_log_line,
-    job_from_work_item, skip_log_line,
+    job_from_work_item, prepare_interrupted_ci_recovery_item, skip_log_line,
 };
 
 /// Exact current job identities produced by one item-scoped role feed.
@@ -207,6 +207,11 @@ pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
 
     result.ci_status = scan.ci_status;
     for item in &scan.work_items {
+        if !prepare_interrupted_ci_recovery_item(forge, repository, workflow, compiled, now, item)
+            .await?
+        {
+            continue;
+        }
         let mut job: WorkItemJob = job_from_work_item(&repo_label, item);
         match enrich_work_item_job_inner(
             forge,

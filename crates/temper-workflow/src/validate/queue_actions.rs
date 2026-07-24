@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::Diagnostic;
-use crate::spec::{RawQueueAction, RawTransition, RawWorkflowSpec};
+use crate::spec::{RawGateCondition, RawQueueAction, RawTransition, RawWorkflowSpec};
 use crate::validate_build::build_effect;
 
 /// Checks action authority, artifact scope, checkout vocabulary, and effects
@@ -27,6 +27,9 @@ pub(super) fn check_queue_action_contract(
             check_authority(&queue.id, action, transition, roles, diagnostics);
             check_artifact(&queue.id, &queue.artifacts, action, transition, diagnostics);
             check_checkout(&queue.id, action, transition, diagnostics);
+            if matches!(queue.condition, Some(RawGateCondition::CiRecoveryRequired)) {
+                check_ci_recovery_action(&queue.id, action, transition, diagnostics);
+            }
         }
     }
 }
@@ -72,6 +75,29 @@ fn check_artifact(
                 action_artifact: transition.artifact.clone(),
             });
         }
+    }
+}
+
+fn check_ci_recovery_action(
+    queue: &str,
+    action: &RawQueueAction,
+    transition: &RawTransition,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if action.checkout.as_deref() != Some("pull_request_read_only") {
+        diagnostics.push(Diagnostic::QueueActionUnsafeCiRecoveryCheckout {
+            queue: queue.to_string(),
+            role: action.role.clone(),
+            action: action.action.clone(),
+            checkout: action.checkout.clone(),
+        });
+    }
+    if transition.outcomes.is_empty() {
+        diagnostics.push(Diagnostic::QueueActionCiRecoveryMissingOutcomes {
+            queue: queue.to_string(),
+            role: action.role.clone(),
+            action: action.action.clone(),
+        });
     }
 }
 

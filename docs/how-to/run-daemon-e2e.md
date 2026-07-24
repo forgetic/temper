@@ -28,9 +28,9 @@ cargo nextest run --workspace --run-ignored only -P e2e-capstones
 ```
 
 For the daemon topology this lane runs only
-`daemon_forgejo_ci_fails_then_passes_converges`, the red→green Actions/merge
-capstone. The daemon happy path and other live scenarios remain available in
-the manual/all-e2e lane below.
+`daemon_forgejo_bare_failure_requires_recovery`, the status-only Actions
+recovery capstone. The daemon happy path and other live scenarios remain
+available in the manual/all-e2e lane below.
 
 ## Run every ignored live test
 
@@ -72,26 +72,26 @@ The test target lives in the root package (it spawns the root
   (per-role token routing), real CI goes green, the mechanical backstop merges,
   and the source issue closes through the provider's native close-on-merge
   keyword.
-- `daemon_forgejo_ci_fails_then_passes_converges` — the worker's first head
-  omits the CI sentinel so real CI fails; the dedicated CI-status poll detects
-  that terminal red head and starts exactly one `pr_ci_failed` engineer repair.
-  The repair pushes a marker-bearing new head, real CI turns green, and the
-  targeted mechanical handling from the next CI-status wake lands it.
+- `daemon_forgejo_bare_failure_requires_recovery` — the worker's first head
+  omits the CI sentinel so real CI fails, but Forgejo 7's web-UI payload carries
+  only bare `status: failure`. The dedicated CI-status poll keeps the exact-head
+  gate red as recovery-required without assigning `pr_ci_failed`, pushing a new
+  head, or landing the PR.
 
 The fixture sets `ci_poll_cadence_secs = 1` and keeps both
 `poll_cadence_secs` and `mechanical_cadence_secs` at 600 seconds, beyond the
 300-second convergence budget. Forgejo 7.0.x emits no Actions-completion
 repository webhooks, so completing before those broad fallback deadlines proves
-that the dedicated CI cadence found both red repair and green landing work.
+that the dedicated CI cadence found green landing or retained ambiguous red
+without writable repair.
 
-For operators, `ci_poll_cadence_secs` bounds webhook-less red-repair and
-green-landing detection. `poll_cadence_secs` remains the full
-correctness/liveness backstop, including work outside CI-gated PRs.
-`mechanical_cadence_secs` runs automated queues but, by itself, does **not**
-discover red `pr_ci_failed` engineer work. A PR matches `ci_failed` only when
-every latest-per-name job for its current head is terminal and at least one is
-non-success; a visible failed job mixed with queued or running latest jobs is
-still pending.
+For operators, `ci_poll_cadence_secs` bounds webhook-less terminal-CI detection.
+`poll_cadence_secs` remains the full correctness/liveness backstop, including
+work outside CI-gated PRs. `mechanical_cadence_secs` runs automated queues but,
+by itself, does **not** discover role-owned work. A PR matches `ci_failed` only
+for explicit ordinary failure evidence after every latest-per-name job on its
+current head is terminal. A bare Forgejo `status: failure` is recovery-required;
+a terminal job mixed with queued or running latest jobs is still pending.
 
 First use may download pinned Forgejo and `forgejo-runner` binaries into
 `.cache/forgejo/` and publish scenario state caches. Warmed runs copy state
@@ -101,7 +101,7 @@ from `.cache` to `/tmp`.
 
 ```sh
 cargo test --test daemon_forgejo_e2e \
-  daemon_forgejo_ci_fails_then_passes_converges -- --ignored
+  daemon_forgejo_bare_failure_requires_recovery -- --ignored
 ```
 
 The worker binary is built on demand from the `temper-testing` package when it

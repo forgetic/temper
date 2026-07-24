@@ -166,6 +166,10 @@ fn ci_job(
         name: name.into(),
         status,
         conclusion,
+        provider_conclusion: None,
+        provider_reason: None,
+        run_id: None,
+        attempt: None,
         url: None,
         created_at: ts(created_at),
         started_at: (status != CiJobStatus::Queued).then(|| ts(created_at)),
@@ -241,6 +245,7 @@ fn ci_discovery_uses_only_one_open_pull_request_bucket() {
             current_head_ci_present: false,
             state: CiState::Pending,
             completed_at: None,
+            terminal_evidence: Vec::new(),
         }]
     );
     assert_eq!(forge.count(CountedForgeOp::ListIssueCandidates), 0);

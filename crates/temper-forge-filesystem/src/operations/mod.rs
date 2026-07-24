@@ -17,12 +17,12 @@ mod repositories;
 use crate::FilesystemForge;
 use async_trait::async_trait;
 use temper_forge_model::{
-    CiJob, CiJobId, CiJobListing, CiJobQuery, Comment, CreateComment, CreateIssue,
-    CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue,
-    IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails, ItemNumber, Label, MergePullRequest,
-    MergeRecord, PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery,
-    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
-    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CiJob, CiJobId, CiJobListing, CiJobQuery, CiRetryOutcome, CiRetryRequest, Comment,
+    CreateComment, CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository,
+    Forge, ForgeResult, Issue, IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails,
+    ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestCandidateQuery,
+    PullRequestId, PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath,
+    RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait]
@@ -302,6 +302,10 @@ impl Forge for FilesystemForge {
         query: CiJobQuery,
     ) -> ForgeResult<CiJobListing> {
         ci_jobs::list_ci_jobs_with_presence(self, repo_id, query)
+    }
+
+    async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {
+        ci_jobs::retry_ci_attempt(self, request)
     }
 
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {

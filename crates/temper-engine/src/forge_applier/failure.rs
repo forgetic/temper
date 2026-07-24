@@ -41,6 +41,15 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             FailureClass::Permanent | FailureClass::Protocol => {}
         }
 
+        // Interrupted-CI diagnostics are already bounded by their durable
+        // exact-attempt marker. Releasing this assignment marks that one
+        // diagnostic exhausted; the recovery loop owns the single structured
+        // `needs-human` audit. Do not publish a second generic worker-failure
+        // audit or make a code-repair action eligible.
+        if is_interrupted_ci_diagnostic(&job) {
+            return ApplyOutcome::Rejected { class, reason };
+        }
+
         match self.park_failure(&job, &result, class).await {
             Ok(()) => ApplyOutcome::Rejected { class, reason },
             Err(reason) => ApplyOutcome::Retryable { reason },
@@ -178,6 +187,15 @@ impl AttentionTarget {
                 .map(|_| ()),
         }
     }
+}
+
+fn is_interrupted_ci_diagnostic(job: &InFlightJob) -> bool {
+    serde_json::from_value::<temper_protocol_worker::JobContext>(job.job_payload.clone())
+        .ok()
+        .and_then(|context| context.pull_request_freshness)
+        .and_then(|freshness| freshness.queue_condition)
+        .as_deref()
+        == Some("ci_recovery_required")
 }
 
 fn failure_class_name(class: FailureClass) -> &'static str {

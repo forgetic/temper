@@ -167,20 +167,44 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
         let head_sha = pull_request.head_sha.clone().unwrap_or_default();
         forge.seed_ci_jobs(
             &repo,
-            vec![temper_forge::CiJob {
-                id: temper_forge::CiJobId::new("ci-validate-1"),
-                repo_id: repo.clone(),
-                pull_request_id: Some(pull_request.id.clone()),
-                commit_sha: head_sha,
-                name: "validate".to_string(),
-                status: temper_forge::CiJobStatus::Completed,
-                conclusion: Some(temper_forge::CiJobConclusion::Failure),
-                url: Some("https://ci.example.test/jobs/validate".to_string()),
-                created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
-                started_at: None,
-                completed_at: None,
-                updated_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
-            }],
+            vec![
+                temper_forge::CiJob {
+                    id: temper_forge::CiJobId::new("ci-validate-1"),
+                    repo_id: repo.clone(),
+                    pull_request_id: Some(pull_request.id.clone()),
+                    commit_sha: head_sha,
+                    name: "validate".to_string(),
+                    status: temper_forge::CiJobStatus::Completed,
+                    conclusion: Some(temper_forge::CiJobConclusion::Failure),
+                    provider_conclusion: Some("failure".to_string()),
+                    provider_reason: Some("process exited with code 1".to_string()),
+                    run_id: Some("run-42".to_string()),
+                    attempt: Some("2".to_string()),
+                    url: Some("https://ci.example.test/jobs/validate".to_string()),
+                    created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
+                    started_at: None,
+                    completed_at: None,
+                    updated_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
+                },
+                temper_forge::CiJob {
+                    id: temper_forge::CiJobId::new("ci-runner-lost-1"),
+                    repo_id: repo.clone(),
+                    pull_request_id: Some(pull_request.id.clone()),
+                    commit_sha: pull_request.head_sha.clone().unwrap_or_default(),
+                    name: "runner-lost-diagnostic".to_string(),
+                    status: temper_forge::CiJobStatus::Completed,
+                    conclusion: Some(temper_forge::CiJobConclusion::RunnerLost),
+                    provider_conclusion: Some("failure".to_string()),
+                    provider_reason: Some("runner disconnected".to_string()),
+                    run_id: Some("run-43".to_string()),
+                    attempt: Some("1".to_string()),
+                    url: None,
+                    created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
+                    started_at: None,
+                    completed_at: None,
+                    updated_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
+                },
+            ],
         );
 
         // A `pr_ci_failed`-queue member for the implementation PR.
@@ -285,6 +309,10 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
         );
         assert!(guidance.contains("name: validate"), "guidance: {guidance}");
         assert!(
+            !guidance.contains("runner-lost-diagnostic"),
+            "non-repairable jobs must not be presented as source failures: {guidance}"
+        );
+        assert!(
             guidance.contains("status: completed"),
             "guidance: {guidance}"
         );
@@ -292,6 +320,16 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
             guidance.contains("conclusion: failure"),
             "guidance: {guidance}"
         );
+        assert!(
+            guidance.contains("provider_conclusion: failure"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("provider_reason: process exited with code 1"),
+            "guidance: {guidance}"
+        );
+        assert!(guidance.contains("run_id: run-42"), "guidance: {guidance}");
+        assert!(guidance.contains("attempt: 2"), "guidance: {guidance}");
         assert!(
             guidance.contains("commit_sha: abc123"),
             "guidance: {guidance}"
@@ -307,6 +345,26 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
         assert!(
             guidance.contains("implementation-report `body`"),
             "guidance: {guidance}"
+        );
+
+        let runner_lost = forge
+            .list_ci_jobs(&repo, temper_forge::CiJobQuery::default())
+            .await
+            .expect("CI jobs remain readable")
+            .into_iter()
+            .find(|job| job.conclusion == Some(temper_forge::CiJobConclusion::RunnerLost))
+            .expect("runner-lost evidence exists");
+        forge.seed_ci_jobs(&repo, vec![runner_lost]);
+        let mut stale_job = job_from_work_item("ai/temper", &item);
+        let error =
+            enrich_work_item_job(&forge, &repo, &item, &mut stale_job, &workflow, &compiled)
+                .await
+                .expect_err("non-repairable terminal CI cannot receive writable repair guidance");
+        assert!(
+            error.to_string().contains(
+                "refusing stale writable code-repair guidance without explicit ordinary failure evidence"
+            ),
+            "error: {error}"
         );
     })
 }

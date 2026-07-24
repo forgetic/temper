@@ -11,6 +11,7 @@ fn missing_observation(number: u64, head_sha: &str) -> CiStatusObservation {
         current_head_ci_present: false,
         state: CiState::Pending,
         completed_at: None,
+        terminal_evidence: Vec::new(),
     }
 }
 
@@ -197,7 +198,10 @@ fn queued_current_head_run_without_jobs_never_ages_as_missing() {
     );
     assert!(matches!(
         monitor.observations.values().next(),
-        Some(RecordedObservation::Present(CiState::Pending))
+        Some(RecordedObservation::Present {
+            state: CiState::Pending,
+            ..
+        })
     ));
 }
 

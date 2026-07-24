@@ -2,8 +2,9 @@ mod support;
 
 use support::{TestRoot, block_on, pull_request, repository, timestamp, write_ci_jobs};
 use temper_forge_model::{
-    CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobSort, CiJobSortField, CiJobStatus, Forge,
-    ForgeError, PullRequestId, RepositoryId, SortDirection,
+    CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobSort, CiJobSortField, CiJobStatus,
+    CiRetryOutcome, CiRetryRequest, Forge, ForgeError, PullRequest, PullRequestId, RepositoryId,
+    SortDirection,
 };
 
 fn ci_job(
@@ -23,6 +24,10 @@ fn ci_job(
         name: name.into(),
         status,
         conclusion: (status == CiJobStatus::Completed).then_some(CiJobConclusion::Success),
+        provider_conclusion: None,
+        provider_reason: None,
+        run_id: None,
+        attempt: None,
         url: None,
         created_at: timestamp(created_at),
         started_at: (status != CiJobStatus::Queued).then_some(timestamp(created_at + 1)),
@@ -52,7 +57,7 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
     let root = TestRoot::new("ci-jobs");
     let forge = root.forge();
     let repository = block_on(forge.create_repository(repository("alice", "project"))).unwrap();
-    let test = ci_job(
+    let mut test = ci_job(
         &repository.id,
         "test",
         "Test",
@@ -61,6 +66,11 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
         3,
         6,
     );
+    test.conclusion = Some(CiJobConclusion::RunnerLost);
+    test.provider_conclusion = Some("runner_lost".to_string());
+    test.provider_reason = Some("runner disconnected".to_string());
+    test.run_id = Some("run-42".to_string());
+    test.attempt = Some("2".to_string());
     let build = ci_job(
         &repository.id,
         "build",
@@ -76,7 +86,10 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
 
     let listed = block_on(forge.list_ci_jobs(&repository.id, CiJobQuery::default())).unwrap();
     assert_eq!(listed, vec![build.clone(), test.clone()]);
-    assert_eq!(block_on(forge.get_ci_job(&test.id)).unwrap(), Some(test));
+    assert_eq!(
+        block_on(forge.get_ci_job(&test.id)).unwrap(),
+        Some(test.clone())
+    );
     assert_eq!(
         block_on(forge.get_ci_job(&CiJobId::new("ci-job-missing"))).unwrap(),
         None
@@ -85,8 +98,87 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
     let reopened = root.forge();
     assert_eq!(
         block_on(reopened.get_ci_job(&build.id)).unwrap(),
-        Some(build)
+        Some(build.clone())
     );
+    assert_eq!(block_on(reopened.get_ci_job(&test.id)).unwrap(), Some(test));
+    assert_eq!(
+        build.provider_conclusion, None,
+        "legacy-shaped records default"
+    );
+}
+
+#[test]
+fn exact_ci_retry_fixture_is_deterministic_and_durable() {
+    let root = TestRoot::new("ci-retry");
+    let forge = root.forge();
+    let repository = block_on(forge.create_repository(repository("alice", "project"))).unwrap();
+    let pull_request = block_on(
+        forge.create_pull_request(&repository.id, pull_request(&repository.id, "Retry CI")),
+    )
+    .unwrap();
+
+    // Local PR heads are provider-owned fixture data, so set the stored head
+    // exactly as a hosted provider read would expose it.
+    let pull_path = forge
+        .root()
+        .join("repositories")
+        .join(repository.id.as_str())
+        .join("pull_requests.json");
+    let mut pulls: Vec<PullRequest> =
+        serde_json::from_str(&std::fs::read_to_string(&pull_path).unwrap()).unwrap();
+    pulls[0].head_sha = Some("head-1".into());
+    std::fs::write(&pull_path, serde_json::to_string_pretty(&pulls).unwrap()).unwrap();
+
+    let mut job = ci_job(
+        &repository.id,
+        "retry",
+        "Validate",
+        "head-1",
+        CiJobStatus::Completed,
+        3,
+        6,
+    );
+    job.pull_request_id = Some(pull_request.id.clone());
+    job.conclusion = Some(CiJobConclusion::RunnerLost);
+    job.provider_conclusion = Some("runner_lost".into());
+    job.run_id = Some("run-7".into());
+    job.attempt = Some("2".into());
+    forge
+        .seed_ci_jobs(&repository.id, vec![job.clone()])
+        .unwrap();
+    let request = CiRetryRequest::new(
+        repository.id,
+        pull_request.id,
+        "head-1",
+        "run-7",
+        "2",
+        &[job],
+    )
+    .unwrap();
+
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request.clone())).unwrap(),
+        CiRetryOutcome::Unsupported
+    );
+    forge
+        .set_ci_retry_outcome(CiRetryOutcome::Uncertain)
+        .unwrap();
+    assert_eq!(
+        block_on(root.forge().retry_ci_attempt(request.clone())).unwrap(),
+        CiRetryOutcome::Uncertain
+    );
+    forge
+        .set_ci_retry_outcome(CiRetryOutcome::Accepted)
+        .unwrap();
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request.clone())).unwrap(),
+        CiRetryOutcome::Accepted
+    );
+    assert_eq!(
+        block_on(root.forge().retry_ci_attempt(request)).unwrap(),
+        CiRetryOutcome::AlreadyObserved
+    );
+    assert_eq!(root.forge().ci_retry_requests().unwrap().len(), 4);
 }
 
 #[test]

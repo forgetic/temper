@@ -80,11 +80,27 @@ queues such as landing, but by itself does **not** scan role feeds and therefore
 does not discover red `pr_ci_failed` engineer repair work.
 
 CI terminality is conservative and head-aware. Jobs are reduced to the latest
-job per name for the current PR head. `ci_failed` matches only when that set is
-non-empty, every job in it is terminal, and at least one conclusion is
-non-success. A Forge UI can therefore show a visible failure while another
-latest job is queued or running; Temper correctly keeps that aggregate pending
-until all latest-per-name jobs settle.
+job per name for the current PR head. Every latest job must settle before a
+terminal edge is emitted. Exact success is the only landing verdict.
+`ci_failed` matches only aggregates containing an explicit ordinary `failure`
+category; cancellation, interruption, timeout, runner loss, startup failure,
+action-required, neutral/skipped, unknown, and ambiguous terminalization are
+instead `ci_recovery_required`. Those results stay red without dispatching
+writable source repair. A visible terminal job alongside any queued or running
+latest job remains pending.
+
+A current-head run that later terminalizes because its runner disappeared is
+**not** missing-current-head CI. For a freshly revalidated
+`ci_recovery_required` aggregate, the wake executor persists the exact
+repository/PR/head/run/attempt/latest-job fingerprint, then advances one bounded
+sequence: verified provider retry, one separately configured read-only
+diagnostic, or actionable parking. Every action is preceded by a new exact-head
+read. A newer pending attempt, pass, ordinary failure, head change, or closed PR
+suppresses stale interruption work. Durable side-effect markers make duplicate
+or reordered webhook/poll observations and daemon replacement safe at retry,
+diagnostic assignment, attention-label, audit, and marker-cleanup boundaries.
+The recovery path never changes a ref or creates a commit merely to obtain a new
+run.
 
 ### Layering
 

@@ -5,9 +5,9 @@
 //! the architect into a ready code issue (a *single* outcome — no design or
 //! breakdown branch), implemented by the engineer into a PR, handed off by the
 //! engineer with a `landing` label, and auto-merged by the bot once CI is green.
-//! Only three workers participate: `architect`, `engineer`, and `mechanical`.
-//! There is no reviewer/owner/human role and the landing gate has no review
-//! gate.
+//! Four workers participate: `architect`, `engineer`, `ci_diagnostician`, and
+//! `mechanical`. There is no reviewer/owner/human role and the landing gate has
+//! no review gate.
 //!
 //! This mirrors `reference_delivery.rs` at smaller scope. It is the in-process
 //! fixture check; it exercises validation, classification, queue matching, and
@@ -128,11 +128,14 @@ fn basic_delivery_fixture_validates_with_expected_shape() {
     // the knob resolves to `IntakeAuthor::SiteAdmin`.
     assert_eq!(workflow.intake_author(), Some(&IntakeAuthor::SiteAdmin));
 
-    // Exactly three roles drive the run: architect, engineer, mechanical. No
-    // reviewer, owner, or human role exists in this minimal shape.
+    // Four roles drive the run: architect, engineer, the read-only CI
+    // diagnostician, and mechanical. No reviewer, owner, or human role exists.
     let mut role_ids: Vec<&str> = workflow.roles().iter().map(|r| r.id.as_str()).collect();
     role_ids.sort_unstable();
-    assert_eq!(role_ids, vec!["architect", "engineer", "mechanical"]);
+    assert_eq!(
+        role_ids,
+        vec!["architect", "ci_diagnostician", "engineer", "mechanical"]
+    );
     assert!(
         !role_ids.contains(&"reviewer")
             && !role_ids.contains(&"owner")
@@ -193,11 +196,14 @@ fn basic_delivery_fixture_validates_with_expected_shape() {
 }
 
 #[test]
-fn basic_delivery_compiles_only_the_three_workers() {
+fn basic_delivery_compiles_the_four_workers() {
     let compiled = compile(&fixture_workflow());
     let mut ids: Vec<String> = compiled.roles().iter().map(|r| r.id.to_string()).collect();
     ids.sort();
-    assert_eq!(ids, vec!["architect", "engineer", "mechanical"]);
+    assert_eq!(
+        ids,
+        vec!["architect", "ci_diagnostician", "engineer", "mechanical"]
+    );
 }
 
 #[test]
@@ -503,6 +509,20 @@ fn failed_ci_routes_back_to_the_engineer() {
         planner
             .matching_queues_with(&failed, &ci_failed)
             .contains(&QueueId::new("pr_ci_failed"))
+    );
+
+    // Recovery-required terminal CI remains red for landing but does not enter
+    // the writable source-repair queue.
+    let recovery_required = GateSignals::new().with_ci(CiStatus::recovery_required());
+    assert!(
+        !planner
+            .matching_queues_with(&failed, &recovery_required)
+            .contains(&QueueId::new("pr_ci_failed"))
+    );
+    assert!(
+        planner
+            .matching_queues_with(&failed, &recovery_required)
+            .contains(&QueueId::new("pr_ci_recovery"))
     );
 
     // The engineer can act on it via `address_ci_failure`. The transition has

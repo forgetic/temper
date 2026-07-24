@@ -15,8 +15,8 @@ use super::{
 
 /// The CI-status cadence is deliberately short because Forgejo 7.0.x does not
 /// emit Actions-completion repository webhooks. Both broad fallbacks remain at
-/// 600s, beyond the scenario timeout, so red repair and green landing can only
-/// arrive through exact synthetic CI hints.
+/// 600s, beyond the scenario timeout, so green landing and ambiguous-red
+/// suppression can only arrive through exact synthetic CI hints.
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) const WEBHOOK_SECRET: &str = "daemon-e2e-webhook-secret";

@@ -238,6 +238,7 @@ fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
         RawGateCondition::DependenciesResolved => GateCondition::DependenciesResolved,
         RawGateCondition::CiPassed => GateCondition::CiPassed,
         RawGateCondition::CiFailed => GateCondition::CiFailed,
+        RawGateCondition::CiRecoveryRequired => GateCondition::CiRecoveryRequired,
         RawGateCondition::ReviewApproved => GateCondition::ReviewApproved,
         RawGateCondition::ReviewChangesRequested => GateCondition::ReviewChangesRequested,
         RawGateCondition::StateEquals { dimension, state } => GateCondition::StateEquals {

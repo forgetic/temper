@@ -1,0 +1,21 @@
+{
+  "state": {
+    "run": {
+      "status": "failure",
+      "jobs": [
+        {
+          "id": 3385,
+          "name": "validate",
+          "status": "failure"
+        }
+      ],
+      "commit": {
+        "shortSHA": "c456eec18b",
+        "branch": {
+          "name": "feature"
+        }
+      }
+    }
+  },
+  "logs": {}
+}

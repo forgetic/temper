@@ -10,11 +10,11 @@ fn reference_fixture_validates_with_expected_shape() {
         workflow.intake_author(),
         Some(&IntakeAuthor::Role("human".into()))
     );
-    assert_eq!(workflow.roles().len(), 6);
+    assert_eq!(workflow.roles().len(), 7);
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 3);
-    assert_eq!(workflow.queues().len(), 13);
-    assert_eq!(workflow.transitions().len(), 35);
+    assert_eq!(workflow.queues().len(), 14);
+    assert_eq!(workflow.transitions().len(), 37);
     assert_eq!(workflow.gates().len(), 3);
     // +1: implementation_pr -> implementation_pr dependency, for coordinated
     // serial landing (ADR 0023).
@@ -236,6 +236,7 @@ fn reference_fixture_compiles_every_role() {
         ids,
         vec![
             "architect",
+            "ci_diagnostician",
             "engineer",
             "human",
             "mechanical",
@@ -309,6 +310,20 @@ fn reference_fixture_compiles_every_role() {
         .find(|queue| queue.id.as_str() == "pr_ci_failed")
         .expect("CI failure queue is compiled");
     assert_eq!(ci_failed.condition.as_ref(), Some(&GateCondition::CiFailed));
+    let ci_recovery = compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "pr_ci_recovery")
+        .expect("interrupted-CI recovery queue is compiled");
+    assert_eq!(
+        ci_recovery.condition.as_ref(),
+        Some(&GateCondition::CiRecoveryRequired)
+    );
+    assert_eq!(ci_recovery.actions.len(), 1);
+    assert_eq!(
+        ci_recovery.actions[0].checkout.as_deref(),
+        Some("pull_request_read_only")
+    );
 
     let landing = compiled
         .queues()

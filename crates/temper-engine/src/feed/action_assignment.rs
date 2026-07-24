@@ -8,6 +8,7 @@ use temper_protocol_worker::{JobContext, JobGuidance, PullRequestFreshness, Repo
 use temper_runner::{ScanError, WorkItem};
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, Effect, GateCondition, QueueManifest, ToolManifest,
+    parse_metadata_block,
 };
 
 pub(super) fn enrich_job_context_from_workflow(
@@ -217,6 +218,125 @@ fn invalid_workflow_scan(message: impl Into<String>) -> ScanError {
     ScanError::InvalidWorkflow(message.into())
 }
 
+/// Enforces the separately configured non-code diagnostic contract and adds
+/// exact interruption evidence to its read-only assignment.
+pub(super) async fn enrich_interrupted_ci_diagnostic_job<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    item: &WorkItem,
+    compiled: &CompiledWorkflow,
+    context: &mut JobContext,
+    preloaded: Option<&PullRequest>,
+) -> Result<(), ScanError> {
+    let ArtifactSource::PullRequest { number } = item.target else {
+        return Err(invalid_workflow_scan(
+            "interrupted-CI diagnostic requires a pull request target",
+        ));
+    };
+    if context.checkout_capability.as_deref() != Some("pull_request_read_only") {
+        return Err(invalid_workflow_scan(format!(
+            "queue `{}` must route interrupted CI through pull_request_read_only checkout",
+            item.queue.as_str()
+        )));
+    }
+    if context.allowed_verdicts.is_empty() || context.verdict_contracts.is_empty() {
+        return Err(invalid_workflow_scan(format!(
+            "queue `{}` interrupted-CI diagnostic action must declare an explicit verdict contract",
+            item.queue.as_str()
+        )));
+    }
+    let pull_request = match preloaded {
+        Some(pull_request) => pull_request.clone(),
+        None => forge
+            .get_pull_request_by_number(repo, number)
+            .await?
+            .ok_or_else(|| ForgeError::NotFound(format!("pull request {number}")))?,
+    };
+    let metadata = parse_metadata_block(&pull_request.body)
+        .map_err(|error| invalid_workflow_scan(error.to_string()))?
+        .ok_or_else(|| invalid_workflow_scan("interrupted-CI recovery marker is missing"))?;
+    let recovery = metadata
+        .interrupted_ci_recovery
+        .ok_or_else(|| invalid_workflow_scan("interrupted-CI recovery marker is missing"))?;
+    let diagnostic = recovery.diagnostic.as_ref().ok_or_else(|| {
+        invalid_workflow_scan("interrupted-CI diagnostic action is not configured")
+    })?;
+    if diagnostic.queue != item.queue.as_str()
+        || diagnostic.role.as_str() != item.role.as_str()
+        || context.action.as_deref() != Some(diagnostic.action.as_str())
+        || diagnostic.job_id.is_some()
+    {
+        return Err(invalid_workflow_scan(
+            "interrupted-CI diagnostic publication is stale or already exhausted",
+        ));
+    }
+
+    if let Some(workspace) = context.workspace.as_mut() {
+        for repository in &mut workspace.repos {
+            repository.access = RepoAccess::ReadOnly;
+            repository.branch_hint = None;
+        }
+        if let Some(primary) = workspace.repos.first_mut() {
+            primary.branch_hint = Some(pull_request.source.branch.clone());
+        }
+    }
+    let action = context.action.clone().unwrap_or_default();
+    context.pull_request_freshness = Some(pull_request_freshness(
+        repo,
+        item,
+        compiled,
+        context,
+        &pull_request,
+        &action,
+    ));
+    append_guidance(context, interrupted_ci_diagnostic_guidance(&recovery));
+    Ok(())
+}
+
+fn interrupted_ci_diagnostic_guidance(
+    recovery: &temper_workflow::InterruptedCiRecoveryState,
+) -> String {
+    let jobs = recovery
+        .evidence
+        .iter()
+        .map(|evidence| {
+            format!(
+                "  - name: {}\n    job_id: {}\n    conclusion: {:?}\n    provider_conclusion: {}\n    provider_reason: {}\n    run_id: {}\n    attempt: {}\n    created_at: {}\n    started_at: {}\n    completed_at: {}\n    updated_at: {}\n    url: {}",
+                diagnostic_value(Some(evidence.job_name.as_str())),
+                evidence.job_id,
+                evidence.conclusion,
+                diagnostic_value(evidence.provider_conclusion.as_deref()),
+                diagnostic_value(evidence.provider_reason.as_deref()),
+                diagnostic_value(evidence.run_id.as_deref()),
+                diagnostic_value(evidence.attempt.as_deref()),
+                evidence.created_at,
+                evidence.started_at.map(|value| value.to_string()).unwrap_or_else(|| "(unknown)".to_string()),
+                evidence.completed_at.map(|value| value.to_string()).unwrap_or_else(|| "(unknown)".to_string()),
+                evidence.updated_at,
+                diagnostic_value(evidence.url.as_deref()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Interrupted-CI diagnostic contract (non-code action):\n\
+         - current_head: {}\n\
+         - run_id: {}\n\
+         - attempt: {}\n\
+         - provider_retry: {:?}\n\
+         - latest_jobs:\n{}\n\
+         - authority: This checkout is READ-ONLY. Do not edit source or workflow files, create commits, push, or manufacture a CI run. Diagnose the interruption evidence and return exactly one declared verdict; do not report a speculative source/test failure.",
+        recovery.head_sha, recovery.run_id, recovery.attempt, recovery.retry_outcome, jobs,
+    )
+}
+
+fn diagnostic_value(value: Option<&str>) -> &str {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("(unknown)")
+}
+
 /// Turns a generic PR job into a writable PR-head fix job by pointing the
 /// manifest's primary repo at the PR's actual head branch and attaching guidance
 /// for the selected action.
@@ -235,6 +355,21 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
             item.target
         )));
     };
+    let queue = compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == item.queue.as_str());
+    if queue.is_some_and(|queue| {
+        matches!(
+            queue.condition.as_ref(),
+            Some(GateCondition::CiRecoveryRequired)
+        )
+    }) {
+        return Err(invalid_workflow_scan(format!(
+            "queue `{}` routes recovery-required CI through forbidden pull_request_writable code-repair checkout",
+            item.queue.as_str()
+        )));
+    }
     let pull_request = match preloaded {
         Some(pull_request) => pull_request.clone(),
         None => forge
@@ -292,7 +427,7 @@ pub(super) async fn enrich_pull_request_writable_job<F: Forge + ?Sized>(
         &head_branch,
         &base_branch,
     )
-    .await;
+    .await?;
     append_guidance(context, guidance);
     Ok(())
 }
@@ -335,6 +470,7 @@ fn condition_token(condition: &GateCondition) -> Option<String> {
     let token = match condition {
         GateCondition::CiPassed => "ci_passed",
         GateCondition::CiFailed => "ci_failed",
+        GateCondition::CiRecoveryRequired => "ci_recovery_required",
         GateCondition::ReviewApproved => "review_approved",
         GateCondition::ReviewChangesRequested => "review_changes_requested",
         GateCondition::DependenciesResolved

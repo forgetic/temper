@@ -94,10 +94,16 @@ Required methods:
 - `list_ci_jobs`
 - `list_ci_jobs_with_presence`
 - `get_ci_job`
+- `retry_ci_attempt`
 
 CI jobs are associated with a repository, a commit SHA, and optionally a pull
-request. Status is `queued`, `running`, or `completed`; completed jobs may carry
-a conclusion such as `success`, `failure`, or `cancelled`. Populated
+request. Status is `queued`, `running`, or `completed`. Completed jobs carry a
+typed category: success, ordinary failure, cancellation, interruption, timeout,
+runner loss, startup failure, action-required, neutral, skipped, or unknown
+terminalization. Unknown terminalization remains completed and is not evidence
+of an ordinary source/test failure. Sanitized provider conclusion/reason strings
+and opaque run/attempt identities are retained when the provider exposes them;
+all four fields are optional for backward-compatible stored records. Populated
 `CiJobQuery` filters are conjunctive, so a query containing both pull-request ID
 and commit SHA returns only jobs satisfying both constraints.
 
@@ -106,3 +112,49 @@ for the query ownership scope. That fact remains true when a workflow run is
 registered but has no assigned jobs yet, and is independent of a job-status
 filter that removes every returned job. `list_ci_jobs` remains the jobs-only
 convenience operation for callers that do not reason about missing CI.
+
+## Exact-attempt CI retry
+
+`CiRetryRequest::new` requires a repository, pull request, non-empty exact head
+SHA, opaque run and attempt identities, and at least one freshly read job. Every
+job must carry those same repository/PR/head/run/attempt coordinates. The
+constructor canonicalizes the authoritative latest job set into a deterministic
+fingerprint containing stable job identity, status, typed and provider terminal
+evidence, and update time. Empty sets, duplicate IDs, and widened coordinates
+are rejected.
+
+`retry_ci_attempt` is a fenced provider side effect, not a generic workflow
+trigger. Before mutation a backend must re-read the pull request head, exact run
+and attempt, and latest job set and compare every coordinate and the fingerprint.
+It returns one of five typed outcomes:
+
+- `accepted`: the provider acknowledged this exact retry;
+- `already_observed`: a receipt or newer provider attempt proves a retry is
+  already visible, so no duplicate mutation was made;
+- `unsupported`: the backend/version has no endpoint with verified semantics;
+- `rejected(reason)`: a stale identity/fingerprint, non-retryable run, or
+  explicit provider rejection prevented mutation;
+- `uncertain`: the backend cannot prove whether the single provider request
+  took effect, for example after a transport loss or `5xx` response.
+
+`uncertain` is not permission for an unbounded duplicate. The caller must retain
+its interruption evidence and perform a later authoritative exact-head read. A
+new attempt reconciles the request as already observed; unchanged evidence may
+be retried only under the caller's separate bounded recovery policy.
+
+Capability detection fails closed. A backend must report `unsupported` rather
+than guessing an undocumented endpoint or using a UI/read fallback for writes.
+No implementation may create an empty commit, force-push, update a ref, or make
+any other source mutation to trigger CI.
+
+Current provider support is intentionally narrow:
+
+| Backend | Exact-attempt retry | Fallback behavior |
+| --- | --- | --- |
+| GitHub | Supported through the documented Actions run rerun endpoint after exact head/attempt/job-set revalidation | `404`/`410` is unsupported; transport/`5xx` is uncertain and is not blindly repeated |
+| Forgejo | Unsupported on all supported versions | Use a configured read-only diagnostic or park with evidence; the web-UI CI adapter is read-only |
+| Memory/filesystem | Deterministic test outcome / unsupported reference behavior | Never mutate commits or refs |
+
+Provider support decides only whether the first bounded action can be attempted.
+Unsupported, rejected, uncertain, and exhausted outcomes retain the same typed
+terminal evidence for diagnostic fallback and parking.

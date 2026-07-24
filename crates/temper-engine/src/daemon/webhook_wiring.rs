@@ -21,6 +21,7 @@ mod missing_ci_recovery;
 use self::missing_ci_recovery::{MissingCiRecoveryOutcome, recover_missing_current_head_ci};
 
 use crate::RoleFeedTarget;
+use crate::interrupted_ci_recovery::{InterruptedCiRecoveryOutcome, recover_interrupted_ci};
 use crate::lease_applier::WallClock;
 use crate::webhook::WebhookConfig;
 
@@ -310,6 +311,33 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
         let mut failures = Vec::new();
         let now = (self.clock)();
 
+        // A recovery-required terminal result is not ordinary role work. It
+        // first advances the exact-attempt provider/diagnostic recovery state;
+        // only `DispatchDiagnostic` may flow into the role feed below.
+        for (address, facts) in &ci_facts {
+            if facts.verdict != Some(crate::CiTerminalVerdict::RecoveryRequired) {
+                continue;
+            }
+            if let InterruptedCiRecoveryOutcome::Retryable { reason } = recover_interrupted_ci(
+                self.forge.as_ref(),
+                &repository,
+                self.workflow.as_ref(),
+                self.compiled.as_ref(),
+                now,
+                *address,
+            )
+            .await
+            {
+                return WakeOutcome::Failed {
+                    reason: format!(
+                        "interrupted-CI recovery remains incomplete for {}#{}: {reason}",
+                        artifact_kind(address.kind),
+                        address.number
+                    ),
+                };
+            }
+        }
+
         // A missing-CI wake is only an intent. Revalidate and, when still safe,
         // install the attention barrier before mechanical or role work can act
         // on this exact target in the coalesced repository generation.
@@ -475,11 +503,14 @@ fn emit_ci_wake_observation(
     if address.kind != HintArtifactKind::PullRequest {
         return;
     }
-    let fresh_verdict = fresh_status.and_then(|status| match status.state() {
-        CiState::Passed => Some(crate::CiTerminalVerdict::Passed),
-        CiState::Failed => Some(crate::CiTerminalVerdict::Failed),
-        CiState::Pending => None,
-    });
+    let fresh_verdict = fresh_status
+        .as_ref()
+        .and_then(|status| match status.state() {
+            CiState::Passed => Some(crate::CiTerminalVerdict::Passed),
+            CiState::Failed => Some(crate::CiTerminalVerdict::Failed),
+            CiState::RecoveryRequired => Some(crate::CiTerminalVerdict::RecoveryRequired),
+            CiState::Pending => None,
+        });
     // A fresh pending aggregate means the terminal edge was superseded by a
     // rerun before execution; do not report the stale terminal verdict.
     if fresh_status.is_some() && fresh_verdict.is_none() {
@@ -489,6 +520,7 @@ fn emit_ci_wake_observation(
         return;
     };
     let completed_at = fresh_status
+        .as_ref()
         .and_then(|status| status.completed_at())
         .or(facts.completed_at);
     let detection_latency_ms = completed_at.map(|completed_at| {
@@ -511,6 +543,7 @@ fn emit_ci_wake_observation(
         conclusion: match verdict {
             crate::CiTerminalVerdict::Passed => "success",
             crate::CiTerminalVerdict::Failed => "failure",
+            crate::CiTerminalVerdict::RecoveryRequired => "recovery_required",
         },
         duration_ms: 0,
         trigger_source: Some(facts.source.as_str()),

@@ -16,7 +16,7 @@ use chrono::{DateTime, Utc};
 use temper_engine_io::Spawner;
 use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryId};
 use temper_runner::{CiStatusObservation, RepositorySet, RepositoryTarget};
-use temper_workflow::{CiState, CompiledWorkflow, ValidatedWorkflow};
+use temper_workflow::{CiState, CiTerminalEvidence, CompiledWorkflow, ValidatedWorkflow};
 
 use crate::lease_applier::WallClock;
 
@@ -25,8 +25,12 @@ use crate::lease_applier::WallClock;
 pub enum CiTerminalVerdict {
     /// Every latest current-head job completed successfully.
     Passed,
-    /// Every latest current-head job completed and at least one did not succeed.
+    /// Every latest current-head job completed and at least one explicitly
+    /// reported an ordinary source, build, or test failure.
     Failed,
+    /// Every latest current-head job completed without ordinary failure
+    /// evidence, but at least one result requires recovery or diagnosis.
+    RecoveryRequired,
 }
 
 /// One newly observed terminal aggregate for an exact pull request and head.
@@ -38,6 +42,8 @@ pub struct CiTerminalTransition {
     pub head_sha: String,
     /// Newly observed terminal verdict.
     pub verdict: CiTerminalVerdict,
+    /// Latest-job evidence retained for recovery and diagnostic assignment context.
+    pub terminal_evidence: Vec<CiTerminalEvidence>,
     /// Latest-job-set completion time, when every latest job supplied one.
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -71,8 +77,13 @@ struct ObservationKey {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RecordedObservation {
-    Present(CiState),
-    Missing { first_observed_at: DateTime<Utc> },
+    Present {
+        state: CiState,
+        terminal_evidence: Vec<CiTerminalEvidence>,
+    },
+    Missing {
+        first_observed_at: DateTime<Utc>,
+    },
 }
 
 /// In-memory CI aggregate and missing-interval history for configured repositories.
@@ -143,17 +154,22 @@ impl CiStatusMonitor {
             };
             let prior = self.observations.get(&key).cloned();
             let recorded = if observation.current_head_ci_present {
-                if prior != Some(RecordedObservation::Present(observation.state)) {
+                let current = RecordedObservation::Present {
+                    state: observation.state,
+                    terminal_evidence: observation.terminal_evidence.clone(),
+                };
+                if prior.as_ref() != Some(&current) {
                     if let Some(verdict) = terminal_verdict(observation.state) {
                         transitions.push(CiStatusTransition::Terminal(CiTerminalTransition {
                             hint: ci_hint(repository, observation.pull_request_number),
                             head_sha: observation.head_sha.clone(),
                             verdict,
+                            terminal_evidence: observation.terminal_evidence.clone(),
                             completed_at: observation.completed_at,
                         }));
                     }
                 }
-                RecordedObservation::Present(observation.state)
+                current
             } else {
                 let first_observed_at = match prior {
                     Some(RecordedObservation::Missing { first_observed_at }) => first_observed_at,
@@ -303,6 +319,7 @@ fn terminal_verdict(state: CiState) -> Option<CiTerminalVerdict> {
         CiState::Pending => None,
         CiState::Passed => Some(CiTerminalVerdict::Passed),
         CiState::Failed => Some(CiTerminalVerdict::Failed),
+        CiState::RecoveryRequired => Some(CiTerminalVerdict::RecoveryRequired),
     }
 }
 

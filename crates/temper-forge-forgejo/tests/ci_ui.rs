@@ -67,18 +67,28 @@ fn live_view_on_branch(
     let jobs: Vec<_> = jobs
         .iter()
         .enumerate()
-        .map(|(id, (name, status))| json!({ "id": id + 1, "name": name, "status": status }))
+        .map(|(id, (name, status))| {
+            let mut job = json!({ "id": id + 1, "name": name, "status": status });
+            if *status == "failure" {
+                // Normal failure fixtures carry a trustworthy explicit result.
+                // The captured run #591 fixture intentionally omits it.
+                job["conclusion"] = json!("failure");
+            }
+            job
+        })
         .collect();
+    let mut run = json!({
+        "status": status,
+        "jobs": jobs,
+        "commit": { "shortSHA": short_sha, "branch": { "name": branch } }
+    });
+    if status == "failure" {
+        run["conclusion"] = json!("failure");
+    }
     HttpResponse::new(
         200,
         json!({
-            "state": {
-                "run": {
-                    "status": status,
-                    "jobs": jobs,
-                    "commit": { "shortSHA": short_sha, "branch": { "name": branch } }
-                }
-            },
+            "state": { "run": run },
             "logs": {}
         })
         .to_string(),

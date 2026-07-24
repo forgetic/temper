@@ -136,6 +136,63 @@ Recovery is phase-aware:
    contain shell commands only and never label changes or other Forge
    operations.
 
+## Interrupted current-head CI recovery
+
+A terminal current-head aggregate without ordinary `failure` evidence never
+enters writable PR repair. The engine persists `interrupted_ci_recovery`, a
+marker distinct from `missing_ci_recovery`, keyed by repository, PR id, head
+SHA, provider run/attempt, and the complete latest-job fingerprint. The marker
+also retains typed conclusion/reason evidence, retry publication progress, and
+the one selected diagnostic assignment boundary.
+
+Recovery re-reads the open PR and exact-head latest job set immediately before
+each action. A closed PR, changed head, changed run/attempt, newer pending
+attempt, pass, or ordinary repairable failure clears the stale marker without
+acting. A delayed evidence update within the same run/attempt refreshes the
+fingerprint and audit evidence while carrying forward retry and diagnostic
+progress, so reordered provider observations cannot reopen a completed side
+effect boundary. Otherwise recovery proceeds in this fixed order:
+
+1. If every retry coordinate is explicit, persist `retry_started` and its time
+   before requesting the provider-neutral exact-attempt retry. An accepted
+   request is never repeated while waiting for a newer attempt. A process loss
+   or uncertain response after that marker is treated as uncertain, not retried
+   blindly. Unsupported, rejected, uncertain, or grace-exhausted retry moves to
+   diagnosis.
+2. If the matched `ci_recovery_required` queue configures exactly one action, it
+   must explicitly use `pull_request_read_only` and declare verdict outcomes.
+   Its role receives structured job/run/attempt evidence in a read-only PR-head
+   checkout; every repository manifest entry is read-only and generated guidance
+   forbids edits, commits, pushes, synthetic runs, and speculative source-failure
+   claims. Durable assignment claim records its deterministic job id in the
+   recovery marker before worker publication. Rollback of a provably unpublished
+   assignment clears that boundary; release or abandoned-assignment convergence
+   leaves it set, so the diagnostic can run at most once across restarts.
+3. When diagnosis is absent or exhausted, the engine conditionally installs
+   `needs-human`, publishes one fingerprint-keyed audit, then clears only the
+   transient recovery marker. The audit includes head, run/attempt, each job id
+   and URL, timestamps, typed/provider conclusion and reason, and both attempted
+   recovery paths. A failure between barrier, comment, and marker cleanup is
+   resumed from metadata without duplicating the comment.
+
+Missing-current-head recovery remains independent because it has no provider
+attempt to retry. Both paths preserve unrelated labels and defer to live or
+ambiguous assignment ownership. An interrupted-attempt park is recognizable by
+`needs-human` plus one `interrupted_ci_recovery:<fingerprint>` comment; a
+missing-current-head park instead uses its `missing_current_head_ci:<head>` key
+and states that no matching run exists.
+
+For an interrupted-attempt park, the operator must use the comment as the
+remediation checklist: confirm repository and current head; inspect every linked
+job and its typed/provider reason and timestamps; repair runner/provider
+infrastructure; then retrigger that exact head using a supported provider
+operation. Keep `needs-human` while no newer exact-head attempt is visible.
+After a newer queued/running attempt appears, or after independently confirming
+that automation may resume, clear `needs-human`; do not amend, empty-commit, or
+force-push merely to manufacture a run. An explicit ordinary failure on the
+newer attempt is different evidence and may enter the normal writable repair
+queue.
+
 ## Repaired-PR convergence
 
 PR repair records `repaired_head` when the repaired branch is published. Landing

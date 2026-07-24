@@ -9,23 +9,24 @@
 //!   role and mechanical backstops, short dedicated CI-status poll, and
 //!   per-role token routing,
 //! - the deterministic **`temper-testing-daemon-worker`** binary: wire-protocol
-//!   client + real git push as the engineer role identity, including the
-//!   `pr_ci_failed` sentinel repair.
+//!   client + real git push as the engineer role identity. The green scenario
+//!   exercises landing; the bare-failure scenario proves ambiguous Forgejo
+//!   terminalization never reaches its `pr_ci_failed` sentinel repair.
 //!
 //! The daemon runs the engineer-only daemon-delivery workflow
 //! (`daemon-delivery.json`, the dogfood deployment shape): the mechanical
 //! `raw_intake` automation stamps the seeded intake issue `code`+`ready`, the
 //! engineer worker pushes the implementation branch, the daemon applies the
 //! result as the engineer (PR authored by the engineer role), and targeted
-//! mechanical handling lands the PR once real CI is green. Merging closes the
-//! source issue through the provider's native close-on-merge keyword carried by
-//! the worker's commit.
+//! mechanical handling lands a PR only in the green scenario. That merge closes
+//! the source issue through the provider's native close-on-merge keyword carried
+//! by the worker's commit.
 //!
 //! The daemon's role and broad mechanical backstops are deliberately long.
 //! Webhooks drive ordinary Forge events, while a short dedicated CI-status poll
-//! detects terminal red and green heads that Forgejo 7.0.x does not webhook.
-//! Convergence before either broad deadline therefore proves the exact CI wake
-//! path, not a general role scan or broad mechanical tick.
+//! detects terminal results that Forgejo 7.0.x does not webhook. Convergence
+//! before either broad deadline therefore proves the exact CI wake path, not a
+//! general role scan or broad mechanical tick.
 
 #[path = "daemon_scenario/convergence.rs"]
 mod convergence;
@@ -52,7 +53,7 @@ use temper_workflow::RoleId;
 const DAEMON_WORKFLOW: &str = include_str!("daemon-delivery.json");
 
 /// Deliberately long broad backstops. The dedicated CI-status cadence must
-/// drive red repair and green landing before either one can run.
+/// drive green landing or retain ambiguous red before either one can run.
 const DAEMON_POLL_CADENCE_SECS: u64 = 600;
 const DAEMON_MECHANICAL_CADENCE_SECS: u64 = 600;
 /// Short test-only cadence for Forgejo's missing Actions-completion webhooks.
@@ -89,10 +90,10 @@ impl Variant {
         }
     }
 
-    pub fn ci_fails_then_passes() -> Self {
+    pub fn ambiguous_ci_failure() -> Self {
         Self {
-            name: "ci_fails_then_passes",
-            repo_name: "daemon-ci-retry",
+            name: "ambiguous_ci_failure",
+            repo_name: "daemon-ci-ambiguous",
             ci_sentinel: "deferred",
         }
     }
@@ -201,11 +202,26 @@ pub fn run_daemon_variant(variant: Variant) {
     }
 
     if variant.ci_sentinel == "deferred" {
+        // Give the daemon several dedicated CI-poll cadences to consume the
+        // provider result before proving it never reached writable repair.
+        std::thread::sleep(Duration::from_secs(3 * DAEMON_CI_POLL_CADENCE_SECS));
+        runtime::block_on(convergence::assert_ambiguous_failure_observed(
+            &forge,
+            &provisioned,
+            &engineer,
+            issue,
+        ))
+        .unwrap_or_else(|error| {
+            panic!(
+                "scenario '{}' lost its ambiguous-failure invariant: {error}",
+                variant.name
+            )
+        });
         let repairs = worker.assigned_job_count("pr_ci_failed");
         assert_eq!(
             repairs,
-            1,
-            "scenario '{}' expected exactly one pr_ci_failed engineer repair, observed {repairs}\n--- worker log ---\n{}",
+            0,
+            "scenario '{}' must not dispatch pr_ci_failed for status-only failure, observed {repairs}\n--- worker log ---\n{}",
             variant.name,
             worker.log_tail()
         );

@@ -146,7 +146,11 @@ pub(super) async fn recover_missing_current_head_ci<F: Forge + ?Sized>(
     if !compiled.queues().iter().any(|queue| {
         matches!(
             queue.condition.as_ref(),
-            Some(GateCondition::CiPassed | GateCondition::CiFailed)
+            Some(
+                GateCondition::CiPassed
+                    | GateCondition::CiFailed
+                    | GateCondition::CiRecoveryRequired
+            )
         ) && matches_queue_cheap(queue, &classified)
     }) {
         return suppress(repository, address, intent, "not_ci_gated_workflow_queue");

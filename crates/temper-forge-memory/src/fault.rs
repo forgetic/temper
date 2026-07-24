@@ -49,6 +49,8 @@ pub enum FaultOp {
     ListPullRequestComments,
     /// `add_pull_request_comment`.
     AddPullRequestComment,
+    /// `retry_ci_attempt` (surfaced as typed uncertainty).
+    RetryCiAttempt,
     /// `merge_pull_request`.
     MergePullRequest,
 }

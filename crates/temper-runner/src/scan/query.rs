@@ -129,7 +129,11 @@ pub(super) async fn targeted_role_inner<F: Forge + ?Sized>(
     let artifacts =
         targeted_artifacts(forge, repo, workflow, &queues, snapshot, classified, false).await?;
     let ci_status = needs_ci
-        .then(|| artifacts.first().map(|artifact| *artifact.signals.ci()))
+        .then(|| {
+            artifacts
+                .first()
+                .map(|artifact| artifact.signals.ci().clone())
+        })
         .flatten();
     Ok((
         work_items_for_roles(&queues, &artifacts, now, roles),
@@ -337,10 +341,20 @@ async fn push_candidate<F: Forge + ?Sized>(
     artifacts: &mut Vec<ScannedArtifact>,
     emit_ci_completed: bool,
 ) -> Result<(), ScanError> {
-    // Staging and human-attention state are global automation barriers. Check
-    // both before any queue-specific gate read so custom workflows cannot
-    // accidentally bypass them.
-    if classified.metadata.staged || requires_human_attention(&classified.labels) {
+    // Staging and human-attention state are global automation barriers. An
+    // interrupted-CI operation that installed its own barrier remains visible
+    // only to a recovery-required queue so a daemon replacement can finish its
+    // deduplicated audit and marker cleanup.
+    let interrupted_ci_parking = classified.metadata.interrupted_ci_recovery.is_some()
+        && queues.iter().any(|queue| {
+            matches!(
+                queue.condition.as_ref(),
+                Some(temper_workflow::GateCondition::CiRecoveryRequired)
+            )
+        });
+    if classified.metadata.staged
+        || (requires_human_attention(&classified.labels) && !interrupted_ci_parking)
+    {
         return Ok(());
     }
     let Some(needs) = signal_needs_for_candidate(queues, &classified) else {
@@ -383,8 +397,16 @@ async fn push_candidate<F: Forge + ?Sized>(
     emit_pr_gate_evaluated(repo, &classified, &signals, needs, emit_ci_completed);
     // Broad signal reads return a freshly classified artifact. Re-check the
     // attention barrier so a park that became visible during candidate
-    // enrichment cannot produce work from the stale summary.
-    if requires_human_attention(&classified.labels) {
+    // enrichment cannot produce ordinary work from the stale summary. Only the
+    // exact interrupted-CI cleanup path remains eligible.
+    let interrupted_ci_parking = classified.metadata.interrupted_ci_recovery.is_some()
+        && queues.iter().any(|queue| {
+            matches!(
+                queue.condition.as_ref(),
+                Some(temper_workflow::GateCondition::CiRecoveryRequired)
+            )
+        });
+    if requires_human_attention(&classified.labels) && !interrupted_ci_parking {
         return Ok(());
     }
     artifacts.push(ScannedArtifact {
@@ -436,6 +458,15 @@ fn emit_pr_gate_evaluated(
             CiState::Failed => emit_ci_completed(CiCompleted {
                 item: &item,
                 conclusion: "failure",
+                duration_ms: 0,
+                trigger_source: None,
+                detection_latency_ms: None,
+                queue: None,
+                role: None,
+            }),
+            CiState::RecoveryRequired => emit_ci_completed(CiCompleted {
+                item: &item,
+                conclusion: "recovery_required",
                 duration_ms: 0,
                 trigger_source: None,
                 detection_latency_ms: None,

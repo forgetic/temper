@@ -24,6 +24,7 @@ impl CountedForgeOp {
                 | Self::SubmitPullRequestReview
                 | Self::AddPullRequestComment
                 | Self::MergePullRequest
+                | Self::RetryCiAttempt
         )
     }
 }

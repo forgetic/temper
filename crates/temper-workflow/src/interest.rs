@@ -225,6 +225,7 @@ fn condition_label<'a>(
         GateCondition::DependenciesResolved
         | GateCondition::CiPassed
         | GateCondition::CiFailed
+        | GateCondition::CiRecoveryRequired
         | GateCondition::ReviewApproved
         | GateCondition::ReviewChangesRequested => None,
     }

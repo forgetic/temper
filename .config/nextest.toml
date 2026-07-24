@@ -91,7 +91,7 @@ test-threads = 4
 fail-fast = false
 default-filter = '''
 package(temper) & (
-    (binary(daemon_forgejo_e2e) & test(/^daemon_forgejo_ci_fails_then_passes_converges$/)) |
+    (binary(daemon_forgejo_e2e) & test(/^daemon_forgejo_bare_failure_requires_recovery$/)) |
     (binary(init_forgejo_e2e) & test(/^init_forgejo_drives_a_working_setup$/))
 )
 '''

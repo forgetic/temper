@@ -92,6 +92,7 @@ pub mod diagnostics;
 pub mod execute;
 pub mod ids;
 pub mod interest;
+mod interrupted_ci;
 pub mod journal;
 pub mod lease;
 pub mod load;
@@ -135,6 +136,7 @@ pub use ids::{
     TransitionId, ValidationBindingId, VerdictId,
 };
 pub use interest::{WorkflowInterest, workflow_interest};
+pub use interrupted_ci::{InterruptedCiDiagnosticState, InterruptedCiRecoveryState};
 pub use journal::{
     CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,
 };
@@ -156,9 +158,9 @@ pub use metadata::{
 };
 pub use missing_ci::MissingCiRecoveryState;
 pub use plan::{
-    CiState, CiStatus, DependencyReadFailure, DependencyStatus, GateSignals, MechanicalPlan,
-    PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember, QueueQuery, ReviewStatus,
-    SignalNeeds, TransitionPlan, WorkflowEffect, matches_queue, matches_queue_cheap,
+    CiState, CiStatus, CiTerminalEvidence, DependencyReadFailure, DependencyStatus, GateSignals,
+    MechanicalPlan, PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember, QueueQuery,
+    ReviewStatus, SignalNeeds, TransitionPlan, WorkflowEffect, matches_queue, matches_queue_cheap,
     matches_queue_condition, queue_active,
 };
 pub use reconcile::{

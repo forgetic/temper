@@ -111,8 +111,8 @@ snapshot.
 
 - **Default live capstones** should assert only real-stack risks that still need
   routine proof after the hermetic suite passes. Current defaults are daemon
-  topology with webhook/git auth/host-mode Actions red→green merge gating and
-  `temper init --apply` provisioning/config/daemon boot. The former live
+  topology with webhook/git auth and host-mode Actions status-only failure
+  recovery, plus `temper init --apply` provisioning/config/daemon boot. The
   single-process `temper run` scenarios were deleted after hermetic real-stack
   tests covered their value: implementation-PR handoff in
   `crates/temper-testing/tests/hermetic_real_stack.rs` and provider
@@ -138,8 +138,8 @@ snapshot.
   standalone run, fake LLM, real Forgejo, real Actions, and merge
   (manual/all-e2e lane).
 - `tests/daemon_forgejo_e2e.rs` — daemon binary + deterministic wire worker,
-  happy path and CI red-then-green. Only
-  `daemon_forgejo_ci_fails_then_passes_converges` is in the default capstone
+  happy path and status-only failure recovery. Only
+  `daemon_forgejo_bare_failure_requires_recovery` is in the default capstone
   lane; the happy path remains in manual/all-e2e.
 - `tests/init_forgejo_e2e.rs` — `temper init --apply` local artifacts,
   live Forgejo state, idempotency, and daemon boot (default capstone lane).

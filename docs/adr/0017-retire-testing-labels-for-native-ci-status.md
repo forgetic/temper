@@ -24,21 +24,27 @@ whose only job is to mirror provider state.
   ci_gate` for the reference workflows.
 - Add a `ci_failed` condition alongside `ci_passed` so queues can route failed
   CI back to the engineer without storing `testing-failed`.
-- Extend `CiStatus` from a pass boolean to a small aggregate state: `Pending`,
-  `Passed`, or `Failed`. Runtime code still computes it from fresh `CiJob`s.
+- Extend `CiStatus` from a pass boolean to an aggregate state. The original
+  `Pending`, `Passed`, and ordinary `Failed` states are now joined by
+  `RecoveryRequired`, which keeps non-repairable terminal results red without
+  selecting `ci_failed`. Runtime code computes it from fresh `CiJob`s.
 
 The portable aggregation rule remains conservative: reduce jobs to the latest
 job per name. CI passes when that set is non-empty and every latest job is
-completed with `Success`; it fails when that set is non-empty, every latest job
-is completed, and at least one latest job is non-success. No jobs or in-flight
-jobs are pending/unknown.
+completed with `Success`. It is an ordinary failure only when every latest job
+is completed and at least one explicitly reports `Failure`; other terminal
+categories require recovery. No jobs or in-flight jobs are pending/unknown.
 
 ## Consequences
 
 - `testing-passed`, `testing-failed`, `needs-testing`, tester queues, and
   `record_test_*` transitions are retired from the fixtures.
-- `pr_ci_failed` is a native-signal queue condition, not a label filter.
-- The Forge interface needs no new provider field: `CiJob` already exposes the
-  status and conclusion data required for the aggregate.
+- `pr_ci_failed` is a native-signal queue condition, not a label filter, and
+  requires explicit ordinary failure evidence. Interrupted or otherwise
+  non-repairable terminal results use the distinct `ci_recovery_required`
+  signal.
+- Provider models expose typed CI status/conclusion plus bounded original
+  provider conclusion/reason and run/attempt identity. The aggregate uses typed
+  categories for routing and retains original fields for diagnostics.
 - Agents and runners must treat CI as observed native state. They should not add
   labels that mirror CI outcomes.

@@ -98,6 +98,20 @@ sorting by name, creation time, or update time. All populated `CiJobQuery`
 filters compose conjunctively: when pull request and commit SHA are both set,
 every returned job must belong to that pull request and identify that commit.
 
+Completed jobs retain a typed `CiJobConclusion`. `failure` means an ordinary
+job/test failure; cancellation, interruption, timeout, runner loss, startup
+failure, action-required, neutral, skipped, and unknown terminalization remain
+distinct categories. `unknown` is terminal: adapters must not turn an explicit
+but unrecognized terminal provider result back into `queued` or guess that it
+was an ordinary failure.
+
+`provider_conclusion` and `provider_reason` preserve printable provider evidence
+for diagnostics, bounded to 256 UTF-8 bytes with control characters sanitized.
+`run_id` and `attempt` are optional, opaque, repository-scoped provider
+identities used to distinguish the latest execution attempt. These additive
+fields default to absent so existing serialized filesystem records remain
+readable.
+
 `list_ci_jobs_with_presence` returns the same filtered jobs plus a separate
 `matching_ci_present` fact. The fact applies the repository, pull-request, and
 commit ownership scope, but not the job-status filter. It can therefore be true

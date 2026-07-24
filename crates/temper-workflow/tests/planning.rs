@@ -330,6 +330,10 @@ fn ci_job(
         name: name.into(),
         status,
         conclusion,
+        provider_conclusion: None,
+        provider_reason: None,
+        run_id: None,
+        attempt: None,
         url: None,
         created_at: ts(),
         started_at: None,
@@ -339,7 +343,7 @@ fn ci_job(
 }
 
 #[test]
-fn ci_status_distinguishes_pending_passed_and_failed_jobs() {
+fn ci_status_distinguishes_pending_passed_failed_and_recovery_required_jobs() {
     assert_eq!(CiStatus::from_jobs(&[]).state(), CiState::Pending);
     assert_eq!(
         CiStatus::from_jobs(&[ci_job("ci", "sha", CiJobStatus::Running, None)]).state(),
@@ -364,6 +368,34 @@ fn ci_status_distinguishes_pending_passed_and_failed_jobs() {
         )])
         .state(),
         CiState::Failed
+    );
+    for conclusion in [
+        CiJobConclusion::Cancelled,
+        CiJobConclusion::Interrupted,
+        CiJobConclusion::TimedOut,
+        CiJobConclusion::RunnerLost,
+        CiJobConclusion::StartupFailure,
+        CiJobConclusion::ActionRequired,
+        CiJobConclusion::Neutral,
+        CiJobConclusion::Skipped,
+        CiJobConclusion::Unknown,
+    ] {
+        assert_eq!(
+            CiStatus::from_jobs(&[ci_job(
+                "ci",
+                "sha",
+                CiJobStatus::Completed,
+                Some(conclusion),
+            )])
+            .state(),
+            CiState::RecoveryRequired,
+            "{conclusion:?} must not route to code repair"
+        );
+    }
+    assert_eq!(
+        CiStatus::from_jobs(&[ci_job("ci", "sha", CiJobStatus::Completed, None)]).state(),
+        CiState::RecoveryRequired,
+        "ambiguous terminalization has no ordinary failure evidence"
     );
 }
 

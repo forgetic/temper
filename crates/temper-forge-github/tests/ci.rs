@@ -3,7 +3,11 @@
 mod support;
 
 use support::{MockHttpClient, block_on, forge, pull_id, repo_id};
-use temper_forge_model::{CiJobId, CiJobQuery, CiJobStatus, ItemNumber};
+use temper_forge_github::HttpMethod;
+use temper_forge_model::{
+    CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus, CiRetryOutcome, CiRetryRejection,
+    CiRetryRequest, ItemNumber,
+};
 
 fn runs_envelope(run_id: u64, head_sha: &str) -> String {
     format!(
@@ -60,6 +64,187 @@ fn pull_json(number: u64, head_sha: &str) -> String {
             "updated_at": "2024-03-02T00:00:00Z"
         }}"#
     )
+}
+
+fn retry_run_json(attempt: u64) -> String {
+    format!(
+        r#"{{
+            "id": 12,
+            "run_attempt": {attempt},
+            "head_sha": "abc123",
+            "status": "completed",
+            "conclusion": "failure"
+        }}"#
+    )
+}
+
+fn retry_jobs_envelope() -> String {
+    r#"{
+        "total_count": 1,
+        "jobs": [{
+            "id": 300,
+            "run_id": 12,
+            "run_attempt": 2,
+            "head_sha": "abc123",
+            "name": "validate",
+            "status": "completed",
+            "conclusion": "runner_lost",
+            "failure_reason": "runner disconnected",
+            "html_url": "https://github.com/acme/widgets/runs/300",
+            "created_at": "2024-01-02T03:00:00Z",
+            "started_at": "2024-01-02T03:01:00Z",
+            "completed_at": "2024-01-02T03:05:00Z"
+        }]
+    }"#
+    .to_string()
+}
+
+fn retry_request() -> CiRetryRequest {
+    let created_at = chrono::DateTime::parse_from_rfc3339("2024-01-02T03:00:00Z")
+        .unwrap()
+        .to_utc();
+    let started_at = chrono::DateTime::parse_from_rfc3339("2024-01-02T03:01:00Z")
+        .unwrap()
+        .to_utc();
+    let completed_at = chrono::DateTime::parse_from_rfc3339("2024-01-02T03:05:00Z")
+        .unwrap()
+        .to_utc();
+    let job = CiJob {
+        id: CiJobId::new("github:acme/widgets:job:300"),
+        repo_id: repo_id(),
+        pull_request_id: Some(pull_id(5)),
+        commit_sha: "abc123".into(),
+        name: "validate".into(),
+        status: CiJobStatus::Completed,
+        conclusion: Some(CiJobConclusion::RunnerLost),
+        provider_conclusion: Some("runner_lost".into()),
+        provider_reason: Some("runner disconnected".into()),
+        run_id: Some("12".into()),
+        attempt: Some("2".into()),
+        url: Some("https://github.com/acme/widgets/runs/300".into()),
+        created_at,
+        started_at: Some(started_at),
+        completed_at: Some(completed_at),
+        updated_at: completed_at,
+    };
+    CiRetryRequest::new(repo_id(), pull_id(5), "abc123", "12", "2", &[job]).unwrap()
+}
+
+#[test]
+fn retry_ci_attempt_posts_only_the_exact_fenced_run_and_observes_a_new_attempt() {
+    let client = MockHttpClient::new();
+    client.push_response(200, pull_json(5, "abc123"));
+    client.push_response(200, retry_run_json(2));
+    client.push_response(200, retry_jobs_envelope());
+    client.push_response(201, "");
+    let forge = forge(client.clone());
+    let request = retry_request();
+
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request.clone())).unwrap(),
+        CiRetryOutcome::Accepted
+    );
+    let recorded = client.recorded();
+    assert_eq!(recorded[0].path, "/repos/acme/widgets/pulls/5");
+    assert_eq!(recorded[1].path, "/repos/acme/widgets/actions/runs/12");
+    assert_eq!(recorded[2].path, "/repos/acme/widgets/actions/runs/12/jobs");
+    assert_eq!(recorded[3].method, HttpMethod::Post);
+    assert_eq!(
+        recorded[3].path,
+        "/repos/acme/widgets/actions/runs/12/rerun"
+    );
+    assert_eq!(recorded[3].body, None);
+    assert!(recorded.iter().all(|request| {
+        !request.path.contains("/git/")
+            && !request.path.contains("/commits")
+            && !request.path.contains("/refs")
+    }));
+
+    // A later authoritative run read showing a higher attempt reconciles the
+    // prior operation without issuing another POST or relying on its response.
+    client.push_response(200, pull_json(5, "abc123"));
+    client.push_response(200, retry_run_json(3));
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(request)).unwrap(),
+        CiRetryOutcome::AlreadyObserved
+    );
+    assert_eq!(
+        client
+            .recorded()
+            .iter()
+            .filter(|request| request.method == HttpMethod::Post)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn retry_ci_attempt_reports_unsupported_and_uncertain_without_fallback_writes() {
+    for (post_result, expected) in [
+        (
+            Ok(temper_forge_github::HttpResponse::new(404, "")),
+            CiRetryOutcome::Unsupported,
+        ),
+        (
+            Err(temper_forge_github::HttpError::Transport(
+                "connection reset".into(),
+            )),
+            CiRetryOutcome::Uncertain,
+        ),
+    ] {
+        let client = MockHttpClient::new();
+        client.push_response(200, pull_json(5, "abc123"));
+        client.push_response(200, retry_run_json(2));
+        client.push_response(200, retry_jobs_envelope());
+        client.push_result(post_result);
+        let forge = forge(client.clone());
+
+        assert_eq!(
+            block_on(forge.retry_ci_attempt(retry_request())).unwrap(),
+            expected
+        );
+        let writes = client
+            .recorded()
+            .into_iter()
+            .filter(|request| request.method != HttpMethod::Get)
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].path, "/repos/acme/widgets/actions/runs/12/rerun");
+    }
+}
+
+#[test]
+fn retry_ci_attempt_reports_missing_attempt_identity_as_unsupported() {
+    let client = MockHttpClient::new();
+    client.push_response(200, pull_json(5, "abc123"));
+    client.push_response(200, retry_run_json(0));
+    let forge = forge(client.clone());
+
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(retry_request())).unwrap(),
+        CiRetryOutcome::Unsupported
+    );
+    assert!(
+        client
+            .recorded()
+            .iter()
+            .all(|request| request.method == HttpMethod::Get)
+    );
+}
+
+#[test]
+fn retry_ci_attempt_rejects_cross_repository_coordinates_before_http() {
+    let mut value = serde_json::to_value(retry_request()).unwrap();
+    value["repo_id"] = serde_json::json!("github:other/widgets");
+    let widened: CiRetryRequest = serde_json::from_value(value).unwrap();
+    let client = MockHttpClient::new();
+    let forge = forge(client.clone());
+
+    assert_eq!(
+        block_on(forge.retry_ci_attempt(widened)).unwrap(),
+        CiRetryOutcome::Rejected(CiRetryRejection::RepositoryMismatch)
+    );
+    assert_eq!(client.call_count(), 0);
 }
 
 #[test]
@@ -285,4 +470,61 @@ fn list_ci_jobs_uses_explicit_commit_over_pull_head() {
     // The pull request is still resolved (number check) but its head SHA does
     // not override the explicit commit.
     let _ = ItemNumber::new(5);
+}
+
+#[test]
+fn terminal_evidence_is_typed_bounded_and_attempt_identified() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        r#"{
+            "total_count": 1,
+            "workflow_runs": [{
+                "id": 12,
+                "run_attempt": 2,
+                "head_sha": "abc123",
+                "status": "completed"
+            }]
+        }"#,
+    );
+    client.push_response(
+        200,
+        serde_json::json!({
+            "total_count": 1,
+            "jobs": [{
+                "id": 100,
+                "run_id": 12,
+                "head_sha": "abc123",
+                "name": "build",
+                "status": "completed",
+                "conclusion": "action_required",
+                "failure_reason": format!("approval required\r\n{}", "x".repeat(400)),
+                "completed_at": "2024-01-02T03:05:00Z"
+            }]
+        })
+        .to_string(),
+    );
+
+    let jobs = block_on(forge(client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some("abc123".to_string()),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+
+    let job = &jobs[0];
+    assert_eq!(
+        job.conclusion,
+        Some(temper_forge_model::CiJobConclusion::ActionRequired)
+    );
+    assert_eq!(job.provider_conclusion.as_deref(), Some("action_required"));
+    assert!(
+        job.provider_reason.as_ref().unwrap().len()
+            <= temper_forge_model::MAX_CI_PROVIDER_EVIDENCE_BYTES
+    );
+    assert!(!job.provider_reason.as_ref().unwrap().contains('\n'));
+    assert_eq!(job.run_id.as_deref(), Some("12"));
+    assert_eq!(job.attempt.as_deref(), Some("2"));
 }

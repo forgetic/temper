@@ -26,10 +26,11 @@ use crate::ids::{
 use crate::types::{ActionRunDto, ActionTaskDto};
 use crate::{ForgejoForge, HttpClient};
 use temper_forge_model::{
-    CiJob, CiJobId, CiJobListing, CiJobQuery, ForgeError, ForgeResult, RepositoryId,
+    CiJob, CiJobId, CiJobListing, CiJobQuery, CiRetryOutcome, CiRetryRejection, CiRetryRequest,
+    ForgeError, ForgeResult, RepositoryId,
 };
 
-pub(crate) use jobs::map_status;
+pub(crate) use jobs::map_status_evidence;
 use jobs::{latest_attempt, sort_jobs, task_to_job};
 
 impl<C: HttpClient> ForgejoForge<C> {
@@ -113,11 +114,17 @@ impl<C: HttpClient> ForgejoForge<C> {
             .await?;
         let mut jobs = Vec::new();
         for run in &matched {
-            for (index, task) in latest_attempt(&tasks, run_index(run))
-                .into_iter()
-                .enumerate()
-            {
-                if let Some(job) = task_to_job(&repo, repo_id, run, &task, index as u64, &target) {
+            let attempt = latest_attempt(&tasks, run_index(run));
+            for (index, task) in attempt.tasks.into_iter().enumerate() {
+                if let Some(job) = task_to_job(
+                    &repo,
+                    repo_id,
+                    run,
+                    &task,
+                    index as u64,
+                    attempt.ordinal,
+                    &target,
+                ) {
                     jobs.push(job);
                 }
             }
@@ -186,6 +193,23 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(CiJobListing::new(jobs, matching_ci_present))
     }
 
+    /// Reports exact-attempt retry as unsupported for Forgejo.
+    ///
+    /// Forgejo Actions rerun endpoints and attempt semantics vary by release,
+    /// while the supported web-UI surface is read-only and version-sensitive.
+    /// We still validate repository/PR coordinates locally, then fail closed;
+    /// no source mutation or guessed HTTP endpoint is used.
+    pub async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {
+        let repo = parse_repository_id(request.repo_id())?;
+        let (pull_repo, _) = parse_pull_request_id(request.pull_request_id())?;
+        if repo != pull_repo {
+            return Ok(CiRetryOutcome::Rejected(
+                CiRetryRejection::RepositoryMismatch,
+            ));
+        }
+        Ok(CiRetryOutcome::Unsupported)
+    }
+
     /// Looks up a single CI job through the web-UI read path (REST fallback).
     async fn get_ci_job_via_web_ui(
         &self,
@@ -238,7 +262,7 @@ impl<C: HttpClient> ForgejoForge<C> {
 
         // Prefer an exact index + task-id match; fall back to the task id alone
         // in case the attempt enumeration shifted between calls.
-        if let Some(task) = latest.get(coord.job_index as usize) {
+        if let Some(task) = latest.tasks.get(coord.job_index as usize) {
             if task.id == coord.task_id {
                 return Ok(task_to_job(
                     &coord.repo,
@@ -246,11 +270,12 @@ impl<C: HttpClient> ForgejoForge<C> {
                     &run,
                     task,
                     coord.job_index,
+                    latest.ordinal,
                     &target,
                 ));
             }
         }
-        for (index, task) in latest.iter().enumerate() {
+        for (index, task) in latest.tasks.iter().enumerate() {
             if task.id == coord.task_id {
                 return Ok(task_to_job(
                     &coord.repo,
@@ -258,6 +283,7 @@ impl<C: HttpClient> ForgejoForge<C> {
                     &run,
                     task,
                     index as u64,
+                    latest.ordinal,
                     &target,
                 ));
             }

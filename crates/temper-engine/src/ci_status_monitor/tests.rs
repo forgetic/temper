@@ -66,6 +66,7 @@ fn observation(
         current_head_ci_present: true,
         state,
         completed_at: completed_at.map(timestamp),
+        terminal_evidence: Vec::new(),
     }
 }
 
@@ -414,6 +415,10 @@ fn terminal_job(
         name: "test".into(),
         status: CiJobStatus::Completed,
         conclusion: Some(conclusion),
+        provider_conclusion: None,
+        provider_reason: None,
+        run_id: None,
+        attempt: None,
         url: None,
         created_at: timestamp("2026-07-21T11:59:00Z"),
         started_at: Some(timestamp("2026-07-21T11:59:10Z")),
@@ -424,6 +429,45 @@ fn terminal_job(
 
 mod cadence;
 mod missing;
+
+#[test]
+fn recovery_required_terminal_emits_typed_transition_with_evidence() {
+    let forge = MemoryForge::new();
+    let repository = create_repository(&forge, "interrupted");
+    let pull_request = create_pull_request(&forge, &repository, "head-interrupted");
+    let mut job = terminal_job(
+        &repository,
+        &pull_request,
+        "head-interrupted",
+        CiJobConclusion::RunnerLost,
+    );
+    job.provider_conclusion = Some("failure".to_string());
+    job.provider_reason = Some("runner disconnected".to_string());
+    job.run_id = Some("run-591".to_string());
+    job.attempt = Some("1".to_string());
+    forge.seed_ci_jobs(&repository.id, vec![job]);
+    let workflow = workflow();
+    let mut monitor = monitor();
+
+    let transitions = block_on(run_ci_status_monitor_tick(
+        &mut monitor,
+        &forge,
+        &RepositorySet::new(vec![repository]),
+        &workflow,
+        &workflow.compile(),
+    ));
+
+    let transition = terminal_transition(&transitions[0]);
+    assert_eq!(transition.verdict, CiTerminalVerdict::RecoveryRequired);
+    assert_eq!(transition.terminal_evidence.len(), 1);
+    let evidence = &transition.terminal_evidence[0];
+    assert_eq!(evidence.conclusion, CiJobConclusion::RunnerLost);
+    assert_eq!(
+        evidence.provider_reason.as_deref(),
+        Some("runner disconnected")
+    );
+    assert_eq!(evidence.run_id.as_deref(), Some("run-591"));
+}
 
 #[test]
 fn failed_repository_read_preserves_state_and_does_not_stop_other_repositories() {

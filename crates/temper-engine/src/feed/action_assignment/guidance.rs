@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 
 use temper_forge::{
-    CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, Forge, PullRequest, PullRequestReview,
-    RepositoryId, ReviewDecision,
+    CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, Forge, ForgeError, PullRequest,
+    PullRequestReview, RepositoryId, ReviewDecision,
 };
-use temper_runner::WorkItem;
-use temper_workflow::{ArtifactSource, CompiledWorkflow, GateCondition};
+use temper_runner::{ScanError, WorkItem};
+use temper_workflow::{ArtifactSource, CiStatus, CompiledWorkflow, GateCondition};
 
 pub(super) async fn pull_request_writable_guidance<F: Forge + ?Sized>(
     forge: &F,
@@ -19,10 +19,10 @@ pub(super) async fn pull_request_writable_guidance<F: Forge + ?Sized>(
     pull_request: &PullRequest,
     head_branch: &str,
     base_branch: &str,
-) -> String {
+) -> Result<String, ScanError> {
     let handoff = current_pull_request_handoff(pull_request, head_branch, base_branch);
     let gate_feedback = if is_ci_failed_pull_request_queue(item, compiled) {
-        ci_failure_clause(forge, repo, query).await
+        ci_failure_clause(forge, repo, query).await?
     } else if is_review_changes_requested_pull_request_queue(item, compiled) {
         review_changes_requested_clause(forge, pull_request).await
     } else if is_merge_conflict_pull_request_queue(item, compiled) {
@@ -31,7 +31,7 @@ pub(super) async fn pull_request_writable_guidance<F: Forge + ?Sized>(
         queue_match_clause(compiled, item)
     };
 
-    format!(
+    Ok(format!(
         "Assigned workflow action `{action}` for queue `{}` requires updating this existing implementation pull request head.\n\n\
          {handoff}\n\n\
          {gate_feedback}\n\n\
@@ -40,7 +40,7 @@ pub(super) async fn pull_request_writable_guidance<F: Forge + ?Sized>(
          On PR repair success, emit no verdict and include an updated current PR `title`, a compact implementation-report `body` \
          (preserving the Temper workflow metadata block if present), and a short `summary` describing the fix. Do not create a hidden implementation-report block.",
         item.queue.as_str()
-    )
+    ))
 }
 
 fn current_pull_request_handoff(
@@ -196,38 +196,43 @@ async fn ci_failure_clause<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     query: &CiJobQuery,
-) -> String {
-    let failing = match forge.list_ci_jobs(repo, query.clone()).await {
-        Ok(jobs) => latest_failing_ci_jobs(jobs),
-        Err(error) => {
-            return format!(
-                "Fresh assignment-time gate feedback from Forge:\n\
-                 - reason: ci_failed\n\
-                 - failing_jobs: unavailable ({error})\n\
-                 - guidance: CI is currently RED on this pull request; inspect Forge and make CI pass."
-            );
-        }
-    };
-
-    if failing.is_empty() {
-        return "Fresh assignment-time gate feedback from Forge:\n\
-                - reason: ci_failed\n\
-                - failing_jobs: []\n\
-                - guidance: CI is currently RED on this pull request; inspect the failing job and make CI pass."
-            .to_string();
+) -> Result<String, ScanError> {
+    let jobs = forge.list_ci_jobs(repo, query.clone()).await?;
+    let status = CiStatus::from_jobs_for_head(&jobs, query.commit_sha.as_deref());
+    if !status.is_failed() {
+        return Err(ScanError::Forge(ForgeError::Conflict(format!(
+            "current-head CI is {:?}; refusing stale writable code-repair guidance without explicit ordinary failure evidence",
+            status.state()
+        ))));
     }
+    let ordinary_failure_ids = status
+        .terminal_evidence()
+        .iter()
+        .filter(|evidence| evidence.conclusion == CiJobConclusion::Failure)
+        .map(|evidence| evidence.job_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut failing = jobs
+        .into_iter()
+        .filter(|job| ordinary_failure_ids.contains(&job.id))
+        .collect::<Vec<_>>();
+    failing.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.created_at.cmp(&right.created_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
 
     let jobs = failing
         .iter()
         .map(format_ci_job)
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
+    Ok(format!(
         "Fresh assignment-time gate feedback from Forge:\n\
          - reason: ci_failed\n\
          - failing_jobs:\n{jobs}\n\
          - guidance: Inspect the failing CI job details above and make CI pass."
-    )
+    ))
 }
 
 async fn review_changes_requested_clause<F: Forge + ?Sized>(
@@ -267,34 +272,6 @@ async fn review_changes_requested_clause<F: Forge + ?Sized>(
     )
 }
 
-fn latest_failing_ci_jobs(jobs: Vec<CiJob>) -> Vec<CiJob> {
-    let mut latest_by_name = BTreeMap::<String, CiJob>::new();
-    for job in jobs {
-        latest_by_name
-            .entry(job.name.clone())
-            .and_modify(|current| {
-                if ci_job_is_newer(&job, current) {
-                    *current = job.clone();
-                }
-            })
-            .or_insert(job);
-    }
-    latest_by_name
-        .into_values()
-        .filter(ci_job_is_failing)
-        .collect()
-}
-
-fn ci_job_is_newer(candidate: &CiJob, current: &CiJob) -> bool {
-    candidate.created_at > current.created_at
-        || (candidate.created_at == current.created_at
-            && candidate.updated_at >= current.updated_at)
-}
-
-fn ci_job_is_failing(job: &CiJob) -> bool {
-    job.status == CiJobStatus::Completed && job.conclusion != Some(CiJobConclusion::Success)
-}
-
 fn format_ci_job(job: &CiJob) -> String {
     let name = if job.name.trim().is_empty() {
         "(unnamed)"
@@ -302,9 +279,13 @@ fn format_ci_job(job: &CiJob) -> String {
         job.name.trim()
     };
     format!(
-        "  - name: {name}\n    status: {}\n    conclusion: {}\n    commit_sha: {}\n    url: {}",
+        "  - name: {name}\n    status: {}\n    conclusion: {}\n    provider_conclusion: {}\n    provider_reason: {}\n    run_id: {}\n    attempt: {}\n    commit_sha: {}\n    url: {}",
         ci_status_token(job.status),
         ci_conclusion_token(job.conclusion),
+        optional_value(job.provider_conclusion.as_deref().map(str::trim)),
+        optional_value(job.provider_reason.as_deref().map(str::trim)),
+        optional_value(job.run_id.as_deref().map(str::trim)),
+        optional_value(job.attempt.as_deref().map(str::trim)),
         optional_value(Some(job.commit_sha.trim())),
         optional_value(job.url.as_deref().map(str::trim))
     )
@@ -370,6 +351,7 @@ fn condition_token(condition: &GateCondition) -> Option<String> {
     let token = match condition {
         GateCondition::CiPassed => "ci_passed",
         GateCondition::CiFailed => "ci_failed",
+        GateCondition::CiRecoveryRequired => "ci_recovery_required",
         GateCondition::ReviewApproved => "review_approved",
         GateCondition::ReviewChangesRequested => "review_changes_requested",
         GateCondition::DependenciesResolved
@@ -414,9 +396,14 @@ fn ci_conclusion_token(conclusion: Option<CiJobConclusion>) -> &'static str {
         Some(CiJobConclusion::Success) => "success",
         Some(CiJobConclusion::Failure) => "failure",
         Some(CiJobConclusion::Cancelled) => "cancelled",
-        Some(CiJobConclusion::Skipped) => "skipped",
+        Some(CiJobConclusion::Interrupted) => "interrupted",
         Some(CiJobConclusion::TimedOut) => "timed_out",
+        Some(CiJobConclusion::RunnerLost) => "runner_lost",
+        Some(CiJobConclusion::StartupFailure) => "startup_failure",
+        Some(CiJobConclusion::ActionRequired) => "action_required",
         Some(CiJobConclusion::Neutral) => "neutral",
+        Some(CiJobConclusion::Skipped) => "skipped",
+        Some(CiJobConclusion::Unknown) => "unknown",
         None => "none",
     }
 }

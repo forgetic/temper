@@ -11,7 +11,7 @@ use temper_workflow::{CompiledWorkflow, QueueId, RoleId, ValidatedWorkflow};
 use super::recovery::recover_advanced_pull_request_assignments_for_roles;
 use super::{
     EnrichOutcome, enrich_work_item_job_inner, enrichment_failure_log_line, job_from_work_item,
-    skip_log_line,
+    prepare_interrupted_ci_recovery_item, skip_log_line,
 };
 
 /// Enqueued selections from one broad wake, retained so an exact CI hint that
@@ -49,6 +49,11 @@ pub(crate) async fn enqueue_scanned_roles_wake<F: Forge + ?Sized>(
     let mut enqueued_work = Vec::new();
 
     for item in &items {
+        if !prepare_interrupted_ci_recovery_item(forge, repository, workflow, compiled, now, item)
+            .await?
+        {
+            continue;
+        }
         let mut job = job_from_work_item(&repo_label, item);
         match enrich_work_item_job_inner(
             forge,

@@ -101,6 +101,29 @@
       ]
     },
     {
+      "id": "ci_diagnostician",
+      "charter": "Diagnose one exact infrastructure-interrupted CI attempt without changing source, workflow files, commits, or pull-request refs.",
+      "prompt": {
+        "guidance": "Use diagnose_interrupted_ci only for the supplied exact-head interruption evidence. The checkout is read-only; return diagnosed after recording the actionable infrastructure finding, never infer or repair a source defect."
+      },
+      "external_tools": [
+        {
+          "id": "review_workspace",
+          "description": "Inspect an existing pull request and structured interrupted-CI evidence in a read-only checkout, then return the declared diagnostic verdict.",
+          "required": false,
+          "constraints": [
+            "Read the pull request and supplied CI evidence only; never mutate files, commits, refs, or Forge state.",
+            "Return exactly one declared verdict; the engine owns retry and parking side effects."
+          ],
+          "guidance": "Use this only from diagnose_interrupted_ci. Do not invoke coding workspace behavior or suggest speculative source changes."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "pr_ci_recovery"
+      ]
+    },
+    {
       "id": "mechanical",
       "charter": "Automation authority used by the mechanical worker for landing and merge-conflict routing; do not bind this role to an LLM worker.",
       "prompt": {
@@ -424,6 +447,24 @@
           "role": "engineer",
           "action": "address_ci_failure",
           "checkout": "pull_request_writable"
+        }
+      ]
+    },
+    {
+      "id": "pr_ci_recovery",
+      "artifact": "implementation_pr",
+      "excluded_labels": [
+        "merge-conflict"
+      ],
+      "condition": {
+        "kind": "ci_recovery_required"
+      },
+      "actions": [
+        {
+          "role": "ci_diagnostician",
+          "action": "diagnose_interrupted_ci",
+          "checkout": "pull_request_read_only",
+          "guidance": "Diagnose only the exact structured interruption evidence. Do not edit files, push, or route this as a code repair."
         }
       ]
     },
@@ -979,6 +1020,25 @@
           ]
         }
       ]
+    },
+    {
+      "id": "diagnose_interrupted_ci",
+      "artifact": "implementation_pr",
+      "roles": [
+        "ci_diagnostician"
+      ],
+      "outcomes": {
+        "diagnosed": "record_interrupted_ci_diagnostic"
+      },
+      "effects": []
+    },
+    {
+      "id": "record_interrupted_ci_diagnostic",
+      "artifact": "implementation_pr",
+      "roles": [
+        "ci_diagnostician"
+      ],
+      "effects": []
     },
     {
       "id": "address_landing_ci_failure",

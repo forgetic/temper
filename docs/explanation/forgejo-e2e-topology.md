@@ -19,9 +19,10 @@ value the hermetic suite cannot give:
    real git push auth, and the real `temper-daemon` binary's
    env→config→composition (`FORGEJO_*`, `TEMPER_FORGEJO_TOKEN_<ROLE>`,
    CLI flags).
-2. **Real CI red→green**: terminal red starts one `pr_ci_failed` engineer
-   repair, that repair pushes a distinct green head, and the exact green CI wake
-   drives mechanical merge — including *not* merging while CI is red.
+2. **Ambiguous real CI failure**: a status-only Forgejo 7 failure keeps the
+   current-head gate red without entering `pr_ci_failed`, advancing the PR head,
+   or manufacturing a source/test verdict. Explicit ordinary-failure repair
+   routing remains covered by the hermetic restart suite.
 
 It deliberately does **not** re-prove workflow logic; scenarios are minimal.
 
@@ -115,16 +116,16 @@ production `temper-provision-forgejo` binary shares this code path; see
 the CI-pass gate keys on a **commit-message marker** (`[ci-pass]`) rather than
 a checked-out file. The worker's `--ci-sentinel` knob controls whether its
 commit carries the marker: `present` gives the happy path an immediately green
-head; `deferred` gives the red→green scenario a failing first head SHA and a
-later passing fix SHA — two real verdicts.
+head; `deferred` gives the ambiguous-failure scenario a real status-only red
+head that must remain unchanged.
 
 **Reading.** Forgejo 7.0.12 lacks Actions run/task REST endpoints, so
 `list_ci_jobs` is REST-first with a **password/web-UI fallback** (ADR 0019).
 The dedicated CI-status monitor performs these reads with the web-UI
 credentials passed through the daemon's environment, exactly as the production
 launcher wires them. Its terminal transitions enter the bounded wake
-coordinator as exact PR-scoped CI hints; the fresh targeted path evaluates role
-queues for red and mechanical queues for green.
+coordinator as exact PR-scoped CI hints; the fresh targeted path evaluates
+mechanical queues for green and retains status-only red as recovery-required.
 
 ## Triggering status
 
@@ -134,17 +135,17 @@ CI completion is the exception on Forgejo 7.0.x, which does not surface Actions
 completion as a repository webhook. The fixture therefore configures a short
 1-second `ci_poll_cadence_secs` and deliberately long 600-second
 `poll_cadence_secs` and `mechanical_cadence_secs`. Convergence before the
-300-second test deadline proves terminal red repair and terminal green landing
+300-second test deadline proves green landing and ambiguous-red suppression
 came from exact synthetic CI hints, not from either broad fallback.
 
 The cadence boundaries are intentionally distinct. `ci_poll_cadence_secs`
-bounds webhook-less detection for both red engineer repair and green mechanical
-landing. `poll_cadence_secs` remains the full correctness/liveness backstop.
-`mechanical_cadence_secs` runs automated queues, but alone cannot discover the
-role-owned `pr_ci_failed` repair queue. The monitored aggregate is current-head
-and latest-per-job-name: `ci_failed` matches only after every latest job is
-terminal and at least one is non-success. A visible failure alongside any
-queued or running latest job remains pending.
+bounds webhook-less detection for terminal CI. `poll_cadence_secs` remains the
+full correctness/liveness backstop. `mechanical_cadence_secs` runs automated
+queues, but alone cannot discover role-owned work. The monitored aggregate is
+current-head and latest-per-job-name: only explicit ordinary `Failure` satisfies
+`ci_failed`; Forgejo 7's bare `status: failure` remains recovery-required. A
+visible terminal result alongside any queued or running latest job remains
+pending.
 
 ## What replaced the legacy fleet e2e
 
@@ -167,7 +168,7 @@ proofs (`forgejo_server`, `forgejo_runner`, `forgejo_provision`,
 It boots real OS processes, executes CI **on the host**, and detects
 convergence by wall-clock polling. Like the `temper-forge-forgejo` live test
 it is `#[ignore]`d, so default `cargo test` stays hermetic and deterministic.
-The red→green scenario is one of the repo's default live capstones, so
+The ambiguous-failure scenario is one of the repo's default live capstones, so
 `cargo dev-test-full` includes that test; the daemon happy path remains in the
 explicit `cargo dev-test-e2e-all` manual lane.
 

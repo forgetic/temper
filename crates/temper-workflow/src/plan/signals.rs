@@ -19,8 +19,9 @@ use super::{DependencyStatus, queue::QueueQuery};
 use crate::ids::TransitionId;
 use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use temper_forge::{CiJob, CiJobConclusion, CiJobStatus, PullRequestReviewStatus};
+use temper_forge::{CiJob, CiJobConclusion, CiJobId, CiJobStatus, PullRequestReviewStatus};
 
 /// Runtime signal categories a queue or transition may need.
 ///
@@ -76,7 +77,9 @@ impl SignalNeeds {
     pub const fn for_condition(condition: &GateCondition) -> Self {
         match condition {
             GateCondition::DependenciesResolved => Self::new(true, false, false),
-            GateCondition::CiPassed | GateCondition::CiFailed => Self::new(false, true, false),
+            GateCondition::CiPassed
+            | GateCondition::CiFailed
+            | GateCondition::CiRecoveryRequired => Self::new(false, true, false),
             GateCondition::ReviewApproved | GateCondition::ReviewChangesRequested => {
                 Self::new(false, false, true)
             }
@@ -132,10 +135,11 @@ impl ValidatedWorkflow {
 /// fresh [`CiJob`]s with [`CiStatus::from_jobs_for_head`] when a current head is
 /// known, or [`CiStatus::from_jobs`] when the provider supplies no head; these
 /// are the documented places where the aggregation rule lives.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CiStatus {
     state: CiState,
     completed_at: Option<DateTime<Utc>>,
+    terminal_evidence: Vec<CiTerminalEvidence>,
 }
 
 /// Portable aggregate state for the latest native CI jobs on an artifact.
@@ -146,8 +150,67 @@ pub enum CiState {
     Pending,
     /// The latest job per name all completed successfully.
     Passed,
-    /// The latest job per name all completed and at least one was non-success.
+    /// Every latest job completed and at least one explicitly reported an
+    /// ordinary source, build, or test failure that code repair can address.
     Failed,
+    /// Every latest job completed, landing remains blocked, and no job
+    /// explicitly reported an ordinary code-repair failure.
+    RecoveryRequired,
+}
+
+/// Structured evidence from one latest terminal job.
+///
+/// Provider-specific text is already sanitized and bounded by the Forge model.
+/// The typed conclusion remains authoritative for routing; the original text and
+/// opaque run/attempt identity are retained for recovery and diagnostics.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CiTerminalEvidence {
+    /// Provider-scoped job identity.
+    pub job_id: CiJobId,
+    /// Provider job/check name used for latest-attempt aggregation.
+    pub job_name: String,
+    /// Commit SHA reported by the job.
+    pub commit_sha: String,
+    /// Portable typed terminal category used for routing.
+    pub conclusion: CiJobConclusion,
+    /// Sanitized provider conclusion/status spelling.
+    pub provider_conclusion: Option<String>,
+    /// Sanitized provider terminal reason, when exposed.
+    pub provider_reason: Option<String>,
+    /// Opaque repository-scoped provider workflow-run identity.
+    pub run_id: Option<String>,
+    /// Opaque provider attempt identity within the run.
+    pub attempt: Option<String>,
+    /// Provider job or run URL, when exposed.
+    pub url: Option<String>,
+    /// Time the job attempt was created.
+    pub created_at: DateTime<Utc>,
+    /// Time execution started, when known.
+    pub started_at: Option<DateTime<Utc>>,
+    /// Time execution completed, when known.
+    pub completed_at: Option<DateTime<Utc>>,
+    /// Most recent provider update time for this evidence.
+    pub updated_at: DateTime<Utc>,
+}
+
+impl CiTerminalEvidence {
+    fn from_job(job: &CiJob) -> Self {
+        Self {
+            job_id: job.id.clone(),
+            job_name: job.name.clone(),
+            commit_sha: job.commit_sha.clone(),
+            conclusion: job.conclusion.unwrap_or(CiJobConclusion::Unknown),
+            provider_conclusion: job.provider_conclusion.clone(),
+            provider_reason: job.provider_reason.clone(),
+            run_id: job.run_id.clone(),
+            attempt: job.attempt.clone(),
+            url: job.url.clone(),
+            created_at: job.created_at,
+            started_at: job.started_at,
+            completed_at: job.completed_at,
+            updated_at: job.updated_at,
+        }
+    }
 }
 
 impl CiStatus {
@@ -161,6 +224,7 @@ impl CiStatus {
         Self {
             state: CiState::Passed,
             completed_at: None,
+            terminal_evidence: Vec::new(),
         }
     }
 
@@ -169,6 +233,16 @@ impl CiStatus {
         Self {
             state: CiState::Failed,
             completed_at: None,
+            terminal_evidence: Vec::new(),
+        }
+    }
+
+    /// A terminal status that blocks landing but does not establish a code-repair failure.
+    pub fn recovery_required() -> Self {
+        Self {
+            state: CiState::RecoveryRequired,
+            completed_at: None,
+            terminal_evidence: Vec::new(),
         }
     }
 
@@ -182,6 +256,7 @@ impl CiStatus {
         Self {
             state,
             completed_at: None,
+            terminal_evidence: Vec::new(),
         }
     }
 
@@ -209,15 +284,26 @@ impl CiStatus {
         self.state == CiState::Failed
     }
 
+    /// Returns whether CI is terminal but requires non-code recovery or diagnosis.
+    pub fn is_recovery_required(&self) -> bool {
+        self.state == CiState::RecoveryRequired
+    }
+
+    /// Returns deterministic latest-job evidence for a terminal aggregate.
+    pub fn terminal_evidence(&self) -> &[CiTerminalEvidence] {
+        &self.terminal_evidence
+    }
+
     /// Computes the CI verdict from a set of CI jobs.
     ///
     /// The jobs are reduced to the latest job per name (by `created_at`). CI is
     /// *passed* when that set is non-empty and every latest-per-name job has
     /// status [`CiJobStatus::Completed`] with conclusion
-    /// [`CiJobConclusion::Success`]. CI is *failed* when that set is non-empty,
-    /// every latest-per-name job is completed, and at least one latest job has a
-    /// non-success conclusion. Otherwise CI is pending/unknown: no jobs, queued
-    /// jobs, or running jobs neither pass nor fail. See ADR 0014 and ADR 0017.
+    /// [`CiJobConclusion::Success`]. CI is *failed* only when every latest job
+    /// is completed and at least one explicitly has [`CiJobConclusion::Failure`].
+    /// Other completed non-success or missing conclusions require recovery and
+    /// remain in typed terminal evidence. Otherwise CI is pending/unknown: no
+    /// jobs, queued jobs, or running jobs. See ADR 0014 and ADR 0017.
     pub fn from_jobs(jobs: &[CiJob]) -> Self {
         Self::from_job_iter(jobs.iter())
     }
@@ -241,6 +327,34 @@ impl CiStatus {
             jobs.iter()
                 .filter(|job| sha_identifies_head(&job.commit_sha, head_sha)),
         )
+    }
+
+    /// Returns the same deterministic latest-per-name job set used by CI
+    /// aggregation, optionally fenced to an exact/full-or-abbreviated head.
+    pub fn latest_jobs_for_head(jobs: &[CiJob], head_sha: Option<&str>) -> Vec<CiJob> {
+        let head_sha = head_sha.map(str::trim).filter(|sha| !sha.is_empty());
+        let mut latest: HashMap<&str, &CiJob> = HashMap::new();
+        for job in jobs
+            .iter()
+            .filter(|job| head_sha.is_none_or(|head| sha_identifies_head(&job.commit_sha, head)))
+        {
+            latest
+                .entry(job.name.as_str())
+                .and_modify(|current| {
+                    if job.created_at >= current.created_at {
+                        *current = job;
+                    }
+                })
+                .or_insert(job);
+        }
+        let mut latest = latest.into_values().cloned().collect::<Vec<_>>();
+        latest.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.created_at.cmp(&right.created_at))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        latest
     }
 
     fn from_job_iter<'a>(jobs: impl IntoIterator<Item = &'a CiJob>) -> Self {
@@ -267,17 +381,33 @@ impl CiStatus {
             .all(|job| job.conclusion == Some(CiJobConclusion::Success))
         {
             CiState::Passed
-        } else {
+        } else if latest
+            .values()
+            .any(|job| job.conclusion == Some(CiJobConclusion::Failure))
+        {
             CiState::Failed
+        } else {
+            CiState::RecoveryRequired
         };
         let completed_at = latest
             .values()
             .map(|job| job.completed_at)
             .collect::<Option<Vec<_>>>()
             .and_then(|timestamps| timestamps.into_iter().max());
+        let mut terminal_evidence = latest
+            .values()
+            .map(|job| CiTerminalEvidence::from_job(job))
+            .collect::<Vec<_>>();
+        terminal_evidence.sort_by(|left, right| {
+            left.job_name
+                .cmp(&right.job_name)
+                .then_with(|| left.created_at.cmp(&right.created_at))
+                .then_with(|| left.job_id.cmp(&right.job_id))
+        });
         Self {
             state,
             completed_at,
+            terminal_evidence,
         }
     }
 }

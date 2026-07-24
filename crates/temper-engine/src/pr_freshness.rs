@@ -8,12 +8,13 @@
 //! actionable PR.
 
 use temper_forge::{
-    CiJobQuery, Forge, ItemNumber, PullRequestReviewStatus, PullRequestState, RepositoryId,
+    CiJob, CiJobQuery, CiRetryJobSetFingerprint, Forge, ItemNumber, PullRequestReviewStatus,
+    PullRequestState, RepositoryId,
 };
 use temper_protocol_worker::{
     PullRequestFreshness, PullRequestFreshnessResponse, PullRequestFreshnessStatus,
 };
-use temper_workflow::{CiStatus, ReviewStatus};
+use temper_workflow::{CiStatus, ReviewStatus, parse_metadata_block};
 
 /// Revalidates assignment-time PR facts against fresh Forge state.
 pub async fn check_pull_request_freshness<F: Forge + ?Sized>(
@@ -99,6 +100,9 @@ async fn check_pull_request_freshness_inner<F: Forge + ?Sized>(
 
     match check.queue_condition.as_deref() {
         Some("ci_failed") => ci_failed_still_holds(forge, &repo, check, &pull_request).await,
+        Some("ci_recovery_required") => {
+            ci_recovery_required_still_holds(forge, &repo, check, &pull_request).await
+        }
         Some("review_changes_requested") => {
             review_changes_requested_still_holds(forge, check, &pull_request).await
         }
@@ -158,6 +162,80 @@ async fn ci_failed_still_holds<F: Forge + ?Sized>(
     }
 }
 
+async fn ci_recovery_required_still_holds<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    check: &PullRequestFreshness,
+    pull_request: &temper_forge::PullRequest,
+) -> PullRequestFreshnessResponse {
+    let jobs = match current_ci_jobs(forge, repo, pull_request).await {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            return PullRequestFreshnessResponse::unavailable(format!(
+                "read CI for pull request #{}: {error}",
+                check.number
+            ));
+        }
+    };
+    let latest = CiStatus::latest_jobs_for_head(&jobs, pull_request.head_sha.as_deref());
+    let status = CiStatus::from_jobs(&latest);
+    if !status.is_recovery_required() {
+        return PullRequestFreshnessResponse::stale(format!(
+            "pull request #{} current-head CI is {:?}, not recovery-required",
+            check.number,
+            status.state()
+        ));
+    }
+    let recovery = match parse_metadata_block(&pull_request.body) {
+        Ok(Some(metadata)) => metadata.interrupted_ci_recovery,
+        Ok(None) => None,
+        Err(error) => {
+            return PullRequestFreshnessResponse::unavailable(format!(
+                "read interrupted-CI recovery metadata for pull request #{}: {error}",
+                check.number
+            ));
+        }
+    };
+    let Some(recovery) = recovery else {
+        return PullRequestFreshnessResponse::stale(format!(
+            "pull request #{} no longer has an exact interrupted-CI recovery marker",
+            check.number
+        ));
+    };
+    let expected_job_id = format!(
+        "{}/pull_request-{}/{}/{}",
+        check.repo, check.number, check.role, check.queue
+    );
+    let diagnostic_matches = recovery.diagnostic.as_ref().is_some_and(|diagnostic| {
+        diagnostic
+            .job_id
+            .as_deref()
+            .is_none_or(|job_id| job_id == expected_job_id)
+            && diagnostic.queue == check.queue
+            && diagnostic.role.as_str() == check.role
+            && diagnostic.action == check.action
+    });
+    let fingerprint_matches = CiRetryJobSetFingerprint::from_jobs(&latest)
+        .is_ok_and(|fingerprint| fingerprint == recovery.latest_jobs);
+    let run_matches = latest.iter().all(|job| {
+        job.run_id.as_deref() == Some(recovery.run_id.as_str())
+            && job.attempt.as_deref() == Some(recovery.attempt.as_str())
+    });
+    if recovery.repository_id != *repo
+        || recovery.pull_request_id != pull_request.id
+        || pull_request.head_sha.as_deref() != Some(recovery.head_sha.as_str())
+        || !fingerprint_matches
+        || !run_matches
+        || !diagnostic_matches
+    {
+        return PullRequestFreshnessResponse::stale(format!(
+            "pull request #{} interrupted-CI attempt or diagnostic boundary changed",
+            check.number
+        ));
+    }
+    PullRequestFreshnessResponse::fresh()
+}
+
 async fn ci_passed_still_holds<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
@@ -178,12 +256,12 @@ async fn ci_passed_still_holds<F: Forge + ?Sized>(
     }
 }
 
-async fn current_ci_status<F: Forge + ?Sized>(
+async fn current_ci_jobs<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     pull_request: &temper_forge::PullRequest,
-) -> Result<CiStatus, temper_forge::ForgeError> {
-    let jobs = forge
+) -> Result<Vec<CiJob>, temper_forge::ForgeError> {
+    forge
         .list_ci_jobs(
             repo,
             CiJobQuery {
@@ -192,7 +270,15 @@ async fn current_ci_status<F: Forge + ?Sized>(
                 ..CiJobQuery::default()
             },
         )
-        .await?;
+        .await
+}
+
+async fn current_ci_status<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    pull_request: &temper_forge::PullRequest,
+) -> Result<CiStatus, temper_forge::ForgeError> {
+    let jobs = current_ci_jobs(forge, repo, pull_request).await?;
     Ok(CiStatus::from_jobs_for_head(
         &jobs,
         pull_request.head_sha.as_deref(),
@@ -343,6 +429,10 @@ mod tests {
             name: "validate".to_string(),
             status,
             conclusion,
+            provider_conclusion: None,
+            provider_reason: None,
+            run_id: None,
+            attempt: None,
             url: None,
             created_at: now,
             started_at: None,
@@ -360,6 +450,34 @@ mod tests {
             let response = check_pull_request_freshness(&forge, &check(&repo, &pr)).await;
 
             assert_eq!(response.status, PullRequestFreshnessStatus::Fresh);
+        });
+    }
+
+    #[test]
+    fn interrupted_ci_requires_an_exact_recovery_marker_for_assignment_freshness() {
+        temper_engine_io::block_on(async {
+            let (forge, repo, pr) = setup().await;
+            forge.seed_ci_jobs(&repo, vec![ci_job(&repo, &pr, CiJobConclusion::RunnerLost)]);
+
+            let failed_response = check_pull_request_freshness(&forge, &check(&repo, &pr)).await;
+            assert_eq!(failed_response.status, PullRequestFreshnessStatus::Stale);
+            assert!(
+                failed_response
+                    .reason
+                    .unwrap()
+                    .contains("RecoveryRequired, not failed")
+            );
+
+            let mut recovery_check = check(&repo, &pr);
+            recovery_check.queue_condition = Some("ci_recovery_required".to_string());
+            let recovery_response = check_pull_request_freshness(&forge, &recovery_check).await;
+            assert_eq!(recovery_response.status, PullRequestFreshnessStatus::Stale);
+            assert!(
+                recovery_response
+                    .reason
+                    .unwrap()
+                    .contains("recovery marker")
+            );
         });
     }
 
