@@ -23,6 +23,10 @@ fn ci_job(
         name: name.into(),
         status,
         conclusion: (status == CiJobStatus::Completed).then_some(CiJobConclusion::Success),
+        provider_conclusion: None,
+        provider_reason: None,
+        run_id: None,
+        attempt: None,
         url: None,
         created_at: timestamp(created_at),
         started_at: (status != CiJobStatus::Queued).then_some(timestamp(created_at + 1)),
@@ -52,7 +56,7 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
     let root = TestRoot::new("ci-jobs");
     let forge = root.forge();
     let repository = block_on(forge.create_repository(repository("alice", "project"))).unwrap();
-    let test = ci_job(
+    let mut test = ci_job(
         &repository.id,
         "test",
         "Test",
@@ -61,6 +65,11 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
         3,
         6,
     );
+    test.conclusion = Some(CiJobConclusion::RunnerLost);
+    test.provider_conclusion = Some("runner_lost".to_string());
+    test.provider_reason = Some("runner disconnected".to_string());
+    test.run_id = Some("run-42".to_string());
+    test.attempt = Some("2".to_string());
     let build = ci_job(
         &repository.id,
         "build",
@@ -76,7 +85,10 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
 
     let listed = block_on(forge.list_ci_jobs(&repository.id, CiJobQuery::default())).unwrap();
     assert_eq!(listed, vec![build.clone(), test.clone()]);
-    assert_eq!(block_on(forge.get_ci_job(&test.id)).unwrap(), Some(test));
+    assert_eq!(
+        block_on(forge.get_ci_job(&test.id)).unwrap(),
+        Some(test.clone())
+    );
     assert_eq!(
         block_on(forge.get_ci_job(&CiJobId::new("ci-job-missing"))).unwrap(),
         None
@@ -85,7 +97,12 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
     let reopened = root.forge();
     assert_eq!(
         block_on(reopened.get_ci_job(&build.id)).unwrap(),
-        Some(build)
+        Some(build.clone())
+    );
+    assert_eq!(block_on(reopened.get_ci_job(&test.id)).unwrap(), Some(test));
+    assert_eq!(
+        build.provider_conclusion, None,
+        "legacy-shaped records default"
     );
 }
 

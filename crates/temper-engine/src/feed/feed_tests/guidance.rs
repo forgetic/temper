@@ -175,6 +175,10 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
                 name: "validate".to_string(),
                 status: temper_forge::CiJobStatus::Completed,
                 conclusion: Some(temper_forge::CiJobConclusion::Failure),
+                provider_conclusion: Some("failure".to_string()),
+                provider_reason: Some("process exited with code 1".to_string()),
+                run_id: Some("run-42".to_string()),
+                attempt: Some("2".to_string()),
                 url: Some("https://ci.example.test/jobs/validate".to_string()),
                 created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
                 started_at: None,
@@ -292,6 +296,16 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
             guidance.contains("conclusion: failure"),
             "guidance: {guidance}"
         );
+        assert!(
+            guidance.contains("provider_conclusion: failure"),
+            "guidance: {guidance}"
+        );
+        assert!(
+            guidance.contains("provider_reason: process exited with code 1"),
+            "guidance: {guidance}"
+        );
+        assert!(guidance.contains("run_id: run-42"), "guidance: {guidance}");
+        assert!(guidance.contains("attempt: 2"), "guidance: {guidance}");
         assert!(
             guidance.contains("commit_sha: abc123"),
             "guidance: {guidance}"

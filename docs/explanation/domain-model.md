@@ -83,7 +83,13 @@ A merge records the completion of a pull request. The model stores the merge met
 A CI job represents a provider-reported check for a commit. Jobs are linked to a repository, commit SHA, and optionally a pull request. The status/conclusion split mirrors common CI systems:
 
 - status: queued, running, completed
-- conclusion: success, failure, cancelled, skipped, timed out, neutral
+- typed terminal conclusion: success, ordinary failure, cancelled, interrupted, timed out, runner lost, startup failure, action-required, neutral, skipped, unknown
+
+Unknown is an explicitly terminal category, not queued work or evidence of a
+source failure. Jobs may also retain bounded, control-free provider
+conclusion/reason text and opaque run/attempt identities for diagnostics and
+latest-attempt fingerprinting. Those additive fields are optional so legacy
+stored jobs continue to deserialize.
 
 ## Why a filesystem backend exists
 

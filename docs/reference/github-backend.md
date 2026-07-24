@@ -55,7 +55,14 @@ Ids are opaque to workflow code; only the backend parses them:
 - **CI.** `list_ci_jobs` narrows Actions runs provider-side with the
   `head_sha` query parameter (resolved from the pull request's head when a
   PR id is given), then expands each run's latest-attempt jobs.
-  `get_ci_job` reads `/actions/jobs/{job_id}` directly.
+  `get_ci_job` reads `/actions/jobs/{job_id}` directly. Actions conclusions keep
+  startup failure, action-required, stale/interrupted, timeout, cancellation,
+  neutral, skipped, ordinary failure, runner loss (when explicitly supplied),
+  and unknown terminalization distinct. A machine-readable reason can refine a
+  broad failure into an explicit terminal category; arbitrary reason prose is
+  preserved but never reclassified. The adapter also retains bounded,
+  control-sanitized raw conclusion/reason evidence and opaque run/attempt ids;
+  it never turns an unknown completed result into ordinary failure.
 - **Optimistic concurrency.** Best-effort, identical to the Forgejo backend:
   a portable `Version` is derived from the response `ETag` (or the weak
   `updated_at` fallback) per artifact, and conditional writes re-read and

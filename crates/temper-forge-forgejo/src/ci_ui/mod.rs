@@ -107,19 +107,7 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
         if first_unreadable.is_some() {
             continue;
         }
-        // Drop superseded (cancelled) runs: when several commits are pushed to a
-        // head in quick succession Forgejo cancels the in-flight runs, but a
-        // cancelled run carries no verdict — it is neither a pass nor a fail. The
-        // reference CI producer emits only real verdicts, so excluding cancelled
-        // runs keeps the Forgejo verdict stream the same shape (e.g. a clean
-        // `[Failure, Success]` for fail→pass) and stops a stray cancellation from
-        // masking the real latest verdict in `CiStatus::from_jobs`.
-        for job in live_run_to_jobs(repo, repo_id, run, &live, target) {
-            if job.conclusion == Some(temper_forge_model::CiJobConclusion::Cancelled) {
-                continue;
-            }
-            jobs.push(job);
-        }
+        jobs.extend(live_run_to_jobs(repo, repo_id, run, &live, target));
     }
     if let Some(representative) = first_unreadable.as_ref() {
         warn_degraded_list_read(

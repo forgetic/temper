@@ -322,7 +322,17 @@ Newer Forgejo/Gitea Actions REST endpoints are used when available:
 `/actions/runs` plus `/actions/tasks`. For PR-only queries, runs are matched by
 PR ref, provider head SHA, event payload PR data, or PR head branch so historical
 same-branch diagnostics remain visible. Tasks are grouped into the latest
-attempt and mapped to portable `CiJob`s.
+attempt and mapped to portable `CiJob`s. REST task conclusion/reason fields and
+the run plus latest-attempt identities are retained when present.
+Machine-readable task/run reasons can refine a broad failure into an explicit
+infrastructure category; arbitrary reason prose is retained for diagnostics but
+never guessed into a category. A combined status/result vocabulary maps success,
+ordinary failure, cancellation, interruption, timeout, runner loss, startup
+failure, action-required, neutral, and skipped explicitly. A task known to be
+terminal through a completed task or run but carrying an unrecognized result
+maps to terminal `unknown`; the parent run's failure does not manufacture an
+ordinary job failure. Printable raw evidence is control-sanitized and bounded to
+256 UTF-8 bytes.
 
 A non-empty `CiJobQuery.commit_sha` changes this to strict commit ownership,
 including when `pull_request_id` is also present. The run must expose a matching
@@ -344,7 +354,10 @@ password cookies without CSRF; a `404` falls back to Forgejo 7's unqualified
 `…/jobs/{job}` route, whose cookie jar includes `_csrf` and whose request sends
 `X-Csrf-Token`. This path bypasses `/api/v1`, never sends the REST token, and is
 isolated in `ci_ui` / `ci_ui_parse` because the HTML/JSON shapes are
-version-sensitive.
+version-sensitive. The fallback retains each run id and explicit attempt
+coordinate along with any job/run conclusion and reason fields present in the
+live payload. It applies the same conservative terminal-category mapping and
+bounded evidence sanitization as REST.
 
 A live-view `500` triggers one fresh login and one retry of the same route with
 rebuilt cookies and CSRF headers. Persistent non-authentication HTTP failures

@@ -267,3 +267,60 @@ fn list_ci_jobs_uses_explicit_commit_over_pull_head() {
     // not override the explicit commit.
     let _ = ItemNumber::new(5);
 }
+
+#[test]
+fn terminal_evidence_is_typed_bounded_and_attempt_identified() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        r#"{
+            "total_count": 1,
+            "workflow_runs": [{
+                "id": 12,
+                "run_attempt": 2,
+                "head_sha": "abc123",
+                "status": "completed"
+            }]
+        }"#,
+    );
+    client.push_response(
+        200,
+        serde_json::json!({
+            "total_count": 1,
+            "jobs": [{
+                "id": 100,
+                "run_id": 12,
+                "head_sha": "abc123",
+                "name": "build",
+                "status": "completed",
+                "conclusion": "action_required",
+                "failure_reason": format!("approval required\r\n{}", "x".repeat(400)),
+                "completed_at": "2024-01-02T03:05:00Z"
+            }]
+        })
+        .to_string(),
+    );
+
+    let jobs = block_on(forge(client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some("abc123".to_string()),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+
+    let job = &jobs[0];
+    assert_eq!(
+        job.conclusion,
+        Some(temper_forge_model::CiJobConclusion::ActionRequired)
+    );
+    assert_eq!(job.provider_conclusion.as_deref(), Some("action_required"));
+    assert!(
+        job.provider_reason.as_ref().unwrap().len()
+            <= temper_forge_model::MAX_CI_PROVIDER_EVIDENCE_BYTES
+    );
+    assert!(!job.provider_reason.as_ref().unwrap().contains('\n'));
+    assert_eq!(job.run_id.as_deref(), Some("12"));
+    assert_eq!(job.attempt.as_deref(), Some("2"));
+}

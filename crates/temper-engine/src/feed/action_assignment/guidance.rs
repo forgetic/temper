@@ -302,9 +302,13 @@ fn format_ci_job(job: &CiJob) -> String {
         job.name.trim()
     };
     format!(
-        "  - name: {name}\n    status: {}\n    conclusion: {}\n    commit_sha: {}\n    url: {}",
+        "  - name: {name}\n    status: {}\n    conclusion: {}\n    provider_conclusion: {}\n    provider_reason: {}\n    run_id: {}\n    attempt: {}\n    commit_sha: {}\n    url: {}",
         ci_status_token(job.status),
         ci_conclusion_token(job.conclusion),
+        optional_value(job.provider_conclusion.as_deref().map(str::trim)),
+        optional_value(job.provider_reason.as_deref().map(str::trim)),
+        optional_value(job.run_id.as_deref().map(str::trim)),
+        optional_value(job.attempt.as_deref().map(str::trim)),
         optional_value(Some(job.commit_sha.trim())),
         optional_value(job.url.as_deref().map(str::trim))
     )
@@ -414,9 +418,14 @@ fn ci_conclusion_token(conclusion: Option<CiJobConclusion>) -> &'static str {
         Some(CiJobConclusion::Success) => "success",
         Some(CiJobConclusion::Failure) => "failure",
         Some(CiJobConclusion::Cancelled) => "cancelled",
-        Some(CiJobConclusion::Skipped) => "skipped",
+        Some(CiJobConclusion::Interrupted) => "interrupted",
         Some(CiJobConclusion::TimedOut) => "timed_out",
+        Some(CiJobConclusion::RunnerLost) => "runner_lost",
+        Some(CiJobConclusion::StartupFailure) => "startup_failure",
+        Some(CiJobConclusion::ActionRequired) => "action_required",
         Some(CiJobConclusion::Neutral) => "neutral",
+        Some(CiJobConclusion::Skipped) => "skipped",
+        Some(CiJobConclusion::Unknown) => "unknown",
         None => "none",
     }
 }

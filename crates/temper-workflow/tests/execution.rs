@@ -792,10 +792,8 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
     let workflow = basic_delivery_workflow();
     let repo = new_repo(&forge);
 
-    // Create a parent code issue with in-progress label.
     let parent_number = create_issue(&forge, &repo, &["code", "in-progress"]);
 
-    // Create an implementation PR with metadata pointing to the parent.
     let metadata = WorkflowMetadata {
         parents: vec![ArtifactRef::same_repo(parent_number)],
         ..Default::default()
@@ -803,7 +801,6 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
     let block = render_metadata_block(&metadata);
     let pr_number = create_pr_with_body(&forge, &repo, &["implementation", "landing"], &block);
 
-    // Seed CI jobs so the ci_gate is satisfied.
     let pr = block_on(forge.get_pull_request_by_number(&repo, pr_number))
         .expect("lookup succeeds")
         .expect("pull request exists");
@@ -818,6 +815,10 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
             name: "ci".into(),
             status: CiJobStatus::Completed,
             conclusion: Some(CiJobConclusion::Success),
+            provider_conclusion: None,
+            provider_reason: None,
+            run_id: None,
+            attempt: None,
             url: None,
             created_at: ts(),
             started_at: None,

@@ -17,6 +17,8 @@ mod issues;
 mod pulls;
 
 pub(crate) use artifacts::{CommentDto, LabelDto, RepositoryDto, UserDto};
-pub(crate) use ci::{WorkflowJobDto, WorkflowJobsEnvelopeDto, WorkflowRunsEnvelopeDto};
+pub(crate) use ci::{
+    WorkflowJobDto, WorkflowJobsEnvelopeDto, WorkflowRunDto, WorkflowRunsEnvelopeDto,
+};
 pub(crate) use issues::IssueDto;
 pub(crate) use pulls::{MergeResultDto, PrBranchDto, PrRepoDto, PullRequestDto, ReviewDto};
