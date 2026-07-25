@@ -219,6 +219,47 @@ fn explicit_empty_jobs_keeps_matching_ci_presence() {
 }
 
 #[test]
+fn unassigned_queued_job_preserves_provider_values_and_round_trips() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        runs(vec![run(900, 10, "main", "main", HEAD, "queued")]),
+    );
+    client.push_response(200, jobs(vec![job(31, 900, 0, 0, "build", "waiting")]));
+    client.push_response(
+        200,
+        runs(vec![run(900, 10, "main", "main", HEAD, "queued")]),
+    );
+    client.push_response(200, jobs(vec![job(31, 900, 0, 0, "build", "waiting")]));
+
+    let forge = forge(client.clone());
+    let listing = block_on(forge.list_ci_jobs_with_presence(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some(HEAD.to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert!(listing.matching_ci_present());
+    assert_eq!(listing.jobs().len(), 1);
+    let listed = &listing.jobs()[0];
+    assert_eq!(listed.status, CiJobStatus::Queued);
+    assert_eq!(listed.attempt.as_deref(), Some("0"));
+    assert_eq!(
+        listed.id.as_str(),
+        "forgejo:acme/widgets:actions:900:31:0:0"
+    );
+
+    let found = block_on(forge.get_ci_job(&listed.id)).unwrap().unwrap();
+    assert_eq!(found.id, listed.id);
+    assert_eq!(found.status, CiJobStatus::Queued);
+    assert_eq!(found.attempt.as_deref(), Some("0"));
+    assert_api_only(&client.recorded());
+}
+
+#[test]
 fn query_values_are_not_synthetic_job_evidence() {
     let client = MockHttpClient::new();
     client.push_response(200, pull(7, "feature", HEAD));
@@ -466,8 +507,6 @@ fn invalid_or_mismatched_provider_identity_fails_closed() {
     let invalid = [
         job(0, 900, 1, 41, "build", "success"),
         job(31, 0, 1, 41, "build", "success"),
-        job(31, 900, 0, 41, "build", "success"),
-        job(31, 900, 1, 0, "build", "success"),
         job(31, 901, 1, 41, "build", "success"),
         job(31, 900, 1, 41, "", "success"),
         job(31, 900, 1, 41, "build", ""),
@@ -514,8 +553,6 @@ fn malformed_opaque_identity_is_rejected_before_http() {
         "forgejo:acme/widgets:actions:900:31:41",
         "forgejo:acme/widgets:actions:0:31:1:41",
         "forgejo:acme/widgets:actions:900:0:1:41",
-        "forgejo:acme/widgets:actions:900:31:0:41",
-        "forgejo:acme/widgets:actions:900:31:1:0",
     ] {
         let client = MockHttpClient::new();
         let result = block_on(forge(client.clone()).get_ci_job(&CiJobId::new(id)));

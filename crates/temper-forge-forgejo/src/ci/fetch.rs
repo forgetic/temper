@@ -64,9 +64,10 @@ impl<C: HttpClient> ForgejoForge<C> {
     /// Fetches and validates one provider run's Forgejo 16 jobs response.
     ///
     /// The endpoint coordinate is the run database `id`. Every returned row
-    /// must carry complete, non-zero provider run/job/attempt/task identity and
-    /// must identify that same run. The explicit response wrapper is required,
-    /// including for an empty job list.
+    /// must carry a non-zero provider run/job identity and must identify that
+    /// same run. Provider-reported zero attempt/task values are retained because
+    /// Forgejo uses them before a queued job is assigned to a runner. The
+    /// explicit response wrapper is required, including for an empty job list.
     pub(super) async fn fetch_run_jobs(
         &self,
         repo: &RepoCoord,
@@ -135,9 +136,9 @@ fn extract_runs_array<T: DeserializeOwned>(context: &str, body: &str) -> ForgeRe
 fn validate_jobs(context: &str, run_id: u64, jobs: &[ActionJobDto]) -> ForgeResult<()> {
     let mut identities = HashSet::new();
     for job in jobs {
-        if job.id == 0 || job.run_id == 0 || job.attempt == 0 || job.task_id == 0 {
+        if job.id == 0 || job.run_id == 0 {
             return Err(ForgeError::Backend(format!(
-                "{context}: invalid zero provider job identity"
+                "{context}: invalid zero provider run or job identity"
             )));
         }
         if job.run_id != run_id {
@@ -200,16 +201,21 @@ mod tests {
     }
 
     #[test]
-    fn validates_complete_run_scoped_identity() {
+    fn validates_run_scoped_identity_and_accepts_unassigned_jobs() {
         let valid = job(31, 1, 41, "build");
         assert!(validate_jobs("ctx", 900, std::slice::from_ref(&valid)).is_ok());
+
+        let mut unassigned = valid.clone();
+        unassigned.attempt = 0;
+        unassigned.task_id = 0;
+        assert!(validate_jobs("ctx", 900, &[unassigned]).is_ok());
 
         let mut mismatch = valid.clone();
         mismatch.run_id = 901;
         assert!(validate_jobs("ctx", 900, &[mismatch]).is_err());
 
         let mut invalid = valid;
-        invalid.task_id = 0;
+        invalid.id = 0;
         assert!(validate_jobs("ctx", 900, &[invalid]).is_err());
     }
 }

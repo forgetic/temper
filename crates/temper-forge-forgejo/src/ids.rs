@@ -185,16 +185,16 @@ pub(crate) fn parse_ci_job_id(id: &CiJobId) -> ForgeResult<CiJobCoord> {
         return Err(invalid_id("ci job", raw));
     }
     let repo = parse_repo_segment(parts[1], "ci job", raw)?;
-    let parse_identity = |part: &str| {
-        part.parse::<u64>()
-            .ok()
-            .filter(|value| *value > 0)
-            .ok_or_else(|| invalid_id("ci job", raw))
-    };
+    let parse_identity = |part: &str| part.parse::<u64>().map_err(|_| invalid_id("ci job", raw));
+    let run_id = parse_identity(parts[3])?;
+    let job_id = parse_identity(parts[4])?;
+    if run_id == 0 || job_id == 0 {
+        return Err(invalid_id("ci job", raw));
+    }
     Ok(CiJobCoord {
         repo,
-        run_id: parse_identity(parts[3])?,
-        job_id: parse_identity(parts[4])?,
+        run_id,
+        job_id,
         attempt: parse_identity(parts[5])?,
         task_id: parse_identity(parts[6])?,
     })
@@ -270,6 +270,22 @@ mod tests {
         let id = format_ci_job_id(&coord);
         assert_eq!(id.as_str(), "forgejo:acme/widgets:actions:900:31:2:345");
         assert_eq!(parse_ci_job_id(&id).unwrap(), coord);
+    }
+
+    #[test]
+    fn ci_job_id_preserves_unassigned_provider_values() {
+        let coord = CiJobCoord {
+            repo: repo(),
+            run_id: 900,
+            job_id: 31,
+            attempt: 0,
+            task_id: 0,
+        };
+        let id = format_ci_job_id(&coord);
+        assert_eq!(id.as_str(), "forgejo:acme/widgets:actions:900:31:0:0");
+        assert_eq!(parse_ci_job_id(&id).unwrap(), coord);
+        assert!(parse_ci_job_id(&CiJobId::new("forgejo:acme/widgets:actions:0:31:0:0")).is_err());
+        assert!(parse_ci_job_id(&CiJobId::new("forgejo:acme/widgets:actions:900:0:0:0")).is_err());
     }
 
     #[test]
