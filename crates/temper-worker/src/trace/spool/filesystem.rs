@@ -59,6 +59,7 @@ pub(super) fn repair_run_permissions(run_dir: &Path) -> Result<(), TraceError> {
         "events.jsonl",
         "acknowledgement.json",
         "compacted.json",
+        "terminalization.json",
         FORWARDING_INDEX_FILE,
     ] {
         repair_private_file_if_present(&run_dir.join(name))?;

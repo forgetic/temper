@@ -45,7 +45,10 @@ pub(crate) use forwarder::spawn_activity_forwarder;
 use model::*;
 use scope::{canonicalize_child_scope, validate_scope_acceptance};
 use spool::*;
-pub use spool::{TraceSpoolEntry, TraceSpoolInventory, TraceSpoolOutcome, TraceSpoolOutcomeCounts};
+pub use spool::{
+    TraceReclamationReport, TraceSpoolEntry, TraceSpoolInventory, TraceSpoolOutcome,
+    TraceSpoolOutcomeCounts,
+};
 
 /// Maximum encoded bytes accepted for one bare child frame.
 pub const MAX_CHILD_ACTIVITY_FRAME_BYTES: usize = 256 * 1024;
@@ -612,6 +615,9 @@ mod full_path_tests;
 
 #[cfg(test)]
 mod inventory_tests;
+
+#[cfg(test)]
+mod reclamation_tests;
 
 #[cfg(test)]
 mod prompt_tests;
