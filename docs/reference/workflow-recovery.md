@@ -69,6 +69,71 @@ durable round and round-scoped child correlation keys. A retry therefore neither
 duplicates a child or audit comment nor dispatches a partially wired child, and
 a later legitimate fan-out cannot alias or discard an earlier round's children.
 
+## Bounded model-failure recovery
+
+Engineer session recovery is coordination-scoped and stored beside the reusable
+checkouts, not in daemon memory. The versioned
+`.temper-agent-session/state.json` ledger contains the active session, at most
+one archived predecessor and its normalized terminal diagnostic, the failure
+epoch and consecutive count, whether automatic rotation was consumed, and the
+exact assignment attempt already accounted for. The worker atomically persists
+a retry, rotation, or park decision before publishing its result. Re-delivery of
+the same attempt returns that decision without incrementing the count.
+
+The finite state transition is:
+
+1. A retryable terminal model failure authorizes up to three worker runs on the
+   current session. Provider-internal stream retries are already exhausted and
+   are not counted separately.
+2. A non-retryable terminal immediately consumes the current session; reaching
+   the retryable cap does the same.
+3. The first consumed session is archived and exactly one fresh session is
+   persisted over the same dirty checkout. The transient result permits one
+   later claim.
+4. If the fresh session is consumed before authoritative success, the permanent
+   result removes `ready`, `in-progress`, the active assignee and other action
+   presentation, adds `needs-human`, and creates one failure-epoch-keyed audit.
+   Polling, result replay, and process replacement cannot create a third session
+   or another audit.
+5. Authoritative success starts a new failure epoch and clears the consecutive
+   decision boundary while retaining bounded predecessor evidence. Missing
+   state may create only the initial session. Malformed, unsupported, or
+   workstream-mismatched state fails closed without overwrite or budget reset.
+
+Activity traces are observational. The normalized model diagnostic and session
+decision in the durable worker result/ledger remain authoritative when trace
+capture is disabled, unavailable, delayed, or lost.
+
+### Recovery-to-requeue procedure
+
+1. Leave `needs-human` in place. From the audit, record the attempt, failure
+   epoch/count, active and prior session IDs, diagnostic category/status, role,
+   coordination key, and evidence location.
+2. Under the configured worker workspace root, locate
+   `<role>/<percent-encoded-coordination-key>/.temper-agent-session/state.json`.
+   The repository directories beside `.temper-agent-session` are the exact
+   preserved checkouts. Copy the ledger and capture `git status --short
+   --branch`, `git diff`, `git diff --cached`, and an inventory of untracked
+   files before changing anything.
+3. Correct the external provider or session condition: credentials and
+   entitlement, provider/model availability, account limits, or the diagnosed
+   context/response condition. Keep secrets and raw provider responses out of
+   Forge comments, logs, and the ledger. Do not fabricate retryability from
+   stderr.
+4. Inspect the tracked and untracked predecessor work and confirm it is still
+   the intended product. Do not reset, clean, stash-drop, quarantine, commit, or
+   delete it merely to restart the agent.
+5. Deliberately remove `needs-human` and restore the proper queue label from the
+   compiled workflow (commonly `ready` for a code issue), preserving kind and
+   lineage labels. Restoring only one of those two label conditions does not
+   resume normal dispatch.
+
+Deleting `.temper-agent-session/state.json`, deleting the coordination-scoped
+workspace, or hand-editing the failure counter is **not** routine recovery. It
+destroys the evidence and can reset the finite safety boundary. If exceptional
+state repair is unavoidable, retain a complete copy and require explicit
+operator review rather than using deletion as a requeue shortcut.
+
 ## Workspace quarantine recovery
 
 A reusable writable checkout is inspected before reset or fetch. Local commits,
