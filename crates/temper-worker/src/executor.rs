@@ -5,9 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Poll, Waker};
 
 use serde_json::Value;
+use temper_protocol_activity::ModelFailureV1;
 use temper_protocol_worker::{
     Assign, Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus,
-    WORKER_PROTOCOL_VERSION,
+    SessionRecoveryEvidenceV1, WORKER_PROTOCOL_VERSION,
 };
 
 use crate::agent_runner::JobProgressReporter;
@@ -41,6 +42,10 @@ pub enum JobOutcome {
     Failure {
         class: FailureClass,
         message: String,
+        /// Canonical model terminal retained even when activity capture is absent.
+        model_failure: Option<ModelFailureV1>,
+        /// Optional durable session-policy decision associated with this failure.
+        session_recovery: Option<SessionRecoveryEvidenceV1>,
     },
 }
 
@@ -178,7 +183,12 @@ impl JobExecutor for StubExecutor {
                     summary: Some("stub executor completed without doing IO".to_string()),
                     details: None,
                 },
-                StubMode::Failure { class, message } => JobOutcome::Failure { class, message },
+                StubMode::Failure { class, message } => JobOutcome::Failure {
+                    class,
+                    message,
+                    model_failure: None,
+                    session_recovery: None,
+                },
             }
         }
     }
@@ -241,11 +251,31 @@ pub fn job_result_for_attempt(
             summary,
             ..base
         },
-        JobOutcome::Failure { class, message } => JobResult {
-            status: ResultStatus::Failure,
-            failure: Some(Failure { class, message }),
-            ..base
-        },
+        JobOutcome::Failure {
+            class,
+            message,
+            mut model_failure,
+            session_recovery,
+        } => {
+            if let Some(model_failure) = &mut model_failure {
+                model_failure.normalize();
+            }
+            let session_recovery = session_recovery.filter(|evidence| {
+                evidence
+                    .validate_for_attempt(base.attempt_id.as_deref())
+                    .is_ok()
+            });
+            JobResult {
+                status: ResultStatus::Failure,
+                failure: Some(Failure {
+                    class,
+                    message,
+                    model_failure,
+                    session_recovery,
+                }),
+                ..base
+            }
+        }
     }
 }
 
@@ -527,6 +557,49 @@ mod tests {
     }
 
     #[test]
+    fn failure_outcome_preserves_typed_evidence_for_exact_attempt() {
+        use temper_protocol_activity::{ModelFailureCategoryV1, ModelFailureV1};
+        use temper_protocol_worker::{SessionRecoveryActionV1, SessionRecoveryEvidenceV1};
+
+        let model_failure = ModelFailureV1 {
+            provider: "openai-codex".to_string(),
+            model: "gpt-safe".to_string(),
+            category: ModelFailureCategoryV1::Response,
+            retryable: false,
+            http_status: Some(502),
+            provider_request_id: Some("req_748".to_string()),
+            provider_error_code: Some("malformed_stream".to_string()),
+            message: "Provider returned a malformed stream.".to_string(),
+            detail_redacted: false,
+        };
+        let session_recovery = SessionRecoveryEvidenceV1 {
+            attempt_id: "attempt-748".to_string(),
+            failure_epoch: 1,
+            failure_count: 1,
+            action: SessionRecoveryActionV1::RotateSession,
+            current_session_id: "session-old".to_string(),
+            prior_session_id: None,
+            new_session_id: Some("session-new".to_string()),
+            evidence_location: ".temper-agent-session/state.json".to_string(),
+        };
+        let result = job_result_for_attempt(
+            "worker-1",
+            "job-748",
+            Some("attempt-748".to_string()),
+            JobOutcome::Failure {
+                class: FailureClass::Transient,
+                message: "model failure".to_string(),
+                model_failure: Some(model_failure.clone()),
+                session_recovery: Some(session_recovery.clone()),
+            },
+        );
+
+        let failure = result.failure.expect("failure evidence");
+        assert_eq!(failure.model_failure, Some(model_failure));
+        assert_eq!(failure.session_recovery, Some(session_recovery));
+    }
+
+    #[test]
     fn failure_stub_maps_to_failure_result_without_branch() {
         temper_worker_io::block_on(async {
             let outcome = StubExecutor::failure(FailureClass::Permanent, "configured failure")
@@ -545,6 +618,8 @@ mod tests {
                 Some(Failure {
                     class: FailureClass::Permanent,
                     message: "configured failure".to_string(),
+                    model_failure: None,
+                    session_recovery: None,
                 })
             );
         });

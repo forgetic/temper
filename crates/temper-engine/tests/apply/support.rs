@@ -238,6 +238,8 @@ pub(crate) fn failure_result(
         failure: Some(Failure {
             class,
             message: message.to_string(),
+            model_failure: None,
+            session_recovery: None,
         }),
         summary: Some(summary.to_string()),
         details: None,

@@ -181,6 +181,8 @@ mod tests {
             "failure": Failure {
                 class: FailureClass::Permanent,
                 message: "configured failure".to_string(),
+                model_failure: None,
+                session_recovery: None,
             },
             "verdict": null,
             "body": null,
@@ -315,6 +317,70 @@ mod tests {
             "secret-token-sentinel",
         ] {
             assert!(!encoded.contains(forbidden), "event leaked {forbidden}");
+        }
+    }
+
+    #[test]
+    fn durable_session_rotation_event_uses_typed_result_without_activity_capture() {
+        use temper_protocol_activity::{ModelFailureCategoryV1, ModelFailureV1};
+        use temper_protocol_worker::{SessionRecoveryActionV1, SessionRecoveryEvidenceV1};
+
+        const SECRET: &str = "WORKER-ROTATION-SECRET-750";
+        let result = test_job_result(json!({
+            "protocol_version": WORKER_PROTOCOL_VERSION,
+            "worker_id": "worker-1",
+            "job_id": "job-rotation",
+            "attempt_id": "attempt-rotation",
+            "status": ResultStatus::Failure,
+            "failure": Failure {
+                class: FailureClass::Transient,
+                message: "typed recovery".to_string(),
+                model_failure: Some(ModelFailureV1 {
+                    provider: "fixture-provider".into(),
+                    model: "fixture-model".into(),
+                    category: ModelFailureCategoryV1::Provider,
+                    retryable: false,
+                    http_status: Some(503),
+                    provider_request_id: Some("request-750".into()),
+                    provider_error_code: Some("unavailable".into()),
+                    message: format!("Authorization: Bearer {SECRET}"),
+                    detail_redacted: false,
+                }),
+                session_recovery: Some(SessionRecoveryEvidenceV1 {
+                    attempt_id: "attempt-rotation".into(),
+                    failure_epoch: 4,
+                    failure_count: 1,
+                    action: SessionRecoveryActionV1::RotateSession,
+                    current_session_id: "session-prior".into(),
+                    prior_session_id: None,
+                    new_session_id: Some("session-fresh".into()),
+                    evidence_location: ".temper-agent-session/state.json".into(),
+                }),
+            },
+        }));
+        let event = WorkerEvent::session_rotated(&result).expect("typed rotation event");
+        assert_eq!(
+            event.name(),
+            temper_log::Event::ModelSessionRotated.as_str()
+        );
+        let captured = capture_events(|| event.emit());
+        assert_eq!(captured.len(), 1);
+        let fields = &captured[0]["fields"];
+        assert_eq!(fields["event"], "model.session.rotated");
+        assert_eq!(fields["attempt_id"], "attempt-rotation");
+        assert_eq!(fields["failure_epoch"], 4);
+        assert_eq!(fields["failure_count"], 1);
+        assert_eq!(fields["action"], "rotate_session");
+        assert_eq!(fields["current_session_id"], "session-prior");
+        assert_eq!(fields["new_session_id"], "session-fresh");
+        assert_eq!(fields["category"], "redacted_unknown");
+        assert_eq!(fields["detail_redacted"], true);
+        let encoded = serde_json::to_string(&captured).unwrap();
+        for forbidden in [SECRET, "Authorization", "Bearer", "prompt", "stderr"] {
+            assert!(
+                !encoded.contains(forbidden),
+                "rotation event leaked {forbidden}"
+            );
         }
     }
 

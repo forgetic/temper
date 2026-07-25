@@ -179,6 +179,8 @@ fn ownership_loss_records_canceled_cleanup_evidence_before_releasing_capacity() 
         JobOutcome::Failure {
             class: FailureClass::Permanent,
             message: "late executor completion".to_string(),
+            model_failure: None,
+            session_recovery: None,
         },
     );
     let record = machine.on_completion(

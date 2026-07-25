@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use temper_protocol_worker::{Assign, FailureClass, JobContext, WorkspaceManifest, WorkspaceRepo};
 
-use crate::agent_runner::{
-    AgentRunError, AgentRunOutput, AgentRunRequest, AgentRunner, JobProgressReporter,
-};
+use crate::agent_runner::{AgentRunOutput, AgentRunRequest, AgentRunner, JobProgressReporter};
 use crate::executor::{JobExecutionContext, JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{
@@ -16,13 +14,17 @@ use crate::workspace::{
 
 mod context;
 mod execution;
+mod failure;
 mod outcome;
 mod session;
 mod verdict;
 
 use context::{build_workspace_context, effective_job_guidance};
+use failure::failure;
 use outcome::{WritableOutcomeRequest, writable_outcome};
-use session::{attach_agent_session, persist_after_success};
+use session::{
+    agent_failure_outcome, attach_agent_session, persist_after_success, replay_accounted_attempt,
+};
 use verdict::verdict_only_outcome;
 
 type ProgressReporterFactory = Arc<dyn Fn(&str, &str) -> JobProgressReporter + Send + Sync>;
@@ -261,6 +263,9 @@ async fn execute<R: AgentRunner>(
     if !execution.fence.is_open() {
         return cancelled_attempt();
     }
+    if let Some(outcome) = replay_accounted_attempt(agent_session.as_ref(), &attempt_id) {
+        return outcome;
+    }
 
     // Run one agent turn with the cwd set to the workspace root (not a single
     // repo), so the agent can read and build every sibling. The runner owns the
@@ -278,7 +283,7 @@ async fn execute<R: AgentRunner>(
     } = match runner
         .run_request(AgentRunRequest::new_controlled(
             &job_id,
-            attempt_id,
+            attempt_id.clone(),
             &workspace_context,
             &workspace_root,
             execution.fence.clone(),
@@ -288,8 +293,15 @@ async fn execute<R: AgentRunner>(
         .await
     {
         Ok(output) => output,
-        Err(AgentRunError { class, message }) => {
-            return failure(class, message);
+        Err(error) => {
+            return agent_failure_outcome(
+                agent_session.as_ref(),
+                &attempt_id,
+                error,
+                &execution.fence,
+                &execution.cancellation,
+            )
+            .await;
         }
     };
 
@@ -586,13 +598,6 @@ fn cancelled_attempt() -> JobOutcome {
         FailureClass::Transient,
         "job attempt was cancelled by the worker watchdog",
     )
-}
-
-fn failure(class: FailureClass, message: impl Into<String>) -> JobOutcome {
-    JobOutcome::Failure {
-        class,
-        message: message.into(),
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

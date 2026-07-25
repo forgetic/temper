@@ -20,7 +20,10 @@ inputs as flags:
   `AgentRuntimeLimitsV1` JSON object with positive `tool_timeout_secs`,
   `model_connect_timeout_secs`, and `model_idle_timeout_secs` values;
 - `--agent-lifecycle-address <HOST:PORT>` for known first-party commands only.
-  This is a dedicated correctness channel, not an activity-trace endpoint.
+  This is a dedicated correctness channel, not an activity-trace endpoint;
+- `--terminal-output <FILE>` for known first-party commands only. The worker
+  creates this private, per-run destination for a bounded typed model failure
+  when the agent cannot write a `WorkspaceResult`.
 
 The worker classifies each invocation as first-party or third-party. Known
 `temper-agent` and `temper agent` commands receive complete resolved limits and
@@ -144,6 +147,32 @@ The staged `AgentLifecycleCommandV1::Cancel` and
 cancellation handshake used by the process supervisor. Explicit third-party
 commands receive no lifecycle flag and may emit nothing; worker fallback
 supervision remains authoritative for them.
+
+## Typed first-party terminal failure
+
+A recognized first-party child that ends with a terminal model failure writes
+an `AgentTerminalOutputV1` document to `--terminal-output`, even though no
+`WorkspaceResult` exists:
+
+```json
+{"protocol_version":1,"model_failure":{"provider":"openai-codex","model":"gpt-safe","category":"rate_limit","retryable":true,"http_status":429,"provider_request_id":"req_748","provider_error_code":"rate_limit","message":"Provider rate limit reached.","detail_redacted":false}}
+```
+
+The document is closed, limited to 4 KiB, and contains only the normalized
+`ModelFailureV1` vocabulary. It has no prompt, raw response, thinking, tool
+content, credential, stderr, or generic extension field. The reference
+`temper-agent` writes it only for `CodingAgentError::ModelFailure` and
+`ModelUnavailable` after all in-run model retries are exhausted.
+
+The worker provides and reads this private path only for commands already
+recognized as first-party (the same commands that receive `--runtime-limits`).
+It validates the version, complete JSON shape, field bounds, and safe diagnostic
+before attaching the model failure to `AgentRunError`. It does this before the
+ordinary nonzero-exit fallback. A third-party or legacy child never receives the
+path. Missing, malformed, oversized, unsafe, and signal/crash outputs retain the
+existing generic child-process failure. Stderr remains bounded operator text
+only and is never parsed for category, retryability, provider/model identity,
+status, request ID, or provider code.
 
 ## `WorkspaceContext` and artifact compatibility
 
@@ -307,7 +336,9 @@ assignment is active.
 
 The agent writes one `WorkspaceResult` to `--result`. A writable head result may
 carry `title`, `body`, and `summary`; verdict actions carry a declared `verdict`
-and any contract-required authored content. The worker validates the result,
+and any contract-required authored content. A first-party model failure that has
+no workspace result uses the separate private typed terminal carrier above; it
+does not synthesize a `WorkspaceResult`. The worker validates the result,
 workspace diff, accepted `submit_for_pr` proof, and PR-head freshness before it
 publishes the daemon `Result` message. In-process `submit_for_pr` uses the same
 attempt fence and cancellation handle as the model run: the gate and controlled

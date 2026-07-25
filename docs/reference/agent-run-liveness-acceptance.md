@@ -5,6 +5,12 @@ assignment-convergence compatibility requirement. The executable copy is
 `temper-testing/tests/liveness_acceptance.rs`; it verifies that every named test
 and structured operator event remains present.
 
+This matrix also indexes the #737 bounded model-failure recovery capstone. That
+fixture deliberately runs without an activity trace journal: the typed worker
+result and coordination-scoped session ledger alone must survive component
+replacement and converge to either one preserved product or one human-attention
+park.
+
 The suites deliberately split by authority: pure machine tests own transition
 races, `temper-sim` owns virtual-time worker capacity, hermetic real-stack tests
 own durable Forge/workspace recovery, and short Unix-gated tests own process
@@ -23,6 +29,12 @@ waits for a multi-second wall-clock timeout.
 | #340.8 timer/capacity races | `exact_boundary_progress_wins_and_stale_no_progress_timers_are_ignored`, `normal_completion_beats_timeout_and_duplicate_completion_releases_once`, and `max_run_is_independent_of_progress_and_releasing_one_of_many_preserves_membership`. | `worker.job.timeout`, `worker.capacity.released` |
 | #340.9 compatibility and observability | `deadline_and_liveness_defaults_apply_without_new_toml`, `config_template_resolves_the_documented_liveness_contract`, `profiles_inherit_each_missing_deadline_independently`, `json_schema_marks_all_duration_seconds_as_positive`, `config_show_includes_target_pools_and_agent_profiles_without_secret_values`, `structured_liveness_round_trips_without_sensitive_content`, `legacy_heartbeat_without_liveness_remains_compatible`, and `liveness_catalog_emits_structured_levels_without_sensitive_fields`. | Full liveness event catalog below |
 | #331 compatibility | `lost_acknowledgement_replays_exact_result_without_double_apply`, `live_reconciliation_retries_release_after_forge_outage`, and `live_reconciliation_converges_full_issue_assignment_once` prove retained-result replay and complete assignment/lease/label/assignee convergence are idempotent. | `worker.result.delivery`, `assignment.convergence` |
+| #737 finite model recovery | `model_recovery_rotates_once_across_daemon_replacement_and_publishes_preserved_product` writes tracked and untracked predecessor work, durably rotates once, replaces daemon and worker, reuses the exact checkout from a distinct fresh session, and publishes one product. `model_recovery_exhaustion_parks_once_and_never_reclaims_after_restarts` fails the fresh session, replays its result, repeats scans, and replaces both components while proving one audit, no PR, no third session, and no later claim. Both run with agent activity capture unavailable. | `model.session.rotated`, `model.failure.parked`, plus the failure-epoch-keyed Forge audit and `.temper-agent-session/state.json` |
 
 The stable structured event catalog and field/level definitions live in
 [Logging and observability](../explanation/logging-and-observability.md#job-liveness-and-convergence-events).
+The dedicated hermetic regression can be run with:
+
+```sh
+cargo test -p temper-testing --test hermetic_real_stack model_recovery_ -- --nocapture
+```

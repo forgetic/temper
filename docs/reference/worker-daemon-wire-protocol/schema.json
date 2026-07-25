@@ -475,6 +475,37 @@
    },
    "additionalProperties": false
   },
+  "modelFailure": {
+   "type": "object",
+   "required": ["provider", "model", "category", "retryable", "message", "detail_redacted"],
+   "properties": {
+    "provider": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "model": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "category": { "enum": ["timeout", "transport", "rate_limit", "authentication", "context", "response", "provider", "redacted_unknown"] },
+    "retryable": { "type": "boolean" },
+    "http_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+    "provider_request_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "provider_error_code": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
+    "message": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "detail_redacted": { "type": "boolean" }
+   },
+   "additionalProperties": false
+  },
+  "sessionRecoveryEvidence": {
+   "type": "object",
+   "required": ["attempt_id", "failure_epoch", "failure_count", "action", "current_session_id", "evidence_location"],
+   "properties": {
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "failure_epoch": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "failure_count": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "action": { "enum": ["retry_current_session", "rotate_session", "park_for_human"] },
+    "current_session_id": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "prior_session_id": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "new_session_id": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "evidence_location": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[-A-Za-z0-9._:/\\\\]+$" }
+   },
+   "additionalProperties": false
+  },
   "jobChild": {
    "type": "object",
    "required": [
@@ -960,6 +991,12 @@
       },
       "message": {
        "type": "string"
+      },
+      "model_failure": {
+       "$ref": "#/$defs/modelFailure"
+      },
+      "session_recovery": {
+       "$ref": "#/$defs/sessionRecoveryEvidence"
       }
      }
     },

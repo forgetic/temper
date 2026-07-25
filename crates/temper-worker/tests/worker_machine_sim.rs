@@ -122,6 +122,8 @@ fn finished(job_id: &str, generation: u64) -> WorkerCompletion {
                 JobOutcome::Failure {
                     class: FailureClass::Transient,
                     message: "sim".to_string(),
+                    model_failure: None,
+                    session_recovery: None,
                 },
             )),
             cleanup: JobCleanup::no_process(None),

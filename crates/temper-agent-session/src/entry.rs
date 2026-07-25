@@ -58,13 +58,17 @@ where
         None => std::env::current_dir().map_err(|error| format!("resolve cwd: {error}"))?,
     };
     let result_path = options.result.display().to_string();
+    let terminal_output_path = options
+        .terminal_output
+        .as_ref()
+        .map(|path| path.display().to_string());
 
     // The OAuth auth.json (when an OAuth credential is in play) lives in this
     // temp dir for the whole run, so the OAuth loader can read/refresh it across
     // model calls; it is removed when `_auth_dir` drops at the end of the run.
     let (config, _auth_dir) = build_config(options, &context)?;
 
-    crate::run::drive(config, context, cwd, result_path)
+    crate::run::drive(config, context, cwd, result_path, terminal_output_path)
 }
 
 /// Reads and parses the [`WorkspaceContext`] from the `--context` file.

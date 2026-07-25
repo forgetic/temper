@@ -68,6 +68,7 @@ impl OutOfProcessRunner {
         result_path: &Path,
         tool_config_path: Option<&Path>,
         runtime_limits_path: Option<&Path>,
+        terminal_output_path: Option<&Path>,
         trace_policy_path: Option<&Path>,
         lifecycle_address: Option<&str>,
         activity_address: Option<&str>,
@@ -92,6 +93,9 @@ impl OutOfProcessRunner {
         }
         if let Some(path) = runtime_limits_path {
             command.arg(RUNTIME_LIMITS_FLAG).arg(path);
+        }
+        if let Some(path) = terminal_output_path {
+            command.arg(TERMINAL_OUTPUT_FLAG).arg(path);
         }
         if let Some(path) = trace_policy_path {
             command.arg(TRACE_POLICY_FLAG).arg(path);

@@ -46,6 +46,8 @@ impl JobExecutor for ControlledExecutor {
             JobOutcome::Failure {
                 class: FailureClass::Canceled,
                 message: "component stopped".to_string(),
+                model_failure: None,
+                session_recovery: None,
             }
         }
     }

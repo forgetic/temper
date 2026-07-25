@@ -644,6 +644,8 @@ impl WorkerMachine {
             failure: Some(Failure {
                 class: FailureClass::Canceled,
                 message: format!("worker canceled attempt after ownership loss: {reason}"),
+                model_failure: None,
+                session_recovery: None,
             }),
             summary: None,
             details: Some(serde_json::json!({
@@ -728,6 +730,8 @@ impl WorkerMachine {
                     cancellation,
                     disposition,
                 ),
+                model_failure: None,
+                session_recovery: None,
             }),
             summary: None,
             details: Some(details),

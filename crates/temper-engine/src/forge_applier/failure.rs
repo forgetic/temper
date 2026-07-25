@@ -8,6 +8,7 @@ use temper_protocol_worker::{Failure, FailureClass, JobResult, ResultStatus};
 use crate::InFlightJob;
 use crate::applier::ApplyOutcome;
 use crate::forge_applier::ForgeApplier;
+use crate::forge_applier::model_recovery::ModelRecoveryParkEvidence;
 
 const FAILURE_AUDIT_COMMENT_KEY_PREFIX: &str = "daemon_failure_audit:";
 
@@ -50,6 +51,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return ApplyOutcome::Rejected { class, reason };
         }
 
+        if let Some(evidence) = ModelRecoveryParkEvidence::from_result(&result) {
+            return match self.park_model_recovery(&job, &result, &evidence).await {
+                Ok(()) => ApplyOutcome::Rejected { class, reason },
+                Err(reason) => ApplyOutcome::Retryable { reason },
+            };
+        }
+
         match self.park_failure(&job, &result, class).await {
             Ok(()) => ApplyOutcome::Rejected { class, reason },
             Err(reason) => ApplyOutcome::Retryable { reason },
@@ -66,6 +74,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         result.failure = Some(Failure {
             class: FailureClass::Protocol,
             message: reason,
+            model_failure: None,
+            session_recovery: None,
         });
         self.apply_failure(job, result).await
     }

@@ -331,6 +331,8 @@ impl JobExecutor for FixtureExecutor {
                 return JobOutcome::Failure {
                     class: FailureClass::Permanent,
                     message: "post-cleanup second dispatch".to_string(),
+                    model_failure: None,
+                    session_recovery: None,
                 };
             }
             let request = AgentRunRequest::new_controlled(
@@ -347,6 +349,8 @@ impl JobExecutor for FixtureExecutor {
             JobOutcome::Failure {
                 class: FailureClass::Canceled,
                 message: format!("fixture agent completed after cancellation: {result:?}"),
+                model_failure: None,
+                session_recovery: None,
             }
         }
     }

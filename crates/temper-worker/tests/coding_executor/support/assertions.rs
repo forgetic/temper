@@ -28,7 +28,7 @@ pub fn expect_success(outcome: JobOutcome) -> (String, String, Option<String>) {
         } => {
             panic!("expected success, got verdict {verdict:?} {body:?} {summary:?} {children:?}")
         }
-        JobOutcome::Failure { class, message } => {
+        JobOutcome::Failure { class, message, .. } => {
             panic!("expected success, got {class:?}: {message}")
         }
     }
@@ -52,7 +52,7 @@ pub fn expect_verdict(
             summary,
             details: _,
         } => panic!("expected verdict, got success {repos:?} {summary:?}"),
-        JobOutcome::Failure { class, message } => {
+        JobOutcome::Failure { class, message, .. } => {
             panic!("expected verdict, got {class:?}: {message}")
         }
     }
@@ -60,7 +60,7 @@ pub fn expect_verdict(
 
 pub fn expect_failure_class(outcome: JobOutcome, expected: FailureClass) -> String {
     match outcome {
-        JobOutcome::Failure { class, message } => {
+        JobOutcome::Failure { class, message, .. } => {
             assert_eq!(class, expected, "unexpected failure message: {message}");
             message
         }

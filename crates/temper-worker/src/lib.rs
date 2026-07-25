@@ -44,7 +44,10 @@ pub use agent_runner::{
     AgentRunError, AgentRunOutput, AgentRunRequest, AgentRunner, JobProgress, JobProgressReporter,
     WorkspaceResult, handle_submit_for_pr_with_proof,
 };
-pub use agent_session::{AgentSessionStore, AgentSessionStoreError};
+pub use agent_session::{
+    AGENT_SESSION_STORE_VERSION, AgentSessionLedger, AgentSessionStore, AgentSessionStoreError,
+    PriorAgentSessionRecord,
+};
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
 pub use config::{
     AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,

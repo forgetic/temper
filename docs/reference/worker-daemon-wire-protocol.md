@@ -34,7 +34,8 @@ semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.allowed_verdicts`, `JobContext.verdict_contracts`,
 `JobContext.source_metadata`, `JobContext.artifact_context`, legacy
 `JobContext.guidance`, additive `JobContext.structured_guidance`, `JobResult.verdict`, `JobResult.body`,
-`JobResult.children`, and `JobResult.children[].kind` are all optional, and the
+`JobResult.children`, `JobResult.children[].kind`,
+`JobResult.failure.model_failure`, and `JobResult.failure.session_recovery` are all optional, and the
 protocol version remains `1`. The `fetch-context`/`context-response`,
 `activity-batch`/`activity-ack`, and daemon-to-worker `cancel-attempts`
 capabilities are additive in the same v1 envelope.
@@ -390,8 +391,26 @@ Worker returns the structured result for one assigned job.
 | `failure` | object | required for failures | Failure details. |
 | `failure.class` | string | yes when `failure` is present | `transient`, `permanent`, `canceled`, or `protocol`. |
 | `failure.message` | string | yes when `failure` is present | Human-readable failure summary. |
+| `failure.model_failure` | object | no | Normalized bounded `ModelFailureV1`, authoritative independently of activity tracing. Contains only safe provider/model identity, category, retryability, optional status/request/code, a bounded sanitized message, and `detail_redacted`. |
+| `failure.session_recovery` | object | no | Typed bounded evidence for the durable session-recovery decision. |
+| `failure.session_recovery.attempt_id` | string | yes when session recovery is present | Exact attempt identity; must match the enclosing result. |
+| `failure.session_recovery.failure_epoch` | integer | yes when session recovery is present | One-based consecutive-failure epoch. |
+| `failure.session_recovery.failure_count` | integer | yes when session recovery is present | One-based terminal count within the epoch. |
+| `failure.session_recovery.action` | string | yes when session recovery is present | `retry_current_session`, `rotate_session`, or `park_for_human`. |
+| `failure.session_recovery.current_session_id` | string | yes when session recovery is present | Session that produced the terminal failure. |
+| `failure.session_recovery.prior_session_id` | string | no | Archived predecessor when the current session followed a rotation. |
+| `failure.session_recovery.new_session_id` | string | no | Fresh session selected by `rotate_session`. |
+| `failure.session_recovery.evidence_location` | string | yes when session recovery is present | Bounded worker-generated operator-safe path/location for durable evidence. |
 | `summary` | string | no | Short result summary suitable for logs or operator display. |
 | `details` | object | no | Arbitrary structured role-specific result details. |
+
+The model diagnostic and session-recovery object are additive optional v1
+fields. Workers normalize the model diagnostic at each agent/worker boundary;
+daemons normalize it again at worker admission and discard invalid or
+attempt-mismatched session evidence. These typed fields are never reconstructed
+from failure messages, stderr, provider prose, prompts, or raw responses. Older
+failure JSON without either field continues to deserialize unchanged. See
+[`result-model-failure.json`](worker-daemon-wire-protocol/examples/result-model-failure.json).
 
 The worker first records the exact result in its private durable result outbox.
 Transport failures retain that entry and replay it with bounded exponential
@@ -503,4 +522,5 @@ assignment remains active.
 - `fetch-context`/`context-response`, `activity-batch`/`activity-ack`, and `cancel-attempts` are optional additive v1 capabilities.
 - Context requests and cancellation directives carry exact attempt identities. Compatibility-optional omitted ids compare only as `None` and never as wildcards.
 - Rollout safety requires draining or restarting old workers that cannot consume `cancel-attempts` while deploying a daemon that may emit it; the additive v1 version alone cannot make those workers stop orphaned work.
+- Additive optional typed model-failure and session-recovery evidence does not require a version bump; legacy failure objects remain valid.
 - Context operations, cancellation causes, and public errors are closed vocabularies even though readers ignore unknown fields elsewhere.

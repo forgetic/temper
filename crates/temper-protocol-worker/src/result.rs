@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use temper_protocol_activity::ModelFailureV1;
 use temper_verdict::{VerdictChildView, VerdictResultView};
+
+use crate::SessionRecoveryEvidenceV1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +42,30 @@ pub struct RepoOutcome {
 pub struct Failure {
     pub class: FailureClass,
     pub message: String,
+    /// Canonical model diagnostic, independent of optional activity tracing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_failure: Option<ModelFailureV1>,
+    /// Durable decision/evidence from the bounded session recovery policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_recovery: Option<SessionRecoveryEvidenceV1>,
+}
+
+impl Failure {
+    /// Canonicalizes typed evidence at a worker/daemon trust boundary. Invalid
+    /// recovery evidence is discarded rather than allowing text or a mismatched
+    /// attempt identity into typed fields.
+    pub fn normalize_evidence(&mut self, expected_attempt_id: Option<&str>) {
+        if let Some(model_failure) = &mut self.model_failure {
+            model_failure.normalize();
+        }
+        if self
+            .session_recovery
+            .as_ref()
+            .is_some_and(|evidence| evidence.validate_for_attempt(expected_attempt_id).is_err())
+        {
+            self.session_recovery = None;
+        }
+    }
 }
 
 /// One workspace-authored child issue carried by a breakdown verdict result.
@@ -104,6 +131,17 @@ pub struct JobResult {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+}
+
+impl JobResult {
+    /// Normalizes optional failure evidence after deserialization and before
+    /// durable admission.
+    pub fn normalize_failure_evidence(&mut self) {
+        let attempt_id = self.attempt_id.clone();
+        if let Some(failure) = &mut self.failure {
+            failure.normalize_evidence(attempt_id.as_deref());
+        }
+    }
 }
 
 impl VerdictResultView for JobResult {
