@@ -18,6 +18,8 @@ CONFIG_DIR="$SCRIPT_DIR/config"
 RUN_DIR="$SCRIPT_DIR/run"
 LOG_DIR="$SCRIPT_DIR/logs"
 
+. "$SCRIPT_DIR/../forgejo-fixture.sh"
+
 BASE_URL=http://127.0.0.1:4200
 HOST=127.0.0.1
 PORT=4200
@@ -36,10 +38,6 @@ MULTI_INTAKE_TITLE='Ship cross-repo reference delivery'
 INTAKE_BODY_PATH="$CONFIG_DIR/intake-issue.md"
 WORKFLOW_PATH="$CONFIG_DIR/workflow.json"
 
-FORGEJO_VERSION=7.0.12
-FORGEJO_RUNNER_VERSION=3.5.1
-FORGEJO_BIN="$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64"
-RUNNER_BIN="$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-$FORGEJO_RUNNER_VERSION-linux-amd64"
 RUN_BIN="$WORKSPACE_ROOT/target/debug/temper"
 WORKER_BIN="$WORKSPACE_ROOT/target/debug/temper-testing-worker"
 JIG_REPO="$HOME/src/rust/jig"
@@ -179,6 +177,7 @@ resolve_common_binaries() {
     command -v mkfifo >/dev/null 2>&1 || die 'mkfifo is required'
     command -v python3 >/dev/null 2>&1 || die 'python3 is required'
 
+    resolve_forgejo_fixture "$WORKSPACE_ROOT"
     log 'building temper development binary...'
     ( cd "$WORKSPACE_ROOT" && cargo build -p temper ) || die 'cargo build -p temper failed'
     [ -x "$RUN_BIN" ] || die "temper binary not found: $RUN_BIN"
@@ -194,9 +193,6 @@ resolve_common_binaries() {
     case "$_init_help" in *--workspace*) ;; *) die 'temper init lacks --workspace' ;; esac
     _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
     case "$_serve_help" in *--config*) die 'temper serve standalone documents non-canonical --config' ;; *) ;; esac
-
-    [ -x "$FORGEJO_BIN" ] || die "forgejo binary not found: $FORGEJO_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
-    [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
 }
 
 resolve_single_binaries() {
@@ -288,6 +284,7 @@ boot_server() {
         [ "$_i" -gt 300 ] && die 'forgejo did not become ready (see logs/forgejo.log)'
         sleep_short
     done
+    verify_forgejo_fixture_version
     log "Forgejo ready (pid $SERVER_PID)"
 }
 

@@ -33,11 +33,22 @@ local and gitignored.
 
 ## Pinned binaries
 
-The pinned Forgejo server and `forgejo-runner` asset constants are owned by
-`bench-forgejo`. Run bench's fixture command (for example, `bench forgejo
-download`) or the bench crate's own tests (for example, `cargo test -p
-bench-forgejo ...` from the bench checkout) when you need to pre-stage or verify
-generic fixture downloads outside Temper.
+The merged Bench fixture pins checksum-verified Linux-amd64 assets for Forgejo
+`16.0.1` and `forgejo-runner` `12.12.0`. Temper's two delivery launchers invoke
+the in-tree resolver backed by those constants rather than defining their own
+versions. To pre-stage both assets from a Temper checkout and print their
+resolved paths, run:
+
+```sh
+cargo run -p temper-testing --bin temper-forgejo-fixture
+```
+
+The resolver downloads missing assets into `.cache/forgejo/` and prints
+`forgejo_version`, `forgejo_runner_version`, `forgejo`, and `forgejo_runner`
+entries. The launchers additionally reject startup unless `/api/v1/version`
+reports the resolved server release. Bench's own `bench forgejo download`
+command provides the equivalent generic fixture operation from a Bench
+checkout.
 
 Both assets are `linux-amd64`; the server is SQLite and statically linked.
 Partial downloads are never published. Offline machines should point binary

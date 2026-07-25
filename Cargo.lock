@@ -58,7 +58,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 [[package]]
 name = "bench-forgejo"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/bench.git?rev=1ca9f7a#1ca9f7a718d803573078a28c76ae6af50b38a532"
+source = "git+https://git.ekanayaka.io/ai/bench.git?rev=174d0d7a8eddc0c68f39bb9c34b79c70f6657554#174d0d7a8eddc0c68f39bb9c34b79c70f6657554"
 dependencies = [
  "serde",
  "serde_json",
