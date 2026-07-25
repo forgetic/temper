@@ -198,7 +198,10 @@ pub(super) async fn persist_after_success(
     outcome: &JobOutcome,
     cancellation: &JobCancellation,
 ) -> Option<JobOutcome> {
-    if !matches!(outcome, JobOutcome::Success { .. }) {
+    if !matches!(
+        outcome,
+        JobOutcome::Success { .. } | JobOutcome::Verdict { .. }
+    ) {
         return None;
     }
     let binding = binding?;
@@ -324,6 +327,50 @@ mod tests {
             assert_eq!(unchanged.active_session.session_id, "session-old");
             assert_eq!(unchanged.consecutive_terminal_count, 0);
             assert!(!unchanged.rotation_consumed);
+        });
+    }
+
+    #[test]
+    fn verdict_reset_failure_is_permanent_and_preserves_the_old_epoch() {
+        temper_worker_io::block_on(async {
+            let temp = tempfile::tempdir().unwrap();
+            let store = AgentSessionStore::for_workspace_root(
+                temp.path(),
+                "engineer",
+                "verdict-reset-failure",
+            )
+            .unwrap();
+            store
+                .save_sync(&AgentSessionState::new("session-old"))
+                .unwrap();
+            let ledger = store.load_ledger_sync().unwrap().unwrap();
+            let binding = AgentSessionBinding {
+                store: store.clone().with_replace_failure(),
+                ledger,
+            };
+            let verdict = JobOutcome::Verdict {
+                verdict: "needs_architect".to_string(),
+                title: None,
+                body: Some("blocked".to_string()),
+                summary: None,
+                children: Vec::new(),
+            };
+
+            let outcome =
+                persist_after_success(Some(&binding), &verdict, &JobCancellation::default())
+                    .await
+                    .expect("failed verdict reset must replace the verdict");
+            match outcome {
+                JobOutcome::Failure { class, message, .. } => {
+                    assert_eq!(class, FailureClass::Permanent);
+                    assert!(message.contains("persist successful agent session recovery boundary"));
+                }
+                other => panic!("expected fail-closed permanent outcome, got {other:?}"),
+            }
+
+            let unchanged = store.load_ledger_sync().unwrap().unwrap();
+            assert_eq!(unchanged.failure_epoch, 1);
+            assert_eq!(unchanged.consecutive_terminal_count, 0);
         });
     }
 }
