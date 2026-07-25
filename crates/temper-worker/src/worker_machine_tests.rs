@@ -93,7 +93,10 @@ impl temper_worker_io::Executor<WorkerMachine> for Recorder {
 }
 
 /// Drive the machine over a completion sequence, returning the captured requests.
-fn run(machine: &mut WorkerMachine, completions: Vec<WorkerCompletion>) -> Vec<WorkerRequest> {
+pub(super) fn run(
+    machine: &mut WorkerMachine,
+    completions: Vec<WorkerCompletion>,
+) -> Vec<WorkerRequest> {
     let recorder = Recorder::default();
     drive_sync(machine, &recorder, completions, || EngineTime::ZERO);
     recorder.requests.into_inner()

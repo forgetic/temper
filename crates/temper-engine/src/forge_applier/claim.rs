@@ -167,7 +167,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .await;
     }
 
-    fn action_effects(&self, job: &InFlightJob) -> Option<Vec<Effect>> {
+    pub(super) fn action_effects(&self, job: &InFlightJob) -> Option<Vec<Effect>> {
         let context = match serde_json::from_value::<JobContext>(job.job_payload.clone()) {
             Ok(context) => context,
             Err(error) => {
@@ -222,7 +222,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         }
     }
 
-    fn is_working_label(&self, label: &LabelId) -> bool {
+    pub(super) fn is_working_label(&self, label: &LabelId) -> bool {
         label.as_str() == "in-progress"
             || self.workflow.state_dimensions().iter().any(|dimension| {
                 dimension.states.iter().any(|state| {

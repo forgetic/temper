@@ -22,6 +22,7 @@ mod body_update;
 mod claim;
 mod coordinated;
 mod failure;
+mod model_recovery;
 mod pr_repair;
 mod pr_reuse;
 mod progress;

@@ -12,6 +12,8 @@ mod failure;
 mod handoff;
 #[path = "forge_apply/landing_pr.rs"]
 mod landing_pr;
+#[path = "forge_apply/model_recovery.rs"]
+mod model_recovery;
 #[path = "forge_apply/review.rs"]
 mod review;
 #[path = "forge_apply/success.rs"]

@@ -21,6 +21,17 @@ pub enum SessionRecoveryActionV1 {
     ParkForHuman,
 }
 
+impl SessionRecoveryActionV1 {
+    /// Stable wire/log spelling shared by recovery results and projections.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RetryCurrentSession => "retry_current_session",
+            Self::RotateSession => "rotate_session",
+            Self::ParkForHuman => "park_for_human",
+        }
+    }
+}
+
 /// Durable, operator-safe evidence for one session recovery decision.
 ///
 /// This DTO deliberately excludes prompts, provider responses, stderr, and a
