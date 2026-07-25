@@ -54,6 +54,7 @@ mod git;
 mod pause;
 mod runner;
 mod stack;
+mod trace;
 mod types;
 
 pub use jig_core::{Reply, Script, StopReason, Turn};
@@ -66,6 +67,7 @@ pub use stack::{
     HermeticComponentHandles, HermeticDurableWorld, HermeticRealStack, HermeticRunResult,
     ResultTappingTransport,
 };
+pub use trace::{HermeticLiveTrace, HermeticSeededTrace, HermeticTracePayloadSnapshot};
 pub use types::{
     FakeModelResponse, FakeModelWrite, HermeticCiAttempt, HermeticCiJobSpec, HermeticIssueSpec,
     HermeticRepoSpec, WorkerRoleSpec,

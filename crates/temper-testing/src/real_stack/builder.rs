@@ -41,7 +41,7 @@ pub struct HermeticRealStackBuilder {
     ci_missing_grace: Duration,
     worker_heartbeat_interval: Duration,
     worker_liveness_limits: temper_worker::WorkerLivenessLimits,
-    enable_agent_traces: bool,
+    agent_trace_policy: Option<temper_protocol_activity::AgentActivityCapturePolicyV1>,
     linux_supervisor_helper: Option<PathBuf>,
 }
 
@@ -72,7 +72,7 @@ impl HermeticRealStackBuilder {
             ci_missing_grace: Duration::from_secs(300),
             worker_heartbeat_interval: Duration::from_millis(50),
             worker_liveness_limits: Default::default(),
-            enable_agent_traces: false,
+            agent_trace_policy: None,
             linux_supervisor_helper: None,
         }
     }
@@ -199,7 +199,17 @@ impl HermeticRealStackBuilder {
     /// Enables the worker trace spool and engine journal with metadata capture.
     #[must_use]
     pub fn enable_agent_traces(mut self) -> Self {
-        self.enable_agent_traces = true;
+        self.agent_trace_policy = Some(Default::default());
+        self
+    }
+
+    /// Enables durable worker and engine traces with one exact capture policy.
+    #[must_use]
+    pub fn agent_trace_policy(
+        mut self,
+        policy: temper_protocol_activity::AgentActivityCapturePolicyV1,
+    ) -> Self {
+        self.agent_trace_policy = Some(policy);
         self
     }
 
@@ -232,26 +242,30 @@ impl HermeticRealStackBuilder {
         let git_root = temp.path().join("git");
         let seed_root = temp.path().join("seed");
         let workspace_root = temp.path().join("workspaces");
-        let trace_config = if self.enable_agent_traces {
-            WorkerAgentTraceConfig {
-                policy: temper_protocol_activity::AgentActivityCapturePolicyV1::default(),
-                spool_root: Some(temp.path().join("agent-traces/spool")),
+        let trace_config = match self.agent_trace_policy {
+            Some(policy) => {
+                policy
+                    .validate()
+                    .map_err(|error| format!("invalid hermetic trace policy: {error}"))?;
+                WorkerAgentTraceConfig {
+                    policy,
+                    spool_root: Some(temp.path().join("agent-traces/spool")),
+                }
             }
-        } else {
-            WorkerAgentTraceConfig::default()
+            None => WorkerAgentTraceConfig::default(),
         };
         let trace_collector = TraceCollector::new(trace_config.clone());
-        let trace_journal = if self.enable_agent_traces {
-            Some(
+        let trace_journal = trace_config
+            .spool_root
+            .as_ref()
+            .map(|_| {
                 temper_engine::AgentTraceJournal::open(temper_engine::TraceJournalConfig {
                     root: temp.path().join("agent-traces/journal"),
                     policy: trace_config.policy.clone(),
                 })
-                .map_err(|error| format!("open hermetic trace journal: {error}"))?,
-            )
-        } else {
-            None
-        };
+                .map_err(|error| format!("open hermetic trace journal: {error}"))
+            })
+            .transpose()?;
 
         let forge = Arc::new(MemoryForge::new());
         let mut repo_ids = BTreeMap::new();
