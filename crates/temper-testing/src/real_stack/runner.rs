@@ -8,7 +8,7 @@ use std::time::Duration;
 use skein::runtime::RuntimeHandle;
 use temper_agent::{
     AgentAbortAuthority, CodingAgentError, ForgeContextHost, ProviderConfig, WorkspaceContext,
-    run_coding_agent_native_with_totals_tool_config_and_hosts,
+    protocol_model_failure, run_coding_agent_native_with_totals_tool_config_and_hosts,
 };
 use temper_engine::Daemon;
 use temper_protocol_activity::FailureCodeV1;
@@ -419,7 +419,24 @@ impl PrFreshnessGuard for DaemonPrFreshnessGuard {
 
 fn agent_error(error: CodingAgentError, worker_cancellation_requested: bool) -> AgentRunError {
     let class = agent_error_class(&error, worker_cancellation_requested);
-    AgentRunError::new(class, error.to_string())
+    let model_failure = coding_agent_model_failure(&error);
+    let error = AgentRunError::new(class, error.to_string());
+    match model_failure {
+        Some(model_failure) => error.with_model_failure(model_failure),
+        None => error,
+    }
+}
+
+fn coding_agent_model_failure(
+    error: &CodingAgentError,
+) -> Option<temper_protocol_activity::ModelFailureV1> {
+    match error {
+        CodingAgentError::ModelFailure(diagnostic)
+        | CodingAgentError::ModelUnavailable { diagnostic, .. } => {
+            Some(protocol_model_failure(diagnostic.as_ref()))
+        }
+        _ => None,
+    }
 }
 
 fn agent_error_class(
@@ -490,11 +507,11 @@ mod tests {
     }
 
     #[test]
-    fn native_runner_keeps_model_failures_transient() {
+    fn native_runner_preserves_the_typed_model_failure_boundary() {
         let failure = agent_error(
             CodingAgentError::ModelFailure(Box::new(
                 temper_agent_core::ModelFailureDiagnostic::redacted_unknown(
-                    "provider", "model", true,
+                    "provider", "model", false,
                 ),
             )),
             false,
@@ -502,7 +519,17 @@ mod tests {
 
         assert_eq!(failure.class, FailureClass::Transient);
         assert!(failure.message.contains("redacted_unknown"));
-        assert!(failure.message.contains("retryable=true"));
+        assert!(failure.message.contains("retryable=false"));
+        let diagnostic = failure
+            .model_failure
+            .expect("native fixture retains the authoritative typed diagnostic");
+        assert_eq!(diagnostic.provider, "provider");
+        assert_eq!(diagnostic.model, "model");
+        assert_eq!(
+            diagnostic.category,
+            temper_protocol_activity::ModelFailureCategoryV1::RedactedUnknown
+        );
+        assert!(!diagnostic.retryable);
     }
 
     #[test]

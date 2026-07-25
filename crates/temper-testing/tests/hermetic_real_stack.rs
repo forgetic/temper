@@ -6,8 +6,9 @@ use chrono::{DateTime, Utc};
 use jig_core::{HttpError, Reply, Script, ScriptAction, StopReason, Turn};
 use temper_agent_core::{StreamRetryConfig, install_stream_retry_config_override};
 use temper_forge_model::{Forge, Issue};
+use temper_protocol_activity::ModelFailureCategoryV1;
 use temper_protocol_agent::{SubmitForPrGate, SubmitForPrRequest, SubmitForPrResponse};
-use temper_protocol_worker::{FailureClass, JobResult, ResultStatus};
+use temper_protocol_worker::{FailureClass, JobResult, ResultStatus, SessionRecoveryActionV1};
 use temper_testing::real_stack::{
     FakeModelResponse, HermeticIssueSpec, HermeticRealStack, HermeticRealStackBuilder,
     HermeticRepoSpec,
@@ -188,6 +189,8 @@ mod budget_retry;
 mod label_only_restart;
 #[path = "hermetic_real_stack/missing_ci_restart.rs"]
 mod missing_ci_restart;
+#[path = "hermetic_real_stack/model_recovery.rs"]
+mod model_recovery;
 #[path = "hermetic_real_stack/multi_repo.rs"]
 mod multi_repo;
 #[path = "hermetic_real_stack/ownership_loss.rs"]
@@ -219,7 +222,11 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             Arc::clone(&observed_success_continuation),
         );
 
-        let mut stack = HermeticRealStackBuilder::new()
+        let builder = HermeticRealStackBuilder::new();
+        #[cfg(target_os = "linux")]
+        let builder = builder
+            .linux_supervisor_helper(env!("CARGO_BIN_EXE_temper-real-stack-supervisor-helper"));
+        let mut stack = builder
             .repo(HermeticRepoSpec::new("acme", "service"))
             .issue(HermeticIssueSpec::ready_code(
                 "Recover after provider server_error",
@@ -249,12 +256,26 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             .as_ref()
             .expect("failed result carries failure details");
         assert_eq!(failure.class, FailureClass::Transient);
-        assert!(
-            failure.message.contains("server_error")
-                || failure.message.contains("temporary upstream failure"),
-            "failure should carry the provider server_error details: {}",
-            failure.message
+        let model_failure = failure
+            .model_failure
+            .as_ref()
+            .expect("native runner carries the typed terminal diagnostic");
+        assert_eq!(model_failure.category, ModelFailureCategoryV1::Provider);
+        assert!(model_failure.retryable);
+        assert_eq!(model_failure.http_status, Some(500));
+        assert_eq!(
+            model_failure.provider_error_code.as_deref(),
+            Some("server_error")
         );
+        let recovery = failure
+            .session_recovery
+            .as_ref()
+            .expect("retryable terminal is durably accounted");
+        assert_eq!(
+            recovery.action,
+            SessionRecoveryActionV1::RetryCurrentSession
+        );
+        assert_eq!(recovery.failure_count, 1);
         assert!(
             provider_errors.load(Ordering::SeqCst) >= 3,
             "fake provider should see the initial HTTP 500 plus configured stream retries"

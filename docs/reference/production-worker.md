@@ -23,6 +23,53 @@ and standalone daemon wording below remains useful for legacy or test-only
 operation, but operator-facing docs should prefer `serve engine` / `serve
 worker`.
 
+## Operating a bounded model-recovery park
+
+Terminal model failures are governed by a durable, finite policy per engineer
+workstream. A non-retryable terminal diagnostic consumes the current session
+immediately. A retryable terminal diagnostic may run at most three times on the
+same session. In either case Temper may rotate automatically **once** to a fresh
+session over the unchanged coordination-scoped checkout. If that fresh session
+is consumed before an authoritative success, Temper records a permanent
+boundary, removes queue eligibility and active claim presentation, adds
+`needs-human`, and publishes one deduplicated audit. An authoritative success
+starts a new failure epoch. Individual provider stream retries do not count as
+worker runs.
+
+The typed model diagnostic and recovery decision travel in the worker result and
+are persisted in `.temper-agent-session/state.json`; agent activity capture,
+child stderr, and daemon memory are not recovery authority. Daemon or worker
+replacement therefore cannot reset the failure count, create a third session,
+or make a parked item claimable. Malformed, unsupported, or mismatched existing
+session state fails closed and is not overwritten.
+
+For a parked item, use the audit's role, workstream/session identities, attempt,
+and `evidence_location` to find the configured worker workspace:
+
+```text
+<worker.workspace-root>/<role>/<percent-encoded-coordination-key>/
+├── .temper-agent-session/state.json
+└── <repository checkout directories...>
+```
+
+Inspect the ledger and every checkout in place. Record `git status --short
+--branch`, `git diff`, `git diff --cached`, untracked files, the active and prior
+session IDs, failure epoch/count, and the normalized provider/model category.
+Correct the provider credentials, entitlement, model availability, context
+limit, or other session condition outside this directory; then verify the
+preserved changes are still the intended product. Never place credentials or
+raw provider responses in the audit or ledger.
+
+After correction, deliberately remove `needs-human` and restore the queue label
+that the compiled workflow requires for that artifact (for example `ready` for
+a code issue). Do not merely clear `needs-human`: without the proper queue label
+the item remains intentionally ineligible. Conversely, do not restore a queue
+label before the cause is corrected, because that begins a new operator-approved
+claim. **Never delete the checkout, `.temper-agent-session`, or its ledger as
+routine recovery**, and do not reset, stash-drop, or commit away predecessor
+changes just to make the workstream clean. Preserve or copy evidence before any
+exceptional manual ledger repair.
+
 ## Operating an interrupted-CI park
 
 A provider-reported cancellation, interruption, timeout, runner loss, startup
