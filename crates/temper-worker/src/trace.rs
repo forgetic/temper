@@ -28,6 +28,7 @@ mod accept;
 mod coordination;
 #[cfg(test)]
 mod coordination_tests;
+mod diagnostics;
 mod endpoint;
 #[cfg(test)]
 mod endpoint_tests;
@@ -40,6 +41,7 @@ mod spool;
 mod terminal;
 use coordination::TraceCoordination;
 pub use coordination::{DirtyTraceRun, DirtyTraceRuns, TraceCollector, TraceCoordinationSnapshot};
+pub use diagnostics::{ActivityTraceRunner, warn_activity_trace_start_failed};
 pub use endpoint::ActivityEndpoint;
 pub(crate) use forwarder::spawn_activity_forwarder;
 use model::*;
@@ -110,8 +112,16 @@ pub enum TraceError {
     Disabled,
     #[error("activity run byte quota exceeded")]
     QuotaExceeded,
-    #[error("aggregate activity spool quota of {limit} bytes exceeded")]
-    AggregateQuotaExceeded { limit: u64 },
+    #[error(
+        "aggregate activity spool quota exceeded: physical used bytes {physical_used_bytes}, logical reserved bytes {logical_reserved_bytes}, requested bytes {requested_bytes}, limit {limit}, dirty runs {dirty_run_count}"
+    )]
+    AggregateQuotaExceeded {
+        physical_used_bytes: u64,
+        logical_reserved_bytes: u64,
+        requested_bytes: u64,
+        limit: u64,
+        dirty_run_count: u64,
+    },
     #[error("activity run already has a terminal event")]
     AlreadyTerminal,
     #[error("acknowledgement {acknowledged} exceeds last durable sequence {last_seq}")]

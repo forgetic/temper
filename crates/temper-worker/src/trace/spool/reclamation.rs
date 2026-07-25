@@ -32,6 +32,10 @@ pub struct TraceReclamationReport {
     pub failed_runs: u64,
     /// Dirty or malformed active entries left after the pass.
     pub remaining_dirty_runs: u64,
+    /// Physical bytes retained across active and quarantined evidence.
+    pub physical_used_bytes: u64,
+    /// Logical bytes still charged against aggregate trace admission.
+    pub logical_reserved_bytes: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -160,6 +164,8 @@ fn reclaim_locked(
     report.remaining_dirty_runs = remaining
         .dirty_run_count
         .saturating_add(remaining.outcomes.malformed_runs);
+    report.physical_used_bytes = remaining.total_physical_bytes;
+    report.logical_reserved_bytes = remaining.logical_reserved_bytes;
     Ok(report)
 }
 

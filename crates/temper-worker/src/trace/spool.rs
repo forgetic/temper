@@ -325,7 +325,13 @@ pub(super) fn ensure_aggregate_spool_capacity(
         .checked_add(requested)
         .is_none_or(|projected| projected > limit)
     {
-        Err(TraceError::AggregateQuotaExceeded { limit })
+        Err(TraceError::AggregateQuotaExceeded {
+            physical_used_bytes: report.total_physical_bytes,
+            logical_reserved_bytes: report.logical_reserved_bytes,
+            requested_bytes: requested,
+            limit,
+            dirty_run_count: report.dirty_run_count,
+        })
     } else {
         Ok(())
     }
