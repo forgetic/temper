@@ -203,6 +203,8 @@ mod restart_acceptance;
 mod restart_cancellation;
 #[path = "hermetic_real_stack/restart_recovery.rs"]
 mod restart_recovery;
+#[path = "hermetic_real_stack/trace_reclamation_restart.rs"]
+mod trace_reclamation_restart;
 
 #[test]
 fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {

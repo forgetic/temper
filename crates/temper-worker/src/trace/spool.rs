@@ -10,20 +10,34 @@ use temper_protocol_activity::{
     BlobReferenceV1, RunStartedV1,
 };
 
-use super::{RecoveredTraceRun, TraceError, TraceManifestV1, event_blob_references};
+use super::{
+    RecoveredTraceRun, TraceCoordination, TraceError, TraceManifestV1, event_blob_references,
+};
 
 mod filesystem;
 mod forwarding_index;
+mod inventory;
 mod operation_counts;
+mod reclamation;
 mod recovery;
 pub(super) use filesystem::{repair_private_dir, repair_spool_root_permissions, sync_file_data};
 use filesystem::{repair_run_permissions, sync_directory, sync_file_all};
 use forwarding_index::persist_forwarding_index_best_effort;
 pub(super) use forwarding_index::{acknowledge_forwarded_run, persist_forwarding_index};
+pub(super) use inventory::TRACE_QUARANTINE_DIR;
+pub(super) use inventory::inventory as spool_inventory;
+pub use inventory::{
+    TraceSpoolEntry, TraceSpoolInventory, TraceSpoolOutcome, TraceSpoolOutcomeCounts,
+};
 use operation_counts::*;
 #[cfg(test)]
 pub(super) use operation_counts::{
     TraceSpoolOperationCounts, reset_spool_operation_counts, spool_operation_counts,
+};
+pub use reclamation::TraceReclamationReport;
+#[cfg(test)]
+pub(super) use reclamation::{
+    ReclamationFault, TERMINALIZATION_MARKER_FILE, set_reclamation_fault,
 };
 use recovery::{recover_compacted_marker, recover_run_with_offsets_locked, recover_spool_metadata};
 pub(super) use recovery::{recover_forwarding_run, recover_run};
@@ -269,8 +283,23 @@ pub(super) fn open_spool_lock(run_dir: &Path) -> Result<(PathBuf, File), TraceEr
     open_named_lock(run_dir, ".spool.lock")
 }
 
+pub(super) fn open_spool_owner_lock(run_dir: &Path) -> Result<(PathBuf, File), TraceError> {
+    open_named_lock(run_dir, inventory::RUN_OWNERSHIP_LOCK_FILE)
+}
+
 fn open_named_lock(directory: &Path, name: &str) -> Result<(PathBuf, File), TraceError> {
     let path = directory.join(name);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if !metadata.file_type().is_file() || metadata.file_type().is_symlink() => {
+            return Err(TraceError::InvalidSpool(format!(
+                "trace spool lock is not a regular file: {}",
+                path.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(io_error("inspect trace spool lock", &path, source)),
+    }
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true);
     #[cfg(unix)]
@@ -286,65 +315,26 @@ fn open_named_lock(directory: &Path, name: &str) -> Result<(PathBuf, File), Trac
 
 pub(super) fn ensure_aggregate_spool_capacity(
     root: &Path,
+    coordination: &TraceCoordination,
     requested: u64,
     limit: u64,
 ) -> Result<(), TraceError> {
-    let used = aggregate_reserved_bytes(root)?;
-    if used
+    let report = inventory::inventory(root, coordination)?;
+    if report
+        .logical_reserved_bytes
         .checked_add(requested)
         .is_none_or(|projected| projected > limit)
     {
-        Err(TraceError::AggregateQuotaExceeded { limit })
+        Err(TraceError::AggregateQuotaExceeded {
+            physical_used_bytes: report.total_physical_bytes,
+            logical_reserved_bytes: report.logical_reserved_bytes,
+            requested_bytes: requested,
+            limit,
+            dirty_run_count: report.dirty_run_count,
+        })
     } else {
         Ok(())
     }
-}
-
-fn aggregate_reserved_bytes(root: &Path) -> Result<u64, TraceError> {
-    let mut total = 0u64;
-    for entry in read_dir(root)? {
-        let entry = entry.map_err(|source| io_error("read trace spool entry", root, source))?;
-        let metadata = fs::symlink_metadata(entry.path())
-            .map_err(|source| io_error("inspect trace spool entry", &entry.path(), source))?;
-        if metadata.file_type().is_symlink() {
-            total = total.saturating_add(metadata.len());
-            continue;
-        }
-        if !metadata.is_dir() {
-            total = total.saturating_add(metadata.len());
-            continue;
-        }
-        let run_dir = entry.path();
-        let compacted = run_dir.join("compacted.json");
-        let manifest = run_dir.join("manifest.json");
-        let reserved = if compacted.is_file() {
-            directory_bytes(&run_dir)?
-        } else if manifest.is_file() {
-            read_json::<TraceManifestV1>(&manifest)
-                .map(|manifest| manifest.policy.max_run_bytes)
-                .unwrap_or_else(|_| directory_bytes(&run_dir).unwrap_or(u64::MAX))
-        } else {
-            directory_bytes(&run_dir)?
-        };
-        total = total.saturating_add(reserved);
-    }
-    Ok(total)
-}
-
-fn directory_bytes(directory: &Path) -> Result<u64, TraceError> {
-    let mut total = 0u64;
-    for entry in read_dir(directory)? {
-        let entry =
-            entry.map_err(|source| io_error("read trace spool entry", directory, source))?;
-        let metadata = fs::symlink_metadata(entry.path())
-            .map_err(|source| io_error("inspect trace spool entry", &entry.path(), source))?;
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            total = total.saturating_add(directory_bytes(&entry.path())?);
-        } else {
-            total = total.saturating_add(metadata.len());
-        }
-    }
-    Ok(total)
 }
 
 fn reclaim_compacted_payload(run_dir: &Path) -> Result<(), TraceError> {

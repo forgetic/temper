@@ -32,6 +32,10 @@ use crate::transport::{HttpTransport, Transport};
 use crate::worker_machine::{WorkerCompletion, WorkerMachine};
 use crate::worker_shell::{WorkerCancellation, WorkerShell};
 
+mod reclamation;
+pub use reclamation::STARTUP_TRACE_RECLAMATION_RUN_BUDGET;
+use reclamation::{reclaim_activity_traces_at_startup, spawn_background_trace_reclamation};
+
 /// Run the worker to (effective) completion over the **HTTP** transport (the
 /// split deployment): register, then poll/dispatch/report/heartbeat forever,
 /// driven by the completion queue. Returns only if the machine stops or every
@@ -506,6 +510,15 @@ where
     let cancellation = WorkerCancellation::default();
     let task_registry = WorkerTaskRegistry::new();
     let component_tasks = WorkerComponentTasks::default();
+    let continue_trace_reclamation = reclaim_activity_traces_at_startup(&collector);
+    if continue_trace_reclamation {
+        spawn_background_trace_reclamation(
+            spawner.clone(),
+            collector.clone(),
+            cancellation.clone(),
+            component_tasks.clone(),
+        );
+    }
     let forwarder_joined = spawn_activity_forwarder(
         spawner.clone(),
         collector,

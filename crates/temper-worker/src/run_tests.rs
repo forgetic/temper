@@ -1,14 +1,21 @@
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use skein::cx::Cx;
+use temper_protocol_activity::AgentActivityCapturePolicyV1;
+use temper_protocol_agent::{
+    AgentSessionState, WorkspaceContext, WorkspaceRepository, WorkspaceWorkItem,
+};
 use temper_protocol_worker::{
     Artifact, Assign, FailureClass, WORKER_PROTOCOL_VERSION, WorkerAuth, WorkerProtocolMessage,
 };
 use temper_worker_io::{CqSender, channel};
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::prelude::*;
 
 use super::*;
 use crate::config::{ExecutorSelection, WorkerAgentTraceConfig, WorkerLivenessLimits};
@@ -281,4 +288,305 @@ fn crash_hard_escalates_joins_and_preserves_the_active_claim() {
         WorkerShutdown::Crash,
         crate::JobCancellationRequest::HardKill,
     );
+}
+
+#[derive(Clone, Default)]
+struct SharedLogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl io::Write for SharedLogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().expect("log buffer").write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for SharedLogBuffer {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+struct StartupRecoveryTransport {
+    collector: TraceCollector,
+}
+
+impl Transport for StartupRecoveryTransport {
+    fn send(
+        &self,
+        _cx: Cx,
+        message: WorkerProtocolMessage,
+        _auth: Option<WorkerAuth>,
+    ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
+        if matches!(
+            message,
+            WorkerProtocolMessage::Register(_) | WorkerProtocolMessage::Poll(_)
+        ) {
+            let inventory = self.collector.inventory().expect("inventory at intake");
+            assert_eq!(
+                inventory.outcomes.abandoned_non_terminal_runs, 0,
+                "startup recovery must finish before registration or polling"
+            );
+        }
+        async { Ok(None) }
+    }
+}
+
+struct BackgroundRecoveryTransport {
+    collector: TraceCollector,
+    assignment_available: AtomicBool,
+    dirty_at_first_poll: Arc<AtomicU64>,
+}
+
+impl Transport for BackgroundRecoveryTransport {
+    fn send(
+        &self,
+        _cx: Cx,
+        message: WorkerProtocolMessage,
+        _auth: Option<WorkerAuth>,
+    ) -> impl Future<Output = Result<Option<WorkerProtocolMessage>, String>> + Send {
+        let response = match message {
+            WorkerProtocolMessage::Poll(_)
+                if self.assignment_available.swap(false, Ordering::AcqRel) =>
+            {
+                let inventory = self.collector.inventory().expect("background inventory");
+                let remaining = inventory
+                    .dirty_run_count
+                    .saturating_add(inventory.outcomes.malformed_runs);
+                self.dirty_at_first_poll.store(remaining, Ordering::Release);
+                Some(WorkerProtocolMessage::Assign(assignment()))
+            }
+            _ => None,
+        };
+        async move { Ok(response) }
+    }
+}
+
+fn trace_context() -> WorkspaceContext {
+    WorkspaceContext {
+        trace_context: None,
+        repos: vec![WorkspaceRepository {
+            id: "forgejo:ai/temper".to_string(),
+            owner: "ai".to_string(),
+            name: "temper".to_string(),
+            default_branch: "main".to_string(),
+            dir: "temper".to_string(),
+            access: "writable".to_string(),
+            base_branch: "main".to_string(),
+            branch_hint: Some("agent/startup-recovery".to_string()),
+        }],
+        work_item: WorkspaceWorkItem {
+            role: "engineer".to_string(),
+            queue: "code_ready".to_string(),
+            kind: "code".to_string(),
+            target: "Issue { number: ItemNumber(746) }".to_string(),
+            context: "{}".to_string(),
+        },
+        artifact_context: None,
+        action: "open_pr".to_string(),
+        correlation_key: "pr-for-code-746".to_string(),
+        checkout: Some("writable".to_string()),
+        allowed_verdicts: Vec::new(),
+        verdict_contracts: Default::default(),
+        source_metadata: Default::default(),
+        guidance: Default::default(),
+        pull_request_freshness: None,
+        agent_session: Some(AgentSessionState::new("startup-recovery-session")),
+    }
+}
+
+fn trace_config(root: std::path::PathBuf) -> WorkerAgentTraceConfig {
+    WorkerAgentTraceConfig {
+        policy: AgentActivityCapturePolicyV1 {
+            max_run_bytes: 5_000,
+            max_inline_bytes: 1,
+            max_blob_bytes: 1,
+            ..Default::default()
+        },
+        spool_root: Some(root),
+    }
+}
+
+#[test]
+fn startup_reclaims_a_saturated_sixteen_run_spool_before_intake() {
+    temper_worker_io::block_on_with(move |_cx, handle| async move {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let traces = trace_config(temp.path().join("traces"));
+        let collector = TraceCollector::new(traces.clone());
+        let context = trace_context();
+        let mut stale = Vec::new();
+        for index in 0..STARTUP_TRACE_RECLAMATION_RUN_BUDGET {
+            stale.push(
+                collector
+                    .begin_run(&format!("stale-{index}"), &context)
+                    .expect("seed stale reservation")
+                    .expect("trace enabled"),
+            );
+        }
+        drop(stale);
+
+        let human = SharedLogBuffer::default();
+        let json = SharedLogBuffer::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .without_time()
+                    .with_writer(human.clone()),
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_writer(json.clone()),
+            );
+        let worker_config = WorkerConfig {
+            agent_traces: traces,
+            ..config(temp.path().join("results"))
+        };
+        let worker = tracing::subscriber::with_default(subscriber, || {
+            start_worker_with_transport_and_trace_collector(
+                handle,
+                worker_config,
+                Arc::new(ControlledExecutor {
+                    started: channel().0,
+                    finished: Arc::new(AtomicBool::new(false)),
+                    finish_at: crate::JobCancellationRequest::Graceful,
+                }),
+                Arc::new(StartupRecoveryTransport {
+                    collector: collector.clone(),
+                }),
+                collector.clone(),
+            )
+        });
+
+        let inventory = collector.inventory().expect("post-start inventory");
+        assert_eq!(inventory.outcomes.abandoned_non_terminal_runs, 0);
+        let next = collector
+            .begin_run("admitted-after-recovery", &context)
+            .expect("startup reclaimed logical capacity")
+            .expect("trace enabled");
+        next.finish_success(None).expect("finish admitted trace");
+        drop(next);
+
+        let records =
+            String::from_utf8(json.0.lock().expect("json logs").clone()).expect("UTF-8 logs");
+        let summary = records
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+            .find(|record| record["fields"]["event"] == "agent.activity.startup_recovery")
+            .expect("startup recovery summary");
+        assert_eq!(summary["fields"]["terminalized_runs"], 16);
+        assert_eq!(summary["fields"]["quarantined_runs"], 0);
+        assert_eq!(summary["fields"]["protected_runs"], 0);
+        assert_eq!(summary["fields"]["failed_runs"], 0);
+        assert_eq!(summary["fields"]["remaining_dirty_runs"], 0);
+        let physical = summary["fields"]["physical_used_bytes"]
+            .as_u64()
+            .expect("physical total");
+        let logical = summary["fields"]["logical_reserved_bytes"]
+            .as_u64()
+            .expect("logical total");
+        let rendered =
+            String::from_utf8(human.0.lock().expect("human logs").clone()).expect("UTF-8 logs");
+        assert!(rendered.contains(&format!(
+            "terminalized 16, quarantined 0, protected 0, failed 0, remaining dirty 0, physical used bytes {physical}, logical reserved bytes {logical}"
+        )));
+
+        worker.shutdown().await;
+    });
+}
+
+#[test]
+fn startup_recovery_failure_still_allows_assignment_intake() {
+    temper_worker_io::block_on_with(move |_cx, handle| async move {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let invalid_root = temp.path().join("trace-root-is-a-file");
+        std::fs::write(&invalid_root, b"not a spool directory").expect("invalid root");
+        let (started_tx, mut started_rx) = channel();
+        let finished = Arc::new(AtomicBool::new(false));
+        let traces = trace_config(invalid_root);
+        let collector = TraceCollector::new(traces.clone());
+        let worker = start_worker_with_transport_and_trace_collector(
+            handle,
+            WorkerConfig {
+                agent_traces: traces,
+                ..config(temp.path().join("results"))
+            },
+            Arc::new(ControlledExecutor {
+                started: started_tx,
+                finished: Arc::clone(&finished),
+                finish_at: crate::JobCancellationRequest::Graceful,
+            }),
+            Arc::new(AssignmentTransport::new()),
+            collector,
+        );
+        started_rx
+            .recv()
+            .await
+            .expect("assignment starts after recovery failure");
+        worker.shutdown().await;
+        assert!(finished.load(Ordering::Acquire));
+    });
+}
+
+#[test]
+fn bounded_background_recovery_yields_to_assignments_and_joins_on_shutdown() {
+    temper_worker_io::block_on_with(move |_cx, handle| async move {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("traces");
+        std::fs::create_dir_all(&root).expect("trace root");
+        for index in 0..=STARTUP_TRACE_RECLAMATION_RUN_BUDGET {
+            std::fs::create_dir(root.join(format!("malformed-{index:02}")))
+                .expect("malformed spool");
+        }
+        let traces = trace_config(root);
+        let collector = TraceCollector::new(traces.clone());
+        let dirty_at_first_poll = Arc::new(AtomicU64::new(u64::MAX));
+        let transport = Arc::new(BackgroundRecoveryTransport {
+            collector: collector.clone(),
+            assignment_available: AtomicBool::new(true),
+            dirty_at_first_poll: Arc::clone(&dirty_at_first_poll),
+        });
+        let (started_tx, mut started_rx) = channel();
+        let finished = Arc::new(AtomicBool::new(false));
+        let worker = start_worker_with_transport_and_trace_collector(
+            handle,
+            WorkerConfig {
+                agent_traces: traces,
+                ..config(temp.path().join("results"))
+            },
+            Arc::new(ControlledExecutor {
+                started: started_tx,
+                finished: Arc::clone(&finished),
+                finish_at: crate::JobCancellationRequest::Graceful,
+            }),
+            transport,
+            collector.clone(),
+        );
+        started_rx
+            .recv()
+            .await
+            .expect("assignment starts before background convergence");
+        assert_eq!(dirty_at_first_poll.load(Ordering::Acquire), 1);
+
+        let mut converged = false;
+        for _ in 0..20 {
+            let inventory = collector.inventory().expect("recovery inventory");
+            if inventory.dirty_run_count == 0 && inventory.outcomes.malformed_runs == 0 {
+                converged = true;
+                break;
+            }
+            temper_worker_io::sleep_for(Duration::from_millis(25)).await;
+        }
+        assert!(
+            converged,
+            "background recovery must converge in bounded passes"
+        );
+        worker.shutdown().await;
+        assert!(finished.load(Ordering::Acquire));
+    });
 }

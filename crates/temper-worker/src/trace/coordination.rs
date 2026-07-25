@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 
@@ -32,6 +32,7 @@ struct TraceCoordinationState {
     append_generation: u64,
     acknowledgement_generation: u64,
     dirty_runs: BTreeMap<String, u64>,
+    active_runs: BTreeSet<String>,
     next_waiter_id: u64,
     append_waiters: BTreeMap<u64, Waker>,
     acknowledgement_waiters: BTreeMap<u64, Waker>,
@@ -53,11 +54,25 @@ impl std::fmt::Debug for TraceCoordination {
                 &state.acknowledgement_generation,
             )
             .field("dirty_runs", &state.dirty_runs)
+            .field("active_runs", &state.active_runs)
             .finish_non_exhaustive()
     }
 }
 
 impl TraceCoordination {
+    pub(super) fn register_active(&self, run_id: &str) {
+        let inserted = self.lock().active_runs.insert(run_id.to_string());
+        debug_assert!(inserted, "trace run registered active more than once");
+    }
+
+    pub(super) fn unregister_active(&self, run_id: &str) {
+        self.lock().active_runs.remove(run_id);
+    }
+
+    pub(super) fn is_active(&self, run_id: &str) -> bool {
+        self.lock().active_runs.contains(run_id)
+    }
+
     pub(super) fn snapshot(&self) -> TraceCoordinationSnapshot {
         let state = self.lock();
         TraceCoordinationSnapshot {

@@ -1,3 +1,6 @@
+use std::io;
+use std::sync::{Arc, Mutex};
+
 use temper_protocol_activity::{
     ACTIVITY_ADDRESS_FLAG, AgentActivityCapturePolicyV1, AgentActivityEventV1,
 };
@@ -9,6 +12,30 @@ use super::{
 use crate::agent_runner::AgentRunner;
 use crate::config::WorkerAgentTraceConfig;
 use crate::trace::{TraceCollector, WORKER_SPOOL_RUN_CAPACITY};
+use tracing::instrument::WithSubscriber as _;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::prelude::*;
+
+#[derive(Clone, Default)]
+struct SharedLogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl io::Write for SharedLogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().expect("log buffer").write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for SharedLogBuffer {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
 
 #[test]
 #[cfg(unix)]
@@ -158,13 +185,51 @@ fn aggregate_spool_exhaustion_does_not_change_the_agent_result() {
         ])
         .with_trace_collector(trace_config);
     let cwd = temp.path().to_path_buf();
-    temper_worker_io::block_on(async move {
-        runner
-            .run("product-work-still-succeeds", &context, &cwd)
-            .await
-    })
+    let human = SharedLogBuffer::default();
+    let json = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(human.clone()),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(json.clone()),
+        );
+    temper_worker_io::block_on(
+        async move {
+            runner
+                .run("product-work-still-succeeds", &context, &cwd)
+                .await
+        }
+        .with_subscriber(subscriber),
+    )
     .expect("aggregate trace exhaustion cannot change product-work success");
     assert_eq!(reservations.len() as u64, WORKER_SPOOL_RUN_CAPACITY);
+
+    let records = String::from_utf8(json.0.lock().expect("json logs").clone()).expect("UTF-8 logs");
+    let warning = records
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+        .find(|record| record["fields"]["event"] == "agent.activity.start_failed")
+        .expect("out-of-process trace admission warning");
+    let fields = &warning["fields"];
+    assert_eq!(fields["runner"], "out_of_process");
+    assert_eq!(fields["logical_reserved_bytes"], 80_000);
+    assert_eq!(fields["requested_bytes"], 5_000);
+    assert_eq!(fields["limit"], 80_000);
+    assert_eq!(fields["dirty_run_count"], 16);
+    let physical = fields["physical_used_bytes"]
+        .as_u64()
+        .expect("physical used bytes");
+    let rendered =
+        String::from_utf8(human.0.lock().expect("human logs").clone()).expect("UTF-8 logs");
+    assert!(rendered.contains(&format!(
+        "physical used bytes {physical}, logical reserved bytes 80000, requested bytes 5000, limit 80000, dirty runs 16"
+    )));
 }
 
 #[test]

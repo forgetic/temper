@@ -209,14 +209,11 @@ impl InProcessAgentRunner {
         let trace = match self.trace_collector.begin_run(job_id, context) {
             Ok(trace) => trace,
             Err(error) => {
-                tracing::warn!(
-                    target: "temper::worker",
-                    service = "worker",
-                    event = "agent.activity.start_failed",
+                temper_worker::warn_activity_trace_start_failed(
+                    temper_worker::ActivityTraceRunner::Standalone,
                     job_id,
-                    correlation_key = context.correlation_key.as_str(),
-                    %error,
-                    "standalone worker could not start durable agent tracing; continuing without it"
+                    context.correlation_key.as_str(),
+                    &error,
                 );
                 None
             }
@@ -615,6 +612,10 @@ mod cancellation_tests;
 #[cfg(test)]
 #[path = "agent_runner/model_failure_tests.rs"]
 mod model_failure_tests;
+
+#[cfg(test)]
+#[path = "agent_runner/quota_diagnostics_tests.rs"]
+mod quota_diagnostics_tests;
 
 #[cfg(test)]
 mod tests;

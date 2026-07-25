@@ -84,8 +84,8 @@ pub use result_outbox::{
     ResultOutbox, ResultOutboxEntry, ResultOutboxError,
 };
 pub use run::{
-    WorkerComponentHandle, WorkerEmergencyShutdownHandle, run_worker,
-    run_worker_with_trace_collector, run_worker_with_transport,
+    STARTUP_TRACE_RECLAMATION_RUN_BUDGET, WorkerComponentHandle, WorkerEmergencyShutdownHandle,
+    run_worker, run_worker_with_trace_collector, run_worker_with_transport,
     run_worker_with_transport_and_trace_collector, shutdown_worker_after_signal,
     start_worker_with_transport, start_worker_with_transport_and_hook,
     start_worker_with_transport_and_hook_and_trace_collector,
@@ -110,9 +110,11 @@ pub use temper_protocol_agent::{
 pub use temper_protocol_worker::WorkerAuth;
 pub use temper_protocol_worker::{ShutdownBlocker, ShutdownBlockerKind, ShutdownEscalationStage};
 pub use trace::{
-    ActivityEndpoint, DirtyTraceRun, DirtyTraceRuns, MAX_CHILD_ACTIVITY_FRAME_BYTES,
-    MAX_CHILD_ACTIVITY_RECORD_BYTES, RecoveredTraceRun, TraceCollector, TraceCoordinationSnapshot,
-    TraceError, TraceManifestV1, TraceRun, WORKER_SPOOL_RUN_CAPACITY,
+    ActivityEndpoint, ActivityTraceRunner, DirtyTraceRun, DirtyTraceRuns,
+    MAX_CHILD_ACTIVITY_FRAME_BYTES, MAX_CHILD_ACTIVITY_RECORD_BYTES, RecoveredTraceRun,
+    TraceCollector, TraceCoordinationSnapshot, TraceError, TraceManifestV1, TraceReclamationReport,
+    TraceRun, TraceSpoolEntry, TraceSpoolInventory, TraceSpoolOutcome, TraceSpoolOutcomeCounts,
+    WORKER_SPOOL_RUN_CAPACITY, warn_activity_trace_start_failed,
 };
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{

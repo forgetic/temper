@@ -360,11 +360,25 @@ fn aggregate_spool_reservations_bound_runs_across_the_worker() {
                 .expect("capture enabled"),
         );
     }
-    assert!(matches!(
-        collector.begin_run("aggregate-exhausted", &context()),
-        Err(TraceError::AggregateQuotaExceeded { limit })
-            if limit == 5_000 * WORKER_SPOOL_RUN_CAPACITY
-    ));
+    let error = match collector.begin_run("aggregate-exhausted", &context()) {
+        Err(error) => error,
+        Ok(_) => panic!("aggregate reservation ceiling was not enforced"),
+    };
+    let TraceError::AggregateQuotaExceeded {
+        physical_used_bytes,
+        logical_reserved_bytes,
+        requested_bytes,
+        limit,
+        dirty_run_count,
+    } = error
+    else {
+        panic!("unexpected aggregate admission error: {error}");
+    };
+    assert!(physical_used_bytes > 0);
+    assert_eq!(logical_reserved_bytes, 5_000 * WORKER_SPOOL_RUN_CAPACITY);
+    assert_eq!(requested_bytes, 5_000);
+    assert_eq!(limit, 5_000 * WORKER_SPOOL_RUN_CAPACITY);
+    assert_eq!(dirty_run_count, WORKER_SPOOL_RUN_CAPACITY);
     assert_eq!(runs.len() as u64, WORKER_SPOOL_RUN_CAPACITY);
 }
 
@@ -564,6 +578,7 @@ fn spool_directories_and_files_are_owner_only() {
     assert_eq!(mode(&root), 0o700);
     assert_eq!(mode(run.spool_dir()), 0o700);
     assert_eq!(mode(&run.spool_dir().join("blobs")), 0o700);
+    assert_eq!(mode(&run.spool_dir().join(".owner.lock")), 0o600);
     assert_eq!(mode(&run.spool_dir().join("manifest.json")), 0o600);
     assert_eq!(mode(&run.spool_dir().join("events.jsonl")), 0o600);
     assert_eq!(mode(&run.spool_dir().join("acknowledgement.json")), 0o600);

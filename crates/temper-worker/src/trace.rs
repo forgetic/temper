@@ -5,7 +5,7 @@
 //! numbers. [`TraceError`] lets callers degrade tracing without changing work.
 
 use std::collections::BTreeMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -28,6 +28,7 @@ mod accept;
 mod coordination;
 #[cfg(test)]
 mod coordination_tests;
+mod diagnostics;
 mod endpoint;
 #[cfg(test)]
 mod endpoint_tests;
@@ -40,11 +41,16 @@ mod spool;
 mod terminal;
 use coordination::TraceCoordination;
 pub use coordination::{DirtyTraceRun, DirtyTraceRuns, TraceCollector, TraceCoordinationSnapshot};
+pub use diagnostics::{ActivityTraceRunner, warn_activity_trace_start_failed};
 pub use endpoint::ActivityEndpoint;
 pub(crate) use forwarder::spawn_activity_forwarder;
 use model::*;
 use scope::{canonicalize_child_scope, validate_scope_acceptance};
 use spool::*;
+pub use spool::{
+    TraceReclamationReport, TraceSpoolEntry, TraceSpoolInventory, TraceSpoolOutcome,
+    TraceSpoolOutcomeCounts,
+};
 
 /// Maximum encoded bytes accepted for one bare child frame.
 pub const MAX_CHILD_ACTIVITY_FRAME_BYTES: usize = 256 * 1024;
@@ -106,8 +112,16 @@ pub enum TraceError {
     Disabled,
     #[error("activity run byte quota exceeded")]
     QuotaExceeded,
-    #[error("aggregate activity spool quota of {limit} bytes exceeded")]
-    AggregateQuotaExceeded { limit: u64 },
+    #[error(
+        "aggregate activity spool quota exceeded: physical used bytes {physical_used_bytes}, logical reserved bytes {logical_reserved_bytes}, requested bytes {requested_bytes}, limit {limit}, dirty runs {dirty_run_count}"
+    )]
+    AggregateQuotaExceeded {
+        physical_used_bytes: u64,
+        logical_reserved_bytes: u64,
+        requested_bytes: u64,
+        limit: u64,
+        dirty_run_count: u64,
+    },
     #[error("activity run already has a terminal event")]
     AlreadyTerminal,
     #[error("acknowledgement {acknowledged} exceeds last durable sequence {last_seq}")]
@@ -141,6 +155,28 @@ impl TraceCollector {
         .map(Some)
     }
 
+    /// Produces the deterministic classification and accounting report used by
+    /// aggregate-capacity admission. The scan never follows symbolic links.
+    pub fn inventory(&self) -> Result<TraceSpoolInventory, TraceError> {
+        let Some(root) = self.config.spool_root.as_deref() else {
+            return Ok(TraceSpoolInventory::default());
+        };
+        match fs::symlink_metadata(root) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(TraceSpoolInventory::default());
+            }
+            Err(source) => return Err(io_error("inspect trace spool root", root, source)),
+            Ok(metadata) if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() => {
+                return Err(TraceError::InvalidSpool(format!(
+                    "trace spool root is not a regular directory: {}",
+                    root.display()
+                )));
+            }
+            Ok(_) => {}
+        }
+        spool_inventory(root, &self.coordination)
+    }
+
     /// Recovers every complete JSONL record, blob, and acknowledgement cursor.
     /// A non-newline-terminated final fragment is truncated in place; complete
     /// malformed records are rejected rather than silently skipped.
@@ -155,7 +191,12 @@ impl TraceCollector {
         let mut run_dirs = read_dir(root)?
             .filter_map(Result::ok)
             .filter_map(|entry| match entry.file_type() {
-                Ok(file_type) if file_type.is_dir() => Some(entry.path()),
+                Ok(file_type)
+                    if file_type.is_dir()
+                        && entry.file_name().to_str() != Some(TRACE_QUARANTINE_DIR) =>
+                {
+                    Some(entry.path())
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -181,9 +222,19 @@ struct TraceRunInner {
     cursor_path: PathBuf,
     lock_path: PathBuf,
     lock_file: File,
+    _ownership_file: File,
     started: Instant,
     state: Mutex<RunState>,
     coordination: Arc<TraceCoordination>,
+}
+
+impl Drop for TraceRunInner {
+    fn drop(&mut self) {
+        self.coordination.unregister_active(&self.manifest.run_id);
+        // The ownership file remains locked until after this drop body, so a
+        // scanner that observes the local registration removal still cannot
+        // claim the run before the final owner is gone.
+    }
 }
 
 struct RunState {
@@ -240,8 +291,12 @@ impl TraceRun {
         let aggregate_limit = policy
             .max_run_bytes
             .saturating_mul(WORKER_SPOOL_RUN_CAPACITY);
-        let aggregate_result =
-            ensure_aggregate_spool_capacity(root, policy.max_run_bytes, aggregate_limit);
+        let aggregate_result = ensure_aggregate_spool_capacity(
+            root,
+            &coordination,
+            policy.max_run_bytes,
+            aggregate_limit,
+        );
         if let Err(error) = aggregate_result {
             let _ = fs2::FileExt::unlock(&root_lock_file);
             return Err(error);
@@ -255,6 +310,14 @@ impl TraceRun {
             lock_file
                 .lock_exclusive()
                 .map_err(|source| io_error("lock new trace spool", &lock_path, source))?;
+            let (ownership_path, ownership_file) = open_spool_owner_lock(&run_dir)?;
+            ownership_file.lock_exclusive().map_err(|source| {
+                io_error(
+                    "lock new trace spool lifetime ownership",
+                    &ownership_path,
+                    source,
+                )
+            })?;
             let blobs_dir = run_dir.join("blobs");
             create_private_dir(&blobs_dir)?;
 
@@ -307,6 +370,7 @@ impl TraceRun {
                     cursor_path,
                     lock_path: lock_path.clone(),
                     lock_file,
+                    _ownership_file: ownership_file,
                     started: Instant::now(),
                     state: Mutex::new(RunState {
                         event_file,
@@ -326,6 +390,9 @@ impl TraceRun {
                     coordination,
                 }),
             };
+            run.inner
+                .coordination
+                .register_active(&run.inner.manifest.run_id);
             fs2::FileExt::unlock(&run.inner.lock_file)
                 .map_err(|source| io_error("unlock new trace spool", &lock_path, source))?;
             run.append_host_event(
@@ -555,6 +622,12 @@ mod full_path_retry_tests;
 
 #[cfg(test)]
 mod full_path_tests;
+
+#[cfg(test)]
+mod inventory_tests;
+
+#[cfg(test)]
+mod reclamation_tests;
 
 #[cfg(test)]
 mod prompt_tests;
