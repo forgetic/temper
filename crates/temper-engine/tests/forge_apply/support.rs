@@ -12,11 +12,13 @@ pub(crate) use temper_forge::{
     ItemNumber, PullRequest, PullRequestQuery, PullRequestReview, RepositoryId, ReviewDecision,
     UpdateIssue, UpdatePullRequest, User, UserId,
 };
-pub(crate) use temper_forge_memory::MemoryForge;
+pub(crate) use temper_forge_memory::{FaultOp, MemoryForge};
+pub(crate) use temper_protocol_activity::{ModelFailureCategoryV1, ModelFailureV1};
 pub(crate) use temper_protocol_worker::{
     Artifact, Assign, Branch, Capability, Capacity, Failure, FailureClass, JobChild, JobResult,
     Poll, Register, ReleaseDisposition, RepoAccess, RepoOutcome, ResultStatus,
-    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage, WorkspaceManifest, WorkspaceRepo,
+    SessionRecoveryActionV1, SessionRecoveryEvidenceV1, WORKER_PROTOCOL_VERSION,
+    WorkerProtocolMessage, WorkspaceManifest, WorkspaceRepo,
 };
 pub(crate) use temper_worker_registry::InFlightJob;
 pub(crate) use temper_workflow::{
@@ -309,6 +311,60 @@ pub(crate) fn permanent_failure_result(worker_id: &str, job_id: &str) -> JobResu
         Some(FailureClass::Permanent),
         "not implemented",
     )
+}
+
+pub(crate) fn model_recovery_failure_result(
+    worker_id: &str,
+    job_id: &str,
+    action: SessionRecoveryActionV1,
+    failure_epoch: u32,
+    failure_count: u32,
+) -> JobResult {
+    let current_session_id = if action == SessionRecoveryActionV1::RotateSession {
+        "session-prior"
+    } else {
+        "session-fresh"
+    };
+    let class = if action == SessionRecoveryActionV1::ParkForHuman {
+        FailureClass::Permanent
+    } else {
+        FailureClass::Transient
+    };
+    let mut result = failure_result(
+        worker_id,
+        job_id,
+        Some(class),
+        "generic message must not be projected into the typed audit",
+    );
+    let attempt_id = result.attempt_id.clone().expect("test attempt");
+    result.failure = Some(Failure {
+        class,
+        message: "generic message must not be projected into the typed audit".to_string(),
+        model_failure: Some(ModelFailureV1 {
+            provider: "fixture-provider".to_string(),
+            model: "fixture-model".to_string(),
+            category: ModelFailureCategoryV1::Provider,
+            retryable: false,
+            http_status: Some(503),
+            provider_request_id: Some("request-750".to_string()),
+            provider_error_code: Some("unavailable".to_string()),
+            message: "Provider is unavailable.".to_string(),
+            detail_redacted: false,
+        }),
+        session_recovery: Some(SessionRecoveryEvidenceV1 {
+            attempt_id,
+            failure_epoch,
+            failure_count,
+            action,
+            current_session_id: current_session_id.to_string(),
+            prior_session_id: (action == SessionRecoveryActionV1::ParkForHuman)
+                .then(|| "session-prior".to_string()),
+            new_session_id: (action == SessionRecoveryActionV1::RotateSession)
+                .then(|| "session-fresh".to_string()),
+            evidence_location: ".temper-agent-session/state.json".to_string(),
+        }),
+    });
+    result
 }
 
 pub(crate) fn success_without_branch(worker_id: &str, job_id: &str) -> JobResult {

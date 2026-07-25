@@ -53,6 +53,12 @@ pub enum Event {
     McpToolResult,
     /// A workspace contains a product diff after an agent run (`workspace.diff.produced`).
     WorkspaceDiffProduced,
+    /// A durable model failure consumed a session and selected its one fresh replacement
+    /// (`model.session.rotated`).
+    ModelSessionRotated,
+    /// Exhausted bounded model recovery was parked for operator action
+    /// (`model.failure.parked`).
+    ModelFailureParked,
     /// The engine applied a workflow transition (`transition.applied`).
     TransitionApplied,
     /// A plan-validation result converged durably (`validation.outcome`).
@@ -97,6 +103,8 @@ impl Event {
             Self::McpToolCalled => "mcp.tool.called",
             Self::McpToolResult => "mcp.tool.result",
             Self::WorkspaceDiffProduced => "workspace.diff.produced",
+            Self::ModelSessionRotated => "model.session.rotated",
+            Self::ModelFailureParked => "model.failure.parked",
             Self::TransitionApplied => "transition.applied",
             Self::ValidationOutcome => "validation.outcome",
             Self::QueueEntered => "queue.entered",
@@ -114,7 +122,7 @@ impl Event {
     ///
     /// Kept in sync with the enum by the `all_variants_have_unique_dotted_form`
     /// test, which fails if a new variant is added without listing it here.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 27] = [
         Self::IssueOpened,
         Self::WakeReceived,
         Self::CiCompleted,
@@ -130,6 +138,8 @@ impl Event {
         Self::McpToolCalled,
         Self::McpToolResult,
         Self::WorkspaceDiffProduced,
+        Self::ModelSessionRotated,
+        Self::ModelFailureParked,
         Self::TransitionApplied,
         Self::ValidationOutcome,
         Self::QueueEntered,
@@ -167,6 +177,8 @@ mod tests {
             "mcp.tool.called",
             "mcp.tool.result",
             "workspace.diff.produced",
+            "model.session.rotated",
+            "model.failure.parked",
             "transition.applied",
             "validation.outcome",
             "queue.entered",
@@ -206,6 +218,6 @@ mod tests {
         // variant is added but not appended to ALL, this and the uniqueness test
         // catch it (the array literal would also fail to compile on a length
         // mismatch).
-        assert_eq!(Event::ALL.len(), 25);
+        assert_eq!(Event::ALL.len(), 27);
     }
 }

@@ -636,6 +636,13 @@ impl Machine for WorkerMachine {
                             )),
                             Self::send_entry(&entry),
                         ];
+                        if let Some(event) =
+                            crate::observability::WorkerEvent::session_rotated(&entry.result)
+                        {
+                            // The session ledger and outbox record are both durable before
+                            // this decision reaches the logging shell.
+                            requests.insert(1, WorkerRequest::Observe(event));
+                        }
                         requests.extend(self.poll_or_backoff());
                         requests
                     }
@@ -727,6 +734,10 @@ impl Machine for WorkerMachine {
         self.stopped
     }
 }
+
+#[cfg(test)]
+#[path = "worker_machine_model_recovery_tests.rs"]
+mod model_recovery_tests;
 
 #[cfg(test)]
 #[path = "worker_machine_tests.rs"]

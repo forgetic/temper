@@ -26,7 +26,10 @@
 
 mod ci;
 pub mod human;
+mod model_recovery;
 mod validation_outcome;
+
+pub use model_recovery::*;
 
 pub use validation_outcome::{ValidationOutcome, ValidationOutcomeKind, emit_validation_outcome};
 
@@ -827,6 +830,8 @@ mod tests {
             (Event::McpToolCalled, Service::Agent),
             (Event::McpToolResult, Service::Agent),
             (Event::WorkspaceDiffProduced, Service::Worker),
+            (Event::ModelSessionRotated, Service::Worker),
+            (Event::ModelFailureParked, Service::Engine),
             (Event::TransitionApplied, Service::Engine),
             (Event::ValidationOutcome, Service::Engine),
             (Event::QueueEntered, Service::Engine),
