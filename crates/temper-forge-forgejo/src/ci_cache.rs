@@ -149,7 +149,7 @@ mod tests {
 
     fn job_at(commit_sha: &str, status: CiJobStatus, conclusion: Option<CiJobConclusion>) -> CiJob {
         CiJob {
-            id: CiJobId::new("forgejo:acme/widgets:actions:1:0:1"),
+            id: CiJobId::new("forgejo:acme/widgets:actions:1:1:1:1"),
             repo_id: RepositoryId::new("forgejo:acme/widgets"),
             pull_request_id: None,
             commit_sha: commit_sha.to_string(),

@@ -46,10 +46,12 @@ pub(super) fn live_run_to_jobs(
             };
             let coord = CiJobCoord {
                 repo: repo.clone(),
-                run,
-                job_index: index as u64,
-                // The web UI exposes no stable task id; the run id is the page's
-                // job coordinate, so reuse it as the encoded task id.
+                run_id: run,
+                // This compatibility module is no longer reachable from CI
+                // reads; retain a deterministic shape until its dependent
+                // cleanup removes the web-UI implementation.
+                job_id: index as u64 + 1,
+                attempt: live.attempt.max(1),
                 task_id: run,
             };
             // The live view exposes no per-job timestamp, but CI runs are created
@@ -179,7 +181,7 @@ mod tests {
         assert!(jobs[0].provider_reason.as_ref().unwrap().len() <= MAX_CI_PROVIDER_EVIDENCE_BYTES);
         assert_eq!(jobs[0].run_id.as_deref(), Some("1"));
         assert_eq!(jobs[0].attempt.as_deref(), Some("2"));
-        assert_eq!(jobs[0].id.as_str(), "forgejo:acme/widgets:actions:1:0:1");
+        assert_eq!(jobs[0].id.as_str(), "forgejo:acme/widgets:actions:1:1:2:1");
         assert_eq!(jobs[0].commit_sha, "c456eec18b");
         assert_eq!(
             jobs[0].pull_request_id.as_ref().unwrap().as_str(),

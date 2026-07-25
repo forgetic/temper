@@ -13,10 +13,15 @@
 
 mod candidate_index;
 mod ci;
+// Kept only for the dependency-ordered compatibility/configuration cleanup.
+// Public CI reads no longer reference these modules.
+#[allow(dead_code)]
 mod ci_cache;
 mod ci_match;
 mod ci_time;
+#[allow(dead_code)]
 mod ci_ui;
+#[allow(dead_code)]
 mod ci_ui_parse;
 mod client;
 mod config;
@@ -61,9 +66,9 @@ pub struct ForgejoForge<C = EngineHttpClient> {
     /// issue endpoints require numeric ids, while the portable surface uses
     /// names. Shared across clones and invalidated after label upserts.
     label_ids: Arc<Mutex<HashMap<String, HashMap<String, u64>>>>,
-    /// Memo of terminal web-UI CI reads, so an idle mechanical tick skips the
-    /// expensive login+scrape for a pull request whose head SHA has not changed
-    /// since its CI settled (ADR 0019 cost mitigation). Shared across clones.
+    /// Memo retained only until the dependency-ordered web-UI cleanup removes
+    /// its configuration and source.
+    #[allow(dead_code)]
     ci_reads: Arc<ci_cache::CiReadCache>,
 }
 
@@ -151,7 +156,9 @@ impl<C: HttpClient> ForgejoForge<C> {
         &self.client
     }
 
-    /// The web-UI CI read memo (ADR 0019 cost mitigation); see [`ci_cache`].
+    /// The retained web-UI CI read memo; unreachable from public CI reads and
+    /// removed by the dependency-ordered compatibility cleanup.
+    #[allow(dead_code)]
     pub(crate) fn ci_read_cache(&self) -> &ci_cache::CiReadCache {
         &self.ci_reads
     }

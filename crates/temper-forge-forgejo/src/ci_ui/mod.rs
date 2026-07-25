@@ -200,7 +200,7 @@ pub(crate) async fn read_ci_job<C: HttpClient>(
 ) -> ForgeResult<Option<CiJob>> {
     let mut client = WebUiClient::new(forge, credentials);
     client.login().await?;
-    let live = match client.run_live_view(&coord.repo, coord.run, 0).await? {
+    let live = match client.run_live_view(&coord.repo, coord.run_id, 0).await? {
         LiveViewOutcome::Found(live) => live,
         LiveViewOutcome::Missing => return Ok(None),
         LiveViewOutcome::Unreadable(unreadable) => {
@@ -208,6 +208,8 @@ pub(crate) async fn read_ci_job<C: HttpClient>(
         }
     };
     let target = Target::default();
-    let jobs = live_run_to_jobs(&coord.repo, repo_id, coord.run, &live, &target);
-    Ok(jobs.into_iter().nth(coord.job_index as usize))
+    let jobs = live_run_to_jobs(&coord.repo, repo_id, coord.run_id, &live, &target);
+    Ok(jobs
+        .into_iter()
+        .nth(coord.job_id.saturating_sub(1) as usize))
 }
