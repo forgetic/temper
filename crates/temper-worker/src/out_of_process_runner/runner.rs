@@ -44,14 +44,11 @@ impl OutOfProcessRunner {
         let trace = match self.trace_collector.begin_run(job_id, context) {
             Ok(trace) => trace,
             Err(error) => {
-                tracing::warn!(
-                    target: "temper::worker",
-                    service = "worker",
-                    event = "agent.activity.start_failed",
+                crate::trace::warn_activity_trace_start_failed(
+                    crate::trace::ActivityTraceRunner::OutOfProcess,
                     job_id,
-                    correlation_key = context.correlation_key.as_str(),
-                    %error,
-                    "worker could not start durable agent tracing; continuing without it"
+                    context.correlation_key.as_str(),
+                    &error,
                 );
                 None
             }
