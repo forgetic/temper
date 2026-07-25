@@ -1,12 +1,10 @@
-{
-  "jobs": [
-    {
-      "id": 3385,
-      "run_id": 591,
-      "attempt": 1,
-      "task_id": 3385,
-      "name": "validate",
-      "status": "failure"
-    }
-  ]
-}
+[
+  {
+    "id": 3385,
+    "run_id": 591,
+    "attempt": 1,
+    "task_id": 3385,
+    "name": "validate",
+    "status": "failure"
+  }
+]

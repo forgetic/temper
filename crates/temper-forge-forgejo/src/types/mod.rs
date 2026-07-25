@@ -18,7 +18,7 @@ mod pulls;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-pub(crate) use actions::{ActionJobDto, ActionJobsResponseDto, ActionRunDto};
+pub(crate) use actions::{ActionJobDto, ActionRunDto};
 pub(crate) use issues::{DependencyRefDto, IssueDto, PullRequestMarkerDto};
 pub(crate) use pulls::{PrBranchDto, PrRepoDto, PullRequestDto, ReviewDto};
 

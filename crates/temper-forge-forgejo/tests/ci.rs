@@ -43,7 +43,7 @@ fn runs(rows: Vec<Value>) -> String {
 }
 
 fn jobs(rows: Vec<Value>) -> String {
-    json!({ "jobs": rows }).to_string()
+    Value::Array(rows).to_string()
 }
 
 fn pull(number: u64, head_ref: &str, head_sha: &str) -> String {
@@ -93,8 +93,9 @@ fn list_uses_provider_run_route_and_provider_job_attempt_task_identity() {
             run(901, 11, "#8", "other", "9999999999999", "success"),
         ]),
     );
-    // Repeated names and response order do not infer attempts. Provider attempt
-    // 2 is current and provider identity, not an array index, forms each id.
+    // Repeated names and response order do not infer attempts. Each provider
+    // job carries its own latest attempt, so jobs at lower attempts remain
+    // visible; provider identity, not an array index, forms each id.
     client.push_response(
         200,
         jobs(vec![
@@ -116,26 +117,37 @@ fn list_uses_provider_run_route_and_provider_job_attempt_task_identity() {
 
     assert!(listing.matching_ci_present());
     let listed = listing.jobs();
-    assert_eq!(listed.len(), 2);
+    assert_eq!(listed.len(), 4);
     assert_eq!(listed[0].name, "build");
     assert_eq!(
         listed[0].id.as_str(),
-        "forgejo:acme/widgets:actions:900:33:2:503"
+        "forgejo:acme/widgets:actions:900:11:1:501"
     );
-    assert_eq!(listed[1].name, "test");
+    assert_eq!(listed[1].name, "build");
     assert_eq!(
         listed[1].id.as_str(),
+        "forgejo:acme/widgets:actions:900:33:2:503"
+    );
+    assert_eq!(listed[2].name, "test");
+    assert_eq!(
+        listed[2].id.as_str(),
+        "forgejo:acme/widgets:actions:900:22:1:502"
+    );
+    assert_eq!(listed[3].name, "test");
+    assert_eq!(
+        listed[3].id.as_str(),
         "forgejo:acme/widgets:actions:900:44:2:504"
     );
     assert_eq!(listed[0].run_id.as_deref(), Some("900"));
-    assert_eq!(listed[0].attempt.as_deref(), Some("2"));
+    assert_eq!(listed[0].attempt.as_deref(), Some("1"));
+    assert_eq!(listed[1].attempt.as_deref(), Some("2"));
     assert_eq!(listed[0].pull_request_id, Some(pull_id(7)));
     assert_eq!(listed[0].commit_sha, HEAD);
     assert_eq!(
         listed[0].url.as_deref(),
         Some("https://forge.example.com/acme/widgets/actions/runs/10")
     );
-    assert_eq!(listed[1].conclusion, Some(CiJobConclusion::Unknown));
+    assert_eq!(listed[3].conclusion, Some(CiJobConclusion::Unknown));
 
     let recorded = client.recorded();
     assert_eq!(
@@ -202,7 +214,7 @@ fn explicit_empty_jobs_keeps_matching_ci_presence() {
         200,
         runs(vec![run(900, 10, "main", "main", HEAD, "queued")]),
     );
-    client.push_response(200, r#"{"jobs":[]}"#);
+    client.push_response(200, "[]");
 
     let listing = block_on(forge(client.clone()).list_ci_jobs_with_presence(
         &repo_id(),
@@ -438,7 +450,14 @@ fn get_returns_none_for_unknown_provider_run_without_fetching_jobs() {
 
 #[test]
 fn malformed_or_missing_jobs_shape_fails_closed() {
-    for body in ["", "{", "{}", r#"{"jobs":null}"#, "[]", r#"{"tasks":[]}"#] {
+    for body in [
+        "",
+        "{",
+        "{}",
+        r#"{"jobs":null}"#,
+        r#"{"jobs":[]}"#,
+        r#"{"tasks":[]}"#,
+    ] {
         let client = MockHttpClient::new();
         client.push_response(
             200,

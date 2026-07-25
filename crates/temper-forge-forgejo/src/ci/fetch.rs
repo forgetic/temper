@@ -3,11 +3,11 @@
 
 use crate::ids::RepoCoord;
 use crate::map::pr_branch_name;
-use crate::types::{ActionJobDto, ActionJobsResponseDto, PullRequestDto};
+use crate::types::{ActionJobDto, PullRequestDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use temper_forge_model::{ForgeError, ForgeResult, ItemNumber};
 
 /// Bound on Actions run-list responses, mirroring the reference tooling.
@@ -66,8 +66,8 @@ impl<C: HttpClient> ForgejoForge<C> {
     /// The endpoint coordinate is the run database `id`. Every returned row
     /// must carry a non-zero provider run/job identity and must identify that
     /// same run. Provider-reported zero attempt/task values are retained because
-    /// Forgejo uses them before a queued job is assigned to a runner. The
-    /// explicit response wrapper is required, including for an empty job list.
+    /// Forgejo uses them before a queued job is assigned to a runner. Forgejo's
+    /// bare JSON array is required; an explicit `[]` is a successful empty list.
     pub(super) async fn fetch_run_jobs(
         &self,
         repo: &RepoCoord,
@@ -87,14 +87,13 @@ impl<C: HttpClient> ForgejoForge<C> {
                 response.status
             )));
         }
-        let response: ActionJobsResponseDto =
-            serde_json::from_str(&response.body).map_err(|error| {
-                ForgeError::Backend(format!(
-                    "{context}: failed to decode expected jobs response: {error}"
-                ))
-            })?;
-        validate_jobs(&context, run_id, &response.jobs)?;
-        Ok(current_attempt(response.jobs))
+        let jobs: Vec<ActionJobDto> = serde_json::from_str(&response.body).map_err(|error| {
+            ForgeError::Backend(format!(
+                "{context}: failed to decode expected jobs array: {error}"
+            ))
+        })?;
+        validate_jobs(&context, run_id, &jobs)?;
+        Ok(current_attempt(jobs))
     }
 }
 
@@ -153,24 +152,39 @@ fn validate_jobs(context: &str, run_id: u64, jobs: &[ActionJobDto]) -> ForgeResu
                 job.id
             )));
         }
-        if !identities.insert((job.id, job.run_id, job.attempt, job.task_id)) {
+        if !identities.insert((job.id, job.attempt)) {
             return Err(ForgeError::Backend(format!(
-                "{context}: duplicate provider job identity"
+                "{context}: duplicate provider job attempt identity"
             )));
         }
     }
     Ok(())
 }
 
-/// Selects the largest provider-reported attempt and orders its jobs by stable
-/// provider identity. Names and response order never determine attempts.
-fn current_attempt(mut jobs: Vec<ActionJobDto>) -> Vec<ActionJobDto> {
-    let Some(attempt) = jobs.iter().map(|job| job.attempt).max() else {
-        return jobs;
-    };
-    jobs.retain(|job| job.attempt == attempt);
-    jobs.sort_by_key(|job| (job.id, job.task_id));
-    jobs
+/// Selects each stable provider job's largest provider-reported attempt.
+///
+/// Forgejo's endpoint normally returns one row per `ActionRunJob`, whose
+/// `attempt` and `task_id` are already that job's latest values. Attempts may
+/// legitimately differ between jobs, so a run-wide maximum must not discard
+/// unaffected jobs. Grouping by provider job id also remains deterministic if
+/// a provider ever returns more than one attempt row. Names and response order
+/// never determine attempts.
+fn current_attempt(jobs: Vec<ActionJobDto>) -> Vec<ActionJobDto> {
+    let mut current = BTreeMap::new();
+    for job in jobs {
+        match current.entry(job.id) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(job);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry)
+                if job.attempt > entry.get().attempt =>
+            {
+                entry.insert(job);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {}
+        }
+    }
+    current.into_values().collect()
 }
 
 #[cfg(test)]
@@ -189,15 +203,22 @@ mod tests {
     }
 
     #[test]
-    fn current_attempt_uses_provider_values_not_names_or_order() {
+    fn current_attempt_is_selected_per_provider_job() {
         let jobs = current_attempt(vec![
-            job(33, 2, 43, "build"),
+            job(33, 2, 44, "build"),
             job(11, 1, 41, "build"),
-            job(44, 2, 44, "build"),
+            job(11, 2, 43, "build"),
             job(22, 1, 42, "test"),
         ]);
-        assert_eq!(jobs.iter().map(|job| job.id).collect::<Vec<_>>(), [33, 44]);
-        assert!(jobs.iter().all(|job| job.attempt == 2));
+        assert_eq!(
+            jobs.iter().map(|job| job.id).collect::<Vec<_>>(),
+            [11, 22, 33]
+        );
+        assert_eq!(
+            jobs.iter().map(|job| job.attempt).collect::<Vec<_>>(),
+            [2, 1, 2]
+        );
+        assert_eq!(jobs[0].task_id, 43);
     }
 
     #[test]

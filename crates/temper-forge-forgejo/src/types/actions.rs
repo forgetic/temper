@@ -71,17 +71,6 @@ pub(crate) struct ActionJobDto {
     pub status: String,
 }
 
-/// Exact response shape for
-/// `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs`.
-///
-/// `jobs` intentionally has no serde default. `{"jobs":[]}` is an explicit,
-/// successful empty result; `{}`, `{"jobs":null}`, and a bare array are not the
-/// expected provider response and fail closed.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub(crate) struct ActionJobsResponseDto {
-    pub jobs: Vec<ActionJobDto>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,22 +109,21 @@ mod tests {
 
     #[test]
     fn per_run_job_requires_the_v16_identity_shape() {
-        let response: ActionJobsResponseDto = serde_json::from_str(
-            r#"{"jobs":[{"id":31,"run_id":900,"attempt":2,"task_id":44,
-                "name":"build","status":"success"}]}"#,
+        let response: Vec<ActionJobDto> = serde_json::from_str(
+            r#"[{"id":31,"run_id":900,"attempt":2,"task_id":44,
+                "name":"build","status":"success"}]"#,
         )
         .unwrap();
-        assert_eq!(response.jobs[0].id, 31);
-        assert_eq!(response.jobs[0].run_id, 900);
-        assert_eq!(response.jobs[0].attempt, 2);
-        assert_eq!(response.jobs[0].task_id, 44);
+        assert_eq!(response[0].id, 31);
+        assert_eq!(response[0].run_id, 900);
+        assert_eq!(response[0].attempt, 2);
+        assert_eq!(response[0].task_id, 44);
 
-        assert!(serde_json::from_str::<ActionJobsResponseDto>(r#"{}"#).is_err());
-        assert!(serde_json::from_str::<ActionJobsResponseDto>(r#"{"jobs":null}"#).is_err());
-        assert!(serde_json::from_str::<ActionJobsResponseDto>(r#"[]"#).is_err());
+        assert!(serde_json::from_str::<Vec<ActionJobDto>>(r#"{}"#).is_err());
+        assert!(serde_json::from_str::<Vec<ActionJobDto>>(r#"{"jobs":[]}"#).is_err());
         assert!(
-            serde_json::from_str::<ActionJobsResponseDto>(
-                r#"{"jobs":[{"id":31,"run_id":900,"attempt":2,"name":"build","status":"success"}]}"#
+            serde_json::from_str::<Vec<ActionJobDto>>(
+                r#"[{"id":31,"run_id":900,"attempt":2,"name":"build","status":"success"}]"#
             )
             .is_err()
         );
