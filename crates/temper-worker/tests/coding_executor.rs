@@ -19,6 +19,8 @@ mod pr_repair;
 mod read_only;
 #[path = "coding_executor/review.rs"]
 mod review;
+#[path = "coding_executor/session.rs"]
+mod session;
 #[path = "coding_executor/support/mod.rs"]
 mod support;
 #[path = "coding_executor/target_branch.rs"]

@@ -189,7 +189,7 @@ impl AgentSessionStore {
                         }
                     })?;
                 self.validate_key(&path, &stored.role, &stored.coordination_key)?;
-                self.validate_ledger(&path, &stored.ledger)?;
+                validation::validate_ledger(&path, &stored.ledger)?;
                 stored.ledger
             }
             version => return Err(AgentSessionStoreError::UnsupportedVersion { path, version }),
@@ -211,7 +211,7 @@ impl AgentSessionStore {
         &self,
         ledger: &AgentSessionLedger,
     ) -> Result<(), AgentSessionStoreError> {
-        self.validate_ledger(&self.path(), ledger)?;
+        validation::validate_ledger(&self.path(), ledger)?;
         self.replace_ledger_sync(ledger)
     }
 
@@ -452,7 +452,7 @@ impl AgentSessionStore {
         ledger: &AgentSessionLedger,
     ) -> Result<(), AgentSessionStoreError> {
         let path = self.path();
-        self.validate_ledger(&path, ledger)?;
+        validation::validate_ledger(&path, ledger)?;
         let Some(parent) = path.parent() else {
             return Err(AgentSessionStoreError::Io {
                 path,
@@ -526,90 +526,6 @@ impl AgentSessionStore {
         }
         Ok(())
     }
-
-    fn validate_ledger(
-        &self,
-        path: &Path,
-        ledger: &AgentSessionLedger,
-    ) -> Result<(), AgentSessionStoreError> {
-        let invalid = |reason: String| AgentSessionStoreError::InvalidLedger {
-            path: path.to_path_buf(),
-            reason,
-        };
-        if ledger.active_session.session_id.trim().is_empty() {
-            return Err(invalid("active session id must not be empty".to_string()));
-        }
-        if ledger.failure_epoch == 0 {
-            return Err(invalid(
-                "failure epoch must be greater than zero".to_string(),
-            ));
-        }
-        if ledger.rotation_consumed && ledger.prior_session.is_none() {
-            return Err(invalid(
-                "a consumed rotation requires a prior-session record".to_string(),
-            ));
-        }
-        if let Some(diagnostic) = &ledger.latest_model_failure {
-            diagnostic
-                .validate()
-                .map_err(|error| invalid(error.to_string()))?;
-        }
-        if let Some(prior) = &ledger.prior_session {
-            if prior.session.session_id.trim().is_empty()
-                || prior.failed_attempt_id.trim().is_empty()
-                || prior.consecutive_terminal_count == 0
-            {
-                return Err(invalid("prior-session record is incomplete".to_string()));
-            }
-            prior
-                .model_failure
-                .validate()
-                .map_err(|error| invalid(error.to_string()))?;
-        }
-        match (&ledger.accounted_attempt_id, &ledger.recovery_decision) {
-            (None, None) => {}
-            (Some(attempt_id), Some(decision)) => {
-                decision
-                    .validate_for_attempt(Some(attempt_id))
-                    .map_err(invalid)?;
-                match decision.action {
-                    SessionRecoveryActionV1::RotateSession => {
-                        let prior = ledger.prior_session.as_ref().ok_or_else(|| {
-                            invalid("rotation decision has no prior-session record".to_string())
-                        })?;
-                        if prior.session.session_id != decision.current_session_id
-                            || decision.new_session_id.as_deref()
-                                != Some(ledger.active_session.session_id.as_str())
-                            || prior.consecutive_terminal_count != decision.failure_count
-                            || ledger.consecutive_terminal_count != 0
-                            || !ledger.rotation_consumed
-                        {
-                            return Err(invalid(
-                                "rotation decision does not match the persisted boundary"
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                    SessionRecoveryActionV1::RetryCurrentSession
-                    | SessionRecoveryActionV1::ParkForHuman => {
-                        if ledger.active_session.session_id != decision.current_session_id
-                            || ledger.consecutive_terminal_count != decision.failure_count
-                        {
-                            return Err(invalid(
-                                "recovery decision does not match the active session".to_string(),
-                            ));
-                        }
-                    }
-                }
-            }
-            _ => {
-                return Err(invalid(
-                    "accounted attempt and recovery decision must be present together".to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
 }
 
 #[derive(Deserialize)]
@@ -634,6 +550,8 @@ struct StoredAgentSessionV2 {
     coordination_key: String,
     ledger: AgentSessionLedger,
 }
+
+mod validation;
 
 #[cfg(test)]
 mod tests;

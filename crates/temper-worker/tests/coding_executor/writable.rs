@@ -322,43 +322,6 @@ fn pr_feedback_resumes_saved_engineer_session_for_same_coordination_key() {
 }
 
 #[test]
-fn corrupt_session_state_fails_closed_without_running_agent_or_overwriting_evidence() {
-    temper_worker_io::block_on(async {
-        let fixture = Fixture::new();
-        let branch = "agent/pr-for-code-7";
-        fixture.seed_pr_head_branch(branch);
-        let store = temper_worker::AgentSessionStore::for_workspace_root(
-            &fixture.workspace_root,
-            "engineer",
-            "pr-for-code-7",
-        )
-        .expect("session store");
-        fs::create_dir_all(store.path().parent().expect("session parent"))
-            .expect("create corrupt session parent");
-        let original = "{not valid json";
-        fs::write(store.path(), original).expect("write corrupt session");
-
-        let executor = fixture.executor(AgentBehavior::UnexpectedRun.runner(), true);
-        let message = expect_failure_class(
-            executor
-                .execute(pr_fix_assign(branch, "pr-for-code-7"))
-                .await,
-            FailureClass::Protocol,
-        );
-
-        assert!(
-            message.contains("state preserved"),
-            "unexpected message: {message}"
-        );
-        assert_eq!(
-            fs::read_to_string(store.path()).expect("corrupt state remains"),
-            original,
-            "fail-closed attachment must not overwrite malformed evidence"
-        );
-    });
-}
-
-#[test]
 fn pr_writable_no_diff_on_existing_pr_head_is_not_success() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
