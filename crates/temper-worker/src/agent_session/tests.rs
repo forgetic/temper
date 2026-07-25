@@ -119,6 +119,159 @@ fn malformed_unsupported_and_mismatched_records_fail_closed() {
 }
 
 #[test]
+fn semantically_inconsistent_v2_ledgers_fail_closed_without_changing_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(temp.path());
+    store
+        .save_sync(&AgentSessionState::new("session-first"))
+        .unwrap();
+
+    let read_document = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(store.path()).unwrap()).unwrap()
+    };
+    let initial = read_document();
+
+    store
+        .account_model_failure_sync("attempt-retry", &diagnostic(true))
+        .unwrap();
+    let retry = read_document();
+
+    store
+        .account_model_failure_sync("attempt-rotate", &diagnostic(false))
+        .unwrap();
+    let rotation = read_document();
+
+    store
+        .account_model_failure_sync("attempt-park", &diagnostic(false))
+        .unwrap();
+    let park = read_document();
+
+    store.reset_after_success_sync().unwrap();
+    let success_reset = read_document();
+
+    let mut cases = Vec::new();
+
+    let mut document = initial.clone();
+    document["ledger"]["consecutive_terminal_count"] = json!(1);
+    cases.push(("unaccounted nonzero count", document));
+
+    let mut document = initial;
+    document["ledger"]["latest_model_failure"] = serde_json::to_value(diagnostic(true)).unwrap();
+    cases.push(("initial epoch with reset-only evidence", document));
+
+    let mut document = retry.clone();
+    document["ledger"]["latest_model_failure"] = serde_json::Value::Null;
+    cases.push(("accounted decision without latest diagnostic", document));
+
+    let mut document = retry.clone();
+    document["ledger"]["recovery_decision"]["failure_epoch"] = json!(2);
+    cases.push(("decision from another failure epoch", document));
+
+    let mut document = retry.clone();
+    document["ledger"]["consecutive_terminal_count"] = json!(2);
+    cases.push(("decision count differs from ledger", document));
+
+    let mut document = retry.clone();
+    document["ledger"]["latest_model_failure"]["retryable"] = json!(false);
+    cases.push(("non-retryable diagnostic with retry action", document));
+
+    let mut document = retry.clone();
+    document["ledger"]["recovery_decision"]["new_session_id"] = json!("forged-session");
+    cases.push(("retry action with a new session", document));
+
+    let mut unrotated_success_reset = retry.clone();
+    {
+        let ledger = unrotated_success_reset["ledger"].as_object_mut().unwrap();
+        ledger.insert("failure_epoch".to_string(), json!(2));
+        ledger.insert("consecutive_terminal_count".to_string(), json!(0));
+        ledger.remove("accounted_attempt_id");
+        ledger.remove("recovery_decision");
+    }
+    unrotated_success_reset["ledger"]["latest_model_failure"]["retryable"] = json!(false);
+    cases.push((
+        "success reset retains impossible non-retryable evidence without a rotation",
+        unrotated_success_reset,
+    ));
+
+    let mut document = retry;
+    document["ledger"]["recovery_decision"]["evidence_location"] = json!("other/session.json");
+    cases.push(("decision points at different evidence", document));
+
+    let mut document = rotation.clone();
+    document["ledger"]["prior_session"]["failed_attempt_id"] = json!("different-attempt");
+    cases.push(("rotation attempt differs from archived failure", document));
+
+    let mut document = rotation.clone();
+    document["ledger"]["latest_model_failure"]["provider"] = json!("different-provider");
+    cases.push((
+        "rotation diagnostic differs from archived failure",
+        document,
+    ));
+
+    let mut document = rotation.clone();
+    document["ledger"]["consecutive_terminal_count"] = json!(1);
+    cases.push(("rotation did not reset active-session count", document));
+
+    let mut document = rotation;
+    let prior_session_id = document["ledger"]["prior_session"]["session"]["session_id"].clone();
+    document["ledger"]["active_session"]["session_id"] = prior_session_id;
+    cases.push(("active and prior session ids are identical", document));
+
+    let mut document = park.clone();
+    document["ledger"]["rotation_consumed"] = json!(false);
+    cases.push(("park without consumed rotation", document));
+
+    let mut document = park.clone();
+    document["ledger"]["recovery_decision"]["prior_session_id"] = json!("wrong-prior");
+    cases.push(("park names a different prior session", document));
+
+    let mut document = park.clone();
+    document["ledger"]["latest_model_failure"]["retryable"] = json!(true);
+    cases.push(("park before retryable budget exhaustion", document));
+
+    let mut document = park;
+    document["ledger"]["recovery_decision"]["new_session_id"] = json!("third-session");
+    cases.push(("park action creates a new session", document));
+
+    let mut document = success_reset.clone();
+    document["ledger"]["consecutive_terminal_count"] = json!(1);
+    cases.push(("success reset retains a nonzero count", document));
+
+    let mut document = success_reset.clone();
+    document["ledger"]["rotation_consumed"] = json!(true);
+    cases.push(("success reset retains consumed rotation", document));
+
+    let mut document = success_reset.clone();
+    document["ledger"]["prior_session"]["failed_attempt_id"] = json!("unsafe\nattempt");
+    cases.push(("reset history has an invalid archived attempt", document));
+
+    let mut document = success_reset.clone();
+    document["ledger"]["prior_session"]["session"]["session_id"] = json!("unsafe session id");
+    cases.push(("reset history has an invalid archived session", document));
+
+    let mut document = success_reset;
+    document["ledger"]["latest_model_failure"] = serde_json::Value::Null;
+    cases.push(("retained prior session without diagnostic", document));
+
+    for (label, document) in cases {
+        let bytes = serde_json::to_vec_pretty(&document).unwrap();
+        std::fs::write(store.path(), &bytes).unwrap();
+        assert!(
+            matches!(
+                store.load_ledger_sync().expect_err(label),
+                AgentSessionStoreError::InvalidLedger { .. }
+            ),
+            "{label} must be rejected as an invalid ledger"
+        );
+        assert_eq!(
+            std::fs::read(store.path()).unwrap(),
+            bytes,
+            "{label} was rewritten while being rejected"
+        );
+    }
+}
+
+#[test]
 fn retryable_failures_retry_twice_then_rotate_once_and_park_second_session() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(temp.path());
@@ -241,6 +394,26 @@ fn authoritative_success_starts_new_epoch_and_retains_bounded_history() {
         .unwrap();
     assert_eq!(next.failure_epoch, 2);
     assert_eq!(next.action, SessionRecoveryActionV1::RotateSession);
+}
+
+#[test]
+fn authoritative_success_allows_attempt_ids_to_be_reused_in_a_new_epoch() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(temp.path());
+    store
+        .save_sync(&AgentSessionState::new("session-first"))
+        .unwrap();
+    store
+        .account_model_failure_sync("attempt-reused", &diagnostic(false))
+        .unwrap();
+    store.reset_after_success_sync().unwrap();
+
+    let next = store
+        .account_model_failure_sync("attempt-reused", &diagnostic(true))
+        .expect("a reset epoch accounts the attempt independently");
+    assert_eq!(next.failure_epoch, 2);
+    assert_eq!(next.action, SessionRecoveryActionV1::RetryCurrentSession);
+    assert_eq!(next.failure_count, 1);
 }
 
 #[test]
