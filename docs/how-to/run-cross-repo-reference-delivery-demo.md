@@ -17,8 +17,9 @@ and does not require provider credentials.
 
 In short:
 
-- provide the pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries in
-  `.cache/forgejo/`;
+- let the launcher resolve the Bench-pinned Forgejo `16.0.1` and
+  `forgejo-runner` `12.12.0` binaries, downloading and checksum-verifying
+  missing Linux-amd64 assets in `.cache/forgejo/`;
 - run on a host that permits host-mode Forgejo Actions jobs;
 - let the launcher build the root `temper` binary and the `temper-testing-worker`
   binary.
@@ -30,7 +31,8 @@ cd examples/reference-delivery
 ./run.sh start        # ./run.sh multi-repo is an alias
 ```
 
-The launcher boots a throwaway Forgejo, registers a host-mode runner, provisions
+The launcher boots a throwaway Forgejo, verifies that `/api/v1/version` reports
+the Bench-pinned `16.0.1` release, registers a host-mode runner, provisions
 exactly two repositories (`acme/service` and `acme/service-canary`), starts the
 deterministic architect/engineer/reviewer/mechanical worker fleet across that
 repo set, and only then files one unlabeled parent intake in `acme/service`.

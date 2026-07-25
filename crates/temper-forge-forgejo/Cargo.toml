@@ -21,7 +21,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-bench-forgejo = { git = "https://git.ekanayaka.io/ai/bench.git", rev = "1ca9f7a" }
+bench-forgejo = { git = "https://git.ekanayaka.io/ai/bench.git", rev = "174d0d7a8eddc0c68f39bb9c34b79c70f6657554" }
 temper-workflow = { path = "../temper-workflow" }
 tracing-subscriber = { workspace = true }
 
