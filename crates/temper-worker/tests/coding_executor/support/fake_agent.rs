@@ -17,6 +17,8 @@ pub enum AgentBehavior {
     /// A transient provider error (the in-process analog of the old non-zero
     /// subprocess exit) without typed model evidence.
     TransientError,
+    /// A terminal retryable diagnostic used to exercise the per-session run budget.
+    RetryableModelError,
     /// A terminal non-retryable diagnostic after writing tracked and untracked work.
     NonRetryableModelError,
     /// Panics if invoked; used to prove an accounted attempt is replayed from disk.
@@ -153,6 +155,16 @@ impl AgentRunner for FakeAgentRunner {
             }
             AgentBehavior::TransientError => Err(AgentRunError::transient(
                 "LLM run failed: provider transport reset",
+            )),
+            AgentBehavior::RetryableModelError => Err(AgentRunError::transient(
+                "terminal retryable model call failed",
+            )
+            .with_model_failure(
+                temper_protocol_activity::ModelFailureV1::redacted_unknown(
+                    "fixture-provider",
+                    "fixture-model",
+                    true,
+                ),
             )),
             AgentBehavior::NonRetryableModelError => {
                 fs::write(

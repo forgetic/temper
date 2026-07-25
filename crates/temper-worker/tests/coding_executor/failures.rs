@@ -111,6 +111,117 @@ fn transient_agent_error_maps_to_transient_failure_without_consuming_model_budge
 }
 
 #[test]
+fn writable_engineer_verdict_resets_recovery_before_the_workstream_is_requeued() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let branch = "agent/pr-for-code-7";
+        let coordination_key = "verdict-model-recovery-reset";
+        let store = temper_worker::AgentSessionStore::for_workspace_root(
+            &fixture.workspace_root,
+            "engineer",
+            coordination_key,
+        )
+        .unwrap();
+
+        let failing_executor = fixture.executor(AgentBehavior::RetryableModelError.runner(), true);
+        for count in 1..=2 {
+            let mut assignment = assign(branch, coordination_key);
+            assignment.attempt_id = Some(format!("attempt-before-verdict-{count}"));
+            let recovery = match failing_executor.execute(assignment).await {
+                JobOutcome::Failure {
+                    class,
+                    model_failure: Some(model_failure),
+                    session_recovery: Some(recovery),
+                    ..
+                } => {
+                    assert_eq!(class, FailureClass::Transient);
+                    assert!(model_failure.retryable);
+                    recovery
+                }
+                other => panic!("expected retryable model failure, got {other:?}"),
+            };
+            assert_eq!(
+                recovery.action,
+                temper_protocol_worker::SessionRecoveryActionV1::RetryCurrentSession
+            );
+            assert_eq!(recovery.failure_epoch, 1);
+            assert_eq!(recovery.failure_count, count);
+        }
+
+        let before_verdict = store.load_ledger_sync().unwrap().unwrap();
+        assert_eq!(before_verdict.failure_epoch, 1);
+        assert_eq!(before_verdict.consecutive_terminal_count, 2);
+        assert!(!before_verdict.rotation_consumed);
+        let active_session = before_verdict.active_session.session_id.clone();
+
+        let verdict_executor = fixture.executor(AgentBehavior::WritableVerdict.runner(), true);
+        let mut verdict_assignment = assign_with_context(
+            coordination_key,
+            writable_job_context_with_allowed_verdicts(
+                branch,
+                coordination_key,
+                &["needs_architect"],
+            ),
+        );
+        verdict_assignment.attempt_id = Some("attempt-authoritative-verdict".to_string());
+        let (verdict, _, _, _) = expect_verdict(verdict_executor.execute(verdict_assignment).await);
+        assert_eq!(verdict, "needs_architect");
+
+        let after_verdict = store.load_ledger_sync().unwrap().unwrap();
+        assert_eq!(after_verdict.failure_epoch, 2);
+        assert_eq!(after_verdict.consecutive_terminal_count, 0);
+        assert!(!after_verdict.rotation_consumed);
+        assert_eq!(after_verdict.accounted_attempt_id, None);
+        assert_eq!(after_verdict.recovery_decision, None);
+        assert_eq!(after_verdict.active_session.session_id, active_session);
+
+        // Requeue the same coordination-scoped workstream. The fresh epoch gets
+        // all three retryable runs before consuming its one rotation.
+        let requeued_executor = fixture.executor(AgentBehavior::RetryableModelError.runner(), true);
+        for count in 1..=3 {
+            let mut assignment = assign(branch, coordination_key);
+            assignment.attempt_id = Some(format!("attempt-after-verdict-{count}"));
+            let recovery = match requeued_executor.execute(assignment).await {
+                JobOutcome::Failure {
+                    class,
+                    model_failure: Some(model_failure),
+                    session_recovery: Some(recovery),
+                    ..
+                } => {
+                    assert_eq!(class, FailureClass::Transient);
+                    assert!(model_failure.retryable);
+                    recovery
+                }
+                other => panic!("expected bounded model failure, got {other:?}"),
+            };
+            let expected_action = if count < 3 {
+                temper_protocol_worker::SessionRecoveryActionV1::RetryCurrentSession
+            } else {
+                temper_protocol_worker::SessionRecoveryActionV1::RotateSession
+            };
+            assert_eq!(recovery.action, expected_action);
+            assert_eq!(recovery.failure_epoch, 2);
+            assert_eq!(recovery.failure_count, count);
+            assert_eq!(recovery.current_session_id, active_session);
+        }
+
+        let after_full_budget = store.load_ledger_sync().unwrap().unwrap();
+        assert_eq!(after_full_budget.failure_epoch, 2);
+        assert_eq!(after_full_budget.consecutive_terminal_count, 0);
+        assert!(after_full_budget.rotation_consumed);
+        assert_eq!(
+            after_full_budget
+                .prior_session
+                .as_ref()
+                .unwrap()
+                .consecutive_terminal_count,
+            3
+        );
+        assert_ne!(after_full_budget.active_session.session_id, active_session);
+    });
+}
+
+#[test]
 fn non_retryable_model_failures_rotate_once_then_park_without_losing_workspace() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
