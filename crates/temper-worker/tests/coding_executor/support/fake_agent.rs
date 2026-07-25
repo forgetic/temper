@@ -15,8 +15,12 @@ pub enum AgentBehavior {
     /// Engineer submits successfully, then mutates the workspace before final JSON.
     MutateAfterSubmit,
     /// A transient provider error (the in-process analog of the old non-zero
-    /// subprocess exit).
+    /// subprocess exit) without typed model evidence.
     TransientError,
+    /// A terminal non-retryable diagnostic after writing tracked and untracked work.
+    NonRetryableModelError,
+    /// Panics if invoked; used to prove an accounted attempt is replayed from disk.
+    UnexpectedRun,
     /// Return a summary-only result and write no diff (engineer => "no diff").
     NoDiff,
     /// Engineer commits its product locally, leaving a clean working tree for
@@ -150,6 +154,30 @@ impl AgentRunner for FakeAgentRunner {
             AgentBehavior::TransientError => Err(AgentRunError::transient(
                 "LLM run failed: provider transport reset",
             )),
+            AgentBehavior::NonRetryableModelError => {
+                fs::write(
+                    repo_cwd.join("README.md"),
+                    "# seed\nvaluable tracked work\n",
+                )
+                .expect("write tracked model work");
+                fs::write(
+                    repo_cwd.join("model-untracked.txt"),
+                    "valuable untracked work\n",
+                )
+                .expect("write untracked model work");
+                Err(
+                    AgentRunError::transient("terminal model call failed").with_model_failure(
+                        temper_protocol_activity::ModelFailureV1::redacted_unknown(
+                            "fixture-provider",
+                            "fixture-model",
+                            false,
+                        ),
+                    ),
+                )
+            }
+            AgentBehavior::UnexpectedRun => {
+                panic!("agent must not run for an already-accounted attempt")
+            }
             AgentBehavior::NoDiff => {
                 accepted_output(
                     WorkspaceResult {

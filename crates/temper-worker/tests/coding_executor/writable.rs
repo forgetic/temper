@@ -322,7 +322,7 @@ fn pr_feedback_resumes_saved_engineer_session_for_same_coordination_key() {
 }
 
 #[test]
-fn corrupt_session_state_falls_back_to_new_session_for_pr_feedback() {
+fn corrupt_session_state_fails_closed_without_running_agent_or_overwriting_evidence() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let branch = "agent/pr-for-code-7";
@@ -335,25 +335,25 @@ fn corrupt_session_state_falls_back_to_new_session_for_pr_feedback() {
         .expect("session store");
         fs::create_dir_all(store.path().parent().expect("session parent"))
             .expect("create corrupt session parent");
-        fs::write(store.path(), "{not valid json").expect("write corrupt session");
+        let original = "{not valid json";
+        fs::write(store.path(), original).expect("write corrupt session");
 
-        let agent = AgentBehavior::Success.runner();
-        let executor = fixture.executor(agent.clone(), true);
-        expect_success(
+        let executor = fixture.executor(AgentBehavior::UnexpectedRun.runner(), true);
+        let message = expect_failure_class(
             executor
                 .execute(pr_fix_assign(branch, "pr-for-code-7"))
                 .await,
+            FailureClass::Protocol,
         );
 
-        let fallback_session = agent
-            .captured_context()
-            .agent_session
-            .expect("feedback job received fallback session");
-        assert!(!fallback_session.session_id.trim().is_empty());
+        assert!(
+            message.contains("state preserved"),
+            "unexpected message: {message}"
+        );
         assert_eq!(
-            store.load_sync().expect("saved fallback session"),
-            Some(fallback_session),
-            "successful feedback run should replace the corrupt saved state"
+            fs::read_to_string(store.path()).expect("corrupt state remains"),
+            original,
+            "fail-closed attachment must not overwrite malformed evidence"
         );
     });
 }
