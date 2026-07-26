@@ -5,12 +5,12 @@ use std::fs;
 use std::path::Path;
 
 use serde_json::Value as JsonValue;
-use temper_testing::live_basic_delivery::LiveBasicDeliveryEvidence;
+use temper_testing::live_manifest::LiveManifestEvidence;
 
 use crate::run_evidence;
 
 pub(super) fn capture_observability(
-    evidence: &LiveBasicDeliveryEvidence,
+    evidence: &LiveManifestEvidence,
     standalone_log: &Path,
 ) -> run_evidence::ObservabilityEvidence {
     let events = capture_structured_events(evidence, standalone_log);
@@ -25,7 +25,7 @@ pub(super) fn capture_observability(
 }
 
 fn capture_structured_events(
-    evidence: &LiveBasicDeliveryEvidence,
+    evidence: &LiveManifestEvidence,
     standalone_log: &Path,
 ) -> Vec<run_evidence::StructuredEventEvidence> {
     let Ok(contents) = fs::read_to_string(standalone_log) else {

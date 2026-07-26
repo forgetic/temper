@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-#[path = "temper-scenario/basic_delivery.rs"]
-mod basic_delivery;
+#[path = "temper-scenario/manifest_executor.rs"]
+mod manifest_executor;
 #[path = "temper-scenario/manifest_runner.rs"]
 mod manifest_runner;
 #[path = "temper-scenario/promote.rs"]

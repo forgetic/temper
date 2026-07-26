@@ -4,9 +4,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use temper_scenario_core::load_resolved_manifest_toml;
-use temper_testing::live_basic_delivery::{
-    LiveBasicDeliveryEvidence, ScenarioBundle, TemperCommand, run_live_basic_delivery,
+use temper_testing::live_manifest::{
+    LiveManifestEvidence, ScenarioBundle, TemperCommand, run_live_manifest,
 };
 
 use crate::run_context::ScenarioRunFacts;
@@ -18,13 +17,12 @@ const PRIMARY_TEMPER_BIN_ENV: &str = "TEMPER_SCENARIO_TEMPER_BIN";
 const COMPAT_TEMPER_BIN_ENV: &str = "TEMPER_BIN";
 
 pub(super) fn run_and_print(
-    scenario_path: &Path,
-    manifest_path: &Path,
+    scenario: &ScenarioBundle,
     facts: &ScenarioRunFacts,
     temper_bin: Option<&Path>,
     context: &run_evidence::RunEvidenceContext,
 ) -> Result<run_evidence::RunEvidenceArtifact, String> {
-    let evidence = run_live(scenario_path, manifest_path, temper_bin)?;
+    let evidence = run_live(scenario, temper_bin)?;
     let lines = live_evidence_lines(&evidence, None);
     let artifact = live_artifact(&evidence, context, &lines, None);
     print_outcome(&lines, facts, context);
@@ -33,12 +31,11 @@ pub(super) fn run_and_print(
 }
 
 pub(super) fn evidence_lines(
-    scenario_path: &Path,
-    manifest_path: &Path,
+    scenario: &ScenarioBundle,
     temper_bin: Option<&Path>,
     artifact_dir: Option<&Path>,
 ) -> Result<Vec<String>, String> {
-    let evidence = run_live(scenario_path, manifest_path, temper_bin)?;
+    let evidence = run_live(scenario, temper_bin)?;
     if let Some(artifact_dir) = artifact_dir {
         let retained_logs = copy_report_artifacts(&evidence, artifact_dir)?;
         Ok(live_evidence_lines(&evidence, Some(&retained_logs)))
@@ -50,18 +47,11 @@ pub(super) fn evidence_lines(
 }
 
 fn run_live(
-    scenario_path: &Path,
-    manifest_path: &Path,
+    scenario: &ScenarioBundle,
     temper_bin: Option<&Path>,
-) -> Result<LiveBasicDeliveryEvidence, String> {
-    let manifest = load_resolved_manifest_toml(manifest_path).map_err(|error| error.to_string())?;
-    let scenario = ScenarioBundle::from_manifest(
-        scenario_path.to_path_buf(),
-        manifest_path.to_path_buf(),
-        manifest,
-    )?;
+) -> Result<LiveManifestEvidence, String> {
     let temper = resolve_temper_command(temper_bin)?;
-    run_live_basic_delivery(scenario, temper)
+    run_live_manifest(scenario.clone(), temper)
 }
 
 fn print_outcome(
@@ -79,7 +69,7 @@ fn print_outcome(
     }
 }
 
-fn retain_artifact_workspace(evidence: LiveBasicDeliveryEvidence) {
+fn retain_artifact_workspace(evidence: LiveManifestEvidence) {
     // Live CLI output cites files under the harness workspace. The harness
     // normally deletes that temp tree when evidence is dropped (which is ideal
     // for ignored tests), but direct operator runs need the printed log/artifact
@@ -101,7 +91,7 @@ struct RetainedLogPaths {
 }
 
 fn copy_report_artifacts(
-    evidence: &LiveBasicDeliveryEvidence,
+    evidence: &LiveManifestEvidence,
     artifact_dir: &Path,
 ) -> Result<RetainedLogPaths, String> {
     let root = artifact_dir.join("live-manifest-artifacts");
@@ -150,7 +140,7 @@ fn copy_log(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 fn live_artifact(
-    evidence: &LiveBasicDeliveryEvidence,
+    evidence: &LiveManifestEvidence,
     context: &run_evidence::RunEvidenceContext,
     lines: &[String],
     retained_logs: Option<&RetainedLogPaths>,
@@ -345,7 +335,7 @@ fn duration_ms(duration: std::time::Duration) -> u64 {
 }
 
 fn live_evidence_lines(
-    evidence: &LiveBasicDeliveryEvidence,
+    evidence: &LiveManifestEvidence,
     retained_logs: Option<&RetainedLogPaths>,
 ) -> Vec<String> {
     let workspace_root = retained_logs

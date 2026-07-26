@@ -1,16 +1,14 @@
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use jig_core::{Reply, RequestView, Script, StopReason, Turn};
+use jig_core::{Reply, RequestView, Script, ScriptFile};
 use jig_server::FakeLlm;
-use serde_json::json;
 
-use super::{HandoffFixture, REFRESH_FAKE_TIMEOUT};
+use super::REFRESH_FAKE_TIMEOUT;
 
 const REFRESH_TITLE_NEEDLE: &str = "refresh existing handoff";
-const CREATE_NOTE_PATH: &str = "service/HANDOFF_CREATE.md";
-const REFRESH_NOTE_PATH: &str = "service/HANDOFF_REFRESH.md";
 
 pub(super) struct HandoffFake {
     fake: FakeLlm,
@@ -25,7 +23,15 @@ struct FakeState {
 }
 
 impl HandoffFake {
-    pub(super) fn start(fixture: HandoffFixture) -> Self {
+    pub(super) fn start(script_path: &Path) -> Result<Self, String> {
+        let script = ScriptFile::load(script_path)
+            .map_err(|error| {
+                format!(
+                    "load scenario Jig script {}: {error}",
+                    script_path.display()
+                )
+            })?
+            .into_script();
         let state = Arc::new((Mutex::new(FakeState::default()), Condvar::new()));
         let rule_state = Arc::clone(&state);
         let engineer_requests = Arc::new(AtomicUsize::new(0));
@@ -61,14 +67,14 @@ impl HandoffFake {
                     }
                 }
             }
-            handoff_reply(&fixture, refresh, view.prior_tool_results)
+            script.next_reply(view)
         }))
-        .expect("start implementation-pr-handoff fake LLM");
-        Self {
+        .map_err(|error| format!("start scenario Jig fake LLM: {error}"))?;
+        Ok(Self {
             fake,
             state,
             engineer_requests,
-        }
+        })
     }
 
     pub(super) fn base_url(&self) -> String {
@@ -147,59 +153,6 @@ impl HandoffFake {
             })
             .collect::<Vec<_>>()
             .join("\n")
-    }
-}
-
-fn handoff_reply(fixture: &HandoffFixture, refresh: bool, prior_tool_results: usize) -> Reply {
-    match prior_tool_results {
-        0 => Reply {
-            turns: vec![Turn::ToolCall {
-                id: if refresh {
-                    "call_write_refresh_handoff_note".to_string()
-                } else {
-                    "call_write_create_handoff_note".to_string()
-                },
-                name: "write".to_string(),
-                args: json!({
-                    "path": if refresh { REFRESH_NOTE_PATH } else { CREATE_NOTE_PATH },
-                    "content": if refresh {
-                        "refresh handoff product diff\n"
-                    } else {
-                        "create handoff product diff\n"
-                    },
-                }),
-            }],
-            usage: Default::default(),
-            stop: StopReason::ToolCalls,
-        },
-        1 => Reply {
-            turns: vec![Turn::ToolCall {
-                id: if refresh {
-                    "call_submit_refresh_handoff".to_string()
-                } else {
-                    "call_submit_create_handoff".to_string()
-                },
-                name: "submit_for_pr".to_string(),
-                args: json!({ "summary": fixture.summary }),
-            }],
-            usage: Default::default(),
-            stop: StopReason::ToolCalls,
-        },
-        _ => {
-            let (title, body) = if refresh {
-                (&fixture.refresh_title, &fixture.refresh_body)
-            } else {
-                (&fixture.create_title, &fixture.create_body)
-            };
-            Reply::text(
-                json!({
-                    "title": title,
-                    "body": body,
-                    "summary": fixture.summary,
-                })
-                .to_string(),
-            )
-        }
     }
 }
 

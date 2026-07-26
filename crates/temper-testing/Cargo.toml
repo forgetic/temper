@@ -82,6 +82,7 @@ tempfile.workspace = true
 # the workflow-derived runner config (`runner_config_for`) behind the worker's
 # runtime `--workflow` flag, rather than duplicating them here.
 temper-reference-delivery = { path = "../temper-reference-delivery" }
+temper-scenario-core = { path = "../temper-scenario-core" }
 temper-runner = { path = "../temper-runner" }
 temper-trigger-forgejo = { path = "../temper-trigger-forgejo" }
 temper-wake = { path = "../temper-wake" }

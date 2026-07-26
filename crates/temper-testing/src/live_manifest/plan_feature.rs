@@ -1,4 +1,3 @@
-use std::fs;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -23,13 +22,12 @@ use super::process::{
     tune_init_config, wait_for_standalone, write_snapshot,
 };
 use super::{
-    CiJobEvidence, FakeLlmEvidence, FinalStateEvidence, IssueEvidence, LiveBasicDeliveryEvidence,
-    LiveBasicDeliveryHarness, LiveLogPaths, PullRequestEvidence,
+    CiJobEvidence, FakeLlmEvidence, FinalStateEvidence, IssueEvidence, LiveLogPaths,
+    LiveManifestEvidence, LiveManifestHarness, PullRequestEvidence,
 };
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
 
-const FEATURE_TITLE: &str = "Ship plan-centric dogfood feature branch delivery";
 const PLAN_TITLE: &str = "Plan plan-centric dogfood delivery";
 const FIRST_CODE_TITLE: &str = "Implement plan foundation slice";
 const SECOND_CODE_TITLE: &str = "Implement validation and landing slice";
@@ -107,11 +105,11 @@ pub struct RolePromptEvidence {
     pub constraint_excerpts: Vec<String>,
 }
 
-pub(super) fn run_live_plan_feature_branch(
-    harness: &LiveBasicDeliveryHarness,
-) -> Result<LiveBasicDeliveryEvidence, String> {
+pub(super) fn run_feature_branch_aggregate_landing(
+    harness: &LiveManifestHarness,
+) -> Result<LiveManifestEvidence, String> {
     let started = Instant::now();
-    harness.scenario.assert_workflow_matches_reference()?;
+    harness.scenario.validate_workflow()?;
 
     let cached = start_cached_bare_admin_server(
         &harness.admin_user,
@@ -130,7 +128,7 @@ pub(super) fn run_live_plan_feature_branch(
     }
     let admin_token = mint_site_admin_token(&server, &harness.admin_user)?;
 
-    let fake = PlanFeatureFake::start();
+    let fake = PlanFeatureFake::start(harness.scenario.jig_script_path())?;
     let scenario_run_id = super::scenario_run_id(&harness.scenario);
     let workspace = RunWorkspace::new(&harness.workspace_prefix);
     let bundle_dir = workspace.dir("bundle");
@@ -193,10 +191,7 @@ pub(super) fn run_live_plan_feature_branch(
     let feature_issue = super::process::engine_block_on(seed_feature_issue(
         &forge,
         &repository,
-        &harness
-            .scenario
-            .scenario_path
-            .join("config/feature-issue.md"),
+        &harness.scenario.intake,
     ))?;
 
     let timeout = convergence_timeout(harness.scenario.timeout);
@@ -275,7 +270,7 @@ pub(super) fn run_live_plan_feature_branch(
 
     let convergence = convergence_start.elapsed();
     standalone.kill();
-    Ok(LiveBasicDeliveryEvidence {
+    Ok(LiveManifestEvidence {
         _workspace: workspace,
         scenario_path: harness.scenario.scenario_path.clone(),
         manifest_path: harness.scenario.manifest_path.clone(),
@@ -339,17 +334,15 @@ pub(super) fn run_live_plan_feature_branch(
 async fn seed_feature_issue(
     forge: &impl Forge,
     repository: &RepositoryId,
-    body_path: &std::path::Path,
+    issue: &super::IntakeFixture,
 ) -> Result<ItemNumber, String> {
-    let body = fs::read_to_string(body_path)
-        .map_err(|error| format!("read feature issue body {}: {error}", body_path.display()))?;
     forge
         .create_issue(
             repository,
             CreateIssue {
-                title: FEATURE_TITLE.to_string(),
-                body,
-                labels: vec!["feature".to_string()],
+                title: issue.title.clone(),
+                body: issue.body.clone(),
+                labels: issue.labels.clone(),
                 assignees: Vec::new(),
             },
         )

@@ -54,7 +54,7 @@ pub(super) async fn seed_intake(
     Ok(issue.number)
 }
 
-pub(super) fn drive_full_basic_delivery(
+pub(super) fn drive_single_pull_request_convergence(
     forge: &ForgejoForge,
     repository: &RepositoryId,
     issue: ItemNumber,

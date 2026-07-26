@@ -4,7 +4,9 @@ This validation-grade live scenario reproduces feature #620's production failure
 shape on real Forgejo, real `forgejo-runner`, a real Temper process, and captured
 Jig fake-LLM requests. The source feature intentionally arrives with
 `target_branch: main`; that metadata is treated as untrusted input rather than
-feature-delivery intent.
+feature-delivery intent. All role responses live in
+`jig/plan-centric-feature-branch.json`; the explicit manifest actions and
+convergence strategy, not this directory or workflow name, select execution.
 
 It proves:
 

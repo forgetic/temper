@@ -1,4 +1,4 @@
-//! Shared live Forgejo harness for the checked-in `basic-delivery` scenario.
+//! Data-driven live Forgejo manifest harness for checked-in scenario bundles.
 //!
 //! This module owns the heavyweight end-to-end path that used to live directly
 //! in the root `tests/basic_delivery_forgejo_e2e.rs` integration test: cached
@@ -10,6 +10,7 @@
 mod bundle;
 mod codebase_memory;
 mod convergence;
+mod execution_plan;
 mod fake_llm;
 mod handoff;
 mod plan_feature;
@@ -24,11 +25,14 @@ use std::time::{Duration, Instant};
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
 
-pub use bundle::{IntakeFixture, ObservabilityFixture, RepoFixture, ScenarioBundle};
-use convergence::{
-    admin_forge, ci_diagnostics, drive_full_basic_delivery, repository, seed_intake,
+pub use bundle::{
+    AgentFixture, ConvergenceStrategy, IntakeFixture, ManifestAction, ManifestExecutionPlan,
+    ManifestStep, ObservabilityFixture, RepoFixture, ScenarioBundle,
 };
-use fake_llm::BasicDeliveryFake;
+use convergence::{
+    admin_forge, ci_diagnostics, drive_single_pull_request_convergence, repository, seed_intake,
+};
+use fake_llm::SinglePullRequestFake;
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
 pub use plan_feature::{
     IssueState as PlanIssueState, LivePlanFeatureEvidence,
@@ -82,9 +86,9 @@ impl TemperCommand {
     }
 }
 
-/// Configured live basic-delivery harness.
+/// Configured validation-grade live manifest harness.
 #[derive(Clone)]
-pub struct LiveBasicDeliveryHarness {
+pub struct LiveManifestHarness {
     pub scenario: ScenarioBundle,
     pub temper: TemperCommand,
     pub admin_user: String,
@@ -93,7 +97,7 @@ pub struct LiveBasicDeliveryHarness {
     pub workspace_prefix: String,
 }
 
-impl LiveBasicDeliveryHarness {
+impl LiveManifestHarness {
     /// Builds the harness with the default local Forgejo administrator and
     /// workspace settings.
     pub fn new(scenario: ScenarioBundle, temper: TemperCommand) -> Self {
@@ -111,19 +115,22 @@ impl LiveBasicDeliveryHarness {
     /// returned evidence owns the temporary workspace until it is dropped, so log
     /// paths named in the evidence remain readable long enough for callers to
     /// print or archive them.
-    pub fn run(&self) -> Result<LiveBasicDeliveryEvidence, String> {
-        if self.scenario.is_implementation_pr_handoff() {
-            return handoff::run_live_implementation_pr_handoff(self);
-        }
-        if self.scenario.declares_codebase_memory_contract() {
-            return codebase_memory::run_live_codebase_memory_agent(self);
-        }
-        if self.scenario.is_plan_centric_feature_branch() {
-            return plan_feature::run_live_plan_feature_branch(self);
+    pub fn run(&self) -> Result<LiveManifestEvidence, String> {
+        match self.scenario.execution.convergence {
+            ConvergenceStrategy::ImplementationPrHandoff => {
+                return handoff::run_authored_pr_create_refresh(self);
+            }
+            ConvergenceStrategy::CodebaseMemory => {
+                return codebase_memory::run_tool_augmented_pull_request(self);
+            }
+            ConvergenceStrategy::PlanFeatureLanding => {
+                return plan_feature::run_feature_branch_aggregate_landing(self);
+            }
+            ConvergenceStrategy::SinglePullRequest => {}
         }
 
         let started = Instant::now();
-        self.scenario.assert_workflow_matches_reference()?;
+        self.scenario.validate_workflow()?;
 
         let cached = start_cached_bare_admin_server(
             &self.admin_user,
@@ -142,7 +149,7 @@ impl LiveBasicDeliveryHarness {
         }
         let admin_token = mint_site_admin_token(&server, &self.admin_user)?;
 
-        let fake = BasicDeliveryFake::start();
+        let fake = SinglePullRequestFake::start(self.scenario.jig_script_path())?;
         let scenario_run_id = scenario_run_id(&self.scenario);
         let workspace = RunWorkspace::new(&self.workspace_prefix);
         let bundle_dir = workspace.dir("bundle");
@@ -201,7 +208,7 @@ impl LiveBasicDeliveryHarness {
 
         let timeout = convergence_timeout(self.scenario.timeout);
         let convergence_start = Instant::now();
-        let final_state = match drive_full_basic_delivery(
+        let final_state = match drive_single_pull_request_convergence(
             &forge,
             &repository,
             issue,
@@ -217,7 +224,7 @@ impl LiveBasicDeliveryHarness {
                     &ci_diagnostics(&forge, &repository),
                 );
                 return Err(format!(
-                    "live basic-delivery did not converge within {timeout:?}: {error}\n\
+                    "live manifest did not converge within {timeout:?}: {error}\n\
                      forge_url={} repo={} intake_issue=#{} runner_running={}\n\
                      runner log tail:\n{}\n\
                      --- init log ({}) ---\n{}\n\
@@ -274,7 +281,7 @@ impl LiveBasicDeliveryHarness {
         );
 
         standalone.kill();
-        Ok(LiveBasicDeliveryEvidence {
+        Ok(LiveManifestEvidence {
             _workspace: workspace,
             scenario_path: self.scenario.scenario_path.clone(),
             manifest_path: self.scenario.manifest_path.clone(),
@@ -308,12 +315,12 @@ impl LiveBasicDeliveryHarness {
     }
 }
 
-/// Convenience wrapper around [`LiveBasicDeliveryHarness::run`].
-pub fn run_live_basic_delivery(
+/// Convenience wrapper around [`LiveManifestHarness::run`].
+pub fn run_live_manifest(
     scenario: ScenarioBundle,
     temper: TemperCommand,
-) -> Result<LiveBasicDeliveryEvidence, String> {
-    LiveBasicDeliveryHarness::new(scenario, temper).run()
+) -> Result<LiveManifestEvidence, String> {
+    LiveManifestHarness::new(scenario, temper).run()
 }
 
 fn scenario_run_id(scenario: &ScenarioBundle) -> String {
@@ -339,8 +346,8 @@ fn scenario_run_id(scenario: &ScenarioBundle) -> String {
     format!("{safe_name}-{}-{nanos}", std::process::id())
 }
 
-/// Structured evidence emitted by a successful live basic-delivery run.
-pub struct LiveBasicDeliveryEvidence {
+/// Structured evidence emitted by a successful live manifest run.
+pub struct LiveManifestEvidence {
     _workspace: RunWorkspace,
     pub scenario_path: PathBuf,
     pub manifest_path: PathBuf,
@@ -366,11 +373,11 @@ pub struct LiveBasicDeliveryEvidence {
     pub logs: LiveLogPaths,
 }
 
-impl LiveBasicDeliveryEvidence {
+impl LiveManifestEvidence {
     /// Compact human-readable rendering for ignored-test stdout/CI logs.
     pub fn to_report(&self) -> String {
         let mut lines = vec![
-            "live_basic_delivery evidence:".to_string(),
+            "live_manifest evidence:".to_string(),
             format!("  scenario: {}", self.scenario_path.display()),
             format!("  manifest: {}", self.manifest_path.display()),
             format!("  scenario_run_id: {}", self.scenario_run_id),

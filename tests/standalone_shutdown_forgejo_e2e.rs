@@ -9,7 +9,7 @@
 mod e2e_lock;
 
 use std::path::PathBuf;
-use temper_testing::live_basic_delivery::{
+use temper_testing::live_manifest::{
     ScenarioBundle, StandaloneShutdownRequest, TemperCommand, run_standalone_shutdown_acceptance,
 };
 

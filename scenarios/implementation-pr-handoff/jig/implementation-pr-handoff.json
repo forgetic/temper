@@ -1,0 +1,92 @@
+{
+  "phases": [
+    {
+      "name": "engineer-refresh-handoff",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer"
+        ],
+        "any_message_contains": [
+          "refresh existing handoff",
+          "Current implementation PR handoff"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_write_refresh_handoff_note",
+                "name": "write",
+                "args": {
+                  "path": "service/HANDOFF_REFRESH.md",
+                  "content": "refresh handoff product diff\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_submit_refresh_handoff",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "scripted coding workspace summary"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Implement refreshed handoff\",\"body\":\"# Implementation report\\n\\nLatest compact handoff.\",\"summary\":\"scripted coding workspace summary\"}"
+        }
+      ]
+    },
+    {
+      "name": "engineer-create-handoff",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_write_create_handoff_note",
+                "name": "write",
+                "args": {
+                  "path": "service/HANDOFF_CREATE.md",
+                  "content": "create handoff product diff\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_submit_create_handoff",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "scripted coding workspace summary"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Implement durable PR handoff\",\"body\":\"# Implementation report\\n\\n- Added the durable handoff path.\",\"summary\":\"scripted coding workspace summary\"}"
+        }
+      ]
+    }
+  ]
+}

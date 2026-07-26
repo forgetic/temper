@@ -1,0 +1,60 @@
+{
+  "phases": [
+    {
+      "name": "engineer-codebase-memory",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_memory_search",
+                "name": "codebase_memory_search_code",
+                "args": {
+                  "query": "WidgetService"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_write_memory_notes",
+                "name": "write",
+                "args": {
+                  "path": "demo/MEMORY_NOTES.md",
+                  "content": "memory-guided notes\nFAKE_MCP_SEARCH_RESULT project=actual-demo-project query=WidgetService\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_submit_memory_notes",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "Used codebase memory search result before writing MEMORY_NOTES.md."
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Use codebase memory result\",\"body\":\"# Implementation report\\nWrote MEMORY_NOTES.md from the fake codebase-memory search result.\",\"summary\":\"Used codebase memory search result before writing MEMORY_NOTES.md.\"}"
+        }
+      ]
+    }
+  ]
+}

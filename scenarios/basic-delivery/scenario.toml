@@ -88,7 +88,7 @@ ci_source = "config/ci.yml"
 id = "configure-jig-fake-llm"
 action = "jig.fake_llm"
 roles = ["architect", "engineer"]
-script = "basic-delivery"
+script_path = "jig/basic-delivery.json"
 
 [[steps]]
 id = "launch-standalone-temper"
@@ -106,6 +106,7 @@ after = "temper.launch_standalone"
 [[steps]]
 id = "wait-for-convergence"
 action = "workflow.wait_convergence"
+strategy = "single-pull-request"
 until = "single implementation PR merged and source issue closed"
 
 [expect]

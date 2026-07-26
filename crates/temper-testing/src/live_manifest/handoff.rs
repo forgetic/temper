@@ -20,8 +20,8 @@ use super::process::{
     tune_init_config, wait_for_standalone, write_snapshot,
 };
 use super::{
-    FakeLlmEvidence, FinalStateEvidence, IssueEvidence, LiveBasicDeliveryEvidence,
-    LiveBasicDeliveryHarness, LiveLogPaths, PullRequestEvidence,
+    FakeLlmEvidence, FinalStateEvidence, IssueEvidence, LiveLogPaths, LiveManifestEvidence,
+    LiveManifestHarness, PullRequestEvidence,
 };
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
@@ -65,7 +65,6 @@ struct HandoffFixture {
     refresh_body: String,
     stale_title: String,
     stale_body: String,
-    summary: String,
 }
 
 #[derive(Clone, Debug)]
@@ -75,14 +74,14 @@ struct IssueFixture {
     labels: Vec<String>,
 }
 
-pub(super) fn run_live_implementation_pr_handoff(
-    harness: &LiveBasicDeliveryHarness,
-) -> Result<LiveBasicDeliveryEvidence, String> {
+pub(super) fn run_authored_pr_create_refresh(
+    harness: &LiveManifestHarness,
+) -> Result<LiveManifestEvidence, String> {
     let started = Instant::now();
-    harness.scenario.assert_workflow_matches_reference()?;
+    harness.scenario.validate_workflow()?;
     let fixture = HandoffFixture::load(
         &harness.scenario.scenario_path,
-        &harness.scenario.manifest_path,
+        &harness.scenario.resolved_manifest,
     )?;
 
     let cached = start_cached_bare_admin_server(
@@ -102,7 +101,7 @@ pub(super) fn run_live_implementation_pr_handoff(
     }
     let admin_token = mint_site_admin_token(&server, &harness.admin_user)?;
 
-    let fake = HandoffFake::start(fixture.clone());
+    let fake = HandoffFake::start(harness.scenario.jig_script_path())?;
     let scenario_run_id = super::scenario_run_id(&harness.scenario);
     let workspace = RunWorkspace::new(&harness.workspace_prefix);
     let bundle_dir = workspace.dir("bundle");
@@ -269,7 +268,7 @@ pub(super) fn run_live_implementation_pr_handoff(
 
     let convergence = started.elapsed();
     standalone.kill();
-    Ok(LiveBasicDeliveryEvidence {
+    Ok(LiveManifestEvidence {
         _workspace: workspace,
         scenario_path: harness.scenario.scenario_path.clone(),
         manifest_path: harness.scenario.manifest_path.clone(),
@@ -660,13 +659,12 @@ async fn verify_handoff_case(
 }
 
 impl HandoffFixture {
-    fn load(scenario_path: &Path, manifest_path: &Path) -> Result<Self, String> {
-        let manifest = load_manifest_toml(manifest_path)?;
-        let source = source_issue_fixture(scenario_path, &manifest)?;
+    fn load(scenario_path: &Path, manifest: &TomlValue) -> Result<Self, String> {
+        let source = source_issue_fixture(scenario_path, manifest)?;
         let create_issue =
-            issue_fixture(scenario_path, &manifest, "create")?.unwrap_or_else(|| source.clone());
+            issue_fixture(scenario_path, manifest, "create")?.unwrap_or_else(|| source.clone());
         let refresh_issue =
-            issue_fixture(scenario_path, &manifest, "refresh")?.unwrap_or_else(|| source.clone());
+            issue_fixture(scenario_path, manifest, "refresh")?.unwrap_or_else(|| source.clone());
         let handoff = manifest
             .get("handoff")
             .and_then(TomlValue::as_table)
@@ -682,17 +680,8 @@ impl HandoffFixture {
             refresh_body: read_path_field(scenario_path, handoff, "refresh_body_path")?,
             stale_title: required_string(handoff, "stale_title")?,
             stale_body: required_string(handoff, "stale_body")?,
-            summary: required_string(handoff, "summary")?,
         })
     }
-}
-
-fn load_manifest_toml(manifest_path: &Path) -> Result<TomlValue, String> {
-    let source = fs::read_to_string(manifest_path)
-        .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
-    source
-        .parse::<TomlValue>()
-        .map_err(|error| format!("parse {}: {error}", manifest_path.display()))
 }
 
 fn source_issue_fixture(
