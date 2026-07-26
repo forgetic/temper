@@ -54,7 +54,7 @@ const GUIDANCE_CONTRACTS: &[GuidanceContract] = &[
     },
     GuidanceContract {
         role: "tester",
-        role_guidance: "Validate completed feature plans",
+        role_guidance: "Run final read-only validation",
         prompt_guidance: "Use validate_plan only after reading",
         tool_guidance: "Use this from validate_plan.",
         constraints: &[
@@ -267,3 +267,7 @@ fn snippet(text: &str, max: usize) -> String {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "fake_tests.rs"]
+mod tests;
