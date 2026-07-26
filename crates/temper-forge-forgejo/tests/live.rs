@@ -11,17 +11,12 @@
 //! cargo test -p temper-forge-forgejo --test live -- --ignored
 //! ```
 
-mod live_support;
-
 use base64::Engine;
 use bench_forgejo::{ForgejoRunner, ForgejoServer, ForgejoState, ServerError};
-use live_support::{RestRuns404Client, cookie_value, exchange, request_header};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use temper_engine_io::http::{HttpCall, HttpResponseData, http_call};
-use temper_forge_forgejo::{
-    EngineHttpClient, ForgejoConfig, ForgejoForge, HttpClient, HttpMethod, HttpRequest,
-};
+use temper_forge_forgejo::{EngineHttpClient, ForgejoConfig, ForgejoForge};
 use temper_forge_model::{
     CandidateLabelSelection, CandidateLifecycle, CiJobConclusion, CiJobQuery, CiJobStatus,
     CreateIssue, IssueCandidateQuery, IssueQuery, IssueState, PullRequestQuery, RepositoryId,
@@ -42,7 +37,6 @@ jobs:
     steps:
       - run: echo temper forgejo live smoke
 "#;
-const REST_TOKEN_SENTINEL: &str = "rest-token-must-not-reach-web-ui";
 
 #[derive(serde::Deserialize, serde::Serialize)]
 struct LiveMetadata {
@@ -115,8 +109,11 @@ fn live_smoke_suite_against_throwaway_forgejo() {
     });
 }
 
+// The fixture is now Forgejo 16 and REST-only. The dependent cleanup removes
+// this superseded Forgejo 15 web-UI contract and its support module entirely.
+#[cfg(any())]
 #[test]
-#[ignore = "boots local Forgejo 15.0.3 + host-mode runner; run with --ignored"]
+#[ignore = "superseded Forgejo 15 web-UI compatibility contract"]
 fn forgejo_15_0_3_web_ui_ci_contract() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         let world = boot_world().await;
