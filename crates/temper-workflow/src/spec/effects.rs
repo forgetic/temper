@@ -10,6 +10,29 @@ use temper_forge::ReviewDecision;
 
 use crate::metadata::WorkflowMetadataKey;
 
+/// Per-artifact-kind requirements for one `create_issues` product set.
+///
+/// These constraints complement the total child cardinality. They let a
+/// workflow require heterogeneous fan-out (for example, product children plus
+/// one final scenario-authoring child) without splitting one atomic verdict
+/// across multiple effects.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawChildKindRequirement {
+    /// Required issue artifact kind.
+    pub kind: String,
+    /// Minimum number of children of this kind.
+    #[serde(default = "default_min_children")]
+    pub min_children: usize,
+    /// Optional maximum number of children of this kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_children: Option<usize>,
+    /// Every child of `kind` must depend on every authored child whose kind is
+    /// named here. This is evaluated against sibling slugs before Forge mutation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on_all_kinds: Vec<String>,
+}
+
 /// Declarative policy for resolving or validating an effect's target branch.
 ///
 /// The policy is intentionally separate from artifact metadata. An omitted
@@ -158,6 +181,10 @@ pub enum RawEffect {
         /// enforce. Empty preserves existing workflow behavior.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_child_metadata: Vec<WorkflowMetadataKey>,
+        /// Per-kind cardinality and dependency requirements for heterogeneous
+        /// child sets. Empty preserves the legacy total-cardinality contract.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        child_kind_requirements: Vec<RawChildKindRequirement>,
         /// Workflow-owned child target-branch production. `derived_feature_branch`
         /// derives `agent/pr-for-feature-<source-number>`, `inherit` copies the
         /// validated source branch, and `repository_default` explicitly selects

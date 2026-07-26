@@ -297,6 +297,92 @@ fn rejects_duplicate_unknown_self_and_cyclic_dependencies() {
 }
 
 #[test]
+fn enforces_per_kind_cardinality_and_dependency_coverage() {
+    let contract = VerdictContract {
+        min_children: 2,
+        allowed_child_kinds: vec!["code".to_string(), "validation".to_string()],
+        child_kind_requirements: vec![
+            crate::ChildKindRequirement {
+                kind: "code".to_string(),
+                min_children: 1,
+                max_children: None,
+                depends_on_all_kinds: Vec::new(),
+            },
+            crate::ChildKindRequirement {
+                kind: "validation".to_string(),
+                min_children: 1,
+                max_children: Some(1),
+                depends_on_all_kinds: vec!["code".to_string()],
+            },
+        ],
+        ..VerdictContract::default()
+    };
+    let product = Child::valid("product", "code");
+    let missing_scenario = ResultView {
+        verdict: Some("needs_plan".to_string()),
+        title: None,
+        body: None,
+        children: vec![product],
+    };
+    let error = validate_verdict_result(
+        &missing_scenario,
+        &contracts(contract.clone()),
+        &SourceMetadata::new(),
+    )
+    .expect_err("a scenario child is mandatory")
+    .to_string();
+    assert!(error.contains("exactly 1 child product(s) of kind `validation`, received 0"));
+
+    let product = Child::valid("product", "code");
+    let scenario_one = Child::valid("scenario-one", "validation");
+    let scenario_two = Child::valid("scenario-two", "validation");
+    let duplicate_scenario = ResultView {
+        verdict: Some("needs_plan".to_string()),
+        title: None,
+        body: None,
+        children: vec![product, scenario_one, scenario_two],
+    };
+    let error = validate_verdict_result(
+        &duplicate_scenario,
+        &contracts(contract.clone()),
+        &SourceMetadata::new(),
+    )
+    .expect_err("only one scenario child is allowed")
+    .to_string();
+    assert!(error.contains("exactly 1 child product(s) of kind `validation`, received 2"));
+
+    let product = Child::valid("product", "code");
+    let scenario = Child::valid("scenario", "validation");
+    let missing_dependency = ResultView {
+        verdict: Some("needs_plan".to_string()),
+        title: None,
+        body: None,
+        children: vec![product, scenario],
+    };
+    let error = validate_verdict_result(
+        &missing_dependency,
+        &contracts(contract.clone()),
+        &SourceMetadata::new(),
+    )
+    .expect_err("scenario must cover every product dependency")
+    .to_string();
+    assert!(error.contains("must depend on every `code` child; missing: product"));
+
+    let first = Child::valid("first", "code");
+    let second = Child::valid("second", "code");
+    let mut scenario = Child::valid("scenario", "validation");
+    scenario.depends_on = vec!["first".to_string(), "second".to_string()];
+    let valid = ResultView {
+        verdict: Some("needs_plan".to_string()),
+        title: None,
+        body: None,
+        children: vec![first, second, scenario],
+    };
+    validate_verdict_result(&valid, &contracts(contract), &SourceMetadata::new())
+        .expect("one scenario depending on every product is valid");
+}
+
+#[test]
 fn validates_required_pr_text_and_source_metadata() {
     let contract = VerdictContract {
         max_children: Some(0),

@@ -295,6 +295,7 @@ pub(crate) fn build_effect(effect: &RawEffect) -> Effect {
             min_children,
             max_children,
             required_child_metadata,
+            child_kind_requirements,
             target_branch_policy,
         } => Effect::CreateIssues {
             correlation_key: correlation_key.clone(),
@@ -302,6 +303,19 @@ pub(crate) fn build_effect(effect: &RawEffect) -> Effect {
             min_children: *min_children,
             max_children: *max_children,
             required_child_metadata: required_child_metadata.clone(),
+            child_kind_requirements: child_kind_requirements
+                .iter()
+                .map(|requirement| crate::validated::ChildKindRequirement {
+                    kind: ArtifactKindId::new(&requirement.kind),
+                    min_children: requirement.min_children,
+                    max_children: requirement.max_children,
+                    depends_on_all_kinds: requirement
+                        .depends_on_all_kinds
+                        .iter()
+                        .map(ArtifactKindId::new)
+                        .collect(),
+                })
+                .collect(),
             target_branch_policy: *target_branch_policy,
         },
         RawEffect::MergePullRequest => Effect::MergePullRequest,

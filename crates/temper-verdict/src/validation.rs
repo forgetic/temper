@@ -167,7 +167,83 @@ fn validate_children<C: VerdictChildView>(
         validate_child_kind(child, index, contract, problems);
         validate_child_metadata(child, index, contract, problems);
     }
+    validate_child_kind_requirements(children, contract, problems);
     validate_dependencies(children, &slugs, problems);
+}
+
+fn effective_child_kind<C: VerdictChildView>(child: &C) -> &str {
+    child.kind().unwrap_or("code").trim()
+}
+
+fn validate_child_kind_requirements<C: VerdictChildView>(
+    children: &[C],
+    contract: &crate::VerdictContract,
+    problems: &mut Vec<String>,
+) {
+    for requirement in &contract.child_kind_requirements {
+        let count = children
+            .iter()
+            .filter(|child| effective_child_kind(*child) == requirement.kind)
+            .count();
+        if count < requirement.min_children {
+            problems.push(match requirement.max_children {
+                Some(max) if max == requirement.min_children => format!(
+                    "requires exactly {} child product(s) of kind `{}`, received {count}",
+                    requirement.min_children, requirement.kind
+                ),
+                _ => format!(
+                    "requires at least {} child product(s) of kind `{}`, received {count}",
+                    requirement.min_children, requirement.kind
+                ),
+            });
+        }
+        if requirement.max_children.is_some_and(|max| count > max) {
+            let max = requirement.max_children.expect("checked");
+            problems.push(if max == requirement.min_children {
+                format!(
+                    "requires exactly {max} child product(s) of kind `{}`, received {count}",
+                    requirement.kind
+                )
+            } else {
+                format!(
+                    "allows at most {max} child product(s) of kind `{}`, received {count}",
+                    requirement.kind
+                )
+            });
+        }
+
+        for dependency_kind in &requirement.depends_on_all_kinds {
+            let required_slugs = children
+                .iter()
+                .filter(|child| effective_child_kind(*child) == dependency_kind)
+                .map(|child| child.slug().trim())
+                .filter(|slug| !slug.is_empty())
+                .collect::<Vec<_>>();
+            for child in children
+                .iter()
+                .filter(|child| effective_child_kind(*child) == requirement.kind)
+            {
+                let missing = required_slugs
+                    .iter()
+                    .copied()
+                    .filter(|slug| {
+                        !child
+                            .depends_on()
+                            .iter()
+                            .any(|dependency| dependency.trim() == *slug)
+                    })
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    problems.push(format!(
+                        "child `{}` of kind `{}` must depend on every `{dependency_kind}` child; missing: {}",
+                        child.slug().trim(),
+                        requirement.kind,
+                        missing.join(", ")
+                    ));
+                }
+            }
+        }
+    }
 }
 
 fn validate_child_kind<C: VerdictChildView>(
@@ -176,7 +252,7 @@ fn validate_child_kind<C: VerdictChildView>(
     contract: &crate::VerdictContract,
     problems: &mut Vec<String>,
 ) {
-    let kind = child.kind().unwrap_or("code").trim();
+    let kind = effective_child_kind(child);
     if kind.is_empty() {
         problems.push(format!(
             "child `{}` has a blank artifact kind",

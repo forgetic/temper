@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn normal_dispatch_composes_configured_guidance_for_architect_engineer_and_tester() {
+fn normal_dispatch_composes_configured_guidance_for_workflow_roles() {
     temper_engine_io::block_on(async move {
         let forge = MemoryForge::new();
         let repository = forge
@@ -47,10 +47,19 @@ fn normal_dispatch_composes_configured_guidance_for_architect_engineer_and_teste
                 "Only touch the checked-out repository workspace.",
             ),
             (
+                "scenario_author",
+                "validation_ready",
+                "validation",
+                "Author the plan's required checked-in feature scenario",
+                "Use author_scenario only for the ready validation child.",
+                "Use this only for author_scenario",
+                "Keep generated runtime evidence out of the checked-in scenario corpus.",
+            ),
+            (
                 "tester",
                 "plan_needs_validation",
                 "plan",
-                "Validate completed feature plans",
+                "Run final read-only validation",
                 "Use validate_plan only after reading",
                 "Use this from validate_plan.",
                 "Tie validation evidence to the current feature branch head",

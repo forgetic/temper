@@ -345,6 +345,13 @@ pub enum Diagnostic {
         min_children: usize,
         max_children: Option<usize>,
     },
+    /// A per-kind `create_issues` requirement is malformed or cannot produce a
+    /// child kind related to the transition source.
+    InvalidChildKindRequirement {
+        transition: String,
+        kind: String,
+        reason: String,
+    },
     /// More than one artifact kind for the same Forge target declares no
     /// identifying labels. A target may have at most one default (catch-all)
     /// kind, so the engine cannot decide which one admits an unlabeled artifact.
@@ -379,6 +386,7 @@ impl Diagnostic {
             | Diagnostic::CreatePullRequestArtifactKindTargetMismatch { .. }
             | Diagnostic::UnsupportedTargetBranchPolicy { .. }
             | Diagnostic::InvalidCreateIssuesCardinality { .. }
+            | Diagnostic::InvalidChildKindRequirement { .. }
             | Diagnostic::MultipleDefaultArtifactKinds { .. } => Severity::Error,
         }
     }
@@ -571,6 +579,14 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 formatter,
                 "transition `{transition}` create_issues cardinality must require at least one child and max_children must be >= min_children (min={min_children}, max={max_children:?})"
+            ),
+            Diagnostic::InvalidChildKindRequirement {
+                transition,
+                kind,
+                reason,
+            } => write!(
+                formatter,
+                "transition `{transition}` has invalid create_issues requirement for child kind `{kind}`: {reason}"
             ),
             Diagnostic::MultipleDefaultArtifactKinds { target, kinds } => write!(
                 formatter,

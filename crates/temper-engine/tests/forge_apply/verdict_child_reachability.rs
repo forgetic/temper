@@ -53,40 +53,113 @@ fn decompose_plan_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
     )
 }
 
+fn product(slug: &str) -> JobChild {
+    let mut child = job_child(
+        slug,
+        &format!("Implement {slug}"),
+        "Implement product work.",
+        &[],
+    );
+    child.kind = Some("code".to_string());
+    child
+}
+
+fn scenario(dependencies: &[&str]) -> JobChild {
+    let mut child = job_child(
+        "feature-scenario",
+        "Author the feature scenario",
+        "Author the required checked-in feature scenario.",
+        &[],
+    );
+    child.kind = Some("validation".to_string());
+    child.depends_on = dependencies
+        .iter()
+        .map(|slug| (*slug).to_string())
+        .collect();
+    child
+}
+
+async fn rejected_decomposition(children: Vec<JobChild>, expected: &str) {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "main").await;
+    let plan = create_ready_plan(&forge, &repo).await;
+    let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
+    let job = decompose_plan_job("acme/service", plan);
+    let result = verdict_result_with_children("worker-a", &job.job_id, "children_ready", children);
+
+    applier.apply(job, result).await;
+
+    let (_, labels) = issue_body_and_labels(&forge, &repo, plan).await;
+    assert!(has_label(&labels, "plan"));
+    assert!(has_label(&labels, "ready"));
+    assert!(has_label(&labels, "needs-human"));
+    assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+    let comments = issue_comment_bodies(&forge, &repo, plan).await;
+    assert_eq!(comments.len(), 1);
+    assert!(comments[0].contains(expected), "rejection: {}", comments[0]);
+}
+
 #[test]
-fn child_kind_without_a_serviceable_queue_is_rejected_by_verdict_contract() {
+fn plan_decomposition_requires_exactly_one_validation_child_before_forge_mutation() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        rejected_decomposition(
+            vec![product("api")],
+            "exactly 1 child product(s) of kind `validation`, received 0",
+        )
+        .await;
+        rejected_decomposition(
+            vec![product("api"), scenario(&["api"]), scenario(&["api"])],
+            "exactly 1 child product(s) of kind `validation`, received 2",
+        )
+        .await;
+    })
+}
+
+#[test]
+fn validation_child_must_depend_on_every_product_before_forge_mutation() {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        rejected_decomposition(
+            vec![product("api"), product("ui"), scenario(&["api"])],
+            "must depend on every `code` child; missing: ui",
+        )
+        .await;
+    })
+}
+
+#[test]
+fn valid_validation_child_inherits_branch_and_starts_blocked() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "main").await;
         let plan = create_ready_plan(&forge, &repo).await;
         let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
         let job = decompose_plan_job("acme/service", plan);
-        let before = issue_body_and_labels(&forge, &repo, plan).await;
-        let mut child = job_child(
-            "landing-regression",
-            "Prove repaired-head CI blocks landing",
-            "Add the integrated mechanical-landing regression.",
-            &[],
+        let result = verdict_result_with_children(
+            "worker-a",
+            &job.job_id,
+            "children_ready",
+            vec![product("api"), product("ui"), scenario(&["api", "ui"])],
         );
-        child.kind = Some("validation".to_string());
-        let result =
-            verdict_result_with_children("worker-a", &job.job_id, "children_ready", vec![child]);
 
         applier.apply(job, result).await;
 
-        let after = issue_body_and_labels(&forge, &repo, plan).await;
-        assert_eq!(after.0, before.0);
-        assert!(has_label(&after.1, "plan"));
-        assert!(has_label(&after.1, "ready"));
-        assert!(has_label(&after.1, "needs-human"));
-        assert_eq!(list_issues(&forge, &repo).await.len(), 1);
-        let comments = issue_comment_bodies(&forge, &repo, plan).await;
-        assert_eq!(comments.len(), 1);
-        assert!(
-            comments[0]
-                .contains("child `landing-regression` has kind `validation`; allowed kinds: code"),
-            "rejection evidence: {}",
-            comments[0]
+        let issues = list_issues(&forge, &repo).await;
+        assert_eq!(issues.len(), 4);
+        let scenario = issue_by_slug(&issues, "feature-scenario");
+        assert!(has_label(&scenario.labels, "validation"));
+        assert!(has_label(&scenario.labels, "blocked"));
+        assert!(!has_label(&scenario.labels, "ready"));
+        let metadata = parse_metadata_block(&scenario.body)
+            .expect("scenario metadata parses")
+            .expect("scenario metadata exists");
+        assert_eq!(metadata.dependencies.len(), 2);
+        assert_eq!(metadata.kind, Some(ArtifactKindId::new("validation")));
+        assert_eq!(
+            metadata.target_branch.as_deref(),
+            Some("feature/current-head-ci")
         );
+        let (_, plan_labels) = issue_body_and_labels(&forge, &repo, plan).await;
+        assert!(has_label(&plan_labels, "in-progress"));
+        assert!(!has_label(&plan_labels, "needs-validation"));
     })
 }

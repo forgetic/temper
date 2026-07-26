@@ -310,6 +310,18 @@ impl QueueAutomation {
     }
 }
 
+/// A validated per-kind requirement for an atomic child issue set.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ChildKindRequirement {
+    pub kind: ArtifactKindId,
+    #[serde(default = "default_min_children")]
+    pub min_children: usize,
+    #[serde(default)]
+    pub max_children: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on_all_kinds: Vec<ArtifactKindId>,
+}
+
 /// One AND-clause in a queue's disjunctive label filter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueueLabelSet {
@@ -376,6 +388,8 @@ pub enum Effect {
         max_children: Option<usize>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_child_metadata: Vec<WorkflowMetadataKey>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        child_kind_requirements: Vec<ChildKindRequirement>,
         /// Explicit child target-branch production contract. `None` retains
         /// legacy behavior and never implies repository-default intent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
